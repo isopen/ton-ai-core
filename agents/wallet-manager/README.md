@@ -1,1 +1,3 @@
+```bash
 export MNEMONIC="MNEMONIC"
+```
