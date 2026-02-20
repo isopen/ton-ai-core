@@ -1,0 +1,16 @@
+{
+  "name": "ton-ai-wallet",
+  "version": "0.1.0",
+  "description": "ton-ai-wallet",
+  "scripts": {
+    "clean": "npm run clean:core",
+    "clean:core": "cd packages/core && npm run clean",
+
+    "build:core": "cd packages/core && npm install && npm run build && npm pack",
+
+    "rebuild": "npm run clean && npm run build:core"
+  },
+  "keywords": ["ton", "ai", "blockchain"],
+  "author": "testertesterov",
+  "license": "MIT"
+}

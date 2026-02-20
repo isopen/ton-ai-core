@@ -1,0 +1,20 @@
+{
+  "name": "@ton-ai/core",
+  "version": "0.1.0",
+  "description": "Core package for TON AI Framework",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@ton/mcp": "^0.1.10",
+    "@ton/walletkit": "0.0.8",
+    "axios": "^1.7.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.16",
+    "typescript": "^5.3.3"
+  }
+}

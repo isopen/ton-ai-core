@@ -1,0 +1,12 @@
+{
+  "name": "ton-ai-core",
+  "version": "0.1.0",
+  "description": "TON AI Framework",
+  "keywords": [
+    "ton",
+    "ai",
+    "blockchain"
+  ],
+  "author": "testertesterov",
+  "license": "MIT"
+}

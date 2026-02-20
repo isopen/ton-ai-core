@@ -1,0 +1,26 @@
+{
+  "name": "ton-ai-wallet",
+  "version": "0.1.0",
+  "description": "ton-ai-wallet",
+  "scripts": {
+    "clean": "npm run clean:core && npm run clean:agent",
+    "clean:core": "cd packages/core && npm run clean",
+    "clean:agent": "cd agents/wallet && (test -d dist && rm -rf dist || true) && (test -d node_modules/@ton-ai && rm -rf node_modules/@ton-ai || true)",
+
+    "build:core": "cd packages/core && npm install && npm run build && npm pack",
+    "build:agent": "cd agents/wallet && npm install",
+
+    "copy-packages": "mkdir -p agents/wallet/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/wallet/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped'",
+
+    "rebuild": "npm run clean && npm run build:core && npm run build:agent && npm run copy-packages",
+
+    "rebuild:quick": "npm run build:core && npm run copy-packages && cd agents/wallet && npm install",
+
+    "start:agent": "cd agents/wallet && npm start",
+
+    "dev": "npm run rebuild && npm run start:agent"
+  },
+  "keywords": ["ton", "ai", "blockchain"],
+  "author": "testertesterov",
+  "license": "MIT"
+}
