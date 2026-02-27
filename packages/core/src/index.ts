@@ -1,6 +1,6 @@
 export * from './types';
 export { MCPClient } from './client';
-export { BaseAgent, AgentConfig } from './agent';
+export { BaseAgentSimple, BaseAgent, AgentConfig, SimpleAgentConfig } from './agent';
 export { 
   Plugin, 
   PluginContext, 
