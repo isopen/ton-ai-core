@@ -1,0 +1,28 @@
+{
+  "name": "telegram-bot",
+  "version": "0.1.0",
+  "description": "Telegram Bot",
+  "scripts": {
+    "clean": "npm run clean:core && npm run clean:telegram && npm run clean:agent",
+    "clean:core": "cd packages/core && npm run clean",
+    "clean:telegram": "cd plugins/telegram-bot-api && npm run clean",
+    "clean:agent": "cd agents/telegram-bot && (test -d dist && rm -rf dist || true) && (test -d node_modules/@ton-ai && rm -rf node_modules/@ton-ai || true)",
+
+    "build:core": "cd packages/core && npm install && npm run build && npm pack",
+    "build:telegram": "cd plugins/telegram-bot-api && npm install && npm run build && npm pack",
+    "build:agent": "cd agents/telegram-bot && npm install",
+
+    "copy-packages": "mkdir -p agents/telegram-bot/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/telegram-bot/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped' && cp plugins/telegram-bot-api/ton-ai-telegram-bot-api-0.1.0.tgz agents/telegram-bot/node_modules/@ton-ai/ 2>/dev/null || echo 'Telegram package copy skipped'",
+
+    "rebuild": "npm run clean && npm run build:core && npm run build:telegram && npm run build:agent && npm run copy-packages",
+
+    "rebuild:quick": "npm run build:core && npm run build:telegram && npm run copy-packages && cd agents/telegram-bot && npm install",
+
+    "start:agent": "cd agents/telegram-bot && npm start",
+
+    "dev": "npm run rebuild && npm run start:agent"
+  },
+  "keywords": ["ton", "ai", "telegram", "bot"],
+  "author": "testertesterov",
+  "license": "MIT"
+}

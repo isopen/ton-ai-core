@@ -40,6 +40,9 @@ use-wallet-manager:
 use-pay-to-go:
 	$(call use_config,pay-to-go)
 
+use-telegram-bot:
+	$(call build_with_config,telegram-bot)
+
 build-ton-ai-core:
 	$(call build_with_config,ton-ai-core)
 
@@ -51,6 +54,9 @@ build-wallet-manager:
 
 build-pay-to-go:
 	$(call build_with_config,pay-to-go)
+
+telegram-bot:
+	$(call build_with_config,telegram-bot)
 
 list-configs:
 	@echo "Available configurations:"
