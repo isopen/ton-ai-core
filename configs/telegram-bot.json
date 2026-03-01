@@ -1,7 +1,7 @@
 {
-  "name": "telegram-bot",
+  "name": "ton-ai-telegram-bot",
   "version": "0.1.0",
-  "description": "Telegram Bot",
+  "description": "ton-ai-telegram-bot",
   "scripts": {
     "clean": "npm run clean:core && npm run clean:telegram && npm run clean:agent",
     "clean:core": "cd packages/core && npm run clean",
