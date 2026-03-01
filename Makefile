@@ -1,4 +1,4 @@
-.PHONY: use-wallet use-openrouter build-wallet build-openrouter build-all run list-configs
+.PHONY: use-wallet use-openrouter build-wallet build-openrouter use-gigachat build-gigachat run list-configs
 
 CONFIGS_DIR := ./configs
 PACKAGE_JSON := package.json
@@ -43,6 +43,9 @@ use-pay-to-go:
 use-telegram-bot:
 	$(call build_with_config,telegram-bot)
 
+use-gigachat:
+	$(call build_with_config,gigachat)
+
 build-ton-ai-core:
 	$(call build_with_config,ton-ai-core)
 
@@ -55,8 +58,11 @@ build-wallet-manager:
 build-pay-to-go:
 	$(call build_with_config,pay-to-go)
 
-telegram-bot:
+build-telegram-bot:
 	$(call build_with_config,telegram-bot)
+
+build-gigachat:
+	$(call build_with_config,gigachat)
 
 list-configs:
 	@echo "Available configurations:"

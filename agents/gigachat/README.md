@@ -1,0 +1,3 @@
+```bash
+export GIGACHAT_API_KEY="GIGACHAT_API_KEY"
+```
