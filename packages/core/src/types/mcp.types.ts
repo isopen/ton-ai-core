@@ -14,6 +14,17 @@ export interface MCPConfig {
   protocol?: 'http' | 'https';
 }
 
+export interface JsonRpcResponse {
+  jsonrpc: string;
+  id: number;
+  result?: any;
+  error?: {
+    code: number;
+    message: string;
+    data?: any;
+  };
+}
+
 export interface BalanceResponse {
   ton: string;
   nano: string;

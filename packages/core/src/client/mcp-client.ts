@@ -1,6 +1,4 @@
 import { EventEmitter } from 'events';
-import axios from 'axios';
-import * as https from 'https';
 import { fromNano, toNano } from '@ton/core';
 import { createTonWalletMCP } from '@ton/mcp';
 import { 
@@ -12,6 +10,7 @@ import {
 } from '@ton/walletkit';
 import {
   MCPConfig,
+  JsonRpcResponse,
   BalanceResponse,
   JettonBalanceResponse,
   JettonWithBalance,
@@ -39,6 +38,7 @@ export class MCPClient extends EventEmitter {
   private server: any;
   private kit: any;
   private wallet: any;
+  private abortController: AbortController | null = null;
 
   constructor(config: MCPConfig = {}) {
     super();
@@ -156,6 +156,9 @@ export class MCPClient extends EventEmitter {
   }
 
   private async httpRequest(method: string, params: any): Promise<any> {
+    this.abortController = new AbortController();
+    const { signal } = this.abortController;
+
     try {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json'
@@ -172,32 +175,53 @@ export class MCPClient extends EventEmitter {
       }
 
       const id = Date.now();
-
-      const httpsAgent = this.mode === 'https' 
-        ? new https.Agent({ rejectUnauthorized: false }) 
-        : undefined;
-
-      const response = await axios.post(this.httpEndpoint!, {
+      const requestBody = {
         jsonrpc: '2.0',
         method,
         params,
         id
-      }, { 
-        headers, 
-        timeout: 30000,
-        httpsAgent 
+      };
+
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          this.abortController?.abort();
+          reject(new Error('Request timeout'));
+        }, 30000);
       });
 
-      if (response.data.error) {
-        throw new Error(response.data.error.message);
+      const fetchPromise = fetch(this.httpEndpoint!, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+        signal
+      });
+
+      const response = await Promise.race([fetchPromise, timeoutPromise]) as Response;
+
+      if (!response.ok) {
+        throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
       }
 
-      return response.data.result;
-    } catch (error: any) {
-      if (error.code === 'ECONNREFUSED') {
-        throw new Error(`MCP server not running at ${this.httpEndpoint}`);
+      const data = await response.json() as JsonRpcResponse;
+
+      if (data.error) {
+        throw new Error(data.error.message);
+      }
+
+      return data.result;
+
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          throw new Error('Request aborted');
+        }
+        if (error.message.includes('Failed to fetch')) {
+          throw new Error(`MCP server not running at ${this.httpEndpoint}`);
+        }
       }
       throw error;
+    } finally {
+      this.abortController = null;
     }
   }
 
@@ -381,6 +405,9 @@ export class MCPClient extends EventEmitter {
   }
 
   async close(): Promise<void> {
+    if (this.abortController) {
+      this.abortController.abort();
+    }
     this.removeAllListeners();
   }
 
