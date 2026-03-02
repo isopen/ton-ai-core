@@ -157,7 +157,9 @@ import {
     DeleteStickerFromSetParams,
     SetStickerEmojiListParams,
     SetStickerKeywordsParams,
-    SetStickerMaskPositionParams
+    SetStickerMaskPositionParams,
+    SendMessageDraftParams,
+    SetChatMemberTagParams
 } from './types';
 
 export class TelegramBotSkills {
@@ -1612,5 +1614,17 @@ export class TelegramBotSkills {
             this.context.logger.error('Error getting chat boosts:', error);
             return [];
         }
+    }
+
+    async setChatMemberTag(params: SetChatMemberTagParams): Promise<boolean> {
+        return this.request<boolean>('setChatMemberTag', params);
+    }
+
+    async sendMessageDraft(params: SendMessageDraftParams): Promise<Message> {
+        const message = await this.request<Message>('sendMessageDraft', params);
+        if (message.chat && message.message_id) {
+            this.components.messages.addMessage(message.chat.id, message);
+        }
+        return message;
     }
 }

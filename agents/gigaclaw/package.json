@@ -1,0 +1,21 @@
+{
+  "name": "@ton-ai/gigaclaw",
+  "version": "0.1.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "testertesterov",
+  "license": "MIT",
+  "dependencies": {
+    "@ton-ai/core": "file:../../packages/core/ton-ai-core-0.1.0.tgz",
+    "@ton-ai/telegram-bot-api": "file:../../plugins/telegram-bot-api/ton-ai-telegram-bot-api-0.1.0.tgz",
+    "@ton-ai/gigachat": "file:../../plugins/gigachat/ton-ai-gigachat-0.1.0.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

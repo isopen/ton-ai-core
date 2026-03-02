@@ -1,0 +1,36 @@
+{
+  "name": "ton-ai-gigaclaw",
+  "version": "0.1.0",
+  "description": "GigaClaw agent that streams GigaChat responses to Telegram",
+  "scripts": {
+    "clean": "npm run clean:core && npm run clean:telegram && npm run clean:gigachat && npm run clean:agent",
+    "clean:core": "cd packages/core && npm run clean",
+    "clean:telegram": "cd plugins/telegram-bot-api && npm run clean",
+    "clean:gigachat": "cd plugins/gigachat && npm run clean",
+    "clean:agent": "cd agents/gigaclaw && rm -rf dist node_modules package-lock.json",
+
+    "build:core": "cd packages/core && npm install && npm run build && npm pack",
+    "build:telegram": "cd plugins/telegram-bot-api && npm install && npm run build && npm pack",
+    "build:gigachat": "cd plugins/gigachat && npm install && npm run build && npm pack",
+    "build:agent": "cd agents/gigaclaw && npm install",
+
+    "copy-packages": "mkdir -p agents/gigaclaw/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/gigaclaw/node_modules/@ton-ai/ 2>/dev/null && cp plugins/telegram-bot-api/ton-ai-telegram-bot-api-0.1.0.tgz agents/gigaclaw/node_modules/@ton-ai/ 2>/dev/null && cp plugins/gigachat/ton-ai-gigachat-0.1.0.tgz agents/gigaclaw/node_modules/@ton-ai/ 2>/dev/null || echo 'Package copy completed'",
+
+    "rebuild": "npm run clean && npm run build:core && npm run build:telegram && npm run build:gigachat && npm run build:agent && npm run copy-packages",
+    "rebuild:quick": "npm run build:core && npm run build:telegram && npm run build:gigachat && npm run copy-packages && cd agents/gigaclaw && npm install",
+
+    "start:agent": "cd agents/gigaclaw && npm start",
+    "dev": "npm run rebuild && npm run start:agent"
+  },
+  "keywords": [
+    "ton", 
+    "ai", 
+    "gigachat", 
+    "telegram", 
+    "bot", 
+    "streaming",
+    "gigaclaw"
+  ],
+  "author": "testertesterov",
+  "license": "MIT"
+}
