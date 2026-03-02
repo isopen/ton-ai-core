@@ -10,8 +10,7 @@
   },
   "dependencies": {
     "@ton/mcp": "^0.1.10",
-    "@ton/walletkit": "0.0.8",
-    "axios": "^1.7.4"
+    "@ton/walletkit": "0.0.8"
   },
   "devDependencies": {
     "@types/node": "^20.11.16",
