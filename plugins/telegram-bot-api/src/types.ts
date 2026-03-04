@@ -1,4 +1,3 @@
-// Config
 export interface TelegramBotConfig {
     token: string;
     apiBaseUrl?: string;
@@ -18,7 +17,6 @@ export interface TelegramBotConfig {
     maxRetries?: number;
 }
 
-// Core types
 export interface Update {
     update_id: number;
     message?: Message;
@@ -43,6 +41,16 @@ export interface Update {
     message_reaction_count?: any;
     chat_boost?: ChatBoost;
     removed_chat_boost?: any;
+}
+
+export interface MessageEntity {
+    type: 'mention' | 'hashtag' | 'cashtag' | 'bot_command' | 'url' | 'email' | 'phone_number' | 'bold' | 'italic' | 'underline' | 'strikethrough' | 'spoiler' | 'blockquote' | 'expandable_blockquote' | 'code' | 'pre' | 'text_link' | 'text_mention' | 'custom_emoji' | 'date_time';
+    offset: number;
+    length: number;
+    url?: string;
+    user?: User;
+    language?: string;
+    custom_emoji_id?: string;
 }
 
 export interface Message {
@@ -123,16 +131,7 @@ export interface Message {
     video_chat_participants_invited?: any;
     web_app_data?: any;
     reply_markup?: any;
-}
-
-export interface MessageEntity {
-    type: string;
-    offset: number;
-    length: number;
-    url?: string;
-    user?: User;
-    language?: string;
-    custom_emoji_id?: string;
+    sender_tag?: string;
 }
 
 export interface User {
@@ -221,7 +220,6 @@ export interface MessageId {
     message_id: number;
 }
 
-// Media types
 export interface PhotoSize {
     file_id: string;
     file_unique_id: string;
@@ -404,7 +402,6 @@ export interface SuccessfulPayment {
     provider_payment_charge_id: string;
 }
 
-// Bot commands
 export interface BotCommand {
     command: string;
     description: string;
@@ -428,7 +425,6 @@ export interface BotShortDescription {
     short_description: string;
 }
 
-// Webhook
 export interface WebhookInfo {
     url: string;
     has_custom_certificate: boolean;
@@ -441,14 +437,12 @@ export interface WebhookInfo {
     allowed_updates?: string[];
 }
 
-// Menu
 export interface MenuButton {
     type: 'commands' | 'web_app' | 'default';
     text?: string;
     web_app?: any;
 }
 
-// Chat permissions
 export interface ChatPermissions {
     can_send_messages?: boolean;
     can_send_audios?: boolean;
@@ -464,9 +458,9 @@ export interface ChatPermissions {
     can_invite_users?: boolean;
     can_pin_messages?: boolean;
     can_manage_topics?: boolean;
+    can_edit_tag?: boolean;
 }
 
-// Chat member
 export interface ChatMember {
     status: string;
     user: User;
@@ -488,6 +482,9 @@ export interface ChatMember {
     can_delete_stories?: boolean;
     is_anonymous?: boolean;
     custom_title?: string;
+    tag?: string;
+    can_edit_tag?: boolean;
+    can_manage_tags?: boolean;
 }
 
 export interface ChatMemberUpdated {
@@ -526,9 +523,9 @@ export interface ChatAdministratorRights {
     can_edit_messages?: boolean;
     can_pin_messages?: boolean;
     can_manage_topics?: boolean;
+    can_manage_tags?: boolean;
 }
 
-// Invite links
 export interface ChatInviteLink {
     invite_link: string;
     creator: User;
@@ -541,7 +538,6 @@ export interface ChatInviteLink {
     pending_join_request_count?: number;
 }
 
-// Forum
 export interface ForumTopic {
     message_thread_id: number;
     name: string;
@@ -576,7 +572,6 @@ export interface GeneralForumTopicUnhidden {
     [key: string]: never;
 }
 
-// Business
 export interface BusinessConnection {
     id: string;
     user: User;
@@ -586,7 +581,6 @@ export interface BusinessConnection {
     is_enabled: boolean;
 }
 
-// Inline mode
 export interface InlineQuery {
     id: string;
     from: User;
@@ -631,7 +625,6 @@ export interface PreCheckoutQuery {
     order_info?: any;
 }
 
-// Payments
 export interface LabeledPrice {
     label: string;
     amount: number;
@@ -649,7 +642,6 @@ export interface InlineQueryResult {
     [key: string]: any;
 }
 
-// Boosts
 export interface ChatBoost {
     boost_id: string;
     add_date: number;
@@ -661,13 +653,11 @@ export interface UserChatBoosts {
     boosts: ChatBoost[];
 }
 
-// Response parameters
 export interface ResponseParameters {
     migrate_to_chat_id?: number;
     retry_after?: number;
 }
 
-// Input media
 export interface InputMedia {
     type: string;
     media: string;
@@ -714,7 +704,6 @@ export interface InputMediaDocument extends InputMedia {
     disable_content_type_detection?: boolean;
 }
 
-// Keyboard markup
 export interface InlineKeyboardMarkup {
     inline_keyboard: InlineKeyboardButton[][];
 }
@@ -729,6 +718,7 @@ export interface InlineKeyboardButton {
     switch_inline_query_current_chat?: string;
     callback_game?: any;
     pay?: boolean;
+    icon_custom_emoji_id?: string;
 }
 
 export interface ReplyKeyboardMarkup {
@@ -748,6 +738,7 @@ export interface KeyboardButton {
     request_location?: boolean;
     request_poll?: any;
     web_app?: any;
+    icon_custom_emoji_id?: string;
 }
 
 export interface ReplyKeyboardRemove {
@@ -761,7 +752,6 @@ export interface ForceReply {
     selective?: boolean;
 }
 
-// Message params
 export interface SendMessageParams {
     chat_id: number;
     text: string;
@@ -774,6 +764,19 @@ export interface SendMessageParams {
     message_effect_id?: string;
     reply_parameters?: any;
     reply_markup?: InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | ForceReply;
+    business_connection_id?: string;
+}
+
+export interface SendMessageDraftParams {
+    chat_id: number;
+    draft_id: number;
+    text: string;
+    message_thread_id?: number;
+    parse_mode?: string;
+    entities?: MessageEntity[];
+    disable_notification?: boolean;
+    protect_content?: boolean;
+    reply_parameters?: any;
     business_connection_id?: string;
 }
 
@@ -1030,6 +1033,7 @@ export interface ForwardMessageParams {
     message_thread_id?: number;
     disable_notification?: boolean;
     protect_content?: boolean;
+    message_effect_id?: string;
 }
 
 export interface CopyMessageParams {
@@ -1045,6 +1049,7 @@ export interface CopyMessageParams {
     protect_content?: boolean;
     reply_parameters?: any;
     reply_markup?: InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | ForceReply;
+    message_effect_id?: string;
 }
 
 export interface EditMessageTextParams {
@@ -1135,12 +1140,19 @@ export interface PromoteChatMemberParams {
     can_edit_messages?: boolean;
     can_pin_messages?: boolean;
     can_manage_topics?: boolean;
+    can_manage_tags?: boolean;
 }
 
 export interface SetChatAdministratorCustomTitleParams {
     chat_id: number;
     user_id: number;
     custom_title: string;
+}
+
+export interface SetChatMemberTagParams {
+    chat_id: number;
+    user_id: number;
+    tag?: string;
 }
 
 export interface BanChatSenderChatParams {
@@ -1638,4 +1650,12 @@ export interface LogOutParams {
 
 export interface CloseParams {
     [key: string]: never;
+}
+
+export interface BottomButton {
+    text: string;
+    callback_data?: string;
+    url?: string;
+    web_app?: any;
+    icon_custom_emoji_id?: string;
 }

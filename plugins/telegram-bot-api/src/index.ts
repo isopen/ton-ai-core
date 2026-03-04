@@ -160,7 +160,9 @@ import {
     SetStickerKeywordsParams,
     SetStickerMaskPositionParams,
     LogOutParams,
-    CloseParams
+    CloseParams,
+    SendMessageDraftParams,
+    SetChatMemberTagParams
 } from './types';
 
 export * from './components';
@@ -1777,5 +1779,15 @@ export class TelegramBotPlugin implements Plugin {
         if (!this.initialized) {
             throw new Error('Plugin not initialized. Call initialize() first.');
         }
+    }
+
+    async setChatMemberTag(params: SetChatMemberTagParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.setChatMemberTag(params);
+    }
+
+    async sendMessageDraft(params: SendMessageDraftParams): Promise<Message> {
+        this.checkInitialized();
+        return this.skills.sendMessageDraft(params);
     }
 }

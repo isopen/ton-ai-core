@@ -46,6 +46,9 @@ use-telegram-bot:
 use-gigachat:
 	$(call build_with_config,gigachat)
 
+use-gigaclaw:
+	$(call build_with_config,gigaclaw)
+
 build-ton-ai-core:
 	$(call build_with_config,ton-ai-core)
 
@@ -63,6 +66,9 @@ build-telegram-bot:
 
 build-gigachat:
 	$(call build_with_config,gigachat)
+
+build-gigaclaw:
+	$(call build_with_config,gigaclaw)
 
 list-configs:
 	@echo "Available configurations:"
