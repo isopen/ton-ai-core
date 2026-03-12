@@ -49,6 +49,9 @@ use-gigachat:
 use-gigaclaw:
 	$(call build_with_config,gigaclaw)
 
+use-content-checker:
+	$(call build_with_config,content-checker)
+
 build-ton-ai-core:
 	$(call build_with_config,ton-ai-core)
 
@@ -69,6 +72,9 @@ build-gigachat:
 
 build-gigaclaw:
 	$(call build_with_config,gigaclaw)
+
+build-content-checker:
+	$(call build_with_config,content-checker)
 
 list-configs:
 	@echo "Available configurations:"

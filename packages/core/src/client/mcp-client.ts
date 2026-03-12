@@ -1,13 +1,14 @@
 import { EventEmitter } from 'events';
 import { fromNano, toNano } from '@ton/core';
 import { createTonWalletMCP } from '@ton/mcp';
-import { 
-  Signer, 
-  WalletV5R1Adapter, 
-  TonWalletKit, 
-  Network, 
+import {
+  Signer,
+  WalletV5R1Adapter,
+  TonWalletKit,
+  Network,
   MemoryStorageAdapter
 } from '@ton/walletkit';
+import { MCP_EVENTS } from '../events';
 import {
   MCPConfig,
   JsonRpcResponse,
@@ -69,8 +70,8 @@ export class MCPClient extends EventEmitter {
     try {
       console.log('Initializing MCP stdio mode with programmatic API...');
 
-      const network = this.config.network === 'testnet' 
-        ? Network.testnet() 
+      const network = this.config.network === 'testnet'
+        ? Network.testnet()
         : Network.mainnet();
 
       this.kit = new TonWalletKit({
@@ -126,11 +127,11 @@ export class MCPClient extends EventEmitter {
       console.log(`Network: ${this.config.network}`);
 
       this.isReady = true;
-      this.emit('ready');
+      this.emit(MCP_EVENTS.READY);
 
     } catch (error) {
       console.error('Failed to initialize stdio mode:', error);
-      this.emit('error', error);
+      this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -140,7 +141,7 @@ export class MCPClient extends EventEmitter {
     this.httpEndpoint = `${protocol}://${this.config.host}:${this.config.port}/mcp`;
     console.log(`MCP ${protocol.toUpperCase()} endpoint: ${this.httpEndpoint}`);
     this.isReady = true;
-    this.emit('ready');
+    this.emit(MCP_EVENTS.READY);
   }
 
   private async request(method: string, params: any = {}): Promise<any> {
@@ -296,15 +297,60 @@ export class MCPClient extends EventEmitter {
   }
 
   async send_ton(toAddress: string, amount: string, comment?: string): Promise<SendTONResponse> {
-    return this.request('send_ton', { toAddress, amount, comment });
+    try {
+      const result = await this.request('send_ton', { toAddress, amount, comment });
+
+      this.emit(MCP_EVENTS.TRANSACTION, {
+        hash: result.hash,
+        amount,
+        type: 'send_ton',
+        from: this.walletAddress,
+        to: toAddress
+      });
+
+      return result;
+    } catch (error) {
+      this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
   }
 
   async send_jetton(toAddress: string, jettonAddress: string, amount: string, comment?: string): Promise<SendJettonResponse> {
-    return this.request('send_jetton', { toAddress, jettonAddress, amount, comment });
+    try {
+      const result = await this.request('send_jetton', { toAddress, jettonAddress, amount, comment });
+
+      this.emit(MCP_EVENTS.TRANSACTION, {
+        hash: result.hash,
+        amount,
+        type: 'send_jetton',
+        from: this.walletAddress,
+        to: toAddress
+      });
+
+      return result;
+    } catch (error) {
+      this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
   }
 
   async send_raw_transaction(messages: Message[], validUntil?: number, fromAddress?: string): Promise<SendRawTransactionResponse> {
-    return this.request('send_raw_transaction', { messages, validUntil, fromAddress });
+    try {
+      const result = await this.request('send_raw_transaction', { messages, validUntil, fromAddress });
+
+      this.emit(MCP_EVENTS.TRANSACTION, {
+        hash: result.hash,
+        amount: '0',
+        type: 'send_raw',
+        from: fromAddress || this.walletAddress,
+        to: 'multiple'
+      });
+
+      return result;
+    } catch (error) {
+      this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
   }
 
   async get_nfts(limit: number = 20, offset: number = 0): Promise<NFT[]> {
@@ -317,7 +363,26 @@ export class MCPClient extends EventEmitter {
   }
 
   async send_nft(nftAddress: string, toAddress: string, comment?: string): Promise<SendNFTResponse> {
-    return this.request('send_nft', { nftAddress, toAddress, comment });
+    try {
+      const result = await this.request('send_nft', { nftAddress, toAddress, comment });
+
+      this.emit(MCP_EVENTS.TRANSACTION, {
+        hash: result.hash,
+        type: 'send_nft',
+        from: this.walletAddress,
+        to: toAddress
+      });
+
+      this.emit(MCP_EVENTS.NFT_UPDATE, {
+        address: nftAddress,
+        owner: toAddress
+      });
+
+      return result;
+    } catch (error) {
+      this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
   }
 
   async resolve_dns(domain: string): Promise<ResolveDNSResponse> {
@@ -332,12 +397,42 @@ export class MCPClient extends EventEmitter {
     return this.request('get_swap_quote', { fromToken, toToken, amount, slippageBps });
   }
 
-  async execute_swap(quote: any): Promise<{ hash: string; success: boolean }> {
-    return this.request('execute_swap', { quote });
+  async execute_swap(quote: any, amount?: string): Promise<{ hash: string; success: boolean }> {
+    try {
+      const result = await this.request('execute_swap', { quote });
+
+      this.emit(MCP_EVENTS.TRANSACTION, {
+        hash: result.hash,
+        amount: amount || quote?.amount || '0',
+        type: 'swap',
+        from: this.walletAddress,
+        to: 'dex'
+      });
+
+      return result;
+    } catch (error) {
+      this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
   }
 
   async swap_tokens(fromToken: string, toToken: string, amount: string, slippageBps?: number): Promise<{ hash: string; quote: any; success: boolean }> {
-    return this.request('swap_tokens', { fromToken, toToken, amount, slippageBps });
+    try {
+      const result = await this.request('swap_tokens', { fromToken, toToken, amount, slippageBps });
+
+      this.emit(MCP_EVENTS.TRANSACTION, {
+        hash: result.hash,
+        amount,
+        type: 'swap',
+        from: this.walletAddress,
+        to: 'dex'
+      });
+
+      return result;
+    } catch (error) {
+      this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
   }
 
   async getBalance(): Promise<BalanceResponse> {
@@ -408,6 +503,8 @@ export class MCPClient extends EventEmitter {
     if (this.abortController) {
       this.abortController.abort();
     }
+
+    this.emit(MCP_EVENTS.CLOSED, 0);
     this.removeAllListeners();
   }
 
@@ -419,7 +516,7 @@ export class MCPClient extends EventEmitter {
         reject(new Error('Timeout waiting for MCP to be ready'));
       }, timeout);
 
-      this.once('ready', () => {
+      this.once(MCP_EVENTS.READY, () => {
         clearTimeout(timer);
         resolve();
       });

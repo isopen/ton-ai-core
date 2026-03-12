@@ -32,7 +32,9 @@ import {
     Message,
     ToolDefinitionJson,
     ChatHistory,
-    Provider
+    Provider,
+    VisionAnalysisOptions,
+    VisionAnalysisResult
 } from './types';
 
 export * from './components';
@@ -43,7 +45,7 @@ export class OpenRouterPlugin implements Plugin {
     public metadata: PluginMetadata = {
         name: 'openrouter',
         version: '0.1.0',
-        description: 'Complete OpenRouter API integration with all endpoints: Responses API, Anthropic Messages, Models, Endpoints, Activity, Credits, Embeddings, Generations, API Keys, Guardrails, Providers, OAuth, and Chat Completions',
+        description: 'Complete OpenRouter API integration',
         author: 'TON AI Core Team',
         dependencies: []
     };
@@ -64,7 +66,7 @@ export class OpenRouterPlugin implements Plugin {
         this.config = {
             apiKey: process.env.OPENROUTER_API_KEY || '',
             baseUrl: 'https://openrouter.ai/api/v1',
-            defaultModel: 'openai/gpt-4o',
+            defaultModel: 'arcee-ai/trinity-large-preview:free',
             appIdentifier: 'https://ton-ai.core',
             appDisplayName: 'TON AI Core',
             maxHistory: 100,
@@ -84,7 +86,7 @@ export class OpenRouterPlugin implements Plugin {
     }
 
     async onActivate(): Promise<void> {
-        this.context.logger.info('🔌 OpenRouter plugin activated');
+        this.context.logger.info('OpenRouter plugin activated');
 
         this.startCreditMonitoring();
 
@@ -99,14 +101,14 @@ export class OpenRouterPlugin implements Plugin {
     }
 
     async onDeactivate(): Promise<void> {
-        this.context.logger.info('🔌 OpenRouter plugin deactivated');
+        this.context.logger.info('OpenRouter plugin deactivated');
 
         this.stopCreditMonitoring();
         this.context.events.emit('openrouter:deactivated');
     }
 
     async shutdown(): Promise<void> {
-        this.context.logger.info('🛑 OpenRouter plugin shutting down...');
+        this.context.logger.info('OpenRouter plugin shutting down...');
 
         this.stopCreditMonitoring();
         this.components.cleanup();
@@ -115,7 +117,7 @@ export class OpenRouterPlugin implements Plugin {
 
     async onConfigChange(newConfig: Record<string, any>): Promise<void> {
         this.config = { ...this.config, ...newConfig } as OpenRouterConfig;
-        this.context.logger.info('⚙️ OpenRouter config updated', this.config);
+        this.context.logger.info('OpenRouter config updated');
 
         this.components.updateConfig(this.config);
 
@@ -144,14 +146,14 @@ export class OpenRouterPlugin implements Plugin {
             this.config.monitorInterval
         );
 
-        this.context.logger.info(`💰 Credit monitoring started (interval: ${this.config.monitorInterval}ms)`);
+        this.context.logger.info(`Credit monitoring started (interval: ${this.config.monitorInterval}ms)`);
     }
 
     private stopCreditMonitoring(): void {
         if (this.creditMonitorInterval) {
             clearInterval(this.creditMonitorInterval);
             this.creditMonitorInterval = undefined;
-            this.context.logger.info('💰 Credit monitoring stopped');
+            this.context.logger.info('Credit monitoring stopped');
         }
     }
 
@@ -171,7 +173,7 @@ export class OpenRouterPlugin implements Plugin {
                     total: response.data.total_credits,
                     usage: response.data.total_usage
                 });
-                this.context.logger.warn(`⚠️ Low credits: ${remaining.toFixed(2)} remaining`);
+                this.context.logger.warn(`Low credits: ${remaining.toFixed(2)} remaining`);
             }
         } catch (error) {
             this.context.logger.debug('Error monitoring credits:', error);
@@ -188,6 +190,21 @@ export class OpenRouterPlugin implements Plugin {
         this.config.apiKey = apiKey;
         this.skills.setApiKey(apiKey);
         this.context.events.emit('openrouter:apiKey:updated');
+    }
+
+    async analyzeImage(imagePath: string, options?: VisionAnalysisOptions): Promise<VisionAnalysisResult> {
+        this.checkInitialized();
+        return this.skills.analyzeImage(imagePath, options);
+    }
+
+    async analyzeVideo(videoPath: string, options?: VisionAnalysisOptions): Promise<VisionAnalysisResult> {
+        this.checkInitialized();
+        return this.skills.analyzeVideo(videoPath, options);
+    }
+
+    async analyzeMedia(mediaPath: string, options?: VisionAnalysisOptions): Promise<VisionAnalysisResult> {
+        this.checkInitialized();
+        return this.skills.analyzeMedia(mediaPath, options);
     }
 
     async createResponse(
