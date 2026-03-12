@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { MCPClient } from '../client';
 import { PluginManager } from '../plugin';
 import { Plugin } from '../plugin/plugin-interface';
+import { AGENT_EVENTS, PLUGIN_EVENTS, MCP_EVENTS } from '../events';
 import {
   MCPConfig,
   BalanceResponse,
@@ -20,10 +21,31 @@ import {
   Message
 } from '../types';
 
+export type AgentEventType = typeof AGENT_EVENTS[keyof typeof AGENT_EVENTS];
+
 export interface AgentConfig extends MCPConfig {
   id?: string;
   name?: string;
   plugins?: Record<string, any>;
+}
+
+export interface BaseAgent {
+  on(event: typeof AGENT_EVENTS.INITIALIZED, listener: (data: { id: string; name: string; startTime: Date; walletAddress?: string }) => void): this;
+  on(event: typeof AGENT_EVENTS.STARTED, listener: (data: { id: string; name: string }) => void): this;
+  on(event: typeof AGENT_EVENTS.STOPPED, listener: (data: { id: string; name: string }) => void): this;
+  on(event: typeof AGENT_EVENTS.ERROR, listener: (error: Error) => void): this;
+  on(event: typeof PLUGIN_EVENTS.REGISTERED, listener: (data: { name: string }) => void): this;
+  on(event: typeof PLUGIN_EVENTS.UNREGISTERED, listener: (data: { name: string }) => void): this;
+  on(event: typeof PLUGIN_EVENTS.ACTIVATED, listener: (data: { name: string }) => void): this;
+  on(event: typeof PLUGIN_EVENTS.DEACTIVATED, listener: (data: { name: string }) => void): this;
+  on(event: typeof MCP_EVENTS.READY, listener: () => void): this;
+  on(event: typeof MCP_EVENTS.ERROR, listener: (error: Error) => void): this;
+  on(event: typeof MCP_EVENTS.CLOSED, listener: (code: number | null) => void): this;
+  on(event: typeof MCP_EVENTS.BALANCE_UPDATE, listener: (data: { ton: string; jettons?: Array<{ address: string; balance: string; symbol: string }> }) => void): this;
+  on(event: typeof MCP_EVENTS.TRANSACTION, listener: (data: { hash: string; amount: string; type: string; from?: string; to?: string }) => void): this;
+  on(event: typeof MCP_EVENTS.JETTON_UPDATE, listener: (data: { address: string; balance: string; symbol: string }) => void): this;
+  on(event: typeof MCP_EVENTS.NFT_UPDATE, listener: (data: { address: string; owner: string; collection?: string }) => void): this;
+  on(event: string, listener: (...args: any[]) => void): this;
 }
 
 export abstract class BaseAgent extends EventEmitter {
@@ -44,6 +66,34 @@ export abstract class BaseAgent extends EventEmitter {
 
     this.mcp = new MCPClient(config);
     this.plugins = new PluginManager(this.mcp, config.plugins);
+
+    this.mcp.on(MCP_EVENTS.READY, () => {
+      this.emit(MCP_EVENTS.READY);
+    });
+
+    this.mcp.on(MCP_EVENTS.ERROR, (error) => {
+      this.emit(MCP_EVENTS.ERROR, error);
+    });
+
+    this.mcp.on(MCP_EVENTS.CLOSED, (code) => {
+      this.emit(MCP_EVENTS.CLOSED, code);
+    });
+
+    this.mcp.on(MCP_EVENTS.BALANCE_UPDATE, (data) => {
+      this.emit(MCP_EVENTS.BALANCE_UPDATE, data);
+    });
+
+    this.mcp.on(MCP_EVENTS.TRANSACTION, (data) => {
+      this.emit(MCP_EVENTS.TRANSACTION, data);
+    });
+
+    this.mcp.on(MCP_EVENTS.JETTON_UPDATE, (data) => {
+      this.emit(MCP_EVENTS.JETTON_UPDATE, data);
+    });
+
+    this.mcp.on(MCP_EVENTS.NFT_UPDATE, (data) => {
+      this.emit(MCP_EVENTS.NFT_UPDATE, data);
+    });
   }
 
   async initialize(): Promise<void> {
@@ -60,14 +110,14 @@ export abstract class BaseAgent extends EventEmitter {
       this.startTime = new Date();
       this.initialized = true;
 
-      this.emit('initialized', { 
-        id: this.id, 
+      this.emit(AGENT_EVENTS.INITIALIZED, {
+        id: this.id,
         name: this.name,
         startTime: this.startTime,
         walletAddress: this.mcp.getWalletAddress()
       });
     } catch (error) {
-      this.emit('error', error);
+      this.emit(AGENT_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -80,7 +130,7 @@ export abstract class BaseAgent extends EventEmitter {
     if (!this.isRunning) {
       this.isRunning = true;
       await this.onStart();
-      this.emit('started', { id: this.id, name: this.name });
+      this.emit(AGENT_EVENTS.STARTED, { id: this.id, name: this.name });
     }
   }
 
@@ -92,29 +142,38 @@ export abstract class BaseAgent extends EventEmitter {
     await this.onStop();
     await this.mcp.close();
 
-    this.emit('stopped', { id: this.id, name: this.name });
+    this.emit(AGENT_EVENTS.STOPPED, { id: this.id, name: this.name });
     this.removeAllListeners();
   }
 
   async registerPlugin(plugin: Plugin, config?: Record<string, any>): Promise<void> {
     await this.plugins.registerPlugin(plugin);
+    this.emit(PLUGIN_EVENTS.REGISTERED, { name: plugin.metadata.name });
+
     if (config) {
       await this.plugins.activatePlugin(plugin.metadata.name, config);
+      this.emit(PLUGIN_EVENTS.ACTIVATED, { name: plugin.metadata.name });
     }
-    this.emit('plugin:registered', { name: plugin.metadata.name });
   }
 
   async unregisterPlugin(pluginName: string): Promise<void> {
+    if (this.plugins.isActive(pluginName)) {
+      await this.plugins.deactivatePlugin(pluginName);
+      this.emit(PLUGIN_EVENTS.DEACTIVATED, { name: pluginName });
+    }
+
     await this.plugins.unregisterPlugin(pluginName);
-    this.emit('plugin:unregistered', { name: pluginName });
+    this.emit(PLUGIN_EVENTS.UNREGISTERED, { name: pluginName });
   }
 
   async activatePlugin(pluginName: string, config?: Record<string, any>): Promise<void> {
     await this.plugins.activatePlugin(pluginName, config);
+    this.emit(PLUGIN_EVENTS.ACTIVATED, { name: pluginName });
   }
 
   async deactivatePlugin(pluginName: string): Promise<void> {
     await this.plugins.deactivatePlugin(pluginName);
+    this.emit(PLUGIN_EVENTS.DEACTIVATED, { name: pluginName });
   }
 
   getPlugin<T extends Plugin>(name: string): T | undefined {

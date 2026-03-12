@@ -1,11 +1,26 @@
 import { EventEmitter } from 'events';
 import { PluginManager } from '../plugin';
 import { Plugin } from '../plugin/plugin-interface';
+import { AGENT_EVENTS, PLUGIN_EVENTS } from '../events';
+
+export type AgentEventType = typeof AGENT_EVENTS[keyof typeof AGENT_EVENTS];
 
 export interface SimpleAgentConfig {
   id?: string;
   name?: string;
   plugins?: Record<string, any>;
+}
+
+export interface BaseAgentSimple {
+  on(event: typeof AGENT_EVENTS.INITIALIZED, listener: (data: { id: string; name: string; startTime: Date }) => void): this;
+  on(event: typeof AGENT_EVENTS.STARTED, listener: (data: { id: string; name: string }) => void): this;
+  on(event: typeof AGENT_EVENTS.STOPPED, listener: (data: { id: string; name: string }) => void): this;
+  on(event: typeof AGENT_EVENTS.ERROR, listener: (error: Error) => void): this;
+  on(event: typeof PLUGIN_EVENTS.REGISTERED, listener: (data: { name: string }) => void): this;
+  on(event: typeof PLUGIN_EVENTS.UNREGISTERED, listener: (data: { name: string }) => void): this;
+  on(event: typeof PLUGIN_EVENTS.ACTIVATED, listener: (data: { name: string }) => void): this;
+  on(event: typeof PLUGIN_EVENTS.DEACTIVATED, listener: (data: { name: string }) => void): this;
+  on(event: string, listener: (...args: any[]) => void): this;
 }
 
 export abstract class BaseAgentSimple extends EventEmitter {
@@ -32,13 +47,13 @@ export abstract class BaseAgentSimple extends EventEmitter {
       await this.onInitialize();
       this.startTime = new Date();
       this.initialized = true;
-      this.emit('initialized', { 
-        id: this.id, 
+      this.emit(AGENT_EVENTS.INITIALIZED, {
+        id: this.id,
         name: this.name,
         startTime: this.startTime
       });
     } catch (error) {
-      this.emit('error', error);
+      this.emit(AGENT_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -51,7 +66,7 @@ export abstract class BaseAgentSimple extends EventEmitter {
     if (!this.isRunning) {
       this.isRunning = true;
       await this.onStart();
-      this.emit('started', { id: this.id, name: this.name });
+      this.emit(AGENT_EVENTS.STARTED, { id: this.id, name: this.name });
     }
   }
 
@@ -60,29 +75,38 @@ export abstract class BaseAgentSimple extends EventEmitter {
     this.initialized = false;
     await this.plugins.deactivateAll();
     await this.onStop();
-    this.emit('stopped', { id: this.id, name: this.name });
+    this.emit(AGENT_EVENTS.STOPPED, { id: this.id, name: this.name });
     this.removeAllListeners();
   }
 
   async registerPlugin(plugin: Plugin, config?: Record<string, any>): Promise<void> {
     await this.plugins.registerPlugin(plugin);
+    this.emit(PLUGIN_EVENTS.REGISTERED, { name: plugin.metadata.name });
+
     if (config) {
       await this.plugins.activatePlugin(plugin.metadata.name, config);
+      this.emit(PLUGIN_EVENTS.ACTIVATED, { name: plugin.metadata.name });
     }
-    this.emit('plugin:registered', { name: plugin.metadata.name });
   }
 
   async unregisterPlugin(pluginName: string): Promise<void> {
+    if (this.plugins.isActive(pluginName)) {
+      await this.plugins.deactivatePlugin(pluginName);
+      this.emit(PLUGIN_EVENTS.DEACTIVATED, { name: pluginName });
+    }
+
     await this.plugins.unregisterPlugin(pluginName);
-    this.emit('plugin:unregistered', { name: pluginName });
+    this.emit(PLUGIN_EVENTS.UNREGISTERED, { name: pluginName });
   }
 
   async activatePlugin(pluginName: string, config?: Record<string, any>): Promise<void> {
     await this.plugins.activatePlugin(pluginName, config);
+    this.emit(PLUGIN_EVENTS.ACTIVATED, { name: pluginName });
   }
 
   async deactivatePlugin(pluginName: string): Promise<void> {
     await this.plugins.deactivatePlugin(pluginName);
+    this.emit(PLUGIN_EVENTS.DEACTIVATED, { name: pluginName });
   }
 
   getPlugin<T extends Plugin>(name: string): T | undefined {

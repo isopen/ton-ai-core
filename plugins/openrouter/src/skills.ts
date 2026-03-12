@@ -1,5 +1,9 @@
 import { PluginContext } from '@ton-ai/core';
 import { OpenRouterComponents } from './components';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as https from 'https';
+import * as http from 'http';
 import {
     OpenResponsesRequest,
     OpenResponsesNonStreamingResponse,
@@ -27,7 +31,10 @@ import {
     ChatResponse,
     ChatStreamingResponseChunk,
     OpenRouterConfig,
-    Provider
+    Provider,
+    VisionAnalysisOptions,
+    VisionAnalysisResult,
+    Message
 } from './types';
 
 export class OpenRouterSkills {
@@ -83,6 +90,182 @@ export class OpenRouterSkills {
             ...additionalHeaders
         };
         return headers;
+    }
+
+    private async downloadFile(url: string): Promise<Buffer> {
+        return new Promise((resolve, reject) => {
+            const protocol = url.startsWith('https') ? https : http;
+
+            protocol.get(url, (response) => {
+                if (response.statusCode !== 200) {
+                    reject(new Error(`Failed to download: ${response.statusCode}`));
+                    return;
+                }
+
+                const chunks: Buffer[] = [];
+                response.on('data', (chunk) => chunks.push(chunk));
+                response.on('end', () => resolve(Buffer.concat(chunks)));
+                response.on('error', reject);
+            }).on('error', reject);
+        });
+    }
+
+    private async readMediaFile(mediaPath: string): Promise<{ buffer: Buffer; mimeType: string }> {
+        let buffer: Buffer;
+
+        if (mediaPath.startsWith('http://') || mediaPath.startsWith('https://')) {
+            buffer = await this.downloadFile(mediaPath);
+        } else {
+            const resolvedPath = path.resolve(mediaPath);
+            if (!fs.existsSync(resolvedPath)) {
+                throw new Error(`File not found: ${resolvedPath}`);
+            }
+            buffer = fs.readFileSync(resolvedPath);
+        }
+
+        const ext = path.extname(mediaPath).toLowerCase();
+        let mimeType: string;
+
+        if (mediaPath.startsWith('http')) {
+            if (mediaPath.match(/\.(jpg|jpeg)/i)) mimeType = 'image/jpeg';
+            else if (mediaPath.match(/\.png/i)) mimeType = 'image/png';
+            else if (mediaPath.match(/\.gif/i)) mimeType = 'image/gif';
+            else if (mediaPath.match(/\.webp/i)) mimeType = 'image/webp';
+            else if (mediaPath.match(/\.mp4/i)) mimeType = 'video/mp4';
+            else if (mediaPath.match(/\.webm/i)) mimeType = 'video/webm';
+            else if (mediaPath.match(/\.mov/i)) mimeType = 'video/quicktime';
+            else if (mediaPath.match(/\.avi/i)) mimeType = 'video/x-msvideo';
+            else mimeType = 'application/octet-stream';
+        } else {
+            const mimeTypes: Record<string, string> = {
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.png': 'image/png',
+                '.gif': 'image/gif',
+                '.webp': 'image/webp',
+                '.mp4': 'video/mp4',
+                '.webm': 'video/webm',
+                '.mov': 'video/quicktime',
+                '.avi': 'video/x-msvideo'
+            };
+            mimeType = mimeTypes[ext] || 'application/octet-stream';
+        }
+
+        return { buffer, mimeType };
+    }
+
+    async analyzeImage(imagePath: string, options?: VisionAnalysisOptions): Promise<VisionAnalysisResult> {
+        const startTime = Date.now();
+
+        try {
+            const { buffer, mimeType } = await this.readMediaFile(imagePath);
+            const base64Image = buffer.toString('base64');
+
+            const prompt = options?.prompt || 'Analyze this image in detail. Describe what you see, including objects, people, text, colors, composition, and any notable elements.';
+
+            const messages = [
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'image_url',
+                            image_url: {
+                                url: `data:${mimeType};base64,${base64Image}`
+                            }
+                        },
+                        {
+                            type: 'text',
+                            text: prompt
+                        }
+                    ]
+                }
+            ];
+
+            const response = await this.request<ChatResponse>('POST', '/chat/completions', {
+                model: options?.model || 'nvidia/nemotron-nano-12b-v2-vl:free',
+                messages: messages,
+                temperature: options?.temperature,
+                max_tokens: options?.maxTokens
+            });
+
+            const processingTime = Date.now() - startTime;
+            const content = response.choices[0]?.message?.content;
+
+            return {
+                analysis: typeof content === 'string' ? content : JSON.stringify(content),
+                model: response.model,
+                usage: response.usage,
+                processingTime
+            };
+
+        } catch (error) {
+            throw new Error(`Image analysis failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    async analyzeVideo(videoPath: string, options?: VisionAnalysisOptions): Promise<VisionAnalysisResult> {
+        const startTime = Date.now();
+
+        try {
+            const { buffer, mimeType } = await this.readMediaFile(videoPath);
+
+            if (buffer.length > 10 * 1024 * 1024) {
+                this.context.logger.warn('Video file is large (>10MB). Processing may be slow.');
+            }
+
+            const base64Video = buffer.toString('base64');
+
+            const prompt = options?.prompt || 'Analyze this video. Describe what is happening, including actions, people, objects, scenes, and any notable elements.';
+
+            const messages = [
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'video_url',
+                            video_url: {
+                                url: `data:${mimeType};base64,${base64Video}`
+                            }
+                        },
+                        {
+                            type: 'text',
+                            text: prompt
+                        }
+                    ]
+                }
+            ];
+
+            const response = await this.request<ChatResponse>('POST', '/chat/completions', {
+                model: options?.model || 'nvidia/nemotron-nano-12b-v2-vl:free',
+                messages: messages,
+                temperature: options?.temperature,
+                max_tokens: options?.maxTokens
+            });
+
+            const processingTime = Date.now() - startTime;
+            const content = response.choices[0]?.message?.content;
+
+            return {
+                analysis: typeof content === 'string' ? content : JSON.stringify(content),
+                model: response.model,
+                usage: response.usage,
+                processingTime
+            };
+
+        } catch (error) {
+            throw new Error(`Video analysis failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    async analyzeMedia(mediaPath: string, options?: VisionAnalysisOptions): Promise<VisionAnalysisResult> {
+        const isVideo = mediaPath.match(/\.(mp4|webm|mov|avi)$/i) ||
+            (mediaPath.startsWith('http') && mediaPath.match(/\.(mp4|webm|mov|avi)/i));
+
+        if (isVideo) {
+            return this.analyzeVideo(mediaPath, options);
+        } else {
+            return this.analyzeImage(mediaPath, options);
+        }
     }
 
     private async request<T>(

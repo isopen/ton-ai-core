@@ -1901,3 +1901,22 @@ export interface ChatHistory {
     cost?: number;
     provider?: string;
 }
+
+export interface VisionAnalysisOptions {
+    prompt?: string;
+    temperature?: number;
+    maxTokens?: number;
+    model?: string;
+}
+
+export interface VisionAnalysisResult {
+    analysis: string;
+    model: string;
+    usage?: {
+        prompt_tokens: number;
+        completion_tokens: number;
+        total_tokens: number;
+    };
+    processingTime: number;
+}
+

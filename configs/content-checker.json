@@ -1,0 +1,28 @@
+{
+  "name": "ton-ai-content-checker",
+  "version": "0.1.0",
+  "description": "Content checker agent for analyzing images and videos",
+  "scripts": {
+    "clean": "npm run clean:core && npm run clean:openrouter && npm run clean:agent",
+    "clean:core": "cd packages/core && npm run clean",
+    "clean:openrouter": "cd plugins/openrouter && npm run clean",
+    "clean:agent": "cd agents/content-checker && (test -d dist && rm -rf dist || true) && (test -d node_modules/@ton-ai && rm -rf node_modules/@ton-ai || true)",
+
+    "build:core": "cd packages/core && npm install && npm run build && npm pack",
+    "build:openrouter": "cd plugins/openrouter && npm install && npm run build && npm pack",
+    "build:agent": "cd agents/content-checker && npm install",
+
+    "copy-packages": "mkdir -p agents/content-checker/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/content-checker/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped' && cp plugins/openrouter/ton-ai-openrouter-0.1.0.tgz agents/content-checker/node_modules/@ton-ai/ 2>/dev/null || echo 'OpenRouter package copy skipped'",
+
+    "rebuild": "npm run clean && npm run build:core && npm run build:openrouter && npm run build:agent && npm run copy-packages",
+
+    "rebuild:quick": "npm run build:core && npm run build:openrouter && npm run copy-packages && cd agents/content-checker && npm install",
+
+    "start:agent": "cd agents/content-checker && npm start",
+
+    "dev": "npm run rebuild && npm run start:agent"
+  },
+  "keywords": ["ton", "ai", "content-checker", "image-analysis", "video-analysis"],
+  "author": "testertesterov",
+  "license": "MIT"
+}
