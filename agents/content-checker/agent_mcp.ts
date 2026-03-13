@@ -156,6 +156,23 @@ export class ContentCheckerAgent extends BaseAgent {
         });
     }
 
+    private async ensureModelAvailable(modelId: string): Promise<boolean> {
+        try {
+            const models = await this.openRouter.listModels();
+            const modelExists = models.data.some(m => m.id === modelId || m.canonical_slug === modelId);
+
+            if (!modelExists) {
+                console.error(`Model ${modelId} not found in available models`);
+                return false;
+            }
+
+            return true;
+        } catch (error) {
+            console.error('Error checking model availability:', error);
+            return false;
+        }
+    }
+
     private async ensureSufficientBalance(): Promise<void> {
         if (!this.agentConfig.treasuryAddress) return;
 
@@ -174,6 +191,11 @@ export class ContentCheckerAgent extends BaseAgent {
         }
 
         try {
+            const modelAvailable = await this.ensureModelAvailable(this.agentConfig.defaultModel!);
+            if (!modelAvailable) {
+                throw new Error(`Model ${this.agentConfig.defaultModel} is not available`);
+            }
+
             await this.ensureSufficientBalance();
 
             const response = await this.mcp.sendTON(
