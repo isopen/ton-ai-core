@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "author": "testertesterov",
-  "license": "MIT",
+  "license": "Boost Software License 1.0",
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist"

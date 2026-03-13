@@ -52,6 +52,9 @@ use-gigaclaw:
 use-content-checker:
 	$(call build_with_config,content-checker)
 
+use-logger:
+	$(call build_with_config,logger)
+
 build-ton-ai-core:
 	$(call build_with_config,ton-ai-core)
 
@@ -75,6 +78,9 @@ build-gigaclaw:
 
 build-content-checker:
 	$(call build_with_config,content-checker)
+
+build-logger:
+	$(call build_with_config,logger)
 
 list-configs:
 	@echo "Available configurations:"

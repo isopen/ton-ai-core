@@ -7,7 +7,7 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "testertesterov",
-  "license": "MIT",
+  "license": "Boost Software License 1.0",
   "dependencies": {
     "@ton-ai/core": "file:../../packages/core/ton-ai-core-0.1.0.tgz",
     "@ton-ai/openrouter": "file:../../plugins/openrouter/ton-ai-openrouter-0.1.0.tgz"

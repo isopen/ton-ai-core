@@ -1,5 +1,5 @@
 {
-  "name": "@ton-ai/content-checker",
+  "name": "@ton-ai/logger",
   "version": "0.1.0",
   "description": "",
   "main": "index.js",
@@ -9,8 +9,9 @@
   "author": "testertesterov",
   "license": "Boost Software License 1.0",
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "@ton-ai/core": "file:../../packages/core/ton-ai-core-0.1.0.tgz",
-    "@ton-ai/openrouter": "file:../../plugins/openrouter/ton-ai-openrouter-0.1.0.tgz"
+    "@ton-ai/lancedb": "file:../../plugins/lancedb/ton-ai-lancedb-0.1.0.tgz"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",
