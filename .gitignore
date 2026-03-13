@@ -32,6 +32,8 @@ temp/
 *.tmp
 *.temp
 
+*.lance
+
 *.tgz
 
 package.json.backup

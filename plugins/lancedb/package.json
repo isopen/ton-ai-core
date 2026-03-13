@@ -1,20 +1,21 @@
 {
-  "name": "@ton-ai/core",
+  "name": "@ton-ai/lancedb",
   "version": "0.1.0",
-  "description": "Core package for TON AI Framework",
+  "description": "LanceDB plugin for TON AI Framework",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "author": "testertesterov",
   "license": "Boost Software License 1.0",
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@ton/mcp": "^0.1.10",
-    "@ton/walletkit": "0.0.8"
+    "@lancedb/lancedb": "^0.26.2"
   },
   "devDependencies": {
-    "@types/node": "^20.11.16",
+    "@ton-ai/core": "file:../../packages/core/ton-ai-core-0.1.0.tgz",
+    "@types/node": "^20.19.33",
     "typescript": "^5.3.3"
   }
 }

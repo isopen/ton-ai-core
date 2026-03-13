@@ -5,14 +5,10 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "author": "testertesterov",
-  "license": "MIT",
+  "license": "Boost Software License 1.0",
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist"
-  },
-  "dependencies": {
-    "@ton/core": "^0.56.0",
-    "@ton/crypto": "^3.2.0"
   },
   "devDependencies": {
     "@ton-ai/core": "file:../../packages/core/ton-ai-core-0.1.0.tgz",
