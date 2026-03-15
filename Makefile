@@ -55,6 +55,9 @@ use-content-checker:
 use-logger:
 	$(call build_with_config,logger)
 
+use-deployer:
+	$(call build_with_config,deployer)
+
 build-ton-ai-core:
 	$(call build_with_config,ton-ai-core)
 
@@ -81,6 +84,9 @@ build-content-checker:
 
 build-logger:
 	$(call build_with_config,logger)
+
+build-deployer:
+	$(call build_with_config,deployer)
 
 list-configs:
 	@echo "Available configurations:"

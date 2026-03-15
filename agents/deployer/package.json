@@ -1,0 +1,21 @@
+{
+  "name": "@ton-ai/deployer",
+  "version": "0.1.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "testertesterov",
+  "license": "Boost Software License 1.0",
+  "dependencies": {
+    "@ton-ai/core": "file:../../packages/core/ton-ai-core-0.1.0.tgz",
+    "@ton-ai/vercel": "file:../../plugins/vercel/ton-ai-vercel-0.1.0.tgz",
+    "dotenv": "^17.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

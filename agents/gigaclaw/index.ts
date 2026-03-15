@@ -1,4 +1,5 @@
 import { GigaClawAgent, GigaClawConfig } from './agent';
+import { AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
 
 const config: GigaClawConfig = {
     name: 'gigaclaw',
@@ -35,32 +36,36 @@ async function main() {
 
     const agent = new GigaClawAgent(config);
 
-    agent.on('initialized', () => {
+    agent.on(AGENT_EVENTS.INITIALIZED, () => {
         console.log('Agent initialized');
     });
 
-    agent.on('started', () => {
+    agent.on(AGENT_EVENTS.STARTED, () => {
         console.log('Agent started, waiting for Telegram messages...');
     });
 
-    agent.on('stopped', () => {
+    agent.on(AGENT_EVENTS.STOPPED, () => {
         console.log('Agent stopped');
     });
 
-    agent.on('error', (error) => {
+    agent.on(AGENT_EVENTS.ERROR, (error) => {
         console.error('Agent error:', error);
     });
 
-    agent.on('plugin:activated', (event) => {
-        console.log(`Plugin activated: ${event.name}`);
+    agent.on(PLUGIN_EVENTS.REGISTERED, (data) => {
+        console.log(`Plugin registered: ${data.name}`);
     });
 
-    agent.on('plugin:deactivated', (event) => {
-        console.log(`Plugin deactivated: ${event.name}`);
+    agent.on(PLUGIN_EVENTS.UNREGISTERED, (data) => {
+        console.log(`Plugin unregistered: ${data.name}`);
     });
 
-    agent.on('plugin:error', (event) => {
-        console.error(`Plugin ${event.name} error:`, event.error);
+    agent.on(PLUGIN_EVENTS.ACTIVATED, (data) => {
+        console.log(`Plugin activated: ${data.name}`);
+    });
+
+    agent.on(PLUGIN_EVENTS.DEACTIVATED, (data) => {
+        console.log(`Plugin deactivated: ${data.name}`);
     });
 
     try {
