@@ -60,7 +60,7 @@ async function main() {
     });
 
     agent.on('plugin:error', (event) => {
-        console.error(`Plugin ${event.name} error:`, event.error);
+        console.error(`Plugin ${event.name} error:`, event.name);
     });
 
     try {
