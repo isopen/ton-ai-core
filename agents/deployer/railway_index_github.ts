@@ -1,4 +1,4 @@
-import { RailwayDeployerAgent, DeployerConfig } from './railway_agent_github';
+import { RailwayDeployerAgent } from './railway_agent_github';
 import { AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
 import * as readline from 'readline';
 import * as dotenv from 'dotenv';
@@ -25,75 +25,36 @@ function parseArgs() {
         return { configFile };
     }
 
-    return { configFile: null };
+    console.error('Error: --config parameter is required');
+    console.error('Usage: npx ts-node railway_index_github.ts --config=your_config.ts');
+    process.exit(1);
 }
 
-async function loadConfig(configFile: string | null) {
-    if (configFile) {
-        try {
-            const configPath = path.resolve(process.cwd(), configFile);
-            const configModule = await import(configPath);
-            const config = configModule.default || configModule;
+async function loadConfig(configFile: string) {
+    try {
+        const configPath = path.resolve(process.cwd(), configFile);
+        const configModule = await import(configPath);
+        const config = configModule.default || configModule;
 
-            if (typeof config === 'function') {
-                return config();
-            }
-
-            return config;
-        } catch (error) {
-            console.error(`Failed to load config from ${configFile}:`, error);
-            process.exit(1);
+        if (typeof config === 'function') {
+            return config();
         }
+
+        return config;
+    } catch (error) {
+        console.error(`Failed to load config from ${configFile}:`, error);
+        process.exit(1);
     }
-    return null;
 }
 
 async function main() {
-    console.log('Railway Deployer Agent');
-
-    const requiredVars = ['RAILWAY_TOKEN', 'RAILWAY_TOKEN_TYPE', 'RAILWAY_TEAM_ID', 'GITHUB_OWNER', 'GITHUB_REPO', 'GITHUB_BRANCH'];
-    const missingVars = requiredVars.filter(v => !process.env[v]);
-
-    if (missingVars.length > 0) {
-        console.error('Missing required environment variables:');
-        missingVars.forEach(v => console.error(`   - ${v}`));
-        console.error('\nPlease create a .env file with:');
-        console.error('RAILWAY_TOKEN=your_railway_token');
-        console.error('RAILWAY_TOKEN_TYPE=workspace (account, workspace, or project)');
-        console.error('RAILWAY_TEAM_ID=your_workspace_id_here');
-        console.error('GITHUB_OWNER=isopen');
-        console.error('GITHUB_REPO=ton-ai-core');
-        console.error('GITHUB_BRANCH=master');
-        process.exit(1);
-    }
-
     const { configFile } = parseArgs();
-    const userConfig = await loadConfig(configFile);
+    const config = await loadConfig(configFile);
 
-    const config: DeployerConfig = {
-        name: 'railway-deployer',
-        plugins: {},
-        railway: {
-            apiToken: process.env.RAILWAY_TOKEN || '',
-            tokenType: (process.env.RAILWAY_TOKEN_TYPE as 'account' | 'workspace' | 'project') || 'workspace',
-            teamId: process.env.RAILWAY_TEAM_ID
-        },
-        github: {
-            owner: process.env.GITHUB_OWNER || 'isopen',
-            repo: process.env.GITHUB_REPO || 'ton-ai-core',
-            branch: process.env.GITHUB_BRANCH || 'master'
-        },
-        agent: {
-            name: 'gigaclaw',
-            entryPoint: 'index.ts',
-            plugins: ['gigachat', 'telegram-bot-api'],
-            envPrefix: 'GIGACLAW'
-        },
-        projectName: process.env.RAILWAY_PROJECT_NAME || 'gigaclaw-bot',
-        environmentVariables: {
-            ...userConfig?.environmentVariables
-        }
-    };
+    console.log('Railway Deployer Agent');
+    console.log(`Loaded config from: ${configFile}`);
+    console.log(`Agent: ${config.agent?.name || 'unknown'}`);
+    console.log(`Plugins: ${config.agent?.plugins?.join(', ') || 'none'}\n`);
 
     const agent = new RailwayDeployerAgent(config);
 
@@ -129,12 +90,12 @@ async function main() {
         await agent.start();
 
         console.log('\nDeployment configuration:');
-        console.log(`  Repository: ${config.github.owner}/${config.github.repo}`);
-        console.log(`  Branch: ${config.github.branch}`);
-        console.log(`  Agent: ${config.agent.name}`);
-        console.log(`  Plugins: ${config.agent.plugins?.join(', ') || 'none'}`);
+        console.log(`  Repository: ${config.github?.owner}/${config.github?.repo}`);
+        console.log(`  Branch: ${config.github?.branch}`);
+        console.log(`  Agent: ${config.agent?.name}`);
+        console.log(`  Plugins: ${config.agent?.plugins?.join(', ') || 'none'}`);
         console.log(`  Project: ${config.projectName}`);
-        console.log(`  Token type: ${config.railway.tokenType}`);
+        console.log(`  Token type: ${config.railway?.tokenType}`);
 
         const deployNow = await prompt('\nStart deployment to Railway? (y/n): ');
 
