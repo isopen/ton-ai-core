@@ -11,6 +11,7 @@
   "dependencies": {
     "@ton-ai/core": "file:../../packages/core/ton-ai-core-0.1.0.tgz",
     "@ton-ai/vercel": "file:../../plugins/vercel/ton-ai-vercel-0.1.0.tgz",
+    "@ton-ai/railway": "file:../../plugins/railway/ton-ai-railway-0.1.0.tgz",
     "dotenv": "^17.3.1"
   },
   "devDependencies": {
