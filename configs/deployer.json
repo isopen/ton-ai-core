@@ -3,28 +3,30 @@
   "version": "0.1.0",
   "description": "Deployer agent for deploying projects to Vercel",
   "scripts": {
-    "clean": "npm run clean:core && npm run clean:vercel && npm run clean:railway && npm run clean:agent",
+    "clean": "npm run clean:core && npm run clean:vercel && npm run clean:railway && npm run clean:render && npm run clean:agent",
     "clean:core": "cd packages/core && npm run clean",
     "clean:vercel": "cd plugins/vercel && npm run clean",
     "clean:railway": "cd plugins/railway && npm run clean",
+    "clean:render": "cd plugins/render && npm run clean",
     "clean:agent": "cd agents/deployer && (test -d dist && rm -rf dist || true) && (test -d node_modules/@ton-ai && rm -rf node_modules/@ton-ai || true)",
 
     "build:core": "cd packages/core && npm install && npm run build && npm pack",
     "build:vercel": "cd plugins/vercel && npm install && npm run build && npm pack",
     "build:railway": "cd plugins/railway && npm install && npm run build && npm pack",
+    "build:render": "cd plugins/render && npm install && npm run build && npm pack",
     "build:agent": "cd agents/deployer && npm install",
 
-    "copy-packages": "mkdir -p agents/deployer/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/deployer/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped' && cp plugins/vercel/ton-ai-vercel-0.1.0.tgz agents/deployer/node_modules/@ton-ai/ 2>/dev/null || echo 'Vercel package copy skipped' && cp plugins/railway/ton-ai-railway-0.1.0.tgz agents/deployer/node_modules/@ton-ai/ 2>/dev/null || echo 'Railway package copy skipped'",
+    "copy-packages": "mkdir -p agents/deployer/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/deployer/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped' && cp plugins/vercel/ton-ai-vercel-0.1.0.tgz agents/deployer/node_modules/@ton-ai/ 2>/dev/null || echo 'Vercel package copy skipped' && cp plugins/railway/ton-ai-railway-0.1.0.tgz agents/deployer/node_modules/@ton-ai/ 2>/dev/null || echo 'Railway package copy skipped' && cp plugins/render/ton-ai-render-0.1.0.tgz agents/deployer/node_modules/@ton-ai/ 2>/dev/null || echo 'Render package copy skipped'",
 
-    "rebuild": "npm run clean && npm run build:core && npm run build:vercel && npm run build:railway && npm run build:agent && npm run copy-packages",
+    "rebuild": "npm run clean && npm run build:core && npm run build:vercel && npm run build:railway && npm run build:render && npm run build:agent && npm run copy-packages",
 
-    "rebuild:quick": "npm run build:core && npm run build:vercel && npm run build:railway && npm run copy-packages && cd agents/deployer && npm install",
+    "rebuild:quick": "npm run build:core && npm run build:vercel && npm run build:railway && npm run build:render && npm run copy-packages && cd agents/deployer && npm install",
 
     "start:agent": "cd agents/deployer && npm start",
 
     "dev": "npm run rebuild && npm run start:agent"
   },
-  "keywords": ["ton", "ai", "deployer", "vercel", "railway", "deployment", "hosting"],
+  "keywords": ["ton", "ai", "deployer", "vercel", "railway", "render", "deployment", "hosting"],
   "author": "testertesterov",
   "license": "MIT"
 }
