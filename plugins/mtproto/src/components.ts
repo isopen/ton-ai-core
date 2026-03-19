@@ -295,6 +295,9 @@ export class CryptoClient extends EventEmitter {
         const padding = decrypted.subarray(32 + messageLength);
 
         const expectedMsgKey = MTProtoKDF.computeMsgKey(this.authKey.key, plaintext, padding, this.isClient);
+        if (!expectedMsgKey.equals(encrypted.msgKey)) {
+            throw new Error('Invalid msg_key');
+        }
         const isValid = expectedMsgKey.equals(encrypted.msgKey);
 
         if (!isValid) {
