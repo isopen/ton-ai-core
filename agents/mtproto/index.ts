@@ -22,7 +22,6 @@ function createMessageId(seqNo: number, isClient: boolean = true): bigint {
 
 async function comprehensiveMTProtoTest() {
     console.log('🔬 MTProto 2.0 Comprehensive Test Suite');
-    console.log('=========================================\n');
 
     const plugin = new MTProtoCryptoPlugin();
 
@@ -47,9 +46,6 @@ async function comprehensiveMTProtoTest() {
     await plugin.onActivate();
     console.log('✅ Plugin initialized\n');
 
-    // =========================================================================
-    // TEST 1: Key Generation and Management
-    // =========================================================================
     console.log('📝 TEST 1: Key Generation and Management');
     try {
         const dhKeys = plugin.generateDHKeys();
@@ -66,7 +62,6 @@ async function comprehensiveMTProtoTest() {
         console.log(`      ID: ${authKey.id.toString(16)}`);
         console.log(`      Length: ${authKey.key.length} bytes (2048 bits)`);
 
-        // Verify auth_key_id is lower 64 bits of SHA1
         const sha1 = crypto.createHash('sha1').update(authKey.key).digest();
         const expectedId = BigInt('0x' + sha1.subarray(-8).toString('hex'));
         console.log(`   ✅ AuthKey ID verification: ${authKey.id === expectedId ? 'PASS' : 'FAIL'}`);
@@ -75,7 +70,6 @@ async function comprehensiveMTProtoTest() {
         plugin.setServerSalt(serverSalt);
         console.log(`   ✅ Server salt set: ${serverSalt.toString('hex')}`);
 
-        // Verify stored keys
         const storedAuthKey = plugin.getAuthKey();
         const storedSalt = plugin.getServerSalt();
         const storedDHKeys = plugin.getDHKeys();
@@ -86,9 +80,6 @@ async function comprehensiveMTProtoTest() {
         console.log(`   ❌ Test failed: ${err.message}\n`);
     }
 
-    // =========================================================================
-    // TEST 2: Message ID Requirements
-    // =========================================================================
     console.log('📝 TEST 2: Message ID Requirements');
     try {
         const clientMsgId1 = createMessageId(0, true);
@@ -112,9 +103,6 @@ async function comprehensiveMTProtoTest() {
         console.log(`   ❌ Test failed: ${err.message}\n`);
     }
 
-    // =========================================================================
-    // TEST 3: Basic Encryption/Decryption Cycle
-    // =========================================================================
     console.log('📝 TEST 3: Basic Encryption/Decryption Cycle');
 
     const testCases = [
@@ -165,9 +153,6 @@ async function comprehensiveMTProtoTest() {
     }
     console.log(`\n   Basic cycle: ${basicSuccess}/${testCases.length} passed\n`);
 
-    // =========================================================================
-    // TEST 4: Session ID Variations
-    // =========================================================================
     console.log('📝 TEST 4: Session ID Variations');
 
     const sessionIds = [
@@ -176,7 +161,7 @@ async function comprehensiveMTProtoTest() {
         0x1234n,
         0x12345678n,
         0x123456789n,
-        0x7FFFFFFFFFFFFFFFn  // max positive
+        0x7FFFFFFFFFFFFFFFn
     ];
 
     const testMessage = 'Session test message';
@@ -207,9 +192,6 @@ async function comprehensiveMTProtoTest() {
     }
     console.log(`\n   Session ID tests: ${sessionSuccess}/${sessionIds.length} passed\n`);
 
-    // =========================================================================
-    // TEST 5: Message Size Boundaries
-    // =========================================================================
     console.log('📝 TEST 5: Message Size Boundaries');
 
     const sizes = [
@@ -247,9 +229,6 @@ async function comprehensiveMTProtoTest() {
     }
     console.log(`\n   Size tests: ${sizeSuccess}/${sizes.length} passed\n`);
 
-    // =========================================================================
-    // TEST 6: Padding Validation (12-1024 bytes)
-    // =========================================================================
     console.log('📝 TEST 6: Padding Validation');
     try {
         const smallMsg = 'Small';
@@ -262,9 +241,8 @@ async function comprehensiveMTProtoTest() {
             0
         );
 
-        // Calculate padding size
         const encrypted_len = encrypted.data.length;
-        const plaintext_len = 32 + smallMsg.length; // header + message
+        const plaintext_len = 32 + smallMsg.length;
         const padding = encrypted_len - plaintext_len;
 
         console.log(`   Message length: ${smallMsg.length} bytes`);
@@ -280,9 +258,6 @@ async function comprehensiveMTProtoTest() {
         console.log(`   ❌ Test failed: ${err.message}\n`);
     }
 
-    // =========================================================================
-    // TEST 7: Message Key Validation
-    // =========================================================================
     console.log('📝 TEST 7: Message Key Validation');
     try {
         const testMsg = 'Validation test';
@@ -337,9 +312,6 @@ async function comprehensiveMTProtoTest() {
         console.log(`   ❌ Test failed: ${err.message}\n`);
     }
 
-    // =========================================================================
-    // TEST 8: Sequence Numbers
-    // =========================================================================
     console.log('📝 TEST 8: Sequence Numbers');
     try {
         const messages = ['First', 'Second', 'Third', 'Fourth'];
@@ -366,9 +338,6 @@ async function comprehensiveMTProtoTest() {
         console.log(`   ❌ Test failed: ${err.message}\n`);
     }
 
-    // =========================================================================
-    // TEST 9: Multiple Sessions Concurrent
-    // =========================================================================
     console.log('📝 TEST 9: Concurrent Sessions');
     try {
         const sessions = [0x1111n, 0x2222n, 0x3333n, 0x4444n, 0x5555n];
@@ -394,9 +363,6 @@ async function comprehensiveMTProtoTest() {
         console.log(`   ❌ Test failed: ${err.message}\n`);
     }
 
-    // =========================================================================
-    // TEST 10: Performance Benchmark
-    // =========================================================================
     console.log('📝 TEST 10: Performance Benchmark');
     try {
         const iterations = 1000;
@@ -436,10 +402,21 @@ async function comprehensiveMTProtoTest() {
         console.log(`   ❌ Test failed: ${err.message}\n`);
     }
 
-    // =========================================================================
-    // TEST 11: Reset Functionality
-    // =========================================================================
-    console.log('📝 TEST 11: Reset Functionality');
+    console.log('📝 TEST 11: Metrics');
+    try {
+        const metrics = plugin.getMetrics();
+        console.log('   Current metrics:');
+        console.log(`   Mode: ${metrics.mode}`);
+        console.log(`   Ready: ${metrics.ready}`);
+        console.log(`   Has AuthKey: ${metrics.hasAuthKey}`);
+        console.log(`   AuthKey ID: ${metrics.authKeyId || 'none'}\n`);
+
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+    }
+
+    console.log('📝 TEST 12: Reset Functionality');
     try {
         console.log('   Before reset:');
         console.log(`   AuthKey: ${plugin.getAuthKey() ? 'present' : 'absent'}`);
@@ -459,26 +436,6 @@ async function comprehensiveMTProtoTest() {
         console.log(`   ❌ Test failed: ${err.message}\n`);
     }
 
-    // =========================================================================
-    // TEST 12: Metrics
-    // =========================================================================
-    console.log('📝 TEST 12: Metrics');
-    try {
-        const metrics = plugin.getMetrics();
-        console.log('   Current metrics:');
-        console.log(`   Mode: ${metrics.mode}`);
-        console.log(`   Ready: ${metrics.ready}`);
-        console.log(`   Has AuthKey: ${metrics.hasAuthKey}`);
-        console.log(`   AuthKey ID: ${metrics.authKeyId || 'none'}\n`);
-
-    } catch (error) {
-        const err = error as Error;
-        console.log(`   ❌ Test failed: ${err.message}\n`);
-    }
-
-    // =========================================================================
-    // SUMMARY
-    // =========================================================================
     console.log('📊 TEST SUMMARY');
     console.log('===============');
     console.log(`✅ Key Generation: PASS`);
