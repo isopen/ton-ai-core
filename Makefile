@@ -88,6 +88,9 @@ build-logger:
 build-deployer:
 	$(call build_with_config,deployer)
 
+build-mtproto:
+	$(call build_with_config,mtproto)
+
 list-configs:
 	@echo "Available configurations:"
 	@ls -1 $(CONFIGS_DIR)/*.json | sed 's/.*\///' | sed 's/\.json//'
