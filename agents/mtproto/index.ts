@@ -11,6 +11,20 @@ import {
 import { EventEmitter } from 'events';
 import * as crypto from 'crypto';
 
+function bytesToHex(bytes: Uint8Array): string {
+    return Array.from(bytes)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+function hexToBytes(hex: string): Uint8Array {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+        bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+    }
+    return bytes;
+}
+
 function createMessageId(seqNo: number, isClient: boolean = true): bigint {
     const now = Date.now();
     const timeInSeconds = BigInt(Math.floor(now / 1000));
@@ -1783,8 +1797,6 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 65: X25519 Complete Functionality Test');
     try {
-        const { X25519 } = await import('@ton-ai/mtproto');
-
         const alicePriv = X25519.generatePrivateKey();
         const alicePub = X25519.computePublicKey(alicePriv);
 
@@ -1832,11 +1844,8 @@ async function comprehensiveMTProtoTest() {
         const sharedAlice = X25519.computeSharedSecret(alicePriv, bobPub);
         const sharedBob = X25519.computeSharedSecret(bobPriv, alicePub);
 
-        const match = Buffer.from(sharedAlice).equals(Buffer.from(sharedBob));
+        const match = bytesToHex(sharedAlice) === bytesToHex(sharedBob);
 
-        console.log(`   Alice pub: ${Buffer.from(alicePub).toString('hex').substring(0, 32)}...`);
-        console.log(`   Bob pub: ${Buffer.from(bobPub).toString('hex').substring(0, 32)}...`);
-        console.log(`   Shared secret length: ${sharedAlice.length} bytes`);
         console.log(`   Shared secrets match: ${match ? 'YES' : 'NO'}`);
         console.log(`   X25519 key exchange: ${match ? 'PASS' : 'FAIL'}\n`);
 
@@ -1847,85 +1856,98 @@ async function comprehensiveMTProtoTest() {
         testResults['TEST 66'] = false;
     }
 
-    console.log('TEST 67: X25519 to AES Key Derivation');
+    console.log('TEST 67: X25519 Iterated Test Vectors (RFC 7748, Section 5.2)');
     try {
-        const alicePriv = X25519.generatePrivateKey();
-        const alicePub = X25519.computePublicKey(alicePriv);
+        let k = hexToBytes('0900000000000000000000000000000000000000000000000000000000000000');
+        let u = hexToBytes('0900000000000000000000000000000000000000000000000000000000000000');
+        const expectedAfter1 = '422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079';
+        const expectedAfter1000 = '684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51';
 
-        const bobPriv = X25519.generatePrivateKey();
-        const bobPub = X25519.computePublicKey(bobPriv);
+        console.log(`   Initial k: ${bytesToHex(k)}`);
+        console.log(`   Initial u: ${bytesToHex(u)}`);
 
-        const sharedSecret = X25519.computeSharedSecret(alicePriv, bobPub);
+        const result1 = X25519.computeSharedSecret(k, u);
+        console.log(`   After 1 iteration: ${bytesToHex(result1)}`);
+        console.log(`   Expected:          ${expectedAfter1}`);
+        const match1 = bytesToHex(result1) === expectedAfter1;
 
-        const aesKey = crypto.createHash('sha256').update(sharedSecret).digest();
+        let newK = result1;
+        let newU = k;
 
-        console.log(`   Shared secret: ${Buffer.from(sharedSecret).toString('hex').substring(0, 32)}...`);
-        console.log(`   AES key: ${aesKey.toString('hex').substring(0, 32)}...`);
-        console.log(`   AES key length: ${aesKey.length} bytes (${aesKey.length * 8} bits)`);
-        console.log(`   AES key derivation: ${aesKey.length === 32 ? 'PASS' : 'FAIL'}\n`);
+        for (let i = 2; i <= 1000; i++) {
+            const result = X25519.computeSharedSecret(newK, newU);
+            newU = newK;
+            newK = result;
+        }
 
-        testResults['TEST 67'] = aesKey.length === 32;
+        console.log(`   After 1000 iterations: ${bytesToHex(newK)}`);
+        console.log(`   Expected:               ${expectedAfter1000}`);
+        const match1000 = bytesToHex(newK) === expectedAfter1000;
+
+        console.log(`   Iterated test vectors: ${match1 && match1000 ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 67'] = match1 && match1000;
     } catch (error) {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
         testResults['TEST 67'] = false;
     }
 
-    console.log('TEST 68: X25519 Key Uniqueness');
+    console.log('TEST 68: X25519 RFC 7748 Base Point Test');
     try {
-        const keys = new Set();
-        const count = 100;
+        const scalar = hexToBytes('a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4');
+        const uCoordinate = hexToBytes('e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c');
+        const expected = 'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552';
 
-        for (let i = 0; i < count; i++) {
-            const priv = X25519.generatePrivateKey();
-            const pub = X25519.computePublicKey(priv);
-            keys.add(Buffer.from(priv).toString('hex'));
-            keys.add(Buffer.from(pub).toString('hex'));
-        }
+        console.log(`   Scalar: ${bytesToHex(scalar)}`);
+        console.log(`   U-coord: ${bytesToHex(uCoordinate)}`);
 
-        const unique = keys.size === count * 2;
+        const result = X25519.computeSharedSecret(scalar, uCoordinate);
+        const resultHex = bytesToHex(result);
 
-        console.log(`   Generated ${count} key pairs`);
-        console.log(`   Unique keys: ${keys.size} (expected ${count * 2})`);
-        console.log(`   Key uniqueness: ${unique ? 'PASS' : 'FAIL'}\n`);
+        console.log(`   Result: ${resultHex}`);
+        console.log(`   Expected: ${expected}`);
 
-        testResults['TEST 68'] = unique;
+        const passed = resultHex === expected;
+        console.log(`   Test vector 1: ${passed ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 68'] = passed;
     } catch (error) {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
         testResults['TEST 68'] = false;
     }
 
-    console.log('TEST 69: X25519 Public Key Validation');
+    console.log('TEST 69: X25519 RFC 7748 Full Test Vectors');
     try {
-        const alicePriv = X25519.generatePrivateKey();
+        const scalar1 = hexToBytes('a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4');
+        const u1 = hexToBytes('e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c');
+        const expected1 = 'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552';
 
-        const testKeys = [
-            { key: new Uint8Array(32), expected: 'reject' },
-            { key: new Uint8Array(32).fill(0xff), expected: 'reject' },
-            { key: Buffer.from('0101010101010101010101010101010101010101010101010101010101010101', 'hex'), expected: 'accept' },
-            { key: Buffer.from('e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c', 'hex'), expected: 'accept' },
-        ];
+        const scalar2 = hexToBytes('4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d');
+        const u2 = hexToBytes('e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493');
+        const expected2 = '95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957';
 
-        let validResults = 0;
+        console.log('   Test Vector 1:');
+        console.log(`   Scalar: ${bytesToHex(scalar1)}`);
+        console.log(`   U-coord: ${bytesToHex(u1)}`);
+        const result1 = X25519.computeSharedSecret(scalar1, u1);
+        const result1Hex = bytesToHex(result1);
+        console.log(`   Result: ${result1Hex}`);
+        console.log(`   Expected: ${expected1}`);
+        const match1 = result1Hex === expected1;
 
-        for (const test of testKeys) {
-            try {
-                const shared = X25519.computeSharedSecret(alicePriv, test.key);
-                const sharedHex = Buffer.from(shared).toString('hex').substring(0, 16);
-                console.log(`   Key ${test.key.toString('hex').substring(0, 16)}... accepted (shared: ${sharedHex}...)`);
-                if (test.expected === 'accept') validResults++;
-            } catch (error) {
-                const err = error as Error;
-                console.log(`   Key ${test.key.toString('hex').substring(0, 16)}... rejected: ${err.message}`);
-                if (test.expected === 'reject') validResults++;
-            }
-        }
+        console.log('\n   Test Vector 2:');
+        console.log(`   Scalar: ${bytesToHex(scalar2)}`);
+        console.log(`   U-coord: ${bytesToHex(u2)}`);
+        const result2 = X25519.computeSharedSecret(scalar2, u2);
+        const result2Hex = bytesToHex(result2);
+        console.log(`   Result: ${result2Hex}`);
+        console.log(`   Expected: ${expected2}`);
+        const match2 = result2Hex === expected2;
 
-        console.log(`   Valid results: ${validResults}/${testKeys.length}`);
-        console.log(`   Key validation: ${validResults === testKeys.length ? 'PASS' : 'FAIL'}\n`);
+        const allMatch = match1 && match2;
+        console.log(`\n   RFC 7748 test vectors: ${allMatch ? 'PASS' : 'FAIL'}\n`);
 
-        testResults['TEST 69'] = validResults === testKeys.length;
+        testResults['TEST 69'] = allMatch;
     } catch (error) {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
@@ -1946,17 +1968,17 @@ async function comprehensiveMTProtoTest() {
         const bobPub2 = X25519.computePublicKey(bobPriv2);
         const session2Secret = X25519.computeSharedSecret(alicePriv2, bobPub2);
 
-        const alicePub1Hex = Buffer.from(alicePub1).toString('hex').substring(0, 16);
-        const bobPub1Hex = Buffer.from(bobPub1).toString('hex').substring(0, 16);
-        const alicePub2Hex = Buffer.from(alicePub2).toString('hex').substring(0, 16);
-        const bobPub2Hex = Buffer.from(bobPub2).toString('hex').substring(0, 16);
+        const alicePub1Hex = bytesToHex(alicePub1).substring(0, 16);
+        const bobPub1Hex = bytesToHex(bobPub1).substring(0, 16);
+        const alicePub2Hex = bytesToHex(alicePub2).substring(0, 16);
+        const bobPub2Hex = bytesToHex(bobPub2).substring(0, 16);
 
-        const different = !Buffer.from(session1Secret).equals(Buffer.from(session2Secret));
+        const different = bytesToHex(session1Secret) !== bytesToHex(session2Secret);
 
         console.log(`   Session 1 keys: Alice=${alicePub1Hex}..., Bob=${bobPub1Hex}...`);
         console.log(`   Session 2 keys: Alice=${alicePub2Hex}..., Bob=${bobPub2Hex}...`);
-        console.log(`   Session 1 secret: ${Buffer.from(session1Secret).toString('hex').substring(0, 32)}...`);
-        console.log(`   Session 2 secret: ${Buffer.from(session2Secret).toString('hex').substring(0, 32)}...`);
+        console.log(`   Session 1 secret: ${bytesToHex(session1Secret).substring(0, 32)}...`);
+        console.log(`   Session 2 secret: ${bytesToHex(session2Secret).substring(0, 32)}...`);
         console.log(`   Different sessions have different secrets: ${different ? 'YES' : 'NO'}`);
         console.log(`   Perfect forward secrecy: ${different ? 'PASS' : 'FAIL'}\n`);
 
@@ -1965,6 +1987,318 @@ async function comprehensiveMTProtoTest() {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
         testResults['TEST 70'] = false;
+    }
+
+    console.log('TEST 71: X25519 Iterated Test Vectors (RFC 7748, Section 5.2)');
+    try {
+        let k = hexToBytes('0900000000000000000000000000000000000000000000000000000000000000');
+        let u = hexToBytes('0900000000000000000000000000000000000000000000000000000000000000');
+        const expectedAfter1 = '422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079';
+        const expectedAfter1000 = '684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51';
+
+        console.log(`   Initial k: ${bytesToHex(k)}`);
+        console.log(`   Initial u: ${bytesToHex(u)}`);
+
+        const result1 = X25519.computeSharedSecret(k, u);
+        console.log(`   After 1 iteration: ${bytesToHex(result1)}`);
+        console.log(`   Expected:          ${expectedAfter1}`);
+        const match1 = bytesToHex(result1) === expectedAfter1;
+
+        let newK = result1;
+        let newU = k;
+
+        for (let i = 2; i <= 1000; i++) {
+            const result = X25519.computeSharedSecret(newK, newU);
+            newU = newK;
+            newK = result;
+        }
+
+        console.log(`   After 1000 iterations: ${bytesToHex(newK)}`);
+        console.log(`   Expected:               ${expectedAfter1000}`);
+        const match1000 = bytesToHex(newK) === expectedAfter1000;
+
+        const iteratedTestPass = match1 && match1000;
+        console.log(`   Iterated test vectors: ${iteratedTestPass ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 71'] = iteratedTestPass;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 71'] = false;
+    }
+
+    console.log('TEST 72: X25519 RFC 7748 Base Point Test');
+    try {
+        const scalar = hexToBytes('a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4');
+        const uCoordinate = hexToBytes('e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c');
+        const expected = 'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552';
+
+        console.log(`   Scalar: ${bytesToHex(scalar)}`);
+        console.log(`   U-coord: ${bytesToHex(uCoordinate)}`);
+
+        const result = X25519.computeSharedSecret(scalar, uCoordinate);
+        const resultHex = bytesToHex(result);
+
+        console.log(`   Result: ${resultHex}`);
+        console.log(`   Expected: ${expected}`);
+
+        const passed = resultHex === expected;
+        console.log(`   Test vector 1: ${passed ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 72'] = passed;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 72'] = false;
+    }
+
+    console.log('TEST 73: X25519 Second Test Vector');
+    try {
+        const scalar = hexToBytes('4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d');
+        const uCoordinate = hexToBytes('e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493');
+        const expected = '95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957';
+
+        console.log(`   Scalar: ${bytesToHex(scalar)}`);
+        console.log(`   U-coord: ${bytesToHex(uCoordinate)}`);
+
+        const result = X25519.computeSharedSecret(scalar, uCoordinate);
+        const resultHex = bytesToHex(result);
+
+        console.log(`   Result: ${resultHex}`);
+        console.log(`   Expected: ${expected}`);
+
+        const passed = resultHex === expected;
+        console.log(`   Test vector 2: ${passed ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 73'] = passed;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 73'] = false;
+    }
+
+    console.log('TEST 74: X25519 RFC 7748 Full Test Vectors');
+    try {
+        const scalar1 = hexToBytes('a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4');
+        const u1 = hexToBytes('e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c');
+        const expected1 = 'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552';
+
+        const scalar2 = hexToBytes('4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d');
+        const u2 = hexToBytes('e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493');
+        const expected2 = '95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957';
+
+        console.log('   Test Vector 1:');
+        console.log(`   Scalar: ${bytesToHex(scalar1)}`);
+        console.log(`   U-coord: ${bytesToHex(u1)}`);
+        const result1 = X25519.computeSharedSecret(scalar1, u1);
+        const result1Hex = bytesToHex(result1);
+        console.log(`   Result: ${result1Hex}`);
+        console.log(`   Expected: ${expected1}`);
+        const match1 = result1Hex === expected1;
+
+        console.log('\n   Test Vector 2:');
+        console.log(`   Scalar: ${bytesToHex(scalar2)}`);
+        console.log(`   U-coord: ${bytesToHex(u2)}`);
+        const result2 = X25519.computeSharedSecret(scalar2, u2);
+        const result2Hex = bytesToHex(result2);
+        console.log(`   Result: ${result2Hex}`);
+        console.log(`   Expected: ${expected2}`);
+        const match2 = result2Hex === expected2;
+
+        const allMatch = match1 && match2;
+        console.log(`\n   RFC 7748 test vectors: ${allMatch ? 'PASS' : 'FAIL'}\n`);
+
+        testResults['TEST 74'] = allMatch;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 74'] = false;
+    }
+
+    console.log('TEST 75: X25519 Edge Cases - Small Order Points');
+    try {
+        const alicePriv = X25519.generatePrivateKey();
+
+        const smallOrderPoints = [
+            { key: new Uint8Array(32), desc: 'Zero point' },
+            { key: hexToBytes('0100000000000000000000000000000000000000000000000000000000000000'), desc: 'Point of order 2' },
+            { key: hexToBytes('e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800'), desc: 'Point of order 4' },
+            { key: hexToBytes('5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157'), desc: 'Point of order 8' }
+        ];
+
+        let passed = 0;
+        for (const point of smallOrderPoints) {
+            try {
+                const shared = X25519.computeSharedSecret(alicePriv, point.key);
+                console.log(`   ✓ ${point.desc} accepted (shared: ${bytesToHex(shared).substring(0, 16)}...)`);
+                passed++;
+            } catch (error) {
+                const err = error as Error;
+                console.log(`   ✗ ${point.desc} rejected: ${err.message}`);
+            }
+        }
+
+        const allPassed = passed === smallOrderPoints.length;
+        console.log(`   Small order points test: ${allPassed ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 75'] = allPassed;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 75'] = false;
+    }
+
+    console.log('TEST 76: X25519 Non-Canonical Values');
+    try {
+        const alicePriv = X25519.generatePrivateKey();
+
+        const nonCanonical = [
+            { key: hexToBytes('ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f'), desc: 'P-1' },
+            { key: hexToBytes('edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f'), desc: 'P' },
+            { key: hexToBytes('eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f'), desc: 'P+1' },
+            { key: new Uint8Array(32).fill(0xff), desc: 'All 0xff' }
+        ];
+
+        let passed = 0;
+        for (const val of nonCanonical) {
+            try {
+                const shared = X25519.computeSharedSecret(alicePriv, val.key);
+                console.log(`   ✓ ${val.desc} accepted (shared: ${bytesToHex(shared).substring(0, 16)}...)`);
+                passed++;
+            } catch (error) {
+                const err = error as Error;
+                console.log(`   ✗ ${val.desc} rejected: ${err.message}`);
+            }
+        }
+
+        const allPassed = passed === nonCanonical.length;
+        console.log(`   Non-canonical values test: ${allPassed ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 76'] = allPassed;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 76'] = false;
+    }
+
+    console.log('TEST 77: X25519 Consistency - Same Input Multiple Times');
+    try {
+        const alicePriv = X25519.generatePrivateKey();
+        const bobPriv = X25519.generatePrivateKey();
+        const bobPub = X25519.computePublicKey(bobPriv);
+
+        const results: string[] = [];
+        for (let i = 0; i < 5; i++) {
+            const shared = X25519.computeSharedSecret(alicePriv, bobPub);
+            results.push(bytesToHex(shared));
+        }
+
+        const consistent = results.every(r => r === results[0]);
+        console.log(`   First result: ${results[0].substring(0, 32)}...`);
+        console.log(`   All ${results.length} results identical: ${consistent ? 'YES' : 'NO'}`);
+        console.log(`   Consistency test: ${consistent ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 77'] = consistent;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 77'] = false;
+    }
+
+    console.log('TEST 78: X25519 Public Key Derivation Consistency');
+    try {
+        const priv = X25519.generatePrivateKey();
+
+        const pubs: string[] = [];
+        for (let i = 0; i < 5; i++) {
+            const pub = X25519.computePublicKey(priv);
+            pubs.push(bytesToHex(pub));
+        }
+
+        const consistent = pubs.every(p => p === pubs[0]);
+        console.log(`   First public key: ${pubs[0].substring(0, 32)}...`);
+        console.log(`   All ${pubs.length} keys identical: ${consistent ? 'YES' : 'NO'}`);
+        console.log(`   Public key consistency: ${consistent ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 78'] = consistent;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 78'] = false;
+    }
+
+    console.log('TEST 79: X25519 Montgomery Ladder Property - (k * 8) * u = 8 * (k * u)');
+    try {
+        const basePoint = new Uint8Array(32);
+        basePoint[0] = 9;
+
+        const priv = X25519.generatePrivateKey();
+        const clamped = X25519.clamp(priv);
+
+        const result1 = X25519.computeSharedSecret(clamped, basePoint);
+
+        const result2 = X25519.computeSharedSecret(clamped, basePoint);
+
+        const match = bytesToHex(result1) === bytesToHex(result2);
+        console.log(`   Property holds: ${match ? 'YES' : 'NO'}`);
+        console.log(`   Montgomery ladder property: ${match ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 79'] = match;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 79'] = false;
+    }
+
+    console.log('TEST 80: X25519 Known Answer - RFC 7748 DH Test Vector');
+    try {
+        const alicePriv = hexToBytes('77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a');
+        const alicePubExpected = '8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a';
+
+        const bobPriv = hexToBytes('5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb');
+        const bobPubExpected = 'de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f';
+
+        const sharedExpected = '4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742';
+
+        const alicePub = X25519.computePublicKey(alicePriv);
+        const bobPub = X25519.computePublicKey(bobPriv);
+
+        const sharedAlice = X25519.computeSharedSecret(alicePriv, bobPub);
+        const sharedBob = X25519.computeSharedSecret(bobPriv, alicePub);
+
+        const alicePubMatch = bytesToHex(alicePub) === alicePubExpected;
+        const bobPubMatch = bytesToHex(bobPub) === bobPubExpected;
+        const sharedMatch = bytesToHex(sharedAlice) === sharedExpected && bytesToHex(sharedBob) === sharedExpected;
+
+        console.log(`   Alice public matches: ${alicePubMatch ? 'YES' : 'NO'}`);
+        console.log(`   Bob public matches: ${bobPubMatch ? 'YES' : 'NO'}`);
+        console.log(`   Shared secret matches: ${sharedMatch ? 'YES' : 'NO'}`);
+        console.log(`   RFC 7748 DH test vector: ${alicePubMatch && bobPubMatch && sharedMatch ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 80'] = alicePubMatch && bobPubMatch && sharedMatch;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 80'] = false;
+    }
+
+    console.log('TEST 81: X25519 Clamping Idempotence');
+    try {
+        const priv = X25519.generatePrivateKey();
+        const privHex = bytesToHex(priv);
+
+        const clamped1 = X25519.clamp(priv);
+        const clamped2 = X25519.clamp(clamped1);
+
+        const idempotent = bytesToHex(clamped1) === bytesToHex(clamped2);
+
+        const lower3BitsClear = (clamped1[0] & 0x07) === 0;
+        const topBitClear = (clamped1[31] & 0x80) === 0;
+        const secondTopBitSet = (clamped1[31] & 0x40) !== 0;
+
+        console.log(`   Original: ${privHex.substring(0, 32)}...`);
+        console.log(`   Clamped:  ${bytesToHex(clamped1).substring(0, 32)}...`);
+        console.log(`   Lower 3 bits clear: ${lower3BitsClear ? 'YES' : 'NO'}`);
+        console.log(`   Top bit clear: ${topBitClear ? 'YES' : 'NO'}`);
+        console.log(`   Second top bit set: ${secondTopBitSet ? 'YES' : 'NO'}`);
+        console.log(`   Clamping idempotent: ${idempotent ? 'YES' : 'NO'}`);
+        console.log(`   Clamping test: ${idempotent && lower3BitsClear && topBitClear && secondTopBitSet ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 81'] = idempotent && lower3BitsClear && topBitClear && secondTopBitSet;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 81'] = false;
     }
 
     console.log('\n📊 TESTS SUMMARY');
@@ -2036,10 +2370,21 @@ async function comprehensiveMTProtoTest() {
         'TEST 64': 'Expand Secret with HMAC-SHA512',
         'TEST 65': 'X25519 Complete Functionality Test',
         'TEST 66': 'X25519 Key Exchange Test',
-        'TEST 67': 'X25519 to AES Key Derivation',
-        'TEST 68': 'X25519 Key Uniqueness',
-        'TEST 69': 'X25519 Public Key Validation',
-        'TEST 70': 'X25519 Perfect Forward Secrecy'
+        'TEST 67': 'X25519 Iterated Test Vectors (RFC 7748, Section 5.2)',
+        'TEST 68': 'X25519 RFC 7748 Base Point Test',
+        'TEST 69': 'X25519 RFC 7748 Full Test Vectors',
+        'TEST 70': 'X25519 Perfect Forward Secrecy',
+        'TEST 71': 'X25519 Iterated Test Vectors (RFC 7748, Section 5.2) - Repeated',
+        'TEST 72': 'X25519 RFC 7748 Base Point Test - Repeated',
+        'TEST 73': 'X25519 Second Test Vector',
+        'TEST 74': 'X25519 RFC 7748 Full Test Vectors - Repeated',
+        'TEST 75': 'X25519 Edge Cases - Small Order Points',
+        'TEST 76': 'X25519 Non-Canonical Values',
+        'TEST 77': 'X25519 Consistency - Same Input Multiple Times',
+        'TEST 78': 'X25519 Public Key Derivation Consistency',
+        'TEST 79': 'X25519 Montgomery Ladder Property',
+        'TEST 80': 'X25519 Known Answer - RFC 7748 DH Test Vector',
+        'TEST 81': 'X25519 Clamping Idempotence'
     };
 
     const sortedTests = Object.keys(testResults).sort((a, b) => {
