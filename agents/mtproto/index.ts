@@ -1989,130 +1989,7 @@ async function comprehensiveMTProtoTest() {
         testResults['TEST 70'] = false;
     }
 
-    console.log('TEST 71: X25519 Iterated Test Vectors (RFC 7748, Section 5.2)');
-    try {
-        let k = hexToBytes('0900000000000000000000000000000000000000000000000000000000000000');
-        let u = hexToBytes('0900000000000000000000000000000000000000000000000000000000000000');
-        const expectedAfter1 = '422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079';
-        const expectedAfter1000 = '684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51';
-
-        console.log(`   Initial k: ${bytesToHex(k)}`);
-        console.log(`   Initial u: ${bytesToHex(u)}`);
-
-        const result1 = X25519.computeSharedSecret(k, u);
-        console.log(`   After 1 iteration: ${bytesToHex(result1)}`);
-        console.log(`   Expected:          ${expectedAfter1}`);
-        const match1 = bytesToHex(result1) === expectedAfter1;
-
-        let newK = result1;
-        let newU = k;
-
-        for (let i = 2; i <= 1000; i++) {
-            const result = X25519.computeSharedSecret(newK, newU);
-            newU = newK;
-            newK = result;
-        }
-
-        console.log(`   After 1000 iterations: ${bytesToHex(newK)}`);
-        console.log(`   Expected:               ${expectedAfter1000}`);
-        const match1000 = bytesToHex(newK) === expectedAfter1000;
-
-        const iteratedTestPass = match1 && match1000;
-        console.log(`   Iterated test vectors: ${iteratedTestPass ? 'PASS' : 'FAIL'}\n`);
-        testResults['TEST 71'] = iteratedTestPass;
-    } catch (error) {
-        const err = error as Error;
-        console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 71'] = false;
-    }
-
-    console.log('TEST 72: X25519 RFC 7748 Base Point Test');
-    try {
-        const scalar = hexToBytes('a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4');
-        const uCoordinate = hexToBytes('e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c');
-        const expected = 'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552';
-
-        console.log(`   Scalar: ${bytesToHex(scalar)}`);
-        console.log(`   U-coord: ${bytesToHex(uCoordinate)}`);
-
-        const result = X25519.computeSharedSecret(scalar, uCoordinate);
-        const resultHex = bytesToHex(result);
-
-        console.log(`   Result: ${resultHex}`);
-        console.log(`   Expected: ${expected}`);
-
-        const passed = resultHex === expected;
-        console.log(`   Test vector 1: ${passed ? 'PASS' : 'FAIL'}\n`);
-        testResults['TEST 72'] = passed;
-    } catch (error) {
-        const err = error as Error;
-        console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 72'] = false;
-    }
-
-    console.log('TEST 73: X25519 Second Test Vector');
-    try {
-        const scalar = hexToBytes('4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d');
-        const uCoordinate = hexToBytes('e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493');
-        const expected = '95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957';
-
-        console.log(`   Scalar: ${bytesToHex(scalar)}`);
-        console.log(`   U-coord: ${bytesToHex(uCoordinate)}`);
-
-        const result = X25519.computeSharedSecret(scalar, uCoordinate);
-        const resultHex = bytesToHex(result);
-
-        console.log(`   Result: ${resultHex}`);
-        console.log(`   Expected: ${expected}`);
-
-        const passed = resultHex === expected;
-        console.log(`   Test vector 2: ${passed ? 'PASS' : 'FAIL'}\n`);
-        testResults['TEST 73'] = passed;
-    } catch (error) {
-        const err = error as Error;
-        console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 73'] = false;
-    }
-
-    console.log('TEST 74: X25519 RFC 7748 Full Test Vectors');
-    try {
-        const scalar1 = hexToBytes('a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4');
-        const u1 = hexToBytes('e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c');
-        const expected1 = 'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552';
-
-        const scalar2 = hexToBytes('4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d');
-        const u2 = hexToBytes('e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493');
-        const expected2 = '95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957';
-
-        console.log('   Test Vector 1:');
-        console.log(`   Scalar: ${bytesToHex(scalar1)}`);
-        console.log(`   U-coord: ${bytesToHex(u1)}`);
-        const result1 = X25519.computeSharedSecret(scalar1, u1);
-        const result1Hex = bytesToHex(result1);
-        console.log(`   Result: ${result1Hex}`);
-        console.log(`   Expected: ${expected1}`);
-        const match1 = result1Hex === expected1;
-
-        console.log('\n   Test Vector 2:');
-        console.log(`   Scalar: ${bytesToHex(scalar2)}`);
-        console.log(`   U-coord: ${bytesToHex(u2)}`);
-        const result2 = X25519.computeSharedSecret(scalar2, u2);
-        const result2Hex = bytesToHex(result2);
-        console.log(`   Result: ${result2Hex}`);
-        console.log(`   Expected: ${expected2}`);
-        const match2 = result2Hex === expected2;
-
-        const allMatch = match1 && match2;
-        console.log(`\n   RFC 7748 test vectors: ${allMatch ? 'PASS' : 'FAIL'}\n`);
-
-        testResults['TEST 74'] = allMatch;
-    } catch (error) {
-        const err = error as Error;
-        console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 74'] = false;
-    }
-
-    console.log('TEST 75: X25519 Edge Cases - Small Order Points');
+    console.log('TEST 71: X25519 Edge Cases - Small Order Points');
     try {
         const alicePriv = X25519.generatePrivateKey();
 
@@ -2137,14 +2014,14 @@ async function comprehensiveMTProtoTest() {
 
         const allPassed = passed === smallOrderPoints.length;
         console.log(`   Small order points test: ${allPassed ? 'PASS' : 'FAIL'}\n`);
-        testResults['TEST 75'] = allPassed;
+        testResults['TEST 71'] = allPassed;
     } catch (error) {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 75'] = false;
+        testResults['TEST 71'] = false;
     }
 
-    console.log('TEST 76: X25519 Non-Canonical Values');
+    console.log('TEST 72: X25519 Non-Canonical Values');
     try {
         const alicePriv = X25519.generatePrivateKey();
 
@@ -2169,14 +2046,14 @@ async function comprehensiveMTProtoTest() {
 
         const allPassed = passed === nonCanonical.length;
         console.log(`   Non-canonical values test: ${allPassed ? 'PASS' : 'FAIL'}\n`);
-        testResults['TEST 76'] = allPassed;
+        testResults['TEST 72'] = allPassed;
     } catch (error) {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 76'] = false;
+        testResults['TEST 72'] = false;
     }
 
-    console.log('TEST 77: X25519 Consistency - Same Input Multiple Times');
+    console.log('TEST 73: X25519 Consistency - Same Input Multiple Times');
     try {
         const alicePriv = X25519.generatePrivateKey();
         const bobPriv = X25519.generatePrivateKey();
@@ -2192,14 +2069,14 @@ async function comprehensiveMTProtoTest() {
         console.log(`   First result: ${results[0].substring(0, 32)}...`);
         console.log(`   All ${results.length} results identical: ${consistent ? 'YES' : 'NO'}`);
         console.log(`   Consistency test: ${consistent ? 'PASS' : 'FAIL'}\n`);
-        testResults['TEST 77'] = consistent;
+        testResults['TEST 73'] = consistent;
     } catch (error) {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 77'] = false;
+        testResults['TEST 73'] = false;
     }
 
-    console.log('TEST 78: X25519 Public Key Derivation Consistency');
+    console.log('TEST 74: X25519 Public Key Derivation Consistency');
     try {
         const priv = X25519.generatePrivateKey();
 
@@ -2213,14 +2090,14 @@ async function comprehensiveMTProtoTest() {
         console.log(`   First public key: ${pubs[0].substring(0, 32)}...`);
         console.log(`   All ${pubs.length} keys identical: ${consistent ? 'YES' : 'NO'}`);
         console.log(`   Public key consistency: ${consistent ? 'PASS' : 'FAIL'}\n`);
-        testResults['TEST 78'] = consistent;
+        testResults['TEST 74'] = consistent;
     } catch (error) {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 78'] = false;
+        testResults['TEST 74'] = false;
     }
 
-    console.log('TEST 79: X25519 Montgomery Ladder Property - (k * 8) * u = 8 * (k * u)');
+    console.log('TEST 75: X25519 Montgomery Ladder Property');
     try {
         const basePoint = new Uint8Array(32);
         basePoint[0] = 9;
@@ -2229,20 +2106,19 @@ async function comprehensiveMTProtoTest() {
         const clamped = X25519.clamp(priv);
 
         const result1 = X25519.computeSharedSecret(clamped, basePoint);
-
         const result2 = X25519.computeSharedSecret(clamped, basePoint);
 
         const match = bytesToHex(result1) === bytesToHex(result2);
         console.log(`   Property holds: ${match ? 'YES' : 'NO'}`);
         console.log(`   Montgomery ladder property: ${match ? 'PASS' : 'FAIL'}\n`);
-        testResults['TEST 79'] = match;
+        testResults['TEST 75'] = match;
     } catch (error) {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 79'] = false;
+        testResults['TEST 75'] = false;
     }
 
-    console.log('TEST 80: X25519 Known Answer - RFC 7748 DH Test Vector');
+    console.log('TEST 76: X25519 Known Answer - RFC 7748 DH Test Vector');
     try {
         const alicePriv = hexToBytes('77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a');
         const alicePubExpected = '8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a';
@@ -2266,14 +2142,14 @@ async function comprehensiveMTProtoTest() {
         console.log(`   Bob public matches: ${bobPubMatch ? 'YES' : 'NO'}`);
         console.log(`   Shared secret matches: ${sharedMatch ? 'YES' : 'NO'}`);
         console.log(`   RFC 7748 DH test vector: ${alicePubMatch && bobPubMatch && sharedMatch ? 'PASS' : 'FAIL'}\n`);
-        testResults['TEST 80'] = alicePubMatch && bobPubMatch && sharedMatch;
+        testResults['TEST 76'] = alicePubMatch && bobPubMatch && sharedMatch;
     } catch (error) {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 80'] = false;
+        testResults['TEST 76'] = false;
     }
 
-    console.log('TEST 81: X25519 Clamping Idempotence');
+    console.log('TEST 77: X25519 Clamping Idempotence');
     try {
         const priv = X25519.generatePrivateKey();
         const privHex = bytesToHex(priv);
@@ -2294,11 +2170,11 @@ async function comprehensiveMTProtoTest() {
         console.log(`   Second top bit set: ${secondTopBitSet ? 'YES' : 'NO'}`);
         console.log(`   Clamping idempotent: ${idempotent ? 'YES' : 'NO'}`);
         console.log(`   Clamping test: ${idempotent && lower3BitsClear && topBitClear && secondTopBitSet ? 'PASS' : 'FAIL'}\n`);
-        testResults['TEST 81'] = idempotent && lower3BitsClear && topBitClear && secondTopBitSet;
+        testResults['TEST 77'] = idempotent && lower3BitsClear && topBitClear && secondTopBitSet;
     } catch (error) {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 81'] = false;
+        testResults['TEST 77'] = false;
     }
 
     console.log('\n📊 TESTS SUMMARY');
@@ -2374,17 +2250,13 @@ async function comprehensiveMTProtoTest() {
         'TEST 68': 'X25519 RFC 7748 Base Point Test',
         'TEST 69': 'X25519 RFC 7748 Full Test Vectors',
         'TEST 70': 'X25519 Perfect Forward Secrecy',
-        'TEST 71': 'X25519 Iterated Test Vectors (RFC 7748, Section 5.2) - Repeated',
-        'TEST 72': 'X25519 RFC 7748 Base Point Test - Repeated',
-        'TEST 73': 'X25519 Second Test Vector',
-        'TEST 74': 'X25519 RFC 7748 Full Test Vectors - Repeated',
-        'TEST 75': 'X25519 Edge Cases - Small Order Points',
-        'TEST 76': 'X25519 Non-Canonical Values',
-        'TEST 77': 'X25519 Consistency - Same Input Multiple Times',
-        'TEST 78': 'X25519 Public Key Derivation Consistency',
-        'TEST 79': 'X25519 Montgomery Ladder Property',
-        'TEST 80': 'X25519 Known Answer - RFC 7748 DH Test Vector',
-        'TEST 81': 'X25519 Clamping Idempotence'
+        'TEST 71': 'X25519 Edge Cases - Small Order Points',
+        'TEST 72': 'X25519 Non-Canonical Values',
+        'TEST 73': 'X25519 Consistency - Same Input Multiple Times',
+        'TEST 74': 'X25519 Public Key Derivation Consistency',
+        'TEST 75': 'X25519 Montgomery Ladder Property',
+        'TEST 76': 'X25519 Known Answer - RFC 7748 DH Test Vector',
+        'TEST 77': 'X25519 Clamping Idempotence'
     };
 
     const sortedTests = Object.keys(testResults).sort((a, b) => {
