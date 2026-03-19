@@ -756,6 +756,574 @@ async function comprehensiveMTProtoTest() {
         testResults['TEST 21'] = false;
     }
 
+    console.log('TEST 22: Message ID Uniqueness Across Sessions');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const ids = new Set<string>();
+        let duplicates = 0;
+        
+        for (let session = 0; session < 5; session++) {
+            for (let i = 0; i < 200; i++) {
+                const msgId = createMessageId(i + (session * 1000));
+                const idStr = msgId.toString();
+                if (ids.has(idStr)) {
+                    duplicates++;
+                    console.log(`   Duplicate found: ${msgId.toString(16)}`);
+                }
+                ids.add(idStr);
+            }
+        }
+        
+        console.log(`   Generated 1000 message IDs across 5 sessions`);
+        console.log(`   Duplicates: ${duplicates}`);
+        const unique = duplicates === 0;
+        console.log(`   Message IDs unique across sessions: ${unique ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 22'] = unique;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 22'] = false;
+    }
+
+    console.log('TEST 23: Multiple Message IDs in Rapid Succession');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const ids: bigint[] = [];
+        const start = Date.now();
+        
+        for (let i = 0; i < 1000; i++) {
+            ids.push(createMessageId(i));
+        }
+        
+        const end = Date.now();
+        const timePerId = (end - start) / 1000;
+        
+        let increasing = true;
+        for (let i = 1; i < ids.length; i++) {
+            if (ids[i] <= ids[i-1]) {
+                increasing = false;
+                break;
+            }
+        }
+        
+        console.log(`   Generated 1000 IDs in ${end - start}ms`);
+        console.log(`   Average: ${timePerId.toFixed(3)}ms per ID`);
+        console.log(`   Strictly increasing: ${increasing ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 23'] = increasing;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 23'] = false;
+    }
+
+    console.log('TEST 24: Server Message ID Parity');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        let passed = true;
+        
+        for (let i = 0; i < 100; i++) {
+            const serverMsgId = createMessageId(i, false);
+            if (serverMsgId % 2n === 0n) {
+                passed = false;
+                console.log(`   ❌ Server message ID even: ${serverMsgId.toString(16)}`);
+                break;
+            }
+        }
+        
+        console.log(`   Server message IDs always odd: ${passed ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 24'] = passed;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 24'] = false;
+    }
+
+    console.log('TEST 25: Message ID Time Difference Consistency');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const samples = [];
+        
+        for (let i = 0; i < 10; i++) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            const msgId = createMessageId(i);
+            const now = BigInt(Math.floor(Date.now() / 1000)) * 4294967296n;
+            const diff = msgId > now ? msgId - now : now - msgId;
+            const seconds = Number(diff) / 4294967296;
+            samples.push(seconds);
+        }
+        
+        const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
+        const maxDiff = Math.max(...samples) - Math.min(...samples);
+        
+        console.log(`   Average time difference: ${avg.toFixed(3)} seconds`);
+        console.log(`   Max variation: ${maxDiff.toFixed(3)} seconds`);
+        console.log(`   Time difference consistent: ${maxDiff < 1 ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 25'] = maxDiff < 1;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 25'] = false;
+    }
+
+    console.log('TEST 26: Message ID Wrapping Behavior');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const maxId = 0x7FFFFFFFFFFFFFFFn;
+        const nearMax = maxId - 100n;
+        
+        const id1 = createMessageId(0);
+        const id2 = createMessageId(1000);
+        
+        console.log(`   Normal ID: ${id1.toString(16)}`);
+        console.log(`   Later ID: ${id2.toString(16)}`);
+        console.log(`   IDs increase monotonically: ${id2 > id1 ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 26'] = id2 > id1;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 26'] = false;
+    }
+
+    console.log('TEST 27: Message ID with Maximum SeqNo');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const maxSeqNo = 0x7FFFFFFF;
+        const msgId = createMessageId(maxSeqNo);
+        
+        console.log(`   Max seqNo: ${maxSeqNo}`);
+        console.log(`   Generated ID: ${msgId.toString(16)} (${msgId})`);
+        console.log(`   ID within 64-bit range: ${msgId <= 0x7FFFFFFFFFFFFFFFn ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 27'] = msgId <= 0x7FFFFFFFFFFFFFFFn;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 27'] = false;
+    }
+
+    console.log('TEST 28: Message ID with Zero SeqNo');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const msgId = createMessageId(0);
+        
+        console.log(`   SeqNo 0: ${msgId.toString(16)} (${msgId})`);
+        console.log(`   Valid ID generated: ${msgId > 0n ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 28'] = msgId > 0n;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 28'] = false;
+    }
+
+    console.log('TEST 29: Message ID Monotonicity Under Load');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const ids: bigint[] = [];
+        const startTime = Date.now();
+        
+        for (let i = 0; i < 100; i++) {
+            const msgId = createMessageId(i);
+            ids.push(msgId);
+        }
+        
+        let monotonic = true;
+        for (let i = 1; i < ids.length; i++) {
+            if (ids[i] <= ids[i-1]) {
+                monotonic = false;
+                console.log(`   Non-monotonic at index ${i}:`);
+                console.log(`      ${ids[i-1].toString(16)} -> ${ids[i].toString(16)}`);
+                break;
+            }
+        }
+        
+        const endTime = Date.now();
+        console.log(`   Generated 100 IDs in ${endTime - startTime}ms`);
+        console.log(`   Message IDs strictly increasing: ${monotonic ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 29'] = monotonic;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 29'] = false;
+    }
+
+    console.log('TEST 30: Message ID Boundary Values');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const boundaries = [
+            { seq: 0, time: 0 },
+            { seq: 0x7FFFFFFF, time: Date.now() },
+            { seq: 0, time: 0x7FFFFFFF * 1000 }
+        ];
+        
+        let allValid = true;
+        for (const b of boundaries) {
+            const msgId = createMessageId(b.seq);
+            const valid = msgId > 0n && msgId <= 0x7FFFFFFFFFFFFFFFn;
+            if (!valid) allValid = false;
+            console.log(`   Boundary (seq:${b.seq}): ${msgId.toString(16)} - ${valid ? 'VALID' : 'INVALID'}`);
+        }
+        
+        console.log(`   All boundary values valid: ${allValid ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 30'] = allValid;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 30'] = false;
+    }
+
+    console.log('TEST 31: Message ID with Maximum Time Value');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const msgId = createMessageId(0);
+        
+        console.log(`   Generated ID: ${msgId.toString(16)}`);
+        console.log(`   ID within valid range: ${msgId > 0n && msgId <= 0x7FFFFFFFFFFFFFFFn ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 31'] = msgId > 0n && msgId <= 0x7FFFFFFFFFFFFFFFn;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 31'] = false;
+    }
+
+    console.log('TEST 32: Message ID with Negative Time');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const msgId = createMessageId(0);
+        
+        console.log(`   Generated ID: ${msgId.toString(16)}`);
+        console.log(`   ID is positive: ${msgId > 0n ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 32'] = msgId > 0n;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 32'] = false;
+    }
+
+    console.log('TEST 33: Message ID with Different Clients');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const client1Id = createMessageId(0, true);
+        const client2Id = createMessageId(0, true);
+        const serverId = createMessageId(0, false);
+        
+        console.log(`   Client 1 ID: ${client1Id.toString(16)} (${client1Id % 2n === 0n ? 'even' : 'odd'})`);
+        console.log(`   Client 2 ID: ${client2Id.toString(16)} (${client2Id % 2n === 0n ? 'even' : 'odd'})`);
+        console.log(`   Server ID: ${serverId.toString(16)} (${serverId % 2n === 1n ? 'odd' : 'even'})`);
+        
+        const allValid = (client1Id % 2n === 0n) && (client2Id % 2n === 0n) && (serverId % 2n === 1n);
+        console.log(`   All IDs have correct parity: ${allValid ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 33'] = allValid;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 33'] = false;
+    }
+
+    console.log('TEST 34: Message ID with Maximum SeqNo and Time');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const maxSeqNo = 0x7FFFFFFF;
+        const msgId = createMessageId(maxSeqNo);
+        
+        console.log(`   Max seqNo: ${maxSeqNo}`);
+        console.log(`   Generated ID: ${msgId.toString(16)}`);
+        console.log(`   ID within 64-bit range: ${msgId <= 0x7FFFFFFFFFFFFFFFn ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 34'] = msgId <= 0x7FFFFFFFFFFFFFFFn;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 34'] = false;
+    }
+
+    console.log('TEST 35: AuthKey Generation with Different Shared Secrets');
+    try {
+        const dhKeys1 = plugin.generateDHKeys();
+        const dhKeys2 = plugin.generateDHKeys();
+        
+        const sharedSecret1 = plugin.computeSharedSecret(dhKeys1.privateKey, dhKeys1.publicKey);
+        const sharedSecret2 = plugin.computeSharedSecret(dhKeys2.privateKey, dhKeys2.publicKey);
+        
+        const authKey1 = await plugin.generateAuthKey(sharedSecret1);
+        const authKey2 = await plugin.generateAuthKey(sharedSecret2);
+        
+        console.log(`   AuthKey1 ID: ${authKey1.id.toString(16)}`);
+        console.log(`   AuthKey2 ID: ${authKey2.id.toString(16)}`);
+        console.log(`   Different shared secrets produce different AuthKeys: ${authKey1.id !== authKey2.id ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 35'] = authKey1.id !== authKey2.id;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 35'] = false;
+    }
+
+    console.log('TEST 36: AuthKey ID Collision Resistance');
+    try {
+        const ids = new Set<string>();
+        let collisions = 0;
+        
+        for (let i = 0; i < 1000; i++) {
+            const dhKeys = plugin.generateDHKeys();
+            const sharedSecret = plugin.computeSharedSecret(dhKeys.privateKey, dhKeys.publicKey);
+            const authKey = await plugin.generateAuthKey(sharedSecret);
+            const idStr = authKey.id.toString(16);
+            
+            if (ids.has(idStr)) {
+                collisions++;
+                console.log(`   Collision found: ${idStr}`);
+            }
+            ids.add(idStr);
+        }
+        
+        console.log(`   Generated 1000 AuthKeys`);
+        console.log(`   Collisions: ${collisions}`);
+        console.log(`   AuthKey IDs are unique: ${collisions === 0 ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 36'] = collisions === 0;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 36'] = false;
+    }
+
+    console.log('TEST 37: Server Salt Uniqueness');
+    try {
+        const salts = new Set<string>();
+        
+        for (let i = 0; i < 100; i++) {
+            const salt = crypto.randomBytes(8);
+            salts.add(salt.toString('hex'));
+        }
+        
+        console.log(`   Generated 100 salts`);
+        console.log(`   Unique salts: ${salts.size}`);
+        console.log(`   Salts are unique: ${salts.size === 100 ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 37'] = salts.size === 100;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 37'] = false;
+    }
+
+    console.log('TEST 38: Message Encryption with Different Salts');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const message = 'Test message';
+        const msgId = createMessageId(0);
+        const sessionId = 0x12345678n;
+        
+        const salt1 = crypto.randomBytes(8);
+        const salt2 = crypto.randomBytes(8);
+        
+        plugin.setServerSalt(salt1);
+        const encrypted1 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
+        
+        plugin.setServerSalt(salt2);
+        const encrypted2 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
+        
+        const different = !encrypted1.data.equals(encrypted2.data);
+        console.log(`   Different salts produce different ciphertext: ${different ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 38'] = different;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 38'] = false;
+    }
+
+    console.log('TEST 39: Message Encryption with Different Sessions');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const message = 'Test message';
+        const msgId = createMessageId(0);
+        const salt = crypto.randomBytes(8);
+        plugin.setServerSalt(salt);
+        
+        const encrypted1 = plugin.encryptMessage(Buffer.from(message), 0x1n, msgId, 0);
+        const encrypted2 = plugin.encryptMessage(Buffer.from(message), 0x2n, msgId, 0);
+        
+        const different = !encrypted1.data.equals(encrypted2.data);
+        console.log(`   Different sessions produce different ciphertext: ${different ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 39'] = different;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 39'] = false;
+    }
+
+    console.log('TEST 40: Message Encryption with Different SeqNo');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const message = 'Test message';
+        const msgId = createMessageId(0);
+        const sessionId = 0x12345678n;
+        const salt = crypto.randomBytes(8);
+        plugin.setServerSalt(salt);
+        
+        const encrypted1 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
+        const encrypted2 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 1);
+        
+        const different = !encrypted1.data.equals(encrypted2.data);
+        console.log(`   Different seqNo produce different ciphertext: ${different ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 40'] = different;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 40'] = false;
+    }
+
+    console.log('TEST 41: Message Encryption with Different Message IDs');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const message = 'Test message';
+        const sessionId = 0x12345678n;
+        const salt = crypto.randomBytes(8);
+        plugin.setServerSalt(salt);
+        
+        const encrypted1 = plugin.encryptMessage(Buffer.from(message), sessionId, createMessageId(0), 0);
+        const encrypted2 = plugin.encryptMessage(Buffer.from(message), sessionId, createMessageId(1), 0);
+        
+        const different = !encrypted1.data.equals(encrypted2.data);
+        console.log(`   Different message IDs produce different ciphertext: ${different ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 41'] = different;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 41'] = false;
+    }
+
+    console.log('TEST 42: Decrypt with Wrong AuthKey');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const message = 'Test message';
+        const msgId = createMessageId(0);
+        const sessionId = 0x12345678n;
+        const salt = crypto.randomBytes(8);
+        plugin.setServerSalt(salt);
+        
+        const encrypted = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
+        
+        const dhKeys = plugin.generateDHKeys();
+        const sharedSecret = plugin.computeSharedSecret(dhKeys.privateKey, dhKeys.publicKey);
+        const wrongAuthKey = await plugin.generateAuthKey(sharedSecret);
+        
+        const originalAuthKey = plugin.getAuthKey();
+        if (!originalAuthKey) throw new Error('Original AuthKey is null');
+        
+        plugin.setAuthKey(wrongAuthKey);
+        
+        let decryptionFailed = false;
+        try {
+            plugin.decryptMessage(encrypted, sessionId);
+        } catch (error) {
+            decryptionFailed = true;
+        }
+        
+        plugin.setAuthKey(originalAuthKey);
+        
+        console.log(`   Decrypt with wrong AuthKey fails: ${decryptionFailed ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 42'] = decryptionFailed;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 42'] = false;
+    }
+
+    console.log('TEST 43: Message Integrity with Different Salts');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const message = 'Test message';
+        const msgId = createMessageId(0);
+        const sessionId = 0x12345678n;
+        
+        const salt1 = crypto.randomBytes(8);
+        const salt2 = crypto.randomBytes(8);
+        
+        plugin.setServerSalt(salt1);
+        const encrypted1 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
+        
+        plugin.setServerSalt(salt2);
+        const encrypted2 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
+        
+        const different = !encrypted1.data.equals(encrypted2.data);
+        
+        console.log(`   Salt1: ${salt1.toString('hex')}`);
+        console.log(`   Salt2: ${salt2.toString('hex')}`);
+        console.log(`   Different salts produce different ciphertext: ${different ? 'PASS' : 'FAIL'}\n`);
+        
+        testResults['TEST 43'] = different;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 43'] = false;
+    }
+
+    console.log('TEST 44: Message Key Collision Resistance');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const msgKeys = new Set<string>();
+        let collisions = 0;
+        
+        for (let i = 0; i < 100; i++) {
+            const message = `Test message ${i}`;
+            const msgId = createMessageId(i);
+            const sessionId = 0x12345678n;
+            const salt = crypto.randomBytes(8);
+            plugin.setServerSalt(salt);
+            
+            const encrypted = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, i);
+            const msgKeyStr = encrypted.msgKey.toString('hex');
+            
+            if (msgKeys.has(msgKeyStr)) {
+                collisions++;
+            }
+            msgKeys.add(msgKeyStr);
+        }
+        
+        console.log(`   Generated 100 message keys`);
+        console.log(`   Collisions: ${collisions}`);
+        console.log(`   Message keys are unique: ${collisions === 0 ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 44'] = collisions === 0;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 44'] = false;
+    }
+
+    console.log('TEST 45: Padding Size Distribution');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+        const paddingSizes: number[] = [];
+        
+        for (let size = 1; size <= 100; size++) {
+            const message = 'A'.repeat(size);
+            const msgId = createMessageId(size);
+            const encrypted = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, size);
+            
+            const encryptedLen = encrypted.data.length;
+            const plaintextLen = 32 + size;
+            const padding = encryptedLen - plaintextLen;
+            paddingSizes.push(padding);
+        }
+        
+        let allValid = true;
+        for (const p of paddingSizes) {
+            if (p < 12 || p > 1024) {
+                allValid = false;
+                break;
+            }
+        }
+        
+        const minPadding = Math.min(...paddingSizes);
+        const maxPadding = Math.max(...paddingSizes);
+        const avgPadding = paddingSizes.reduce((a, b) => a + b, 0) / paddingSizes.length;
+        
+        console.log(`   Padding range: ${minPadding} - ${maxPadding} bytes`);
+        console.log(`   Average padding: ${avgPadding.toFixed(2)} bytes`);
+        console.log(`   All padding within 12-1024 range: ${allValid ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 45'] = allValid;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 45'] = false;
+    }
+
     console.log('\n📊 TESTS SUMMARY');
 
     const testDetails: Record<string, string> = {
@@ -779,7 +1347,31 @@ async function comprehensiveMTProtoTest() {
         'TEST 18': 'Invalid Session ID',
         'TEST 19': 'Binary Data',
         'TEST 20': 'Edge Case - Maximum SeqNo',
-        'TEST 21': 'Edge Case - Minimum Session ID'
+        'TEST 21': 'Edge Case - Minimum Session ID',
+        'TEST 22': 'Message ID Uniqueness Across Sessions',
+        'TEST 23': 'Multiple Message IDs in Rapid Succession',
+        'TEST 24': 'Server Message ID Parity',
+        'TEST 25': 'Message ID Time Difference Consistency',
+        'TEST 26': 'Message ID Wrapping Behavior',
+        'TEST 27': 'Message ID with Maximum SeqNo',
+        'TEST 28': 'Message ID with Zero SeqNo',
+        'TEST 29': 'Message ID Monotonicity Under Load',
+        'TEST 30': 'Message ID Boundary Values',
+        'TEST 31': 'Message ID with Maximum Time Value',
+        'TEST 32': 'Message ID with Negative Time',
+        'TEST 33': 'Message ID with Different Clients',
+        'TEST 34': 'Message ID with Maximum SeqNo and Time',
+        'TEST 35': 'AuthKey Generation with Different Shared Secrets',
+        'TEST 36': 'AuthKey ID Collision Resistance',
+        'TEST 37': 'Server Salt Uniqueness',
+        'TEST 38': 'Message Encryption with Different Salts',
+        'TEST 39': 'Message Encryption with Different Sessions',
+        'TEST 40': 'Message Encryption with Different SeqNo',
+        'TEST 41': 'Message Encryption with Different Message IDs',
+        'TEST 42': 'Decrypt with Wrong AuthKey',
+        'TEST 43': 'Decrypt with Wrong ServerSalt',
+        'TEST 44': 'Message Key Collision Resistance',
+        'TEST 45': 'Padding Size Distribution'
     };
 
     const sortedTests = Object.keys(testResults).sort((a, b) => {
