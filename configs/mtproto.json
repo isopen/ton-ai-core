@@ -1,0 +1,32 @@
+{
+  "name": "ton-ai-mtproto",
+  "version": "0.1.0",
+  "description": "MTProto 2.0",
+  "scripts": {
+    "clean": "npm run clean:core && npm run clean:mtproto && npm run clean:agent",
+    "clean:core": "cd packages/core && npm run clean",
+    "clean:mtproto": "cd plugins/mtproto && npm run clean",
+    "clean:agent": "cd agents/mtproto && rm -rf dist node_modules package-lock.json",
+
+    "build:core": "cd packages/core && npm install && npm run build && npm pack",
+    "build:mtproto": "cd plugins/mtproto && npm install && npm run build && npm pack",
+    "build:agent": "cd agents/mtproto && npm install",
+
+    "copy-packages": "mkdir -p agents/mtproto/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/mtproto/node_modules/@ton-ai/ 2>/dev/null && cp plugins/mtproto/ton-ai-mtproto-0.1.0.tgz agents/mtproto/node_modules/@ton-ai/ 2>/dev/null || echo 'Package copy completed'",
+
+    "rebuild": "npm run clean && npm run build:core && npm run build:mtproto && npm run build:agent && npm run copy-packages",
+    "rebuild:quick": "npm run build:core && npm run build:mtproto && npm run copy-packages && cd agents/mtproto && npm install",
+
+    "start:agent": "cd agents/mtproto && npm start",
+    "dev": "npm run rebuild && npm run start:agent"
+  },
+  "keywords": [
+    "ton", 
+    "ai", 
+    "telegram", 
+    "mtproto",
+    "bot"
+  ],
+  "author": "testertesterov",
+  "license": "MIT"
+}
