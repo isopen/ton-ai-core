@@ -162,6 +162,10 @@ export class DiffieHellman {
         return BigInt('0x' + bytes.toString('hex'));
     }
 
+    static computePublicKey(privateKey: bigint): bigint {
+        return this.modExp(this.G, privateKey, this.P);
+    }
+
     private static modExp(base: bigint, exp: bigint, mod: bigint): bigint {
         let result = 1n;
         let b = base % mod;
@@ -172,6 +176,142 @@ export class DiffieHellman {
             e >>= 1n;
         }
         return result;
+    }
+}
+
+export class SecretExpander {
+    static expandSecret(secret: Buffer): Buffer {
+        const hmac0 = crypto.createHmac('sha512', secret).update('0').digest();
+        const hmac1 = crypto.createHmac('sha512', secret).update('1').digest();
+        return Buffer.concat([hmac0, hmac1]);
+    }
+}
+
+export class X25519 {
+    private static readonly P = 2n ** 255n - 19n;
+    private static readonly A24 = 121665n;
+    private static readonly BASE = 9n;
+
+    static clamp(privateKey: Uint8Array): Uint8Array {
+        const clamped = new Uint8Array(privateKey);
+        clamped[0] &= 0xf8;
+        clamped[31] &= 0x7f;
+        clamped[31] |= 0x40;
+        return clamped;
+    }
+
+    private static decodeLittleEndian(bytes: Uint8Array): bigint {
+        let result = 0n;
+        for (let i = 0; i < bytes.length; i++) {
+            result += BigInt(bytes[i]) << (8n * BigInt(i));
+        }
+        return result;
+    }
+
+    private static encodeLittleEndian(x: bigint, length: number): Uint8Array {
+        const result = new Uint8Array(length);
+        let value = x % X25519.P;
+        for (let i = 0; i < length; i++) {
+            result[i] = Number(value & 0xffn);
+            value >>= 8n;
+        }
+        return result;
+    }
+
+    private static mod(a: bigint): bigint {
+        const res = a % X25519.P;
+        return res < 0n ? res + X25519.P : res;
+    }
+
+    private static mul(a: bigint, b: bigint): bigint {
+        return (a * b) % X25519.P;
+    }
+
+    private static sq(a: bigint): bigint {
+        return (a * a) % X25519.P;
+    }
+
+    private static inv(x: bigint): bigint {
+        return this.modPow(x, X25519.P - 2n);
+    }
+
+    private static modPow(base: bigint, exp: bigint): bigint {
+        let result = 1n;
+        let b = base % X25519.P;
+        let e = exp;
+        while (e > 0n) {
+            if (e & 1n) result = this.mul(result, b);
+            b = this.sq(b);
+            e >>= 1n;
+        }
+        return result;
+    }
+
+    private static montgomeryLadder(scalar: Uint8Array, u: bigint): bigint {
+        let x_1 = u;
+        let x_2 = 1n;
+        let z_2 = 0n;
+        let x_3 = u;
+        let z_3 = 1n;
+        let swap = 0;
+
+        for (let t = 254; t >= 0; t--) {
+            const k_t = (scalar[Math.floor(t / 8)] >> (t % 8)) & 1;
+            const dummy = swap ^ k_t;
+            swap = k_t;
+
+            if (dummy === 1) {
+                [x_2, x_3] = [x_3, x_2];
+                [z_2, z_3] = [z_3, z_2];
+            }
+
+            const A = (x_2 + z_2) % X25519.P;
+            const AA = this.sq(A);
+            const B = this.mod(x_2 - z_2);
+            const BB = this.sq(B);
+            const E = this.mod(AA - BB);
+
+            const C = (x_3 + z_3) % X25519.P;
+            const D = this.mod(x_3 - z_3);
+            const DA = this.mul(D, A);
+            const CB = this.mul(C, B);
+
+            x_3 = this.sq(DA + CB);
+            z_3 = this.mul(x_1, this.sq(this.mod(DA - CB)));
+            x_2 = this.mul(AA, BB);
+            z_2 = this.mul(E, (AA + this.mul(X25519.A24, E)) % X25519.P);
+        }
+
+        if (swap === 1) {
+            [x_2, x_3] = [x_3, x_2];
+            [z_2, z_3] = [z_3, z_2];
+        }
+
+        return this.mul(x_2, this.inv(z_2));
+    }
+
+    static generatePrivateKey(): Uint8Array {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        return this.clamp(bytes);
+    }
+
+    static computePublicKey(privateKey: Uint8Array): Uint8Array {
+        const clamped = this.clamp(privateKey);
+        const x = this.montgomeryLadder(clamped, X25519.BASE);
+        return this.encodeLittleEndian(x, 32);
+    }
+
+    static computeSharedSecret(privateKey: Uint8Array, peerPublicKey: Uint8Array): Uint8Array {
+        const clamped = this.clamp(privateKey);
+        const u = this.decodeLittleEndian(peerPublicKey);
+
+        if (u >= X25519.P || u === 0n || u === 1n || u === X25519.P - 1n) {
+            throw new Error('Invalid public key');
+        }
+
+        const x = this.montgomeryLadder(clamped, u);
+        return this.encodeLittleEndian(x, 32);
     }
 }
 
