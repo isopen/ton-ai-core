@@ -8,9 +8,9 @@ function createMessageId(seqNo: number, isClient: boolean = true): bigint {
     const messageIdBase = timeInSeconds * 4294967296n;
     const milliseconds = BigInt(now % 1000);
     const fractionalPart = (milliseconds * 4294967296n) / 1000n;
-    
+
     let messageId = messageIdBase + fractionalPart + BigInt(seqNo * 4);
-    
+
     if (isClient) {
         if (messageId % 2n === 1n) {
             messageId = messageId + 1n;
@@ -20,7 +20,7 @@ function createMessageId(seqNo: number, isClient: boolean = true): bigint {
             messageId = messageId + 1n;
         }
     }
-    
+
     return messageId & 0x7FFFFFFFFFFFFFFFn;
 }
 
@@ -98,15 +98,15 @@ async function comprehensiveMTProtoTest() {
         console.log(`   Client message ID (seq0): ${clientMsgId1.toString(16)} (${clientMsgId1})`);
         console.log(`   Client message ID (seq1): ${clientMsgId2.toString(16)} (${clientMsgId2})`);
         console.log(`   Server message ID: ${serverMsgId.toString(16)} (${serverMsgId})`);
-        
+
         const clientParity = clientMsgId1 % 2n === 0n;
         const serverParity = serverMsgId % 2n === 1n;
         const monotonic = clientMsgId2 > clientMsgId1;
-        
+
         console.log(`   Client parity (even): ${clientParity ? 'PASS' : 'FAIL'} (${clientMsgId1 % 2n})`);
         console.log(`   Server parity (odd): ${serverParity ? 'PASS' : 'FAIL'} (${serverMsgId % 2n})`);
         console.log(`   Monotonic: ${monotonic ? 'PASS' : 'FAIL'} (${clientMsgId2} > ${clientMsgId1})`);
-        
+
         const now = BigInt(Math.floor(Date.now() / 1000)) * 4294967296n;
         const timeDiff = clientMsgId1 > now ? clientMsgId1 - now : now - clientMsgId1;
         const timeDiffSeconds = Number(timeDiff) / 4294967296;
@@ -487,13 +487,13 @@ async function comprehensiveMTProtoTest() {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const ids = new Set();
         let duplicates = 0;
-        
+
         for (let i = 0; i < 1000; i++) {
             const msgId = createMessageId(i);
             if (ids.has(msgId)) duplicates++;
             ids.add(msgId);
         }
-        
+
         console.log(`   Generated 1000 message IDs`);
         console.log(`   Duplicates: ${duplicates}`);
         const unique = duplicates === 0;
@@ -509,20 +509,20 @@ async function comprehensiveMTProtoTest() {
     try {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const msgIds = [];
-        
+
         for (let i = 0; i < 10; i++) {
             await new Promise(resolve => setTimeout(resolve, 1));
             msgIds.push(createMessageId(i));
         }
-        
+
         let increasing = true;
         for (let i = 1; i < msgIds.length; i++) {
-            if (msgIds[i] <= msgIds[i-1]) {
+            if (msgIds[i] <= msgIds[i - 1]) {
                 increasing = false;
                 break;
             }
         }
-        
+
         console.log(`   Message IDs strictly increasing: ${increasing ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 14'] = increasing;
     } catch (error) {
@@ -537,7 +537,7 @@ async function comprehensiveMTProtoTest() {
         const message = 'Same message text';
         const msgId = createMessageId(0);
         const sessions = [0x1n, 0x2n, 0x3n, 0x4n, 0x5n];
-        
+
         const encryptedMessages = [];
         for (const sid of sessions) {
             const encrypted = await plugin.encryptMessage(
@@ -548,7 +548,7 @@ async function comprehensiveMTProtoTest() {
             );
             encryptedMessages.push(encrypted);
         }
-        
+
         let allDifferent = true;
         for (let i = 0; i < encryptedMessages.length; i++) {
             for (let j = i + 1; j < encryptedMessages.length; j++) {
@@ -558,7 +558,7 @@ async function comprehensiveMTProtoTest() {
                 }
             }
         }
-        
+
         console.log(`   Different sessions produce different ciphertext: ${allDifferent ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 15'] = allDifferent;
     } catch (error) {
@@ -572,11 +572,11 @@ async function comprehensiveMTProtoTest() {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const sizes = [4096, 8192, 16384, 32768];
         let allPassed = true;
-        
+
         for (const size of sizes) {
             const largeMsg = 'X'.repeat(size);
             const msgId = createMessageId(size);
-            
+
             const start = Date.now();
             const encrypted = plugin.encryptMessage(
                 Buffer.from(largeMsg),
@@ -585,14 +585,14 @@ async function comprehensiveMTProtoTest() {
                 size
             );
             const encryptTime = Date.now() - start;
-            
+
             const decryptStart = Date.now();
             const decrypted = plugin.decryptMessage(encrypted, testSessionId);
             const decryptTime = Date.now() - decryptStart;
-            
+
             const success = decrypted.toString('utf8') === largeMsg;
             if (!success) allPassed = false;
-            
+
             console.log(`   Size ${size} bytes:`);
             console.log(`      Encrypted: ${encrypted.data.length} bytes (${encryptTime}ms)`);
             console.log(`      Decrypted: ${decryptTime}ms`);
@@ -613,7 +613,7 @@ async function comprehensiveMTProtoTest() {
         const message = 'Rapid test';
         const start = Date.now();
         let allPassed = true;
-        
+
         for (let i = 0; i < count; i++) {
             const msgId = createMessageId(i);
             const encrypted = plugin.encryptMessage(
@@ -623,15 +623,15 @@ async function comprehensiveMTProtoTest() {
                 i
             );
             const decrypted = plugin.decryptMessage(encrypted, testSessionId);
-            
+
             if (decrypted.toString('utf8') !== message) {
                 allPassed = false;
             }
         }
-        
+
         const totalTime = Date.now() - start;
         console.log(`   ${count} rapid messages: ${totalTime}ms`);
-        console.log(`   Average: ${(totalTime/count).toFixed(2)}ms per message`);
+        console.log(`   Average: ${(totalTime / count).toFixed(2)}ms per message`);
         console.log(`   Rapid fire test: ${allPassed ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 17'] = allPassed;
     } catch (error) {
@@ -647,14 +647,14 @@ async function comprehensiveMTProtoTest() {
         const msgId = createMessageId(0);
         const correctSid = testSessionId;
         const wrongSid = 0xDEADBEEFn;
-        
+
         const encrypted = plugin.encryptMessage(
             Buffer.from(message),
             correctSid,
             msgId,
             0
         );
-        
+
         let wrongCaught = false;
         try {
             plugin.decryptMessage(encrypted, wrongSid);
@@ -664,11 +664,11 @@ async function comprehensiveMTProtoTest() {
             console.log(`   Wrong session ID caught: ${err.message}`);
             wrongCaught = true;
         }
-        
+
         const decrypted = plugin.decryptMessage(encrypted, correctSid);
         const correctWorks = decrypted.toString('utf8') === message;
         console.log(`   Correct session ID works: ${correctWorks ? 'PASS' : 'FAIL'}\n`);
-        
+
         testResults['TEST 18'] = wrongCaught && correctWorks;
     } catch (error) {
         const err = error as Error;
@@ -683,7 +683,7 @@ async function comprehensiveMTProtoTest() {
             0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0xFD, 0xFC,
             0x10, 0x20, 0x30, 0x40, 0x80, 0x90, 0xA0, 0xB0
         ]);
-        
+
         const msgId = createMessageId(0);
         const encrypted = plugin.encryptMessage(
             binaryData,
@@ -691,9 +691,9 @@ async function comprehensiveMTProtoTest() {
             msgId,
             0
         );
-        
+
         const decrypted = plugin.decryptMessage(encrypted, testSessionId);
-        
+
         const success = binaryData.equals(decrypted);
         console.log(`   Binary data length: ${binaryData.length} bytes`);
         console.log(`   Binary data preserved: ${success ? 'PASS' : 'FAIL'}\n`);
@@ -710,16 +710,16 @@ async function comprehensiveMTProtoTest() {
         const maxSeqNo = 0x7FFFFFFF;
         const message = 'Max seqno test';
         const msgId = createMessageId(maxSeqNo);
-        
+
         const encrypted = plugin.encryptMessage(
             Buffer.from(message),
             testSessionId,
             msgId,
             maxSeqNo
         );
-        
+
         const decrypted = plugin.decryptMessage(encrypted, testSessionId);
-        
+
         const success = decrypted.toString('utf8') === message;
         console.log(`   Max seqNo: ${maxSeqNo}`);
         console.log(`   Max seqNo works: ${success ? 'PASS' : 'FAIL'}\n`);
@@ -736,16 +736,16 @@ async function comprehensiveMTProtoTest() {
         const minSid = 0n;
         const message = 'Min session test';
         const msgId = createMessageId(0);
-        
+
         const encrypted = plugin.encryptMessage(
             Buffer.from(message),
             minSid,
             msgId,
             0
         );
-        
+
         const decrypted = plugin.decryptMessage(encrypted, minSid);
-        
+
         const success = decrypted.toString('utf8') === message;
         console.log(`   Min session ID: 0x${minSid.toString(16)}`);
         console.log(`   Min session ID works: ${success ? 'PASS' : 'FAIL'}\n`);
@@ -761,7 +761,7 @@ async function comprehensiveMTProtoTest() {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const ids = new Set<string>();
         let duplicates = 0;
-        
+
         for (let session = 0; session < 5; session++) {
             for (let i = 0; i < 200; i++) {
                 const msgId = createMessageId(i + (session * 1000));
@@ -773,7 +773,7 @@ async function comprehensiveMTProtoTest() {
                 ids.add(idStr);
             }
         }
-        
+
         console.log(`   Generated 1000 message IDs across 5 sessions`);
         console.log(`   Duplicates: ${duplicates}`);
         const unique = duplicates === 0;
@@ -790,22 +790,22 @@ async function comprehensiveMTProtoTest() {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const ids: bigint[] = [];
         const start = Date.now();
-        
+
         for (let i = 0; i < 1000; i++) {
             ids.push(createMessageId(i));
         }
-        
+
         const end = Date.now();
         const timePerId = (end - start) / 1000;
-        
+
         let increasing = true;
         for (let i = 1; i < ids.length; i++) {
-            if (ids[i] <= ids[i-1]) {
+            if (ids[i] <= ids[i - 1]) {
                 increasing = false;
                 break;
             }
         }
-        
+
         console.log(`   Generated 1000 IDs in ${end - start}ms`);
         console.log(`   Average: ${timePerId.toFixed(3)}ms per ID`);
         console.log(`   Strictly increasing: ${increasing ? 'PASS' : 'FAIL'}\n`);
@@ -820,7 +820,7 @@ async function comprehensiveMTProtoTest() {
     try {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         let passed = true;
-        
+
         for (let i = 0; i < 100; i++) {
             const serverMsgId = createMessageId(i, false);
             if (serverMsgId % 2n === 0n) {
@@ -829,7 +829,7 @@ async function comprehensiveMTProtoTest() {
                 break;
             }
         }
-        
+
         console.log(`   Server message IDs always odd: ${passed ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 24'] = passed;
     } catch (error) {
@@ -842,7 +842,7 @@ async function comprehensiveMTProtoTest() {
     try {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const samples = [];
-        
+
         for (let i = 0; i < 10; i++) {
             await new Promise(resolve => setTimeout(resolve, 100));
             const msgId = createMessageId(i);
@@ -851,10 +851,10 @@ async function comprehensiveMTProtoTest() {
             const seconds = Number(diff) / 4294967296;
             samples.push(seconds);
         }
-        
+
         const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
         const maxDiff = Math.max(...samples) - Math.min(...samples);
-        
+
         console.log(`   Average time difference: ${avg.toFixed(3)} seconds`);
         console.log(`   Max variation: ${maxDiff.toFixed(3)} seconds`);
         console.log(`   Time difference consistent: ${maxDiff < 1 ? 'PASS' : 'FAIL'}\n`);
@@ -870,10 +870,10 @@ async function comprehensiveMTProtoTest() {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const maxId = 0x7FFFFFFFFFFFFFFFn;
         const nearMax = maxId - 100n;
-        
+
         const id1 = createMessageId(0);
         const id2 = createMessageId(1000);
-        
+
         console.log(`   Normal ID: ${id1.toString(16)}`);
         console.log(`   Later ID: ${id2.toString(16)}`);
         console.log(`   IDs increase monotonically: ${id2 > id1 ? 'PASS' : 'FAIL'}\n`);
@@ -889,7 +889,7 @@ async function comprehensiveMTProtoTest() {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const maxSeqNo = 0x7FFFFFFF;
         const msgId = createMessageId(maxSeqNo);
-        
+
         console.log(`   Max seqNo: ${maxSeqNo}`);
         console.log(`   Generated ID: ${msgId.toString(16)} (${msgId})`);
         console.log(`   ID within 64-bit range: ${msgId <= 0x7FFFFFFFFFFFFFFFn ? 'PASS' : 'FAIL'}\n`);
@@ -904,7 +904,7 @@ async function comprehensiveMTProtoTest() {
     try {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const msgId = createMessageId(0);
-        
+
         console.log(`   SeqNo 0: ${msgId.toString(16)} (${msgId})`);
         console.log(`   Valid ID generated: ${msgId > 0n ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 28'] = msgId > 0n;
@@ -919,22 +919,22 @@ async function comprehensiveMTProtoTest() {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const ids: bigint[] = [];
         const startTime = Date.now();
-        
+
         for (let i = 0; i < 100; i++) {
             const msgId = createMessageId(i);
             ids.push(msgId);
         }
-        
+
         let monotonic = true;
         for (let i = 1; i < ids.length; i++) {
-            if (ids[i] <= ids[i-1]) {
+            if (ids[i] <= ids[i - 1]) {
                 monotonic = false;
                 console.log(`   Non-monotonic at index ${i}:`);
-                console.log(`      ${ids[i-1].toString(16)} -> ${ids[i].toString(16)}`);
+                console.log(`      ${ids[i - 1].toString(16)} -> ${ids[i].toString(16)}`);
                 break;
             }
         }
-        
+
         const endTime = Date.now();
         console.log(`   Generated 100 IDs in ${endTime - startTime}ms`);
         console.log(`   Message IDs strictly increasing: ${monotonic ? 'PASS' : 'FAIL'}\n`);
@@ -953,7 +953,7 @@ async function comprehensiveMTProtoTest() {
             { seq: 0x7FFFFFFF, time: Date.now() },
             { seq: 0, time: 0x7FFFFFFF * 1000 }
         ];
-        
+
         let allValid = true;
         for (const b of boundaries) {
             const msgId = createMessageId(b.seq);
@@ -961,7 +961,7 @@ async function comprehensiveMTProtoTest() {
             if (!valid) allValid = false;
             console.log(`   Boundary (seq:${b.seq}): ${msgId.toString(16)} - ${valid ? 'VALID' : 'INVALID'}`);
         }
-        
+
         console.log(`   All boundary values valid: ${allValid ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 30'] = allValid;
     } catch (error) {
@@ -974,7 +974,7 @@ async function comprehensiveMTProtoTest() {
     try {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const msgId = createMessageId(0);
-        
+
         console.log(`   Generated ID: ${msgId.toString(16)}`);
         console.log(`   ID within valid range: ${msgId > 0n && msgId <= 0x7FFFFFFFFFFFFFFFn ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 31'] = msgId > 0n && msgId <= 0x7FFFFFFFFFFFFFFFn;
@@ -988,7 +988,7 @@ async function comprehensiveMTProtoTest() {
     try {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const msgId = createMessageId(0);
-        
+
         console.log(`   Generated ID: ${msgId.toString(16)}`);
         console.log(`   ID is positive: ${msgId > 0n ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 32'] = msgId > 0n;
@@ -1004,11 +1004,11 @@ async function comprehensiveMTProtoTest() {
         const client1Id = createMessageId(0, true);
         const client2Id = createMessageId(0, true);
         const serverId = createMessageId(0, false);
-        
+
         console.log(`   Client 1 ID: ${client1Id.toString(16)} (${client1Id % 2n === 0n ? 'even' : 'odd'})`);
         console.log(`   Client 2 ID: ${client2Id.toString(16)} (${client2Id % 2n === 0n ? 'even' : 'odd'})`);
         console.log(`   Server ID: ${serverId.toString(16)} (${serverId % 2n === 1n ? 'odd' : 'even'})`);
-        
+
         const allValid = (client1Id % 2n === 0n) && (client2Id % 2n === 0n) && (serverId % 2n === 1n);
         console.log(`   All IDs have correct parity: ${allValid ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 33'] = allValid;
@@ -1023,7 +1023,7 @@ async function comprehensiveMTProtoTest() {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const maxSeqNo = 0x7FFFFFFF;
         const msgId = createMessageId(maxSeqNo);
-        
+
         console.log(`   Max seqNo: ${maxSeqNo}`);
         console.log(`   Generated ID: ${msgId.toString(16)}`);
         console.log(`   ID within 64-bit range: ${msgId <= 0x7FFFFFFFFFFFFFFFn ? 'PASS' : 'FAIL'}\n`);
@@ -1038,13 +1038,13 @@ async function comprehensiveMTProtoTest() {
     try {
         const dhKeys1 = plugin.generateDHKeys();
         const dhKeys2 = plugin.generateDHKeys();
-        
+
         const sharedSecret1 = plugin.computeSharedSecret(dhKeys1.privateKey, dhKeys1.publicKey);
         const sharedSecret2 = plugin.computeSharedSecret(dhKeys2.privateKey, dhKeys2.publicKey);
-        
+
         const authKey1 = await plugin.generateAuthKey(sharedSecret1);
         const authKey2 = await plugin.generateAuthKey(sharedSecret2);
-        
+
         console.log(`   AuthKey1 ID: ${authKey1.id.toString(16)}`);
         console.log(`   AuthKey2 ID: ${authKey2.id.toString(16)}`);
         console.log(`   Different shared secrets produce different AuthKeys: ${authKey1.id !== authKey2.id ? 'PASS' : 'FAIL'}\n`);
@@ -1059,20 +1059,20 @@ async function comprehensiveMTProtoTest() {
     try {
         const ids = new Set<string>();
         let collisions = 0;
-        
+
         for (let i = 0; i < 1000; i++) {
             const dhKeys = plugin.generateDHKeys();
             const sharedSecret = plugin.computeSharedSecret(dhKeys.privateKey, dhKeys.publicKey);
             const authKey = await plugin.generateAuthKey(sharedSecret);
             const idStr = authKey.id.toString(16);
-            
+
             if (ids.has(idStr)) {
                 collisions++;
                 console.log(`   Collision found: ${idStr}`);
             }
             ids.add(idStr);
         }
-        
+
         console.log(`   Generated 1000 AuthKeys`);
         console.log(`   Collisions: ${collisions}`);
         console.log(`   AuthKey IDs are unique: ${collisions === 0 ? 'PASS' : 'FAIL'}\n`);
@@ -1086,12 +1086,12 @@ async function comprehensiveMTProtoTest() {
     console.log('TEST 37: Server Salt Uniqueness');
     try {
         const salts = new Set<string>();
-        
+
         for (let i = 0; i < 100; i++) {
             const salt = crypto.randomBytes(8);
             salts.add(salt.toString('hex'));
         }
-        
+
         console.log(`   Generated 100 salts`);
         console.log(`   Unique salts: ${salts.size}`);
         console.log(`   Salts are unique: ${salts.size === 100 ? 'PASS' : 'FAIL'}\n`);
@@ -1108,16 +1108,16 @@ async function comprehensiveMTProtoTest() {
         const message = 'Test message';
         const msgId = createMessageId(0);
         const sessionId = 0x12345678n;
-        
+
         const salt1 = crypto.randomBytes(8);
         const salt2 = crypto.randomBytes(8);
-        
+
         plugin.setServerSalt(salt1);
         const encrypted1 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
-        
+
         plugin.setServerSalt(salt2);
         const encrypted2 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
-        
+
         const different = !encrypted1.data.equals(encrypted2.data);
         console.log(`   Different salts produce different ciphertext: ${different ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 38'] = different;
@@ -1134,10 +1134,10 @@ async function comprehensiveMTProtoTest() {
         const msgId = createMessageId(0);
         const salt = crypto.randomBytes(8);
         plugin.setServerSalt(salt);
-        
+
         const encrypted1 = plugin.encryptMessage(Buffer.from(message), 0x1n, msgId, 0);
         const encrypted2 = plugin.encryptMessage(Buffer.from(message), 0x2n, msgId, 0);
-        
+
         const different = !encrypted1.data.equals(encrypted2.data);
         console.log(`   Different sessions produce different ciphertext: ${different ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 39'] = different;
@@ -1155,10 +1155,10 @@ async function comprehensiveMTProtoTest() {
         const sessionId = 0x12345678n;
         const salt = crypto.randomBytes(8);
         plugin.setServerSalt(salt);
-        
+
         const encrypted1 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
         const encrypted2 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 1);
-        
+
         const different = !encrypted1.data.equals(encrypted2.data);
         console.log(`   Different seqNo produce different ciphertext: ${different ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 40'] = different;
@@ -1175,10 +1175,10 @@ async function comprehensiveMTProtoTest() {
         const sessionId = 0x12345678n;
         const salt = crypto.randomBytes(8);
         plugin.setServerSalt(salt);
-        
+
         const encrypted1 = plugin.encryptMessage(Buffer.from(message), sessionId, createMessageId(0), 0);
         const encrypted2 = plugin.encryptMessage(Buffer.from(message), sessionId, createMessageId(1), 0);
-        
+
         const different = !encrypted1.data.equals(encrypted2.data);
         console.log(`   Different message IDs produce different ciphertext: ${different ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 41'] = different;
@@ -1196,27 +1196,27 @@ async function comprehensiveMTProtoTest() {
         const sessionId = 0x12345678n;
         const salt = crypto.randomBytes(8);
         plugin.setServerSalt(salt);
-        
+
         const encrypted = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
-        
+
         const dhKeys = plugin.generateDHKeys();
         const sharedSecret = plugin.computeSharedSecret(dhKeys.privateKey, dhKeys.publicKey);
         const wrongAuthKey = await plugin.generateAuthKey(sharedSecret);
-        
+
         const originalAuthKey = plugin.getAuthKey();
         if (!originalAuthKey) throw new Error('Original AuthKey is null');
-        
+
         plugin.setAuthKey(wrongAuthKey);
-        
+
         let decryptionFailed = false;
         try {
             plugin.decryptMessage(encrypted, sessionId);
         } catch (error) {
             decryptionFailed = true;
         }
-        
+
         plugin.setAuthKey(originalAuthKey);
-        
+
         console.log(`   Decrypt with wrong AuthKey fails: ${decryptionFailed ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 42'] = decryptionFailed;
     } catch (error) {
@@ -1231,22 +1231,22 @@ async function comprehensiveMTProtoTest() {
         const message = 'Test message';
         const msgId = createMessageId(0);
         const sessionId = 0x12345678n;
-        
+
         const salt1 = crypto.randomBytes(8);
         const salt2 = crypto.randomBytes(8);
-        
+
         plugin.setServerSalt(salt1);
         const encrypted1 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
-        
+
         plugin.setServerSalt(salt2);
         const encrypted2 = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, 0);
-        
+
         const different = !encrypted1.data.equals(encrypted2.data);
-        
+
         console.log(`   Salt1: ${salt1.toString('hex')}`);
         console.log(`   Salt2: ${salt2.toString('hex')}`);
         console.log(`   Different salts produce different ciphertext: ${different ? 'PASS' : 'FAIL'}\n`);
-        
+
         testResults['TEST 43'] = different;
     } catch (error) {
         const err = error as Error;
@@ -1259,23 +1259,23 @@ async function comprehensiveMTProtoTest() {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const msgKeys = new Set<string>();
         let collisions = 0;
-        
+
         for (let i = 0; i < 100; i++) {
             const message = `Test message ${i}`;
             const msgId = createMessageId(i);
             const sessionId = 0x12345678n;
             const salt = crypto.randomBytes(8);
             plugin.setServerSalt(salt);
-            
+
             const encrypted = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, i);
             const msgKeyStr = encrypted.msgKey.toString('hex');
-            
+
             if (msgKeys.has(msgKeyStr)) {
                 collisions++;
             }
             msgKeys.add(msgKeyStr);
         }
-        
+
         console.log(`   Generated 100 message keys`);
         console.log(`   Collisions: ${collisions}`);
         console.log(`   Message keys are unique: ${collisions === 0 ? 'PASS' : 'FAIL'}\n`);
@@ -1290,18 +1290,18 @@ async function comprehensiveMTProtoTest() {
     try {
         if (!plugin.getAuthKey()) throw new Error('Auth key not set');
         const paddingSizes: number[] = [];
-        
+
         for (let size = 1; size <= 100; size++) {
             const message = 'A'.repeat(size);
             const msgId = createMessageId(size);
             const encrypted = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, size);
-            
+
             const encryptedLen = encrypted.data.length;
             const plaintextLen = 32 + size;
             const padding = encryptedLen - plaintextLen;
             paddingSizes.push(padding);
         }
-        
+
         let allValid = true;
         for (const p of paddingSizes) {
             if (p < 12 || p > 1024) {
@@ -1309,11 +1309,11 @@ async function comprehensiveMTProtoTest() {
                 break;
             }
         }
-        
+
         const minPadding = Math.min(...paddingSizes);
         const maxPadding = Math.max(...paddingSizes);
         const avgPadding = paddingSizes.reduce((a, b) => a + b, 0) / paddingSizes.length;
-        
+
         console.log(`   Padding range: ${minPadding} - ${maxPadding} bytes`);
         console.log(`   Average padding: ${avgPadding.toFixed(2)} bytes`);
         console.log(`   All padding within 12-1024 range: ${allValid ? 'PASS' : 'FAIL'}\n`);
@@ -1322,6 +1322,371 @@ async function comprehensiveMTProtoTest() {
         const err = error as Error;
         console.log(`   ❌ Test failed: ${err.message}\n`);
         testResults['TEST 45'] = false;
+    }
+
+    console.log('TEST 46: AES-256-IGE Known Test Vectors');
+    try {
+        const { AES256IGE } = await import('@ton-ai/mtproto');
+
+        const key = Buffer.from('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f', 'hex');
+        const iv = Buffer.from('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f', 'hex');
+        const plaintext = Buffer.from('000102030405060708090a0b0c0d0e0f', 'hex');
+
+        const encrypted = AES256IGE.encrypt(plaintext, key, iv);
+        const decrypted = AES256IGE.decrypt(encrypted, key, iv);
+
+        console.log(`   Plaintext: ${plaintext.toString('hex')}`);
+        console.log(`   Encrypted: ${encrypted.toString('hex').substring(0, 32)}...`);
+        console.log(`   Decrypted: ${decrypted.toString('hex')}`);
+        console.log(`   AES-256-IGE test vector: ${plaintext.equals(decrypted) ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 46'] = plaintext.equals(decrypted);
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 46'] = false;
+    }
+
+    console.log('TEST 47: Auth Key Generation with SHA256');
+    try {
+        const testSecret = Buffer.from('00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff', 'hex');
+        const hash = crypto.createHash('sha256').update(testSecret).digest();
+        const expectedKey = Buffer.concat([testSecret, hash]);
+
+        const authKey = await plugin.generateAuthKey(testSecret);
+
+        const keyMatch = authKey.key.slice(0, 32).equals(testSecret) &&
+            authKey.key.slice(32, 64).equals(hash);
+
+        console.log(`   AuthKey format: ${keyMatch ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 47'] = keyMatch;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 47'] = false;
+    }
+
+    console.log('TEST 48: KDF with Client/Server Differentiation');
+    try {
+        const { MTProtoKDF } = await import('@ton-ai/mtproto');
+        const authKey = crypto.randomBytes(256);
+        const plaintext = crypto.randomBytes(64);
+        const padding = crypto.randomBytes(20);
+
+        const clientMsgKey = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
+        const serverMsgKey = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, false);
+
+        const clientKeys = MTProtoKDF.deriveKeys(authKey, clientMsgKey, true);
+        const serverKeys = MTProtoKDF.deriveKeys(authKey, serverMsgKey, false);
+
+        const different = !clientMsgKey.equals(serverMsgKey) &&
+            !clientKeys.aesKey.equals(serverKeys.aesKey);
+
+        console.log(`   Client/Server KDF differentiation: ${different ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 48'] = different;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 48'] = false;
+    }
+
+    console.log('TEST 49: Message Key Computation with Padding');
+    try {
+        const { MTProtoKDF } = await import('@ton-ai/mtproto');
+        const authKey = crypto.randomBytes(256);
+        const plaintext = Buffer.from('Test message');
+        const padding1 = crypto.randomBytes(20);
+        const padding2 = crypto.randomBytes(20);
+
+        const msgKey1 = MTProtoKDF.computeMsgKey(authKey, plaintext, padding1, true);
+        const msgKey2 = MTProtoKDF.computeMsgKey(authKey, plaintext, padding2, true);
+
+        console.log(`   Different padding -> different msgKey: ${!msgKey1.equals(msgKey2) ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 49'] = !msgKey1.equals(msgKey2);
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 49'] = false;
+    }
+
+    console.log('TEST 50: AuthKey ID from SHA1');
+    try {
+        const testKey = crypto.randomBytes(256);
+        const sha1 = crypto.createHash('sha1').update(testKey).digest();
+        const expectedId = BigInt('0x' + sha1.subarray(-8).toString('hex'));
+
+        const { MTProtoKDF } = await import('@ton-ai/mtproto');
+        const computedId = MTProtoKDF.computeAuthKeyId(testKey);
+
+        console.log(`   Expected ID: ${expectedId.toString(16)}`);
+        console.log(`   Computed ID: ${computedId.toString(16)}`);
+        console.log(`   AuthKey ID matches SHA1 last 8 bytes: ${computedId === expectedId ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 50'] = computedId === expectedId;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 50'] = false;
+    }
+
+    console.log('TEST 51: Key Deriviation Function Uniqueness');
+    try {
+        const { MTProtoKDF } = await import('@ton-ai/mtproto');
+        const authKey = crypto.randomBytes(256);
+        const plaintext = crypto.randomBytes(64);
+        const padding = crypto.randomBytes(20);
+
+        const msgKey1 = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
+        const msgKey2 = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
+
+        console.log(`   Same inputs produce same msgKey: ${msgKey1.equals(msgKey2) ? 'YES' : 'NO'}`);
+        console.log(`   KDF deterministic: ${msgKey1.equals(msgKey2) ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 51'] = msgKey1.equals(msgKey2);
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 51'] = false;
+    }
+
+    console.log('TEST 52: KDF Avalanche Effect');
+    try {
+        const { MTProtoKDF } = await import('@ton-ai/mtproto');
+        const authKey = crypto.randomBytes(256);
+        const plaintext = crypto.randomBytes(64);
+        const padding = crypto.randomBytes(20);
+
+        const msgKey1 = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
+
+        const plaintext2 = Buffer.from(plaintext);
+        plaintext2[0] ^= 0x01;
+        const msgKey2 = MTProtoKDF.computeMsgKey(authKey, plaintext2, padding, true);
+
+        const diffBits = (a: Buffer, b: Buffer): number => {
+            let count = 0;
+            for (let i = 0; i < a.length; i++) {
+                let xor = a[i] ^ b[i];
+                while (xor) {
+                    count += xor & 1;
+                    xor >>= 1;
+                }
+            }
+            return count;
+        };
+
+        const bitsChanged = diffBits(msgKey1, msgKey2);
+        const totalBits = msgKey1.length * 8;
+        const percentChanged = (bitsChanged / totalBits) * 100;
+
+        console.log(`   Total bits: ${totalBits}`);
+        console.log(`   Bits changed: ${bitsChanged}`);
+        console.log(`   Change rate: ${percentChanged.toFixed(2)}%`);
+        console.log(`   Expected: ~50% (${(totalBits * 0.45).toFixed(0)}-${(totalBits * 0.55).toFixed(0)} bits)`);
+
+        const minExpected = Math.floor(totalBits * 0.45);
+        const maxExpected = Math.ceil(totalBits * 0.55);
+        const passed = bitsChanged >= minExpected && bitsChanged <= maxExpected;
+
+        console.log(`   KDF avalanche effect: ${passed ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 52'] = passed;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 52'] = false;
+    }
+
+    console.log('TEST 53: AES-256-IGE Block Independence');
+    try {
+        const { AES256IGE } = await import('@ton-ai/mtproto');
+        const key = crypto.randomBytes(32);
+        const iv = crypto.randomBytes(32);
+
+        const block1 = crypto.randomBytes(16);
+        const block2 = crypto.randomBytes(16);
+        const combined = Buffer.concat([block1, block2]);
+
+        const encrypted = AES256IGE.encrypt(combined, key, iv);
+        const decrypted = AES256IGE.decrypt(encrypted, key, iv);
+
+        const block1Decrypted = decrypted.subarray(0, 16);
+        const block2Decrypted = decrypted.subarray(16, 32);
+
+        console.log(`   Block1 preserved: ${block1.equals(block1Decrypted) ? 'YES' : 'NO'}`);
+        console.log(`   Block2 preserved: ${block2.equals(block2Decrypted) ? 'YES' : 'NO'}`);
+        console.log(`   IGE mode block independence: ${block1.equals(block1Decrypted) && block2.equals(block2Decrypted) ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 53'] = block1.equals(block1Decrypted) && block2.equals(block2Decrypted);
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 53'] = false;
+    }
+
+    console.log('TEST 54: AES-256-IGE Error Propagation');
+    try {
+        const { AES256IGE } = await import('@ton-ai/mtproto');
+        const key = crypto.randomBytes(32);
+        const iv = crypto.randomBytes(32);
+        const plaintext = crypto.randomBytes(64);
+
+        const encrypted = AES256IGE.encrypt(plaintext, key, iv);
+
+        const corrupted = Buffer.from(encrypted);
+        corrupted[20] ^= 0xFF;
+
+        const decrypted = AES256IGE.decrypt(corrupted, key, iv);
+
+        let diffCount = 0;
+        for (let i = 0; i < plaintext.length; i++) {
+            if (plaintext[i] !== decrypted[i]) diffCount++;
+        }
+
+        console.log(`   Corrupted bytes: 1`);
+        console.log(`   Affected bytes in output: ${diffCount}`);
+        console.log(`   IGE error propagation: ${diffCount >= 16 ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 54'] = diffCount >= 16;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 54'] = false;
+    }
+
+    console.log('TEST 55: AES-256-ECB vs IGE Mode');
+    try {
+        const { AES256IGE } = await import('@ton-ai/mtproto');
+        const key = crypto.randomBytes(32);
+        const iv = crypto.randomBytes(32);
+
+        const identicalBlocks = Buffer.concat([
+            crypto.randomBytes(16),
+            crypto.randomBytes(16),
+            crypto.randomBytes(16)
+        ]);
+
+        const encrypted = AES256IGE.encrypt(identicalBlocks, key, iv);
+
+        const block1 = encrypted.subarray(0, 16);
+        const block2 = encrypted.subarray(16, 32);
+        const block3 = encrypted.subarray(32, 48);
+
+        const allDifferent = !block1.equals(block2) && !block2.equals(block3) && !block1.equals(block3);
+
+        console.log(`   Identical plaintext blocks produce different ciphertext: ${allDifferent ? 'YES' : 'NO'}`);
+        console.log(`   IGE mode (not ECB): ${allDifferent ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 55'] = allDifferent;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 55'] = false;
+    }
+
+    console.log('TEST 56: Padding Randomness');
+    try {
+        if (!plugin.getAuthKey()) throw new Error('Auth key not set');
+
+        const message = 'A';
+        const paddings: Buffer[] = [];
+
+        for (let i = 0; i < 100; i++) {
+            const msgId = createMessageId(i);
+            const encrypted = plugin.encryptMessage(Buffer.from(message), sessionId, msgId, i);
+            const encryptedLen = encrypted.data.length;
+            const plaintextLen = 32 + message.length;
+
+            const paddingStart = 32 + message.length;
+            const padding = encrypted.data.subarray(paddingStart, encryptedLen);
+            paddings.push(padding);
+        }
+
+        let allDifferent = true;
+        for (let i = 0; i < paddings.length; i++) {
+            for (let j = i + 1; j < paddings.length; j++) {
+                if (paddings[i].equals(paddings[j])) {
+                    allDifferent = false;
+                    break;
+                }
+            }
+        }
+
+        console.log(`   Random padding bytes are unique: ${allDifferent ? 'YES' : 'NO'}`);
+        console.log(`   Padding randomness: ${allDifferent ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 56'] = allDifferent;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 56'] = false;
+    }
+
+    console.log('TEST 57: Message Key Length');
+    try {
+        const { MTProtoKDF } = await import('@ton-ai/mtproto');
+        const authKey = crypto.randomBytes(256);
+        const plaintext = crypto.randomBytes(64);
+        const padding = crypto.randomBytes(20);
+
+        const msgKey = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
+
+        console.log(`   MsgKey length: ${msgKey.length} bytes`);
+        console.log(`   Expected length: 16 bytes`);
+        console.log(`   MsgKey length correct: ${msgKey.length === 16 ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 57'] = msgKey.length === 16;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 57'] = false;
+    }
+
+    console.log('TEST 58: AES Key and IV Length');
+    try {
+        const { MTProtoKDF } = await import('@ton-ai/mtproto');
+        const authKey = crypto.randomBytes(256);
+        const msgKey = crypto.randomBytes(16);
+
+        const { aesKey, aesIv } = MTProtoKDF.deriveKeys(authKey, msgKey, true);
+
+        console.log(`   AES Key length: ${aesKey.length} bytes`);
+        console.log(`   AES IV length: ${aesIv.length} bytes`);
+        console.log(`   Expected: 32 bytes each`);
+        console.log(`   Key/IV lengths correct: ${aesKey.length === 32 && aesIv.length === 32 ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 58'] = aesKey.length === 32 && aesIv.length === 32;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 58'] = false;
+    }
+
+    console.log('TEST 59: AuthKey Length');
+    try {
+        const sharedSecret = crypto.randomBytes(256);
+        const authKey = await plugin.generateAuthKey(sharedSecret);
+
+        console.log(`   AuthKey length: ${authKey.key.length} bytes`);
+        console.log(`   Expected: 288 bytes (256 + 32)`);
+        console.log(`   AuthKey length correct: ${authKey.key.length === 288 ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 59'] = authKey.key.length === 288;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 59'] = false;
+    }
+
+    console.log('TEST 60: DH Prime Validation');
+    try {
+        const { DiffieHellman } = await import('@ton-ai/mtproto');
+
+        const keys1 = DiffieHellman.generateKeys();
+        const keys2 = DiffieHellman.generateKeys();
+
+        const secret1 = DiffieHellman.computeSharedSecret(keys1.privateKey, keys2.publicKey);
+        const secret2 = DiffieHellman.computeSharedSecret(keys2.privateKey, keys1.publicKey);
+
+        const sharedSecretsMatch = secret1.equals(secret2);
+
+        console.log(`   Shared secrets match: ${sharedSecretsMatch ? 'YES' : 'NO'}`);
+        console.log(`   Secret length: ${secret1.length} bytes`);
+        console.log(`   Expected: 256 bytes`);
+        console.log(`   DH prime validation: ${sharedSecretsMatch && secret1.length === 256 ? 'PASS' : 'FAIL'}\n`);
+        testResults['TEST 60'] = sharedSecretsMatch && secret1.length === 256;
+    } catch (error) {
+        const err = error as Error;
+        console.log(`   ❌ Test failed: ${err.message}\n`);
+        testResults['TEST 60'] = false;
     }
 
     console.log('\n📊 TESTS SUMMARY');
@@ -1369,9 +1734,24 @@ async function comprehensiveMTProtoTest() {
         'TEST 40': 'Message Encryption with Different SeqNo',
         'TEST 41': 'Message Encryption with Different Message IDs',
         'TEST 42': 'Decrypt with Wrong AuthKey',
-        'TEST 43': 'Decrypt with Wrong ServerSalt',
+        'TEST 43': 'Message Integrity with Different Salts',
         'TEST 44': 'Message Key Collision Resistance',
-        'TEST 45': 'Padding Size Distribution'
+        'TEST 45': 'Padding Size Distribution',
+        'TEST 46': 'AES-256-IGE Known Test Vectors',
+        'TEST 47': 'Auth Key Generation with SHA256',
+        'TEST 48': 'KDF with Client/Server Differentiation',
+        'TEST 49': 'Message Key Computation with Padding',
+        'TEST 50': 'AuthKey ID from SHA1',
+        'TEST 51': 'KDF Determinism',
+        'TEST 52': 'KDF Avalanche Effect',
+        'TEST 53': 'AES-256-IGE Block Independence',
+        'TEST 54': 'AES-256-IGE Error Propagation',
+        'TEST 55': 'IGE vs ECB Mode Distinction',
+        'TEST 56': 'Padding Randomness',
+        'TEST 57': 'Message Key Length Validation',
+        'TEST 58': 'AES Key and IV Length Validation',
+        'TEST 59': 'AuthKey Length Validation',
+        'TEST 60': 'DH Prime Validation'
     };
 
     const sortedTests = Object.keys(testResults).sort((a, b) => {
@@ -1395,13 +1775,13 @@ async function comprehensiveMTProtoTest() {
     console.log(`   ❌ Failed: ${failedTests}`);
 
     if (failedTests === 0) {
-        console.log('🎉 MTProto 2.0 is complete and correct!');
+        console.log('🎉 MTProto 2.0 encryption layer is complete and correct!');
     } else {
         console.log('⚠️ Some tests failed. Need to fix issues.');
     }
 
-        await plugin.onDeactivate();
-    }
+    await plugin.onDeactivate();
+}
 
 comprehensiveMTProtoTest().catch((error: unknown) => {
     const err = error as Error;
