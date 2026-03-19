@@ -1,4 +1,11 @@
-import { MTProtoCryptoPlugin, EncryptedData, DecryptedData } from '@ton-ai/mtproto';
+import {
+    MTProtoCryptoPlugin,
+    EncryptedData,
+    DecryptedData,
+    AES256IGE,
+    MTProtoKDF,
+    DiffieHellman
+} from '@ton-ai/mtproto';
 import { EventEmitter } from 'events';
 import * as crypto from 'crypto';
 
@@ -1429,7 +1436,6 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 51: Key Deriviation Function Uniqueness');
     try {
-        const { MTProtoKDF } = await import('@ton-ai/mtproto');
         const authKey = crypto.randomBytes(256);
         const plaintext = crypto.randomBytes(64);
         const padding = crypto.randomBytes(20);
@@ -1448,7 +1454,6 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 52: KDF Avalanche Effect');
     try {
-        const { MTProtoKDF } = await import('@ton-ai/mtproto');
         const authKey = crypto.randomBytes(256);
         const plaintext = crypto.randomBytes(64);
         const padding = crypto.randomBytes(20);
@@ -1494,7 +1499,6 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 53: AES-256-IGE Block Independence');
     try {
-        const { AES256IGE } = await import('@ton-ai/mtproto');
         const key = crypto.randomBytes(32);
         const iv = crypto.randomBytes(32);
 
@@ -1520,7 +1524,6 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 54: AES-256-IGE Error Propagation');
     try {
-        const { AES256IGE } = await import('@ton-ai/mtproto');
         const key = crypto.randomBytes(32);
         const iv = crypto.randomBytes(32);
         const plaintext = crypto.randomBytes(64);
@@ -1549,7 +1552,6 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 55: AES-256-ECB vs IGE Mode');
     try {
-        const { AES256IGE } = await import('@ton-ai/mtproto');
         const key = crypto.randomBytes(32);
         const iv = crypto.randomBytes(32);
 
@@ -1615,7 +1617,6 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 57: Message Key Length');
     try {
-        const { MTProtoKDF } = await import('@ton-ai/mtproto');
         const authKey = crypto.randomBytes(256);
         const plaintext = crypto.randomBytes(64);
         const padding = crypto.randomBytes(20);
@@ -1634,7 +1635,6 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 58: AES Key and IV Length');
     try {
-        const { MTProtoKDF } = await import('@ton-ai/mtproto');
         const authKey = crypto.randomBytes(256);
         const msgKey = crypto.randomBytes(16);
 
@@ -1668,8 +1668,6 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 60: DH Prime Validation');
     try {
-        const { DiffieHellman } = await import('@ton-ai/mtproto');
-
         const keys1 = DiffieHellman.generateKeys();
         const keys2 = DiffieHellman.generateKeys();
 
