@@ -1,15 +1,10 @@
 import {
     MTProtoCryptoPlugin,
     EncryptedData,
-    DecryptedData,
-    AES256IGE,
-    MTProtoKDF,
-    DiffieHellman,
-    SecretExpander,
-    X25519
+    DecryptedData
 } from '@ton-ai/mtproto';
+import { crypto } from '@ton-ai/core';
 import { EventEmitter } from 'events';
-import * as crypto from 'crypto';
 
 function bytesToHex(bytes: Uint8Array): string {
     return Array.from(bytes)
@@ -1353,8 +1348,8 @@ async function comprehensiveMTProtoTest() {
         const iv = Buffer.from('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f', 'hex');
         const plaintext = Buffer.from('000102030405060708090a0b0c0d0e0f', 'hex');
 
-        const encrypted = AES256IGE.encrypt(plaintext, key, iv);
-        const decrypted = AES256IGE.decrypt(encrypted, key, iv);
+        const encrypted = crypto.AES256IGE.encrypt(plaintext, key, iv);
+        const decrypted = crypto.AES256IGE.decrypt(encrypted, key, iv);
 
         console.log(`   Plaintext: ${plaintext.toString('hex')}`);
         console.log(`   Encrypted: ${encrypted.toString('hex').substring(0, 32)}...`);
@@ -1392,11 +1387,11 @@ async function comprehensiveMTProtoTest() {
         const plaintext = crypto.randomBytes(64);
         const padding = crypto.randomBytes(20);
 
-        const clientMsgKey = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
-        const serverMsgKey = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, false);
+        const clientMsgKey = crypto.MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
+        const serverMsgKey = crypto.MTProtoKDF.computeMsgKey(authKey, plaintext, padding, false);
 
-        const clientKeys = MTProtoKDF.deriveKeys(authKey, clientMsgKey, true);
-        const serverKeys = MTProtoKDF.deriveKeys(authKey, serverMsgKey, false);
+        const clientKeys = crypto.MTProtoKDF.deriveKeys(authKey, clientMsgKey, true);
+        const serverKeys = crypto.MTProtoKDF.deriveKeys(authKey, serverMsgKey, false);
 
         const different = !clientMsgKey.equals(serverMsgKey) &&
             !clientKeys.aesKey.equals(serverKeys.aesKey);
@@ -1416,8 +1411,8 @@ async function comprehensiveMTProtoTest() {
         const padding1 = crypto.randomBytes(20);
         const padding2 = crypto.randomBytes(20);
 
-        const msgKey1 = MTProtoKDF.computeMsgKey(authKey, plaintext, padding1, true);
-        const msgKey2 = MTProtoKDF.computeMsgKey(authKey, plaintext, padding2, true);
+        const msgKey1 = crypto.MTProtoKDF.computeMsgKey(authKey, plaintext, padding1, true);
+        const msgKey2 = crypto.MTProtoKDF.computeMsgKey(authKey, plaintext, padding2, true);
 
         console.log(`   Different padding -> different msgKey: ${!msgKey1.equals(msgKey2) ? 'PASS' : 'FAIL'}\n`);
         testResults['TEST 49'] = !msgKey1.equals(msgKey2);
@@ -1433,7 +1428,7 @@ async function comprehensiveMTProtoTest() {
         const sha1 = crypto.createHash('sha1').update(testKey).digest();
         const expectedId = BigInt('0x' + sha1.subarray(-8).toString('hex'));
 
-        const computedId = MTProtoKDF.computeAuthKeyId(testKey);
+        const computedId = crypto.MTProtoKDF.computeAuthKeyId(testKey);
 
         console.log(`   Expected ID: ${expectedId.toString(16)}`);
         console.log(`   Computed ID: ${computedId.toString(16)}`);
@@ -1451,8 +1446,8 @@ async function comprehensiveMTProtoTest() {
         const plaintext = crypto.randomBytes(64);
         const padding = crypto.randomBytes(20);
 
-        const msgKey1 = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
-        const msgKey2 = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
+        const msgKey1 = crypto.MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
+        const msgKey2 = crypto.MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
 
         console.log(`   Same inputs produce same msgKey: ${msgKey1.equals(msgKey2) ? 'YES' : 'NO'}`);
         console.log(`   KDF deterministic: ${msgKey1.equals(msgKey2) ? 'PASS' : 'FAIL'}\n`);
@@ -1469,11 +1464,11 @@ async function comprehensiveMTProtoTest() {
         const plaintext = crypto.randomBytes(64);
         const padding = crypto.randomBytes(20);
 
-        const msgKey1 = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
+        const msgKey1 = crypto.MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
 
         const plaintext2 = Buffer.from(plaintext);
         plaintext2[0] ^= 0x01;
-        const msgKey2 = MTProtoKDF.computeMsgKey(authKey, plaintext2, padding, true);
+        const msgKey2 = crypto.MTProtoKDF.computeMsgKey(authKey, plaintext2, padding, true);
 
         const diffBits = (a: Buffer, b: Buffer): number => {
             let count = 0;
@@ -1517,8 +1512,8 @@ async function comprehensiveMTProtoTest() {
         const block2 = crypto.randomBytes(16);
         const combined = Buffer.concat([block1, block2]);
 
-        const encrypted = AES256IGE.encrypt(combined, key, iv);
-        const decrypted = AES256IGE.decrypt(encrypted, key, iv);
+        const encrypted = crypto.AES256IGE.encrypt(combined, key, iv);
+        const decrypted = crypto.AES256IGE.decrypt(encrypted, key, iv);
 
         const block1Decrypted = decrypted.subarray(0, 16);
         const block2Decrypted = decrypted.subarray(16, 32);
@@ -1539,12 +1534,12 @@ async function comprehensiveMTProtoTest() {
         const iv = crypto.randomBytes(32);
         const plaintext = crypto.randomBytes(64);
 
-        const encrypted = AES256IGE.encrypt(plaintext, key, iv);
+        const encrypted = crypto.AES256IGE.encrypt(plaintext, key, iv);
 
         const corrupted = Buffer.from(encrypted);
         corrupted[20] ^= 0xFF;
 
-        const decrypted = AES256IGE.decrypt(corrupted, key, iv);
+        const decrypted = crypto.AES256IGE.decrypt(corrupted, key, iv);
 
         let diffCount = 0;
         for (let i = 0; i < plaintext.length; i++) {
@@ -1572,7 +1567,7 @@ async function comprehensiveMTProtoTest() {
             crypto.randomBytes(16)
         ]);
 
-        const encrypted = AES256IGE.encrypt(identicalBlocks, key, iv);
+        const encrypted = crypto.AES256IGE.encrypt(identicalBlocks, key, iv);
 
         const block1 = encrypted.subarray(0, 16);
         const block2 = encrypted.subarray(16, 32);
@@ -1632,7 +1627,7 @@ async function comprehensiveMTProtoTest() {
         const plaintext = crypto.randomBytes(64);
         const padding = crypto.randomBytes(20);
 
-        const msgKey = MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
+        const msgKey = crypto.MTProtoKDF.computeMsgKey(authKey, plaintext, padding, true);
 
         console.log(`   MsgKey length: ${msgKey.length} bytes`);
         console.log(`   Expected length: 16 bytes`);
@@ -1649,7 +1644,7 @@ async function comprehensiveMTProtoTest() {
         const authKey = crypto.randomBytes(256);
         const msgKey = crypto.randomBytes(16);
 
-        const { aesKey, aesIv } = MTProtoKDF.deriveKeys(authKey, msgKey, true);
+        const { aesKey, aesIv } = crypto.MTProtoKDF.deriveKeys(authKey, msgKey, true);
 
         console.log(`   AES Key length: ${aesKey.length} bytes`);
         console.log(`   AES IV length: ${aesIv.length} bytes`);
@@ -1679,11 +1674,11 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 60: DH Prime Validation');
     try {
-        const keys1 = DiffieHellman.generateKeys();
-        const keys2 = DiffieHellman.generateKeys();
+        const keys1 = crypto.DiffieHellman.generateKeys();
+        const keys2 = crypto.DiffieHellman.generateKeys();
 
-        const secret1 = DiffieHellman.computeSharedSecret(keys1.privateKey, keys2.publicKey);
-        const secret2 = DiffieHellman.computeSharedSecret(keys2.privateKey, keys1.publicKey);
+        const secret1 = crypto.DiffieHellman.computeSharedSecret(keys1.privateKey, keys2.publicKey);
+        const secret2 = crypto.DiffieHellman.computeSharedSecret(keys2.privateKey, keys1.publicKey);
 
         const sharedSecretsMatch = secret1.equals(secret2);
 
@@ -1700,11 +1695,11 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 61: BasicHandshake Key Generation Test');
     try {
-        const aliceKeys = DiffieHellman.generateKeys();
-        const bobKeys = DiffieHellman.generateKeys();
+        const aliceKeys = crypto.DiffieHellman.generateKeys();
+        const bobKeys = crypto.DiffieHellman.generateKeys();
 
-        const sharedFromAlice = DiffieHellman.computeSharedSecret(aliceKeys.privateKey, bobKeys.publicKey);
-        const sharedFromBob = DiffieHellman.computeSharedSecret(bobKeys.privateKey, aliceKeys.publicKey);
+        const sharedFromAlice = crypto.DiffieHellman.computeSharedSecret(aliceKeys.privateKey, bobKeys.publicKey);
+        const sharedFromBob = crypto.DiffieHellman.computeSharedSecret(bobKeys.privateKey, aliceKeys.publicKey);
 
         const sharedSecretsMatch = sharedFromAlice.equals(sharedFromBob);
 
@@ -1724,18 +1719,18 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 62: KDF3 with X=0 and X=8 Test');
     try {
-        const aliceKeys = DiffieHellman.generateKeys();
-        const bobKeys = DiffieHellman.generateKeys();
-        const sharedSecret = DiffieHellman.computeSharedSecret(aliceKeys.privateKey, bobKeys.publicKey);
+        const aliceKeys = crypto.DiffieHellman.generateKeys();
+        const bobKeys = crypto.DiffieHellman.generateKeys();
+        const sharedSecret = crypto.DiffieHellman.computeSharedSecret(aliceKeys.privateKey, bobKeys.publicKey);
         const authKey = await plugin.generateAuthKey(sharedSecret);
 
         const data = Buffer.from('hello world');
 
-        const msgKeyClient = MTProtoKDF.computeMsgKey(authKey.key, data, Buffer.alloc(0), true);
-        const msgKeyServer = MTProtoKDF.computeMsgKey(authKey.key, data, Buffer.alloc(0), false);
+        const msgKeyClient = crypto.MTProtoKDF.computeMsgKey(authKey.key, data, Buffer.alloc(0), true);
+        const msgKeyServer = crypto.MTProtoKDF.computeMsgKey(authKey.key, data, Buffer.alloc(0), false);
 
-        const clientKeys = MTProtoKDF.deriveKeys(authKey.key, msgKeyClient, true);
-        const serverKeys = MTProtoKDF.deriveKeys(authKey.key, msgKeyServer, false);
+        const clientKeys = crypto.MTProtoKDF.deriveKeys(authKey.key, msgKeyClient, true);
+        const serverKeys = crypto.MTProtoKDF.deriveKeys(authKey.key, msgKeyServer, false);
 
         const msgKeysDifferent = !msgKeyClient.equals(msgKeyServer);
         const aesKeysDifferent = !clientKeys.aesKey.equals(serverKeys.aesKey);
@@ -1761,8 +1756,8 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 63: Get Public Key from Private Key');
     try {
-        const keys = DiffieHellman.generateKeys();
-        const publicKeyFromPrivate = DiffieHellman.computePublicKey(keys.privateKey);
+        const keys = crypto.DiffieHellman.generateKeys();
+        const publicKeyFromPrivate = crypto.DiffieHellman.computePublicKey(keys.privateKey);
 
         const publicKeyMatches = publicKeyFromPrivate === keys.publicKey;
 
@@ -1781,7 +1776,7 @@ async function comprehensiveMTProtoTest() {
     console.log('TEST 64: Expand Secret with HMAC-SHA512');
     try {
         const secret = crypto.randomBytes(32);
-        const expanded = SecretExpander.expandSecret(secret);
+        const expanded = crypto.SecretExpander.expandSecret(secret);
 
         console.log(`   Secret length: ${secret.length} bytes`);
         console.log(`   Expanded length: ${expanded.length} bytes`);
@@ -1797,25 +1792,25 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 65: X25519 Complete Functionality Test');
     try {
-        const alicePriv = X25519.generatePrivateKey();
-        const alicePub = X25519.computePublicKey(alicePriv);
+        const alicePriv = crypto.X25519.generatePrivateKey();
+        const alicePub = crypto.X25519.computePublicKey(alicePriv);
 
-        const bobPriv = X25519.generatePrivateKey();
-        const bobPub = X25519.computePublicKey(bobPriv);
+        const bobPriv = crypto.X25519.generatePrivateKey();
+        const bobPub = crypto.X25519.computePublicKey(bobPriv);
 
         console.log(`   Key generation successful`);
         console.log(`      Alice pub: ${Buffer.from(alicePub).toString('hex').substring(0, 32)}...`);
         console.log(`      Bob pub: ${Buffer.from(bobPub).toString('hex').substring(0, 32)}...`);
 
-        const sharedAlice = X25519.computeSharedSecret(alicePriv, bobPub);
-        const sharedBob = X25519.computeSharedSecret(bobPriv, alicePub);
+        const sharedAlice = crypto.X25519.computeSharedSecret(alicePriv, bobPub);
+        const sharedBob = crypto.X25519.computeSharedSecret(bobPriv, alicePub);
 
         const sharedMatch = Buffer.from(sharedAlice).equals(Buffer.from(sharedBob));
         console.log(`   Shared secrets match: ${sharedMatch ? 'YES' : 'NO'}`);
 
         const testKey = new Uint8Array(32);
         for (let i = 0; i < 32; i++) testKey[i] = 0xff;
-        const clamped = X25519.clamp(testKey);
+        const clamped = crypto.X25519.clamp(testKey);
 
         const lower3BitsClear = (clamped[0] & 0x07) === 0;
         const topBitClear = (clamped[31] & 0x80) === 0;
@@ -1835,14 +1830,14 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 66: X25519 Key Exchange Test');
     try {
-        const alicePriv = X25519.generatePrivateKey();
-        const alicePub = X25519.computePublicKey(alicePriv);
+        const alicePriv = crypto.X25519.generatePrivateKey();
+        const alicePub = crypto.X25519.computePublicKey(alicePriv);
 
-        const bobPriv = X25519.generatePrivateKey();
-        const bobPub = X25519.computePublicKey(bobPriv);
+        const bobPriv = crypto.X25519.generatePrivateKey();
+        const bobPub = crypto.X25519.computePublicKey(bobPriv);
 
-        const sharedAlice = X25519.computeSharedSecret(alicePriv, bobPub);
-        const sharedBob = X25519.computeSharedSecret(bobPriv, alicePub);
+        const sharedAlice = crypto.X25519.computeSharedSecret(alicePriv, bobPub);
+        const sharedBob = crypto.X25519.computeSharedSecret(bobPriv, alicePub);
 
         const match = bytesToHex(sharedAlice) === bytesToHex(sharedBob);
 
@@ -1866,7 +1861,7 @@ async function comprehensiveMTProtoTest() {
         console.log(`   Initial k: ${bytesToHex(k)}`);
         console.log(`   Initial u: ${bytesToHex(u)}`);
 
-        const result1 = X25519.computeSharedSecret(k, u);
+        const result1 = crypto.X25519.computeSharedSecret(k, u);
         console.log(`   After 1 iteration: ${bytesToHex(result1)}`);
         console.log(`   Expected:          ${expectedAfter1}`);
         const match1 = bytesToHex(result1) === expectedAfter1;
@@ -1875,7 +1870,7 @@ async function comprehensiveMTProtoTest() {
         let newU = k;
 
         for (let i = 2; i <= 1000; i++) {
-            const result = X25519.computeSharedSecret(newK, newU);
+            const result = crypto.X25519.computeSharedSecret(newK, newU);
             newU = newK;
             newK = result;
         }
@@ -1901,7 +1896,7 @@ async function comprehensiveMTProtoTest() {
         console.log(`   Scalar: ${bytesToHex(scalar)}`);
         console.log(`   U-coord: ${bytesToHex(uCoordinate)}`);
 
-        const result = X25519.computeSharedSecret(scalar, uCoordinate);
+        const result = crypto.X25519.computeSharedSecret(scalar, uCoordinate);
         const resultHex = bytesToHex(result);
 
         console.log(`   Result: ${resultHex}`);
@@ -1929,7 +1924,7 @@ async function comprehensiveMTProtoTest() {
         console.log('   Test Vector 1:');
         console.log(`   Scalar: ${bytesToHex(scalar1)}`);
         console.log(`   U-coord: ${bytesToHex(u1)}`);
-        const result1 = X25519.computeSharedSecret(scalar1, u1);
+        const result1 = crypto.X25519.computeSharedSecret(scalar1, u1);
         const result1Hex = bytesToHex(result1);
         console.log(`   Result: ${result1Hex}`);
         console.log(`   Expected: ${expected1}`);
@@ -1938,7 +1933,7 @@ async function comprehensiveMTProtoTest() {
         console.log('\n   Test Vector 2:');
         console.log(`   Scalar: ${bytesToHex(scalar2)}`);
         console.log(`   U-coord: ${bytesToHex(u2)}`);
-        const result2 = X25519.computeSharedSecret(scalar2, u2);
+        const result2 = crypto.X25519.computeSharedSecret(scalar2, u2);
         const result2Hex = bytesToHex(result2);
         console.log(`   Result: ${result2Hex}`);
         console.log(`   Expected: ${expected2}`);
@@ -1956,17 +1951,17 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 70: X25519 Perfect Forward Secrecy');
     try {
-        const alicePriv1 = X25519.generatePrivateKey();
-        const alicePub1 = X25519.computePublicKey(alicePriv1);
-        const bobPriv1 = X25519.generatePrivateKey();
-        const bobPub1 = X25519.computePublicKey(bobPriv1);
-        const session1Secret = X25519.computeSharedSecret(alicePriv1, bobPub1);
+        const alicePriv1 = crypto.X25519.generatePrivateKey();
+        const alicePub1 = crypto.X25519.computePublicKey(alicePriv1);
+        const bobPriv1 = crypto.X25519.generatePrivateKey();
+        const bobPub1 = crypto.X25519.computePublicKey(bobPriv1);
+        const session1Secret = crypto.X25519.computeSharedSecret(alicePriv1, bobPub1);
 
-        const alicePriv2 = X25519.generatePrivateKey();
-        const alicePub2 = X25519.computePublicKey(alicePriv2);
-        const bobPriv2 = X25519.generatePrivateKey();
-        const bobPub2 = X25519.computePublicKey(bobPriv2);
-        const session2Secret = X25519.computeSharedSecret(alicePriv2, bobPub2);
+        const alicePriv2 = crypto.X25519.generatePrivateKey();
+        const alicePub2 = crypto.X25519.computePublicKey(alicePriv2);
+        const bobPriv2 = crypto.X25519.generatePrivateKey();
+        const bobPub2 = crypto.X25519.computePublicKey(bobPriv2);
+        const session2Secret = crypto.X25519.computeSharedSecret(alicePriv2, bobPub2);
 
         const alicePub1Hex = bytesToHex(alicePub1).substring(0, 16);
         const bobPub1Hex = bytesToHex(bobPub1).substring(0, 16);
@@ -1991,7 +1986,7 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 71: X25519 Edge Cases - Small Order Points');
     try {
-        const alicePriv = X25519.generatePrivateKey();
+        const alicePriv = crypto.X25519.generatePrivateKey();
 
         const smallOrderPoints = [
             { key: new Uint8Array(32), desc: 'Zero point' },
@@ -2003,7 +1998,7 @@ async function comprehensiveMTProtoTest() {
         let passed = 0;
         for (const point of smallOrderPoints) {
             try {
-                const shared = X25519.computeSharedSecret(alicePriv, point.key);
+                const shared = crypto.X25519.computeSharedSecret(alicePriv, point.key);
                 console.log(`   ✓ ${point.desc} accepted (shared: ${bytesToHex(shared).substring(0, 16)}...)`);
                 passed++;
             } catch (error) {
@@ -2023,7 +2018,7 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 72: X25519 Non-Canonical Values');
     try {
-        const alicePriv = X25519.generatePrivateKey();
+        const alicePriv = crypto.X25519.generatePrivateKey();
 
         const nonCanonical = [
             { key: hexToBytes('ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f'), desc: 'P-1' },
@@ -2035,7 +2030,7 @@ async function comprehensiveMTProtoTest() {
         let passed = 0;
         for (const val of nonCanonical) {
             try {
-                const shared = X25519.computeSharedSecret(alicePriv, val.key);
+                const shared = crypto.X25519.computeSharedSecret(alicePriv, val.key);
                 console.log(`   ✓ ${val.desc} accepted (shared: ${bytesToHex(shared).substring(0, 16)}...)`);
                 passed++;
             } catch (error) {
@@ -2055,13 +2050,13 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 73: X25519 Consistency - Same Input Multiple Times');
     try {
-        const alicePriv = X25519.generatePrivateKey();
-        const bobPriv = X25519.generatePrivateKey();
-        const bobPub = X25519.computePublicKey(bobPriv);
+        const alicePriv = crypto.X25519.generatePrivateKey();
+        const bobPriv = crypto.X25519.generatePrivateKey();
+        const bobPub = crypto.X25519.computePublicKey(bobPriv);
 
         const results: string[] = [];
         for (let i = 0; i < 5; i++) {
-            const shared = X25519.computeSharedSecret(alicePriv, bobPub);
+            const shared = crypto.X25519.computeSharedSecret(alicePriv, bobPub);
             results.push(bytesToHex(shared));
         }
 
@@ -2078,11 +2073,11 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 74: X25519 Public Key Derivation Consistency');
     try {
-        const priv = X25519.generatePrivateKey();
+        const priv = crypto.X25519.generatePrivateKey();
 
         const pubs: string[] = [];
         for (let i = 0; i < 5; i++) {
-            const pub = X25519.computePublicKey(priv);
+            const pub = crypto.X25519.computePublicKey(priv);
             pubs.push(bytesToHex(pub));
         }
 
@@ -2102,11 +2097,11 @@ async function comprehensiveMTProtoTest() {
         const basePoint = new Uint8Array(32);
         basePoint[0] = 9;
 
-        const priv = X25519.generatePrivateKey();
-        const clamped = X25519.clamp(priv);
+        const priv = crypto.X25519.generatePrivateKey();
+        const clamped = crypto.X25519.clamp(priv);
 
-        const result1 = X25519.computeSharedSecret(clamped, basePoint);
-        const result2 = X25519.computeSharedSecret(clamped, basePoint);
+        const result1 = crypto.X25519.computeSharedSecret(clamped, basePoint);
+        const result2 = crypto.X25519.computeSharedSecret(clamped, basePoint);
 
         const match = bytesToHex(result1) === bytesToHex(result2);
         console.log(`   Property holds: ${match ? 'YES' : 'NO'}`);
@@ -2128,11 +2123,11 @@ async function comprehensiveMTProtoTest() {
 
         const sharedExpected = '4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742';
 
-        const alicePub = X25519.computePublicKey(alicePriv);
-        const bobPub = X25519.computePublicKey(bobPriv);
+        const alicePub = crypto.X25519.computePublicKey(alicePriv);
+        const bobPub = crypto.X25519.computePublicKey(bobPriv);
 
-        const sharedAlice = X25519.computeSharedSecret(alicePriv, bobPub);
-        const sharedBob = X25519.computeSharedSecret(bobPriv, alicePub);
+        const sharedAlice = crypto.X25519.computeSharedSecret(alicePriv, bobPub);
+        const sharedBob = crypto.X25519.computeSharedSecret(bobPriv, alicePub);
 
         const alicePubMatch = bytesToHex(alicePub) === alicePubExpected;
         const bobPubMatch = bytesToHex(bobPub) === bobPubExpected;
@@ -2151,11 +2146,11 @@ async function comprehensiveMTProtoTest() {
 
     console.log('TEST 77: X25519 Clamping Idempotence');
     try {
-        const priv = X25519.generatePrivateKey();
+        const priv = crypto.X25519.generatePrivateKey();
         const privHex = bytesToHex(priv);
 
-        const clamped1 = X25519.clamp(priv);
-        const clamped2 = X25519.clamp(clamped1);
+        const clamped1 = crypto.X25519.clamp(priv);
+        const clamped2 = crypto.X25519.clamp(clamped1);
 
         const idempotent = bytesToHex(clamped1) === bytesToHex(clamped2);
 
