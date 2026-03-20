@@ -1,6 +1,6 @@
 export class X25519 {
   private static readonly P = 2n ** 255n - 19n;
-  private static readonly A24 = 121665n;
+  private static readonly A24 = 121666n;
 
   private static decodeLittleEndian(bytes: Uint8Array): bigint {
     let result = 0n;
@@ -83,7 +83,7 @@ export class X25519 {
       x3 = ((DA + CB) * (DA + CB)) % this.P;
       z3 = (x1 * ((DA - CB + this.P) * (DA - CB + this.P) % this.P)) % this.P;
       x2 = (AA * BB) % this.P;
-      z2 = (E * ((AA + ((this.A24 * E) % this.P)) % this.P)) % this.P;
+      z2 = (E * ((BB + (this.A24 * E) % this.P) % this.P)) % this.P;
     }
 
     if (swap) {
