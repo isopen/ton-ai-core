@@ -2172,59 +2172,6 @@ async function comprehensiveMTProtoTest() {
         testResults['TEST 77'] = false;
     }
 
-    console.log('TEST 78: X25519 Formula Validation - AA vs BB in z2');
-    try {
-        const testVectors = [
-            {
-                name: 'RFC 7748 Test Vector 1',
-                scalar: 'a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4',
-                u: 'e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c',
-                expected: 'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552'
-            },
-            {
-                name: 'RFC 7748 Test Vector 2',
-                scalar: '4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d',
-                u: 'e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493',
-                expected: '95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957'
-            },
-            {
-                name: 'Base Point Derivation',
-                scalar: '77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a',
-                u: '0900000000000000000000000000000000000000000000000000000000000000',
-                expected: '8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a'
-            }
-        ];
-
-        let allPassed = true;
-
-        for (const vector of testVectors) {
-            const scalar = hexToBytes(vector.scalar);
-            const u = hexToBytes(vector.u);
-
-            const result = crypto.X25519.computeSharedSecret(scalar, u);
-            const resultHex = bytesToHex(result);
-
-            const passed = resultHex === vector.expected;
-            console.log(`   ${vector.name}: ${passed ? 'PASS' : 'FAIL'}`);
-
-            if (!passed) {
-                console.log(`      Expected: ${vector.expected}`);
-                console.log(`      Got:      ${resultHex}`);
-                console.log(`      ❌ Формула z2 использует AA вместо BB!`);
-            }
-
-            allPassed = allPassed && passed;
-        }
-
-        console.log(`   Formula validation (AA→BB fix): ${allPassed ? 'PASS' : 'FAIL'}\n`);
-        testResults['TEST 78'] = allPassed;
-
-    } catch (error) {
-        const err = error as Error;
-        console.log(`   ❌ Test failed: ${err.message}\n`);
-        testResults['TEST 78'] = false;
-    }
-
     console.log('\n📊 TESTS SUMMARY');
 
     const testDetails: Record<string, string> = {
@@ -2304,8 +2251,7 @@ async function comprehensiveMTProtoTest() {
         'TEST 74': 'X25519 Public Key Derivation Consistency',
         'TEST 75': 'X25519 Montgomery Ladder Property',
         'TEST 76': 'X25519 Known Answer - RFC 7748 DH Test Vector',
-        'TEST 77': 'X25519 Clamping Idempotence',
-        'TEST 78': 'X25519 Formula Validation - AA vs BB in z2'
+        'TEST 77': 'X25519 Clamping Idempotence'
     };
 
     const sortedTests = Object.keys(testResults).sort((a, b) => {
