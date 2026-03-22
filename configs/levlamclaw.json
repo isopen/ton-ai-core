@@ -1,0 +1,37 @@
+{
+  "name": "ton-ai-levlamclaw",
+  "version": "0.1.0",
+  "description": "LevlamClaw agent that streams OpenRouter responses to Telegram via TDLib",
+  "scripts": {
+    "clean": "npm run clean:core && npm run clean:tdlib && npm run clean:openrouter && npm run clean:agent",
+    "clean:core": "cd packages/core && npm run clean",
+    "clean:tdlib": "cd plugins/tdlib && npm run clean",
+    "clean:openrouter": "cd plugins/openrouter && npm run clean",
+    "clean:agent": "cd agents/levlamclaw && rm -rf dist node_modules package-lock.json",
+
+    "build:core": "cd packages/core && npm install && npm run build && npm pack",
+    "build:tdlib": "cd plugins/tdlib && npm install && npm run build && npm pack",
+    "build:openrouter": "cd plugins/openrouter && npm install && npm run build && npm pack",
+    "build:agent": "cd agents/levlamclaw && npm install",
+
+    "copy-packages": "mkdir -p agents/levlamclaw/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/levlamclaw/node_modules/@ton-ai/ 2>/dev/null && cp plugins/tdlib/ton-ai-tdlib-0.1.0.tgz agents/levlamclaw/node_modules/@ton-ai/ 2>/dev/null && cp plugins/openrouter/ton-ai-openrouter-0.1.0.tgz agents/levlamclaw/node_modules/@ton-ai/ 2>/dev/null || echo 'Package copy completed'",
+
+    "rebuild": "npm run clean && npm run build:core && npm run build:tdlib && npm run build:openrouter && npm run build:agent && npm run copy-packages",
+    "rebuild:quick": "npm run build:core && npm run build:tdlib && npm run build:openrouter && npm run copy-packages && cd agents/levlamclaw && npm install",
+
+    "start:agent": "cd agents/levlamclaw && npm start",
+    "dev": "npm run rebuild && npm run start:agent"
+  },
+  "keywords": [
+    "ton",
+    "ai",
+    "tdlib",
+    "telegram",
+    "bot",
+    "openrouter",
+    "levlam",
+    "levlamclaw"
+  ],
+  "author": "testertesterov",
+  "license": "MIT"
+}

@@ -10,8 +10,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@ton/mcp": "^0.1.10",
-    "@ton/walletkit": "0.0.8"
+    "@ton/mcp": "0.1.13",
+    "@ton/walletkit": "0.0.10"
   },
   "devDependencies": {
     "@types/node": "^20.11.16",

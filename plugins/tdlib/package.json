@@ -1,0 +1,18 @@
+{
+  "name": "@ton-ai/tdlib",
+  "version": "0.1.0",
+  "description": "TDLib plugin for TON AI Framework",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "author": "testertesterov",
+  "license": "Boost Software License 1.0",
+  "scripts": {
+    "build": "tsc && cp src/tdjson_wrapper.c dist/",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@ton-ai/core": "file:../../packages/core/ton-ai-core-0.1.0.tgz",
+    "@types/node": "^20.19.33",
+    "typescript": "^5.3.3"
+  }
+}
