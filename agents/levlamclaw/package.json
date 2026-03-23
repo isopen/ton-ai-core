@@ -1,0 +1,21 @@
+{
+  "name": "@ton-ai/tdlib",
+  "version": "0.1.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "testertesterov",
+  "license": "Boost Software License 1.0",
+  "dependencies": {
+    "@ton-ai/core": "file:../../packages/core/ton-ai-core-0.1.0.tgz",
+    "@ton-ai/tdlib": "file:../../plugins/tdlib/ton-ai-tdlib-0.1.0.tgz",
+    "@ton-ai/openrouter": "file:../../plugins/openrouter/ton-ai-openrouter-0.1.0.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
