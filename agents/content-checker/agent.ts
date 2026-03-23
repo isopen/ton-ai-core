@@ -6,11 +6,22 @@ export interface ContentCheckerConfig extends SimpleAgentConfig {
     defaultModel?: string;
     systemPrompt?: string;
     verbose?: boolean;
+    approveThreshold?: number;
+    rejectThreshold?: number;
 }
 
-export interface AnalysisResult extends VisionAnalysisResult {
+export interface ContentRating {
+    score: number;
+    categories: string[];
+    recommendation: 'approve' | 'moderate' | 'reject';
+    confidence: number;
+    reason: string;
+}
+
+export interface EnhancedAnalysisResult extends VisionAnalysisResult {
     mediaType: 'image' | 'video';
     mediaPath: string;
+    rating: ContentRating;
 }
 
 export class ContentCheckerAgent extends BaseAgentSimple {
@@ -23,8 +34,24 @@ export class ContentCheckerAgent extends BaseAgentSimple {
 
         this.agentConfig = {
             defaultModel: 'nvidia/nemotron-nano-12b-v2-vl:free',
-            systemPrompt: 'You are a content analysis assistant. Analyze the provided media in detail.',
+            systemPrompt: `You are a content analysis and moderation assistant.
+
+Analyze the provided media and return a JSON response with:
+{
+    "analysis": "detailed analysis of the content",
+    "rating": {
+        "score": number (0-100, 0=safe, 100=highly inappropriate),
+        "categories": string[] (e.g., ["violence", "nsfw", "safe", "hate_speech", "spam"]),
+        "recommendation": "approve" | "moderate" | "reject",
+        "confidence": number (0-100),
+        "reason": "brief explanation for the rating"
+    }
+}
+
+Respond ONLY with valid JSON, no other text.`,
             verbose: false,
+            approveThreshold: 30,
+            rejectThreshold: 70,
             ...config
         };
 
@@ -124,28 +151,73 @@ export class ContentCheckerAgent extends BaseAgentSimple {
         });
     }
 
-    async analyzeImage(
-        imagePath: string,
-        customPrompt?: string
-    ): Promise<AnalysisResult> {
+    private parseResponse(analysisText: string): { analysis: string; rating: ContentRating } {
+        try {
+            const parsed = JSON.parse(analysisText);
+            return {
+                analysis: parsed.analysis || analysisText,
+                rating: {
+                    score: parsed.rating?.score ?? 50,
+                    categories: parsed.rating?.categories ?? ['unknown'],
+                    recommendation: parsed.rating?.recommendation ?? 'moderate',
+                    confidence: parsed.rating?.confidence ?? 0,
+                    reason: parsed.rating?.reason ?? 'Unable to parse rating'
+                }
+            };
+        } catch {
+            return {
+                analysis: analysisText,
+                rating: {
+                    score: 50,
+                    categories: ['unknown'],
+                    recommendation: 'moderate',
+                    confidence: 0,
+                    reason: 'Failed to parse JSON response'
+                }
+            };
+        }
+    }
+
+    private applyThresholds(rating: ContentRating): ContentRating {
+        if (rating.score <= this.agentConfig.approveThreshold!) {
+            rating.recommendation = 'approve';
+        } else if (rating.score >= this.agentConfig.rejectThreshold!) {
+            rating.recommendation = 'reject';
+        } else {
+            rating.recommendation = 'moderate';
+        }
+        return rating;
+    }
+
+    async analyzeImage(imagePath: string, customPrompt?: string): Promise<EnhancedAnalysisResult> {
         await this.ensureReady();
 
         console.log(`\nProcessing image: ${imagePath}`);
 
         try {
+            const prompt = customPrompt || this.agentConfig.systemPrompt;
+
             const visionOptions: VisionAnalysisOptions = {
-                prompt: customPrompt,
-                model: this.agentConfig.defaultModel
+                prompt: prompt,
+                model: this.agentConfig.defaultModel,
+                temperature: 0.3
             };
 
             const result = await this.openRouter.analyzeImage(imagePath, visionOptions);
 
-            console.log(`Analysis completed`);
+            const { analysis, rating } = this.parseResponse(result.analysis);
+            const finalRating = this.applyThresholds(rating);
+
+            console.log(`Rating: ${finalRating.score}/100 - ${finalRating.recommendation.toUpperCase()}`);
 
             this.requestCounter++;
 
             return {
-                ...result,
+                analysis,
+                rating: finalRating,
+                model: result.model,
+                usage: result.usage,
+                processingTime: result.processingTime,
                 mediaType: 'image',
                 mediaPath: imagePath
             };
@@ -156,28 +228,35 @@ export class ContentCheckerAgent extends BaseAgentSimple {
         }
     }
 
-    async analyzeVideo(
-        videoPath: string,
-        customPrompt?: string
-    ): Promise<AnalysisResult> {
+    async analyzeVideo(videoPath: string, customPrompt?: string): Promise<EnhancedAnalysisResult> {
         await this.ensureReady();
 
         console.log(`\nProcessing video: ${videoPath}`);
 
         try {
+            const prompt = customPrompt || this.agentConfig.systemPrompt;
+
             const visionOptions: VisionAnalysisOptions = {
-                prompt: customPrompt,
-                model: this.agentConfig.defaultModel
+                prompt: prompt,
+                model: this.agentConfig.defaultModel,
+                temperature: 0.3
             };
 
             const result = await this.openRouter.analyzeVideo(videoPath, visionOptions);
 
-            console.log(`Analysis completed`);
+            const { analysis, rating } = this.parseResponse(result.analysis);
+            const finalRating = this.applyThresholds(rating);
+
+            console.log(`Rating: ${finalRating.score}/100 - ${finalRating.recommendation.toUpperCase()}`);
 
             this.requestCounter++;
 
             return {
-                ...result,
+                analysis,
+                rating: finalRating,
+                model: result.model,
+                usage: result.usage,
+                processingTime: result.processingTime,
                 mediaType: 'video',
                 mediaPath: videoPath
             };
@@ -188,10 +267,7 @@ export class ContentCheckerAgent extends BaseAgentSimple {
         }
     }
 
-    async analyzeMedia(
-        mediaPath: string,
-        customPrompt?: string
-    ): Promise<AnalysisResult> {
+    async analyzeMedia(mediaPath: string, customPrompt?: string): Promise<EnhancedAnalysisResult> {
         const isVideo = mediaPath.match(/\.(mp4|webm|mov|avi)$/i);
 
         if (isVideo) {
@@ -201,13 +277,10 @@ export class ContentCheckerAgent extends BaseAgentSimple {
         }
     }
 
-    async analyzeBatch(
-        mediaPaths: string[],
-        customPrompt?: string
-    ): Promise<AnalysisResult[]> {
+    async analyzeBatch(mediaPaths: string[], customPrompt?: string): Promise<EnhancedAnalysisResult[]> {
         await this.ensureReady();
 
-        const results: AnalysisResult[] = [];
+        const results: EnhancedAnalysisResult[] = [];
 
         console.log(`\nProcessing batch of ${mediaPaths.length} media files`);
 
@@ -222,15 +295,20 @@ export class ContentCheckerAgent extends BaseAgentSimple {
             } catch (error) {
                 console.error(`File ${i + 1} failed:`, error);
 
-                const isVideo = mediaPaths[i].match(/\.(mp4|webm|mov|avi)$/i);
-
                 results.push({
                     analysis: `Error: ${error instanceof Error ? error.message : String(error)}`,
                     model: this.agentConfig.defaultModel!,
                     processingTime: 0,
-                    mediaType: isVideo ? 'video' : 'image',
-                    mediaPath: mediaPaths[i]
-                } as AnalysisResult);
+                    mediaType: mediaPaths[i].match(/\.(mp4|webm|mov|avi)$/i) ? 'video' : 'image',
+                    mediaPath: mediaPaths[i],
+                    rating: {
+                        score: 50,
+                        categories: ['error'],
+                        recommendation: 'moderate',
+                        confidence: 0,
+                        reason: 'Analysis failed'
+                    }
+                } as EnhancedAnalysisResult);
 
                 this.emit(AGENT_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
             }
@@ -249,7 +327,11 @@ export class ContentCheckerAgent extends BaseAgentSimple {
         return {
             ...this.getStatus(),
             requestsProcessed: this.requestCounter,
-            model: this.agentConfig.defaultModel
+            model: this.agentConfig.defaultModel,
+            thresholds: {
+                approve: this.agentConfig.approveThreshold,
+                reject: this.agentConfig.rejectThreshold
+            }
         };
     }
 
