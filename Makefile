@@ -2,6 +2,15 @@ CONFIGS_DIR := ./configs
 PACKAGE_JSON := package.json
 PACKAGE_JSON_BACKUP := package.json.backup
 
+define check_config_exists
+	@if [ ! -f $(CONFIGS_DIR)/$(1).json ]; then \
+		echo "Error: Configuration '$(1)' does not exist in $(CONFIGS_DIR)"; \
+		echo "Available configs:"; \
+		ls -1 $(CONFIGS_DIR)/*.json | sed 's/.*\///' | sed 's/\.json//'; \
+		exit 1; \
+	fi
+endef
+
 define use_config
 	@echo "Switching to $(1)..."
 	@if [ -f $(PACKAGE_JSON) ] && [ ! -L $(PACKAGE_JSON) ]; then \
@@ -26,10 +35,8 @@ define build_with_config
 	@echo "Build completed with $(1) configuration"
 endef
 
-use-%:
-	$(call use_config,$*)
-
 build-%:
+	$(call check_config_exists,$*)
 	$(call build_with_config,$*)
 
 list-configs:
