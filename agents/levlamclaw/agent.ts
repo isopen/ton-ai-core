@@ -50,7 +50,7 @@ export class LevlamClawAgent extends BaseAgentSimple {
         this.openrouterPlugin = new OpenRouterPlugin();
         await this.registerPlugin(this.openrouterPlugin, {
             apiKey: this.agentConfig.openrouter.apiKey,
-            defaultModel: this.agentConfig.openrouter.defaultModel || 'arcee-ai/trinity-large-preview:free',
+            defaultModel: this.agentConfig.openrouter.defaultModel || 'openrouter/free',
             maxHistory: 100
         });
 

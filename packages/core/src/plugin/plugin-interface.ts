@@ -10,7 +10,7 @@ export interface PluginMetadata {
 }
 
 export interface PluginContext {
-  mcp: MCPClient;
+  mcp?: MCPClient;
   events: EventEmitter;
   logger: {
     info: (message: string, ...args: any[]) => void;

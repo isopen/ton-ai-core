@@ -12,7 +12,7 @@ async function main() {
         console.error('TELEGRAM_API_ID=123456');
         console.error('TELEGRAM_API_HASH=your_api_hash');
         console.error('OPENROUTER_API_KEY=sk-or-v1-xxxxx');
-        console.error('OPENROUTER_MODEL=arcee-ai/trinity-large-preview:free');
+        console.error('OPENROUTER_MODEL=openrouter/free');
         console.error('TDLIB_LIBRARY_PATH=/usr/local/lib/libtdjson.so (optional)');
         console.error('TDLIB_DATABASE_DIRECTORY=./tdlib_data (optional)');
         console.error('TDLIB_FILES_DIRECTORY=./tdlib_files (optional)');
@@ -38,7 +38,7 @@ async function main() {
         },
         openrouter: {
             apiKey: process.env.OPENROUTER_API_KEY!,
-            defaultModel: process.env.OPENROUTER_MODEL || 'arcee-ai/trinity-large-preview:free'
+            defaultModel: process.env.OPENROUTER_MODEL || 'openrouter/free'
         },
         tdlib: {
             libraryPath: process.env.TDLIB_LIBRARY_PATH,

@@ -1,7 +1,5 @@
-import { EventEmitter } from 'events';
+import { BaseAgentCore } from './base-agent-core';
 import { MCPClient } from '../client';
-import { PluginManager } from '../plugin';
-import { Plugin } from '../plugin/plugin-interface';
 import { AGENT_EVENTS, PLUGIN_EVENTS, MCP_EVENTS } from '../events';
 import {
   MCPConfig,
@@ -27,6 +25,7 @@ export interface AgentConfig extends MCPConfig {
   id?: string;
   name?: string;
   plugins?: Record<string, any>;
+  logger?: any;
 }
 
 export interface BaseAgent {
@@ -48,62 +47,34 @@ export interface BaseAgent {
   on(event: string, listener: (...args: any[]) => void): this;
 }
 
-export abstract class BaseAgent extends EventEmitter {
-  public readonly id: string;
-  public readonly name: string;
+const MCP_FORWARD_EVENTS = [
+  MCP_EVENTS.READY,
+  MCP_EVENTS.ERROR,
+  MCP_EVENTS.CLOSED,
+  MCP_EVENTS.BALANCE_UPDATE,
+  MCP_EVENTS.TRANSACTION,
+  MCP_EVENTS.JETTON_UPDATE,
+  MCP_EVENTS.NFT_UPDATE,
+];
+
+export abstract class BaseAgent extends BaseAgentCore {
   protected mcp: MCPClient;
-  protected plugins: PluginManager;
-  protected config: AgentConfig;
-  protected isRunning: boolean = false;
-  protected startTime?: Date;
-  private initialized: boolean = false;
 
   constructor(config: AgentConfig = {}) {
-    super();
-    this.id = config.id || `agent-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    this.name = config.name || this.id;
-    this.config = config;
-
-    this.mcp = new MCPClient(config);
-    this.plugins = new PluginManager(this.mcp, config.plugins);
-
-    this.mcp.on(MCP_EVENTS.READY, () => {
-      this.emit(MCP_EVENTS.READY);
-    });
-
-    this.mcp.on(MCP_EVENTS.ERROR, (error) => {
-      this.emit(MCP_EVENTS.ERROR, error);
-    });
-
-    this.mcp.on(MCP_EVENTS.CLOSED, (code) => {
-      this.emit(MCP_EVENTS.CLOSED, code);
-    });
-
-    this.mcp.on(MCP_EVENTS.BALANCE_UPDATE, (data) => {
-      this.emit(MCP_EVENTS.BALANCE_UPDATE, data);
-    });
-
-    this.mcp.on(MCP_EVENTS.TRANSACTION, (data) => {
-      this.emit(MCP_EVENTS.TRANSACTION, data);
-    });
-
-    this.mcp.on(MCP_EVENTS.JETTON_UPDATE, (data) => {
-      this.emit(MCP_EVENTS.JETTON_UPDATE, data);
-    });
-
-    this.mcp.on(MCP_EVENTS.NFT_UPDATE, (data) => {
-      this.emit(MCP_EVENTS.NFT_UPDATE, data);
-    });
+    super({ ...config, mcp: undefined });
+    this.mcp = new MCPClient(config, config.logger || this.logger);
+    (this.plugins as any).setMCP?.(this.mcp);
+    for (const event of MCP_FORWARD_EVENTS) {
+      this.mcp.on(event, (...args: any[]) => this.emit(event, ...args));
+    }
   }
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
-
     try {
       if (this.config.mode === 'stdio') {
-        await (this.mcp as any).initialize();
+        await this.mcp.initialize();
       }
-
       await this.mcp.waitForReady();
       await this.onInitialize();
 
@@ -122,74 +93,14 @@ export abstract class BaseAgent extends EventEmitter {
     }
   }
 
-  async start(): Promise<void> {
-    if (!this.initialized) {
-      await this.initialize();
-    }
-
-    if (!this.isRunning) {
-      this.isRunning = true;
-      await this.onStart();
-      this.emit(AGENT_EVENTS.STARTED, { id: this.id, name: this.name });
-    }
-  }
-
   async stop(): Promise<void> {
     this.isRunning = false;
     this.initialized = false;
-
     await this.plugins.deactivateAll();
     await this.onStop();
     await this.mcp.close();
-
     this.emit(AGENT_EVENTS.STOPPED, { id: this.id, name: this.name });
     this.removeAllListeners();
-  }
-
-  async registerPlugin(plugin: Plugin, config?: Record<string, any>): Promise<void> {
-    await this.plugins.registerPlugin(plugin);
-    this.emit(PLUGIN_EVENTS.REGISTERED, { name: plugin.metadata.name });
-
-    if (config) {
-      await this.plugins.activatePlugin(plugin.metadata.name, config);
-      this.emit(PLUGIN_EVENTS.ACTIVATED, { name: plugin.metadata.name });
-    }
-  }
-
-  async unregisterPlugin(pluginName: string): Promise<void> {
-    if (this.plugins.isActive(pluginName)) {
-      await this.plugins.deactivatePlugin(pluginName);
-      this.emit(PLUGIN_EVENTS.DEACTIVATED, { name: pluginName });
-    }
-
-    await this.plugins.unregisterPlugin(pluginName);
-    this.emit(PLUGIN_EVENTS.UNREGISTERED, { name: pluginName });
-  }
-
-  async activatePlugin(pluginName: string, config?: Record<string, any>): Promise<void> {
-    await this.plugins.activatePlugin(pluginName, config);
-    this.emit(PLUGIN_EVENTS.ACTIVATED, { name: pluginName });
-  }
-
-  async deactivatePlugin(pluginName: string): Promise<void> {
-    await this.plugins.deactivatePlugin(pluginName);
-    this.emit(PLUGIN_EVENTS.DEACTIVATED, { name: pluginName });
-  }
-
-  getPlugin<T extends Plugin>(name: string): T | undefined {
-    return this.plugins.getPlugin(name) as T;
-  }
-
-  isPluginActive(name: string): boolean {
-    return this.plugins.isActive(name);
-  }
-
-  listPlugins() {
-    return this.plugins.listPlugins();
-  }
-
-  listActivePlugins() {
-    return this.plugins.listActivePlugins();
   }
 
   async getBalance(): Promise<BalanceResponse> {
@@ -237,6 +148,16 @@ export abstract class BaseAgent extends EventEmitter {
     return this.mcp.getSwapQuote(fromToken, toToken, amount, slippageBps);
   }
 
+  async executeSwap(quote: SwapQuoteResponse, amount?: string): Promise<{ hash: string; success: boolean }> {
+    if (!this.initialized) throw new Error('Agent not initialized');
+    return this.mcp.executeSwap(quote, amount);
+  }
+
+  async swapTokens(fromToken: string, toToken: string, amount: string, slippageBps?: number): Promise<{ hash: string; quote: SwapQuoteResponse; success: boolean }> {
+    if (!this.initialized) throw new Error('Agent not initialized');
+    return this.mcp.swapTokens(fromToken, toToken, amount, slippageBps);
+  }
+
   async getNFTs(limit?: number, offset?: number): Promise<NFT[]> {
     if (!this.initialized) throw new Error('Agent not initialized');
     return this.mcp.getNFTs(limit, offset);
@@ -266,23 +187,17 @@ export abstract class BaseAgent extends EventEmitter {
     return this.mcp.getWalletAddress();
   }
 
-  protected abstract onInitialize(): Promise<void>;
-  protected abstract onStart(): Promise<void>;
-  protected abstract onStop(): Promise<void>;
-
   getStatus() {
+    const baseStatus = super.getStatus();
+    const configCopy = { ...this.config };
+    if (configCopy.mnemonic) configCopy.mnemonic = '***';
+    if (configCopy.apiKey) configCopy.apiKey = '***';
     return {
-      id: this.id,
-      name: this.name,
-      isRunning: this.isRunning,
-      initialized: this.initialized,
-      startTime: this.startTime,
-      uptime: this.startTime ? Date.now() - this.startTime.getTime() : 0,
+      ...baseStatus,
       walletAddress: this.getWalletAddress(),
-      activePlugins: this.listActivePlugins(),
       mode: this.config.mode,
       network: this.config.network,
-      config: { ...this.config, mnemonic: this.config.mnemonic ? '***' : undefined }
+      config: configCopy
     };
   }
 }

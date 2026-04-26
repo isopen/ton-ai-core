@@ -5,13 +5,17 @@ import { MCPClient } from '../client';
 export class PluginManager extends EventEmitter {
   private plugins: Map<string, Plugin> = new Map();
   private contexts: Map<string, PluginContext> = new Map();
-  private mcp: MCPClient;
+  private mcp?: MCPClient;
   private globalConfig: Record<string, any>;
 
-  constructor(mcp: MCPClient, config: Record<string, any> = {}) {
+  constructor(mcp?: MCPClient, config: Record<string, any> = {}) {
     super();
     this.mcp = mcp;
     this.globalConfig = config;
+  }
+
+  setMCP(mcp: MCPClient) {
+    this.mcp = mcp;
   }
 
   async registerPlugin(plugin: Plugin): Promise<void> {
@@ -50,20 +54,25 @@ export class PluginManager extends EventEmitter {
     this.emit('plugin:unregistered', { name });
   }
 
-  async activatePlugin(name: string, config: Record<string, any> = {}): Promise<void> {
+  async activatePlugin(name: string, config: Record<string, any> = {}, visited: Set<string> = new Set()): Promise<void> {
+    if (visited.has(name)) {
+      throw new Error(`Circular dependency detected involving plugin ${name}`);
+    }
     const plugin = this.plugins.get(name);
     if (!plugin) {
       throw new Error(`Plugin ${name} not found`);
     }
 
     if (this.contexts.has(name)) {
-      throw new Error(`Plugin ${name} is already active`);
+      return;
     }
+
+    visited.add(name);
 
     if (plugin.metadata.dependencies) {
       for (const dep of plugin.metadata.dependencies) {
         if (!this.contexts.has(dep)) {
-          await this.activatePlugin(dep);
+          await this.activatePlugin(dep, {}, visited);
         }
       }
     }
@@ -75,7 +84,6 @@ export class PluginManager extends EventEmitter {
       if (plugin.onActivate) {
         await plugin.onActivate();
       }
-
       this.contexts.set(name, context);
       this.emit('plugin:activated', { name });
     } catch (error) {
@@ -99,7 +107,6 @@ export class PluginManager extends EventEmitter {
       if (plugin.shutdown) {
         await plugin.shutdown();
       }
-
       this.contexts.delete(name);
       this.emit('plugin:deactivated', { name });
     } catch (error) {
