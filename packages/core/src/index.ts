@@ -2,6 +2,7 @@ export * from './types';
 export { MCPClient } from './client';
 
 export {
+  BaseAgentCore,
   BaseAgentSimple,
   BaseAgent,
   AgentConfig,

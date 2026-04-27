@@ -75,6 +75,11 @@ export class MCPClient extends EventEmitter {
   constructor(config: MCPConfig = {}, logger?: Logger) {
     super();
     this.logger = logger || DEFAULT_LOGGER;
+
+    if (config.debug === false) {
+      this.logger.debug = () => {};
+    }
+
     this.config = {
       mode: 'stdio',
       network: 'testnet',

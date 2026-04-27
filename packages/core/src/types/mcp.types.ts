@@ -12,6 +12,7 @@ export interface MCPConfig {
   host?: string;
   walletVersion?: WalletVersion;
   protocol?: 'http' | 'https';
+  debug?: boolean;
 }
 
 export interface JsonRpcResponse {

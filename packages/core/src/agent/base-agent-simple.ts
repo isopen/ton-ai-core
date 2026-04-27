@@ -1,12 +1,7 @@
-import { BaseAgentCore } from './base-agent-core';
+import { BaseAgentCore, BaseAgentConfig } from './base-agent-core';
 import { AGENT_EVENTS, PLUGIN_EVENTS } from '../events';
 
-export interface SimpleAgentConfig {
-  id?: string;
-  name?: string;
-  plugins?: Record<string, any>;
-  logger?: any;
-}
+export interface SimpleAgentConfig extends BaseAgentConfig {}
 
 export interface BaseAgentSimple {
   on(event: typeof AGENT_EVENTS.INITIALIZED, listener: (data: { id: string; name: string; startTime: Date }) => void): this;
@@ -20,7 +15,7 @@ export interface BaseAgentSimple {
   on(event: string, listener: (...args: any[]) => void): this;
 }
 
-export abstract class BaseAgentSimple extends BaseAgentCore {
+export abstract class BaseAgentSimple extends BaseAgentCore<SimpleAgentConfig> {
   constructor(config: SimpleAgentConfig = {}) {
     super({ ...config, mcp: undefined });
   }

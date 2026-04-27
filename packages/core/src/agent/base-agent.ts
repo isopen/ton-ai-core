@@ -1,4 +1,4 @@
-import { BaseAgentCore } from './base-agent-core';
+import { BaseAgentCore, BaseAgentConfig } from './base-agent-core';
 import { MCPClient } from '../client';
 import { AGENT_EVENTS, PLUGIN_EVENTS, MCP_EVENTS } from '../events';
 import {
@@ -21,12 +21,7 @@ import {
 
 export type AgentEventType = typeof AGENT_EVENTS[keyof typeof AGENT_EVENTS];
 
-export interface AgentConfig extends MCPConfig {
-  id?: string;
-  name?: string;
-  plugins?: Record<string, any>;
-  logger?: any;
-}
+export interface AgentConfig extends MCPConfig, BaseAgentConfig {}
 
 export interface BaseAgent {
   on(event: typeof AGENT_EVENTS.INITIALIZED, listener: (data: { id: string; name: string; startTime: Date; walletAddress?: string }) => void): this;
@@ -57,13 +52,13 @@ const MCP_FORWARD_EVENTS = [
   MCP_EVENTS.NFT_UPDATE,
 ];
 
-export abstract class BaseAgent extends BaseAgentCore {
+export abstract class BaseAgent extends BaseAgentCore<AgentConfig> {
   protected mcp: MCPClient;
 
   constructor(config: AgentConfig = {}) {
     super({ ...config, mcp: undefined });
     this.mcp = new MCPClient(config, config.logger || this.logger);
-    (this.plugins as any).setMCP?.(this.mcp);
+    this.plugins.setMCP(this.mcp);
     for (const event of MCP_FORWARD_EVENTS) {
       this.mcp.on(event, (...args: any[]) => this.emit(event, ...args));
     }
