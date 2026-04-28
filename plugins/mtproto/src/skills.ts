@@ -51,24 +51,28 @@ export class MTCryptoServices {
         this.context.events.emit('mtproto:authkey:set', { id: authKey.id.toString(16) });
     }
 
+    setSecretAuthKey(authKey: AuthKey): void {
+        this.components.client.setSecretAuthKey(authKey);
+    }
+
     setServerSalt(salt: Buffer): void {
         this.components.client.setServerSalt(salt);
         this.context.events.emit('mtproto:salt:set', {});
     }
 
-    encrypt(data: Buffer | string): EncryptedData {
+    async encrypt(data: Buffer | string): Promise<EncryptedData> {
         const buffer = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
         const tempSessionId = 0n;
         const tempMessageId = 0n;
-        const encrypted = this.components.client.encryptMessage(buffer, tempSessionId, tempMessageId, 0);
+        const encrypted = await this.components.client.encryptMessage(buffer, tempSessionId, tempMessageId, 0);
         this.context.events.emit('mtproto:encrypted', { size: encrypted.data.length });
         return encrypted;
     }
 
-    decrypt(encrypted: EncryptedData): DecryptedData {
+    async decrypt(encrypted: EncryptedData): Promise<DecryptedData> {
         const tempSessionId = 0n;
         try {
-            return this.components.client.decryptMessage(encrypted, tempSessionId);
+            return await this.components.client.decryptMessage(encrypted, tempSessionId);
         } catch (error) {
             return {
                 data: Buffer.alloc(0),
@@ -78,15 +82,35 @@ export class MTCryptoServices {
         }
     }
 
-    encryptMessage(message: Buffer, sessionId: bigint, messageId: bigint, seqNo: number): EncryptedData {
-        const encrypted = this.components.client.encryptMessage(message, sessionId, messageId, seqNo);
-        this.context.events.emit('mtproto:message:encrypted', { size: encrypted.data.length });
+    async encryptMessage(
+        message: Buffer,
+        sessionId: bigint,
+        messageId: bigint,
+        seqNo: number,
+        options?: { secret?: boolean; isInitiator?: boolean }
+    ): Promise<EncryptedData> {
+        const encrypted = await this.components.client.encryptMessage(
+            message, sessionId, messageId, seqNo, options
+        );
+        const event = options?.secret
+            ? 'mtproto:secret:message:encrypted'
+            : 'mtproto:message:encrypted';
+        this.context.events.emit(event, { size: encrypted.data.length });
         return encrypted;
     }
 
-    decryptMessage(encrypted: EncryptedData, sessionId: bigint): Buffer {
-        const decryptedData = this.components.client.decryptMessage(encrypted, sessionId);
-        this.context.events.emit('mtproto:message:decrypted', { size: decryptedData.data.length });
+    async decryptMessage(
+        encrypted: EncryptedData,
+        sessionId: bigint,
+        options?: { secret?: boolean; isInitiator?: boolean }
+    ): Promise<Buffer> {
+        const decryptedData = await this.components.client.decryptMessage(
+            encrypted, sessionId, options
+        );
+        const event = options?.secret
+            ? 'mtproto:secret:message:decrypted'
+            : 'mtproto:message:decrypted';
+        this.context.events.emit(event, { size: decryptedData.data.length });
         return decryptedData.data;
     }
 
@@ -104,6 +128,7 @@ export class MTCryptoServices {
 
     reset(): void {
         this.components.client['authKey'] = null;
+        this.components.client['secretAuthKey'] = null;
         this.components.client['serverSalt'] = null;
         this.components.client['dhKeys'] = null;
         this.context.events.emit('mtproto:reset', {});

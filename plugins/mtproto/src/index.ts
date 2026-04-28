@@ -102,29 +102,44 @@ export class MTProtoCryptoPlugin implements Plugin {
         this.skills.setAuthKey(authKey);
     }
 
+    setSecretAuthKey(authKey: AuthKey): void {
+        this.checkInitialized();
+        this.skills.setSecretAuthKey(authKey);
+    }
+
     setServerSalt(salt: Buffer): void {
         this.checkInitialized();
         this.skills.setServerSalt(salt);
     }
 
-    encrypt(data: Buffer | string): EncryptedData {
+    async encrypt(data: Buffer | string): Promise<EncryptedData> {
         this.checkInitialized();
         return this.skills.encrypt(data);
     }
 
-    decrypt(encrypted: EncryptedData): DecryptedData {
+    async decrypt(encrypted: EncryptedData): Promise<DecryptedData> {
         this.checkInitialized();
         return this.skills.decrypt(encrypted);
     }
 
-    encryptMessage(message: Buffer, sessionId: bigint, messageId: bigint, seqNo: number): EncryptedData {
+    async encryptMessage(
+        message: Buffer,
+        sessionId: bigint,
+        messageId: bigint,
+        seqNo: number,
+        options?: { secret?: boolean; isInitiator?: boolean }
+    ): Promise<EncryptedData> {
         this.checkInitialized();
-        return this.skills.encryptMessage(message, sessionId, messageId, seqNo);
+        return this.skills.encryptMessage(message, sessionId, messageId, seqNo, options);
     }
 
-    decryptMessage(encrypted: EncryptedData, sessionId: bigint): Buffer {
+    async decryptMessage(
+        encrypted: EncryptedData,
+        sessionId: bigint,
+        options?: { secret?: boolean; isInitiator?: boolean }
+    ): Promise<Buffer> {
         this.checkInitialized();
-        return this.skills.decryptMessage(encrypted, sessionId);
+        return this.skills.decryptMessage(encrypted, sessionId, options);
     }
 
     getAuthKey(): AuthKey | null {

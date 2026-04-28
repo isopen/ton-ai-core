@@ -1,5 +1,5 @@
 import { PluginContext } from '@ton-ai/core';
-import { crypto } from '@ton-ai/core';
+import { crypton } from '@ton-ai/core';
 import { EventEmitter } from 'events';
 import {
     MTCryptoConfig,
@@ -14,6 +14,7 @@ export class CryptoClient extends EventEmitter {
     private config: MTCryptoConfig;
     private connected: boolean = false;
     private authKey: AuthKey | null = null;
+    private secretAuthKey: AuthKey | null = null;
     private serverSalt: Buffer | null = null;
     private dhKeys: DHKeys | null = null;
     private isClient: boolean = true;
@@ -39,12 +40,12 @@ export class CryptoClient extends EventEmitter {
     }
 
     generateDHKeys(): DHKeys {
-        this.dhKeys = crypto.DiffieHellman.generateKeys();
+        this.dhKeys = crypton.DiffieHellman.generateKeys();
         return this.dhKeys;
     }
 
     computeSharedSecret(privateKey: bigint, peerPublicKey: bigint): Buffer {
-        const sharedSecret = crypto.DiffieHellman.computeSharedSecret(privateKey, peerPublicKey);
+        const sharedSecret = crypton.DiffieHellman.computeSharedSecret(privateKey, peerPublicKey);
         if (this.dhKeys) {
             this.dhKeys.sharedSecret = sharedSecret;
         }
@@ -52,19 +53,20 @@ export class CryptoClient extends EventEmitter {
     }
 
     async generateAuthKey(sharedSecret: Buffer): Promise<AuthKey> {
-        const hash = crypto.createHash('sha256').update(sharedSecret).digest();
-        const key = Buffer.concat([sharedSecret, hash]);
-        const id = crypto.MTProtoKDF.computeAuthKeyId(key);
-        const aux = crypto.randomBytes(32);
-
+        const key = sharedSecret;
+        const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
+        const aux = crypton.getRandomBytes(32);
         this.authKey = { key, id, aux };
-        this.serverSalt = crypto.randomBytes(8);
-
+        this.serverSalt = crypton.getRandomBytes(8);
         return this.authKey;
     }
 
     setAuthKey(authKey: AuthKey): void {
         this.authKey = authKey;
+    }
+
+    setSecretAuthKey(authKey: AuthKey): void {
+        this.secretAuthKey = authKey;
     }
 
     setServerSalt(salt: Buffer): void {
@@ -75,71 +77,86 @@ export class CryptoClient extends EventEmitter {
     private buildDataForEncryption(message: Buffer, sessionId: bigint, messageId: bigint, seqNo: number): Buffer {
         const headerSize = 32;
         const data = Buffer.alloc(headerSize + message.length);
-
         this.serverSalt!.copy(data, 0);
         data.writeBigInt64BE(sessionId, 8);
         data.writeBigInt64BE(messageId, 16);
         data.writeInt32BE(seqNo, 24);
         data.writeInt32BE(message.length, 28);
         message.copy(data, 32);
-
         return data;
     }
 
     private generateRandomPadding(dataLength: number): Buffer {
         const minPadding = 12;
-        const blockSize = crypto.AES256IGE['BLOCK_SIZE'];
-
+        const blockSize = 16;
         let padding = blockSize - (dataLength % blockSize);
-        if (padding < minPadding) {
-            padding += blockSize;
-        }
-
-        return crypto.randomBytes(padding);
+        if (padding < minPadding) padding += blockSize;
+        return crypton.getRandomBytes(padding);
     }
 
-    encryptMessage(message: Buffer, sessionId: bigint, messageId: bigint, seqNo: number): EncryptedData {
-        if (!this.authKey) throw new Error('Auth key not set');
+    async encryptMessage(
+        message: Buffer,
+        sessionId: bigint,
+        messageId: bigint,
+        seqNo: number,
+        options?: { secret?: boolean; isInitiator?: boolean }
+    ): Promise<EncryptedData> {
+        const secret = options?.secret ?? false;
+        const key = secret ? this.secretAuthKey : this.authKey;
+        if (!key) throw new Error(`Auth key not set (secret: ${secret})`);
         if (!this.serverSalt) throw new Error('Server salt not set');
 
         const plaintext = this.buildDataForEncryption(message, sessionId, messageId, seqNo);
         const randomPadding = this.generateRandomPadding(plaintext.length);
 
-        const msgKey = crypto.MTProtoKDF.computeMsgKey(this.authKey.key, plaintext, randomPadding, this.isClient);
-        const { aesKey, aesIv } = crypto.MTProtoKDF.deriveKeys(this.authKey.key, msgKey, this.isClient);
+        let x: number;
+        if (secret) {
+            if (options?.isInitiator === undefined) throw new Error('isInitiator required for secret chat');
+            x = options.isInitiator ? 0 : 8;
+        } else {
+            x = this.isClient ? 0 : 8;
+        }
 
-        const dataToEncrypt = Buffer.concat([plaintext, randomPadding]);
-        const encrypted = crypto.AES256IGE.encrypt(dataToEncrypt, aesKey, aesIv);
+        const msgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, randomPadding, x);
+        const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(key.key, msgKey, x);
 
-        return {
-            data: encrypted,
-            msgKey,
-            iv: aesIv
-        };
+        const encrypted = await crypton.AES256IGE.encrypt(Buffer.concat([plaintext, randomPadding]), aesKey, aesIv);
+        return { data: encrypted, msgKey, iv: aesIv };
     }
 
-    decryptMessage(encrypted: EncryptedData, expectedSessionId: bigint): DecryptedData {
-        if (!this.authKey) throw new Error('Auth key not set');
+    async decryptMessage(
+        encrypted: EncryptedData,
+        expectedSessionId: bigint,
+        options?: { secret?: boolean; isInitiator?: boolean }
+    ): Promise<DecryptedData> {
+        const secret = options?.secret ?? false;
+        const key = secret ? this.secretAuthKey : this.authKey;
+        if (!key) throw new Error(`Auth key not set (secret: ${secret})`);
 
-        const { aesKey, aesIv } = crypto.MTProtoKDF.deriveKeys(this.authKey.key, encrypted.msgKey, this.isClient);
-        const decrypted = crypto.AES256IGE.decrypt(encrypted.data, aesKey, aesIv);
+        let x: number;
+        if (secret) {
+            if (options?.isInitiator === undefined) throw new Error('isInitiator required for secret chat');
+            x = options.isInitiator ? 0 : 8;
+        } else {
+            x = this.isClient ? 0 : 8;
+        }
+
+        const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(key.key, encrypted.msgKey, x);
+        const decrypted = await crypton.AES256IGE.decrypt(encrypted.data, aesKey, aesIv);
 
         const messageLength = decrypted.readInt32BE(28);
         const plaintext = decrypted.subarray(0, 32 + messageLength);
         const padding = decrypted.subarray(32 + messageLength);
 
-        const expectedMsgKey = crypto.MTProtoKDF.computeMsgKey(this.authKey.key, plaintext, padding, this.isClient);
-        if (!expectedMsgKey.equals(encrypted.msgKey)) {
+        let expectedMsgKey: Buffer;
+        try {
+            expectedMsgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, padding, x);
+        } catch (e) {
             throw new Error('Invalid msg_key');
         }
-        const isValid = expectedMsgKey.equals(encrypted.msgKey);
 
-        if (!isValid) {
-            return {
-                data: Buffer.alloc(0),
-                isValid: false,
-                msgKey: encrypted.msgKey
-            };
+        if (!expectedMsgKey.equals(encrypted.msgKey)) {
+            throw new Error('Invalid msg_key');
         }
 
         const sessionId = decrypted.readBigInt64BE(8);
@@ -147,28 +164,13 @@ export class CryptoClient extends EventEmitter {
             throw new Error('Session ID mismatch');
         }
 
-        return {
-            data: decrypted.subarray(32, 32 + messageLength),
-            isValid: true,
-            msgKey: encrypted.msgKey
-        };
+        return { data: decrypted.subarray(32, 32 + messageLength), isValid: true, msgKey: encrypted.msgKey };
     }
 
-    getAuthKey(): AuthKey | null {
-        return this.authKey;
-    }
-
-    getServerSalt(): Buffer | null {
-        return this.serverSalt;
-    }
-
-    getDHKeys(): DHKeys | null {
-        return this.dhKeys;
-    }
-
-    isReady(): boolean {
-        return this.connected;
-    }
+    getAuthKey(): AuthKey | null { return this.authKey; }
+    getServerSalt(): Buffer | null { return this.serverSalt; }
+    getDHKeys(): DHKeys | null { return this.dhKeys; }
+    isReady(): boolean { return this.connected; }
 
     async disconnect(): Promise<void> {
         this.connected = false;
