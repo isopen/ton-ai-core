@@ -14,7 +14,6 @@ async function runMTProtoAgent() {
     await plugin.onActivate();
     console.log('=== Plugin activated ===\n');
 
-    // ------------------- Cloud Chat -------------------
     console.log('--- Cloud Chat ---');
     const cloudDH = plugin.generateDHKeys();
     const cloudSecret = plugin.computeSharedSecret(cloudDH.privateKey, cloudDH.publicKey);
@@ -28,7 +27,6 @@ async function runMTProtoAgent() {
     const cloudDecrypted = await plugin.decryptMessage(cloudEncrypted, 0xABCDn);
     console.log('Cloud decrypted:', cloudDecrypted.toString('utf-8'), '\n');
 
-    // ------------------- Secret Chat -------------------
     console.log('--- Secret Chat ---');
     const aliceDH = plugin.generateDHKeys();
     const bobDH = plugin.generateDHKeys();

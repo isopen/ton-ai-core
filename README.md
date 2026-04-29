@@ -1,16 +1,17 @@
-# TON AI Framework
+# TON AI Core
 
 Imagine a framework that not only simplifies blockchain development but also unleashes the full potential of AI agents on the TON ecosystem! We've created a lightweight, modular, and intuitive framework that becomes your trusted companion in building the next generation of decentralized intelligent applications. This powerful toolkit lets developers customize its functionality to their specific needs, scaling seamlessly from simple scripts to complex autonomous agents.
 
-Whether you're building a DeFi trading bot, an NFT management assistant, or a blockchain analytics tool, TON AI is ready to be your reliable foundation for any task. It handles the complexities of TON blockchain integration with flawless precision, leaving you with one crucial task - bringing your most ambitious ideas to life!
+Whether you're building a DeFi trading bot, an NFT management assistant, or a blockchain analytics tool, TON AI Core is ready to be your reliable foundation for any task. It handles the complexities of TON blockchain integration with flawless precision, leaving you with one crucial task - bringing your most ambitious ideas to life!
 
-Join us on this exciting journey and explore new horizons in TON development! Your ideas deserve the best realization - give them wings with TON AI and watch them soar across The Open Network!
+Join us on this exciting journey and explore new horizons in TON development! Your ideas deserve the best realization - give them wings with TON AI Core and watch them soar across The Open Network!
 
 Create what you believe!
 
 ## Get started
 
 ```bash
+0. install https://nodejs.org/en/download
 1. git clone https://github.com/isopen/ton-ai-core.git
 2. cd ton-ai-core
 3. make build-ton-ai-core
@@ -21,8 +22,10 @@ Create what you believe!
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "commonjs",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
+    "types": ["node"],
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
@@ -30,9 +33,7 @@ Create what you believe!
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "moduleResolution": "node",
-    "resolveJsonModule": true,
-    "types": ["node"]
+    "resolveJsonModule": true
   },
   "exclude": ["node_modules", "dist"]
 }
