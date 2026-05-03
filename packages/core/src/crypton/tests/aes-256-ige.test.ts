@@ -4,7 +4,7 @@ import { AES256IGE } from '../aes-256-ige';
 
 async function run() {
   const key = Buffer.from('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f', 'hex');
-  const iv  = Buffer.from('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f', 'hex');
+  const iv = Buffer.from('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f', 'hex');
 
   // 1. Basic test with 48 bytes
   const plain48 = Buffer.alloc(48, 0x41);
@@ -68,7 +68,19 @@ async function run() {
     assert.ok(dec.equals(data), `Length ${len} roundtrip failed`);
   }
 
-  console.log('AES256IGE tests passed');
+  // 8. Large message (1024 blocks = 16384 bytes) – verify stability of single key import
+  const largeData = Buffer.alloc(1024 * 16, 0x55);  // exactly 1024 blocks of 16 bytes each
+  const encLarge = await AES256IGE.encrypt(largeData, key, iv);
+  const decLarge = await AES256IGE.decrypt(encLarge, key, iv);
+  assert.ok(decLarge.equals(largeData), 'Large message roundtrip failed');
+
+  // 9. Ensure that corrupting a single byte in the ciphertext breaks decryption
+  const corrupted = Buffer.from(encLarge);
+  corrupted[0] ^= 0x01;
+  const decCorrupted = await AES256IGE.decrypt(corrupted, key, iv);
+  assert.ok(!decCorrupted.equals(largeData), 'Corrupted large ciphertext should not decrypt to original');
+
+  console.log('AES-256-IGE tests passed');
 }
 
 run().catch(err => { console.error(err); process.exit(1); });

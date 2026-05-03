@@ -72,7 +72,7 @@ export function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint 
   return result;
 }
 
-export function isProbablyPrime(n: bigint, k: number = 20): boolean {
+export function isProbablyPrime(n: bigint, k: number = 40): boolean {
   if (n < 2n) return false;
   if (n === 2n || n === 3n) return true;
   if (n % 2n === 0n) return false;

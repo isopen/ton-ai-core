@@ -68,9 +68,11 @@ async function run() {
   const largeResult = modPow(largeBase, largeExp, largeMod);
   assert.ok(typeof largeResult === 'bigint');
 
-  // 13. isProbablyPrime returns true for 2 and 3
+  // 13. isProbablyPrime returns true for 2, 3, 17 and 19
   assert.ok(isProbablyPrime(2n));
   assert.ok(isProbablyPrime(3n));
+  assert.ok(isProbablyPrime(17n));
+  assert.ok(isProbablyPrime(19n));
 
   // 14. isProbablyPrime returns false for 1 and 4
   assert.ok(!isProbablyPrime(1n));
@@ -83,8 +85,9 @@ async function run() {
   assert.ok(!isProbablyPrime(1000000000000000000n));
 
   // 17. isProbablyPrime correctly handles Carmichael numbers (e.g., 561)
-  //    The Miller–Rabin test should detect 561 as composite.
+  // The Miller–Rabin test should detect 561 as composite.
   assert.ok(!isProbablyPrime(561n, 10), '561 (Carmichael) should be detected as composite');
+  assert.ok(!isProbablyPrime(561n), '561 (Carmichael) should be composite with default k');
 
   // 18. bigIntToBufferLE produces correctly reversed bytes
   const value = 0x1234567890abcdefn;

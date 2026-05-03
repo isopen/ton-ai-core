@@ -1,60 +1,6 @@
 import { Buffer } from 'buffer';
 import { isNode, xor } from './utils';
 
-async function aes256EcbEncryptBlock(
-  block: Uint8Array,
-  key: Uint8Array
-): Promise<Buffer> {
-  if (isNode()) {
-    const crypto = require('crypto');
-    const cipher = crypto.createCipheriv('aes-256-ecb', key, null);
-    cipher.setAutoPadding(false);
-    return Buffer.concat([cipher.update(block), cipher.final()]);
-  }
-
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    key,
-    { name: 'AES-CBC' },
-    false,
-    ['encrypt']
-  );
-  const iv = new Uint8Array(16);
-  const encrypted = await crypto.subtle.encrypt(
-    { name: 'AES-CBC', iv },
-    cryptoKey,
-    block
-  );
-  return Buffer.from(encrypted);
-}
-
-async function aes256EcbDecryptBlock(
-  block: Uint8Array,
-  key: Uint8Array
-): Promise<Buffer> {
-  if (isNode()) {
-    const crypto = require('crypto');
-    const decipher = crypto.createDecipheriv('aes-256-ecb', key, null);
-    decipher.setAutoPadding(false);
-    return Buffer.concat([decipher.update(block), decipher.final()]);
-  }
-
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    key,
-    { name: 'AES-CBC' },
-    false,
-    ['decrypt']
-  );
-  const iv = new Uint8Array(16);
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-CBC', iv },
-    cryptoKey,
-    block
-  );
-  return Buffer.from(decrypted);
-}
-
 export class AES256IGE {
   private static readonly BLOCK_SIZE = 16;
   private static readonly KEY_SIZE = 32;
@@ -75,15 +21,46 @@ export class AES256IGE {
     let prevCipher = iv.subarray(0, this.BLOCK_SIZE);
     let prevPlain = iv.subarray(this.BLOCK_SIZE, this.BLOCK_SIZE * 2);
 
-    for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
-      const plainBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
-      const tmp = xor(plainBlock, prevCipher);
-      const enc = await aes256EcbEncryptBlock(tmp, key);
-      const cipherBlock = xor(enc, prevPlain);
-      cipherBlock.copy(result, offset);
+    if (isNode()) {
+      const crypto = require('crypto');
+      const cipher = crypto.createCipheriv('aes-256-ecb', key, null);
+      cipher.setAutoPadding(false);
 
-      prevCipher = cipherBlock;
-      prevPlain = plainBlock;
+      for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
+        const plainBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
+        const tmp = xor(plainBlock, prevCipher);
+        const enc = cipher.update(tmp);
+        const cipherBlock = xor(enc, prevPlain);
+        cipherBlock.copy(result, offset);
+
+        prevCipher = cipherBlock;
+        prevPlain = plainBlock;
+      }
+      cipher.final();
+    } else {
+      const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        key,
+        { name: 'AES-CBC' },
+        false,
+        ['encrypt']
+      );
+      const ivBlock = new Uint8Array(16);
+
+      for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
+        const plainBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
+        const tmp = xor(plainBlock, prevCipher);
+        const enc = await crypto.subtle.encrypt(
+          { name: 'AES-CBC', iv: ivBlock },
+          cryptoKey,
+          tmp
+        );
+        const cipherBlock = xor(Buffer.from(enc), prevPlain);
+        cipherBlock.copy(result, offset);
+
+        prevCipher = cipherBlock;
+        prevPlain = plainBlock;
+      }
     }
 
     return result;
@@ -104,15 +81,46 @@ export class AES256IGE {
     let prevCipher = iv.subarray(0, this.BLOCK_SIZE);
     let prevPlain = iv.subarray(this.BLOCK_SIZE, this.BLOCK_SIZE * 2);
 
-    for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
-      const cipherBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
-      const tmp = xor(cipherBlock, prevPlain);
-      const dec = await aes256EcbDecryptBlock(tmp, key);
-      const plainBlock = xor(dec, prevCipher);
-      plainBlock.copy(result, offset);
+    if (isNode()) {
+      const crypto = require('crypto');
+      const decipher = crypto.createDecipheriv('aes-256-ecb', key, null);
+      decipher.setAutoPadding(false);
 
-      prevCipher = cipherBlock;
-      prevPlain = plainBlock;
+      for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
+        const cipherBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
+        const tmp = xor(cipherBlock, prevPlain);
+        const dec = decipher.update(tmp);
+        const plainBlock = xor(dec, prevCipher);
+        plainBlock.copy(result, offset);
+
+        prevCipher = cipherBlock;
+        prevPlain = plainBlock;
+      }
+      decipher.final();
+    } else {
+      const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        key,
+        { name: 'AES-CBC' },
+        false,
+        ['decrypt']
+      );
+      const ivBlock = new Uint8Array(16);
+
+      for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
+        const cipherBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
+        const tmp = xor(cipherBlock, prevPlain);
+        const dec = await crypto.subtle.decrypt(
+          { name: 'AES-CBC', iv: ivBlock },
+          cryptoKey,
+          tmp
+        );
+        const plainBlock = xor(Buffer.from(dec), prevCipher);
+        plainBlock.copy(result, offset);
+
+        prevCipher = cipherBlock;
+        prevPlain = plainBlock;
+      }
     }
 
     return result;
