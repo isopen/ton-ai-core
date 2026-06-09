@@ -37,7 +37,7 @@ export interface BaseAgent {
   on(event: typeof MCP_EVENTS.CLOSED, listener: (code: number | null) => void): this;
   on(event: typeof MCP_EVENTS.BALANCE_UPDATE, listener: (data: { ton: string; jettons?: Array<{ address: string; balance: string; symbol: string }> }) => void): this;
   on(event: typeof MCP_EVENTS.TRANSACTION, listener: (data: { hash: string; amount: string; type: string; from?: string; to?: string }) => void): this;
-  on(event: typeof MCP_EVENTS.JETTON_UPDATE, listener: (data: { address: string; balance: string; symbol: string }) => void): this;
+  on(event: typeof MCP_EVENTS.JECTON_UPDATE, listener: (data: { address: string; balance: string; symbol: string }) => void): this;
   on(event: typeof MCP_EVENTS.NFT_UPDATE, listener: (data: { address: string; owner: string; collection?: string }) => void): this;
   on(event: string, listener: (...args: any[]) => void): this;
 }
@@ -89,6 +89,7 @@ export abstract class BaseAgent extends BaseAgentCore<AgentConfig> {
   }
 
   async stop(): Promise<void> {
+    if (!this.isRunning && !this.initialized) return;
     this.isRunning = false;
     this.initialized = false;
     await this.plugins.deactivateAll();
@@ -113,59 +114,44 @@ export abstract class BaseAgent extends BaseAgentCore<AgentConfig> {
     return this.mcp.getJettons();
   }
 
-  async getTransactions(limit?: number): Promise<Transaction[]> {
+  async getTransactions(limit?: number, offset?: number): Promise<Transaction[]> {
     if (!this.initialized) throw new Error('Agent not initialized');
-    return this.mcp.getTransactions(limit);
+    return this.mcp.getTransactions(limit, offset);
   }
 
-  async getKnownJettons(): Promise<KnownJetton[]> {
+  async sendTON(to: string, amount: string, message?: string): Promise<SendTONResponse> {
     if (!this.initialized) throw new Error('Agent not initialized');
-    return this.mcp.getKnownJettons();
+    return this.mcp.sendTON(to, amount, message);
   }
 
-  async sendTON(toAddress: string, amount: string, comment?: string): Promise<SendTONResponse> {
+  async sendJetton(jettonAddress: string, to: string, amount: string, message?: string): Promise<SendJettonResponse> {
     if (!this.initialized) throw new Error('Agent not initialized');
-    return this.mcp.sendTON(toAddress, amount, comment);
+    return this.mcp.sendJetton(jettonAddress, to, amount, message);
   }
 
-  async sendJetton(toAddress: string, jettonAddress: string, amount: string, comment?: string): Promise<SendJettonResponse> {
+  async sendRawTransaction(boc: string): Promise<SendRawTransactionResponse> {
     if (!this.initialized) throw new Error('Agent not initialized');
-    return this.mcp.sendJetton(toAddress, jettonAddress, amount, comment);
+    return this.mcp.sendRawTransaction(boc);
   }
 
-  async sendRawTransaction(messages: Message[], validUntil?: number, fromAddress?: string): Promise<SendRawTransactionResponse> {
+  async getSwapQuote(fromJetton: string, toJetton: string, amount: string): Promise<SwapQuoteResponse> {
     if (!this.initialized) throw new Error('Agent not initialized');
-    return this.mcp.sendRawTransaction(messages, validUntil, fromAddress);
+    return this.mcp.getSwapQuote(fromJetton, toJetton, amount);
   }
 
-  async getSwapQuote(fromToken: string, toToken: string, amount: string, slippageBps?: number): Promise<SwapQuoteResponse> {
+  async executeSwap(fromJetton: string, toJetton: string, amount: string, slippage?: number): Promise<SendRawTransactionResponse> {
     if (!this.initialized) throw new Error('Agent not initialized');
-    return this.mcp.getSwapQuote(fromToken, toToken, amount, slippageBps);
+    return this.mcp.executeSwap(fromJetton, toJetton, amount, slippage);
   }
 
-  async executeSwap(quote: SwapQuoteResponse, amount?: string): Promise<{ hash: string; success: boolean }> {
+  async getNFTs(owner?: string): Promise<NFT[]> {
     if (!this.initialized) throw new Error('Agent not initialized');
-    return this.mcp.executeSwap(quote, amount);
+    return this.mcp.getNFTs(owner);
   }
 
-  async swapTokens(fromToken: string, toToken: string, amount: string, slippageBps?: number): Promise<{ hash: string; quote: SwapQuoteResponse; success: boolean }> {
+  async sendNFT(nftAddress: string, to: string, message?: string): Promise<SendNFTResponse> {
     if (!this.initialized) throw new Error('Agent not initialized');
-    return this.mcp.swapTokens(fromToken, toToken, amount, slippageBps);
-  }
-
-  async getNFTs(limit?: number, offset?: number): Promise<NFT[]> {
-    if (!this.initialized) throw new Error('Agent not initialized');
-    return this.mcp.getNFTs(limit, offset);
-  }
-
-  async getNFT(nftAddress: string): Promise<NFT> {
-    if (!this.initialized) throw new Error('Agent not initialized');
-    return this.mcp.getNFT(nftAddress);
-  }
-
-  async sendNFT(nftAddress: string, toAddress: string, comment?: string): Promise<SendNFTResponse> {
-    if (!this.initialized) throw new Error('Agent not initialized');
-    return this.mcp.sendNFT(nftAddress, toAddress, comment);
+    return this.mcp.sendNFT(nftAddress, to, message);
   }
 
   async resolveDNS(domain: string): Promise<ResolveDNSResponse> {
@@ -178,21 +164,13 @@ export abstract class BaseAgent extends BaseAgentCore<AgentConfig> {
     return this.mcp.backResolveDNS(address);
   }
 
-  getWalletAddress(): string | undefined {
-    return this.mcp.getWalletAddress();
+  async getKnownJettons(): Promise<KnownJetton[]> {
+    if (!this.initialized) throw new Error('Agent not initialized');
+    return this.mcp.getKnownJettons();
   }
 
-  getStatus() {
-    const baseStatus = super.getStatus();
-    const configCopy = { ...this.config };
-    if (configCopy.mnemonic) configCopy.mnemonic = '***';
-    if (configCopy.apiKey) configCopy.apiKey = '***';
-    return {
-      ...baseStatus,
-      walletAddress: this.getWalletAddress(),
-      mode: this.config.mode,
-      network: this.config.network,
-      config: configCopy
-    };
+  async sendMessage(message: string): Promise<Message> {
+    if (!this.initialized) throw new Error('Agent not initialized');
+    return this.mcp.sendMessage(message);
   }
 }
