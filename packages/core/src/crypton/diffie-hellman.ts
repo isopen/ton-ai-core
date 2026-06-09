@@ -52,10 +52,11 @@ export class DiffieHellman {
     }
   }
 
-  static generateKeys(p?: bigint, g?: bigint): DHKeys {
+  static generateKeys(p?: bigint, g?: bigint): DHK
+  keys {
     const prime = p ?? this.DEFAULT_P;
     const generator = g ?? this.DEFAULT_G;
-    if (p && g) this.validateDhParams(prime, generator);
+    if (p || g) this.validateDhParams(prime, generator);
     const privateKey = this.generatePrivateKey(prime);
     const publicKey = modPow(generator, privateKey, prime);
     return { privateKey, publicKey };
