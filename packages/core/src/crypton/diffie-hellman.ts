@@ -53,7 +53,7 @@ export class DiffieHellman {
   }
 
   static generateKeys(p?: bigint, g?: bigint): DHK
-  keys {
+eys {
     const prime = p ?? this.DEFAULT_P;
     const generator = g ?? this.DEFAULT_G;
     if (p || g) this.validateDhParams(prime, generator);
