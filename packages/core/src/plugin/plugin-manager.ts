@@ -150,13 +150,13 @@ export class PluginManager extends EventEmitter {
       mcp: this.mcp,
       events: this,
       logger: {
-        info: (message: string, ...args: any[]) =>
+        info: (message: string, ...args: any[]) => 
           this.emit('log:info', { plugin: name, message, args }),
-        error: (message: string, ...args: any[]) =>
+        error: (message: string, ...args: any[]) => 
           this.emit('log:error', { plugin: name, message, args }),
-        warn: (message: string, ...args: any[]) =>
+        warn: (message: string, ...args: any[]) => 
           this.emit('log:warn', { plugin: name, message, args }),
-        debug: (message: string, ...args: any[]) =>
+        debug: (message: string, ...args: any[]) => 
           this.emit('log:debug', { plugin: name, message, args })
       },
       config: pluginConfig
