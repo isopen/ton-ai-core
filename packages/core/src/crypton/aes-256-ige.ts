@@ -45,17 +45,17 @@ export class AES256IGE {
         false,
         ['encrypt']
       );
-      const ivBlock = new Uint8Array(16);
+      const zeroIv = new Uint8Array(16);
 
       for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
         const plainBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
         const tmp = xor(plainBlock, prevCipher);
         const enc = await crypto.subtle.encrypt(
-          { name: 'AES-CBC', iv: ivBlock },
+          { name: 'AES-CBC', iv: zeroIv },
           cryptoKey,
           tmp
         );
-        const cipherBlock = xor(Buffer.from(enc), prevPlain);
+        const cipherBlock = xor(Buffer.from(enc).subarray(0, this.BLOCK_SIZE), prevPlain);
         cipherBlock.copy(result, offset);
 
         prevCipher = cipherBlock;
@@ -105,17 +105,17 @@ export class AES256IGE {
         false,
         ['decrypt']
       );
-      const ivBlock = new Uint8Array(16);
+      const zeroIv = new Uint8Array(16);
 
       for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
         const cipherBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
         const tmp = xor(cipherBlock, prevPlain);
         const dec = await crypto.subtle.decrypt(
-          { name: 'AES-CBC', iv: ivBlock },
+          { name: 'AES-CBC', iv: zeroIv },
           cryptoKey,
           tmp
         );
-        const plainBlock = xor(Buffer.from(dec), prevCipher);
+        const plainBlock = xor(Buffer.from(dec).subarray(0, this.BLOCK_SIZE), prevCipher);
         plainBlock.copy(result, offset);
 
         prevCipher = cipherBlock;
