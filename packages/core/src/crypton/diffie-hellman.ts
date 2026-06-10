@@ -60,8 +60,14 @@ export class DiffieHellman {
     if (p !== undefined || g !== undefined) {
       this.validateDhParams(prime, generator);
     }
-    const privateKey = this.generatePrivateKey(prime);
-    const publicKey = modPow(generator, privateKey, prime);
+
+    let privateKey: bigint;
+    let publicKey: bigint;
+    do {
+      privateKey = this.generatePrivateKey(prime);
+      publicKey = modPow(generator, privateKey, prime);
+    } while (!this.isValidPublicKey(publicKey, prime));
+
     return { privateKey, publicKey };
   }
 
@@ -83,14 +89,16 @@ export class DiffieHellman {
 
   static validatePublicKey(publicKey: bigint, p?: bigint): void {
     const prime = p ?? this.DEFAULT_P;
-    if (publicKey <= 1n || publicKey >= prime - 1n) {
-      throw new Error('Public key out of bounds');
+    if (!this.isValidPublicKey(publicKey, prime)) {
+      throw new Error('Public key out of bounds or unsafe range');
     }
+  }
+
+  private static isValidPublicKey(publicKey: bigint, prime: bigint): boolean {
+    if (publicKey <= 1n || publicKey >= prime - 1n) return false;
     const minPub = this.MIN_DH_VALUE;
     const maxPub = prime - minPub;
-    if (publicKey < minPub || publicKey > maxPub) {
-      throw new Error('Public key in unsafe range');
-    }
+    return publicKey >= minPub && publicKey <= maxPub;
   }
 
   private static generatePrivateKey(p: bigint): bigint {

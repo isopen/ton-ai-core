@@ -23,20 +23,21 @@ export class AES256IGE {
 
     if (isNode()) {
       const crypto = require('crypto');
-      const cipher = crypto.createCipheriv('aes-256-ecb', key, null);
-      cipher.setAutoPadding(false);
 
       for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
         const plainBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
         const tmp = xor(plainBlock, prevCipher);
-        const enc = cipher.update(tmp);
+
+        const cipher = crypto.createCipheriv('aes-256-ecb', key, null);
+        cipher.setAutoPadding(false);
+        const enc = Buffer.concat([cipher.update(tmp), cipher.final()]);
+
         const cipherBlock = xor(enc, prevPlain);
         cipherBlock.copy(result, offset);
 
         prevCipher = cipherBlock;
         prevPlain = plainBlock;
       }
-      cipher.final();
     } else {
       const cryptoKey = await crypto.subtle.importKey(
         'raw',
@@ -83,20 +84,21 @@ export class AES256IGE {
 
     if (isNode()) {
       const crypto = require('crypto');
-      const decipher = crypto.createDecipheriv('aes-256-ecb', key, null);
-      decipher.setAutoPadding(false);
 
       for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
         const cipherBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
         const tmp = xor(cipherBlock, prevPlain);
-        const dec = decipher.update(tmp);
+
+        const decipher = crypto.createDecipheriv('aes-256-ecb', key, null);
+        decipher.setAutoPadding(false);
+        const dec = Buffer.concat([decipher.update(tmp), decipher.final()]);
+
         const plainBlock = xor(dec, prevCipher);
         plainBlock.copy(result, offset);
 
         prevCipher = cipherBlock;
         prevPlain = plainBlock;
       }
-      decipher.final();
     } else {
       const cryptoKey = await crypto.subtle.importKey(
         'raw',

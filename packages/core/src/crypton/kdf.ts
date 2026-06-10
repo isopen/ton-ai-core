@@ -13,7 +13,7 @@ export class MTProtoKDF {
     authKey: Buffer,
     plaintext: Buffer,
     randomPadding: Buffer,
-    x: number
+    isClient: boolean
   ): Promise<Buffer> {
     if (authKey.length !== this.AUTH_KEY_LENGTH) {
       throw new Error(`Invalid authKey length: expected ${this.AUTH_KEY_LENGTH}, got ${authKey.length}`);
@@ -27,15 +27,16 @@ export class MTProtoKDF {
       throw new Error(`Padding length must be between ${this.MIN_PADDING_LENGTH} and ${this.MAX_PADDING_LENGTH} bytes`);
     }
 
+    const x = isClient ? 0 : 8;
     const authKeyPart = authKey.subarray(88 + x, 88 + x + 32);
     const msgKeyLarge = await sha256(Buffer.concat([authKeyPart, plaintext, randomPadding]));
-    return msgKeyLarge.subarray(8, 24);   // 128 средних бит
+    return msgKeyLarge.subarray(8, 24);
   }
 
   static async deriveKeys(
     authKey: Buffer,
     msgKey: Buffer,
-    x: number
+    isClient: boolean
   ): Promise<{ aesKey: Buffer; aesIv: Buffer }> {
     if (authKey.length !== this.AUTH_KEY_LENGTH) {
       throw new Error(`Invalid authKey length: expected ${this.AUTH_KEY_LENGTH}, got ${authKey.length}`);
@@ -44,6 +45,7 @@ export class MTProtoKDF {
       throw new Error(`Invalid msgKey length: expected ${this.MSG_KEY_LENGTH}, got ${msgKey.length}`);
     }
 
+    const x = isClient ? 0 : 8;
     const sha256_a = await sha256(Buffer.concat([msgKey, authKey.subarray(x, x + 36)]));
     const sha256_b = await sha256(Buffer.concat([authKey.subarray(40 + x, 40 + x + 36), msgKey]));
 
@@ -86,7 +88,7 @@ export class MTProtoKDF {
     randomPadding: Buffer,
     isClient: boolean
   ): Promise<Buffer> {
-    return this.computeMsgKey(authKey, plaintext, randomPadding, isClient ? 0 : 8);
+    return this.computeMsgKey(authKey, plaintext, randomPadding, isClient);
   }
 
   static async deriveKeysCloud(
@@ -94,7 +96,7 @@ export class MTProtoKDF {
     msgKey: Buffer,
     isClient: boolean
   ): Promise<{ aesKey: Buffer; aesIv: Buffer }> {
-    return this.deriveKeys(authKey, msgKey, isClient ? 0 : 8);
+    return this.deriveKeys(authKey, msgKey, isClient);
   }
 
   static async computeMsgKeySecret(
@@ -103,7 +105,7 @@ export class MTProtoKDF {
     randomPadding: Buffer,
     isInitiator: boolean
   ): Promise<Buffer> {
-    return this.computeMsgKey(authKey, plaintext, randomPadding, isInitiator ? 0 : 8);
+    return this.computeMsgKey(authKey, plaintext, randomPadding, isInitiator);
   }
 
   static async deriveKeysSecret(
@@ -111,6 +113,6 @@ export class MTProtoKDF {
     msgKey: Buffer,
     isInitiator: boolean
   ): Promise<{ aesKey: Buffer; aesIv: Buffer }> {
-    return this.deriveKeys(authKey, msgKey, isInitiator ? 0 : 8);
+    return this.deriveKeys(authKey, msgKey, isInitiator);
   }
 }

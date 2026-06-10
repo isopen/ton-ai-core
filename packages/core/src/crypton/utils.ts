@@ -92,6 +92,7 @@ export function isProbablyPrime(n: bigint, k: number = 40): boolean {
   }
 
   function getRandomBase(max: bigint): bigint {
+    if (max <= 2n) return 2n;
     const byteLength = Math.ceil(max.toString(16).length / 2);
     let candidate: bigint;
     do {
