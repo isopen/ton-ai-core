@@ -24,7 +24,7 @@ async function run() {
   assert.ok(sA.equals(sB), 'Shared secrets must match');
   assert.strictEqual(sA.length, 256, 'Shared secret must be 256 bytes');
 
-  // 3. validatePublicKey with default p
+  // 3. validatePublicKey – invalid values
   assert.throws(() => DiffieHellman.validatePublicKey(0n), 'Public key 0 should throw');
   assert.throws(() => DiffieHellman.validatePublicKey(defaultP), 'Public key p should throw');
   assert.throws(() => DiffieHellman.validatePublicKey(min - 1n), 'Too small public key should throw');
@@ -98,13 +98,13 @@ async function run() {
   );
 
   // 12. New bit-length check: reject primes that are not 2^2047 < p < 2^2048
-  const tooSmallPrime = (1n << 2047n) - 1n;   // 2047 bits
+  const tooSmallPrime = (1n << 2047n) - 1n;
   assert.throws(
     () => DiffieHellman.validateDhParams(tooSmallPrime, defaultG),
     /not a 2048-bit number/,
     'Prime with <2048 bits must be rejected'
   );
-  const tooLargePrime = (1n << 2048n) + 1n;   // 2049 bits
+  const tooLargePrime = (1n << 2048n) + 1n;
   assert.throws(
     () => DiffieHellman.validateDhParams(tooLargePrime, defaultG),
     /not a 2048-bit number/,

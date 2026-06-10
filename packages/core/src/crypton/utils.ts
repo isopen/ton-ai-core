@@ -9,6 +9,9 @@ export function getRandomBytes(length: number): Buffer {
     const crypto = require('crypto');
     return crypto.randomBytes(length);
   }
+  if (typeof crypto === 'undefined' || !crypto.getRandomValues) {
+    throw new Error('Secure random number generation is not available in this environment');
+  }
   const arr = new Uint8Array(length);
   crypto.getRandomValues(arr);
   return Buffer.from(arr);
@@ -19,6 +22,10 @@ export function bufferToBigInt(buf: Buffer): bigint {
 }
 
 export function bigIntToBuffer(num: bigint, length: number): Buffer {
+  const maxVal = 1n << BigInt(length * 8);
+  if (num >= maxVal) {
+    throw new Error(`Number too large for ${length}-byte buffer (max 0x${(maxVal - 1n).toString(16)})`);
+  }
   const hex = num.toString(16).padStart(length * 2, '0');
   return Buffer.from(hex, 'hex');
 }
@@ -85,7 +92,7 @@ export function isProbablyPrime(n: bigint, k: number = 40): boolean {
   }
 
   function getRandomBase(max: bigint): bigint {
-    const byteLength = (max.toString(16).length + 1) / 2;
+    const byteLength = Math.ceil(max.toString(16).length / 2);
     let candidate: bigint;
     do {
       const bytes = getRandomBytes(byteLength);
@@ -113,6 +120,10 @@ export function isProbablyPrime(n: bigint, k: number = 40): boolean {
 }
 
 export function bigIntToBufferLE(value: bigint, length: number): Buffer {
+  const maxVal = 1n << BigInt(length * 8);
+  if (value >= maxVal) {
+    throw new Error(`Number too large for ${length}-byte buffer`);
+  }
   const hex = value.toString(16).padStart(length * 2, '0');
   const bytes = Buffer.from(hex, 'hex');
   return Buffer.from(bytes.reverse());

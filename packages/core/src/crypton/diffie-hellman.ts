@@ -8,14 +8,16 @@ export interface DHKeys {
 }
 
 export class DiffieHellman {
-  private static readonly DEFAULT_P = BigInt('0xc71caeb9c6b1c9048e6c522f70f13f73980d40238e3e21c14934d037563d930f' +
+  private static readonly DEFAULT_P = BigInt(
+    '0xc71caeb9c6b1c9048e6c522f70f13f73980d40238e3e21c14934d037563d930f' +
     '48198a0aa7c14058229493d22530f4dbfa336f6e0ac925139543aed44cce7c37' +
     '20fd51f69458705ac68cd4fe6b6b13abdc9746512969328454f18faf8c595f64' +
     '2477fe96bb2a941d5bcd1d4ac8cc49880708fa9b378e3c4f3a9060bee67cf9a4' +
     'a4a695811051907e162753b56b0f6b410dba74d8a84b2a14b3144e0ef1284754' +
     'fd17ed950d5965b4b9dd46582db1178d169c6bc465b0d6ff9ca3928fef5b9ae4' +
     'e418fc15e83ebea0f87fa9ff5eed70050ded2849f47bf959d956850ce929851f' +
-    '0d8115f635b105ee2e4e15d04b2454bf6f4fadf034b10403119cd8e3b92fcc5b');
+    '0d8115f635b105ee2e4e15d04b2454bf6f4fadf034b10403119cd8e3b92fcc5b'
+  );
   private static readonly DEFAULT_G = 2n;
   private static readonly MIN_DH_VALUE = 1n << (2048n - 64n);
   private static readonly TWO_POW_2047 = 1n << 2047n;
@@ -55,7 +57,9 @@ export class DiffieHellman {
   static generateKeys(p?: bigint, g?: bigint): DHKeys {
     const prime = p ?? this.DEFAULT_P;
     const generator = g ?? this.DEFAULT_G;
-    if (p && g) this.validateDhParams(prime, generator);
+    if (p !== undefined || g !== undefined) {
+      this.validateDhParams(prime, generator);
+    }
     const privateKey = this.generatePrivateKey(prime);
     const publicKey = modPow(generator, privateKey, prime);
     return { privateKey, publicKey };
@@ -65,6 +69,9 @@ export class DiffieHellman {
     const prime = p ?? this.DEFAULT_P;
     this.validatePublicKey(peerPublicKey, prime);
     const shared = modPow(peerPublicKey, privateKey, prime);
+    if (shared <= 1n || shared >= prime - 1n) {
+      throw new Error('Weak shared secret');
+    }
     return bigIntToBuffer(shared, 256);
   }
 
