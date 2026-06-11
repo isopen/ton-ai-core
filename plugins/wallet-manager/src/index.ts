@@ -55,7 +55,7 @@ export class WalletManagerPlugin implements Plugin {
     };
 
     this.components = new WalletComponents(this.context, this.config);
-    this.skills = new WalletSkills(this.context, this.context.mcp, this.components);
+    this.skills = new WalletSkills(this.context, this.context.mcp!, this.components);
 
     if (this.config.autoConnect) {
       await this.skills.waitForReady();

@@ -4,14 +4,15 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "start": "npx ts-node index.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "testertesterov",
   "license": "Boost Software License 1.0",
   "dependencies": {
-    "@ton-ai/core": "file:../../packages/core/ton-ai-core-0.1.0.tgz",
-    "@ton-ai/telegram-bot-api": "file:../../plugins/telegram-bot-api/ton-ai-telegram-bot-api-0.1.0.tgz",
-    "@ton-ai/gigachat": "file:../../plugins/gigachat/ton-ai-gigachat-0.1.0.tgz"
+    "@ton-ai/core": "*",
+    "@ton-ai/telegram-bot-api": "*",
+    "@ton-ai/gigachat": "*"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",

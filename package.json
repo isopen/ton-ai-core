@@ -1,7 +1,19 @@
 {
   "name": "ton-ai-core",
   "version": "0.1.0",
-  "description": "TON AI Framework",
+  "description": "TON AI Core",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "plugins/*",
+    "agents/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @ton-ai/core && npm run build -ws --if-present",
+    "build:core": "npm run build -w @ton-ai/core",
+    "clean": "npm run clean -ws --if-present",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "keywords": [
     "ton",
     "ai",

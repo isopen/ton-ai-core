@@ -126,8 +126,8 @@ export class CryptoClient extends EventEmitter {
             x = this.isClient ? 0 : 8;
         }
 
-        const msgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, randomPadding, x);
-        const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(key.key, msgKey, x);
+        const msgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, randomPadding, x === 0);
+        const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(key.key, msgKey, x === 0);
 
         const encrypted = await crypton.AES256IGE.encrypt(Buffer.concat([plaintext, randomPadding]), aesKey, aesIv);
         return { data: encrypted, msgKey, iv: aesIv };
@@ -150,7 +150,7 @@ export class CryptoClient extends EventEmitter {
             x = this.isClient ? 0 : 8;
         }
 
-        const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(key.key, encrypted.msgKey, x);
+        const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(key.key, encrypted.msgKey, x === 0);
         const decrypted = await crypton.AES256IGE.decrypt(encrypted.data, aesKey, aesIv);
 
         const messageLength = decrypted.readInt32BE(28);
@@ -159,7 +159,7 @@ export class CryptoClient extends EventEmitter {
 
         let expectedMsgKey: Buffer;
         try {
-            expectedMsgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, padding, x);
+            expectedMsgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, padding, x === 0);
         } catch (e) {
             throw new Error('Invalid msg_key');
         }
