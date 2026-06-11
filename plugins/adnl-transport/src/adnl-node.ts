@@ -4,13 +4,16 @@ import { UdpTransport } from './udp-transport';
 import { AdnlConfig, PeerInfo, AdnlPacketType } from './types';
 import { crypton } from '@ton-ai/core';
 
+const HANDSHAKE_TIMEOUT_MS = 30000;
+
 export class AdnlNode extends EventEmitter {
     private transport: UdpTransport;
     private crypto: ICryptoBackend;
     private peers = new Map<string, PeerInfo>();
-    private pendingDH = new Map<string, { privateKey: bigint; publicKey: bigint }>();
+    private pendingDH = new Map<string, { privateKey: bigint; publicKey: bigint; timer: NodeJS.Timeout }>();
     private keepAliveTimer?: NodeJS.Timeout;
     private config: AdnlConfig;
+    private messageHandler?: (msg: Buffer, rinfo: any) => void;
 
     constructor(config: AdnlConfig, crypto: ICryptoBackend) {
         super();
@@ -29,11 +32,24 @@ export class AdnlNode extends EventEmitter {
         if (this.config.keepAliveInterval) {
             this.keepAliveTimer = setInterval(() => this.sendKeepAlive(), this.config.keepAliveInterval);
         }
-        this.transport.on('message', (msg, rinfo) => this.handleDatagram(msg, rinfo));
+        this.messageHandler = (msg: Buffer, rinfo: any) => this.handleDatagram(msg, rinfo);
+        this.transport.on('message', this.messageHandler);
     }
 
     async stop(): Promise<void> {
-        if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
+        if (this.keepAliveTimer) {
+            clearInterval(this.keepAliveTimer);
+            this.keepAliveTimer = undefined;
+        }
+        if (this.messageHandler) {
+            this.transport.removeListener('message', this.messageHandler);
+            this.messageHandler = undefined;
+        }
+        for (const entry of this.pendingDH.values()) {
+            clearTimeout(entry.timer);
+        }
+        this.pendingDH.clear();
+        this.peers.clear();
         await this.transport.stop();
     }
 
@@ -46,8 +62,18 @@ export class AdnlNode extends EventEmitter {
         }
         const { ciphertext, msgKey } = await this.crypto.encrypt(peerId, data);
         const packet = Buffer.concat([Buffer.from([AdnlPacketType.ENCRYPTED]), msgKey, ciphertext]);
-        const [host, portStr] = peer.address.split(':');
-        this.transport.send(packet, host, parseInt(portStr));
+        const parsed = this.parseAddress(peer.address);
+        if (!parsed) throw new Error(`Invalid peer address: ${peer.address}`);
+        this.transport.send(packet, parsed.host, parsed.port);
+    }
+
+    private parseAddress(address: string): { host: string; port: number } | null {
+        const lastColon = address.lastIndexOf(':');
+        if (lastColon <= 0) return null;
+        const host = address.substring(0, lastColon);
+        const port = parseInt(address.substring(lastColon + 1), 10);
+        if (isNaN(port) || port <= 0 || port > 65535) return null;
+        return { host, port };
     }
 
     private async handleDatagram(data: Buffer, rinfo: any) {
@@ -73,34 +99,50 @@ export class AdnlNode extends EventEmitter {
 
     async initiateHandshake(peerId: string): Promise<void> {
         const dhKeys = this.crypto.generateDHKeys();
-        this.pendingDH.set(peerId, { ...dhKeys });
+        const timer = setTimeout(() => {
+            this.pendingDH.delete(peerId);
+        }, HANDSHAKE_TIMEOUT_MS);
+        this.pendingDH.set(peerId, { ...dhKeys, timer });
         const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
         const packet = Buffer.concat([Buffer.from([AdnlPacketType.HANDSHAKE]), pubKeyBytes]);
         const peer = this.peers.get(peerId);
         if (!peer) return;
-        const [host, port] = peer.address.split(':');
-        this.transport.send(packet, host, parseInt(port));
+        const parsed = this.parseAddress(peer.address);
+        if (!parsed) return;
+        this.transport.send(packet, parsed.host, parsed.port);
     }
 
     private async handleHandshake(payload: Buffer, rinfo: any, peerId?: string) {
         const peerPubKey = crypton.bufferToBigInt(payload);
         if (!peerId) {
-            peerId = crypton.bytesToHex(payload.subarray(0, 20));
+            const hash = await crypton.sha1(payload);
+            peerId = crypton.bytesToHex(hash.subarray(0, 20));
             this.peers.set(peerId, { peerId, address: `${rinfo.address}:${rinfo.port}`, lastSeen: Date.now() });
             this.emit('newPeer', peerId);
         }
+        if (this.crypto.hasSession(peerId)) {
+            return;
+        }
         if (!this.pendingDH.has(peerId)) {
             const dhKeys = this.crypto.generateDHKeys();
-            this.pendingDH.set(peerId, { ...dhKeys });
+            const timer = setTimeout(() => {
+                this.pendingDH.delete(peerId);
+            }, HANDSHAKE_TIMEOUT_MS);
+            this.pendingDH.set(peerId, { ...dhKeys, timer });
             const myPub = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
             const packet = Buffer.concat([Buffer.from([AdnlPacketType.HANDSHAKE]), myPub]);
-            const [host, port] = this.peers.get(peerId)!.address.split(':');
-            this.transport.send(packet, host, parseInt(port));
+            const peer = this.peers.get(peerId);
+            if (!peer) return;
+            const parsed = this.parseAddress(peer.address);
+            if (!parsed) return;
+            this.transport.send(packet, parsed.host, parsed.port);
         }
-        const myDh = this.pendingDH.get(peerId)!;
+        const myDh = this.pendingDH.get(peerId);
+        if (!myDh) return;
         const sharedSecret = this.crypto.computeSharedSecret(myDh.privateKey, peerPubKey);
-        await this.crypto.createSession(peerId, sharedSecret);
+        clearTimeout(myDh.timer);
         this.pendingDH.delete(peerId);
+        await this.crypto.createSession(peerId, sharedSecret);
         this.emit('secureChannel', peerId);
     }
 
@@ -111,14 +153,17 @@ export class AdnlNode extends EventEmitter {
         try {
             const plaintext = await this.crypto.decrypt(peerId, ciphertext, msgKey);
             this.emit('message', { peerId, data: plaintext });
-        } catch (e) { }
+        } catch (e) {
+            this.emit('error', e);
+        }
     }
 
     private sendKeepAlive() {
         const keepAlive = Buffer.from([AdnlPacketType.KEEPALIVE]);
         for (const [peerId, info] of this.peers) {
-            const [host, port] = info.address.split(':');
-            this.transport.send(keepAlive, host, parseInt(port));
+            const parsed = this.parseAddress(info.address);
+            if (!parsed) continue;
+            this.transport.send(keepAlive, parsed.host, parsed.port);
         }
     }
 }

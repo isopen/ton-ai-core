@@ -1,4 +1,4 @@
-import { PluginContext } from '@ton-ai/core';
+import { PluginContext, crypton } from '@ton-ai/core';
 import { CryptoComponents } from './components';
 import {
     MTCryptoConfig,
@@ -13,6 +13,8 @@ export class MTCryptoServices {
     private components: CryptoComponents;
     private config: MTCryptoConfig;
     private ready: boolean = false;
+    private currentSessionId: bigint = 0n;
+    private msgIdCounter: bigint = 0n;
 
     constructor(context: PluginContext, components: CryptoComponents, config: MTCryptoConfig) {
         this.context = context;
@@ -60,19 +62,31 @@ export class MTCryptoServices {
         this.context.events.emit('mtproto:salt:set', {});
     }
 
+    private ensureSessionId(): void {
+        if (this.currentSessionId === 0n) {
+            this.currentSessionId = BigInt('0x' + crypton.getRandomBytes(8).toString('hex'));
+        }
+    }
+
+    private nextMsgId(): bigint {
+        const now = (BigInt(Math.floor(Date.now() / 1000)) & 0x1FFFFFFFn) << 32n;
+        this.msgIdCounter = (this.msgIdCounter + 1n) & 0xFFFFFFFFn;
+        return (now + this.msgIdCounter) & 0x7FFFFFFFFFFFFFFFn;
+    }
+
     async encrypt(data: Buffer | string): Promise<EncryptedData> {
+        this.ensureSessionId();
         const buffer = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
-        const tempSessionId = 0n;
-        const tempMessageId = 0n;
-        const encrypted = await this.components.client.encryptMessage(buffer, tempSessionId, tempMessageId, 0);
+        const messageId = this.nextMsgId();
+        const encrypted = await this.components.client.encryptMessage(buffer, this.currentSessionId, messageId, 0);
         this.context.events.emit('mtproto:encrypted', { size: encrypted.data.length });
-        return encrypted;
+        return { ...encrypted, sessionId: this.currentSessionId };
     }
 
     async decrypt(encrypted: EncryptedData): Promise<DecryptedData> {
-        const tempSessionId = 0n;
+        const sessionId = encrypted.sessionId ?? this.currentSessionId;
         try {
-            return await this.components.client.decryptMessage(encrypted, tempSessionId);
+            return await this.components.client.decryptMessage(encrypted, sessionId);
         } catch (error) {
             return {
                 data: Buffer.alloc(0),

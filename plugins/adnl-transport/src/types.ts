@@ -1,7 +1,7 @@
 import { ICryptoBackend } from './crypto-backend';
 
 export interface AdnlConfig {
-    cryptoBackend?: ICryptoBackend;
+    cryptoBackend: ICryptoBackend;
     listenPort: number;
     listenAddress?: string;
     peers?: Record<string, string>;

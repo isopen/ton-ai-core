@@ -9,6 +9,7 @@ export interface EncryptedData {
     data: Buffer;
     msgKey: Buffer;
     iv?: Buffer;
+    sessionId?: bigint;
 }
 
 export interface DecryptedData {
