@@ -15,7 +15,7 @@ export * from './skills';
 
 export class MTProtoCryptoPlugin implements Plugin {
     public metadata: PluginMetadata = {
-        name: 'mtproto-crypto',
+        name: 'mtproto',
         version: '0.2.0',
         description: 'MTProto 2.0 cryptographic library',
         author: 'TON AI Core Team',
@@ -31,28 +31,22 @@ export class MTProtoCryptoPlugin implements Plugin {
     async initialize(context: PluginContext): Promise<void> {
         this.context = context;
         const userConfig = context.config as MTCryptoConfig;
-
         this.context.logger.info('Initializing MTProto Crypto plugin...');
-
         this.config = {
             mode: userConfig.mode || 'client',
             testMode: userConfig.testMode || false
         };
-
         this.components = new CryptoComponents(this.context, this.config);
         this.skills = new MTCryptoServices(this.context, this.components, this.config);
-
         this.initialized = true;
         this.context.logger.info('MTProto Crypto plugin initialized');
     }
 
     async onActivate(): Promise<void> {
         this.context.logger.info('MTProto Crypto plugin activated');
-
         try {
             await this.components.initialize();
             this.skills.setReady(true);
-
             this.context.logger.info('MTProto Crypto ready');
             this.context.events.emit('mtproto:activated', { mode: this.config.mode });
         } catch (error) {
@@ -63,10 +57,8 @@ export class MTProtoCryptoPlugin implements Plugin {
 
     async onDeactivate(): Promise<void> {
         this.context.logger.info('MTProto Crypto plugin deactivated');
-
         await this.components.cleanup();
         this.skills.setReady(false);
-
         this.context.events.emit('mtproto:deactivated');
     }
 
@@ -175,6 +167,36 @@ export class MTProtoCryptoPlugin implements Plugin {
             hasAuthKey: !!authKey,
             authKeyId: authKey ? authKey.id.toString(16).slice(0, 16) : null
         };
+    }
+
+    async createSession(peerId: string, sharedSecret: Buffer): Promise<void> {
+        this.checkInitialized();
+        return this.skills.createSession(peerId, sharedSecret);
+    }
+
+    setSessionKeys(peerId: string, authKey: AuthKey, salt: Buffer, sessionId?: bigint): void {
+        this.checkInitialized();
+        this.skills.setSessionKeys(peerId, authKey, salt, sessionId);
+    }
+
+    removeSession(peerId: string): void {
+        this.checkInitialized();
+        this.skills.removeSession(peerId);
+    }
+
+    hasSession(peerId: string): boolean {
+        this.checkInitialized();
+        return this.skills.hasSession(peerId);
+    }
+
+    async encryptForSession(peerId: string, message: Buffer): Promise<EncryptedData> {
+        this.checkInitialized();
+        return this.skills.encryptForSession(peerId, message);
+    }
+
+    async decryptForSession(peerId: string, encrypted: EncryptedData): Promise<DecryptedData> {
+        this.checkInitialized();
+        return this.skills.decryptForSession(peerId, encrypted);
     }
 
     private checkInitialized(): void {

@@ -104,12 +104,8 @@ export class MTCryptoServices {
         sessionId: bigint,
         options?: { secret?: boolean; isInitiator?: boolean }
     ): Promise<Buffer> {
-        const decryptedData = await this.components.client.decryptMessage(
-            encrypted, sessionId, options
-        );
-        const event = options?.secret
-            ? 'mtproto:secret:message:decrypted'
-            : 'mtproto:message:decrypted';
+        const decryptedData = await this.components.client.decryptMessage(encrypted, sessionId, options);
+        const event = options?.secret ? 'mtproto:secret:message:decrypted' : 'mtproto:message:decrypted';
         this.context.events.emit(event, { size: decryptedData.data.length });
         return decryptedData.data;
     }
@@ -132,5 +128,30 @@ export class MTCryptoServices {
         this.components.client['serverSalt'] = null;
         this.components.client['dhKeys'] = null;
         this.context.events.emit('mtproto:reset', {});
+    }
+
+    async createSession(peerId: string, sharedSecret: Buffer): Promise<void> {
+        await this.components.client.createSession(peerId, sharedSecret);
+        this.context.events.emit('mtproto:session:created', { peerId });
+    }
+
+    setSessionKeys(peerId: string, authKey: AuthKey, salt: Buffer, sessionId?: bigint): void {
+        this.components.client.setSessionKeys(peerId, authKey, salt, sessionId);
+    }
+
+    removeSession(peerId: string): void {
+        this.components.client.removeSession(peerId);
+    }
+
+    hasSession(peerId: string): boolean {
+        return this.components.client.hasSession(peerId);
+    }
+
+    async encryptForSession(peerId: string, message: Buffer): Promise<EncryptedData> {
+        return this.components.client.encryptForSession(peerId, message);
+    }
+
+    async decryptForSession(peerId: string, encrypted: EncryptedData): Promise<DecryptedData> {
+        return this.components.client.decryptForSession(peerId, encrypted);
     }
 }

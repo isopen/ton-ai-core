@@ -9,6 +9,14 @@ import {
     DHKeys
 } from './types';
 
+interface SessionState {
+    authKey: AuthKey;
+    serverSalt: Buffer;
+    sessionId: bigint;
+    lastSeqNo: number;
+    msgIdCounter: bigint;
+}
+
 export class CryptoClient extends EventEmitter {
     private context: PluginContext;
     private config: MTCryptoConfig;
@@ -18,6 +26,7 @@ export class CryptoClient extends EventEmitter {
     private serverSalt: Buffer | null = null;
     private dhKeys: DHKeys | null = null;
     private isClient: boolean = true;
+    private sessions: Map<string, SessionState> = new Map();
 
     constructor(context: PluginContext, config: MTCryptoConfig) {
         super();
@@ -176,6 +185,80 @@ export class CryptoClient extends EventEmitter {
         this.connected = false;
         this.emit('disconnected');
         this.context.logger.info('MTProto crypto client disconnected');
+    }
+
+    async createSession(peerId: string, sharedSecret: Buffer): Promise<void> {
+        const authKey = await this.generateAuthKey(sharedSecret);
+        const salt = crypton.getRandomBytes(8);
+        const sessionId = BigInt('0x' + crypton.getRandomBytes(8).toString('hex'));
+        this.sessions.set(peerId, {
+            authKey,
+            serverSalt: salt,
+            sessionId,
+            lastSeqNo: 0,
+            msgIdCounter: 0n,
+        });
+    }
+
+    setSessionKeys(peerId: string, authKey: AuthKey, salt: Buffer, sessionId?: bigint): void {
+        this.sessions.set(peerId, {
+            authKey,
+            serverSalt: salt,
+            sessionId: sessionId ?? BigInt('0x' + crypton.getRandomBytes(8).toString('hex')),
+            lastSeqNo: 0,
+            msgIdCounter: 0n,
+        });
+    }
+
+    removeSession(peerId: string): void {
+        this.sessions.delete(peerId);
+    }
+
+    hasSession(peerId: string): boolean {
+        return this.sessions.has(peerId);
+    }
+
+    async encryptForSession(peerId: string, message: Buffer): Promise<EncryptedData> {
+        const session = this.sessions.get(peerId);
+        if (!session) throw new Error(`No session for peer ${peerId}`);
+        const oldAuthKey = this.authKey;
+        const oldSalt = this.serverSalt;
+        this.authKey = session.authKey;
+        this.serverSalt = session.serverSalt;
+        try {
+            const messageId = this.nextMsgId(session);
+            const seqNo = this.nextSeqNo(session, true);
+            return await this.encryptMessage(message, session.sessionId, messageId, seqNo);
+        } finally {
+            this.authKey = oldAuthKey;
+            this.serverSalt = oldSalt;
+        }
+    }
+
+    async decryptForSession(peerId: string, encrypted: EncryptedData): Promise<DecryptedData> {
+        const session = this.sessions.get(peerId);
+        if (!session) throw new Error(`No session for peer ${peerId}`);
+        const oldAuthKey = this.authKey;
+        const oldSalt = this.serverSalt;
+        this.authKey = session.authKey;
+        this.serverSalt = session.serverSalt;
+        try {
+            return await this.decryptMessage(encrypted, session.sessionId);
+        } finally {
+            this.authKey = oldAuthKey;
+            this.serverSalt = oldSalt;
+        }
+    }
+
+    private nextMsgId(session: SessionState): bigint {
+        const now = (BigInt(Math.floor(Date.now() / 1000)) & 0x1FFFFFFFn) << 32n;
+        session.msgIdCounter = (session.msgIdCounter + 1n) & 0xFFFFFFFFn;
+        return (now + session.msgIdCounter) & 0x7FFFFFFFFFFFFFFFn;
+    }
+
+    private nextSeqNo(session: SessionState, contentRelated: boolean): number {
+        session.lastSeqNo += contentRelated ? 2 : 1;
+        return session.lastSeqNo;
     }
 }
 
