@@ -63,12 +63,13 @@ export class TdlibJsonClient extends EventEmitter implements TdlibClient {
         }
 
         const wrapperPath = this.createWrapper();
+        const safeTdlibPath = path.resolve(tdlibPath);
 
         this.process = spawn(wrapperPath, [], {
             stdio: ['pipe', 'pipe', 'pipe'],
             env: {
                 ...process.env,
-                TDLIB_LIBRARY_PATH: tdlibPath
+                TDLIB_LIBRARY_PATH: safeTdlibPath
             }
         });
 
@@ -108,8 +109,8 @@ export class TdlibJsonClient extends EventEmitter implements TdlibClient {
         }
 
         try {
-            const { execSync } = require('child_process');
-            execSync(`gcc -o ${wrapperPath} ${sourcePath} -ldl -O2`, { stdio: 'inherit' });
+            const { execFileSync } = require('child_process');
+            execFileSync('gcc', ['-o', wrapperPath, sourcePath, '-ldl', '-O2'], { stdio: 'inherit' });
             console.log(`Wrapper compiled: ${wrapperPath}`);
         } catch (error) {
             console.error('Failed to compile wrapper:', error);

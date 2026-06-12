@@ -1,4 +1,4 @@
-import { Plugin, PluginContext, PluginMetadata } from '@ton-ai/core';
+import { BasePlugin } from '@ton-ai/core';
 import { TelegramBotComponents } from './components';
 import { TelegramBotSkills } from './skills';
 import {
@@ -169,29 +169,21 @@ export * from './components';
 export * from './skills';
 export * from './types';
 
-export class TelegramBotPlugin implements Plugin {
-    public metadata: PluginMetadata = {
+export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
+    readonly metadata = {
         name: 'telegram-bot-api',
         version: '0.1.0',
         description: 'Complete Telegram Bot API integration',
         author: 'TON AI Core Team',
-        dependencies: []
+        dependencies: [] as string[]
     };
 
-    private context!: PluginContext;
     private components!: TelegramBotComponents;
     private skills!: TelegramBotSkills;
-    private config!: TelegramBotConfig;
-    private initialized: boolean = false;
     private pollingTimeout?: NodeJS.Timeout;
 
-    async initialize(context: PluginContext): Promise<void> {
-        this.context = context;
-        this.config = context.config as TelegramBotConfig;
-
-        this.context.logger.info('Initializing Telegram Bot API plugin...');
-
-        const defaultConfig: TelegramBotConfig = {
+    protected defaults(): Partial<TelegramBotConfig> {
+        return {
             token: process.env.TELEGRAM_BOT_TOKEN || '',
             apiBaseUrl: 'https://api.telegram.org/bot',
             pollingTimeout: 30,
@@ -209,22 +201,18 @@ export class TelegramBotPlugin implements Plugin {
             retryOnError: true,
             maxRetries: 3
         };
-
-        this.config = { ...defaultConfig, ...this.config };
-
-        this.components = new TelegramBotComponents(this.context, this.config);
-        this.skills = new TelegramBotSkills(this.context, this.components, this.config);
-
-        if (this.config.token) {
-            this.skills.setToken(this.config.token);
-        }
-
-        this.initialized = true;
-        this.context.logger.info('Telegram Bot API plugin initialized');
     }
 
-    async onActivate(): Promise<void> {
-        this.context.logger.info('Telegram Bot API plugin activated');
+    protected async onInit() {
+        this.logger.info('Initializing Telegram Bot API plugin...');
+        this.components = new TelegramBotComponents(this.context, this.config);
+        this.skills = new TelegramBotSkills(this.context, this.components, this.config);
+        if (this.config.token) this.skills.setToken(this.config.token);
+        this.logger.info('Telegram Bot API plugin initialized');
+    }
+
+    async onActivate() {
+        this.logger.info('Telegram Bot API plugin activated');
 
         if (this.config.webhookUrl) {
             await this.setWebhook(this.config.webhookUrl, {
@@ -237,44 +225,36 @@ export class TelegramBotPlugin implements Plugin {
             this.startPolling();
         }
 
-        this.context.events.emit('telegram-bot:activated', {
+        this.events.emit('telegram-bot:activated', {
             username: this.components.bot.getUser()?.username,
             mode: this.config.webhookUrl ? 'webhook' : 'polling'
         });
     }
 
-    async onDeactivate(): Promise<void> {
-        this.context.logger.info('Telegram Bot API plugin deactivated');
-
+    async onDeactivate() {
+        this.logger.info('Telegram Bot API plugin deactivated');
         this.stopPolling();
-
         if (this.config.webhookUrl) {
             await this.deleteWebhook({ drop_pending_updates: true });
         }
-
-        this.context.events.emit('telegram-bot:deactivated');
+        this.events.emit('telegram-bot:deactivated');
     }
 
-    async shutdown(): Promise<void> {
-        this.context.logger.info('Telegram Bot API plugin shutting down...');
-
+    async shutdown() {
+        this.logger.info('Telegram Bot API plugin shutting down...');
         this.stopPolling();
-
         if (this.config.webhookUrl) {
             await this.deleteWebhook({ drop_pending_updates: true });
         }
-
         this.components.cleanup();
         this.initialized = false;
     }
 
-    async onConfigChange(newConfig: Record<string, any>): Promise<void> {
+    async onConfigChange(newConfig: Record<string, any>) {
         const oldWebhook = this.config.webhookUrl;
         const oldToken = this.config.token;
-
-        this.config = { ...this.config, ...newConfig } as TelegramBotConfig;
-        this.context.logger.info('Telegram Bot config updated');
-
+        this.config = { ...this.config, ...newConfig };
+        this.logger.info('Telegram Bot config updated');
         this.components.updateConfig(this.config);
 
         if (newConfig.token && newConfig.token !== oldToken) {
@@ -283,10 +263,7 @@ export class TelegramBotPlugin implements Plugin {
         }
 
         if (newConfig.webhookUrl !== oldWebhook) {
-            if (oldWebhook) {
-                await this.deleteWebhook({ drop_pending_updates: true });
-            }
-
+            if (oldWebhook) await this.deleteWebhook({ drop_pending_updates: true });
             if (this.config.webhookUrl) {
                 await this.setWebhook(this.config.webhookUrl, {
                     max_connections: this.config.webhookMaxConnections,
@@ -300,7 +277,7 @@ export class TelegramBotPlugin implements Plugin {
             }
         }
 
-        this.context.events.emit('telegram-bot:config:updated');
+        this.events.emit('telegram-bot:config:updated');
     }
 
     private startPolling(): void {
@@ -357,7 +334,7 @@ export class TelegramBotPlugin implements Plugin {
 
                 this.pollingTimeout = setTimeout(poll, 0);
             } catch (error) {
-                this.context.logger.error('Polling error:', error);
+                this.logger.error('Polling error:', error);
 
                 if (this.config.retryOnError) {
                     this.pollingTimeout = setTimeout(poll, 5000);
@@ -368,7 +345,7 @@ export class TelegramBotPlugin implements Plugin {
         this.pollingTimeout = setTimeout(poll, 0);
         this.components.updates.setPollTimeout(this.pollingTimeout);
 
-        this.context.logger.info('Polling started');
+        this.logger.info('Polling started');
     }
 
     private stopPolling(): void {
@@ -377,7 +354,7 @@ export class TelegramBotPlugin implements Plugin {
             this.pollingTimeout = undefined;
             this.components.updates.setPollTimeout(null);
             this.components.updates.stopPolling();
-            this.context.logger.info('Polling stopped');
+            this.logger.info('Polling stopped');
         }
     }
 
@@ -390,7 +367,7 @@ export class TelegramBotPlugin implements Plugin {
         this.checkInitialized();
         this.config.token = token;
         this.skills.setToken(token);
-        this.context.events.emit('telegram-bot:token:updated');
+        this.events.emit('telegram-bot:token:updated');
     }
 
     async getMe(): Promise<User> {
@@ -401,15 +378,15 @@ export class TelegramBotPlugin implements Plugin {
     async logOut(): Promise<boolean> {
         this.checkInitialized();
         const params: LogOutParams = {};
-        this.context.logger.debug('Logging out bot with params:', params);
+        this.logger.debug('Logging out bot with params:', params);
         const result = await this.skills.logOut();
 
         if (result) {
-            this.context.logger.info('Bot successfully logged out');
+            this.logger.info('Bot successfully logged out');
             this.components.bot.clear();
             this.components.updates.clear();
             this.initialized = false;
-            this.context.events.emit('telegram-bot:logged-out', { timestamp: Date.now() });
+            this.events.emit('telegram-bot:logged-out', { timestamp: Date.now() });
         }
 
         return result;
@@ -418,11 +395,11 @@ export class TelegramBotPlugin implements Plugin {
     async close(): Promise<boolean> {
         this.checkInitialized();
         const params: CloseParams = {};
-        this.context.logger.debug('Closing bot connection with params:', params);
+        this.logger.debug('Closing bot connection with params:', params);
         const result = await this.skills.close();
 
         if (result) {
-            this.context.logger.info('Bot connection successfully closed');
+            this.logger.info('Bot connection successfully closed');
             this.stopPolling();
 
             if (this.config.webhookUrl) {
@@ -431,7 +408,7 @@ export class TelegramBotPlugin implements Plugin {
 
             this.components.cleanup();
             this.initialized = false;
-            this.context.events.emit('telegram-bot:closed', { timestamp: Date.now() });
+            this.events.emit('telegram-bot:closed', { timestamp: Date.now() });
         }
 
         return result;
@@ -492,46 +469,46 @@ export class TelegramBotPlugin implements Plugin {
             const replyMarkup = params.reply_markup;
             if ('force_reply' in replyMarkup) {
                 const forceReply = replyMarkup as ForceReply;
-                this.context.logger.debug('Sending message with force reply:', forceReply.force_reply);
+                this.logger.debug('Sending message with force reply:', forceReply.force_reply);
                 if (forceReply.input_field_placeholder) {
-                    this.context.logger.debug('Force reply placeholder:', forceReply.input_field_placeholder);
+                    this.logger.debug('Force reply placeholder:', forceReply.input_field_placeholder);
                 }
             } else if ('inline_keyboard' in replyMarkup) {
                 const inlineKeyboard = replyMarkup as InlineKeyboardMarkup;
                 const buttonCount = inlineKeyboard.inline_keyboard.reduce((acc, row) => acc + row.length, 0);
-                this.context.logger.debug(`Sending message with inline keyboard containing ${buttonCount} buttons`);
+                this.logger.debug(`Sending message with inline keyboard containing ${buttonCount} buttons`);
 
                 for (const row of inlineKeyboard.inline_keyboard) {
                     for (const button of row) {
                         if (button.callback_data) {
-                            this.context.logger.debug(`Inline button with callback: ${button.text}`);
+                            this.logger.debug(`Inline button with callback: ${button.text}`);
                         } else if (button.url) {
-                            this.context.logger.debug(`Inline button with URL: ${button.text} -> ${button.url}`);
+                            this.logger.debug(`Inline button with URL: ${button.text} -> ${button.url}`);
                         }
                     }
                 }
             } else if ('keyboard' in replyMarkup) {
                 const replyKeyboard = replyMarkup as ReplyKeyboardMarkup;
                 const buttonCount = replyKeyboard.keyboard.reduce((acc, row) => acc + row.length, 0);
-                this.context.logger.debug(`Sending message with reply keyboard containing ${buttonCount} buttons`);
+                this.logger.debug(`Sending message with reply keyboard containing ${buttonCount} buttons`);
 
                 if (replyKeyboard.is_persistent) {
-                    this.context.logger.debug('Reply keyboard is persistent');
+                    this.logger.debug('Reply keyboard is persistent');
                 }
                 if (replyKeyboard.one_time_keyboard) {
-                    this.context.logger.debug('Reply keyboard is one-time');
+                    this.logger.debug('Reply keyboard is one-time');
                 }
                 if (replyKeyboard.resize_keyboard) {
-                    this.context.logger.debug('Reply keyboard is resized');
+                    this.logger.debug('Reply keyboard is resized');
                 }
                 if (replyKeyboard.input_field_placeholder) {
-                    this.context.logger.debug('Input field placeholder:', replyKeyboard.input_field_placeholder);
+                    this.logger.debug('Input field placeholder:', replyKeyboard.input_field_placeholder);
                 }
             } else if ('remove_keyboard' in replyMarkup) {
                 const removeKeyboard = replyMarkup as ReplyKeyboardRemove;
-                this.context.logger.debug('Removing reply keyboard');
+                this.logger.debug('Removing reply keyboard');
                 if (removeKeyboard.selective) {
-                    this.context.logger.debug('Keyboard removal is selective');
+                    this.logger.debug('Keyboard removal is selective');
                 }
             }
         }
@@ -578,16 +555,16 @@ export class TelegramBotPlugin implements Plugin {
         this.checkInitialized();
         const messages = await this.skills.sendMediaGroup(params);
 
-        this.context.logger.debug(`Sending media group with ${params.media.length} items`);
+        this.logger.debug(`Sending media group with ${params.media.length} items`);
 
         for (let i = 0; i < params.media.length; i++) {
             const media = params.media[i];
             switch (media.type) {
                 case 'photo':
                     const photoMedia = media as InputMediaPhoto;
-                    this.context.logger.debug(`Media ${i + 1}: Photo${photoMedia.has_spoiler ? ' with spoiler' : ''}`);
+                    this.logger.debug(`Media ${i + 1}: Photo${photoMedia.has_spoiler ? ' with spoiler' : ''}`);
                     if (photoMedia.caption) {
-                        this.context.logger.debug(`Photo caption: ${photoMedia.caption.substring(0, 50)}${photoMedia.caption.length > 50 ? '...' : ''}`);
+                        this.logger.debug(`Photo caption: ${photoMedia.caption.substring(0, 50)}${photoMedia.caption.length > 50 ? '...' : ''}`);
                     }
                     break;
                 case 'video':
@@ -602,9 +579,9 @@ export class TelegramBotPlugin implements Plugin {
                     if (videoMedia.has_spoiler) {
                         videoInfo += ` with spoiler`;
                     }
-                    this.context.logger.debug(`Media ${i + 1}: ${videoInfo}`);
+                    this.logger.debug(`Media ${i + 1}: ${videoInfo}`);
                     if (videoMedia.caption) {
-                        this.context.logger.debug(`Video caption: ${videoMedia.caption.substring(0, 50)}${videoMedia.caption.length > 50 ? '...' : ''}`);
+                        this.logger.debug(`Video caption: ${videoMedia.caption.substring(0, 50)}${videoMedia.caption.length > 50 ? '...' : ''}`);
                     }
                     break;
                 case 'animation':
@@ -619,9 +596,9 @@ export class TelegramBotPlugin implements Plugin {
                     if (animationMedia.has_spoiler) {
                         animInfo += ` with spoiler`;
                     }
-                    this.context.logger.debug(`Media ${i + 1}: ${animInfo}`);
+                    this.logger.debug(`Media ${i + 1}: ${animInfo}`);
                     if (animationMedia.caption) {
-                        this.context.logger.debug(`Animation caption: ${animationMedia.caption.substring(0, 50)}${animationMedia.caption.length > 50 ? '...' : ''}`);
+                        this.logger.debug(`Animation caption: ${animationMedia.caption.substring(0, 50)}${animationMedia.caption.length > 50 ? '...' : ''}`);
                     }
                     break;
                 case 'audio':
@@ -636,9 +613,9 @@ export class TelegramBotPlugin implements Plugin {
                     if (audioMedia.duration) {
                         audioInfo += ` (${audioMedia.duration}s)`;
                     }
-                    this.context.logger.debug(`Media ${i + 1}: ${audioInfo}`);
+                    this.logger.debug(`Media ${i + 1}: ${audioInfo}`);
                     if (audioMedia.caption) {
-                        this.context.logger.debug(`Audio caption: ${audioMedia.caption.substring(0, 50)}${audioMedia.caption.length > 50 ? '...' : ''}`);
+                        this.logger.debug(`Audio caption: ${audioMedia.caption.substring(0, 50)}${audioMedia.caption.length > 50 ? '...' : ''}`);
                     }
                     break;
                 case 'document':
@@ -647,15 +624,15 @@ export class TelegramBotPlugin implements Plugin {
                     if (documentMedia.disable_content_type_detection) {
                         docInfo += ` (content type detection disabled)`;
                     }
-                    this.context.logger.debug(`Media ${i + 1}: ${docInfo}`);
+                    this.logger.debug(`Media ${i + 1}: ${docInfo}`);
                     if (documentMedia.caption) {
-                        this.context.logger.debug(`Document caption: ${documentMedia.caption.substring(0, 50)}${documentMedia.caption.length > 50 ? '...' : ''}`);
+                        this.logger.debug(`Document caption: ${documentMedia.caption.substring(0, 50)}${documentMedia.caption.length > 50 ? '...' : ''}`);
                     }
                     break;
             }
         }
 
-        this.context.logger.debug(`Media group sent successfully, received ${messages.length} messages`);
+        this.logger.debug(`Media group sent successfully, received ${messages.length} messages`);
 
         return messages;
     }
@@ -806,14 +783,14 @@ export class TelegramBotPlugin implements Plugin {
             locationInfo += ` inline message ${params.inline_message_id}`;
         }
 
-        this.context.logger.debug(`Editing message media${locationInfo} with: ${mediaInfo}`);
+        this.logger.debug(`Editing message media${locationInfo} with: ${mediaInfo}`);
 
         const result = await this.skills.editMessageMedia(params);
 
         if (typeof result === 'object' && result) {
-            this.context.logger.debug(`Message media edited successfully`);
+            this.logger.debug(`Message media edited successfully`);
         } else {
-            this.context.logger.debug(`Message media edit operation completed: ${result}`);
+            this.logger.debug(`Message media edit operation completed: ${result}`);
         }
 
         return result;
@@ -928,14 +905,14 @@ export class TelegramBotPlugin implements Plugin {
             permissionChanges.push(`manage_topics: ${permissions.can_manage_topics}`);
         }
 
-        this.context.logger.debug(`Setting chat permissions for chat ${params.chat_id}: ${permissionChanges.join(', ')}`);
+        this.logger.debug(`Setting chat permissions for chat ${params.chat_id}: ${permissionChanges.join(', ')}`);
 
         const result = await this.skills.setChatPermissions(params);
 
         if (result) {
-            this.context.logger.info(`Chat permissions updated successfully for chat ${params.chat_id}`);
+            this.logger.info(`Chat permissions updated successfully for chat ${params.chat_id}`);
         } else {
-            this.context.logger.warn(`Failed to update chat permissions for chat ${params.chat_id}`);
+            this.logger.warn(`Failed to update chat permissions for chat ${params.chat_id}`);
         }
 
         return result;
@@ -1243,27 +1220,27 @@ export class TelegramBotPlugin implements Plugin {
             priceItems.push(`${labeledPrice.label}: ${labeledPrice.amount / 100} ${params.currency.toUpperCase()}`);
         }
 
-        this.context.logger.debug(`Sending invoice to chat ${params.chat_id}:`);
-        this.context.logger.debug(`Title: ${params.title}`);
-        this.context.logger.debug(`Description: ${params.description.substring(0, 100)}${params.description.length > 100 ? '...' : ''}`);
-        this.context.logger.debug(`Items: ${priceItems.join(', ')}`);
-        this.context.logger.debug(`Total: ${totalAmount / 100} ${params.currency.toUpperCase()}`);
+        this.logger.debug(`Sending invoice to chat ${params.chat_id}:`);
+        this.logger.debug(`Title: ${params.title}`);
+        this.logger.debug(`Description: ${params.description.substring(0, 100)}${params.description.length > 100 ? '...' : ''}`);
+        this.logger.debug(`Items: ${priceItems.join(', ')}`);
+        this.logger.debug(`Total: ${totalAmount / 100} ${params.currency.toUpperCase()}`);
 
         if (params.max_tip_amount) {
-            this.context.logger.debug(`Max tip amount: ${params.max_tip_amount / 100} ${params.currency.toUpperCase()}`);
+            this.logger.debug(`Max tip amount: ${params.max_tip_amount / 100} ${params.currency.toUpperCase()}`);
         }
         if (params.suggested_tip_amounts && params.suggested_tip_amounts.length > 0) {
             const tips = params.suggested_tip_amounts.map(t => `${t / 100} ${params.currency.toUpperCase()}`).join(', ');
-            this.context.logger.debug(`Suggested tips: ${tips}`);
+            this.logger.debug(`Suggested tips: ${tips}`);
         }
-        if (params.need_name) this.context.logger.debug('Customer name required');
-        if (params.need_phone_number) this.context.logger.debug('Phone number required');
-        if (params.need_email) this.context.logger.debug('Email required');
-        if (params.need_shipping_address) this.context.logger.debug('Shipping address required');
+        if (params.need_name) this.logger.debug('Customer name required');
+        if (params.need_phone_number) this.logger.debug('Phone number required');
+        if (params.need_email) this.logger.debug('Email required');
+        if (params.need_shipping_address) this.logger.debug('Shipping address required');
 
         const message = await this.skills.sendInvoice(params);
 
-        this.context.logger.info(`Invoice sent successfully, message ID: ${message.message_id}`);
+        this.logger.info(`Invoice sent successfully, message ID: ${message.message_id}`);
 
         return message;
     }
@@ -1280,31 +1257,31 @@ export class TelegramBotPlugin implements Plugin {
             priceItems.push(`${labeledPrice.label}: ${labeledPrice.amount / 100} ${params.currency.toUpperCase()}`);
         }
 
-        this.context.logger.debug(`Creating invoice link:`);
-        this.context.logger.debug(`Title: ${params.title}`);
-        this.context.logger.debug(`Description: ${params.description.substring(0, 100)}${params.description.length > 100 ? '...' : ''}`);
-        this.context.logger.debug(`Items: ${priceItems.join(', ')}`);
-        this.context.logger.debug(`Total: ${totalAmount / 100} ${params.currency.toUpperCase()}`);
-        this.context.logger.debug(`Payload: ${params.payload}`);
+        this.logger.debug(`Creating invoice link:`);
+        this.logger.debug(`Title: ${params.title}`);
+        this.logger.debug(`Description: ${params.description.substring(0, 100)}${params.description.length > 100 ? '...' : ''}`);
+        this.logger.debug(`Items: ${priceItems.join(', ')}`);
+        this.logger.debug(`Total: ${totalAmount / 100} ${params.currency.toUpperCase()}`);
+        this.logger.debug(`Payload: ${params.payload}`);
 
         if (params.max_tip_amount) {
-            this.context.logger.debug(`Max tip amount: ${params.max_tip_amount / 100} ${params.currency.toUpperCase()}`);
+            this.logger.debug(`Max tip amount: ${params.max_tip_amount / 100} ${params.currency.toUpperCase()}`);
         }
         if (params.suggested_tip_amounts && params.suggested_tip_amounts.length > 0) {
             const tips = params.suggested_tip_amounts.map(t => `${t / 100} ${params.currency.toUpperCase()}`).join(', ');
-            this.context.logger.debug(`Suggested tips: ${tips}`);
+            this.logger.debug(`Suggested tips: ${tips}`);
         }
         if (params.provider_token) {
-            this.context.logger.debug(`Provider token: ${params.provider_token.substring(0, 5)}...`);
+            this.logger.debug(`Provider token: ${params.provider_token.substring(0, 5)}...`);
         }
-        if (params.need_name) this.context.logger.debug('Customer name required');
-        if (params.need_phone_number) this.context.logger.debug('Phone number required');
-        if (params.need_email) this.context.logger.debug('Email required');
-        if (params.need_shipping_address) this.context.logger.debug('Shipping address required');
+        if (params.need_name) this.logger.debug('Customer name required');
+        if (params.need_phone_number) this.logger.debug('Phone number required');
+        if (params.need_email) this.logger.debug('Email required');
+        if (params.need_shipping_address) this.logger.debug('Shipping address required');
 
         const invoiceLink = await this.skills.createInvoiceLink(params);
 
-        this.context.logger.info(`Invoice link created successfully: ${invoiceLink}`);
+        this.logger.info(`Invoice link created successfully: ${invoiceLink}`);
 
         return invoiceLink;
     }
@@ -1312,11 +1289,11 @@ export class TelegramBotPlugin implements Plugin {
     async answerShippingQuery(params: AnswerShippingQueryParams): Promise<boolean> {
         this.checkInitialized();
 
-        this.context.logger.debug(`Answering shipping query: ${params.shipping_query_id}`);
-        this.context.logger.debug(`OK: ${params.ok}`);
+        this.logger.debug(`Answering shipping query: ${params.shipping_query_id}`);
+        this.logger.debug(`OK: ${params.ok}`);
 
         if (params.shipping_options) {
-            this.context.logger.debug(`Providing ${params.shipping_options.length} shipping options:`);
+            this.logger.debug(`Providing ${params.shipping_options.length} shipping options:`);
 
             for (let i = 0; i < params.shipping_options.length; i++) {
                 const option = params.shipping_options[i];
@@ -1330,22 +1307,22 @@ export class TelegramBotPlugin implements Plugin {
                     priceDetails.push(`${price.label}: ${price.amount / 100}`);
                 }
 
-                this.context.logger.debug(`  Option ${i + 1}: ${shippingOption.id} - ${shippingOption.title}`);
-                this.context.logger.debug(`    Prices: ${priceDetails.join(', ')}`);
-                this.context.logger.debug(`    Total: ${optionTotal / 100}`);
+                this.logger.debug(`  Option ${i + 1}: ${shippingOption.id} - ${shippingOption.title}`);
+                this.logger.debug(`    Prices: ${priceDetails.join(', ')}`);
+                this.logger.debug(`    Total: ${optionTotal / 100}`);
             }
         }
 
         if (params.error_message) {
-            this.context.logger.debug(`Error message: ${params.error_message}`);
+            this.logger.debug(`Error message: ${params.error_message}`);
         }
 
         const result = await this.skills.answerShippingQuery(params);
 
         if (result) {
-            this.context.logger.info(`Shipping query ${params.shipping_query_id} answered successfully`);
+            this.logger.info(`Shipping query ${params.shipping_query_id} answered successfully`);
         } else {
-            this.context.logger.warn(`Failed to answer shipping query ${params.shipping_query_id}`);
+            this.logger.warn(`Failed to answer shipping query ${params.shipping_query_id}`);
         }
 
         return result;
@@ -1369,12 +1346,12 @@ export class TelegramBotPlugin implements Plugin {
     async sendPaidMedia(params: SendPaidMediaParams): Promise<Message> {
         this.checkInitialized();
 
-        this.context.logger.debug(`Sending paid media to chat ${params.chat_id}:`);
-        this.context.logger.debug(`Star count: ${params.star_count}`);
-        this.context.logger.debug(`Media items: ${params.media.length}`);
+        this.logger.debug(`Sending paid media to chat ${params.chat_id}:`);
+        this.logger.debug(`Star count: ${params.star_count}`);
+        this.logger.debug(`Media items: ${params.media.length}`);
 
         if (params.payload) {
-            this.context.logger.debug(`Payload: ${params.payload}`);
+            this.logger.debug(`Payload: ${params.payload}`);
         }
 
         for (let i = 0; i < params.media.length; i++) {
@@ -1389,7 +1366,7 @@ export class TelegramBotPlugin implements Plugin {
                     if (photoMedia.caption) {
                         photoInfo += ` - caption: ${photoMedia.caption.substring(0, 50)}${photoMedia.caption.length > 50 ? '...' : ''}`;
                     }
-                    this.context.logger.debug(`  ${photoInfo}`);
+                    this.logger.debug(`  ${photoInfo}`);
                     break;
                 case 'video':
                     const videoMedia = media as InputMediaVideo;
@@ -1406,7 +1383,7 @@ export class TelegramBotPlugin implements Plugin {
                     if (videoMedia.caption) {
                         videoInfo += ` - caption: ${videoMedia.caption.substring(0, 50)}${videoMedia.caption.length > 50 ? '...' : ''}`;
                     }
-                    this.context.logger.debug(`  ${videoInfo}`);
+                    this.logger.debug(`  ${videoInfo}`);
                     break;
                 case 'animation':
                     const animationMedia = media as InputMediaAnimation;
@@ -1423,7 +1400,7 @@ export class TelegramBotPlugin implements Plugin {
                     if (animationMedia.caption) {
                         animInfo += ` - caption: ${animationMedia.caption.substring(0, 50)}${animationMedia.caption.length > 50 ? '...' : ''}`;
                     }
-                    this.context.logger.debug(`  ${animInfo}`);
+                    this.logger.debug(`  ${animInfo}`);
                     break;
                 case 'audio':
                     const audioMedia = media as InputMediaAudio;
@@ -1440,7 +1417,7 @@ export class TelegramBotPlugin implements Plugin {
                     if (audioMedia.caption) {
                         audioInfo += ` - caption: ${audioMedia.caption.substring(0, 50)}${audioMedia.caption.length > 50 ? '...' : ''}`;
                     }
-                    this.context.logger.debug(`  ${audioInfo}`);
+                    this.logger.debug(`  ${audioInfo}`);
                     break;
                 case 'document':
                     const documentMedia = media as InputMediaDocument;
@@ -1451,21 +1428,21 @@ export class TelegramBotPlugin implements Plugin {
                     if (documentMedia.caption) {
                         docInfo += ` - caption: ${documentMedia.caption.substring(0, 50)}${documentMedia.caption.length > 50 ? '...' : ''}`;
                     }
-                    this.context.logger.debug(`  ${docInfo}`);
+                    this.logger.debug(`  ${docInfo}`);
                     break;
             }
         }
 
         if (params.caption) {
-            this.context.logger.debug(`Global caption: ${params.caption.substring(0, 100)}${params.caption.length > 100 ? '...' : ''}`);
+            this.logger.debug(`Global caption: ${params.caption.substring(0, 100)}${params.caption.length > 100 ? '...' : ''}`);
         }
         if (params.show_caption_above_media) {
-            this.context.logger.debug('Caption shown above media');
+            this.logger.debug('Caption shown above media');
         }
 
         const message = await this.skills.sendPaidMedia(params);
 
-        this.context.logger.info(`Paid media sent successfully, message ID: ${message.message_id}`);
+        this.logger.info(`Paid media sent successfully, message ID: ${message.message_id}`);
 
         return message;
     }
@@ -1773,12 +1750,6 @@ export class TelegramBotPlugin implements Plugin {
 
     isReady(): boolean {
         return this.skills.isReady();
-    }
-
-    private checkInitialized(): void {
-        if (!this.initialized) {
-            throw new Error('Plugin not initialized. Call initialize() first.');
-        }
     }
 
     async setChatMemberTag(params: SetChatMemberTagParams): Promise<boolean> {

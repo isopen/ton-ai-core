@@ -1,4 +1,4 @@
-import { Plugin, PluginContext, PluginMetadata } from '@ton-ai/core';
+import { BasePlugin } from '@ton-ai/core';
 import { OpenRouterComponents } from './components';
 import { OpenRouterSkills } from './skills';
 import {
@@ -41,95 +41,66 @@ export * from './components';
 export * from './skills';
 export * from './types';
 
-export class OpenRouterPlugin implements Plugin {
-    public metadata: PluginMetadata = {
+export class OpenRouterPlugin extends BasePlugin<OpenRouterConfig> {
+    readonly metadata = {
         name: 'openrouter',
         version: '0.1.0',
         description: 'Complete OpenRouter API integration',
         author: 'TON AI Core Team',
-        dependencies: []
+        dependencies: [] as string[]
     };
 
-    private context!: PluginContext;
     private components!: OpenRouterComponents;
     private skills!: OpenRouterSkills;
-    private config!: OpenRouterConfig;
-    private initialized: boolean = false;
     private creditMonitorInterval?: NodeJS.Timeout;
 
-    async initialize(context: PluginContext): Promise<void> {
-        this.context = context;
-        this.config = context.config as OpenRouterConfig;
-
-        this.context.logger.info('Initializing OpenRouter plugin...');
-
-        this.config = {
+    protected defaults() {
+        return {
             apiKey: process.env.OPENROUTER_API_KEY || '',
             baseUrl: 'https://openrouter.ai/api/v1',
             defaultModel: 'arcee-ai/trinity-large-preview:free',
             appIdentifier: 'https://ton-ai.core',
             appDisplayName: 'TON AI Core',
             maxHistory: 100,
-            monitorInterval: 60000,
-            ...this.config
+            monitorInterval: 60000
         };
+    }
 
+    protected async onInit() {
+        this.logger.info('Initializing OpenRouter plugin...');
         this.components = new OpenRouterComponents(this.context, this.config);
         this.skills = new OpenRouterSkills(this.context, this.components, this.config);
-
-        if (this.config.apiKey) {
-            await this.skills.waitForReady();
-        }
-
-        this.initialized = true;
-        this.context.logger.info('OpenRouter plugin initialized');
+        if (this.config.apiKey) await this.skills.waitForReady();
+        this.logger.info('OpenRouter plugin initialized');
     }
 
-    async onActivate(): Promise<void> {
-        this.context.logger.info('OpenRouter plugin activated');
-
+    async onActivate() {
+        this.logger.info('OpenRouter plugin activated');
         this.startCreditMonitoring();
-
-        this.skills.listModels().catch(error => {
-            this.context.logger.debug('Failed to preload models:', error);
-        });
-
-        this.context.events.emit('openrouter:activated', {
-            defaultModel: this.config.defaultModel,
-            baseUrl: this.config.baseUrl
-        });
+        this.skills.listModels().catch(error => this.logger.debug('Failed to preload models:', error));
+        this.events.emit('openrouter:activated', { defaultModel: this.config.defaultModel, baseUrl: this.config.baseUrl });
     }
 
-    async onDeactivate(): Promise<void> {
-        this.context.logger.info('OpenRouter plugin deactivated');
-
+    async onDeactivate() {
+        this.logger.info('OpenRouter plugin deactivated');
         this.stopCreditMonitoring();
-        this.context.events.emit('openrouter:deactivated');
+        this.events.emit('openrouter:deactivated');
     }
 
-    async shutdown(): Promise<void> {
-        this.context.logger.info('OpenRouter plugin shutting down...');
-
+    async shutdown() {
+        this.logger.info('OpenRouter plugin shutting down...');
         this.stopCreditMonitoring();
         this.components.cleanup();
         this.initialized = false;
     }
 
-    async onConfigChange(newConfig: Record<string, any>): Promise<void> {
-        this.config = { ...this.config, ...newConfig } as OpenRouterConfig;
-        this.context.logger.info('OpenRouter config updated');
-
+    async onConfigChange(newConfig: Record<string, any>) {
+        this.config = { ...this.config, ...newConfig };
+        this.logger.info('OpenRouter config updated');
         this.components.updateConfig(this.config);
-
-        if (this.config.apiKey) {
-            this.skills.setApiKey(this.config.apiKey);
-        }
-
-        if (newConfig.monitorInterval) {
-            this.restartCreditMonitoring();
-        }
-
-        this.context.events.emit('openrouter:config:updated', this.config);
+        if (this.config.apiKey) this.skills.setApiKey(this.config.apiKey);
+        if (newConfig.monitorInterval) this.restartCreditMonitoring();
+        this.events.emit('openrouter:config:updated', this.config);
     }
 
     private startCreditMonitoring(): void {
@@ -146,14 +117,14 @@ export class OpenRouterPlugin implements Plugin {
             this.config.monitorInterval
         );
 
-        this.context.logger.info(`Credit monitoring started (interval: ${this.config.monitorInterval}ms)`);
+        this.logger.info(`Credit monitoring started (interval: ${this.config.monitorInterval}ms)`);
     }
 
     private stopCreditMonitoring(): void {
         if (this.creditMonitorInterval) {
             clearInterval(this.creditMonitorInterval);
             this.creditMonitorInterval = undefined;
-            this.context.logger.info('Credit monitoring stopped');
+            this.logger.info('Credit monitoring stopped');
         }
     }
 
@@ -168,15 +139,15 @@ export class OpenRouterPlugin implements Plugin {
             const remaining = response.data.total_credits - response.data.total_usage;
 
             if (remaining < 1.0) {
-                this.context.events.emit('openrouter:credits:low', {
+                this.events.emit('openrouter:credits:low', {
                     remaining,
                     total: response.data.total_credits,
                     usage: response.data.total_usage
                 });
-                this.context.logger.warn(`Low credits: ${remaining.toFixed(2)} remaining`);
+                this.logger.warn(`Low credits: ${remaining.toFixed(2)} remaining`);
             }
         } catch (error) {
-            this.context.logger.debug('Error monitoring credits:', error);
+            this.logger.debug('Error monitoring credits:', error);
         }
     }
 
@@ -189,7 +160,7 @@ export class OpenRouterPlugin implements Plugin {
         this.checkInitialized();
         this.config.apiKey = apiKey;
         this.skills.setApiKey(apiKey);
-        this.context.events.emit('openrouter:apiKey:updated');
+        this.events.emit('openrouter:apiKey:updated');
     }
 
     async analyzeImage(imagePath: string, options?: VisionAnalysisOptions): Promise<VisionAnalysisResult> {
@@ -425,7 +396,7 @@ export class OpenRouterPlugin implements Plugin {
             this.components.history.addHistory(history);
         }
 
-        this.context.events.emit('openrouter:chat:completed', {
+        this.events.emit('openrouter:chat:completed', {
             id: response.id,
             model: response.model,
             tokens: response.usage?.total_tokens
@@ -508,40 +479,34 @@ export class OpenRouterPlugin implements Plugin {
     }
 
     onResponseCompleted(callback: (response: OpenResponsesNonStreamingResponse) => void): void {
-        this.context.events.on('openrouter:response:completed', callback);
+        this.events.on('openrouter:response:completed', callback);
     }
 
     offResponseCompleted(callback: (response: OpenResponsesNonStreamingResponse) => void): void {
-        this.context.events.off('openrouter:response:completed', callback);
+        this.events.off('openrouter:response:completed', callback);
     }
 
     onChatCompleted(callback: (info: { id: string; model: string; tokens?: number }) => void): void {
-        this.context.events.on('openrouter:chat:completed', callback);
+        this.events.on('openrouter:chat:completed', callback);
     }
 
     offChatCompleted(callback: (info: { id: string; model: string; tokens?: number }) => void): void {
-        this.context.events.off('openrouter:chat:completed', callback);
+        this.events.off('openrouter:chat:completed', callback);
     }
 
     onCreditsLow(callback: (info: { remaining: number; total: number; usage: number }) => void): void {
-        this.context.events.on('openrouter:credits:low', callback);
+        this.events.on('openrouter:credits:low', callback);
     }
 
     offCreditsLow(callback: (info: { remaining: number; total: number; usage: number }) => void): void {
-        this.context.events.off('openrouter:credits:low', callback);
+        this.events.off('openrouter:credits:low', callback);
     }
 
     onApiKeyUpdated(callback: () => void): void {
-        this.context.events.on('openrouter:apiKey:updated', callback);
+        this.events.on('openrouter:apiKey:updated', callback);
     }
 
     offApiKeyUpdated(callback: () => void): void {
-        this.context.events.off('openrouter:apiKey:updated', callback);
-    }
-
-    private checkInitialized(): void {
-        if (!this.initialized) {
-            throw new Error('Plugin not initialized. Call initialize() first.');
-        }
+        this.events.off('openrouter:apiKey:updated', callback);
     }
 }

@@ -62,7 +62,7 @@ export async function rsaVerify(
 ): Promise<boolean> {
   if (typeof process !== 'undefined' && process.versions?.node) {
     const crypto = require('crypto');
-    const verifier = crypto.createVerify('RSA-SHA1');
+    const verifier = crypto.createVerify('RSA-SHA256');
     verifier.update(data);
     return verifier.verify(publicKeyPem, signature);
   }

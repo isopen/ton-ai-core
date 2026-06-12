@@ -182,9 +182,6 @@ export class MCPClient extends EventEmitter {
         'Content-Type': 'application/json'
       };
 
-      if (this.config.mnemonic) {
-        headers['MNEMONIC'] = this.config.mnemonic;
-      }
       if (this.config.network) {
         headers['NETWORK'] = this.config.network;
       }

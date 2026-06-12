@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { randomBytes } from 'crypto';
 import { PluginManager } from '../plugin';
 import { Plugin } from '../plugin/plugin-interface';
 import { AGENT_EVENTS, PLUGIN_EVENTS } from '../events';
@@ -39,7 +40,7 @@ export abstract class BaseAgentCore<TConfig extends BaseAgentConfig = BaseAgentC
       this.logger.debug = () => { };
     }
 
-    this.id = config.id || `agent-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+    this.id = config.id || `agent-${Date.now()}-${randomBytes(8).toString('hex')}`;
     this.name = config.name || this.id;
     this.config = config;
     this.plugins = new PluginManager(config.mcp, config.plugins);

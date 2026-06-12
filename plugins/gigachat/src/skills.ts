@@ -65,7 +65,6 @@ export class GigaChatSkills {
         return new Promise((resolve, reject) => {
             const req = https.request({
                 ...options,
-                rejectUnauthorized: false,
                 headers: {
                     ...options.headers
                 }

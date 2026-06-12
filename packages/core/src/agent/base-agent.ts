@@ -125,11 +125,14 @@ export abstract class BaseAgent extends BaseAgentCore<AgentConfig> {
 
   async sendTON(toAddress: string, amount: string, comment?: string): Promise<SendTONResponse> {
     if (!this.initialized) throw new Error('Agent not initialized');
+    this.validateAddress(toAddress, 'toAddress');
     return this.mcp.sendTON(toAddress, amount, comment);
   }
 
   async sendJetton(toAddress: string, jettonAddress: string, amount: string, comment?: string): Promise<SendJettonResponse> {
     if (!this.initialized) throw new Error('Agent not initialized');
+    this.validateAddress(toAddress, 'toAddress');
+    this.validateAddress(jettonAddress, 'jettonAddress');
     return this.mcp.sendJetton(toAddress, jettonAddress, amount, comment);
   }
 
@@ -165,6 +168,8 @@ export abstract class BaseAgent extends BaseAgentCore<AgentConfig> {
 
   async sendNFT(nftAddress: string, toAddress: string, comment?: string): Promise<SendNFTResponse> {
     if (!this.initialized) throw new Error('Agent not initialized');
+    this.validateAddress(nftAddress, 'nftAddress');
+    this.validateAddress(toAddress, 'toAddress');
     return this.mcp.sendNFT(nftAddress, toAddress, comment);
   }
 
@@ -180,6 +185,19 @@ export abstract class BaseAgent extends BaseAgentCore<AgentConfig> {
 
   getWalletAddress(): string | undefined {
     return this.mcp.getWalletAddress();
+  }
+
+  private validateAddress(address: string, fieldName: string): void {
+    if (!address || typeof address !== 'string') {
+      throw new Error(`Invalid ${fieldName}: address is required`);
+    }
+    const trimmed = address.trim();
+    if (trimmed.length < 48 || trimmed.length > 64) {
+      throw new Error(`Invalid ${fieldName}: address length must be 48-64 characters`);
+    }
+    if (!/^[A-Za-z0-9_-]+$/.test(trimmed)) {
+      throw new Error(`Invalid ${fieldName}: address contains invalid characters`);
+    }
   }
 
   getStatus() {

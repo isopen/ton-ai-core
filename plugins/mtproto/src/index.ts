@@ -1,4 +1,4 @@
-import { Plugin, PluginContext, PluginMetadata } from '@ton-ai/core';
+import { BasePlugin } from '@ton-ai/core';
 import { CryptoComponents } from './components';
 import { MTCryptoServices } from './skills';
 import {
@@ -13,65 +13,54 @@ export * from './types';
 export * from './components';
 export * from './skills';
 
-export class MTProtoCryptoPlugin implements Plugin {
-    public metadata: PluginMetadata = {
+export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
+    readonly metadata = {
         name: 'mtproto',
         version: '0.2.0',
         description: 'MTProto 2.0 cryptographic library',
         author: 'TON AI Core Team',
-        dependencies: []
+        dependencies: [] as string[]
     };
 
-    private context!: PluginContext;
     private components!: CryptoComponents;
     public skills!: MTCryptoServices;
-    private config!: MTCryptoConfig;
-    private initialized: boolean = false;
 
-    async initialize(context: PluginContext): Promise<void> {
-        this.context = context;
-        const userConfig = context.config as MTCryptoConfig;
-        this.context.logger.info('Initializing MTProto Crypto plugin...');
-        this.config = {
-            mode: userConfig.mode || 'client',
-            testMode: userConfig.testMode || false
-        };
+    protected defaults() {
+        return { mode: 'client' as const, testMode: false };
+    }
+
+    protected async onInit() {
+        this.logger.info('Initializing MTProto Crypto plugin...');
         this.components = new CryptoComponents(this.context, this.config);
         this.skills = new MTCryptoServices(this.context, this.components, this.config);
-        this.initialized = true;
-        this.context.logger.info('MTProto Crypto plugin initialized');
+        this.logger.info('MTProto Crypto plugin initialized');
     }
 
-    async onActivate(): Promise<void> {
-        this.context.logger.info('MTProto Crypto plugin activated');
-        try {
-            await this.components.initialize();
-            this.skills.setReady(true);
-            this.context.logger.info('MTProto Crypto ready');
-            this.context.events.emit('mtproto:activated', { mode: this.config.mode });
-        } catch (error) {
-            this.context.logger.error('Failed to activate:', error);
-            throw error;
-        }
+    async onActivate() {
+        this.logger.info('MTProto Crypto plugin activated');
+        await this.components.initialize();
+        this.skills.setReady(true);
+        this.logger.info('MTProto Crypto ready');
+        this.events.emit('mtproto:activated', { mode: this.config.mode });
     }
 
-    async onDeactivate(): Promise<void> {
-        this.context.logger.info('MTProto Crypto plugin deactivated');
+    async onDeactivate() {
+        this.logger.info('MTProto Crypto plugin deactivated');
         await this.components.cleanup();
         this.skills.setReady(false);
-        this.context.events.emit('mtproto:deactivated');
+        this.events.emit('mtproto:deactivated');
     }
 
-    async shutdown(): Promise<void> {
+    async shutdown() {
         await this.components.cleanup();
         this.initialized = false;
-        this.context.logger.info('MTProto Crypto plugin shut down');
+        this.logger.info('MTProto Crypto plugin shut down');
     }
 
-    async onConfigChange(newConfig: Record<string, any>): Promise<void> {
+    async onConfigChange(newConfig: Record<string, any>) {
         this.config = { ...this.config, ...newConfig };
-        this.context.logger.info('MTProto Crypto config updated');
-        this.context.events.emit('mtproto:config:updated', {});
+        this.logger.info('MTProto Crypto config updated');
+        this.events.emit('mtproto:config:updated', {});
     }
 
     generateDHKeys(): DHKeys {
@@ -197,11 +186,5 @@ export class MTProtoCryptoPlugin implements Plugin {
     async decryptForSession(peerId: string, encrypted: EncryptedData): Promise<DecryptedData> {
         this.checkInitialized();
         return this.skills.decryptForSession(peerId, encrypted);
-    }
-
-    private checkInitialized(): void {
-        if (!this.initialized) {
-            throw new Error('Plugin not initialized');
-        }
     }
 }

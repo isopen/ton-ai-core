@@ -13,7 +13,9 @@ export {
   Plugin,
   PluginContext,
   PluginMetadata,
-  PluginManager
+  PluginManager,
+  BasePlugin,
+  BasePluginConfig
 } from './plugin';
 
 export {

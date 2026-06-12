@@ -1,4 +1,4 @@
-import { Plugin, PluginContext, PluginMetadata } from '@ton-ai/core';
+import { BasePlugin } from '@ton-ai/core';
 import { WalletComponents } from './components';
 import { WalletSkills } from './skills';
 import { 
@@ -23,93 +23,63 @@ export * from './components';
 export * from './skills';
 export * from './types';
 
-export class WalletManagerPlugin implements Plugin {
-  public metadata: PluginMetadata = {
+export class WalletManagerPlugin extends BasePlugin<WalletConfig> {
+  readonly metadata = {
     name: 'wallet-manager',
     version: '0.1.0',
     description: 'TON wallet management plugin with transaction monitoring',
     author: 'TON AI Core Team',
-    dependencies: []
+    dependencies: [] as string[]
   };
 
-  private context!: PluginContext;
   private components!: WalletComponents;
   private skills!: WalletSkills;
-  private config!: WalletConfig;
-  private initialized: boolean = false;
   private monitorInterval?: NodeJS.Timeout;
-  private lastTxHash: string = '';
+  private lastTxHash = '';
 
-  async initialize(context: PluginContext): Promise<void> {
-    this.context = context;
-    this.config = context.config as WalletConfig;
+  protected defaults() {
+    return { network: 'testnet' as const, autoConnect: true, monitorInterval: 5000, maxTransactions: 20 };
+  }
 
-    this.context.logger.info('Initializing WalletManager plugin...');
-
-    this.config = {
-      network: 'testnet',
-      autoConnect: true,
-      monitorInterval: 5000,
-      maxTransactions: 20,
-      ...this.config
-    };
-
+  protected async onInit() {
+    this.logger.info('Initializing WalletManager plugin...');
     this.components = new WalletComponents(this.context, this.config);
-    this.skills = new WalletSkills(this.context, this.context.mcp!, this.components);
-
-    if (this.config.autoConnect) {
-      await this.skills.waitForReady();
-    }
-
-    this.initialized = true;
-    this.context.logger.info('WalletManager plugin initialized');
+    this.skills = new WalletSkills(this.context, this.mcp!, this.components);
+    if (this.config.autoConnect) await this.skills.waitForReady();
+    this.logger.info('WalletManager plugin initialized');
   }
 
-  async onActivate(): Promise<void> {
-    this.context.logger.info('WalletManager plugin activated');
-
+  async onActivate() {
+    this.logger.info('WalletManager plugin activated');
     const address = this.skills.getWalletAddress();
-
     this.startTransactionMonitoring();
-
-    this.context.events.emit('wallet:activated', { 
-      address,
-      network: this.config.network 
-    });
+    this.events.emit('wallet:activated', { address, network: this.config.network });
   }
 
-  async onDeactivate(): Promise<void> {
-    this.context.logger.info('WalletManager plugin deactivated');
-
+  async onDeactivate() {
+    this.logger.info('WalletManager plugin deactivated');
     this.stopTransactionMonitoring();
-
-    this.context.events.emit('wallet:deactivated');
+    this.events.emit('wallet:deactivated');
   }
 
-  async shutdown(): Promise<void> {
-    this.context.logger.info('WalletManager plugin shutting down...');
-
+  async shutdown() {
+    this.logger.info('WalletManager plugin shutting down...');
     this.stopTransactionMonitoring();
     this.components.cleanup();
     this.initialized = false;
   }
 
-  async onConfigChange(newConfig: Record<string, any>): Promise<void> {
-    this.config = { ...this.config, ...newConfig } as WalletConfig;
-    this.context.logger.info('WalletManager config updated', this.config);
-
+  async onConfigChange(newConfig: Record<string, any>) {
+    this.config = { ...this.config, ...newConfig };
+    this.logger.info('WalletManager config updated', this.config);
     this.components.updateConfig(this.config);
-
-    if (newConfig.monitorInterval) {
-      this.restartTransactionMonitoring();
-    }
-
-    this.context.events.emit('wallet:config:updated', this.config);
+    if (newConfig.monitorInterval) this.restartTransactionMonitoring();
+    this.events.emit('wallet:config:updated', this.config);
   }
 
   private startTransactionMonitoring(): void {
     if (!this.config.monitorInterval || this.config.monitorInterval <= 0) {
-      this.context.logger.info('Transaction monitoring is disabled');
+      this.logger.info('Transaction monitoring is disabled');
       return;
     }
 
@@ -122,14 +92,14 @@ export class WalletManagerPlugin implements Plugin {
       this.config.monitorInterval
     );
 
-    this.context.logger.info(`Transaction monitoring started (interval: ${this.config.monitorInterval}ms)`);
+    this.logger.info(`Transaction monitoring started (interval: ${this.config.monitorInterval}ms)`);
   }
 
   private stopTransactionMonitoring(): void {
     if (this.monitorInterval) {
       clearInterval(this.monitorInterval);
       this.monitorInterval = undefined;
-      this.context.logger.info('Transaction monitoring stopped');
+      this.logger.info('Transaction monitoring stopped');
     }
   }
 
@@ -149,7 +119,7 @@ export class WalletManagerPlugin implements Plugin {
         }
       }
     } catch (error) {
-      this.context.logger.debug('Error monitoring transactions:', error);
+      this.logger.debug('Error monitoring transactions:', error);
     }
   }
 
@@ -182,7 +152,7 @@ export class WalletManagerPlugin implements Plugin {
     };
 
     this.components.addToHistory(event);
-    this.context.events.emit('wallet:transaction:received', event);
+    this.events.emit('wallet:transaction:received', event);
   }
 
   async waitForReady(timeout?: number): Promise<void> {
@@ -219,7 +189,7 @@ export class WalletManagerPlugin implements Plugin {
       params.comment
     );
 
-    this.context.events.emit('wallet:transaction:sent', {
+    this.events.emit('wallet:transaction:sent', {
       hash: result.hash,
       to: params.to,
       amount: params.amount,
@@ -239,7 +209,7 @@ export class WalletManagerPlugin implements Plugin {
       params.comment
     );
 
-    this.context.events.emit('wallet:transaction:sent', {
+    this.events.emit('wallet:transaction:sent', {
       hash: result.hash,
       to: params.to,
       amount: params.amount,
@@ -280,7 +250,7 @@ export class WalletManagerPlugin implements Plugin {
       params.slippageBps
     );
 
-    this.context.events.emit('wallet:swap:executed', {
+    this.events.emit('wallet:swap:executed', {
       hash: result.hash,
       fromToken: params.fromToken,
       toToken: params.toToken,
@@ -313,7 +283,7 @@ export class WalletManagerPlugin implements Plugin {
       params.comment
     );
 
-    this.context.events.emit('wallet:nft:sent', {
+    this.events.emit('wallet:nft:sent', {
       hash: result.hash,
       nft: params.nftAddress,
       to: params.to
@@ -346,16 +316,10 @@ export class WalletManagerPlugin implements Plugin {
   }
 
   onTransaction(callback: (event: TransactionEvent) => void): void {
-    this.context.events.on('wallet:transaction:received', callback);
+    this.events.on('wallet:transaction:received', callback);
   }
 
   offTransaction(callback: (event: TransactionEvent) => void): void {
-    this.context.events.off('wallet:transaction:received', callback);
-  }
-
-  private checkInitialized(): void {
-    if (!this.initialized) {
-      throw new Error('Plugin not initialized. Call initialize() first.');
-    }
+    this.events.off('wallet:transaction:received', callback);
   }
 }
