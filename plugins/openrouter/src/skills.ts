@@ -93,8 +93,17 @@ export class OpenRouterSkills {
     }
 
     private async downloadFile(url: string): Promise<Buffer> {
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+            throw new Error('Only http/https URLs are allowed');
+        }
+        const blocked = ['127.0.0.1', '::1', '0.0.0.0', '169.254.169.254', 'metadata.google.internal'];
+        if (blocked.includes(parsed.hostname) || parsed.hostname.endsWith('.internal')) {
+            throw new Error('Internal/private URLs are not allowed');
+        }
+
         return new Promise((resolve, reject) => {
-            const protocol = url.startsWith('https') ? https : http;
+            const protocol = parsed.protocol === 'https:' ? https : http;
 
             protocol.get(url, (response) => {
                 if (response.statusCode !== 200) {
@@ -103,7 +112,17 @@ export class OpenRouterSkills {
                 }
 
                 const chunks: Buffer[] = [];
-                response.on('data', (chunk) => chunks.push(chunk));
+                let totalSize = 0;
+                const maxsize = 50 * 1024 * 1024;
+                response.on('data', (chunk) => {
+                    totalSize += chunk.length;
+                    if (totalSize > maxsize) {
+                        response.destroy();
+                        reject(new Error('File too large'));
+                        return;
+                    }
+                    chunks.push(chunk);
+                });
                 response.on('end', () => resolve(Buffer.concat(chunks)));
                 response.on('error', reject);
             }).on('error', reject);
@@ -117,6 +136,10 @@ export class OpenRouterSkills {
             buffer = await this.downloadFile(mediaPath);
         } else {
             const resolvedPath = path.resolve(mediaPath);
+            const allowedRoot = process.cwd();
+            if (!resolvedPath.startsWith(allowedRoot)) {
+                throw new Error('Path traversal detected: file must be within project directory');
+            }
             if (!fs.existsSync(resolvedPath)) {
                 throw new Error(`File not found: ${resolvedPath}`);
             }

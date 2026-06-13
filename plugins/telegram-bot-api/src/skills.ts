@@ -297,6 +297,14 @@ export class TelegramBotSkills {
             secret_token?: string;
         }
     ): Promise<boolean> {
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+            throw new Error('Webhook URL must use https or http');
+        }
+        const blocked = ['127.0.0.1', '::1', '0.0.0.0', '169.254.169.254'];
+        if (blocked.includes(parsed.hostname)) {
+            throw new Error('Webhook URL cannot point to localhost or metadata services');
+        }
         return this.request<boolean>('setWebhook', { url, ...params });
     }
 
@@ -1212,8 +1220,14 @@ export class TelegramBotSkills {
 
         if (destinationPath) {
             const fs = await import('fs/promises');
-            await fs.writeFile(destinationPath, buffer);
-            return destinationPath;
+            const path = await import('path');
+            const resolved = path.resolve(destinationPath);
+            const cwd = process.cwd();
+            if (!resolved.startsWith(cwd)) {
+                throw new Error('Invalid destination path: path traversal detected');
+            }
+            await fs.writeFile(resolved, buffer);
+            return resolved;
         }
 
         return buffer;

@@ -8,7 +8,8 @@ export class TokenCache {
 
     setToken(token: string, expiresIn: number): void {
         this.accessToken = token;
-        this.expiresAt = Date.now() + (expiresIn - this.bufferTime) * 1000;
+        const safeExpiry = Math.max(expiresIn - this.bufferTime, 10);
+        this.expiresAt = Date.now() + safeExpiry * 1000;
     }
 
     getToken(): string | null {
@@ -48,33 +49,27 @@ export class RequestQueue {
                     reject(error);
                 }
             });
-            this.process();
+            this.schedule();
         });
     }
 
-    private async process(): Promise<void> {
-        if (this.processing || this.activeCount >= this.maxConcurrent) return;
-
+    private schedule(): void {
+        if (this.processing) return;
         this.processing = true;
+        queueMicrotask(() => {
+            this.processing = false;
+            this.drain();
+        });
+    }
 
-        while (this.queue.length > 0 && this.activeCount < this.maxConcurrent) {
-            const task = this.queue.shift();
-            if (task) {
-                this.activeCount++;
-                try {
-                    await task();
-                } catch (error) {
-                    console.error('Task failed:', error);
-                } finally {
-                    this.activeCount--;
-                }
-            }
-        }
-
-        this.processing = false;
-
-        if (this.queue.length > 0) {
-            this.process();
+    private drain(): void {
+        while (this.activeCount < this.maxConcurrent && this.queue.length > 0) {
+            const task = this.queue.shift()!;
+            this.activeCount++;
+            task().finally(() => {
+                this.activeCount--;
+                this.drain();
+            });
         }
     }
 

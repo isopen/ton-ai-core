@@ -13,11 +13,14 @@ import { URL } from 'url';
 
 const DEFAULT_AUTH_URL = 'https://ngw.devices.sberbank.ru:9443/api/v2/oauth';
 const DEFAULT_API_URL = 'https://gigachat.devices.sberbank.ru/api/v1/chat/completions';
+const DEFAULT_MODELS_URL = 'https://gigachat.devices.sberbank.ru/api/v1/models';
 const DEFAULT_MODEL = 'GigaChat';
 const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_TEMPERATURE = 0.7;
 const DEFAULT_TOP_P = 0.9;
 const DEFAULT_SCOPE = 'GIGACHAT_API_PERS';
+
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
 export class GigaChatSkills {
     private context: PluginContext;
@@ -25,6 +28,7 @@ export class GigaChatSkills {
     private config: GigaChatConfig;
     private ready: boolean = false;
     private maxRetries: number = 3;
+    private readyWaiters: Array<() => void> = [];
 
     constructor(context: PluginContext, components: GigaChatComponents, config: GigaChatConfig) {
         this.context = context;
@@ -32,6 +36,7 @@ export class GigaChatSkills {
         this.config = {
             authUrl: DEFAULT_AUTH_URL,
             apiUrl: DEFAULT_API_URL,
+            modelsUrl: DEFAULT_MODELS_URL,
             model: DEFAULT_MODEL,
             maxTokens: DEFAULT_MAX_TOKENS,
             temperature: DEFAULT_TEMPERATURE,
@@ -48,13 +53,24 @@ export class GigaChatSkills {
     async waitForReady(timeout: number = 10000): Promise<void> {
         if (this.isReady()) return;
 
-        const start = Date.now();
-        while (!this.isReady()) {
-            if (Date.now() - start > timeout) {
-                throw new Error('GigaChat plugin not ready');
-            }
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                const idx = this.readyWaiters.indexOf(onReady);
+                if (idx !== -1) this.readyWaiters.splice(idx, 1);
+                reject(new Error('GigaChat plugin not ready'));
+            }, timeout);
+
+            const onReady = () => {
+                clearTimeout(timer);
+                resolve();
+            };
+            this.readyWaiters.push(onReady);
+        });
+    }
+
+    private notifyReady(): void {
+        const waiters = this.readyWaiters.splice(0);
+        for (const w of waiters) w();
     }
 
     updateConfig(config: Partial<GigaChatConfig>): void {
@@ -135,8 +151,7 @@ export class GigaChatSkills {
                 'Accept': 'application/json',
                 'Authorization': `Bearer ${this.config.apiKey}`,
                 'RqUID': this.components.generateRqUID()
-            },
-            rejectUnauthorized: false
+            }
         };
 
         const data = new URLSearchParams({
@@ -160,13 +175,17 @@ export class GigaChatSkills {
 
                 this.context.logger.info('GigaChat OAuth token obtained');
                 this.ready = true;
+                this.notifyReady();
                 return response.data.access_token;
 
-            } catch (error) {
+            } catch (error: any) {
                 this.context.logger.error(`Auth attempt ${attempt + 1} failed:`, error);
                 this.components.metrics.recordError(`Auth failed: ${error}`);
 
-                if (attempt === this.maxRetries) {
+                const statusMatch = error.message?.match(/\((\d+)\)/);
+                const status = statusMatch ? parseInt(statusMatch[1]) : 0;
+                const isRetryable = RETRYABLE_STATUS.has(status) && attempt < this.maxRetries;
+                if (!isRetryable) {
                     throw error;
                 }
                 await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
@@ -210,8 +229,7 @@ export class GigaChatSkills {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${token}`,
                         'Accept': 'application/json'
-                    },
-                    rejectUnauthorized: false
+                    }
                 };
 
                 const response = await this.httpsRequest(options, JSON.stringify(request));
@@ -260,8 +278,7 @@ export class GigaChatSkills {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`,
                 'Accept': 'text/event-stream'
-            },
-            rejectUnauthorized: false
+            }
         };
 
         const bodyData = JSON.stringify({
@@ -273,13 +290,27 @@ export class GigaChatSkills {
         let rejectNext: ((error: any) => void) | null = null;
         let buffer = '';
         let closed = false;
+        let error: any = null;
+        let lastChunkTime = Date.now();
+        const chunkTimeout = 60000;
+        const maxBufferSize = 1024 * 1024;
 
         const req = https.request({
-            ...options,
-            rejectUnauthorized: false
+            ...options
         }, (res) => {
             res.on('data', (chunk) => {
-                buffer += chunk.toString();
+                lastChunkTime = Date.now();
+                const chunkStr = chunk.toString();
+                buffer += chunkStr;
+
+                if (buffer.length > maxBufferSize) {
+                    req.destroy();
+                    error = new Error('Stream buffer overflow');
+                    closed = true;
+                    if (rejectNext) { rejectNext(error); rejectNext = null; }
+                    return;
+                }
+
                 const lines = buffer.split('\n');
                 buffer = lines.pop() || '';
 
@@ -305,37 +336,55 @@ export class GigaChatSkills {
                 closed = true;
                 if (resolveNext) {
                     resolveNext({ value: null as any, done: true });
+                    resolveNext = null;
                 }
             });
         });
 
-        req.on('error', (error) => {
+        const watchdog = setInterval(() => {
+            if (!closed && Date.now() - lastChunkTime > chunkTimeout) {
+                req.destroy();
+                error = new Error('Stream timeout: no data received');
+                closed = true;
+                if (rejectNext) { rejectNext(error); rejectNext = null; }
+            }
+        }, 10000);
+
+        req.on('error', (err) => {
+            error = err;
+            closed = true;
             if (rejectNext) {
-                rejectNext(error);
+                rejectNext(err);
+                rejectNext = null;
             }
         });
 
         req.write(bodyData);
         req.end();
 
-        while (!closed) {
-            const next = await new Promise<IteratorResult<GigaChatStreamChunk>>((resolve, reject) => {
-                resolveNext = resolve;
-                rejectNext = reject;
-            });
+        try {
+            while (!closed) {
+                const next = await new Promise<IteratorResult<GigaChatStreamChunk>>((resolve, reject) => {
+                    resolveNext = resolve;
+                    rejectNext = reject;
+                });
 
-            if (next.done) {
-                break;
+                if (next.done) break;
+                yield next.value;
             }
-
-            yield next.value;
+        } finally {
+            clearInterval(watchdog);
+            resolveNext = null;
+            rejectNext = null;
+            req.destroy();
+            if (error) throw error;
         }
     }
 
     async getModels(): Promise<any[]> {
         const token = await this.getAccessToken();
 
-        const url = new URL('https://gigachat.devices.sberbank.ru/api/v1/models');
+        const url = new URL(this.config.modelsUrl || DEFAULT_MODELS_URL);
 
         const options: https.RequestOptions = {
             hostname: url.hostname,
@@ -345,8 +394,7 @@ export class GigaChatSkills {
             headers: {
                 'Accept': 'application/json',
                 'Authorization': `Bearer ${token}`
-            },
-            rejectUnauthorized: false
+            }
         };
 
         const response = await this.httpsRequest(options);
@@ -376,7 +424,8 @@ export class GigaChatSkills {
         const response = await this.chatCompletion({ messages });
 
         if (response.choices && response.choices.length > 0) {
-            return response.choices[0].message.content;
+            const content = response.choices[0].message.content;
+            if (content != null) return content;
         }
 
         throw new Error('No response from GigaChat');
@@ -386,7 +435,8 @@ export class GigaChatSkills {
         const response = await this.chatCompletion({ messages });
 
         if (response.choices && response.choices.length > 0) {
-            return response.choices[0].message.content;
+            const content = response.choices[0].message.content;
+            if (content != null) return content;
         }
 
         throw new Error('No response from GigaChat');

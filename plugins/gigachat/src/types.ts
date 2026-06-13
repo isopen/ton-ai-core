@@ -7,6 +7,7 @@ export interface GigaChatConfig {
     topP?: number;
     authUrl?: string;
     apiUrl?: string;
+    modelsUrl?: string;
 }
 
 export interface GigaChatMessage {

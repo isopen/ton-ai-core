@@ -20,6 +20,22 @@ import {
 } from './types';
 import EventEmitter from 'events';
 
+const DANGEROUS_FILTER_PATTERNS = [
+    /\b(drop|delete|truncate|alter|create|insert|update)\b/i,
+    /--|;|\/\*|\*\/|xp_/,
+    /\bor\s+1\s*=\s*1/i,
+    /\band\s+1\s*=\s*1/i,
+];
+
+function sanitizeFilter(filter: string): string {
+    for (const pattern of DANGEROUS_FILTER_PATTERNS) {
+        if (pattern.test(filter)) {
+            throw new Error(`Potentially dangerous filter expression rejected`);
+        }
+    }
+    return filter;
+}
+
 export class ConnectionManager extends EventEmitter {
     private connection: lancedb.Connection | null = null;
     private context: PluginContext;
@@ -345,6 +361,7 @@ export class TableManager {
     async countRows(filter?: string): Promise<number> {
         try {
             if (filter) {
+                sanitizeFilter(filter);
                 const results = await this.table.query().filter(filter).toArray();
                 return results.length;
             }

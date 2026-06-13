@@ -65,12 +65,16 @@ export class TdlibJsonClient extends EventEmitter implements TdlibClient {
         const wrapperPath = this.createWrapper();
         const safeTdlibPath = path.resolve(tdlibPath);
 
+        const safeEnv: Record<string, string | undefined> = {
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            NODE_ENV: process.env.NODE_ENV,
+            TDLIB_LIBRARY_PATH: safeTdlibPath
+        };
+
         this.process = spawn(wrapperPath, [], {
             stdio: ['pipe', 'pipe', 'pipe'],
-            env: {
-                ...process.env,
-                TDLIB_LIBRARY_PATH: safeTdlibPath
-            }
+            env: safeEnv
         });
 
         console.log(`TDLib wrapper process started with PID: ${this.process.pid}`);
