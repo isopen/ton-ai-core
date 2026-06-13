@@ -253,12 +253,16 @@ export class CryptoClient extends EventEmitter {
     private nextMsgId(session: SessionState): bigint {
         const now = (BigInt(Math.floor(Date.now() / 1000)) & 0x1FFFFFFFn) << 32n;
         session.msgIdCounter = (session.msgIdCounter + 1n) & 0xFFFFFFFFn;
-        return (now + session.msgIdCounter) & 0x7FFFFFFFFFFFFFFFn;
+        const raw = now + session.msgIdCounter;
+        return (raw - (raw % 4n)) & 0x7FFFFFFFFFFFFFFFn;
     }
 
     private nextSeqNo(session: SessionState, contentRelated: boolean): number {
-        session.lastSeqNo += contentRelated ? 2 : 1;
-        return session.lastSeqNo;
+        const seqNo = session.lastSeqNo;
+        if (contentRelated) {
+            session.lastSeqNo += 1;
+        }
+        return seqNo;
     }
 }
 

@@ -215,10 +215,11 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         this.logger.info('Telegram Bot API plugin activated');
 
         if (this.config.webhookUrl) {
+            const secretToken = this.config.webhookSecretToken || require('crypto').randomBytes(16).toString('hex');
             await this.setWebhook(this.config.webhookUrl, {
                 max_connections: this.config.webhookMaxConnections,
                 allowed_updates: this.config.allowedUpdates,
-                secret_token: this.config.webhookSecretToken,
+                secret_token: secretToken,
                 drop_pending_updates: this.config.dropPendingUpdates
             });
         } else {
@@ -451,7 +452,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
 
     onUpdate(callback: (update: Update) => void): string {
         this.checkInitialized();
-        const id = `callback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const id = `callback_${require('crypto').randomBytes(8).toString('hex')}`;
         this.components.updates.registerCallback(id, callback);
         return id;
     }

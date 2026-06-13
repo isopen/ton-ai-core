@@ -247,7 +247,7 @@ export class TdlibJsonClient extends EventEmitter implements TdlibClient {
                 '@type': 'checkAuthenticationBotToken',
                 token: this.botToken
             }, 30000);
-            console.log('Bot token sent, result:', result);
+            console.log('Bot token sent, result:', result ? 'ok' : 'failed');
         } catch (error) {
             console.error('Failed to send bot token:', error);
             throw error;
@@ -315,7 +315,7 @@ export class TdlibJsonClient extends EventEmitter implements TdlibClient {
         if (this.process) {
             try {
                 await this.send({ '@type': 'close' }, 5000);
-            } catch (e) { }
+            } catch (e) { this.process?.kill(); }
             this.process.kill();
             this.process = null;
         }

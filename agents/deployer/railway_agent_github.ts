@@ -153,13 +153,18 @@ export class RailwayDeployerAgent extends BaseAgentSimple {
         if (!railway) throw new Error('Railway plugin not available');
 
         const envVars: Record<string, string> = {
-            NODE_ENV: 'production',
-            ...this.config.environmentVariables
+            ...this.config.environmentVariables,
+            NODE_ENV: 'production'
         };
 
+        const safeEnvPrefix = `${envPrefix}_`;
+        const allowedKeys = ['TELEGRAM_BOT_API_TOKEN', 'GIGACHAT_API_KEY', 'OPENROUTER_API_KEY'];
         for (const key of Object.keys(process.env)) {
-            if (key.startsWith(`${envPrefix}_`)) {
-                envVars[key] = process.env[key] || '';
+            if (key.startsWith(safeEnvPrefix)) {
+                const suffix = key.slice(safeEnvPrefix.length);
+                if (allowedKeys.some(ak => suffix.includes(ak))) {
+                    envVars[key] = process.env[key] || '';
+                }
             }
         }
 

@@ -77,7 +77,7 @@ export async function rsaVerify(
   const key = await crypto.subtle.importKey(
     'spki',
     der,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-1' },
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
     false,
     ['verify']
   );

@@ -1,4 +1,4 @@
-import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
+import { BaseAgentSimple, SimpleAgentConfig, crypton } from '@ton-ai/core';
 import {
     TelegramBotPlugin,
     Message,
@@ -498,7 +498,8 @@ export class TelegramBotApiAgent extends BaseAgentSimple {
                 return;
             }
 
-            const randomSticker = this.stickerFileIds[Math.floor(Math.random() * this.stickerFileIds.length)];
+            const randomIndex = crypton.getSecureRandomNumber(this.stickerFileIds.length);
+            const randomSticker = this.stickerFileIds[randomIndex];
 
             await this.telegramPlugin.sendSticker({
                 chat_id: chatId,

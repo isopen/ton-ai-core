@@ -177,7 +177,7 @@ export class ContentCheckerAgent extends BaseAgent {
         if (!this.agentConfig.treasuryAddress) return;
 
         const balance = await this.mcp.getBalance();
-        const tonBalance = parseFloat(balance.ton);
+        const tonBalance = parseFloat(balance.ton) || 0;
         const cost = 0.1;
 
         if (tonBalance < cost) {
@@ -204,7 +204,7 @@ export class ContentCheckerAgent extends BaseAgent {
                 `Media Analysis Request`
             );
 
-            this.totalSpent = (parseFloat(this.totalSpent) + parseFloat(this.agentConfig.costPerRequest!)).toString();
+            this.totalSpent = ((parseFloat(this.totalSpent) || 0) + (parseFloat(this.agentConfig.costPerRequest!) || 0)).toString();
 
             return {
                 hash: response.hash,

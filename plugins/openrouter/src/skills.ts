@@ -97,9 +97,18 @@ export class OpenRouterSkills {
         if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
             throw new Error('Only http/https URLs are allowed');
         }
-        const blocked = ['127.0.0.1', '::1', '0.0.0.0', '169.254.169.254', 'metadata.google.internal'];
-        if (blocked.includes(parsed.hostname) || parsed.hostname.endsWith('.internal')) {
+
+        const hostname = parsed.hostname;
+        const blocked = ['127.0.0.1', '::1', '0.0.0.0', '169.254.169.254', 'metadata.google.internal', '10.', '172.16.', '192.168.'];
+        if (blocked.some(b => hostname === b || hostname.startsWith(b)) || hostname.endsWith('.internal') || hostname.endsWith('.local')) {
             throw new Error('Internal/private URLs are not allowed');
+        }
+
+        if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) {
+            const parts = hostname.split('.').map(Number);
+            if (parts[0] === 10 || parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31 || parts[0] === 192 && parts[1] === 168 || parts[0] === 127 || parts[0] === 0 || (parts[0] === 169 && parts[1] === 254)) {
+                throw new Error('Private IP addresses are not allowed');
+            }
         }
 
         return new Promise((resolve, reject) => {

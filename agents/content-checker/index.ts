@@ -15,11 +15,13 @@ async function main() {
         process.exit(1);
     }
 
+    const approve = parseInt(process.env.APPROVE_THRESHOLD || '30', 10);
+    const reject = parseInt(process.env.REJECT_THRESHOLD || '70', 10);
     const agent = new ContentCheckerAgent({
         openRouterApiKey: process.env.OPENROUTER_API_KEY || '',
         defaultModel: process.env.DEFAULT_MODEL || 'nvidia/nemotron-nano-12b-v2-vl:free',
-        approveThreshold: parseInt(process.env.APPROVE_THRESHOLD || '30'),
-        rejectThreshold: parseInt(process.env.REJECT_THRESHOLD || '70'),
+        approveThreshold: isNaN(approve) ? 30 : approve,
+        rejectThreshold: isNaN(reject) ? 70 : reject,
         verbose: process.env.VERBOSE === 'true'
     });
 

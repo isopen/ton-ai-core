@@ -25,7 +25,10 @@ import {
   ResolveDNSResponse,
   BackResolveDNSResponse,
   KnownJetton,
-  Message
+  Message,
+  NETWORK,
+  WALLET_VERSION,
+  TRANSPORT_MODE
 } from '../types/mcp.types';
 
 export interface Logger {
@@ -62,7 +65,7 @@ function extractWalletAddress(wallet: any): string {
 
 export class MCPClient extends EventEmitter {
   private httpEndpoint?: string;
-  private mode: 'stdio' | 'http' | 'https';
+  private mode: 'stdio' | 'http' | 'https' | 'serverless';
   private config: MCPConfig;
   private isReady: boolean = false;
   private walletAddress?: string;
@@ -81,9 +84,9 @@ export class MCPClient extends EventEmitter {
     }
 
     this.config = {
-      mode: 'stdio',
-      network: 'testnet',
-      walletVersion: 'v5r1',
+      mode: TRANSPORT_MODE.STDIO,
+      network: NETWORK.TESTNET,
+      walletVersion: WALLET_VERSION.V5R1,
       host: '127.0.0.1',
       port: 3000,
       protocol: 'http',
@@ -92,13 +95,13 @@ export class MCPClient extends EventEmitter {
 
     this.mode = this.config.mode!;
 
-    if (this.mode !== 'stdio') {
+    if (this.mode !== TRANSPORT_MODE.STDIO) {
       this.initHttpMode();
     }
   }
 
   async initialize(): Promise<void> {
-    if (this.mode === 'stdio') {
+    if (this.mode === TRANSPORT_MODE.STDIO) {
       await this.initStdioMode();
     }
   }
@@ -107,7 +110,9 @@ export class MCPClient extends EventEmitter {
     try {
       this.logger.info('Initializing MCP stdio mode with programmatic API...');
 
-      const network = this.config.network === 'testnet'
+      await this.setupProxy();
+
+      const network = this.config.network === NETWORK.TESTNET
         ? Network.testnet()
         : Network.mainnet();
 
@@ -123,14 +128,24 @@ export class MCPClient extends EventEmitter {
         throw new Error('Mnemonic is required for stdio mode');
       }
 
-      const signer = await Signer.fromMnemonic(this.config.mnemonic, { type: 'ton' });
-      this.logger.debug('Signer created from mnemonic');
+      const signer = await Signer.fromMnemonic(this.config.mnemonic.split(' '), { type: 'ton' });
+      this.logger.debug('Signer created');
 
-      const walletAdapter = await WalletV5R1Adapter.create(signer, {
-        client: this.kit.getApiClient(network),
-        network: network,
-      });
-      this.logger.debug('Wallet adapter created');
+      const walletVersion = this.config.walletVersion || WALLET_VERSION.V5R1;
+      let walletAdapter;
+      if (walletVersion === WALLET_VERSION.V4R2) {
+        const { WalletV4R2Adapter } = require('@ton/walletkit');
+        walletAdapter = await WalletV4R2Adapter.create(signer, {
+          client: this.kit.getApiClient(network),
+          network: network,
+        });
+      } else {
+        walletAdapter = await WalletV5R1Adapter.create(signer, {
+          client: this.kit.getApiClient(network),
+          network: network,
+        });
+      }
+      this.logger.debug(`Wallet adapter created (${walletVersion})`);
 
       this.wallet = await this.kit.addWallet(walletAdapter);
       this.logger.debug('Wallet added to kit');
@@ -153,6 +168,20 @@ export class MCPClient extends EventEmitter {
     }
   }
 
+  private async setupProxy(): Promise<void> {
+    const proxyUrl = process.env.https_proxy || process.env.HTTPS_PROXY ||
+                     process.env.http_proxy || process.env.HTTP_PROXY;
+    if (!proxyUrl) return;
+
+    try {
+      const { ProxyAgent, setGlobalDispatcher } = await import('undici');
+      setGlobalDispatcher(new ProxyAgent(proxyUrl));
+      this.logger.debug(`Proxy configured: ${proxyUrl}`);
+    } catch {
+      this.logger.debug('undici not available, proxy not configured');
+    }
+  }
+
   private initHttpMode(): void {
     const protocol = this.mode === 'https' ? 'https' : 'http';
     this.httpEndpoint = `${protocol}://${this.config.host}:${this.config.port}/mcp`;
@@ -166,7 +195,7 @@ export class MCPClient extends EventEmitter {
       throw new Error('MCP client not ready. Call initialize() first.');
     }
 
-    if (this.mode === 'stdio') {
+    if (this.mode === TRANSPORT_MODE.STDIO) {
       return this.stdioRequest(method, params);
     } else {
       return this.httpRequest(method, params);
@@ -186,10 +215,10 @@ export class MCPClient extends EventEmitter {
         headers['NETWORK'] = this.config.network;
       }
       if (this.config.apiKey) {
-        headers['TONCENTER_KEY'] = this.config.apiKey;
+        headers['TONCENTER_API_KEY'] = this.config.apiKey;
       }
 
-      const id = Date.now();
+      const id = parseInt(require('crypto').randomBytes(4).toString('hex'), 16);
       const requestBody = {
         jsonrpc: '2.0',
         method,
@@ -275,13 +304,28 @@ export class MCPClient extends EventEmitter {
   }
 
   private async stdioRequest(method: string, params: any): Promise<any> {
-    try {
-      this.logger.debug(`Calling method: ${method} with params:`, params);
-      return await this.callTool(method, params);
-    } catch (error) {
-      this.logger.error(`Error calling method ${method}:`, error);
-      throw error;
+    const maxRetries = 3;
+    let lastResult: any;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        this.logger.debug(`Calling method: ${method} with params:`, params);
+        lastResult = await this.callTool(method, params);
+        const is429 = lastResult?.isError || (typeof lastResult?.error === 'string' && lastResult.error.includes('429'));
+        if (is429) {
+          if (attempt < maxRetries) {
+            const delay = 1000 * Math.pow(2, attempt);
+            this.logger.debug(`Rate limited (429), retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
+        }
+        return lastResult;
+      } catch (error) {
+        this.logger.error(`Error calling method ${method}:`, error);
+        throw error;
+      }
     }
+    return lastResult;
   }
 
   async getBalance(): Promise<BalanceResponse> {
@@ -304,30 +348,37 @@ export class MCPClient extends EventEmitter {
 
   async getJettons(): Promise<JettonWithBalance[]> {
     const result = await this.request('get_jettons');
-    return Array.isArray(result) ? result : [];
+    if (Array.isArray(result)) return result;
+    if (result?.jettons && Array.isArray(result.jettons)) return result.jettons;
+    return [];
   }
 
   async getTransactions(limit: number = 20): Promise<Transaction[]> {
     const result = await this.request('get_transactions', { limit });
-    return Array.isArray(result) ? result : [];
+    this.logger.debug('getTransactions raw result:', JSON.stringify(result).slice(0, 500));
+    if (Array.isArray(result)) return result;
+    if (result?.transactions && Array.isArray(result.transactions)) return result.transactions;
+    return [];
   }
 
   async getKnownJettons(): Promise<KnownJetton[]> {
     const result = await this.request('get_known_jettons');
-    return Array.isArray(result) ? result : [];
+    if (Array.isArray(result)) return result;
+    if (result?.jettons && Array.isArray(result.jettons)) return result.jettons;
+    return [];
   }
 
   async sendTON(toAddress: string, amount: string, comment?: string): Promise<SendTONResponse> {
     try {
       const result = await this.request('send_ton', { toAddress, amount, comment });
       this.emit(MCP_EVENTS.TRANSACTION, {
-        hash: result.hash,
+        hash: result.normalizedHash || result.hash,
         amount,
         type: 'send_ton',
         from: this.walletAddress,
         to: toAddress
       });
-      return result;
+      return { hash: result.normalizedHash || result.hash };
     } catch (error) {
       this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
       throw error;
@@ -338,13 +389,13 @@ export class MCPClient extends EventEmitter {
     try {
       const result = await this.request('send_jetton', { toAddress, jettonAddress, amount, comment });
       this.emit(MCP_EVENTS.TRANSACTION, {
-        hash: result.hash,
+        hash: result.normalizedHash || result.hash,
         amount,
         type: 'send_jetton',
         from: this.walletAddress,
         to: toAddress
       });
-      return result;
+      return { hash: result.normalizedHash || result.hash };
     } catch (error) {
       this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
       throw error;
@@ -355,13 +406,13 @@ export class MCPClient extends EventEmitter {
     try {
       const result = await this.request('send_raw_transaction', { messages, validUntil, fromAddress });
       this.emit(MCP_EVENTS.TRANSACTION, {
-        hash: result.hash,
+        hash: result.normalizedHash || result.hash,
         amount: '0',
         type: 'send_raw',
         from: fromAddress || this.walletAddress,
         to: 'multiple'
       });
-      return result;
+      return { hash: result.normalizedHash || result.hash };
     } catch (error) {
       this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
       throw error;
@@ -370,7 +421,9 @@ export class MCPClient extends EventEmitter {
 
   async getNFTs(limit: number = 20, offset: number = 0): Promise<NFT[]> {
     const result = await this.request('get_nfts', { limit, offset });
-    return Array.isArray(result) ? result : [];
+    if (Array.isArray(result)) return result;
+    if (result?.nfts && Array.isArray(result.nfts)) return result.nfts;
+    return [];
   }
 
   async getNFT(nftAddress: string): Promise<NFT> {
@@ -381,7 +434,7 @@ export class MCPClient extends EventEmitter {
     try {
       const result = await this.request('send_nft', { nftAddress, toAddress, comment });
       this.emit(MCP_EVENTS.TRANSACTION, {
-        hash: result.hash,
+        hash: result.normalizedHash || result.hash,
         type: 'send_nft',
         from: this.walletAddress,
         to: toAddress
@@ -390,7 +443,7 @@ export class MCPClient extends EventEmitter {
         address: nftAddress,
         owner: toAddress
       });
-      return result;
+      return { hash: result.normalizedHash || result.hash };
     } catch (error) {
       this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
       throw error;

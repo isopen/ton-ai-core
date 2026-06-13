@@ -32,12 +32,12 @@ async function main() {
     const agent = new LevlamClawAgent({
         name: 'LevlamClaw',
         telegram: {
-            botToken: process.env.TELEGRAM_BOT_TOKEN!,
-            apiId: parseInt(process.env.TELEGRAM_API_ID!),
-            apiHash: process.env.TELEGRAM_API_HASH!
+            botToken: process.env.TELEGRAM_BOT_TOKEN || '',
+            apiId: parseInt(process.env.TELEGRAM_API_ID || '0', 10),
+            apiHash: process.env.TELEGRAM_API_HASH || ''
         },
         openrouter: {
-            apiKey: process.env.OPENROUTER_API_KEY!,
+            apiKey: process.env.OPENROUTER_API_KEY || '',
             defaultModel: process.env.OPENROUTER_MODEL || 'openrouter/free'
         },
         tdlib: {

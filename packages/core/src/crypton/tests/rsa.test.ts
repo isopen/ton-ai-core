@@ -14,7 +14,7 @@ async function run() {
   const data = Buffer.from('Test data for RSA verification');
 
   // Create a valid signature
-  const signer = crypto.createSign('RSA-SHA1');
+  const signer = crypto.createSign('RSA-SHA256');
   signer.update(data);
   const validSignature = signer.sign(privateKey);
 
@@ -43,7 +43,7 @@ async function run() {
 
   // 5. Empty data and signature (edge case) – should not crash
   const emptyData = Buffer.alloc(0);
-  const signerEmpty = crypto.createSign('RSA-SHA1');
+  const signerEmpty = crypto.createSign('RSA-SHA256');
   signerEmpty.update(emptyData);
   const emptySig = signerEmpty.sign(privateKey);
   const resultEmpty = await rsaVerify(emptyData, emptySig, publicKey);

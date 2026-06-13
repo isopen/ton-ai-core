@@ -1,9 +1,28 @@
 export type Network = 'mainnet' | 'testnet';
-export type WalletVersion = 'v5r1' | 'v4r2';
-export type TransportMode = 'stdio' | 'http' | 'https';
+export type WalletVersion = 'v5r1' | 'v4r2' | 'agentic';
+export type TransportMode = 'stdio' | 'http' | 'https' | 'serverless';
+
+export const NETWORK = {
+  MAINNET: 'mainnet' as const,
+  TESTNET: 'testnet' as const,
+} as const;
+
+export const WALLET_VERSION = {
+  V5R1: 'v5r1' as const,
+  V4R2: 'v4r2' as const,
+  AGENTIC: 'agentic' as const,
+} as const;
+
+export const TRANSPORT_MODE = {
+  STDIO: 'stdio' as const,
+  HTTP: 'http' as const,
+  HTTPS: 'https' as const,
+  SERVERLESS: 'serverless' as const,
+} as const;
 
 export interface MCPConfig {
   mnemonic?: string;
+  privateKey?: string;
   walletAddress?: string;
   network?: Network;
   apiKey?: string;
@@ -13,6 +32,9 @@ export interface MCPConfig {
   walletVersion?: WalletVersion;
   protocol?: 'http' | 'https';
   debug?: boolean;
+  configPath?: string;
+  agenticCollectionAddress?: string;
+  agenticWalletIndex?: number;
 }
 
 export interface JsonRpcResponse {
@@ -62,10 +84,26 @@ export interface TransactionEvent {
 }
 
 export interface Transaction {
-  hash: string;
-  lt: string;
-  time: number;
-  events: TransactionEvent[];
+  eventId: string;
+  timestamp: number;
+  date: string;
+  type: string;
+  status: string;
+  description?: string;
+  isScam?: boolean;
+  from?: string;
+  to?: string;
+  amount?: { ton: string; nanoTon: string };
+  comment?: string;
+  jettonAddress?: string;
+  jettonSymbol?: string;
+  jettonAmount?: string;
+  dex?: string;
+  amountIn?: string;
+  amountOut?: string;
+  hash?: string;
+  lt?: string;
+  events?: TransactionEvent[];
 }
 
 export interface SendTONResponse {

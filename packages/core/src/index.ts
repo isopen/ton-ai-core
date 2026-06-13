@@ -1,5 +1,5 @@
 export * from './types';
-export { MCPClient } from './client';
+export { MCPClient, createServerlessHandler } from './client';
 
 export {
   BaseAgentCore,

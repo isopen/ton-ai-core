@@ -19,7 +19,7 @@ export class TdlibPlugin extends BasePlugin<TdlibConfig> {
 
     protected defaults() {
         return {
-            apiId: parseInt(process.env.TELEGRAM_API_ID || '0'),
+            apiId: parseInt(process.env.TELEGRAM_API_ID || '0', 10),
             apiHash: process.env.TELEGRAM_API_HASH || '',
             databaseDirectory: './tdlib_data',
             filesDirectory: './tdlib_files',

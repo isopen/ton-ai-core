@@ -128,7 +128,7 @@ export class LoggerAgent extends BaseAgentSimple {
 
             if (embeddingArray.length === 0) {
                 console.warn('Could not extract embedding from result, using zero vector');
-                return new Array(this.agentConfig.vectorDimension!).fill(0);
+                return new Array(this.agentConfig.vectorDimension || 384).fill(0);
             }
 
             const targetDim = this.agentConfig.vectorDimension || 384;
@@ -145,7 +145,7 @@ export class LoggerAgent extends BaseAgentSimple {
             return embeddingArray;
         } catch (error) {
             console.error('Error generating embedding:', error);
-            return new Array(this.agentConfig.vectorDimension!).fill(0);
+            return new Array(this.agentConfig.vectorDimension || 384).fill(0);
         }
     }
 

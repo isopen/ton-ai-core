@@ -10,9 +10,10 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@ton/mcp": "0.1.13",
-    "@ton/walletkit": "0.0.10",
-    "@ton/crypto": "3.3.0"
+    "@ton/crypto": "3.3.0",
+    "@ton/mcp": "^0.1.13",
+    "@ton/walletkit": "^0.0.10",
+    "undici": "^8.4.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.16",

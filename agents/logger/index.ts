@@ -5,9 +5,10 @@ async function main() {
     const args = process.argv.slice(2);
     const command = args[0];
 
+    const vectorDim = parseInt(process.env.VECTOR_DIMENSION || '384', 10);
     const agent = new LoggerAgent({
         lancedbUri: process.env.LANCEDB_URI || './logger',
-        vectorDimension: parseInt(process.env.VECTOR_DIMENSION || '384'),
+        vectorDimension: isNaN(vectorDim) ? 384 : vectorDim,
         verbose: process.env.VERBOSE === 'true',
         embeddingModel: process.env.EMBEDDING_MODEL || 'BAAI/bge-small-en-v1.5',
         plugins: {
@@ -80,7 +81,7 @@ async function interactiveMode(agent: LoggerAgent) {
                     if (args.length === 0) {
                         console.log('Usage: search <query> [limit]');
                     } else {
-                        const limit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!) : 10;
+                        const limit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!, 10) : 10;
                         const query = args.join(' ');
                         const results = await agent.vectorSearch(query, { limit });
 
@@ -101,7 +102,7 @@ async function interactiveMode(agent: LoggerAgent) {
                     if (args.length === 0) {
                         console.log('Usage: fts <query> [limit]');
                     } else {
-                        const limit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!) : 10;
+                        const limit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!, 10) : 10;
                         const query = args.join(' ');
                         const results = await agent.fullTextSearch(query, limit);
 
@@ -121,7 +122,7 @@ async function interactiveMode(agent: LoggerAgent) {
                     if (args.length === 0) {
                         console.log('Usage: hybrid <query> [limit]');
                     } else {
-                        const limit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!) : 10;
+                        const limit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!, 10) : 10;
                         const query = args.join(' ');
                         const results = await agent.hybridSearch(query, { limit });
 
@@ -141,7 +142,7 @@ async function interactiveMode(agent: LoggerAgent) {
                     if (args.length === 0) {
                         console.log('Usage: level <info|warn|error|debug> [limit]');
                     } else {
-                        const limit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!) : 10;
+                        const limit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!, 10) : 10;
                         const level = args[0].toLowerCase();
                         const validLevels = ['info', 'warn', 'error', 'debug'];
 
@@ -167,7 +168,7 @@ async function interactiveMode(agent: LoggerAgent) {
                     if (args.length === 0) {
                         console.log('Usage: source <name> [limit]');
                     } else {
-                        const limit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!) : 10;
+                        const limit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!, 10) : 10;
                         const source = args[0];
                         const results = await agent.searchBySource(source, limit);
 
@@ -184,7 +185,7 @@ async function interactiveMode(agent: LoggerAgent) {
                     break;
 
                 case 'recent':
-                    const recentLimit = args[0] ? parseInt(args[0]) : 20;
+                    const recentLimit = args[0] ? parseInt(args[0], 10) : 20;
                     const logs = await agent.getRecentLogs(recentLimit);
 
                     console.log(`\nRecent ${logs.length} logs:`);
@@ -282,7 +283,7 @@ async function handleCommand(agent: LoggerAgent, command: string, args: string[]
                 console.error('Usage: logger search <query> [limit]');
                 process.exit(1);
             }
-            const searchLimit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!) : 10;
+            const searchLimit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!, 10) : 10;
             const searchQuery = args.join(' ');
             const searchResults = await agent.vectorSearch(searchQuery, { limit: searchLimit });
             console.log(JSON.stringify(searchResults, null, 2));
@@ -293,7 +294,7 @@ async function handleCommand(agent: LoggerAgent, command: string, args: string[]
                 console.error('Usage: logger fts <query> [limit]');
                 process.exit(1);
             }
-            const ftsLimit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!) : 10;
+            const ftsLimit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!, 10) : 10;
             const ftsQuery = args.join(' ');
             const ftsResults = await agent.fullTextSearch(ftsQuery, ftsLimit);
             console.log(JSON.stringify(ftsResults, null, 2));
@@ -304,14 +305,14 @@ async function handleCommand(agent: LoggerAgent, command: string, args: string[]
                 console.error('Usage: logger hybrid <query> [limit]');
                 process.exit(1);
             }
-            const hybridLimit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!) : 10;
+            const hybridLimit = args[args.length - 1].match(/^\d+$/) ? parseInt(args.pop()!, 10) : 10;
             const hybridQuery = args.join(' ');
             const hybridResults = await agent.hybridSearch(hybridQuery, { limit: hybridLimit });
             console.log(JSON.stringify(hybridResults, null, 2));
             break;
 
         case 'recent':
-            const recentLimit = args[0] ? parseInt(args[0]) : 50;
+            const recentLimit = args[0] ? parseInt(args[0], 10) : 50;
             const logs = await agent.getRecentLogs(recentLimit);
             console.log(JSON.stringify(logs, null, 2));
             break;

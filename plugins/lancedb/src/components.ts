@@ -136,9 +136,8 @@ export class ConnectionManager extends EventEmitter {
     }
 
     async openTable(tableName: string): Promise<lancedb.Table> {
-        if (this.tables.has(tableName)) {
-            return this.tables.get(tableName)!;
-        }
+        const cached = this.tables.get(tableName);
+        if (cached) return cached;
 
         const conn = this.getConnection();
         try {
@@ -581,9 +580,8 @@ export class VectorDBComponents {
     }
 
     async getOrCreateTable(tableName: string): Promise<TableManager> {
-        if (this.tables.has(tableName)) {
-            return this.tables.get(tableName)!;
-        }
+        const cached = this.tables.get(tableName);
+        if (cached) return cached;
 
         try {
             const table = await this.connection.openTable(tableName);

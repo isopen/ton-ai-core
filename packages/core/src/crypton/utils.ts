@@ -34,7 +34,7 @@ export function xor(a: Buffer, b: Buffer): Buffer {
   if (a.length !== b.length) {
     throw new Error('Buffers must have the same length');
   }
-  const result = Buffer.allocUnsafe(a.length);
+  const result = Buffer.alloc(a.length);
   for (let i = 0; i < a.length; i++) {
     result[i] = a[i] ^ b[i];
   }
@@ -75,6 +75,8 @@ export function hexToBytes(hex: string): Uint8Array {
 }
 
 export function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
+  if (modulus <= 0n) throw new Error('Modulus must be positive');
+  if (modulus === 1n) return 0n;
   let result = 1n;
   let b = base % modulus;
   let e = exponent;
@@ -100,9 +102,11 @@ export function isProbablyPrime(n: bigint, k: number = 40): boolean {
 
   function getRandomBase(max: bigint): bigint {
     if (max <= 2n) return 2n;
-    const byteLength = Math.ceil(max.toString(16).length / 2);
+    const byteLength = Math.max(1, Math.ceil(max.toString(16).length / 2));
     let candidate: bigint;
+    let attempts = 0;
     do {
+      if (++attempts > 1000) throw new Error('Failed to generate random base');
       const bytes = getRandomBytes(byteLength);
       candidate = bufferToBigInt(bytes);
     } while (candidate >= max);

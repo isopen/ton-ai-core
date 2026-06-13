@@ -211,7 +211,7 @@ export class AES256IGE {
       throw new Error(`Data length must be multiple of ${this.BLOCK_SIZE}, got ${data.length}`);
     }
 
-    const result = Buffer.allocUnsafe(data.length);
+    const result = Buffer.alloc(data.length);
     let prevCipher = iv.subarray(0, this.BLOCK_SIZE);
     let prevPlain = iv.subarray(this.BLOCK_SIZE, this.BLOCK_SIZE * 2);
 
@@ -259,7 +259,7 @@ export class AES256IGE {
       throw new Error(`Data length must be multiple of ${this.BLOCK_SIZE}, got ${data.length}`);
     }
 
-    const result = Buffer.allocUnsafe(data.length);
+    const result = Buffer.alloc(data.length);
     let prevCipher = iv.subarray(0, this.BLOCK_SIZE);
     let prevPlain = iv.subarray(this.BLOCK_SIZE, this.BLOCK_SIZE * 2);
 
