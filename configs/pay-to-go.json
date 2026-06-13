@@ -10,7 +10,7 @@
     "build:core": "cd packages/core && npm install && npm run build && npm pack",
     "build:wallet": "cd plugins/openrouter && npm install && npm run build && npm pack",
     "build:agent": "cd agents/pay-to-go && npm install",
-    "copy-packages": "mkdir -p agents/pay-to-go/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/pay-to-go/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped' && cp plugins/openrouter/ton-ai-openrouter-0.1.0.tgz agents/pay-to-go/node_modules/@ton-ai/ 2>/dev/null || echo 'Wallet package copy skipped'",
+    "copy-packages": "mkdir -p agents/pay-to-go/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.2.0.tgz agents/pay-to-go/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped' && cp plugins/openrouter/ton-ai-openrouter-0.1.0.tgz agents/pay-to-go/node_modules/@ton-ai/ 2>/dev/null || echo 'Wallet package copy skipped'",
     "rebuild": "npm run clean && npm run build:core && npm run build:wallet && npm run build:agent && npm run copy-packages",
     "rebuild:quick": "npm run build:core && npm run build:wallet && npm run copy-packages && cd agents/pay-to-go && npm install",
     "start:agent": "cd agents/pay-to-go && npm start",

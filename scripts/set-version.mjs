@@ -1,5 +1,9 @@
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const target = process.argv[2];
 const name = process.argv[3];
@@ -7,7 +11,7 @@ const version = process.argv[4] || (target && !target.includes(':') && name && /
 const fullTarget = target && name && !/^\d/.test(name) ? `${target}:${name}` : target;
 
 if (!fullTarget || !version) {
-  console.log('Usage: node scripts/set-version.js <target> [<name>] <version>');
+  console.log('Usage: node scripts/set-version.mjs <target> [<name>] <version>');
   console.log('');
   console.log('Targets:');
   console.log('  core              - packages/core + root + configs');
@@ -18,9 +22,9 @@ if (!fullTarget || !version) {
   console.log('  all               - core + plugins + agents');
   console.log('');
   console.log('Examples:');
-  console.log('  node scripts/set-version.js core 1.0.0');
-  console.log('  node scripts/set-version.js plugin vercel 0.2.0');
-  console.log('  node scripts/set-version.js agent wallet 0.3.0');
+  console.log('  node scripts/set-version.mjs core 1.0.0');
+  console.log('  node scripts/set-version.mjs plugin vercel 0.2.0');
+  console.log('  node scripts/set-version.mjs agent wallet 0.3.0');
   process.exit(1);
 }
 
@@ -85,15 +89,13 @@ const results = [];
 const allPlugins = getDirs('plugins');
 const allAgents = getDirs('agents');
 
-// ── core ──
 if (fullTarget === 'core' || fullTarget === 'all') {
   results.push(setJsonVersion(path.join(root, 'packages/core/package.json'), 'version', version));
   results.push(setJsonVersion(path.join(root, 'package.json'), 'version', version));
-  setAllConfigVersions(version);
+  results.push(setJsonVersion(path.join(configsDir, 'ton-ai-core.json'), 'version', version));
   replaceTgzInConfigs('ton-ai-core', version);
 }
 
-// ── all plugins ──
 if (fullTarget === 'plugins' || fullTarget === 'all') {
   for (const plugin of allPlugins) {
     const pkgPath = path.join(plugin.path, 'package.json');
@@ -105,7 +107,6 @@ if (fullTarget === 'plugins' || fullTarget === 'all') {
   }
 }
 
-// ── single plugin ──
 if (fullTarget.startsWith('plugin:')) {
   const pluginName = fullTarget.slice(7);
   const plugin = findPkg(pluginName, allPlugins);
@@ -121,7 +122,6 @@ if (fullTarget.startsWith('plugin:')) {
   replaceTgzInConfigs(tgzBase, version);
 }
 
-// ── all agents ──
 if (fullTarget === 'agents' || fullTarget === 'all') {
   for (const agent of allAgents) {
     const pkgPath = path.join(agent.path, 'package.json');
@@ -132,7 +132,6 @@ if (fullTarget === 'agents' || fullTarget === 'all') {
   }
 }
 
-// ── single agent ──
 if (fullTarget.startsWith('agent:')) {
   const agentName = fullTarget.slice(6);
   const agent = findPkg(agentName, allAgents);

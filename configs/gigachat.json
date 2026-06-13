@@ -10,7 +10,7 @@
     "build:core": "cd packages/core && npm install && npm run build && npm pack",
     "build:gigachat": "cd plugins/gigachat && npm install && npm run build && npm pack",
     "build:agent": "cd agents/gigachat && npm install",
-    "copy-packages": "mkdir -p agents/gigachat/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/gigachat/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped' && cp plugins/gigachat/ton-ai-gigachat-0.1.0.tgz agents/gigachat/node_modules/@ton-ai/ 2>/dev/null || echo 'GigaChat package copy skipped'",
+    "copy-packages": "mkdir -p agents/gigachat/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.2.0.tgz agents/gigachat/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped' && cp plugins/gigachat/ton-ai-gigachat-0.1.0.tgz agents/gigachat/node_modules/@ton-ai/ 2>/dev/null || echo 'GigaChat package copy skipped'",
     "rebuild": "npm run clean && npm run build:core && npm run build:gigachat && npm run build:agent && npm run copy-packages",
     "rebuild:quick": "npm run build:core && npm run build:gigachat && npm run copy-packages && cd agents/gigachat && npm install",
     "start:agent": "cd agents/gigachat && npm start",

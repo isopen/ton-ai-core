@@ -10,7 +10,7 @@
     "build:core": "cd packages/core && npm install && npm run build && npm pack",
     "build:lancedb": "cd plugins/lancedb && npm install && npm run build && npm pack",
     "build:agent": "cd agents/logger && npm install",
-    "copy-packages": "mkdir -p agents/logger/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/logger/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped' && cp plugins/lancedb/ton-ai-lancedb-0.1.0.tgz agents/logger/node_modules/@ton-ai/ 2>/dev/null || echo 'LanceDB package copy skipped'",
+    "copy-packages": "mkdir -p agents/logger/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.2.0.tgz agents/logger/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped' && cp plugins/lancedb/ton-ai-lancedb-0.1.0.tgz agents/logger/node_modules/@ton-ai/ 2>/dev/null || echo 'LanceDB package copy skipped'",
     "rebuild": "npm run clean && npm run build:core && npm run build:lancedb && npm run build:agent && npm run copy-packages",
     "rebuild:quick": "npm run build:core && npm run build:lancedb && npm run copy-packages && cd agents/logger && npm install",
     "start:agent": "cd agents/logger && npm start",
