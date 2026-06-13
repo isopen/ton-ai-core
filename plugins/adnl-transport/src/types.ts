@@ -6,6 +6,7 @@ export interface AdnlConfig {
     listenAddress?: string;
     peers?: Record<string, string>;
     keepAliveInterval?: number;
+    rekeyInterval?: number;
 }
 
 export interface PeerInfo {
@@ -18,4 +19,21 @@ export enum AdnlPacketType {
     HANDSHAKE = 0x01,
     ENCRYPTED = 0x02,
     KEEPALIVE = 0x03,
+}
+
+export enum TransportType {
+    ABRIDGED = 0xef,
+    INTERMEDIATE = 0xee,
+    PADDED_INTERMEDIATE = 0xdd,
+    FULL = 0xdd,
+}
+
+export interface SessionState {
+    authKey: Buffer;
+    salt: bigint;
+    sessionId: bigint;
+    lastMessageId: bigint;
+    seqNo: number;
+    lastActivity: number;
+    messageCount: number;
 }

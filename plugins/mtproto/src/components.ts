@@ -258,9 +258,13 @@ export class CryptoClient extends EventEmitter {
     }
 
     private nextSeqNo(session: SessionState, contentRelated: boolean): number {
-        const seqNo = session.lastSeqNo;
+        const currentSeqNo = session.lastSeqNo;
+        let seqNo: number;
         if (contentRelated) {
-            session.lastSeqNo += 1;
+            seqNo = (currentSeqNo * 2) + 1;
+            session.lastSeqNo = currentSeqNo + 1;
+        } else {
+            seqNo = currentSeqNo * 2;
         }
         return seqNo;
     }

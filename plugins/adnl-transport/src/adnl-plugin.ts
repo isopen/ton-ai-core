@@ -5,12 +5,15 @@ import { AdnlNode } from './adnl-node';
 export { AdnlNode } from './adnl-node';
 export * from './types';
 export * from './crypto-backend';
+export * from './transport-protocol';
+export * from './obfuscation';
+export * from './container';
 
 export class AdnlTransportPlugin extends BasePlugin<AdnlConfig> {
     readonly metadata = {
         name: 'adnl-transport',
-        version: '0.2.0',
-        description: 'ADNL transport over UDP with pluggable crypto',
+        version: '0.1.0',
+        description: 'ADNL transport over UDP with MTProto compliance',
         dependencies: [] as string[]
     };
 
@@ -18,7 +21,8 @@ export class AdnlTransportPlugin extends BasePlugin<AdnlConfig> {
     private running = false;
     private onNewPeer?: (peerId: string) => void;
     private onSecureChannel?: (peerId: string) => void;
-    private onMessage?: (data: { peerId: string; data: Buffer }) => void;
+    private onMessage?: (data: { peerId: string; data: Buffer; msgId?: bigint; seqNo?: number }) => void;
+    private onRekey?: (peerId: string) => void;
 
     protected async onInit() {
         if (!this.config.cryptoBackend) {
@@ -32,10 +36,13 @@ export class AdnlTransportPlugin extends BasePlugin<AdnlConfig> {
         await this.node.start();
         this.onNewPeer = (peerId: string) => this.events.emit('adnl:peer:new', peerId);
         this.onSecureChannel = (peerId: string) => this.events.emit('adnl:secureChannel', peerId);
-        this.onMessage = ({ peerId, data }: { peerId: string; data: Buffer }) => this.events.emit('adnl:message', { peerId, data });
+        this.onMessage = (data: { peerId: string; data: Buffer; msgId?: bigint; seqNo?: number }) =>
+            this.events.emit('adnl:message', data);
+        this.onRekey = (peerId: string) => this.events.emit('adnl:rekey', peerId);
         this.node.on('newPeer', this.onNewPeer);
         this.node.on('secureChannel', this.onSecureChannel);
         this.node.on('message', this.onMessage);
+        this.node.on('rekey', this.onRekey);
         this.running = true;
     }
 
@@ -57,9 +64,11 @@ export class AdnlTransportPlugin extends BasePlugin<AdnlConfig> {
         if (this.onNewPeer) this.node.removeListener('newPeer', this.onNewPeer);
         if (this.onSecureChannel) this.node.removeListener('secureChannel', this.onSecureChannel);
         if (this.onMessage) this.node.removeListener('message', this.onMessage);
+        if (this.onRekey) this.node.removeListener('rekey', this.onRekey);
         this.onNewPeer = undefined;
         this.onSecureChannel = undefined;
         this.onMessage = undefined;
+        this.onRekey = undefined;
     }
 
     getNode(): AdnlNode {

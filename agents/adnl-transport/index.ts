@@ -1,11 +1,13 @@
 import { EventEmitter } from 'events';
 import { MTProtoCryptoPlugin } from '@ton-ai/mtproto';
 import { AdnlTransportPlugin } from '@ton-ai/adnl-transport';
-import { ICryptoBackend } from '@ton-ai/adnl-transport';
+import { ICryptoBackend, SessionState } from '@ton-ai/adnl-transport';
 import { crypton } from '@ton-ai/core';
 import crypto from 'crypto';
 
 class MTProtoCryptoBackend implements ICryptoBackend {
+    private sessions = new Map<string, SessionState>();
+
     constructor(private plugin: MTProtoCryptoPlugin) { }
 
     generateDHKeys() {
@@ -19,9 +21,19 @@ class MTProtoCryptoBackend implements ICryptoBackend {
     async createSession(peerId: string, sharedSecret: Buffer) {
         const authKey = await this.plugin.generateAuthKey(sharedSecret);
         const hash = crypto.createHash('sha256').update(sharedSecret).digest();
-        const salt = hash.subarray(0, 8);
+        const salt = hash.readBigUInt64BE(0);
         const sessionId = hash.readBigUInt64BE(8) & 0x7FFFFFFFFFFFFFFFn;
-        this.plugin.setSessionKeys(peerId, authKey, salt, sessionId);
+        this.plugin.setSessionKeys(peerId, authKey, hash.subarray(0, 8), sessionId);
+
+        this.sessions.set(peerId, {
+            authKey: authKey.key,
+            salt,
+            sessionId,
+            lastMessageId: 0n,
+            seqNo: 0,
+            lastActivity: Date.now(),
+            messageCount: 0,
+        });
     }
 
     async encrypt(peerId: string, plaintext: Buffer) {
@@ -40,6 +52,32 @@ class MTProtoCryptoBackend implements ICryptoBackend {
 
     removeSession(peerId: string) {
         this.plugin.removeSession(peerId);
+        this.sessions.delete(peerId);
+    }
+
+    getSessionState(peerId: string): SessionState | undefined {
+        return this.sessions.get(peerId);
+    }
+
+    updateSalt(peerId: string, salt: bigint): void {
+        const session = this.sessions.get(peerId);
+        if (session) {
+            session.salt = salt;
+        }
+    }
+
+    async rekeySession(peerId: string): Promise<void> {
+        const newKeys = this.generateDHKeys();
+        const session = this.sessions.get(peerId);
+        if (!session) return;
+
+        const sharedSecret = this.computeSharedSecret(newKeys.privateKey, newKeys.publicKey);
+        const newAuthKey = await this.plugin.generateAuthKey(sharedSecret);
+
+        session.authKey = newAuthKey.key;
+        session.messageCount = 0;
+        session.lastActivity = Date.now();
+        this.plugin.setSessionKeys(peerId, newAuthKey, Buffer.alloc(8), session.sessionId);
     }
 }
 
@@ -107,13 +145,22 @@ async function main() {
 
     const testMessage = Buffer.from('Hello Bob! This is a secret message via ADNL.', 'utf-8');
     console.log(`Alice sending: "${testMessage.toString()}"`);
-    await alice.adnl.getNode().send(bobPeerId, testMessage);
 
     bob.adnl.getNode().once('message', ({ peerId, data }: { peerId: string; data: Buffer }) => {
         console.log(`Bob received from ${peerId}: "${data.toString()}"\n`);
         console.log('Demo completed successfully!');
         setTimeout(() => process.exit(0), 100);
     });
+
+    bob.adnl.getNode().once('error', (err: Error) => {
+        console.error('Bob error:', err.message);
+    });
+
+    try {
+        await alice.adnl.getNode().send(bobPeerId, testMessage);
+    } catch (e: any) {
+        console.error('Send error:', e.message);
+    }
 
     setTimeout(() => {
         console.error('Timeout: message not received');
