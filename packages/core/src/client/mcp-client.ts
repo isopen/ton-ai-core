@@ -8,6 +8,7 @@ import {
   Network,
   MemoryStorageAdapter
 } from '@ton/walletkit';
+import { getRandomBytes } from '../crypton/utils';
 import { MCP_EVENTS } from '../events';
 import {
   MCPConfig,
@@ -218,7 +219,7 @@ export class MCPClient extends EventEmitter {
         headers['TONCENTER_API_KEY'] = this.config.apiKey;
       }
 
-      const id = parseInt(require('crypto').randomBytes(4).toString('hex'), 16);
+      const id = parseInt(getRandomBytes(4).toString('hex'), 16);
       const requestBody = {
         jsonrpc: '2.0',
         method,

@@ -12,7 +12,13 @@
     "build": "npm run build -w @ton-ai/core && npm run build -ws --if-present",
     "build:core": "npm run build -w @ton-ai/core",
     "clean": "npm run clean -ws --if-present",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "version:core": "node scripts/set-version.js core",
+    "version:plugins": "node scripts/set-version.js plugins",
+    "version:plugin": "node scripts/set-version.js plugin",
+    "version:agents": "node scripts/set-version.js agents",
+    "version:agent": "node scripts/set-version.js agent",
+    "version:all": "node scripts/set-version.js all"
   },
   "keywords": [
     "ton",

@@ -8,17 +8,13 @@
     "clean:adnl-transport": "cd plugins/adnl-transport && npm run clean",
     "clean:mtproto": "cd plugins/mtproto && npm run clean",
     "clean:agent": "cd agents/adnl-transport && rm -rf dist node_modules package-lock.json",
-
     "build:core": "cd packages/core && npm install && npm run build && npm pack",
     "build:adnl-transport": "cd plugins/adnl-transport && npm install && npm run build && npm pack",
     "build:mtproto": "cd plugins/mtproto && npm install && npm run build && npm pack",
     "build:agent": "cd agents/adnl-transport && npm install",
-
     "copy-packages": "mkdir -p agents/adnl-transport/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.1.0.tgz agents/adnl-transport/node_modules/@ton-ai/ 2>/dev/null && cp plugins/adnl-transport/ton-ai-adnl-transport-0.1.0.tgz agents/adnl-transport/node_modules/@ton-ai/ 2>/dev/null && cp plugins/mtproto/ton-ai-mtproto-0.1.0.tgz agents/adnl-transport/node_modules/@ton-ai/ 2>/dev/null || echo 'Package copy completed'",
-
     "rebuild": "npm run clean && npm run build:core && npm run build:adnl-transport && npm run build:mtproto && npm run build:agent && npm run copy-packages",
     "rebuild:quick": "npm run build:core && npm run build:adnl-transport && npm run build:mtproto && npm run copy-packages && cd agents/adnl-transport && npm install",
-
     "start:agent": "cd agents/adnl-transport && npm start",
     "dev": "npm run rebuild && npm run start:agent"
   },

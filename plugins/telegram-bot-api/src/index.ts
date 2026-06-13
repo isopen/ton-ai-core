@@ -1,4 +1,4 @@
-import { BasePlugin } from '@ton-ai/core';
+import { BasePlugin, crypton } from '@ton-ai/core';
 import { TelegramBotComponents } from './components';
 import { TelegramBotSkills } from './skills';
 import {
@@ -215,7 +215,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         this.logger.info('Telegram Bot API plugin activated');
 
         if (this.config.webhookUrl) {
-            const secretToken = this.config.webhookSecretToken || require('crypto').randomBytes(16).toString('hex');
+            const secretToken = this.config.webhookSecretToken || crypton.getRandomBytes(16).toString('hex');
             await this.setWebhook(this.config.webhookUrl, {
                 max_connections: this.config.webhookMaxConnections,
                 allowed_updates: this.config.allowedUpdates,
@@ -452,7 +452,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
 
     onUpdate(callback: (update: Update) => void): string {
         this.checkInitialized();
-        const id = `callback_${require('crypto').randomBytes(8).toString('hex')}`;
+        const id = `callback_${crypton.getRandomBytes(8).toString('hex')}`;
         this.components.updates.registerCallback(id, callback);
         return id;
     }
