@@ -1,9 +1,7 @@
 import { WebSocket, WebSocketServer } from 'ws';
 import { EventEmitter } from 'events';
-
-const INTERMEDIATE_MAGIC = 0xEEEEEEEE;
-const PADDED_INTERMEDIATE_MAGIC = 0xDDDDDDDD;
-const ABRIDGED_MAGIC = 0xEF;
+import { crypton } from '@ton-ai/core';
+import { MAX_MESSAGE_SIZE, MAX_CONNECTIONS, INTERMEDIATE_MAGIC, PADDED_INTERMEDIATE_MAGIC, ABRIDGED_MAGIC, FULL_MAGIC } from './types';
 
 export enum WsTransportType {
     ABRIDGED,
@@ -74,7 +72,11 @@ export class WsTransport extends EventEmitter {
     }
 
     private handleConnection(ws: WebSocket): void {
-        const addr = `ws-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        if (this.connections.size >= MAX_CONNECTIONS) {
+            ws.close();
+            return;
+        }
+        const addr = `ws-${Date.now()}-${crypton.getRandomBytes(8).toString('hex')}`;
         this.connections.set(addr, {
             socket: ws,
             buffer: Buffer.alloc(0),
@@ -101,6 +103,11 @@ export class WsTransport extends EventEmitter {
             }
 
             state.buffer = Buffer.concat([state.buffer, buffer]);
+            if (state.buffer.length > MAX_MESSAGE_SIZE) {
+                ws.close();
+                this.connections.delete(id);
+                return;
+            }
             this.processBuffer(id, state);
         });
 
@@ -136,6 +143,9 @@ export class WsTransport extends EventEmitter {
                 state.socket.send(abridgedHeader);
                 break;
             case WsTransportType.FULL:
+                const fullHeader = Buffer.alloc(4);
+                fullHeader.writeUInt32LE(FULL_MAGIC, 0);
+                state.socket.send(fullHeader);
                 break;
         }
     }
@@ -191,6 +201,7 @@ export class WsTransport extends EventEmitter {
     private extractIntermediate(state: ConnectionState): { payload: Buffer; consumed: number } | null {
         if (state.buffer.length < 4) return null;
         const len = state.buffer.readUInt32LE(0);
+        if (len > MAX_MESSAGE_SIZE) return null;
         if (state.buffer.length < 4 + len) return null;
         return {
             payload: state.buffer.subarray(4, 4 + len),
@@ -201,6 +212,7 @@ export class WsTransport extends EventEmitter {
     private extractPaddedIntermediate(state: ConnectionState): { payload: Buffer; consumed: number } | null {
         if (state.buffer.length < 4) return null;
         const len = state.buffer.readUInt32LE(0);
+        if (len > MAX_MESSAGE_SIZE) return null;
         if (state.buffer.length < 4 + len) return null;
         const payloadLen = len & 0x7FFFFFFF;
         return {
@@ -215,6 +227,14 @@ export class WsTransport extends EventEmitter {
         let len = state.buffer.readUInt8(offset);
         offset++;
 
+        if (len === 0xef) {
+            if (state.buffer.length < offset + 4) return null;
+            offset += 4;
+            if (state.buffer.length < offset) return null;
+            len = state.buffer.readUInt8(offset);
+            offset++;
+        }
+
         if (len === 0x7f) {
             if (state.buffer.length < offset + 3) return null;
             len = state.buffer.readUInt16LE(offset) | (state.buffer.readUInt8(offset + 2) << 16);
@@ -222,6 +242,7 @@ export class WsTransport extends EventEmitter {
         }
 
         const payloadLen = len * 4;
+        if (payloadLen > MAX_MESSAGE_SIZE) return null;
         if (state.buffer.length < offset + payloadLen) return null;
         return {
             payload: state.buffer.subarray(offset, offset + payloadLen),
@@ -229,14 +250,23 @@ export class WsTransport extends EventEmitter {
         };
     }
 
-    private extractFull(state: ConnectionState): { payload: Buffer; consumed: number } | null {
+    private extractFull(state: ConnectionState, retries: number = 0): { payload: Buffer; consumed: number } | null {
         if (state.buffer.length < 12) return null;
         const len = state.buffer.readUInt32LE(0);
-        if (state.buffer.length < len) return null;
-        const payloadLen = len - 12;
+        if (len < 8 || len > MAX_MESSAGE_SIZE) return null;
+        if (state.buffer.length < len + 4) return null;
+        const payloadLen = len - 8;
+        const crcData = state.buffer.subarray(0, len);
+        const expectedCrc = state.buffer.readUInt32LE(len);
+        const actualCrc = this.crc32(crcData);
+        if (expectedCrc !== actualCrc) {
+            if (retries >= 3) return null;
+            state.buffer = state.buffer.subarray(len + 4);
+            return this.extractFull(state, retries + 1);
+        }
         return {
             payload: state.buffer.subarray(8, 8 + payloadLen),
-            consumed: len,
+            consumed: len + 4,
         };
     }
 
@@ -253,12 +283,15 @@ export class WsTransport extends EventEmitter {
                 state.socket.send(Buffer.concat([intermHeader, data]));
                 break;
             case WsTransportType.PADDED_INTERMEDIATE:
-                const padding = Math.floor(Math.random() * 16);
-                const paddedLen = data.length + padding;
-                const paddedHeader = Buffer.alloc(4);
-                paddedHeader.writeUInt32LE(paddedLen, 0);
-                const paddedData = Buffer.concat([paddedHeader, data, Buffer.alloc(padding)]);
-                state.socket.send(paddedData);
+                let wsPadding = crypton.getRandomBytes(1)[0] & 0x0F;
+                if ((data.length + wsPadding) % 4 !== 0) {
+                    wsPadding = (4 - ((data.length + wsPadding) % 4)) % 4;
+                }
+                const wsPaddedLen = data.length + wsPadding;
+                const wsPaddedHeader = Buffer.alloc(4);
+                wsPaddedHeader.writeUInt32LE(wsPaddedLen, 0);
+                const wsPaddedData = Buffer.concat([wsPaddedHeader, data, Buffer.alloc(wsPadding)]);
+                state.socket.send(wsPaddedData);
                 break;
             case WsTransportType.ABRIDGED:
                 const abrPaddedData = data.length % 4 === 0 ? data : Buffer.concat([data, Buffer.alloc(4 - (data.length % 4))]);

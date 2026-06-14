@@ -2,6 +2,8 @@ import { EventEmitter } from 'events';
 import { ICryptoBackend } from './crypto-backend';
 import { WsTransport, WsTransportType } from './ws-transport';
 import { crypton } from '@ton-ai/core';
+import { generateInitPayload, initObfuscation, obfuscateData, deobfuscateData, ObfuscationState } from './obfuscation';
+import { REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, DEFAULT_HOST, HANDSHAKE_TIMEOUT_MS } from './types';
 
 export interface WsConfig {
     cryptoBackend: ICryptoBackend;
@@ -11,6 +13,7 @@ export interface WsConfig {
     transportType: WsTransportType;
     keepAliveInterval?: number;
     rekeyInterval?: number;
+    enableObfuscation?: boolean;
 }
 
 export class WsNode extends EventEmitter {
@@ -18,17 +21,17 @@ export class WsNode extends EventEmitter {
     private crypto: ICryptoBackend;
     private peers = new Map<string, string>();
     private pendingDH = new Map<string, { privateKey: bigint; publicKey: bigint }>();
+    private obfuscationStates = new Map<string, ObfuscationState>();
     private config: WsConfig;
     private peerConnIds = new Map<string, string>();
     private connToPeer = new Map<string, string>();
-
     private running = false;
 
     constructor(config: WsConfig, crypto: ICryptoBackend) {
         super();
         this.config = config;
         this.crypto = crypto;
-        this.transport = new WsTransport(config.port, config.host, config.transportType, true);
+        this.transport = new WsTransport(config.port, config.host || DEFAULT_HOST, config.transportType, true);
 
         if (config.peers) {
             for (const [peerId, addr] of Object.entries(config.peers)) {
@@ -93,16 +96,29 @@ export class WsNode extends EventEmitter {
             throw new Error('Session not yet established, handshake started');
         }
 
+        await this.checkRekeyNeeded(peerId);
+
         const { ciphertext, msgKey } = await this.crypto.encrypt(peerId, data);
 
+        const session = this.crypto.getSessionState(peerId);
+        const authKeyId = Buffer.alloc(8);
+        if (session) {
+            const hash = await crypton.sha1(session.authKey);
+            hash.copy(authKeyId, 0, 0, 8);
+        }
+
         const packet = Buffer.concat([
+            authKeyId,
             Buffer.from([0x02]),
             msgKey,
             ciphertext,
         ]);
 
         const connId = this.peerConnIds.get(peerId) || `peer:${peerId}`;
-        this.transport.send(packet, connId);
+        const obfs = this.obfuscationStates.get(peerId);
+        const finalPacket = obfs ? obfuscateData(packet, obfs) : packet;
+
+        this.transport.send(finalPacket, connId);
     }
 
     async initiateHandshake(peerId: string): Promise<void> {
@@ -113,6 +129,7 @@ export class WsNode extends EventEmitter {
         const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
 
         const packet = Buffer.concat([
+            Buffer.alloc(8),
             Buffer.from([0x01]),
             nonce,
             pubKeyBytes,
@@ -122,17 +139,25 @@ export class WsNode extends EventEmitter {
         this.transport.send(packet, connId);
     }
 
-    private async handleMessage(data: Buffer, connId: string) {
-        if (data.length < 1) return;
-
-        const type = data[0];
-        const payload = data.subarray(1);
+    private async handleMessage(rawData: Buffer, connId: string) {
+        if (rawData.length < 9) return;
 
         const peerId = this.resolvePeerId(connId);
+        let data = rawData;
+        if (peerId) {
+            const obfs = this.obfuscationStates.get(peerId);
+            if (obfs) {
+                data = deobfuscateData(rawData, obfs);
+            }
+        }
+
+        const authKeyId = data.subarray(0, 8);
+        const type = data[8];
+        const payload = data.subarray(9);
 
         if (type === 0x01) {
             await this.handleHandshake(payload, peerId, connId);
-        } else if (type === 0x02) {
+        } else if (authKeyId.some(b => b !== 0)) {
             if (!peerId) return;
             await this.handleEncrypted(payload, peerId);
         }
@@ -146,8 +171,17 @@ export class WsNode extends EventEmitter {
         const peerPubKey = crypton.bufferToBigInt(peerPubKeyBytes);
 
         if (!peerId) {
-            const peerHash = await crypton.sha1(peerPubKeyBytes);
-            peerId = crypton.bytesToHex(peerHash.subarray(0, 20));
+            for (const [id] of this.pendingDH) {
+                if (!this.crypto.hasSession(id)) {
+                    peerId = id;
+                    break;
+                }
+            }
+            if (!peerId) {
+                const nonce = crypton.getRandomBytes(8);
+                const peerHash = await crypton.sha1(Buffer.concat([peerPubKeyBytes, nonce]));
+                peerId = crypton.bytesToHex(peerHash.subarray(0, 20));
+            }
             this.peers.set(peerId, `peer:${peerId}`);
             this.connToPeer.set(connId, peerId);
         }
@@ -162,7 +196,9 @@ export class WsNode extends EventEmitter {
 
             const myNonce = crypton.getRandomBytes(16);
             const myPub = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
+
             const packet = Buffer.concat([
+                Buffer.alloc(8),
                 Buffer.from([0x01]),
                 myNonce,
                 myPub,
@@ -178,6 +214,12 @@ export class WsNode extends EventEmitter {
         this.pendingDH.delete(peerId);
 
         await this.crypto.createSession(peerId, sharedSecret);
+
+        if (this.config.enableObfuscation) {
+            const initPayload = generateInitPayload();
+            this.obfuscationStates.set(peerId, await initObfuscation(initPayload));
+        }
+
         this.emit('secureChannel', peerId);
     }
 
@@ -191,6 +233,22 @@ export class WsNode extends EventEmitter {
             this.emit('message', { peerId, data: plaintext });
         } catch (e: any) {
             this.emit('error', e);
+        }
+    }
+
+    private async checkRekeyNeeded(peerId: string): Promise<void> {
+        const session = this.crypto.getSessionState(peerId);
+        if (!session) return;
+
+        const rekeyThreshold = this.config.rekeyInterval || REKEY_MESSAGE_THRESHOLD;
+        const timeThreshold = REKEY_TIME_THRESHOLD_MS;
+
+        const messageCountExceeded = session.messageCount >= rekeyThreshold;
+        const timeExceeded = Date.now() - session.lastActivity > timeThreshold;
+
+        if (messageCountExceeded || timeExceeded) {
+            await this.crypto.rekeySession(peerId);
+            this.emit('rekey', peerId);
         }
     }
 

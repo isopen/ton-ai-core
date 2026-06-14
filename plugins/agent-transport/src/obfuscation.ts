@@ -1,15 +1,12 @@
 import { crypton } from '@ton-ai/core';
-import crypto from 'crypto';
-
-const OBFUSCATION_INIT_SIZE = 64;
+import { OBFUSCATION_INIT_SIZE } from './types';
 
 const BLOCKED_PREFIXES = [
     Buffer.from([0xdd, 0xdd, 0xdd, 0xdd]),
     Buffer.from([0xee, 0xee, 0xee, 0xee]),
-    Buffer.from('POST'),
-    Buffer.from('GET'),
-    Buffer.from('HEAD'),
-    Buffer.from([0x16, 0x03, 0x01, 0x02]),
+    Buffer.from([0x50, 0x4f, 0x53, 0x54]),
+    Buffer.from([0x47, 0x45, 0x54, 0x00]),
+    Buffer.from([0x48, 0x45, 0x41, 0x44]),
 ];
 
 export interface ObfuscationState {
@@ -23,6 +20,7 @@ export interface ObfuscationState {
 
 function isBlockedPrefix(init: Buffer): boolean {
     if (init[0] === 0xef) return true;
+    if (init[0] === 0x16 && init[1] === 0x03) return true;
     const firstInt = init.readUInt32LE(0);
     if (firstInt === 0x00000000) return true;
     for (const prefix of BLOCKED_PREFIXES) {
@@ -47,7 +45,7 @@ export function generateInitPayload(protocolId?: Buffer): Buffer {
     return init;
 }
 
-export function deriveObfuscationKeys(init: Buffer, secret?: Buffer): ObfuscationState {
+export async function deriveObfuscationKeys(init: Buffer, secret?: Buffer): Promise<ObfuscationState> {
     const initRev = Buffer.alloc(OBFUSCATION_INIT_SIZE);
     for (let i = 0; i < OBFUSCATION_INIT_SIZE; i++) {
         initRev[i] = init[OBFUSCATION_INIT_SIZE - 1 - i];
@@ -57,13 +55,8 @@ export function deriveObfuscationKeys(init: Buffer, secret?: Buffer): Obfuscatio
     let decryptKey = Buffer.from(initRev.subarray(8, 40));
 
     if (secret) {
-        const sha256 = crypto.createHash('sha256');
-        sha256.update(Buffer.concat([encryptKey, secret]));
-        encryptKey = sha256.digest();
-
-        const sha256b = crypto.createHash('sha256');
-        sha256b.update(Buffer.concat([decryptKey, secret]));
-        decryptKey = sha256b.digest();
+        encryptKey = Buffer.from(await crypton.sha256(Buffer.concat([encryptKey, secret])));
+        decryptKey = Buffer.from(await crypton.sha256(Buffer.concat([decryptKey, secret])));
     }
 
     return {
@@ -76,7 +69,7 @@ export function deriveObfuscationKeys(init: Buffer, secret?: Buffer): Obfuscatio
     };
 }
 
-export function initObfuscation(init: Buffer, secret?: Buffer): ObfuscationState {
+export async function initObfuscation(init: Buffer, secret?: Buffer): Promise<ObfuscationState> {
     return deriveObfuscationKeys(init, secret);
 }
 
@@ -87,9 +80,11 @@ function aes256CtrProcess(data: Buffer, key: Buffer, iv: Buffer, counter: number
 
     while (offset < data.length) {
         const counterBlock = Buffer.alloc(16);
-        counterBlock.writeUInt32LE(currentCounter, 0);
+        iv.copy(counterBlock, 0, 0, 12);
+        counterBlock.writeUInt32LE(currentCounter, 12);
 
-        const encrypted = crypto.createCipheriv('aes-256-ecb', key, null).update(counterBlock);
+        const aesEcb = new crypton.AES256ECB(key);
+        const encrypted = aesEcb.encryptBlock(counterBlock);
 
         const chunkLen = Math.min(16, data.length - offset);
         for (let i = 0; i < chunkLen; i++) {
@@ -121,4 +116,19 @@ export function createObfuscatedInit(init: Buffer): Buffer {
     init.copy(result, 0, 0, 56);
     encrypted.copy(result, 56, 56, 64);
     return result;
+}
+
+export async function createSharedObfuscation(initPayload: Buffer): Promise<ObfuscationState> {
+    return deriveObfuscationKeys(initPayload);
+}
+
+export async function rotateObfuscationKeys(state: ObfuscationState): Promise<void> {
+    const newInit = generateInitPayload();
+    const newState = await deriveObfuscationKeys(newInit);
+    state.encryptKey = newState.encryptKey;
+    state.encryptIv = newState.encryptIv;
+    state.decryptKey = newState.decryptKey;
+    state.decryptIv = newState.decryptIv;
+    state.encryptCounter = 0;
+    state.decryptCounter = 0;
 }

@@ -15,6 +15,7 @@ export class MTCryptoServices {
     private ready: boolean = false;
     private currentSessionId: bigint = 0n;
     private msgIdCounter: bigint = 0n;
+    private seqNo: number = 0;
 
     constructor(context: PluginContext, components: CryptoComponents, config: MTCryptoConfig) {
         this.context = context;
@@ -69,16 +70,24 @@ export class MTCryptoServices {
     }
 
     private nextMsgId(): bigint {
-        const now = (BigInt(Math.floor(Date.now() / 1000)) & 0x1FFFFFFFn) << 32n;
+        const now = (BigInt(Math.floor(Date.now() / 1000)) & 0xFFFFFFFFn) << 32n;
         this.msgIdCounter = (this.msgIdCounter + 1n) & 0xFFFFFFFFn;
-        return (now + this.msgIdCounter) & 0x7FFFFFFFFFFFFFFFn;
+        const raw = now + this.msgIdCounter;
+        return (raw - (raw % 4n)) & 0x7FFFFFFFFFFFFFFFn;
+    }
+
+    private nextSeqNo(): number {
+        const seqNo = (this.seqNo * 2) + 1;
+        this.seqNo++;
+        return seqNo;
     }
 
     async encrypt(data: Buffer | string): Promise<EncryptedData> {
         this.ensureSessionId();
         const buffer = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
         const messageId = this.nextMsgId();
-        const encrypted = await this.components.client.encryptMessage(buffer, this.currentSessionId, messageId, 0);
+        const seqNo = this.nextSeqNo();
+        const encrypted = await this.components.client.encryptMessage(buffer, this.currentSessionId, messageId, seqNo);
         this.context.events.emit('mtproto:encrypted', { size: encrypted.data.length });
         return { ...encrypted, sessionId: this.currentSessionId };
     }

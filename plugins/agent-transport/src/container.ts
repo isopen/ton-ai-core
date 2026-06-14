@@ -1,13 +1,11 @@
 import { crypton } from '@ton-ai/core';
+import { CONTAINER_CONSTRUCTOR, GZIP_CONTAINER_CONSTRUCTOR } from './types';
 
 export interface ContainerMessage {
     msgId: bigint;
     seqNo: number;
     body: Buffer;
 }
-
-const CONTAINER_CONSTRUCTOR = 0x73f1f8dc;
-const GZIP_CONTAINER_CONSTRUCTOR = 0x00000000;
 
 export function encodeContainer(messages: ContainerMessage[]): Buffer {
     if (messages.length === 1) {

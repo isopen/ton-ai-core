@@ -1,10 +1,22 @@
-import { TransportType } from './types';
+import { TransportType, INTERMEDIATE_HEADER_SIZE, ABRIDGED_HEADER_SIZE } from './types';
+import { crypton } from '@ton-ai/core';
 
 export { TransportType };
 
-const INTERMEDIATE_HEADER_SIZE = 4;
-const ABRIDGED_HEADER_SIZE = 1;
-const FULL_HEADER_SIZE = 12;
+function crc32(data: Buffer): number {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < data.length; i++) {
+        crc ^= data[i];
+        for (let j = 0; j < 8; j++) {
+            if (crc & 1) {
+                crc = (crc >>> 1) ^ 0xEDB88320;
+            } else {
+                crc = crc >>> 1;
+            }
+        }
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+}
 
 export function encodeIntermediate(payload: Buffer): Buffer {
     const header = Buffer.alloc(INTERMEDIATE_HEADER_SIZE);
@@ -36,44 +48,77 @@ export function decodeAbridged(data: Buffer): Buffer | null {
     if (data.length < ABRIDGED_HEADER_SIZE) return null;
     let headerSize = 1;
     let len = data.readUInt8(0);
+    if (len === 0xef) {
+        if (data.length < 5) return null;
+        headerSize = 5;
+        len = data.readUInt8(4);
+    }
     if (len === 0x7f) {
-        if (data.length < 3) return null;
-        len = data.readUInt16LE(1);
-        headerSize = 3;
+        if (data.length < headerSize + 3) return null;
+        len = data.readUInt16LE(headerSize) | (data.readUInt8(headerSize + 2) << 16);
+        headerSize += 3;
     }
     const payloadLen = len * 4;
     if (data.length < headerSize + payloadLen) return null;
     return data.subarray(headerSize, headerSize + payloadLen);
 }
 
+export function encodePaddedIntermediate(payload: Buffer): Buffer {
+    let padding = crypton.getRandomBytes(1)[0] & 0x0F;
+    if ((payload.length + padding) % 4 !== 0) {
+        padding = (4 - ((payload.length + padding) % 4)) % 4;
+    }
+    const totalLen = payload.length + padding;
+    const header = Buffer.alloc(4);
+    header.writeUInt32LE(totalLen, 0);
+    return Buffer.concat([header, payload, Buffer.alloc(padding)]);
+}
+
+export function decodePaddedIntermediate(data: Buffer): Buffer | null {
+    if (data.length < 4) return null;
+    const len = data.readUInt32LE(0);
+    if (data.length < 4 + len) return null;
+    return data.subarray(4, 4 + len);
+}
+
 export function encodeFull(
-    msgId: bigint,
     seqNo: number,
     payload: Buffer
 ): Buffer {
-    const header = Buffer.alloc(FULL_HEADER_SIZE);
-    header.writeBigUInt64LE(msgId, 0);
-    header.writeInt32LE(seqNo, 8);
-    header.writeInt32LE(payload.length, 12);
-    return Buffer.concat([header, payload]);
+    const bodyLen = 8 + payload.length;
+    const header = Buffer.alloc(8);
+    header.writeUInt32LE(bodyLen, 0);
+    header.writeUInt32LE(seqNo, 4);
+    const crcData = Buffer.concat([header, payload]);
+    const crc = crc32(crcData);
+    const crcBuf = Buffer.alloc(4);
+    crcBuf.writeUInt32LE(crc, 0);
+    return Buffer.concat([header, payload, crcBuf]);
 }
 
-export function decodeFull(data: Buffer): { msgId: bigint; seqNo: number; payload: Buffer } | null {
-    if (data.length < FULL_HEADER_SIZE + 4) return null;
-    const msgId = data.readBigUInt64LE(0);
-    const seqNo = data.readInt32LE(8);
-    const bodyLen = data.readInt32LE(12);
-    if (data.length < FULL_HEADER_SIZE + bodyLen) return null;
-    const payload = data.subarray(FULL_HEADER_SIZE, FULL_HEADER_SIZE + bodyLen);
-    return { msgId, seqNo, payload };
+export function decodeFull(data: Buffer): { seqNo: number; payload: Buffer } | null {
+    if (data.length < 12) return null;
+    const bodyLen = data.readUInt32LE(0);
+    if (data.length < bodyLen + 4) return null;
+    const crcData = data.subarray(0, bodyLen);
+    const expectedCrc = data.readUInt32LE(bodyLen);
+    const actualCrc = crc32(crcData);
+    if (expectedCrc !== actualCrc) return null;
+    const seqNo = data.readUInt32LE(4);
+    const payload = data.subarray(8, bodyLen);
+    return { seqNo, payload };
 }
 
 export function wrapPayload(payload: Buffer, type: TransportType): Buffer {
     switch (type) {
         case TransportType.INTERMEDIATE:
             return encodeIntermediate(payload);
+        case TransportType.PADDED_INTERMEDIATE:
+            return encodePaddedIntermediate(payload);
         case TransportType.ABRIDGED:
             return encodeAbridged(payload);
+        case TransportType.FULL:
+            return encodeFull(0, payload);
         default:
             return encodeIntermediate(payload);
     }
@@ -83,8 +128,14 @@ export function unwrapPayload(data: Buffer, type: TransportType): Buffer | null 
     switch (type) {
         case TransportType.INTERMEDIATE:
             return decodeIntermediate(data);
+        case TransportType.PADDED_INTERMEDIATE:
+            return decodePaddedIntermediate(data);
         case TransportType.ABRIDGED:
             return decodeAbridged(data);
+        case TransportType.FULL: {
+            const result = decodeFull(data);
+            return result?.payload ?? null;
+        }
         default:
             return decodeIntermediate(data);
     }

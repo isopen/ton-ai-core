@@ -1,13 +1,9 @@
 import { EventEmitter } from 'events';
 import { ICryptoBackend } from './crypto-backend';
 import { UdpTransport } from './udp-transport';
-import { UdpConfig, PeerInfo, UdpPacketType, SessionState } from './types';
+import { UdpConfig, PeerInfo, UdpPacketType, SessionState, MAX_PEERS, DEFAULT_HOST, HANDSHAKE_TIMEOUT_MS, REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX } from './types';
 import { crypton } from '@ton-ai/core';
 import { encodeContainer, ContainerMessage } from './container';
-
-const HANDSHAKE_TIMEOUT_MS = 30000;
-const REKEY_MESSAGE_THRESHOLD = 100;
-const REKEY_TIME_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class UdpNode extends EventEmitter {
     private transport: UdpTransport;
@@ -17,12 +13,13 @@ export class UdpNode extends EventEmitter {
     private keepAliveTimer?: NodeJS.Timeout;
     private config: UdpConfig;
     private messageHandler?: (msg: Buffer, rinfo: any) => void;
+    private rateLimits = new Map<string, { count: number; windowStart: number }>();
 
     constructor(config: UdpConfig, crypto: ICryptoBackend) {
         super();
         this.config = config;
         this.crypto = crypto;
-        this.transport = new UdpTransport(config.listenPort, config.listenAddress);
+        this.transport = new UdpTransport(config.listenPort, config.listenAddress || DEFAULT_HOST);
     }
 
     async start(): Promise<void> {
@@ -68,7 +65,15 @@ export class UdpNode extends EventEmitter {
 
         const { ciphertext, msgKey } = await this.crypto.encrypt(peerId, data);
 
+        const session = this.crypto.getSessionState(peerId);
+        const authKeyId = Buffer.alloc(8);
+        if (session) {
+            const hash = await crypton.sha1(session.authKey);
+            hash.copy(authKeyId, 0, 0, 8);
+        }
+
         const packet = Buffer.concat([
+            authKeyId,
             Buffer.from([UdpPacketType.ENCRYPTED]),
             msgKey,
             ciphertext
@@ -95,7 +100,15 @@ export class UdpNode extends EventEmitter {
         const container = encodeContainer(messages);
         const { ciphertext, msgKey } = await this.crypto.encrypt(peerId, container);
 
+        const session = this.crypto.getSessionState(peerId);
+        const authKeyId = Buffer.alloc(8);
+        if (session) {
+            const hash = await crypton.sha1(session.authKey);
+            hash.copy(authKeyId, 0, 0, 8);
+        }
+
         const packet = Buffer.concat([
+            authKeyId,
             Buffer.from([UdpPacketType.ENCRYPTED]),
             msgKey,
             ciphertext
@@ -133,18 +146,20 @@ export class UdpNode extends EventEmitter {
     }
 
     private async handleDatagram(data: Buffer, rinfo: any) {
-        if (data.length < 1) return;
+        if (data.length < 9) return;
 
-        const type = data[0];
         const addr = `${rinfo.address}:${rinfo.port}`;
+        if (!this.checkRateLimit(addr)) return;
+
+        const authKeyId = data.subarray(0, 8);
+        const type = data[8];
+        const payload = data.subarray(9);
         let peerId = this.findPeerByAddress(addr);
 
         if (type === UdpPacketType.HANDSHAKE) {
-            const payload = data.subarray(1);
             await this.handleHandshake(payload, rinfo, peerId);
-        } else if (type === UdpPacketType.ENCRYPTED) {
+        } else if (authKeyId.some(b => b !== 0)) {
             if (!peerId) return;
-            const payload = data.subarray(1);
             await this.handleEncrypted(payload, peerId);
         }
     }
@@ -154,6 +169,17 @@ export class UdpNode extends EventEmitter {
             if (info.address === addr) return id;
         }
         return undefined;
+    }
+
+    private checkRateLimit(addr: string): boolean {
+        const now = Date.now();
+        const entry = this.rateLimits.get(addr);
+        if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+            this.rateLimits.set(addr, { count: 1, windowStart: now });
+            return true;
+        }
+        entry.count++;
+        return entry.count <= RATE_LIMIT_MAX;
     }
 
     async initiateHandshake(peerId: string): Promise<void> {
@@ -167,6 +193,7 @@ export class UdpNode extends EventEmitter {
         const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
 
         const packet = Buffer.concat([
+            Buffer.alloc(8),
             Buffer.from([UdpPacketType.HANDSHAKE]),
             nonce,
             pubKeyBytes
@@ -187,7 +214,9 @@ export class UdpNode extends EventEmitter {
         const peerPubKey = crypton.bufferToBigInt(peerPubKeyBytes);
 
         if (!peerId) {
-            const peerHash = await crypton.sha1(peerPubKeyBytes);
+            if (this.peers.size >= MAX_PEERS) return;
+            const nonce = crypton.getRandomBytes(8);
+            const peerHash = await crypton.sha1(Buffer.concat([peerPubKeyBytes, nonce]));
             peerId = crypton.bytesToHex(peerHash.subarray(0, 20));
             this.peers.set(peerId, { peerId, address: `${rinfo.address}:${rinfo.port}`, lastSeen: Date.now() });
             this.emit('newPeer', peerId);
@@ -207,6 +236,7 @@ export class UdpNode extends EventEmitter {
             const myNonce = crypton.getRandomBytes(16);
             const myPub = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
             const packet = Buffer.concat([
+                Buffer.alloc(8),
                 Buffer.from([UdpPacketType.HANDSHAKE]),
                 myNonce,
                 myPub
@@ -245,7 +275,10 @@ export class UdpNode extends EventEmitter {
     }
 
     private async sendKeepAlive() {
-        const keepAlive = Buffer.from([UdpPacketType.KEEPALIVE]);
+        const keepAlive = Buffer.concat([
+            Buffer.alloc(8),
+            Buffer.from([UdpPacketType.KEEPALIVE])
+        ]);
         for (const [peerId, info] of this.peers) {
             const parsed = this.parseAddress(info.address);
             if (!parsed) continue;

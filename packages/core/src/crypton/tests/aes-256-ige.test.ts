@@ -1,6 +1,7 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { AES256IGE, AesEcb } from '../aes-256-ige';
+import { AES256IGE } from '../aes-256-ige';
+import { AES256ECB } from '../aes-256-ecb';
 import { isNode } from '../utils';
 
 async function run() {
@@ -88,7 +89,7 @@ async function run() {
   const testPlain = Buffer.from('6bc1bee22e409f96e93d7e117393172a', 'hex');
   const expectedCipher = Buffer.from('f3eed1bdb5d2a03c064b5a7e3db181f8', 'hex');
 
-  const ecb = new AesEcb(testKey);
+  const ecb = new AES256ECB(testKey);
   const actualCipher = Buffer.from(ecb.encryptBlock(testPlain));
   assert.ok(actualCipher.equals(expectedCipher), 'AES-256 ECB encryption: test vector mismatch');
 
