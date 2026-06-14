@@ -2,6 +2,7 @@ import net from 'net';
 import { EventEmitter } from 'events';
 import { crypton } from '@ton-ai/core';
 import { MAX_MESSAGE_SIZE, MAX_CONNECTIONS, INTERMEDIATE_MAGIC, PADDED_INTERMEDIATE_MAGIC, ABRIDGED_MAGIC } from './types';
+import { BufferStream } from './buffer-stream';
 
 export enum TcpTransportType {
     ABRIDGED,
@@ -12,7 +13,7 @@ export enum TcpTransportType {
 
 interface ConnectionState {
     socket: net.Socket;
-    buffer: Buffer;
+    stream: BufferStream;
     headerReceived: boolean;
     headerSent: boolean;
     tcpSeqNo: number;
@@ -61,7 +62,7 @@ export class TcpTransport extends EventEmitter {
                 const id = 'server';
                 this.connections.set(id, {
                     socket: this.client!,
-                    buffer: Buffer.alloc(0),
+                    stream: new BufferStream(),
                     headerReceived: true,
                     headerSent: false,
                     tcpSeqNo: 0,
@@ -82,7 +83,7 @@ export class TcpTransport extends EventEmitter {
         const addr = `${socket.remoteAddress}:${socket.remotePort}`;
         this.connections.set(addr, {
             socket,
-            buffer: Buffer.alloc(0),
+            stream: new BufferStream(),
             headerReceived: false,
             headerSent: true,
             tcpSeqNo: 0,
@@ -94,8 +95,8 @@ export class TcpTransport extends EventEmitter {
         socket.on('data', (data) => {
             const state = this.connections.get(id);
             if (!state) return;
-            state.buffer = Buffer.concat([state.buffer, data]);
-            if (state.buffer.length > MAX_MESSAGE_SIZE) {
+            state.stream.push(data);
+            if (state.stream.length > MAX_MESSAGE_SIZE) {
                 socket.destroy();
                 this.connections.delete(id);
                 return;
@@ -140,11 +141,11 @@ export class TcpTransport extends EventEmitter {
     }
 
     private processBuffer(id: string, state: ConnectionState): void {
-        while (state.buffer.length > 0) {
+        while (state.stream.length > 0) {
             if (!state.headerReceived) {
                 const headerLen = this.getHeaderLength();
-                if (state.buffer.length < headerLen) return;
-                state.buffer = state.buffer.subarray(headerLen);
+                if (state.stream.length < headerLen) return;
+                state.stream.consume(headerLen);
                 state.headerReceived = true;
                 continue;
             }
@@ -153,7 +154,7 @@ export class TcpTransport extends EventEmitter {
             if (!result) break;
 
             const { payload, consumed } = result;
-            state.buffer = state.buffer.subarray(consumed);
+            state.stream.consume(consumed);
             this.emit('message', payload, id);
         }
     }
@@ -188,73 +189,73 @@ export class TcpTransport extends EventEmitter {
     }
 
     private extractIntermediate(state: ConnectionState): { payload: Buffer; consumed: number } | null {
-        if (state.buffer.length < 4) return null;
-        const len = state.buffer.readUInt32LE(0);
+        if (state.stream.length < 4) return null;
+        const len = state.stream.peekUInt32LE(0);
         if (len > MAX_MESSAGE_SIZE) return null;
-        if (state.buffer.length < 4 + len) return null;
+        if (state.stream.length < 4 + len) return null;
         return {
-            payload: state.buffer.subarray(4, 4 + len),
+            payload: state.stream.slice(4, 4 + len),
             consumed: 4 + len,
         };
     }
 
     private extractPaddedIntermediate(state: ConnectionState): { payload: Buffer; consumed: number } | null {
-        if (state.buffer.length < 4) return null;
-        const len = state.buffer.readUInt32LE(0);
+        if (state.stream.length < 4) return null;
+        const len = state.stream.peekUInt32LE(0);
         if (len > MAX_MESSAGE_SIZE) return null;
-        if (state.buffer.length < 4 + len) return null;
+        if (state.stream.length < 4 + len) return null;
         const payloadLen = len & 0x7FFFFFFF;
         return {
-            payload: state.buffer.subarray(4, 4 + payloadLen),
+            payload: state.stream.slice(4, 4 + payloadLen),
             consumed: 4 + len,
         };
     }
 
     private extractAbridged(state: ConnectionState): { payload: Buffer; consumed: number } | null {
-        if (state.buffer.length < 1) return null;
+        if (state.stream.length < 1) return null;
         let offset = 0;
-        let len = state.buffer.readUInt8(offset);
+        let len = state.stream.peekUInt8(offset);
         offset++;
 
         if (len === 0xef) {
-            if (state.buffer.length < offset + 4) return null;
+            if (state.stream.length < offset + 4) return null;
             offset += 4;
-            if (state.buffer.length < offset) return null;
-            len = state.buffer.readUInt8(offset);
+            if (state.stream.length < offset) return null;
+            len = state.stream.peekUInt8(offset);
             offset++;
         }
 
         if (len === 0x7f) {
-            if (state.buffer.length < offset + 3) return null;
-            len = state.buffer.readUInt16LE(offset) | (state.buffer.readUInt8(offset + 2) << 16);
+            if (state.stream.length < offset + 3) return null;
+            len = state.stream.peekUInt16LE(offset) | (state.stream.peekUInt8(offset + 2) << 16);
             offset += 3;
         }
 
         const payloadLen = len * 4;
         if (payloadLen > MAX_MESSAGE_SIZE) return null;
-        if (state.buffer.length < offset + payloadLen) return null;
+        if (state.stream.length < offset + payloadLen) return null;
         return {
-            payload: state.buffer.subarray(offset, offset + payloadLen),
+            payload: state.stream.slice(offset, offset + payloadLen),
             consumed: offset + payloadLen,
         };
     }
 
     private extractFull(state: ConnectionState, retries: number = 0): { payload: Buffer; consumed: number } | null {
-        if (state.buffer.length < 12) return null;
-        const len = state.buffer.readUInt32LE(0);
+        if (state.stream.length < 12) return null;
+        const len = state.stream.peekUInt32LE(0);
         if (len < 8 || len > MAX_MESSAGE_SIZE) return null;
-        if (state.buffer.length < len + 4) return null;
+        if (state.stream.length < len + 4) return null;
         const payloadLen = len - 8;
-        const crcData = state.buffer.subarray(0, len);
-        const expectedCrc = state.buffer.readUInt32LE(len);
+        const crcData = state.stream.slice(0, len);
+        const expectedCrc = state.stream.peekUInt32LE(len);
         const actualCrc = this.crc32(crcData);
         if (expectedCrc !== actualCrc) {
             if (retries >= 3) return null;
-            state.buffer = state.buffer.subarray(len + 4);
+            state.stream.consume(len + 4);
             return this.extractFull(state, retries + 1);
         }
         return {
-            payload: state.buffer.subarray(8, 8 + payloadLen),
+            payload: state.stream.slice(8, 8 + payloadLen),
             consumed: len + 4,
         };
     }

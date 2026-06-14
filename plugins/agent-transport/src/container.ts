@@ -77,6 +77,7 @@ function decodeRawContainer(data: Buffer): ContainerMessage[] {
     if (data.length < 4) return [];
 
     const count = data.readInt32LE(0);
+    if (count < 0 || count > 1000) return [];
     const messages: ContainerMessage[] = [];
     let offset = 4;
 

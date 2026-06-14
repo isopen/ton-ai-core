@@ -32,7 +32,9 @@ export class UdpNode extends EventEmitter {
         if (this.config.keepAliveInterval) {
             this.keepAliveTimer = setInterval(() => this.sendKeepAlive(), this.config.keepAliveInterval);
         }
-        this.messageHandler = (msg: Buffer, rinfo: any) => this.handleDatagram(msg, rinfo);
+        this.messageHandler = (msg: Buffer, rinfo: any) => {
+            this.handleDatagram(msg, rinfo).catch((err) => this.emit('error', err));
+        };
         this.transport.on('message', this.messageHandler);
     }
 
@@ -158,6 +160,11 @@ export class UdpNode extends EventEmitter {
 
         if (type === UdpPacketType.HANDSHAKE) {
             await this.handleHandshake(payload, rinfo, peerId);
+        } else if (type === UdpPacketType.KEEPALIVE) {
+            if (peerId) {
+                const peer = this.peers.get(peerId);
+                if (peer) peer.lastSeen = Date.now();
+            }
         } else if (authKeyId.some(b => b !== 0)) {
             if (!peerId) return;
             await this.handleEncrypted(payload, peerId);
@@ -173,6 +180,13 @@ export class UdpNode extends EventEmitter {
 
     private checkRateLimit(addr: string): boolean {
         const now = Date.now();
+        if (this.rateLimits.size > 10000) {
+            for (const [key, entry] of this.rateLimits) {
+                if (now - entry.windowStart > RATE_LIMIT_WINDOW_MS * 10) {
+                    this.rateLimits.delete(key);
+                }
+            }
+        }
         const entry = this.rateLimits.get(addr);
         if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
             this.rateLimits.set(addr, { count: 1, windowStart: now });
@@ -214,12 +228,7 @@ export class UdpNode extends EventEmitter {
         const peerPubKey = crypton.bufferToBigInt(peerPubKeyBytes);
 
         if (!peerId) {
-            if (this.peers.size >= MAX_PEERS) return;
-            const nonce = crypton.getRandomBytes(8);
-            const peerHash = await crypton.sha1(Buffer.concat([peerPubKeyBytes, nonce]));
-            peerId = crypton.bytesToHex(peerHash.subarray(0, 20));
-            this.peers.set(peerId, { peerId, address: `${rinfo.address}:${rinfo.port}`, lastSeen: Date.now() });
-            this.emit('newPeer', peerId);
+            return;
         }
 
         if (this.crypto.hasSession(peerId)) {

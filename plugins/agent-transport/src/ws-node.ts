@@ -4,6 +4,7 @@ import { WsTransport, WsTransportType } from './ws-transport';
 import { crypton } from '@ton-ai/core';
 import { generateInitPayload, initObfuscation, obfuscateData, deobfuscateData, ObfuscationState } from './obfuscation';
 import { REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, DEFAULT_HOST, HANDSHAKE_TIMEOUT_MS } from './types';
+import { BufferStream } from './buffer-stream';
 
 export interface WsConfig {
     cryptoBackend: ICryptoBackend;
@@ -20,7 +21,7 @@ export class WsNode extends EventEmitter {
     private transport: WsTransport;
     private crypto: ICryptoBackend;
     private peers = new Map<string, string>();
-    private pendingDH = new Map<string, { privateKey: bigint; publicKey: bigint }>();
+    private pendingDH = new Map<string, { privateKey: bigint; publicKey: bigint; timer?: NodeJS.Timeout }>();
     private obfuscationStates = new Map<string, ObfuscationState>();
     private config: WsConfig;
     private peerConnIds = new Map<string, string>();
@@ -46,6 +47,15 @@ export class WsNode extends EventEmitter {
             this.handleMessage(data, connId);
         });
 
+        this.transport.on('disconnect', (connId: string) => {
+            const peerId = this.connToPeer.get(connId);
+            if (peerId) {
+                this.connToPeer.delete(connId);
+                this.peerConnIds.delete(peerId);
+                this.obfuscationStates.delete(peerId);
+            }
+        });
+
         this.transport.on('error', (err: Error) => {
             this.emit('error', err);
         });
@@ -55,6 +65,10 @@ export class WsNode extends EventEmitter {
     }
 
     async stop(): Promise<void> {
+        for (const entry of this.pendingDH.values()) {
+            if (entry.timer) clearTimeout(entry.timer);
+        }
+        this.pendingDH.clear();
         await this.transport.stop();
     }
 
@@ -77,9 +91,10 @@ export class WsNode extends EventEmitter {
 
         (this.transport as any).connections.set(connId, {
             socket: (clientTransport as any).client,
-            buffer: Buffer.alloc(0),
+            stream: new BufferStream(),
             headerReceived: false,
             headerSent: true,
+            tcpSeqNo: 0,
         });
     }
 
@@ -123,7 +138,10 @@ export class WsNode extends EventEmitter {
 
     async initiateHandshake(peerId: string): Promise<void> {
         const dhKeys = this.crypto.generateDHKeys();
-        this.pendingDH.set(peerId, dhKeys);
+        const timer = setTimeout(() => {
+            this.pendingDH.delete(peerId);
+        }, HANDSHAKE_TIMEOUT_MS);
+        this.pendingDH.set(peerId, { ...dhKeys, timer });
 
         const nonce = crypton.getRandomBytes(16);
         const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
@@ -177,11 +195,7 @@ export class WsNode extends EventEmitter {
                     break;
                 }
             }
-            if (!peerId) {
-                const nonce = crypton.getRandomBytes(8);
-                const peerHash = await crypton.sha1(Buffer.concat([peerPubKeyBytes, nonce]));
-                peerId = crypton.bytesToHex(peerHash.subarray(0, 20));
-            }
+            if (!peerId) return;
             this.peers.set(peerId, `peer:${peerId}`);
             this.connToPeer.set(connId, peerId);
         }

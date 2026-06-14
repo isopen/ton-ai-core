@@ -46,6 +46,9 @@ export function generateInitPayload(protocolId?: Buffer): Buffer {
 }
 
 export async function deriveObfuscationKeys(init: Buffer, secret?: Buffer): Promise<ObfuscationState> {
+    if (init.length < OBFUSCATION_INIT_SIZE) {
+        throw new Error(`Init payload must be at least ${OBFUSCATION_INIT_SIZE} bytes`);
+    }
     const initRev = Buffer.alloc(OBFUSCATION_INIT_SIZE);
     for (let i = 0; i < OBFUSCATION_INIT_SIZE; i++) {
         initRev[i] = init[OBFUSCATION_INIT_SIZE - 1 - i];

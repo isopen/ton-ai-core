@@ -17,7 +17,7 @@ export const INTERMEDIATE_HEADER_SIZE = 4;
 export const ABRIDGED_HEADER_SIZE = 1;
 export const OBFUSCATION_INIT_SIZE = 64;
 export const CONTAINER_CONSTRUCTOR = 0x73f1f8dc;
-export const GZIP_CONTAINER_CONSTRUCTOR = 0x00000000;
+export const GZIP_CONTAINER_CONSTRUCTOR = 0x3072cfa1;
 
 export interface UdpConfig {
     cryptoBackend: ICryptoBackend;

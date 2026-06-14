@@ -52,10 +52,12 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
 
         if (session && decrypted.data.length >= 32) {
             const msgId = decrypted.data.readBigInt64BE(16);
-            if (msgId <= session.lastMessageId && session.lastMessageId !== 0n) {
+            if (session.lastMessageId !== 0n && msgId < session.lastMessageId - 100n) {
                 throw new Error('Message replay detected');
             }
-            session.lastMessageId = msgId;
+            if (msgId > session.lastMessageId) {
+                session.lastMessageId = msgId;
+            }
         }
 
         return decrypted.data;
@@ -70,6 +72,8 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
         if (session) {
             session.authKey.fill(0);
             if (session.pendingRekey) {
+                session.pendingRekey.privateKey = 0n;
+                session.pendingRekey.publicKey = 0n;
                 delete session.pendingRekey;
             }
         }
@@ -111,9 +115,10 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
         session.authKey = newAuthKey.key;
         session.messageCount = 0;
         session.lastActivity = Date.now();
-        const oldRekey = session.pendingRekey;
         delete session.pendingRekey;
-        this.plugin.setSessionKeys(peerId, newAuthKey, Buffer.alloc(8), session.sessionId);
+        const newSalt = crypton.getRandomBytes(8);
+        session.salt = newSalt.readBigUInt64BE(0);
+        this.plugin.setSessionKeys(peerId, newAuthKey, newSalt, session.sessionId);
         sharedSecret.fill(0);
     }
 }

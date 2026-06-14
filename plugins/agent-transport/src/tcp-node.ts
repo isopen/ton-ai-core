@@ -3,6 +3,7 @@ import { ICryptoBackend } from './crypto-backend';
 import { TcpTransport, TcpTransportType } from './tcp-transport';
 import { crypton } from '@ton-ai/core';
 import { REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, DEFAULT_HOST, HANDSHAKE_TIMEOUT_MS } from './types';
+import { BufferStream } from './buffer-stream';
 
 export interface TcpConfig {
     cryptoBackend: ICryptoBackend;
@@ -18,7 +19,7 @@ export class TcpNode extends EventEmitter {
     private transport: TcpTransport;
     private crypto: ICryptoBackend;
     private peers = new Map<string, string>();
-    private pendingDH = new Map<string, { privateKey: bigint; publicKey: bigint }>();
+    private pendingDH = new Map<string, { privateKey: bigint; publicKey: bigint; timer?: NodeJS.Timeout }>();
     private config: TcpConfig;
     private peerConnIds = new Map<string, string>();
     private connToPeer = new Map<string, string>();
@@ -44,6 +45,15 @@ export class TcpNode extends EventEmitter {
             this.handleMessage(data, connId);
         });
 
+        this.transport.on('disconnect', (connId: string) => {
+            const peerId = this.connToPeer.get(connId);
+            if (peerId) {
+                this.connToPeer.delete(connId);
+                this.peerConnIds.delete(peerId);
+                this.addrToPeer.delete(this.peers.get(peerId) || '');
+            }
+        });
+
         this.transport.on('error', (err: Error) => {
             this.emit('error', err);
         });
@@ -53,6 +63,10 @@ export class TcpNode extends EventEmitter {
     }
 
     async stop(): Promise<void> {
+        for (const entry of this.pendingDH.values()) {
+            if (entry.timer) clearTimeout(entry.timer);
+        }
+        this.pendingDH.clear();
         await this.transport.stop();
     }
 
@@ -77,9 +91,10 @@ export class TcpNode extends EventEmitter {
 
         (this.transport as any).connections.set(connId, {
             socket: (clientTransport as any).client,
-            buffer: Buffer.alloc(0),
+            stream: new BufferStream(),
             headerReceived: false,
             headerSent: true,
+            tcpSeqNo: 0,
         });
     }
 
@@ -121,7 +136,10 @@ export class TcpNode extends EventEmitter {
 
     async initiateHandshake(peerId: string): Promise<void> {
         const dhKeys = this.crypto.generateDHKeys();
-        this.pendingDH.set(peerId, dhKeys);
+        const timer = setTimeout(() => {
+            this.pendingDH.delete(peerId);
+        }, HANDSHAKE_TIMEOUT_MS);
+        this.pendingDH.set(peerId, { ...dhKeys, timer });
 
         const nonce = crypton.getRandomBytes(16);
         const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
@@ -168,11 +186,7 @@ export class TcpNode extends EventEmitter {
                     break;
                 }
             }
-            if (!peerId) {
-                const nonce = crypton.getRandomBytes(8);
-                const peerHash = await crypton.sha1(Buffer.concat([peerPubKeyBytes, nonce]));
-                peerId = crypton.bytesToHex(peerHash.subarray(0, 20));
-            }
+            if (!peerId) return;
             this.connToPeer.set(connId, peerId);
         }
 
@@ -188,6 +202,7 @@ export class TcpNode extends EventEmitter {
             const myPub = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
 
             const packet = Buffer.concat([
+                Buffer.alloc(8),
                 Buffer.from([0x01]),
                 myNonce,
                 myPub,

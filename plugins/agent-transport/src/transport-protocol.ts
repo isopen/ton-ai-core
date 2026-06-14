@@ -32,16 +32,17 @@ export function decodeIntermediate(data: Buffer): Buffer | null {
 }
 
 export function encodeAbridged(payload: Buffer): Buffer {
-    const len = payload.length / 4;
+    const padded = payload.length % 4 === 0 ? payload : Buffer.concat([payload, Buffer.alloc(4 - (payload.length % 4))]);
+    const len = padded.length / 4;
     if (len < 0x7f) {
         const header = Buffer.alloc(ABRIDGED_HEADER_SIZE);
         header.writeUInt8(len, 0);
-        return Buffer.concat([header, payload]);
+        return Buffer.concat([header, padded]);
     }
     const header = Buffer.alloc(3);
     header.writeUInt8(0x7f, 0);
     header.writeUInt16LE(len, 1);
-    return Buffer.concat([header, payload]);
+    return Buffer.concat([header, padded]);
 }
 
 export function decodeAbridged(data: Buffer): Buffer | null {

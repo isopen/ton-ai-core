@@ -2,6 +2,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { EventEmitter } from 'events';
 import { crypton } from '@ton-ai/core';
 import { MAX_MESSAGE_SIZE, MAX_CONNECTIONS, INTERMEDIATE_MAGIC, PADDED_INTERMEDIATE_MAGIC, ABRIDGED_MAGIC, FULL_MAGIC } from './types';
+import { BufferStream } from './buffer-stream';
 
 export enum WsTransportType {
     ABRIDGED,
@@ -12,9 +13,10 @@ export enum WsTransportType {
 
 interface ConnectionState {
     socket: WebSocket;
-    buffer: Buffer;
+    stream: BufferStream;
     headerReceived: boolean;
     headerSent: boolean;
+    tcpSeqNo: number;
 }
 
 export class WsTransport extends EventEmitter {
@@ -59,9 +61,10 @@ export class WsTransport extends EventEmitter {
                 const id = 'server';
                 this.connections.set(id, {
                     socket: this.client!,
-                    buffer: Buffer.alloc(0),
+                    stream: new BufferStream(),
                     headerReceived: true,
                     headerSent: false,
+                    tcpSeqNo: 0,
                 });
                 this.setupSocket(this.client!, id);
                 this.sendHeader(id);
@@ -79,9 +82,10 @@ export class WsTransport extends EventEmitter {
         const addr = `ws-${Date.now()}-${crypton.getRandomBytes(8).toString('hex')}`;
         this.connections.set(addr, {
             socket: ws,
-            buffer: Buffer.alloc(0),
+            stream: new BufferStream(),
             headerReceived: false,
             headerSent: true,
+            tcpSeqNo: 0,
         });
         this.setupSocket(ws, addr);
     }
@@ -102,8 +106,8 @@ export class WsTransport extends EventEmitter {
                 buffer = Buffer.from(String(data));
             }
 
-            state.buffer = Buffer.concat([state.buffer, buffer]);
-            if (state.buffer.length > MAX_MESSAGE_SIZE) {
+            state.stream.push(buffer);
+            if (state.stream.length > MAX_MESSAGE_SIZE) {
                 ws.close();
                 this.connections.delete(id);
                 return;
@@ -143,19 +147,16 @@ export class WsTransport extends EventEmitter {
                 state.socket.send(abridgedHeader);
                 break;
             case WsTransportType.FULL:
-                const fullHeader = Buffer.alloc(4);
-                fullHeader.writeUInt32LE(FULL_MAGIC, 0);
-                state.socket.send(fullHeader);
                 break;
         }
     }
 
     private processBuffer(id: string, state: ConnectionState): void {
-        while (state.buffer.length > 0) {
+        while (state.stream.length > 0) {
             if (!state.headerReceived) {
                 const headerLen = this.getHeaderLength();
-                if (state.buffer.length < headerLen) return;
-                state.buffer = state.buffer.subarray(headerLen);
+                if (state.stream.length < headerLen) return;
+                state.stream.consume(headerLen);
                 state.headerReceived = true;
                 continue;
             }
@@ -164,7 +165,7 @@ export class WsTransport extends EventEmitter {
             if (!result) break;
 
             const { payload, consumed } = result;
-            state.buffer = state.buffer.subarray(consumed);
+            state.stream.consume(consumed);
             this.emit('message', payload, id);
         }
     }
@@ -199,73 +200,73 @@ export class WsTransport extends EventEmitter {
     }
 
     private extractIntermediate(state: ConnectionState): { payload: Buffer; consumed: number } | null {
-        if (state.buffer.length < 4) return null;
-        const len = state.buffer.readUInt32LE(0);
+        if (state.stream.length < 4) return null;
+        const len = state.stream.peekUInt32LE(0);
         if (len > MAX_MESSAGE_SIZE) return null;
-        if (state.buffer.length < 4 + len) return null;
+        if (state.stream.length < 4 + len) return null;
         return {
-            payload: state.buffer.subarray(4, 4 + len),
+            payload: state.stream.slice(4, 4 + len),
             consumed: 4 + len,
         };
     }
 
     private extractPaddedIntermediate(state: ConnectionState): { payload: Buffer; consumed: number } | null {
-        if (state.buffer.length < 4) return null;
-        const len = state.buffer.readUInt32LE(0);
+        if (state.stream.length < 4) return null;
+        const len = state.stream.peekUInt32LE(0);
         if (len > MAX_MESSAGE_SIZE) return null;
-        if (state.buffer.length < 4 + len) return null;
+        if (state.stream.length < 4 + len) return null;
         const payloadLen = len & 0x7FFFFFFF;
         return {
-            payload: state.buffer.subarray(4, 4 + payloadLen),
+            payload: state.stream.slice(4, 4 + payloadLen),
             consumed: 4 + len,
         };
     }
 
     private extractAbridged(state: ConnectionState): { payload: Buffer; consumed: number } | null {
-        if (state.buffer.length < 1) return null;
+        if (state.stream.length < 1) return null;
         let offset = 0;
-        let len = state.buffer.readUInt8(offset);
+        let len = state.stream.peekUInt8(offset);
         offset++;
 
         if (len === 0xef) {
-            if (state.buffer.length < offset + 4) return null;
+            if (state.stream.length < offset + 4) return null;
             offset += 4;
-            if (state.buffer.length < offset) return null;
-            len = state.buffer.readUInt8(offset);
+            if (state.stream.length < offset) return null;
+            len = state.stream.peekUInt8(offset);
             offset++;
         }
 
         if (len === 0x7f) {
-            if (state.buffer.length < offset + 3) return null;
-            len = state.buffer.readUInt16LE(offset) | (state.buffer.readUInt8(offset + 2) << 16);
+            if (state.stream.length < offset + 3) return null;
+            len = state.stream.peekUInt16LE(offset) | (state.stream.peekUInt8(offset + 2) << 16);
             offset += 3;
         }
 
         const payloadLen = len * 4;
         if (payloadLen > MAX_MESSAGE_SIZE) return null;
-        if (state.buffer.length < offset + payloadLen) return null;
+        if (state.stream.length < offset + payloadLen) return null;
         return {
-            payload: state.buffer.subarray(offset, offset + payloadLen),
+            payload: state.stream.slice(offset, offset + payloadLen),
             consumed: offset + payloadLen,
         };
     }
 
     private extractFull(state: ConnectionState, retries: number = 0): { payload: Buffer; consumed: number } | null {
-        if (state.buffer.length < 12) return null;
-        const len = state.buffer.readUInt32LE(0);
+        if (state.stream.length < 12) return null;
+        const len = state.stream.peekUInt32LE(0);
         if (len < 8 || len > MAX_MESSAGE_SIZE) return null;
-        if (state.buffer.length < len + 4) return null;
+        if (state.stream.length < len + 4) return null;
         const payloadLen = len - 8;
-        const crcData = state.buffer.subarray(0, len);
-        const expectedCrc = state.buffer.readUInt32LE(len);
+        const crcData = state.stream.slice(0, len);
+        const expectedCrc = state.stream.peekUInt32LE(len);
         const actualCrc = this.crc32(crcData);
         if (expectedCrc !== actualCrc) {
             if (retries >= 3) return null;
-            state.buffer = state.buffer.subarray(len + 4);
+            state.stream.consume(len + 4);
             return this.extractFull(state, retries + 1);
         }
         return {
-            payload: state.buffer.subarray(8, 8 + payloadLen),
+            payload: state.stream.slice(8, 8 + payloadLen),
             consumed: len + 4,
         };
     }
@@ -309,7 +310,7 @@ export class WsTransport extends EventEmitter {
                 }
                 break;
             case WsTransportType.FULL:
-                const fullSeqNo = 0;
+                const fullSeqNo = state.tcpSeqNo++;
                 const fullLen = 12 + data.length;
                 const fullHeader = Buffer.alloc(8);
                 fullHeader.writeUInt32LE(fullLen, 0);
