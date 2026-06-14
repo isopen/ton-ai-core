@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { ICryptoBackend } from './crypto-backend';
 import { UdpTransport } from './udp-transport';
-import { AdnlConfig, PeerInfo, AdnlPacketType, SessionState } from './types';
+import { UdpConfig, PeerInfo, UdpPacketType, SessionState } from './types';
 import { crypton } from '@ton-ai/core';
 import { encodeContainer, ContainerMessage } from './container';
 
@@ -9,16 +9,16 @@ const HANDSHAKE_TIMEOUT_MS = 30000;
 const REKEY_MESSAGE_THRESHOLD = 100;
 const REKEY_TIME_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
 
-export class AdnlNode extends EventEmitter {
+export class UdpNode extends EventEmitter {
     private transport: UdpTransport;
     private crypto: ICryptoBackend;
     private peers = new Map<string, PeerInfo>();
     private pendingDH = new Map<string, { privateKey: bigint; publicKey: bigint; timer: NodeJS.Timeout }>();
     private keepAliveTimer?: NodeJS.Timeout;
-    private config: AdnlConfig;
+    private config: UdpConfig;
     private messageHandler?: (msg: Buffer, rinfo: any) => void;
 
-    constructor(config: AdnlConfig, crypto: ICryptoBackend) {
+    constructor(config: UdpConfig, crypto: ICryptoBackend) {
         super();
         this.config = config;
         this.crypto = crypto;
@@ -69,7 +69,7 @@ export class AdnlNode extends EventEmitter {
         const { ciphertext, msgKey } = await this.crypto.encrypt(peerId, data);
 
         const packet = Buffer.concat([
-            Buffer.from([AdnlPacketType.ENCRYPTED]),
+            Buffer.from([UdpPacketType.ENCRYPTED]),
             msgKey,
             ciphertext
         ]);
@@ -96,7 +96,7 @@ export class AdnlNode extends EventEmitter {
         const { ciphertext, msgKey } = await this.crypto.encrypt(peerId, container);
 
         const packet = Buffer.concat([
-            Buffer.from([AdnlPacketType.ENCRYPTED]),
+            Buffer.from([UdpPacketType.ENCRYPTED]),
             msgKey,
             ciphertext
         ]);
@@ -139,10 +139,10 @@ export class AdnlNode extends EventEmitter {
         const addr = `${rinfo.address}:${rinfo.port}`;
         let peerId = this.findPeerByAddress(addr);
 
-        if (type === AdnlPacketType.HANDSHAKE) {
+        if (type === UdpPacketType.HANDSHAKE) {
             const payload = data.subarray(1);
             await this.handleHandshake(payload, rinfo, peerId);
-        } else if (type === AdnlPacketType.ENCRYPTED) {
+        } else if (type === UdpPacketType.ENCRYPTED) {
             if (!peerId) return;
             const payload = data.subarray(1);
             await this.handleEncrypted(payload, peerId);
@@ -167,7 +167,7 @@ export class AdnlNode extends EventEmitter {
         const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
 
         const packet = Buffer.concat([
-            Buffer.from([AdnlPacketType.HANDSHAKE]),
+            Buffer.from([UdpPacketType.HANDSHAKE]),
             nonce,
             pubKeyBytes
         ]);
@@ -207,7 +207,7 @@ export class AdnlNode extends EventEmitter {
             const myNonce = crypton.getRandomBytes(16);
             const myPub = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
             const packet = Buffer.concat([
-                Buffer.from([AdnlPacketType.HANDSHAKE]),
+                Buffer.from([UdpPacketType.HANDSHAKE]),
                 myNonce,
                 myPub
             ]);
@@ -245,7 +245,7 @@ export class AdnlNode extends EventEmitter {
     }
 
     private async sendKeepAlive() {
-        const keepAlive = Buffer.from([AdnlPacketType.KEEPALIVE]);
+        const keepAlive = Buffer.from([UdpPacketType.KEEPALIVE]);
         for (const [peerId, info] of this.peers) {
             const parsed = this.parseAddress(info.address);
             if (!parsed) continue;

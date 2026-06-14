@@ -1,7 +1,7 @@
 {
-  "name": "@ton-ai/adnl-transport",
+  "name": "@ton-ai/agent-transport",
   "version": "0.1.0",
-  "description": "ADNL Transport plugin",
+  "description": "Agent transport plugin for inter-agent communication",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "author": "testertesterov",
@@ -14,5 +14,9 @@
     "@ton-ai/core": "*",
     "@types/node": "^20.19.33",
     "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@types/ws": "^8.18.1",
+    "ws": "^8.17.1"
   }
 }

@@ -1,6 +1,6 @@
 import { ICryptoBackend } from './crypto-backend';
 
-export interface AdnlConfig {
+export interface UdpConfig {
     cryptoBackend: ICryptoBackend;
     listenPort: number;
     listenAddress?: string;
@@ -15,7 +15,7 @@ export interface PeerInfo {
     lastSeen: number;
 }
 
-export enum AdnlPacketType {
+export enum UdpPacketType {
     HANDSHAKE = 0x01,
     ENCRYPTED = 0x02,
     KEEPALIVE = 0x03,

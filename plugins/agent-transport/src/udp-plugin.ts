@@ -1,23 +1,23 @@
 import { BasePlugin } from '@ton-ai/core';
-import { AdnlConfig } from './types';
-import { AdnlNode } from './adnl-node';
+import { UdpConfig } from './types';
+import { UdpNode } from './udp-node';
 
-export { AdnlNode } from './adnl-node';
+export { UdpNode } from './udp-node';
 export * from './types';
 export * from './crypto-backend';
 export * from './transport-protocol';
 export * from './obfuscation';
 export * from './container';
 
-export class AdnlTransportPlugin extends BasePlugin<AdnlConfig> {
+export class UdpTransportPlugin extends BasePlugin<UdpConfig> {
     readonly metadata = {
-        name: 'adnl-transport',
+        name: 'agent-transport',
         version: '0.1.0',
-        description: 'ADNL transport over UDP with MTProto compliance',
+        description: 'UDP transport with MTProto compliance',
         dependencies: [] as string[]
     };
 
-    private node!: AdnlNode;
+    private node!: UdpNode;
     private running = false;
     private onNewPeer?: (peerId: string) => void;
     private onSecureChannel?: (peerId: string) => void;
@@ -28,17 +28,17 @@ export class AdnlTransportPlugin extends BasePlugin<AdnlConfig> {
         if (!this.config.cryptoBackend) {
             throw new Error('cryptoBackend is required');
         }
-        this.node = new AdnlNode(this.config, this.config.cryptoBackend);
+        this.node = new UdpNode(this.config, this.config.cryptoBackend);
     }
 
     async onActivate() {
         if (this.running) return;
         await this.node.start();
-        this.onNewPeer = (peerId: string) => this.events.emit('adnl:peer:new', peerId);
-        this.onSecureChannel = (peerId: string) => this.events.emit('adnl:secureChannel', peerId);
+        this.onNewPeer = (peerId: string) => this.events.emit('udp:peer:new', peerId);
+        this.onSecureChannel = (peerId: string) => this.events.emit('udp:secureChannel', peerId);
         this.onMessage = (data: { peerId: string; data: Buffer; msgId?: bigint; seqNo?: number }) =>
-            this.events.emit('adnl:message', data);
-        this.onRekey = (peerId: string) => this.events.emit('adnl:rekey', peerId);
+            this.events.emit('udp:message', data);
+        this.onRekey = (peerId: string) => this.events.emit('udp:rekey', peerId);
         this.node.on('newPeer', this.onNewPeer);
         this.node.on('secureChannel', this.onSecureChannel);
         this.node.on('message', this.onMessage);
@@ -71,7 +71,7 @@ export class AdnlTransportPlugin extends BasePlugin<AdnlConfig> {
         this.onRekey = undefined;
     }
 
-    getNode(): AdnlNode {
+    getNode(): UdpNode {
         return this.node;
     }
 }

@@ -1,7 +1,7 @@
 {
-  "name": "@ton-ai/adnl-transport-agent",
+  "name": "@ton-ai/ws-transport-agent",
   "version": "0.1.0",
-  "description": "",
+  "description": "WebSocket transport agent using MTProto encryption",
   "main": "index.js",
   "scripts": {
     "start": "npx ts-node index.ts",
@@ -12,7 +12,7 @@
   "dependencies": {
     "@ton-ai/core": "*",
     "@ton-ai/mtproto": "*",
-    "@ton-ai/adnl-transport": "*"
+    "@ton-ai/agent-transport": "*"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",
