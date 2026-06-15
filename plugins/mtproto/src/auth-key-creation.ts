@@ -402,9 +402,6 @@ export class AuthKeyCreator {
                 const randomPadding = crypton.getRandomBytes(
                     16 - ((innerData.length + 20) % 16)
                 );
-                if (randomPadding.length === 16) {
-                    randomPadding.fill(0);
-                }
                 const dataForEncryption = Buffer.concat([
                     innerSha1,
                     innerData,
@@ -498,8 +495,8 @@ export class AuthKeyCreator {
         auxHashBuf.copy(data, 33);
 
         const partialHash = await crypton.sha1(Buffer.concat([authKey, data]));
-        return (partialHash.readBigUInt64LE(0) & ((1n << 64n) - 1n)) |
-               ((partialHash.readBigUInt64LE(8) & ((1n << 64n) - 1n)) << 64n);
+        return partialHash.readBigUInt64LE(0) |
+               (partialHash.readBigUInt64LE(8) << 64n);
     }
 
     private xorBuffers(a: Buffer, b: Buffer): Buffer {

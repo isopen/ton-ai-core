@@ -8,7 +8,6 @@ export interface MTCryptoConfig extends SimpleAgentConfig {
 export interface EncryptedData {
     data: Buffer;
     msgKey: Buffer;
-    iv?: Buffer;
     sessionId?: bigint;
 }
 

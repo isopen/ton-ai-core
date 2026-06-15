@@ -71,6 +71,11 @@ export class CryptoClient extends EventEmitter {
         return sharedSecret;
     }
 
+    /**
+     * Generates an auth key from a DH shared secret using HKDF-SHA512.
+     * This is a custom P2P key derivation, NOT the standard MTProto cloud auth_key.
+     * Standard MTProto auth_key = DH shared secret directly.
+     */
     async generateAuthKey(sharedSecret: Buffer): Promise<AuthKey> {
         const salt = Buffer.from(await crypton.sha256(sharedSecret));
         const info = Buffer.from('ton-ai-agent-transport-auth-key-v1');
@@ -160,7 +165,7 @@ export class CryptoClient extends EventEmitter {
 
         try {
             const encrypted = await crypton.AES256IGE.encrypt(Buffer.concat([plaintext, randomPadding]), aesKey, aesIv);
-            return { data: encrypted, msgKey, iv: aesIv };
+            return { data: encrypted, msgKey };
         } finally {
             aesKey.fill(0);
             aesIv.fill(0);
@@ -419,7 +424,7 @@ export class CryptoClient extends EventEmitter {
 
         try {
             const encrypted = await crypton.AES256IGE.encrypt(Buffer.concat([plaintext, randomPadding]), aesKey, aesIv);
-            return { data: encrypted, msgKey, iv: aesIv };
+            return { data: encrypted, msgKey };
         } finally {
             aesKey.fill(0);
             aesIv.fill(0);

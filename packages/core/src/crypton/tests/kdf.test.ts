@@ -37,26 +37,26 @@ async function run() {
   );
 
   // 5. Cloud msgKey differs for client and server
-  const msgKeyClient = await MTProtoKDF.computeMsgKeyCloud(authKey, plain, validPadding, true);
-  const msgKeyServer = await MTProtoKDF.computeMsgKeyCloud(authKey, plain, validPadding, false);
+  const msgKeyClient = await MTProtoKDF.computeMsgKey(authKey, plain, validPadding, true);
+  const msgKeyServer = await MTProtoKDF.computeMsgKey(authKey, plain, validPadding, false);
   assert.notDeepStrictEqual(msgKeyClient, msgKeyServer, '5. Client and server msgKey must differ');
 
   // 6. Secret chat msgKey
-  const msgKeyInit = await MTProtoKDF.computeMsgKeySecret(authKey, plain, validPadding, true);
-  const msgKeyRecv = await MTProtoKDF.computeMsgKeySecret(authKey, plain, validPadding, false);
+  const msgKeyInit = await MTProtoKDF.computeMsgKey(authKey, plain, validPadding, true);
+  const msgKeyRecv = await MTProtoKDF.computeMsgKey(authKey, plain, validPadding, false);
   assert.notDeepStrictEqual(msgKeyInit, msgKeyRecv, '6. Initiator and receiver msgKey must differ');
 
-  // 7. deriveKeysCloud different keys
-  const keysClient = await MTProtoKDF.deriveKeysCloud(authKey, msgKeyClient, true);
-  const keysServer = await MTProtoKDF.deriveKeysCloud(authKey, msgKeyServer, false);
+  // 7. deriveKeys different keys for client/server
+  const keysClient = await MTProtoKDF.deriveKeys(authKey, msgKeyClient, true);
+  const keysServer = await MTProtoKDF.deriveKeys(authKey, msgKeyServer, false);
   assert.strictEqual(keysClient.aesKey.length, 32);
   assert.strictEqual(keysClient.aesIv.length, 32);
   assert.notDeepStrictEqual(keysClient.aesKey, keysServer.aesKey);
   assert.notDeepStrictEqual(keysClient.aesIv, keysServer.aesIv);
 
-  // 8. deriveKeysSecret different keys
-  const keysInit = await MTProtoKDF.deriveKeysSecret(authKey, msgKeyInit, true);
-  const keysRecv = await MTProtoKDF.deriveKeysSecret(authKey, msgKeyRecv, false);
+  // 8. deriveKeys different keys for initiator/receiver
+  const keysInit = await MTProtoKDF.deriveKeys(authKey, msgKeyInit, true);
+  const keysRecv = await MTProtoKDF.deriveKeys(authKey, msgKeyRecv, false);
   assert.strictEqual(keysInit.aesKey.length, 32);
   assert.strictEqual(keysInit.aesIv.length, 32);
   assert.notDeepStrictEqual(keysInit.aesKey, keysRecv.aesKey);
@@ -111,22 +111,22 @@ async function run() {
   const msgKeyX8 = await MTProtoKDF.computeMsgKey(authKey, plain, validPadding, false);
   assert.notDeepStrictEqual(msgKeyX0, msgKeyX8);
 
-  // 20-23 Wrapper error checks
+  // 20-23 Error checks for base methods
   await assert.rejects(
-    () => MTProtoKDF.deriveKeysCloud(shortAuthKey, msgKeyClient, true),
+    () => MTProtoKDF.deriveKeys(shortAuthKey, msgKeyClient, true),
     /Invalid authKey length/
   );
   await assert.rejects(
-    () => MTProtoKDF.deriveKeysCloud(authKey, Buffer.alloc(8), true),
+    () => MTProtoKDF.deriveKeys(authKey, Buffer.alloc(8), true),
     /Invalid msgKey length/
   );
   await assert.rejects(
-    () => MTProtoKDF.deriveKeysSecret(shortAuthKey, msgKeyInit, true),
+    () => MTProtoKDF.computeMsgKey(shortAuthKey, plain, validPadding, true),
     /Invalid authKey length/
   );
   await assert.rejects(
-    () => MTProtoKDF.deriveKeysSecret(authKey, Buffer.alloc(8), true),
-    /Invalid msgKey length/
+    () => MTProtoKDF.computeMsgKey(authKey, plain, Buffer.alloc(8), true),
+    /Padding length must be between/
   );
 
   console.log('MTProtoKDF tests passed');

@@ -80,38 +80,4 @@ export class MTProtoKDF {
   static async computeKeyFingerprint(sharedSecret: Buffer): Promise<bigint> {
     return this.computeAuthKeyId(sharedSecret);
   }
-
-  static async computeMsgKeyCloud(
-    authKey: Buffer,
-    plaintext: Buffer,
-    randomPadding: Buffer,
-    isClient: boolean
-  ): Promise<Buffer> {
-    return this.computeMsgKey(authKey, plaintext, randomPadding, isClient);
-  }
-
-  static async deriveKeysCloud(
-    authKey: Buffer,
-    msgKey: Buffer,
-    isClient: boolean
-  ): Promise<{ aesKey: Buffer; aesIv: Buffer }> {
-    return this.deriveKeys(authKey, msgKey, isClient);
-  }
-
-  static async computeMsgKeySecret(
-    authKey: Buffer,
-    plaintext: Buffer,
-    randomPadding: Buffer,
-    isInitiator: boolean
-  ): Promise<Buffer> {
-    return this.computeMsgKey(authKey, plaintext, randomPadding, isInitiator);
-  }
-
-  static async deriveKeysSecret(
-    authKey: Buffer,
-    msgKey: Buffer,
-    isInitiator: boolean
-  ): Promise<{ aesKey: Buffer; aesIv: Buffer }> {
-    return this.deriveKeys(authKey, msgKey, isInitiator);
-  }
 }
