@@ -43,6 +43,9 @@ export class BufferStream {
     }
 
     slice(offset: number, end: number): Buffer {
+        if (offset < 0 || end < 0 || offset > end || end > this.totalBytes) {
+            throw new RangeError('Invalid slice bounds');
+        }
         const len = end - offset;
         if (len === 0) return Buffer.alloc(0);
 
@@ -58,7 +61,7 @@ export class BufferStream {
             pos += chunk.length;
         }
 
-        const result = Buffer.allocUnsafe(len);
+        const result = Buffer.alloc(len);
         let written = 0;
         pos = 0;
         for (const chunk of this.chunks) {

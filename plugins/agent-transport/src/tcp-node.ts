@@ -19,11 +19,13 @@ export class TcpNode extends EventEmitter {
     private transport: TcpTransport;
     private crypto: ICryptoBackend;
     private peers = new Map<string, string>();
-    private pendingDH = new Map<string, { privateKey: bigint; publicKey: bigint; timer?: NodeJS.Timeout }>();
+    private pendingDH = new Map<string, { privateKeyBuf: Buffer; privateKey: bigint; publicKey: bigint; timer?: NodeJS.Timeout }>();
     private config: TcpConfig;
     private peerConnIds = new Map<string, string>();
     private connToPeer = new Map<string, string>();
     private addrToPeer = new Map<string, string>();
+    private clientTransports = new Map<string, TcpTransport>();
+    private transportListeners: Array<[string, Function]> = [];
     private running = false;
 
     constructor(config: TcpConfig, crypto: ICryptoBackend) {
@@ -41,32 +43,47 @@ export class TcpNode extends EventEmitter {
 
     async start(): Promise<void> {
         if (this.running) return;
-        this.transport.on('message', (data: Buffer, connId: string) => {
-            this.handleMessage(data, connId);
-        });
-
-        this.transport.on('disconnect', (connId: string) => {
+        const onMsg = (data: Buffer, connId: string) => {
+            this.handleMessage(data, connId).catch((err) => this.emit('error', err));
+        };
+        const onDisc = (connId: string) => {
             const peerId = this.connToPeer.get(connId);
             if (peerId) {
                 this.connToPeer.delete(connId);
                 this.peerConnIds.delete(peerId);
                 this.addrToPeer.delete(this.peers.get(peerId) || '');
             }
-        });
-
-        this.transport.on('error', (err: Error) => {
+        };
+        const onErr = (err: Error) => {
             this.emit('error', err);
-        });
+        };
+        this.transport.on('message', onMsg);
+        this.transport.on('disconnect', onDisc);
+        this.transport.on('error', onErr);
+        this.transportListeners = [['message', onMsg], ['disconnect', onDisc], ['error', onErr]];
 
         await this.transport.start();
         this.running = true;
     }
 
     async stop(): Promise<void> {
+        for (const [event, fn] of this.transportListeners) {
+            this.transport.removeListener(event, fn as any);
+        }
+        this.transportListeners = [];
         for (const entry of this.pendingDH.values()) {
             if (entry.timer) clearTimeout(entry.timer);
+            entry.privateKeyBuf.fill(0);
         }
         this.pendingDH.clear();
+        for (const ct of this.clientTransports.values()) {
+            await ct.stop();
+        }
+        this.clientTransports.clear();
+        this.peers.clear();
+        this.peerConnIds.clear();
+        this.connToPeer.clear();
+        this.addrToPeer.clear();
         await this.transport.stop();
     }
 
@@ -84,6 +101,7 @@ export class TcpNode extends EventEmitter {
 
         const connId = `peer:${peerId}`;
         this.peerConnIds.set(peerId, connId);
+        this.clientTransports.set(peerId, clientTransport);
 
         clientTransport.on('message', (data: Buffer) => {
             this.handleMessage(data, connId);
@@ -102,7 +120,7 @@ export class TcpNode extends EventEmitter {
         if (connId.startsWith('peer:')) {
             return connId.slice(5);
         }
-        return this.connToPeer.get(connId);
+        return this.connToPeer.get(connId) || this.addrToPeer.get(connId);
     }
 
     async send(peerId: string, data: Buffer): Promise<void> {
@@ -116,7 +134,7 @@ export class TcpNode extends EventEmitter {
         const { ciphertext, msgKey } = await this.crypto.encrypt(peerId, data);
 
         const session = this.crypto.getSessionState(peerId);
-        const authKeyId = session ? Buffer.alloc(8) : Buffer.alloc(8);
+        const authKeyId = Buffer.alloc(8);
         if (session) {
             const authKey = session.authKey;
             const hash = await crypton.sha1(authKey);
@@ -137,11 +155,14 @@ export class TcpNode extends EventEmitter {
     async initiateHandshake(peerId: string): Promise<void> {
         const dhKeys = this.crypto.generateDHKeys();
         const timer = setTimeout(() => {
+            this.pendingDH.get(peerId)?.privateKeyBuf.fill(0);
             this.pendingDH.delete(peerId);
         }, HANDSHAKE_TIMEOUT_MS);
         this.pendingDH.set(peerId, { ...dhKeys, timer });
 
-        const nonce = crypton.getRandomBytes(16);
+        const nonce = Buffer.alloc(16);
+        nonce.writeBigInt64LE(BigInt(Date.now()), 0);
+        crypton.getRandomBytes(8).copy(nonce, 8);
         const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
 
         const packet = Buffer.concat([
@@ -168,6 +189,12 @@ export class TcpNode extends EventEmitter {
             await this.handleHandshake(payload, peerId, connId);
         } else if (authKeyId.some(b => b !== 0)) {
             if (!peerId) return;
+            const session = this.crypto.getSessionState(peerId);
+            if (session) {
+                const expectedHash = await crypton.sha1(session.authKey);
+                const expectedId = expectedHash.subarray(0, 8);
+                if (!authKeyId.equals(expectedId)) return;
+            }
             await this.handleEncrypted(payload, peerId);
         }
     }
@@ -176,19 +203,31 @@ export class TcpNode extends EventEmitter {
         if (payload.length < 16 + 256) return;
 
         const peerNonce = payload.subarray(0, 16);
+        const peerTimestamp = Number(peerNonce.readBigInt64LE(0));
+        if (Math.abs(Date.now() - peerTimestamp) > 60000) return;
+
         const peerPubKeyBytes = payload.subarray(16, 272);
         const peerPubKey = crypton.bufferToBigInt(peerPubKeyBytes);
 
+        if (peerPubKey <= 1n || peerPubKey >= (1n << 2048n) - 1n) {
+            return;
+        }
+
         if (!peerId) {
-            for (const [id] of this.pendingDH) {
+            peerId = this.connToPeer.get(connId) || this.addrToPeer.get(connId);
+        }
+
+        if (!peerId) {
+            for (const [id] of this.peers) {
                 if (!this.crypto.hasSession(id)) {
                     peerId = id;
+                    this.connToPeer.set(connId, peerId);
                     break;
                 }
             }
-            if (!peerId) return;
-            this.connToPeer.set(connId, peerId);
         }
+
+        if (!peerId) return;
 
         if (this.crypto.hasSession(peerId)) {
             return;
@@ -196,7 +235,11 @@ export class TcpNode extends EventEmitter {
 
         if (!this.pendingDH.has(peerId)) {
             const dhKeys = this.crypto.generateDHKeys();
-            this.pendingDH.set(peerId, dhKeys);
+            const timer = setTimeout(() => {
+                this.pendingDH.get(peerId)?.privateKeyBuf.fill(0);
+                this.pendingDH.delete(peerId);
+            }, HANDSHAKE_TIMEOUT_MS);
+            this.pendingDH.set(peerId, { ...dhKeys, timer });
 
             const myNonce = crypton.getRandomBytes(16);
             const myPub = crypton.bigIntToBuffer(dhKeys.publicKey, 256);

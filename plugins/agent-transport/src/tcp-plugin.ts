@@ -15,6 +15,7 @@ export class TcpTransportPlugin extends BasePlugin<TcpConfig> {
 
     private node!: TcpNode;
     private running = false;
+    private listeners: Array<[string, Function]> = [];
 
     protected async onInit() {
         if (!this.config.cryptoBackend) {
@@ -26,20 +27,33 @@ export class TcpTransportPlugin extends BasePlugin<TcpConfig> {
     async onActivate() {
         if (this.running) return;
         await this.node.start();
-        this.node.on('secureChannel', (peerId: string) => this.events.emit('tcp:secureChannel', peerId));
-        this.node.on('message', (data: { peerId: string; data: Buffer }) => this.events.emit('tcp:message', data));
-        this.node.on('error', (err: Error) => this.events.emit('tcp:error', err));
+        const onSecure = (peerId: string) => this.events.emit('tcp:secureChannel', peerId);
+        const onMsg = (data: { peerId: string; data: Buffer }) => this.events.emit('tcp:message', data);
+        const onErr = (err: Error) => this.events.emit('tcp:error', err);
+        this.node.on('secureChannel', onSecure);
+        this.node.on('message', onMsg);
+        this.node.on('error', onErr);
+        this.listeners = [['secureChannel', onSecure], ['message', onMsg], ['error', onErr]];
         this.running = true;
+    }
+
+    private removeListeners() {
+        for (const [event, fn] of this.listeners) {
+            this.node.removeListener(event, fn as any);
+        }
+        this.listeners = [];
     }
 
     async onDeactivate() {
         if (!this.running) return;
+        this.removeListeners();
         await this.node.stop();
         this.running = false;
     }
 
     async shutdown() {
         if (!this.running) return;
+        this.removeListeners();
         await this.node.stop();
         this.running = false;
     }

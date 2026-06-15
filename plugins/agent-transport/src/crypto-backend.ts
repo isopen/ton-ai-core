@@ -1,7 +1,7 @@
 import { SessionState } from './types';
 
 export interface ICryptoBackend {
-    generateDHKeys(): { privateKey: bigint; publicKey: bigint };
+    generateDHKeys(): { privateKeyBuf: Buffer; privateKey: bigint; publicKey: bigint };
     computeSharedSecret(privateKey: bigint, peerPublicKey: bigint): Buffer;
     createSession(peerId: string, sharedSecret: Buffer, sessionId?: bigint): Promise<void>;
     encrypt(peerId: string, plaintext: Buffer): Promise<{ ciphertext: Buffer; msgKey: Buffer }>;

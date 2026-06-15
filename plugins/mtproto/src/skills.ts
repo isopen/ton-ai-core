@@ -15,7 +15,8 @@ export class MTCryptoServices {
     private ready: boolean = false;
     private currentSessionId: bigint = 0n;
     private msgIdCounter: bigint = 0n;
-    private seqNo: number = 0;
+    private contentSeqNo: number = 0;
+    private nonContentSeqNo: number = 0;
 
     constructor(context: PluginContext, components: CryptoComponents, config: MTCryptoConfig) {
         this.context = context;
@@ -73,20 +74,29 @@ export class MTCryptoServices {
         const now = (BigInt(Math.floor(Date.now() / 1000)) & 0xFFFFFFFFn) << 32n;
         this.msgIdCounter = (this.msgIdCounter + 1n) & 0xFFFFFFFFn;
         const raw = now + this.msgIdCounter;
-        return (raw - (raw % 4n)) & 0x7FFFFFFFFFFFFFFFn;
+        const isClient = this.config.mode !== 'server';
+        if (isClient) {
+            return (raw - (raw % 4n)) & 0x7FFFFFFFFFFFFFFFn;
+        }
+        return ((raw - (raw % 4n)) + 1n) & 0x7FFFFFFFFFFFFFFFn;
     }
 
-    private nextSeqNo(): number {
-        const seqNo = (this.seqNo * 2) + 1;
-        this.seqNo++;
-        return seqNo;
+    private nextSeqNo(contentRelated: boolean): number {
+        if (contentRelated) {
+            const seqNo = (this.contentSeqNo * 2) + 1;
+            this.contentSeqNo = (this.contentSeqNo + 1) & 0x7FFFFFFF;
+            return seqNo & 0x7FFFFFFF;
+        }
+        const seqNo = this.nonContentSeqNo * 2;
+        this.nonContentSeqNo = (this.nonContentSeqNo + 1) & 0x7FFFFFFF;
+        return seqNo & 0x7FFFFFFF;
     }
 
     async encrypt(data: Buffer | string): Promise<EncryptedData> {
         this.ensureSessionId();
         const buffer = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
         const messageId = this.nextMsgId();
-        const seqNo = this.nextSeqNo();
+        const seqNo = this.nextSeqNo(true);
         const encrypted = await this.components.client.encryptMessage(buffer, this.currentSessionId, messageId, seqNo);
         this.context.events.emit('mtproto:encrypted', { size: encrypted.data.length });
         return { ...encrypted, sessionId: this.currentSessionId };
@@ -146,10 +156,14 @@ export class MTCryptoServices {
     }
 
     reset(): void {
-        this.components.client['authKey'] = null;
-        this.components.client['secretAuthKey'] = null;
-        this.components.client['serverSalt'] = null;
-        this.components.client['dhKeys'] = null;
+        const client = this.components.client;
+        if (client['authKey']?.key) client['authKey'].key.fill(0);
+        if (client['secretAuthKey']?.key) client['secretAuthKey'].key.fill(0);
+        if (client['serverSalt']) client['serverSalt'].fill(0);
+        client['authKey'] = null;
+        client['secretAuthKey'] = null;
+        client['serverSalt'] = null;
+        client['dhKeys'] = null;
         this.context.events.emit('mtproto:reset', {});
     }
 

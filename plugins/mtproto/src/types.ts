@@ -21,7 +21,6 @@ export interface DecryptedData {
 export interface AuthKey {
     key: Buffer;
     id: bigint;
-    aux: Buffer;
 }
 
 export interface DHKeys {

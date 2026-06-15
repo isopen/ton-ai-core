@@ -5,6 +5,7 @@ export const REKEY_TIME_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_MESSAGE_SIZE = 64 * 1024 * 1024;
 export const MAX_CONNECTIONS = 100;
 export const MAX_PEERS = 1000;
+export const REPLAY_WINDOW_SIZE = 1000;
 export const DEFAULT_HOST = '127.0.0.1';
 export const HANDSHAKE_TIMEOUT_MS = 30000;
 export const RATE_LIMIT_WINDOW_MS = 1000;
@@ -43,7 +44,7 @@ export enum UdpPacketType {
 export enum TransportType {
     ABRIDGED = 0xef,
     INTERMEDIATE = 0xee,
-    PADDED_INTERMEDIATE = 0xed,
+    PADDED_INTERMEDIATE = 0xee,
     FULL = 0xdd,
 }
 
@@ -55,7 +56,10 @@ export interface SessionState {
     seqNo: number;
     lastActivity: number;
     messageCount: number;
+    seenMsgIds: Set<bigint>;
+    seenMsgQueue: bigint[];
     pendingRekey?: {
+        privateKeyBuf: Buffer;
         privateKey: bigint;
         publicKey: bigint;
         timestamp: number;

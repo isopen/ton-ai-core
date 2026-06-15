@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer';
-import { getRandomBytes, bigIntToBuffer, bufferToBigInt, modPow, isProbablyPrime } from './utils';
+import { getRandomBytes, bigIntToBuffer, bufferToBigInt, modPowConstantTime, isProbablyPrime } from './utils';
 
 export interface DHKeys {
   privateKey: bigint;
@@ -9,14 +9,17 @@ export interface DHKeys {
 
 export class DiffieHellman {
   private static readonly DEFAULT_P = BigInt(
-    '0xc71caeb9c6b1c9048e6c522f70f13f73980d40238e3e21c14934d037563d930f' +
-    '48198a0aa7c14058229493d22530f4dbfa336f6e0ac925139543aed44cce7c37' +
-    '20fd51f69458705ac68cd4fe6b6b13abdc9746512969328454f18faf8c595f64' +
-    '2477fe96bb2a941d5bcd1d4ac8cc49880708fa9b378e3c4f3a9060bee67cf9a4' +
-    'a4a695811051907e162753b56b0f6b410dba74d8a84b2a14b3144e0ef1284754' +
-    'fd17ed950d5965b4b9dd46582db1178d169c6bc465b0d6ff9ca3928fef5b9ae4' +
-    'e418fc15e83ebea0f87fa9ff5eed70050ded2849f47bf959d956850ce929851f' +
-    '0d8115f635b105ee2e4e15d04b2454bf6f4fadf034b10403119cd8e3b92fcc5b'
+    '0xffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd1' +
+    '29024e088a67cc74020bbea63b139b22514a08798e3404dd' +
+    'ef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245' +
+    'e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7ed' +
+    'ee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3d' +
+    'c2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f' +
+    '83655d23dca3ad961c62f356208552bb9ed529077096966d' +
+    '670c354e4abc9804f1746c08ca18217c32905e462e36ce3b' +
+    'e39e772c180e86039b2783a2ec07a28fb5c55df06f4c52c9' +
+    'de2bcbf6955817183995497cea956ae515d2261898fa0510' +
+    '15728e5a8aacaa68ffffffffffffffff'
   );
   private static readonly DEFAULT_G = 2n;
   private static readonly MIN_DH_VALUE = 1n << (2048n - 64n);
@@ -57,15 +60,13 @@ export class DiffieHellman {
   static generateKeys(p?: bigint, g?: bigint): DHKeys {
     const prime = p ?? this.DEFAULT_P;
     const generator = g ?? this.DEFAULT_G;
-    if (p !== undefined || g !== undefined) {
-      this.validateDhParams(prime, generator);
-    }
+    this.validateDhParams(prime, generator);
 
     let privateKey: bigint;
     let publicKey: bigint;
     do {
       privateKey = this.generatePrivateKey(prime);
-      publicKey = modPow(generator, privateKey, prime);
+      publicKey = modPowConstantTime(generator, privateKey, prime);
     } while (!this.isValidPublicKey(publicKey, prime));
 
     return { privateKey, publicKey };
@@ -74,8 +75,8 @@ export class DiffieHellman {
   static computeSharedSecret(privateKey: bigint, peerPublicKey: bigint, p?: bigint): Buffer {
     const prime = p ?? this.DEFAULT_P;
     this.validatePublicKey(peerPublicKey, prime);
-    const shared = modPow(peerPublicKey, privateKey, prime);
-    if (shared <= 1n || shared >= prime - 1n) {
+    const shared = modPowConstantTime(peerPublicKey, privateKey, prime);
+    if (shared <= this.MIN_DH_VALUE || shared >= prime - this.MIN_DH_VALUE) {
       throw new Error('Weak shared secret');
     }
     return bigIntToBuffer(shared, 256);
@@ -84,7 +85,7 @@ export class DiffieHellman {
   static computePublicKey(privateKey: bigint, p?: bigint, g?: bigint): bigint {
     const prime = p ?? this.DEFAULT_P;
     const generator = g ?? this.DEFAULT_G;
-    return modPow(generator, privateKey, prime);
+    return modPowConstantTime(generator, privateKey, prime);
   }
 
   static validatePublicKey(publicKey: bigint, p?: bigint): void {

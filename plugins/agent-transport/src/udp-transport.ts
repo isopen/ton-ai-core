@@ -1,12 +1,13 @@
 import dgram from 'dgram';
 import { EventEmitter } from 'events';
+import { MAX_MESSAGE_SIZE } from './types';
 
 export class UdpTransport extends EventEmitter {
     private socket: dgram.Socket | null = null;
     private port: number;
     private address: string;
 
-    constructor(port: number, address: string = '0.0.0.0') {
+    constructor(port: number, address: string = '127.0.0.1') {
         super();
         this.port = port;
         this.address = address;
@@ -15,6 +16,7 @@ export class UdpTransport extends EventEmitter {
     async start(): Promise<void> {
         this.socket = dgram.createSocket('udp4');
         this.socket.on('message', (msg, rinfo) => {
+            if (msg.length > MAX_MESSAGE_SIZE) return;
             this.emit('message', msg, rinfo);
         });
         return new Promise((resolve, reject) => {

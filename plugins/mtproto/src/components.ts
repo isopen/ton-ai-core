@@ -13,7 +13,8 @@ interface SessionState {
     authKey: AuthKey;
     serverSalt: Buffer;
     sessionId: bigint;
-    lastSeqNo: number;
+    contentSeqNo: number;
+    nonContentSeqNo: number;
     msgIdCounter: bigint;
 }
 
@@ -27,6 +28,7 @@ export class CryptoClient extends EventEmitter {
     private dhKeys: DHKeys | null = null;
     private isClient: boolean = true;
     private sessions: Map<string, SessionState> = new Map();
+    private sessionLocks: Map<string, Promise<void>> = new Map();
 
     constructor(context: PluginContext, config: MTCryptoConfig) {
         super();
@@ -62,10 +64,11 @@ export class CryptoClient extends EventEmitter {
     }
 
     async generateAuthKey(sharedSecret: Buffer): Promise<AuthKey> {
-        const key = sharedSecret;
+        const salt = Buffer.from(await crypton.sha256(sharedSecret));
+        const info = Buffer.from('ton-ai-agent-transport-auth-key-v1');
+        const key = await crypton.hkdfSha512(salt, sharedSecret, info, 256);
         const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
-        const aux = crypton.getRandomBytes(32);
-        this.authKey = { key, id, aux };
+        this.authKey = { key, id };
         this.serverSalt = crypton.getRandomBytes(8);
         return this.authKey;
     }
@@ -83,23 +86,35 @@ export class CryptoClient extends EventEmitter {
         this.serverSalt = salt;
     }
 
-    private buildDataForEncryption(message: Buffer, sessionId: bigint, messageId: bigint, seqNo: number): Buffer {
+    private buildDataForEncryption(message: Buffer, sessionId: bigint, messageId: bigint, seqNo: number, serverSalt?: Buffer): Buffer {
         const headerSize = 32;
         const data = Buffer.alloc(headerSize + message.length);
-        this.serverSalt!.copy(data, 0);
-        data.writeBigInt64BE(sessionId, 8);
-        data.writeBigInt64BE(messageId, 16);
-        data.writeInt32BE(seqNo, 24);
-        data.writeInt32BE(message.length, 28);
+        const salt = serverSalt ?? this.serverSalt!;
+        salt.copy(data, 0);
+        data.writeBigInt64LE(sessionId, 8);
+        data.writeBigInt64LE(messageId, 16);
+        data.writeInt32LE(seqNo, 24);
+        data.writeInt32LE(message.length, 28);
         message.copy(data, 32);
         return data;
     }
 
     private generateRandomPadding(dataLength: number): Buffer {
         const minPadding = 12;
+        const maxPadding = 1024;
         const blockSize = 16;
-        let padding = blockSize - (dataLength % blockSize);
-        if (padding < minPadding) padding += blockSize;
+        const target = (blockSize - (dataLength % blockSize)) % blockSize;
+        let minPad: number;
+        if (target === 0) {
+            minPad = blockSize;
+        } else if (target < minPadding) {
+            minPad = target + blockSize;
+        } else {
+            minPad = target;
+        }
+        const count = Math.floor((maxPadding - minPad) / blockSize) + 1;
+        const offset = count > 1 ? crypton.getRandomBytes(4).readUInt32LE(0) % count : 0;
+        const padding = minPad + offset * blockSize;
         return crypton.getRandomBytes(padding);
     }
 
@@ -140,37 +155,59 @@ export class CryptoClient extends EventEmitter {
     ): Promise<DecryptedData> {
         const secret = options?.secret ?? false;
         const key = secret ? this.secretAuthKey : this.authKey;
-        if (!key) throw new Error(`Auth key not set (secret: ${secret})`);
+        if (!key) throw new Error('Decryption failed');
 
         let x: number;
         if (secret) {
-            if (options?.isInitiator === undefined) throw new Error('isInitiator required for secret chat');
+            if (options?.isInitiator === undefined) throw new Error('Decryption failed');
             x = options.isInitiator ? 0 : 8;
         } else {
             x = this.isClient ? 0 : 8;
         }
 
-        const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(key.key, encrypted.msgKey, x === 0);
-        const decrypted = await crypton.AES256IGE.decrypt(encrypted.data, aesKey, aesIv);
+        let decrypted: Buffer;
+        try {
+            const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(key.key, encrypted.msgKey, x === 0);
+            decrypted = await crypton.AES256IGE.decrypt(encrypted.data, aesKey, aesIv);
+        } catch {
+            throw new Error('Decryption failed');
+        }
 
-        const messageLength = decrypted.readInt32BE(28);
-        const plaintext = decrypted.subarray(0, 32 + messageLength);
+        if (decrypted.length < 32) {
+            throw new Error('Decryption failed');
+        }
+
+        const messageLength = decrypted.readInt32LE(28);
+        if (messageLength < 0 || 32 + messageLength > decrypted.length) {
+            throw new Error('Decryption failed');
+        }
+
         const padding = decrypted.subarray(32 + messageLength);
+        if (padding.length < 12 || padding.length > 1024 || decrypted.length % 16 !== 0) {
+            throw new Error('Decryption failed');
+        }
+
+        const plaintext = decrypted.subarray(0, 32 + messageLength);
 
         let expectedMsgKey: Buffer;
         try {
             expectedMsgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, padding, x === 0);
-        } catch (e) {
-            throw new Error('Invalid msg_key');
+        } catch {
+            throw new Error('Decryption failed');
         }
 
-        if (!expectedMsgKey.equals(encrypted.msgKey)) {
-            throw new Error('Invalid msg_key');
+        if (!crypton.constantTimeEqual(expectedMsgKey, encrypted.msgKey)) {
+            throw new Error('Decryption failed');
         }
 
-        const sessionId = decrypted.readBigInt64BE(8);
+        const sessionId = decrypted.readBigInt64LE(8);
         if (sessionId !== expectedSessionId) {
-            throw new Error('Session ID mismatch');
+            throw new Error('Decryption failed');
+        }
+
+        const msgId = decrypted.readBigInt64LE(16);
+        if (msgId === 0n || msgId === 0x7FFFFFFFFFFFFFFFn) {
+            throw new Error('Decryption failed');
         }
 
         return { data: decrypted.subarray(32, 32 + messageLength), isValid: true, msgKey: encrypted.msgKey };
@@ -183,6 +220,15 @@ export class CryptoClient extends EventEmitter {
 
     async disconnect(): Promise<void> {
         this.connected = false;
+        if (this.authKey?.key) this.authKey.key.fill(0);
+        if (this.secretAuthKey?.key) this.secretAuthKey.key.fill(0);
+        if (this.serverSalt) this.serverSalt.fill(0);
+        this.dhKeys = null;
+        for (const session of this.sessions.values()) {
+            session.authKey.key.fill(0);
+            session.serverSalt.fill(0);
+        }
+        this.sessions.clear();
         this.emit('disconnected');
         this.context.logger.info('MTProto crypto client disconnected');
     }
@@ -195,9 +241,11 @@ export class CryptoClient extends EventEmitter {
             authKey,
             serverSalt: salt,
             sessionId,
-            lastSeqNo: 0,
+            contentSeqNo: 0,
+            nonContentSeqNo: 0,
             msgIdCounter: 0n,
         });
+        sharedSecret.fill(0);
     }
 
     setSessionKeys(peerId: string, authKey: AuthKey, salt: Buffer, sessionId?: bigint): void {
@@ -205,68 +253,176 @@ export class CryptoClient extends EventEmitter {
             authKey,
             serverSalt: salt,
             sessionId: sessionId ?? BigInt('0x' + crypton.getRandomBytes(8).toString('hex')),
-            lastSeqNo: 0,
+            contentSeqNo: 0,
+            nonContentSeqNo: 0,
             msgIdCounter: 0n,
         });
     }
 
     removeSession(peerId: string): void {
+        const session = this.sessions.get(peerId);
+        if (session) {
+            session.authKey.key.fill(0);
+            session.serverSalt.fill(0);
+        }
         this.sessions.delete(peerId);
+        this.sessionLocks.delete(peerId);
     }
 
     hasSession(peerId: string): boolean {
         return this.sessions.has(peerId);
     }
 
-    async encryptForSession(peerId: string, message: Buffer): Promise<EncryptedData> {
-        const session = this.sessions.get(peerId);
-        if (!session) throw new Error(`No session for peer ${peerId}`);
-        const oldAuthKey = this.authKey;
-        const oldSalt = this.serverSalt;
-        this.authKey = session.authKey;
-        this.serverSalt = session.serverSalt;
+    private async withLock<T>(peerId: string, fn: () => Promise<T>): Promise<T> {
+        const prev = this.sessionLocks.get(peerId) || Promise.resolve();
+        let release!: () => void;
+        const next = new Promise<void>(r => { release = r; });
+        this.sessionLocks.set(peerId, next);
+        await prev;
         try {
-            const messageId = this.nextMsgId(session);
-            const seqNo = this.nextSeqNo(session, true);
-            return await this.encryptMessage(message, session.sessionId, messageId, seqNo);
+            return await fn();
         } finally {
-            this.authKey = oldAuthKey;
-            this.serverSalt = oldSalt;
+            release();
+            if (this.sessionLocks.get(peerId) === next) {
+                this.sessionLocks.delete(peerId);
+            }
         }
     }
 
+    async encryptForSession(peerId: string, message: Buffer): Promise<EncryptedData> {
+        return this.withLock(peerId, async () => {
+            const session = this.sessions.get(peerId);
+            if (!session) throw new Error(`No session for peer ${peerId}`);
+            const messageId = this.nextMsgId(session);
+            const seqNo = this.nextSeqNo(session, true);
+            return await this.encryptMessageWith(message, session.authKey.key, session.serverSalt, session.sessionId, messageId, seqNo);
+        });
+    }
+
     async decryptForSession(peerId: string, encrypted: EncryptedData): Promise<DecryptedData> {
-        const session = this.sessions.get(peerId);
-        if (!session) throw new Error(`No session for peer ${peerId}`);
-        const oldAuthKey = this.authKey;
-        const oldSalt = this.serverSalt;
-        this.authKey = session.authKey;
-        this.serverSalt = session.serverSalt;
-        try {
-            return await this.decryptMessage(encrypted, session.sessionId);
-        } finally {
-            this.authKey = oldAuthKey;
-            this.serverSalt = oldSalt;
+        return this.withLock(peerId, async () => {
+            const session = this.sessions.get(peerId);
+            if (!session) throw new Error(`No session for peer ${peerId}`);
+            return await this.decryptMessageWith(encrypted, session.authKey.key, session.serverSalt, session.sessionId);
+        });
+    }
+
+    private async encryptMessageWith(
+        message: Buffer,
+        authKeyBuf: Buffer,
+        serverSalt: Buffer,
+        sessionId: bigint,
+        messageId: bigint,
+        seqNo: number,
+        options?: { secret?: boolean; isInitiator?: boolean }
+    ): Promise<EncryptedData> {
+        const secret = options?.secret ?? false;
+        if (!authKeyBuf) throw new Error('Encryption failed');
+        if (!serverSalt) throw new Error('Encryption failed');
+
+        const plaintext = this.buildDataForEncryption(message, sessionId, messageId, seqNo, serverSalt);
+        const randomPadding = this.generateRandomPadding(plaintext.length);
+
+        let x: number;
+        if (secret) {
+            if (options?.isInitiator === undefined) throw new Error('Encryption failed');
+            x = options.isInitiator ? 0 : 8;
+        } else {
+            x = this.isClient ? 0 : 8;
         }
+
+        const msgKey = await crypton.MTProtoKDF.computeMsgKey(authKeyBuf, plaintext, randomPadding, x === 0);
+        const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(authKeyBuf, msgKey, x === 0);
+
+        const encrypted = await crypton.AES256IGE.encrypt(Buffer.concat([plaintext, randomPadding]), aesKey, aesIv);
+        return { data: encrypted, msgKey, iv: aesIv };
+    }
+
+    private async decryptMessageWith(
+        encrypted: EncryptedData,
+        authKeyBuf: Buffer,
+        serverSalt: Buffer,
+        expectedSessionId: bigint,
+        options?: { secret?: boolean; isInitiator?: boolean }
+    ): Promise<DecryptedData> {
+        const secret = options?.secret ?? false;
+        if (!authKeyBuf) throw new Error('Decryption failed');
+
+        let x: number;
+        if (secret) {
+            if (options?.isInitiator === undefined) throw new Error('Decryption failed');
+            x = options.isInitiator ? 0 : 8;
+        } else {
+            x = this.isClient ? 0 : 8;
+        }
+
+        let decrypted: Buffer;
+        try {
+            const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(authKeyBuf, encrypted.msgKey, x === 0);
+            decrypted = await crypton.AES256IGE.decrypt(encrypted.data, aesKey, aesIv);
+        } catch {
+            throw new Error('Decryption failed');
+        }
+
+        if (decrypted.length < 32) {
+            throw new Error('Decryption failed');
+        }
+
+        const messageLength = decrypted.readInt32LE(28);
+        if (messageLength < 0 || 32 + messageLength > decrypted.length) {
+            throw new Error('Decryption failed');
+        }
+
+        const padding = decrypted.subarray(32 + messageLength);
+        if (padding.length < 12 || padding.length > 1024 || decrypted.length % 16 !== 0) {
+            throw new Error('Decryption failed');
+        }
+
+        const plaintext = decrypted.subarray(0, 32 + messageLength);
+
+        let expectedMsgKey: Buffer;
+        try {
+            expectedMsgKey = await crypton.MTProtoKDF.computeMsgKey(authKeyBuf, plaintext, padding, x === 0);
+        } catch {
+            throw new Error('Decryption failed');
+        }
+
+        if (!crypton.constantTimeEqual(expectedMsgKey, encrypted.msgKey)) {
+            throw new Error('Decryption failed');
+        }
+
+        const sessionId = decrypted.readBigInt64LE(8);
+        if (sessionId !== expectedSessionId) {
+            throw new Error('Decryption failed');
+        }
+
+        const msgId = decrypted.readBigInt64LE(16);
+        if (msgId === 0n || msgId === 0x7FFFFFFFFFFFFFFFn) {
+            throw new Error('Decryption failed');
+        }
+
+        return { data: decrypted.subarray(32, 32 + messageLength), isValid: true, msgKey: encrypted.msgKey };
     }
 
     private nextMsgId(session: SessionState): bigint {
         const now = (BigInt(Math.floor(Date.now() / 1000)) & 0xFFFFFFFFn) << 32n;
         session.msgIdCounter = (session.msgIdCounter + 1n) & 0xFFFFFFFFn;
         const raw = now + session.msgIdCounter;
-        return (raw - (raw % 4n)) & 0x7FFFFFFFFFFFFFFFn;
+        if (this.isClient) {
+            return (raw - (raw % 4n)) & 0x7FFFFFFFFFFFFFFFn;
+        }
+        return ((raw - (raw % 4n)) + 1n) & 0x7FFFFFFFFFFFFFFFn;
     }
 
     private nextSeqNo(session: SessionState, contentRelated: boolean): number {
-        const currentSeqNo = session.lastSeqNo;
-        let seqNo: number;
         if (contentRelated) {
-            seqNo = (currentSeqNo * 2) + 1;
-            session.lastSeqNo = currentSeqNo + 1;
-        } else {
-            seqNo = currentSeqNo * 2;
+            const seqNo = (session.contentSeqNo * 2) + 1;
+            session.contentSeqNo = (session.contentSeqNo + 1) & 0x7FFFFFFF;
+            return seqNo & 0x7FFFFFFF;
         }
-        return seqNo;
+        const seqNo = session.nonContentSeqNo * 2;
+        session.nonContentSeqNo = (session.nonContentSeqNo + 1) & 0x7FFFFFFF;
+        return seqNo & 0x7FFFFFFF;
     }
 }
 

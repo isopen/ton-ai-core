@@ -1,7 +1,7 @@
 import { ICryptoBackend } from './crypto-backend';
 import { MTProtoCryptoPlugin } from '@ton-ai/mtproto';
 import { crypton } from '@ton-ai/core';
-import { SessionState } from './types';
+import { SessionState, REPLAY_WINDOW_SIZE } from './types';
 
 export class MTProtoCryptoBackend implements ICryptoBackend {
     private sessions = new Map<string, SessionState>();
@@ -9,7 +9,9 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
     constructor(private plugin: MTProtoCryptoPlugin) { }
 
     generateDHKeys() {
-        return crypton.DiffieHellman.generateKeys();
+        const keys = crypton.DiffieHellman.generateKeys();
+        const privateKeyBuf = crypton.bigIntToBuffer(keys.privateKey, 256);
+        return { ...keys, privateKeyBuf };
     }
 
     computeSharedSecret(privateKey: bigint, peerPublicKey: bigint) {
@@ -18,9 +20,10 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
 
     async createSession(peerId: string, sharedSecret: Buffer, sessionId?: bigint) {
         const authKey = await this.plugin.generateAuthKey(sharedSecret);
-        const saltBuf = crypton.getRandomBytes(8);
-        const salt = saltBuf.readBigUInt64BE(0);
-        const session = sessionId ?? (await crypton.sha256(sharedSecret)).readBigUInt64BE(0) & 0x7FFFFFFFFFFFFFFFn;
+        const derived = await crypton.sha256(sharedSecret);
+        const saltBuf = Buffer.from(derived.subarray(0, 8));
+        const salt = saltBuf.readBigUInt64LE(0);
+        const session = sessionId ?? derived.readBigUInt64LE(8) & 0x7FFFFFFFFFFFFFFFn;
         this.plugin.setSessionKeys(peerId, authKey, saltBuf, session);
 
         this.sessions.set(peerId, {
@@ -31,6 +34,8 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
             seqNo: 0,
             lastActivity: Date.now(),
             messageCount: 0,
+            seenMsgIds: new Set(),
+            seenMsgQueue: [],
         });
 
         sharedSecret.fill(0);
@@ -51,10 +56,20 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
         const decrypted = await this.plugin.decryptForSession(peerId, { data: ciphertext, msgKey });
 
         if (session && decrypted.data.length >= 32) {
-            const msgId = decrypted.data.readBigInt64BE(16);
-            if (session.lastMessageId !== 0n && msgId < session.lastMessageId - 100n) {
+            const msgId = decrypted.data.readBigInt64LE(16);
+
+            if (session.seenMsgIds.has(msgId)) {
                 throw new Error('Message replay detected');
             }
+
+            session.seenMsgIds.add(msgId);
+            session.seenMsgQueue.push(msgId);
+
+            while (session.seenMsgQueue.length > REPLAY_WINDOW_SIZE) {
+                const oldest = session.seenMsgQueue.shift()!;
+                session.seenMsgIds.delete(oldest);
+            }
+
             if (msgId > session.lastMessageId) {
                 session.lastMessageId = msgId;
             }
@@ -71,7 +86,10 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
         const session = this.sessions.get(peerId);
         if (session) {
             session.authKey.fill(0);
+            session.seenMsgIds.clear();
+            session.seenMsgQueue.length = 0;
             if (session.pendingRekey) {
+                session.pendingRekey.privateKeyBuf.fill(0);
                 session.pendingRekey.privateKey = 0n;
                 session.pendingRekey.publicKey = 0n;
                 delete session.pendingRekey;
@@ -98,6 +116,7 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
 
         const newKeys = this.generateDHKeys();
         session.pendingRekey = {
+            privateKeyBuf: newKeys.privateKeyBuf,
             privateKey: newKeys.privateKey,
             publicKey: newKeys.publicKey,
             timestamp: Date.now(),
@@ -110,14 +129,21 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
         if (!session?.pendingRekey) return;
 
         const sharedSecret = this.computeSharedSecret(session.pendingRekey.privateKey, peerPublicKey);
+        session.pendingRekey.privateKeyBuf.fill(0);
+        session.pendingRekey.privateKey = 0n;
         const newAuthKey = await this.plugin.generateAuthKey(sharedSecret);
 
+        if (session.authKey) {
+            session.authKey.fill(0);
+        }
         session.authKey = newAuthKey.key;
         session.messageCount = 0;
         session.lastActivity = Date.now();
+        session.seenMsgIds.clear();
+        session.seenMsgQueue.length = 0;
         delete session.pendingRekey;
         const newSalt = crypton.getRandomBytes(8);
-        session.salt = newSalt.readBigUInt64BE(0);
+        session.salt = newSalt.readBigUInt64LE(0);
         this.plugin.setSessionKeys(peerId, newAuthKey, newSalt, session.sessionId);
         sharedSecret.fill(0);
     }

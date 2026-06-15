@@ -9,7 +9,7 @@ export class UdpNode extends EventEmitter {
     private transport: UdpTransport;
     private crypto: ICryptoBackend;
     private peers = new Map<string, PeerInfo>();
-    private pendingDH = new Map<string, { privateKey: bigint; publicKey: bigint; timer: NodeJS.Timeout }>();
+    private pendingDH = new Map<string, { privateKeyBuf: Buffer; privateKey: bigint; publicKey: bigint; timer: NodeJS.Timeout }>();
     private keepAliveTimer?: NodeJS.Timeout;
     private config: UdpConfig;
     private messageHandler?: (msg: Buffer, rinfo: any) => void;
@@ -49,6 +49,7 @@ export class UdpNode extends EventEmitter {
         }
         for (const entry of this.pendingDH.values()) {
             clearTimeout(entry.timer);
+            entry.privateKeyBuf.fill(0);
         }
         this.pendingDH.clear();
         this.peers.clear();
@@ -151,23 +152,31 @@ export class UdpNode extends EventEmitter {
         if (data.length < 9) return;
 
         const addr = `${rinfo.address}:${rinfo.port}`;
-        if (!this.checkRateLimit(addr)) return;
-
         const authKeyId = data.subarray(0, 8);
         const type = data[8];
         const payload = data.subarray(9);
         let peerId = this.findPeerByAddress(addr);
 
         if (type === UdpPacketType.HANDSHAKE) {
+            if (!this.checkRateLimit(`unknown:${addr}`)) return;
             await this.handleHandshake(payload, rinfo, peerId);
-        } else if (type === UdpPacketType.KEEPALIVE) {
-            if (peerId) {
+        } else {
+            if (!peerId) return;
+            if (this.peers.get(peerId)!.address !== addr) return;
+            if (!this.checkRateLimit(`peer:${peerId}`)) return;
+
+            if (type === UdpPacketType.KEEPALIVE) {
                 const peer = this.peers.get(peerId);
                 if (peer) peer.lastSeen = Date.now();
+            } else if (authKeyId.some(b => b !== 0)) {
+                const session = this.crypto.getSessionState(peerId);
+                if (session) {
+                    const expectedHash = await crypton.sha1(session.authKey);
+                    const expectedId = expectedHash.subarray(0, 8);
+                    if (!authKeyId.equals(expectedId)) return;
+                }
+                await this.handleEncrypted(payload, peerId);
             }
-        } else if (authKeyId.some(b => b !== 0)) {
-            if (!peerId) return;
-            await this.handleEncrypted(payload, peerId);
         }
     }
 
@@ -199,11 +208,14 @@ export class UdpNode extends EventEmitter {
     async initiateHandshake(peerId: string): Promise<void> {
         const dhKeys = this.crypto.generateDHKeys();
         const timer = setTimeout(() => {
+            this.pendingDH.get(peerId)?.privateKeyBuf.fill(0);
             this.pendingDH.delete(peerId);
         }, HANDSHAKE_TIMEOUT_MS);
         this.pendingDH.set(peerId, { ...dhKeys, timer });
 
-        const nonce = crypton.getRandomBytes(16);
+        const nonce = Buffer.alloc(16);
+        nonce.writeBigInt64LE(BigInt(Date.now()), 0);
+        crypton.getRandomBytes(8).copy(nonce, 8);
         const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
 
         const packet = Buffer.concat([
@@ -224,8 +236,15 @@ export class UdpNode extends EventEmitter {
         if (payload.length < 16 + 256) return;
 
         const peerNonce = payload.subarray(0, 16);
+        const peerTimestamp = Number(peerNonce.readBigInt64LE(0));
+        if (Math.abs(Date.now() - peerTimestamp) > 60000) return;
+
         const peerPubKeyBytes = payload.subarray(16, 272);
         const peerPubKey = crypton.bufferToBigInt(peerPubKeyBytes);
+
+        if (peerPubKey <= 1n || peerPubKey >= (1n << 2048n) - 1n) {
+            return;
+        }
 
         if (!peerId) {
             return;

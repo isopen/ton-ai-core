@@ -1,4 +1,5 @@
 import { Buffer } from 'buffer';
+import { isNode } from './utils';
 
 export class AES256ECB {
   private static readonly sBox = new Uint8Array([
@@ -44,14 +45,21 @@ export class AES256ECB {
   ]);
 
   private roundKeys: Buffer[] = [];
+  private key: Buffer;
+  private useNative: boolean;
 
   constructor(key: Uint8Array) {
     if (!key) throw new Error('Key must not be null or undefined');
     if (key.length !== 32) throw new Error('AES-256 requires a 32-byte key');
-    this.keyExpansion(Buffer.from(key));
+    this.key = Buffer.from(key);
+    this.useNative = isNode();
+    if (!this.useNative) {
+      this.keyExpansion(this.key);
+    }
   }
 
   destroy(): void {
+    this.key.fill(0);
     for (const rk of this.roundKeys) {
       rk.fill(0);
     }
@@ -111,6 +119,14 @@ export class AES256ECB {
   encryptBlock(block: Uint8Array): Buffer {
     if (!block) throw new Error('Block must not be null or undefined');
     if (block.length !== 16) throw new Error('Block must be 16 bytes');
+
+    if (this.useNative) {
+      const crypto = require('crypto');
+      const cipher = crypto.createCipheriv('aes-256-ecb', this.key, null);
+      cipher.setAutoPadding(false);
+      return Buffer.concat([cipher.update(Buffer.from(block)), cipher.final()]);
+    }
+
     const state = Buffer.from(block);
     this.addRoundKey(state, this.roundKeys[0]);
     for (let round = 1; round < 14; round++) {
@@ -128,6 +144,14 @@ export class AES256ECB {
   decryptBlock(block: Uint8Array): Buffer {
     if (!block) throw new Error('Block must not be null or undefined');
     if (block.length !== 16) throw new Error('Block must be 16 bytes');
+
+    if (this.useNative) {
+      const crypto = require('crypto');
+      const decipher = crypto.createDecipheriv('aes-256-ecb', this.key, null);
+      decipher.setAutoPadding(false);
+      return Buffer.concat([decipher.update(Buffer.from(block)), decipher.final()]);
+    }
+
     const state = Buffer.from(block);
     this.addRoundKey(state, this.roundKeys[14]);
     for (let round = 13; round >= 1; round--) {

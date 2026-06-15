@@ -32,16 +32,19 @@ export function decodeIntermediate(data: Buffer): Buffer | null {
 }
 
 export function encodeAbridged(payload: Buffer): Buffer {
-    const padded = payload.length % 4 === 0 ? payload : Buffer.concat([payload, Buffer.alloc(4 - (payload.length % 4))]);
+    const padLen = payload.length % 4 === 0 ? 0 : 4 - (payload.length % 4);
+    const padded = padLen > 0 ? Buffer.concat([payload, crypton.getRandomBytes(padLen)]) : payload;
     const len = padded.length / 4;
     if (len < 0x7f) {
         const header = Buffer.alloc(ABRIDGED_HEADER_SIZE);
         header.writeUInt8(len, 0);
         return Buffer.concat([header, padded]);
     }
-    const header = Buffer.alloc(3);
+    const header = Buffer.alloc(4);
     header.writeUInt8(0x7f, 0);
-    header.writeUInt16LE(len, 1);
+    header.writeUInt8(len & 0xff, 1);
+    header.writeUInt8((len >> 8) & 0xff, 2);
+    header.writeUInt8((len >> 16) & 0xff, 3);
     return Buffer.concat([header, padded]);
 }
 
@@ -49,16 +52,13 @@ export function decodeAbridged(data: Buffer): Buffer | null {
     if (data.length < ABRIDGED_HEADER_SIZE) return null;
     let headerSize = 1;
     let len = data.readUInt8(0);
-    if (len === 0xef) {
-        if (data.length < 5) return null;
-        headerSize = 5;
-        len = data.readUInt8(4);
-    }
+
     if (len === 0x7f) {
-        if (data.length < headerSize + 3) return null;
-        len = data.readUInt16LE(headerSize) | (data.readUInt8(headerSize + 2) << 16);
-        headerSize += 3;
+        if (data.length < 4) return null;
+        len = data.readUInt16LE(1) | (data.readUInt8(3) << 16);
+        headerSize = 4;
     }
+
     const payloadLen = len * 4;
     if (data.length < headerSize + payloadLen) return null;
     return data.subarray(headerSize, headerSize + payloadLen);
@@ -71,13 +71,14 @@ export function encodePaddedIntermediate(payload: Buffer): Buffer {
     }
     const totalLen = payload.length + padding;
     const header = Buffer.alloc(4);
-    header.writeUInt32LE(totalLen, 0);
+    header.writeUInt32LE(totalLen | 0x80000000, 0);
     return Buffer.concat([header, payload, Buffer.alloc(padding)]);
 }
 
 export function decodePaddedIntermediate(data: Buffer): Buffer | null {
     if (data.length < 4) return null;
-    const len = data.readUInt32LE(0);
+    const rawLen = data.readUInt32LE(0);
+    const len = rawLen & 0x7FFFFFFF;
     if (data.length < 4 + len) return null;
     return data.subarray(4, 4 + len);
 }
@@ -110,7 +111,7 @@ export function decodeFull(data: Buffer): { seqNo: number; payload: Buffer } | n
     return { seqNo, payload };
 }
 
-export function wrapPayload(payload: Buffer, type: TransportType): Buffer {
+export function wrapPayload(payload: Buffer, type: TransportType, seqNo: number = 0): Buffer {
     switch (type) {
         case TransportType.INTERMEDIATE:
             return encodeIntermediate(payload);
@@ -119,7 +120,7 @@ export function wrapPayload(payload: Buffer, type: TransportType): Buffer {
         case TransportType.ABRIDGED:
             return encodeAbridged(payload);
         case TransportType.FULL:
-            return encodeFull(0, payload);
+            return encodeFull(seqNo, payload);
         default:
             return encodeIntermediate(payload);
     }

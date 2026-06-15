@@ -1,7 +1,7 @@
 import net from 'net';
 import { EventEmitter } from 'events';
 import { crypton } from '@ton-ai/core';
-import { MAX_MESSAGE_SIZE, MAX_CONNECTIONS, INTERMEDIATE_MAGIC, PADDED_INTERMEDIATE_MAGIC, ABRIDGED_MAGIC } from './types';
+import { MAX_MESSAGE_SIZE, MAX_CONNECTIONS, INTERMEDIATE_MAGIC, PADDED_INTERMEDIATE_MAGIC, ABRIDGED_MAGIC, FULL_MAGIC } from './types';
 import { BufferStream } from './buffer-stream';
 
 export enum TcpTransportType {
@@ -28,7 +28,7 @@ export class TcpTransport extends EventEmitter {
     private isServer: boolean;
     private connections = new Map<string, ConnectionState>();
 
-    constructor(port: number, host: string = '0.0.0.0', transportType: TcpTransportType = TcpTransportType.INTERMEDIATE, isServer: boolean = false) {
+    constructor(port: number, host: string = '127.0.0.1', transportType: TcpTransportType = TcpTransportType.INTERMEDIATE, isServer: boolean = false) {
         super();
         this.port = port;
         this.host = host;
@@ -135,8 +135,12 @@ export class TcpTransport extends EventEmitter {
                 abridgedHeader.writeUInt8(ABRIDGED_MAGIC, 0);
                 state.socket.write(abridgedHeader);
                 break;
-            case TcpTransportType.FULL:
+            case TcpTransportType.FULL: {
+                const fullMagicHeader = Buffer.alloc(4);
+                fullMagicHeader.writeUInt32LE(FULL_MAGIC, 0);
+                state.socket.write(fullMagicHeader);
                 break;
+            }
         }
     }
 
@@ -201,13 +205,13 @@ export class TcpTransport extends EventEmitter {
 
     private extractPaddedIntermediate(state: ConnectionState): { payload: Buffer; consumed: number } | null {
         if (state.stream.length < 4) return null;
-        const len = state.stream.peekUInt32LE(0);
-        if (len > MAX_MESSAGE_SIZE) return null;
-        if (state.stream.length < 4 + len) return null;
-        const payloadLen = len & 0x7FFFFFFF;
+        const rawLen = state.stream.peekUInt32LE(0);
+        const payloadLen = rawLen & 0x7FFFFFFF;
+        if (payloadLen > MAX_MESSAGE_SIZE) return null;
+        if (state.stream.length < 4 + payloadLen) return null;
         return {
             payload: state.stream.slice(4, 4 + payloadLen),
-            consumed: 4 + len,
+            consumed: 4 + payloadLen,
         };
     }
 
@@ -216,14 +220,6 @@ export class TcpTransport extends EventEmitter {
         let offset = 0;
         let len = state.stream.peekUInt8(offset);
         offset++;
-
-        if (len === 0xef) {
-            if (state.stream.length < offset + 4) return null;
-            offset += 4;
-            if (state.stream.length < offset) return null;
-            len = state.stream.peekUInt8(offset);
-            offset++;
-        }
 
         if (len === 0x7f) {
             if (state.stream.length < offset + 3) return null;
@@ -279,12 +275,13 @@ export class TcpTransport extends EventEmitter {
                 }
                 const paddedLen = data.length + padding;
                 const paddedHeader = Buffer.alloc(4);
-                paddedHeader.writeUInt32LE(paddedLen, 0);
+                paddedHeader.writeUInt32LE(paddedLen | 0x80000000, 0);
                 const paddedData = Buffer.concat([paddedHeader, data, Buffer.alloc(padding)]);
                 state.socket.write(paddedData);
                 break;
             case TcpTransportType.ABRIDGED:
-                const abrPaddedData = data.length % 4 === 0 ? data : Buffer.concat([data, Buffer.alloc(4 - (data.length % 4))]);
+                const abrPadLen = data.length % 4 === 0 ? 0 : 4 - (data.length % 4);
+                const abrPaddedData = abrPadLen > 0 ? Buffer.concat([data, crypton.getRandomBytes(abrPadLen)]) : data;
                 const len4 = abrPaddedData.length / 4;
                 if (len4 < 0x7f) {
                     const abrHeader = Buffer.alloc(1);
@@ -300,7 +297,7 @@ export class TcpTransport extends EventEmitter {
                 break;
             case TcpTransportType.FULL:
                 const fullSeqNo = state.tcpSeqNo++;
-                const fullLen = 12 + data.length;
+                const fullLen = 8 + data.length;
                 const fullHeader = Buffer.alloc(8);
                 fullHeader.writeUInt32LE(fullLen, 0);
                 fullHeader.writeUInt32LE(fullSeqNo, 4);

@@ -1,4 +1,5 @@
 import { Buffer } from 'buffer';
+import { hmac_sha512 } from '@ton/crypto';
 
 export function isNode(): boolean {
   return typeof process !== 'undefined' && process.versions?.node !== undefined;
@@ -88,6 +89,23 @@ export function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint 
   return result;
 }
 
+export function modPowConstantTime(base: bigint, exponent: bigint, modulus: bigint, bitLength: number = 2048): bigint {
+  if (modulus <= 0n) throw new Error('Modulus must be positive');
+  if (modulus === 1n) return 0n;
+
+  let result = 1n;
+  let b = base % modulus;
+
+  for (let i = 0; i < bitLength; i++) {
+    const bit = (exponent >> BigInt(i)) & 1n;
+    const temp = (result * b) % modulus;
+    result = (temp * bit + result * (1n - bit)) % modulus;
+    b = (b * b) % modulus;
+  }
+
+  return result;
+}
+
 export function isProbablyPrime(n: bigint, k: number = 40): boolean {
   if (n < 2n) return false;
   if (n === 2n || n === 3n) return true;
@@ -139,4 +157,35 @@ export function bigIntToBufferLE(value: bigint, length: number): Buffer {
   const hex = value.toString(16).padStart(length * 2, '0');
   const bytes = Buffer.from(hex, 'hex');
   return Buffer.from(bytes.reverse());
+}
+
+export async function hkdfExtract(salt: Buffer, ikm: Buffer): Promise<Buffer> {
+  return hmac_sha512(salt, ikm);
+}
+
+export async function hkdfExpand(prk: Buffer, info: Buffer, length: number): Promise<Buffer> {
+  const hashLen = 64;
+  const n = Math.ceil(length / hashLen);
+  if (n > 255) throw new Error('HKDF-Expand: length too large');
+
+  const chunks: Buffer[] = [];
+  let prev: Buffer<ArrayBuffer> = Buffer.alloc(0);
+
+  for (let i = 1; i <= n; i++) {
+    const h = await hmac_sha512(prk, Buffer.concat([prev, info, Buffer.from([i])]));
+    prev = Buffer.from(h);
+    chunks.push(prev);
+  }
+
+  return Buffer.concat(chunks).subarray(0, length);
+}
+
+export async function hkdfSha512(
+  salt: Buffer,
+  ikm: Buffer,
+  info: Buffer,
+  length: number
+): Promise<Buffer> {
+  const prk = await hkdfExtract(salt, ikm);
+  return hkdfExpand(prk, info, length);
 }

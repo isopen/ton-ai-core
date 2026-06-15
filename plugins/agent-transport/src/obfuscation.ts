@@ -79,9 +79,12 @@ export async function initObfuscation(init: Buffer, secret?: Buffer): Promise<Ob
 function aes256CtrProcess(data: Buffer, key: Buffer, iv: Buffer, counter: number): Buffer {
     const result = Buffer.alloc(data.length);
     let offset = 0;
-    let currentCounter = counter;
+    let currentCounter = counter >>> 0;
 
     while (offset < data.length) {
+        if (currentCounter > 0xFFFFFFFF) {
+            throw new Error('CTR counter overflow');
+        }
         const counterBlock = Buffer.alloc(16);
         iv.copy(counterBlock, 0, 0, 12);
         counterBlock.writeUInt32LE(currentCounter, 12);
@@ -102,14 +105,22 @@ function aes256CtrProcess(data: Buffer, key: Buffer, iv: Buffer, counter: number
 }
 
 export function obfuscateData(data: Buffer, state: ObfuscationState): Buffer {
+    const blocks = Math.ceil(data.length / 16);
+    if (state.encryptCounter + blocks > 0xFFFFFFFF) {
+        throw new Error('CTR counter overflow');
+    }
     const result = aes256CtrProcess(data, state.encryptKey, state.encryptIv, state.encryptCounter);
-    state.encryptCounter += Math.ceil(data.length / 16);
+    state.encryptCounter = (state.encryptCounter + blocks) & 0xFFFFFFFF;
     return result;
 }
 
 export function deobfuscateData(data: Buffer, state: ObfuscationState): Buffer {
+    const blocks = Math.ceil(data.length / 16);
+    if (state.decryptCounter + blocks > 0xFFFFFFFF) {
+        throw new Error('CTR counter overflow');
+    }
     const result = aes256CtrProcess(data, state.decryptKey, state.decryptIv, state.decryptCounter);
-    state.decryptCounter += Math.ceil(data.length / 16);
+    state.decryptCounter = (state.decryptCounter + blocks) & 0xFFFFFFFF;
     return result;
 }
 

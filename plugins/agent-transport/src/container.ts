@@ -109,21 +109,31 @@ function decodeSingleMessage(data: Buffer): ContainerMessage[] {
     const seqNo = data.readInt32LE(8);
     const bodyLen = data.readInt32LE(12);
 
-    if (bodyLen > 0 && data.length >= 16 + bodyLen) {
-        return [{
-            msgId,
-            seqNo,
-            body: data.subarray(16, 16 + bodyLen),
-        }];
-    }
+    if (bodyLen < 0 || data.length < 16 + bodyLen) return [];
 
-    return [];
+    return [{
+        msgId,
+        seqNo,
+        body: data.subarray(16, 16 + bodyLen),
+    }];
 }
 
 export function padMessage(data: Buffer): Buffer {
-    const paddingNeeded = (16 - (data.length % 16)) % 16;
     const minPadding = 12;
-    const totalPadding = paddingNeeded < minPadding ? paddingNeeded + 16 : paddingNeeded;
+    const maxPadding = 1024;
+    const blockSize = 16;
+    const target = (blockSize - (data.length % blockSize)) % blockSize;
+    let minPad: number;
+    if (target === 0) {
+        minPad = blockSize;
+    } else if (target < minPadding) {
+        minPad = target + blockSize;
+    } else {
+        minPad = target;
+    }
+    const count = Math.floor((maxPadding - minPad) / blockSize) + 1;
+    const offset = count > 1 ? crypton.getRandomBytes(4).readUInt32LE(0) % count : 0;
+    const totalPadding = minPad + offset * blockSize;
     const padding = crypton.getRandomBytes(totalPadding);
     return Buffer.concat([data, padding]);
 }

@@ -9,12 +9,16 @@ import {
   bufferToBigInt,
   bigIntToBufferLE,
   modPow,
+  modPowConstantTime,
   isProbablyPrime,
   xor,
   isNode,
   constantTimeEqual,
   bytesToHex,
-  hexToBytes
+  hexToBytes,
+  hkdfExtract,
+  hkdfExpand,
+  hkdfSha512
 } from './utils';
 
 import { sha1 } from './sha1';
@@ -86,6 +90,7 @@ export const crypton = {
   deriveSymmetricPath,
   rsaVerify,
   modPow,
+  modPowConstantTime,
   isProbablyPrime,
   bigIntToBuffer,
   bigIntToBufferLE,
@@ -94,5 +99,8 @@ export const crypton = {
   hexToBytes,
   xor,
   isNode,
-  constantTimeEqual
+  constantTimeEqual,
+  hkdfExtract,
+  hkdfExpand,
+  hkdfSha512
 };
