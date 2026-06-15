@@ -236,7 +236,16 @@ export class CryptoClient extends EventEmitter {
             throw new Error('Decryption failed');
         }
 
-        return { data: decrypted.subarray(32, 32 + messageLength), isValid: true, msgKey: encrypted.msgKey };
+        const msgTime = Number(msgId >> 32n);
+        const now = Math.floor(Date.now() / 1000);
+        const msgAge = now - msgTime;
+        if (msgAge > 300 || msgAge < -30) {
+            throw new Error('Decryption failed');
+        }
+
+        const result = Buffer.from(decrypted.subarray(32, 32 + messageLength));
+        decrypted.fill(0);
+        return { data: result, isValid: true, msgKey: encrypted.msgKey };
     }
 
     getAuthKey(): AuthKey | null { return this.authKey; }
@@ -487,7 +496,16 @@ export class CryptoClient extends EventEmitter {
             throw new Error('Decryption failed');
         }
 
-        return { data: decrypted.subarray(32, 32 + messageLength), isValid: true, msgKey: encrypted.msgKey };
+        const msgTime = Number(msgId >> 32n);
+        const now = Math.floor(Date.now() / 1000);
+        const msgAge = now - msgTime;
+        if (msgAge > 300 || msgAge < -30) {
+            throw new Error('Decryption failed');
+        }
+
+        const result = Buffer.from(decrypted.subarray(32, 32 + messageLength));
+        decrypted.fill(0);
+        return { data: result, isValid: true, msgKey: encrypted.msgKey };
     }
 
     private nextMsgId(session: SessionState): bigint {

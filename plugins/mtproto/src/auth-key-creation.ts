@@ -323,10 +323,8 @@ export class AuthKeyCreator {
         const answerBody = decryptedAnswer.subarray(20, 20 + 4 + innerLen);
         const computedSha1 = await crypton.sha1(answerBody);
 
-        for (let i = 0; i < 20; i++) {
-            if (answerSha1[i] !== computedSha1[i]) {
-                throw new Error('SHA1 verification of server DH answer failed');
-            }
+        if (!crypton.constantTimeEqual(answerSha1, computedSha1)) {
+            throw new Error('SHA1 verification of server DH answer failed');
         }
 
         const innerDeserializer = new TLDeserializer(
@@ -362,6 +360,14 @@ export class AuthKeyCreator {
             throw new Error('DH prime is not a 2048-bit number');
         }
 
+        if (!crypton.isProbablyPrime(this.dhPrime)) {
+            throw new Error('DH prime is not prime');
+        }
+        const dhQ = (this.dhPrime - 1n) / 2n;
+        if (!crypton.isProbablyPrime(dhQ)) {
+            throw new Error('DH prime is not a safe prime');
+        }
+
         return response;
     }
 
@@ -369,100 +375,111 @@ export class AuthKeyCreator {
         sendRequest: (data: Buffer) => Promise<Buffer>,
         _step2Result: Buffer
     ): Promise<AuthKeyCreationResult> {
-        const dhKeys = crypton.DiffieHellman.generateKeys(this.dhPrime, BigInt(this.g));
-        this.privateKey = dhKeys.privateKey;
-        this.privateKeyBuf = crypton.bigIntToBuffer(dhKeys.privateKey, 256);
-        this.publicKey = dhKeys.publicKey;
-
-        const sharedSecret = crypton.DiffieHellman.computeSharedSecret(
-            this.privateKey, this.gA, this.dhPrime
-        );
-        this.privateKeyBuf.fill(0);
-        this.privateKey = 0n;
-
         try {
-            const gB = this.bigIntToBytes(this.publicKey, 256);
+            const dhKeys = crypton.DiffieHellman.generateKeys(this.dhPrime, BigInt(this.g));
+            this.privateKey = dhKeys.privateKey;
+            this.privateKeyBuf = crypton.bigIntToBuffer(dhKeys.privateKey, 256);
+            this.publicKey = dhKeys.publicKey;
 
-            const innerSerializer = new TLSerializer();
-            innerSerializer.writeInt32(CONSTRUCTOR_CLIENT_DH_INNER_DATA);
-            innerSerializer.writeInt128(this.nonce);
-            innerSerializer.writeInt128(this.serverNonce);
-            innerSerializer.writeInt64(this.retryId);
-            innerSerializer.writeBytes(gB);
-            const innerData = innerSerializer.toBuffer();
-
-            const innerSha1 = await crypton.sha1(innerData);
-            const randomPadding = crypton.getRandomBytes(
-                16 - ((innerData.length + 20) % 16)
+            const sharedSecret = crypton.DiffieHellman.computeSharedSecret(
+                this.privateKey, this.gA, this.dhPrime
             );
-            if (randomPadding.length === 16) {
-                randomPadding.fill(0);
-            }
-            const dataForEncryption = Buffer.concat([
-                innerSha1,
-                innerData,
-                randomPadding
-            ]);
+            this.privateKeyBuf.fill(0);
+            this.privateKey = 0n;
 
-            const encryptedInner = await crypton.AES256IGE.encrypt(
-                dataForEncryption,
-                this.tmpAesKey,
-                this.tmpAesIv
-            );
+            try {
+                const gB = this.bigIntToBytes(this.publicKey, 256);
 
-            const serializer = new TLSerializer();
-            serializer.writeInt32(CONSTRUCTOR_SET_CLIENT_DH_PARAMS);
-            serializer.writeInt128(this.nonce);
-            serializer.writeInt128(this.serverNonce);
-            serializer.writeBytes(encryptedInner);
-            const payload = serializer.toBuffer();
+                const innerSerializer = new TLSerializer();
+                innerSerializer.writeInt32(CONSTRUCTOR_CLIENT_DH_INNER_DATA);
+                innerSerializer.writeInt128(this.nonce);
+                innerSerializer.writeInt128(this.serverNonce);
+                innerSerializer.writeInt64(this.retryId);
+                innerSerializer.writeBytes(gB);
+                const innerData = innerSerializer.toBuffer();
 
-            const response = await sendRequest(payload);
-            const deserializer = new TLDeserializer(response);
-            const constructor = deserializer.readInt32();
+                const innerSha1 = await crypton.sha1(innerData);
+                const randomPadding = crypton.getRandomBytes(
+                    16 - ((innerData.length + 20) % 16)
+                );
+                if (randomPadding.length === 16) {
+                    randomPadding.fill(0);
+                }
+                const dataForEncryption = Buffer.concat([
+                    innerSha1,
+                    innerData,
+                    randomPadding
+                ]);
 
-            if (constructor === CONSTRUCTOR_DH_GEN_FAIL) {
-                throw new Error('DH gen failed');
-            }
+                const encryptedInner = await crypton.AES256IGE.encrypt(
+                    dataForEncryption,
+                    this.tmpAesKey,
+                    this.tmpAesIv
+                );
 
-            if (constructor === CONSTRUCTOR_DH_GEN_RETRY) {
+                const serializer = new TLSerializer();
+                serializer.writeInt32(CONSTRUCTOR_SET_CLIENT_DH_PARAMS);
+                serializer.writeInt128(this.nonce);
+                serializer.writeInt128(this.serverNonce);
+                serializer.writeBytes(encryptedInner);
+                const payload = serializer.toBuffer();
+
+                const response = await sendRequest(payload);
+                const deserializer = new TLDeserializer(response);
+                const constructor = deserializer.readInt32();
+
+                if (constructor === CONSTRUCTOR_DH_GEN_FAIL) {
+                    throw new Error('DH gen failed');
+                }
+
+                if (constructor === CONSTRUCTOR_DH_GEN_RETRY) {
+                    deserializer.readInt128();
+                    deserializer.readInt128();
+                    const newNonceHash2 = deserializer.readInt128();
+                    this.retryId = (await this.computeAuthKeyAuxHash(sharedSecret));
+                    throw new Error('DH gen retry - re-keying required');
+                }
+
+                if (constructor !== CONSTRUCTOR_DH_GEN_OK) {
+                    throw new Error(`Unexpected constructor: 0x${constructor.toString(16)}`);
+                }
+
                 deserializer.readInt128();
                 deserializer.readInt128();
-                const newNonceHash2 = deserializer.readInt128();
-                this.retryId = (await this.computeAuthKeyAuxHash(sharedSecret));
-                throw new Error('DH gen retry - re-keying required');
+                const newNonceHash1Full = deserializer.readInt128();
+                const newNonceHash1 = newNonceHash1Full & ((1n << 128n) - 1n);
+                const expectedHash1 = await this.computeNewNonceHash1(sharedSecret);
+                if (newNonceHash1 !== expectedHash1) {
+                    throw new Error('New nonce hash mismatch');
+                }
+
+                const authKey = Buffer.from(sharedSecret);
+                try {
+                    const authKeyId = await crypton.MTProtoKDF.computeAuthKeyId(authKey);
+
+                    const salt = this.xorBuffers(
+                        this.newNonce.subarray(0, 8),
+                        this.bigIntToBufferLE(this.serverNonce, 16).subarray(0, 8)
+                    );
+
+                    return {
+                        authKey,
+                        authKeyId,
+                        salt: Buffer.from(salt),
+                        serverSalt: salt.readBigUInt64LE(0),
+                        serverTime: this.serverTime,
+                    };
+                } catch (e) {
+                    authKey.fill(0);
+                    throw e;
+                }
+            } finally {
+                sharedSecret.fill(0);
             }
-
-            if (constructor !== CONSTRUCTOR_DH_GEN_OK) {
-                throw new Error(`Unexpected constructor: 0x${constructor.toString(16)}`);
-            }
-
-            deserializer.readInt128();
-            deserializer.readInt128();
-            const newNonceHash1Full = deserializer.readInt128();
-            const newNonceHash1 = newNonceHash1Full & ((1n << 128n) - 1n);
-            const expectedHash1 = await this.computeNewNonceHash1(sharedSecret);
-            if (newNonceHash1 !== expectedHash1) {
-                throw new Error('New nonce hash mismatch');
-            }
-
-            const authKey = Buffer.from(sharedSecret);
-            const authKeyId = await crypton.MTProtoKDF.computeAuthKeyId(authKey);
-
-            const salt = this.xorBuffers(
-                this.newNonce.subarray(0, 8),
-                this.bigIntToBufferLE(this.serverNonce, 16).subarray(0, 8)
-            );
-
-            return {
-                authKey,
-                authKeyId,
-                salt: Buffer.from(salt),
-                serverSalt: salt.readBigUInt64LE(0),
-                serverTime: this.serverTime,
-            };
-        } finally {
-            sharedSecret.fill(0);
+        } catch (e) {
+            if (this.privateKeyBuf) this.privateKeyBuf.fill(0);
+            this.privateKey = 0n;
+            throw e;
         }
     }
 

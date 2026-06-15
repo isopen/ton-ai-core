@@ -1,6 +1,12 @@
 import { MTProtoCryptoPlugin } from '@ton-ai/mtproto';
 import { EventEmitter } from 'events';
 
+function generateMsgId(): bigint {
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    const randomPart = BigInt(Math.floor(Math.random() * 0xFFFFFFFF));
+    return ((now << 32n) | randomPart) & 0x7FFFFFFFFFFFFFFFn;
+}
+
 async function runMTProtoAgent() {
     const plugin = new MTProtoCryptoPlugin();
     const context = {
@@ -22,7 +28,7 @@ async function runMTProtoAgent() {
     plugin.setServerSalt(Buffer.from('0102030405060708', 'hex'));
 
     const cloudEncrypted = await plugin.encryptMessage(
-        Buffer.from('Hello Cloud!', 'utf-8'), 0xABCDn, 1n, 1
+        Buffer.from('Hello Cloud!', 'utf-8'), 0xABCDn, generateMsgId(), 1
     );
     const cloudDecrypted = await plugin.decryptMessage(cloudEncrypted, 0xABCDn);
     console.log('Cloud decrypted:', cloudDecrypted.toString('utf-8'), '\n');
@@ -40,7 +46,7 @@ async function runMTProtoAgent() {
 
     // Alice (initiator) encrypts
     const encryptedByAlice = await plugin.encryptMessage(
-        secretMessage, secretSession, 2n, 1,
+        secretMessage, secretSession, generateMsgId(), 1,
         { secret: true, isInitiator: true }
     );
     console.log('Encrypted by Alice:', encryptedByAlice.data.length, 'bytes');
@@ -54,7 +60,7 @@ async function runMTProtoAgent() {
 
     // Bob responds (message from non-initiator)
     const encryptedByBob = await plugin.encryptMessage(
-        Buffer.from('Roger that!', 'utf-8'), secretSession, 3n, 1,
+        Buffer.from('Roger that!', 'utf-8'), secretSession, generateMsgId(), 1,
         { secret: true, isInitiator: false }
     );
 

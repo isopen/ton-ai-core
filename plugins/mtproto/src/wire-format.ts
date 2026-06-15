@@ -122,6 +122,13 @@ export class WireFormat {
 
         if (msgLen < 0 || 32 + msgLen > data.length) return null;
 
+        if (messageId === 0n || messageId === 0x7FFFFFFFFFFFFFFFn) return null;
+
+        const msgTime = Number(messageId >> 32n);
+        const now = Math.floor(Date.now() / 1000);
+        const msgAge = now - msgTime;
+        if (msgAge > 300 || msgAge < -30) return null;
+
         const messageBody = Buffer.from(data.subarray(32, 32 + msgLen));
         const padding = Buffer.from(data.subarray(32 + msgLen));
 
