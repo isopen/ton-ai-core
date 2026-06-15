@@ -4,6 +4,8 @@ export { TcpTransportPlugin } from './tcp-plugin';
 export { TcpNode } from './tcp-node';
 export { WsTransportPlugin } from './ws-plugin';
 export { WsNode } from './ws-node';
+export { TransportBridge } from './transport-bridge';
+export { BridgeNode } from './bridge-node';
 export * from './types';
 export * from './crypto-backend';
 export * from './transport-protocol';

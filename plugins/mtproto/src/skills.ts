@@ -156,14 +156,7 @@ export class MTCryptoServices {
     }
 
     reset(): void {
-        const client = this.components.client;
-        if (client['authKey']?.key) client['authKey'].key.fill(0);
-        if (client['secretAuthKey']?.key) client['secretAuthKey'].key.fill(0);
-        if (client['serverSalt']) client['serverSalt'].fill(0);
-        client['authKey'] = null;
-        client['secretAuthKey'] = null;
-        client['serverSalt'] = null;
-        client['dhKeys'] = null;
+        this.components.client.reset();
         this.context.events.emit('mtproto:reset', {});
     }
 

@@ -40,15 +40,19 @@ export class AES256IGE {
       }
     } else {
       const aesEcb = new AES256ECB(key);
-      for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
-        const plainBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
-        const tmp = xor(plainBlock, prevCipher);
-        const enc = aesEcb.encryptBlock(tmp);
-        const cipherBlock = xor(enc, prevPlain);
-        cipherBlock.copy(result, offset);
+      try {
+        for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
+          const plainBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
+          const tmp = xor(plainBlock, prevCipher);
+          const enc = aesEcb.encryptBlock(tmp);
+          const cipherBlock = xor(enc, prevPlain);
+          cipherBlock.copy(result, offset);
 
-        prevCipher = cipherBlock;
-        prevPlain = plainBlock;
+          prevCipher = cipherBlock;
+          prevPlain = plainBlock;
+        }
+      } finally {
+        aesEcb.destroy();
       }
     }
 
@@ -88,15 +92,19 @@ export class AES256IGE {
       }
     } else {
       const aesEcb = new AES256ECB(key);
-      for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
-        const cipherBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
-        const tmp = xor(cipherBlock, prevPlain);
-        const dec = aesEcb.decryptBlock(tmp);
-        const plainBlock = xor(dec, prevCipher);
-        plainBlock.copy(result, offset);
+      try {
+        for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
+          const cipherBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
+          const tmp = xor(cipherBlock, prevPlain);
+          const dec = aesEcb.decryptBlock(tmp);
+          const plainBlock = xor(dec, prevCipher);
+          plainBlock.copy(result, offset);
 
-        prevCipher = cipherBlock;
-        prevPlain = plainBlock;
+          prevCipher = cipherBlock;
+          prevPlain = plainBlock;
+        }
+      } finally {
+        aesEcb.destroy();
       }
     }
 

@@ -16,7 +16,11 @@ interface SessionState {
     contentSeqNo: number;
     nonContentSeqNo: number;
     msgIdCounter: bigint;
+    seenMsgIds: Set<bigint>;
+    seenMsgQueue: bigint[];
 }
+
+const REPLAY_WINDOW_SIZE = 1000;
 
 export class CryptoClient extends EventEmitter {
     private context: PluginContext;
@@ -218,6 +222,21 @@ export class CryptoClient extends EventEmitter {
     getDHKeys(): DHKeys | null { return this.dhKeys; }
     isReady(): boolean { return this.connected; }
 
+    reset(): void {
+        if (this.authKey?.key) this.authKey.key.fill(0);
+        if (this.secretAuthKey?.key) this.secretAuthKey.key.fill(0);
+        if (this.serverSalt) this.serverSalt.fill(0);
+        this.authKey = null;
+        this.secretAuthKey = null;
+        this.serverSalt = null;
+        this.dhKeys = null;
+        for (const session of this.sessions.values()) {
+            session.authKey.key.fill(0);
+            session.serverSalt.fill(0);
+        }
+        this.sessions.clear();
+    }
+
     async disconnect(): Promise<void> {
         this.connected = false;
         if (this.authKey?.key) this.authKey.key.fill(0);
@@ -244,6 +263,8 @@ export class CryptoClient extends EventEmitter {
             contentSeqNo: 0,
             nonContentSeqNo: 0,
             msgIdCounter: 0n,
+            seenMsgIds: new Set(),
+            seenMsgQueue: [],
         });
         sharedSecret.fill(0);
     }
@@ -256,6 +277,8 @@ export class CryptoClient extends EventEmitter {
             contentSeqNo: 0,
             nonContentSeqNo: 0,
             msgIdCounter: 0n,
+            seenMsgIds: new Set(),
+            seenMsgQueue: [],
         });
     }
 
@@ -303,7 +326,20 @@ export class CryptoClient extends EventEmitter {
         return this.withLock(peerId, async () => {
             const session = this.sessions.get(peerId);
             if (!session) throw new Error(`No session for peer ${peerId}`);
-            return await this.decryptMessageWith(encrypted, session.authKey.key, session.serverSalt, session.sessionId);
+            const result = await this.decryptMessageWith(encrypted, session.authKey.key, session.serverSalt, session.sessionId);
+            if (result.data.length >= 32) {
+                const msgId = result.data.readBigInt64LE(16);
+                if (session.seenMsgIds.has(msgId)) {
+                    throw new Error('Message replay detected');
+                }
+                session.seenMsgIds.add(msgId);
+                session.seenMsgQueue.push(msgId);
+                while (session.seenMsgQueue.length > REPLAY_WINDOW_SIZE) {
+                    const oldest = session.seenMsgQueue.shift()!;
+                    session.seenMsgIds.delete(oldest);
+                }
+            }
+            return result;
         });
     }
 

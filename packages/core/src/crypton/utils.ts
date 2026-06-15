@@ -43,18 +43,12 @@ export function xor(a: Buffer, b: Buffer): Buffer {
 }
 
 export function constantTimeEqual(a: Buffer, b: Buffer): boolean {
-  if (a.length !== b.length) {
-    let result = 0;
-    const len = Math.max(a.length, b.length);
-    for (let i = 0; i < len; i++) {
-      result |= (a[i % a.length] || 0) ^ (b[i % b.length] || 0);
-    }
-    return false;
-  }
+  const len = Math.max(a.length, b.length);
   let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a[i] ^ b[i];
+  for (let i = 0; i < len; i++) {
+    result |= (a[i % a.length] || 0) ^ (b[i % b.length] || 0);
   }
+  result |= a.length ^ b.length;
   return result === 0;
 }
 

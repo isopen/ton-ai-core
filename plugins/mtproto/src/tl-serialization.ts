@@ -20,6 +20,8 @@ function crc32(data: Buffer): number {
     return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
+const MAX_BUFFER_SIZE = 64 * 1024 * 1024;
+
 export class TLSerializer {
     private buffer: Buffer;
     private offset: number;
@@ -31,6 +33,9 @@ export class TLSerializer {
 
     private ensureSpace(bytes: number): void {
         while (this.offset + bytes > this.buffer.length) {
+            if (this.buffer.length * 2 > MAX_BUFFER_SIZE) {
+                throw new Error('TL serialization buffer exceeds maximum size');
+            }
             const newBuffer = Buffer.alloc(this.buffer.length * 2);
             this.buffer.copy(newBuffer);
             this.buffer = newBuffer;
@@ -65,6 +70,9 @@ export class TLSerializer {
 
     writeBytes(data: Buffer): void {
         const len = data.length;
+        if (len > 0xFFFFFF) {
+            throw new Error(`Length ${len} exceeds TL bytes maximum`);
+        }
         if (len < 254) {
             this.ensureSpace(1 + len + (4 - (len % 4)) % 4);
             this.buffer.writeUInt8(len, this.offset);
@@ -133,19 +141,28 @@ export class TLDeserializer {
         this.offset = 0;
     }
 
+    private checkBounds(needed: number): void {
+        if (this.offset + needed > this.buffer.length) {
+            throw new Error(`Buffer underflow: need ${needed} bytes at offset ${this.offset}, only ${this.buffer.length - this.offset} remaining`);
+        }
+    }
+
     readInt32(): number {
+        this.checkBounds(4);
         const value = this.buffer.readInt32LE(this.offset);
         this.offset += 4;
         return value;
     }
 
     readInt64(): bigint {
+        this.checkBounds(8);
         const value = this.buffer.readBigInt64LE(this.offset);
         this.offset += 8;
         return value;
     }
 
     readUint32(): number {
+        this.checkBounds(4);
         const value = this.buffer.readUInt32LE(this.offset);
         this.offset += 4;
         return value;
@@ -159,6 +176,7 @@ export class TLDeserializer {
     }
 
     readBytes(): Buffer {
+        this.checkBounds(1);
         const firstByte = this.buffer.readUInt8(this.offset);
         this.offset += 1;
 
@@ -166,12 +184,14 @@ export class TLDeserializer {
         if (firstByte < 254) {
             len = firstByte;
         } else {
+            this.checkBounds(3);
             len = this.buffer.readUInt8(this.offset) |
                   (this.buffer.readUInt8(this.offset + 1) << 8) |
                   (this.buffer.readUInt8(this.offset + 2) << 16);
             this.offset += 3;
         }
 
+        this.checkBounds(len);
         const data = this.buffer.subarray(this.offset, this.offset + len);
         this.offset += len;
         const padding = (4 - (len % 4)) % 4;
@@ -184,30 +204,35 @@ export class TLDeserializer {
     }
 
     readInt32Raw(): number {
+        this.checkBounds(4);
         const value = this.buffer.readInt32LE(this.offset);
         this.offset += 4;
         return value;
     }
 
     readInt64Raw(): bigint {
+        this.checkBounds(8);
         const value = this.buffer.readBigInt64LE(this.offset);
         this.offset += 8;
         return value;
     }
 
     readUint32Raw(): number {
+        this.checkBounds(4);
         const value = this.buffer.readUInt32LE(this.offset);
         this.offset += 4;
         return value;
     }
 
     readDouble(): number {
+        this.checkBounds(8);
         const value = this.buffer.readDoubleLE(this.offset);
         this.offset += 8;
         return value;
     }
 
     readRawBytes(len: number): Buffer {
+        this.checkBounds(len);
         const data = this.buffer.subarray(this.offset, this.offset + len);
         this.offset += len;
         return Buffer.from(data);
@@ -217,6 +242,9 @@ export class TLDeserializer {
         const constructor = this.readInt32();
         if (constructor !== 0x7092e7ba) throw new Error(`Invalid vector<int> constructor: 0x${constructor.toString(16)}`);
         const count = this.readInt32();
+        if (count < 0 || count * 4 > this.remaining) {
+            throw new Error(`Invalid vector count: ${count}`);
+        }
         const result: number[] = [];
         for (let i = 0; i < count; i++) {
             result.push(this.readInt32());
@@ -228,6 +256,9 @@ export class TLDeserializer {
         const constructor = this.readInt32();
         if (constructor !== 0x1cb5c415) throw new Error(`Invalid vector<long> constructor: 0x${constructor.toString(16)}`);
         const count = this.readInt32();
+        if (count < 0 || count * 8 > this.remaining) {
+            throw new Error(`Invalid vector count: ${count}`);
+        }
         const result: bigint[] = [];
         for (let i = 0; i < count; i++) {
             result.push(this.readInt64());
@@ -239,6 +270,9 @@ export class TLDeserializer {
         const constructor = this.readInt32();
         if (constructor !== 0x1cb5c415) throw new Error(`Invalid vector constructor: 0x${constructor.toString(16)}`);
         const count = this.readInt32();
+        if (count < 0) {
+            throw new Error(`Invalid vector count: ${count}`);
+        }
         const result: Buffer[] = [];
         for (let i = 0; i < count; i++) {
             result.push(this.readBytes());
@@ -268,7 +302,8 @@ export function serializeObject(obj: { constructor: number; params: any[] }): Bu
         } else if (typeof param === 'string') {
             serializer.writeString(param);
         } else if (typeof param === 'boolean') {
-            serializer.writeBoolTrue();
+            if (param) serializer.writeBoolTrue();
+            else serializer.writeBoolFalse();
         } else if (Array.isArray(param)) {
             for (const item of param) {
                 if (typeof item === 'number') {

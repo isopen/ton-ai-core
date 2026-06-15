@@ -55,6 +55,10 @@ export class AuthKeyCreator {
         return crypton.getRandomBytes(16);
     }
 
+    private generateNonce32(): Buffer {
+        return crypton.getRandomBytes(32);
+    }
+
     private async rsaEncrypt(data: Buffer, keyFingerprint: bigint): Promise<Buffer> {
         const keyInfo = this.getPublicKeyForFingerprint(keyFingerprint);
         if (!keyInfo) {
@@ -159,6 +163,9 @@ export class AuthKeyCreator {
         this.p = p;
         this.q = q;
 
+        const newNonceBuf = this.generateNonce32();
+        this.newNonce = this.bytesToBigInt(newNonceBuf);
+
         const nonce1 = this.generateNonce16();
 
         const innerSerializer = new TLSerializer();
@@ -202,13 +209,13 @@ export class AuthKeyCreator {
         const keyIv = Buffer.alloc(48);
         this.nonce.toString(16).padStart(32, '0').match(/.{2}/g)!.forEach((h, i) => { keyIv[i] = parseInt(h, 16); });
         this.serverNonce.toString(16).padStart(32, '0').match(/.{2}/g)!.forEach((h, i) => { keyIv[i + 16] = parseInt(h, 16); });
-        this.newNonce.toString(16).padStart(32, '0').match(/.{2}/g)!.forEach((h, i) => { keyIv[i + 32] = parseInt(h, 16); });
+        this.bigIntToBytes(this.newNonce, 32).copy(keyIv, 32);
 
         const sha1Hash = await crypton.sha1(keyIv);
         const aesKey = Buffer.concat([sha1Hash, sha1Hash.subarray(0, 4)]);
         const aesIv = Buffer.concat([
             sha1Hash.subarray(4, 20),
-            this.bigIntToBytes(this.newNonce, 8).subarray(0, 8)
+            this.bigIntToBytes(this.newNonce, 32).subarray(0, 8)
         ]);
 
         const decryptedAnswer = await crypton.AES256IGE.decrypt(encryptedAnswer, aesKey, aesIv);
@@ -229,6 +236,16 @@ export class AuthKeyCreator {
         this.g = innerDeserializer.readInt32();
         this.gA = this.bytesToBigInt(innerDeserializer.readBytes());
 
+        if (this.g < 2 || this.g > 7) {
+            throw new Error(`Invalid generator g=${this.g}`);
+        }
+        if (this.dhPrime <= 1n) {
+            throw new Error('Invalid DH prime');
+        }
+        if (this.gA <= 1n || this.gA >= this.dhPrime - 1n) {
+            throw new Error('Invalid gA from server');
+        }
+
         return response;
     }
 
@@ -241,8 +258,8 @@ export class AuthKeyCreator {
         this.publicKey = dhKeys.publicKey;
 
         const sharedSecret = crypton.DiffieHellman.computeSharedSecret(this.privateKey, this.gA, this.dhPrime);
+        this.privateKey = 0n;
 
-        const nonce1 = this.generateNonce16();
         const gB = this.bigIntToBytes(this.publicKey, 256);
 
         const innerSerializer = new TLSerializer();
@@ -260,12 +277,12 @@ export class AuthKeyCreator {
         const keyIv = Buffer.alloc(48);
         this.nonce.toString(16).padStart(32, '0').match(/.{2}/g)!.forEach((h, i) => { keyIv[i] = parseInt(h, 16); });
         this.serverNonce.toString(16).padStart(32, '0').match(/.{2}/g)!.forEach((h, i) => { keyIv[i + 16] = parseInt(h, 16); });
-        this.newNonce.toString(16).padStart(32, '0').match(/.{2}/g)!.forEach((h, i) => { keyIv[i + 32] = parseInt(h, 16); });
+        this.bigIntToBytes(this.newNonce, 32).copy(keyIv, 32);
 
         const sha1Hash = await crypton.sha1(keyIv);
         const aesKey = Buffer.concat([sha1Hash.subarray(4, 20), sha1Hash.subarray(0, 4)]);
         const aesIv = Buffer.concat([
-            this.bigIntToBytes(this.newNonce, 8).subarray(8, 24),
+            this.bigIntToBytes(this.newNonce, 32).subarray(8, 24),
             sha1Hash.subarray(0, 8)
         ]);
 
@@ -313,9 +330,9 @@ export class AuthKeyCreator {
     }
 
     private async computeNewNonceHash1(authKey: Buffer, expectedHash: bigint): Promise<bigint> {
-        const data = Buffer.alloc(48);
+        const data = Buffer.alloc(49);
         data.writeUInt8(1, 0);
-        this.bigIntToBytes(this.newNonce, 16).copy(data, 1);
+        this.bigIntToBytes(this.newNonce, 32).copy(data, 1);
         const partialHash = await crypton.sha1(Buffer.concat([authKey, data]));
         return partialHash.readBigUInt64LE(0);
     }

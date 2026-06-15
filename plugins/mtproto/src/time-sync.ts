@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { crypton } from '@ton-ai/core';
 
 export class TimeSync {
     private offset: number = 0;
@@ -33,7 +34,12 @@ export class TimeSync {
 
     updateOffset(serverTime: number): void {
         const clientTime = Math.floor(Date.now() / 1000);
-        this.offset = serverTime - clientTime;
+        const newOffset = serverTime - clientTime;
+        if (Math.abs(newOffset) > 86400) {
+            this.events.emit('mtproto:time:sync_error', { error: 'Offset too large', offset: newOffset });
+            return;
+        }
+        this.offset = newOffset;
         this.lastSyncTime = Date.now();
         this.events.emit('mtproto:time:offset_updated', { offset: this.offset });
     }
@@ -49,7 +55,7 @@ export class TimeSync {
     generateMessageId(): bigint {
         const serverTime = this.getServerTime();
         const now = BigInt(serverTime) << 32n;
-        const randomPart = BigInt(Math.floor(Math.random() * 0xFFFFFFFF));
+        const randomPart = BigInt(crypton.getRandomBytes(4).readUInt32LE(0));
         const raw = now | randomPart;
         return (raw - (raw % 4n)) & 0x7FFFFFFFFFFFFFFFn;
     }
@@ -57,7 +63,7 @@ export class TimeSync {
     generateServerMessageId(): bigint {
         const serverTime = this.getServerTime();
         const now = BigInt(serverTime) << 32n;
-        const randomPart = BigInt(Math.floor(Math.random() * 0xFFFFFFFF));
+        const randomPart = BigInt(crypton.getRandomBytes(4).readUInt32LE(0));
         const raw = now | randomPart;
         return ((raw - (raw % 4n)) + 1n) & 0x7FFFFFFFFFFFFFFFn;
     }

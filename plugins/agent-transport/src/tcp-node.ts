@@ -104,11 +104,20 @@ export class TcpNode extends EventEmitter {
         this.clientTransports.set(peerId, clientTransport);
 
         clientTransport.on('message', (data: Buffer) => {
-            this.handleMessage(data, connId);
+            this.handleMessage(data, 'server');
         });
 
+        this.connToPeer.set('server', peerId);
+
+        const clientSocket = (clientTransport as any).client;
+        if (clientSocket && clientSocket.remoteAddress) {
+            const remoteAddr = `${clientSocket.remoteAddress}:${clientSocket.remotePort}`;
+            this.addrToPeer.set(remoteAddr, peerId);
+            this.connToPeer.set(connId, peerId);
+        }
+
         (this.transport as any).connections.set(connId, {
-            socket: (clientTransport as any).client,
+            socket: clientSocket,
             stream: new BufferStream(),
             headerReceived: false,
             headerSent: true,
@@ -222,6 +231,7 @@ export class TcpNode extends EventEmitter {
                 if (!this.crypto.hasSession(id)) {
                     peerId = id;
                     this.connToPeer.set(connId, peerId);
+                    this.peerConnIds.set(peerId, connId);
                     break;
                 }
             }
@@ -241,7 +251,9 @@ export class TcpNode extends EventEmitter {
             }, HANDSHAKE_TIMEOUT_MS);
             this.pendingDH.set(peerId, { ...dhKeys, timer });
 
-            const myNonce = crypton.getRandomBytes(16);
+            const myNonce = Buffer.alloc(16);
+            myNonce.writeBigInt64LE(BigInt(Date.now()), 0);
+            crypton.getRandomBytes(8).copy(myNonce, 8);
             const myPub = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
 
             const packet = Buffer.concat([
