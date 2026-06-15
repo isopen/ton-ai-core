@@ -151,8 +151,13 @@ export class CryptoClient extends EventEmitter {
         const msgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, randomPadding, x === 0);
         const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(key.key, msgKey, x === 0);
 
-        const encrypted = await crypton.AES256IGE.encrypt(Buffer.concat([plaintext, randomPadding]), aesKey, aesIv);
-        return { data: encrypted, msgKey, iv: aesIv };
+        try {
+            const encrypted = await crypton.AES256IGE.encrypt(Buffer.concat([plaintext, randomPadding]), aesKey, aesIv);
+            return { data: encrypted, msgKey, iv: aesIv };
+        } finally {
+            aesKey.fill(0);
+            aesIv.fill(0);
+        }
     }
 
     async decryptMessage(
@@ -173,11 +178,18 @@ export class CryptoClient extends EventEmitter {
         }
 
         let decrypted: Buffer;
+        let aesKey: Buffer;
+        let aesIv: Buffer;
         try {
-            const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(key.key, encrypted.msgKey, x === 0);
+            const keys = await crypton.MTProtoKDF.deriveKeys(key.key, encrypted.msgKey, x === 0);
+            aesKey = keys.aesKey;
+            aesIv = keys.aesIv;
             decrypted = await crypton.AES256IGE.decrypt(encrypted.data, aesKey, aesIv);
         } catch {
             throw new Error('Decryption failed');
+        } finally {
+            if (aesKey!) aesKey!.fill(0);
+            if (aesIv!) aesIv!.fill(0);
         }
 
         if (decrypted.length < 32) {
@@ -377,8 +389,13 @@ export class CryptoClient extends EventEmitter {
         const msgKey = await crypton.MTProtoKDF.computeMsgKey(authKeyBuf, plaintext, randomPadding, x === 0);
         const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(authKeyBuf, msgKey, x === 0);
 
-        const encrypted = await crypton.AES256IGE.encrypt(Buffer.concat([plaintext, randomPadding]), aesKey, aesIv);
-        return { data: encrypted, msgKey, iv: aesIv };
+        try {
+            const encrypted = await crypton.AES256IGE.encrypt(Buffer.concat([plaintext, randomPadding]), aesKey, aesIv);
+            return { data: encrypted, msgKey, iv: aesIv };
+        } finally {
+            aesKey.fill(0);
+            aesIv.fill(0);
+        }
     }
 
     private async decryptMessageWith(
@@ -400,11 +417,18 @@ export class CryptoClient extends EventEmitter {
         }
 
         let decrypted: Buffer;
+        let aesKey: Buffer;
+        let aesIv: Buffer;
         try {
-            const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(authKeyBuf, encrypted.msgKey, x === 0);
+            const keys = await crypton.MTProtoKDF.deriveKeys(authKeyBuf, encrypted.msgKey, x === 0);
+            aesKey = keys.aesKey;
+            aesIv = keys.aesIv;
             decrypted = await crypton.AES256IGE.decrypt(encrypted.data, aesKey, aesIv);
         } catch {
             throw new Error('Decryption failed');
+        } finally {
+            if (aesKey!) aesKey!.fill(0);
+            if (aesIv!) aesIv!.fill(0);
         }
 
         if (decrypted.length < 32) {

@@ -101,7 +101,7 @@ export function encodeFull(
 export function decodeFull(data: Buffer): { seqNo: number; payload: Buffer } | null {
     if (data.length < 12) return null;
     const bodyLen = data.readUInt32LE(0);
-    if (data.length < bodyLen + 4) return null;
+    if (bodyLen < 8 || data.length < bodyLen + 4) return null;
     const crcData = data.subarray(0, bodyLen);
     const expectedCrc = data.readUInt32LE(bodyLen);
     const actualCrc = crc32(crcData);

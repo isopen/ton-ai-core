@@ -80,27 +80,29 @@ function aes256CtrProcess(data: Buffer, key: Buffer, iv: Buffer, counter: number
     const result = Buffer.alloc(data.length);
     let offset = 0;
     let currentCounter = counter >>> 0;
+    const aesEcb = new crypton.AES256ECB(key);
+    try {
+        while (offset < data.length) {
+            if (currentCounter > 0xFFFFFFFF) {
+                throw new Error('CTR counter overflow');
+            }
+            const counterBlock = Buffer.alloc(16);
+            iv.copy(counterBlock, 0, 0, 12);
+            counterBlock.writeUInt32LE(currentCounter, 12);
 
-    while (offset < data.length) {
-        if (currentCounter > 0xFFFFFFFF) {
-            throw new Error('CTR counter overflow');
+            const encrypted = aesEcb.encryptBlock(counterBlock);
+
+            const chunkLen = Math.min(16, data.length - offset);
+            for (let i = 0; i < chunkLen; i++) {
+                result[offset + i] = data[offset + i] ^ encrypted[i];
+            }
+
+            offset += 16;
+            currentCounter++;
         }
-        const counterBlock = Buffer.alloc(16);
-        iv.copy(counterBlock, 0, 0, 12);
-        counterBlock.writeUInt32LE(currentCounter, 12);
-
-        const aesEcb = new crypton.AES256ECB(key);
-        const encrypted = aesEcb.encryptBlock(counterBlock);
-
-        const chunkLen = Math.min(16, data.length - offset);
-        for (let i = 0; i < chunkLen; i++) {
-            result[offset + i] = data[offset + i] ^ encrypted[i];
-        }
-
-        offset += 16;
-        currentCounter++;
+    } finally {
+        aesEcb.destroy();
     }
-
     return result;
 }
 

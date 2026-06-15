@@ -17,14 +17,14 @@ export interface AuthKeyCreationResult {
 }
 
 const CONSTRUCTOR_REQ_PQ_MULTI = 0x7e193470;
-const CONSTRUCTOR_PQ_INNER_DATA_TEMP = 0xa9f5579f;
+const CONSTRUCTOR_PQ_INNER_DATA_TEMP = 0x3c618ee2;
 const CONSTRUCTOR_REQ_DH_PARAMS = 0xd712e4be;
 const CONSTRUCTOR_SERVER_DH_PARAMS_OK = 0xd0e2eeab;
 const CONSTRUCTOR_SERVER_DH_PARAMS_FAIL = 0x79cb045d;
 const CONSTRUCTOR_CLIENT_DH_INNER_DATA = 0x6643b6c4;
 const CONSTRUCTOR_SERVER_DH_INNER_DATA = 0xb588f1c2;
 const CONSTRUCTOR_DH_GEN_OK = 0x3bcbf754;
-const CONSTRUCTOR_DH_GEN_FAIL = 0xedd48321;
+const CONSTRUCTOR_DH_GEN_FAIL = 0xedddb863;
 const CONSTRUCTOR_SET_CLIENT_DH_PARAMS = 0xf5045f1f;
 
 export class AuthKeyCreator {
@@ -42,6 +42,7 @@ export class AuthKeyCreator {
     private privateKey!: bigint;
     private privateKeyBuf!: Buffer;
     private publicKey!: bigint;
+    private serverFingerprints: bigint[] = [];
 
     constructor(config: AuthKeyCreationConfig) {
         this.config = config;
@@ -144,7 +145,7 @@ export class AuthKeyCreator {
 
         const serializer = new TLSerializer();
         serializer.writeInt32(CONSTRUCTOR_REQ_PQ_MULTI);
-        serializer.writeInt64(this.nonce);
+        serializer.writeInt128(this.nonce);
         const payload = serializer.toBuffer();
 
         const response = await sendRequest(payload);
@@ -155,9 +156,11 @@ export class AuthKeyCreator {
             throw new Error(`Unexpected constructor: 0x${constructor.toString(16)}`);
         }
 
-        this.serverNonce = deserializer.readInt64();
+        deserializer.readInt128();
+        this.serverNonce = deserializer.readInt128();
         const pqBytes = deserializer.readBytes();
         this.pq = this.bytesToBigInt(pqBytes);
+        this.serverFingerprints = deserializer.readVectorLong();
 
         return response;
     }
@@ -173,25 +176,24 @@ export class AuthKeyCreator {
         const newNonceBuf = this.generateNonce32();
         this.newNonce = this.bytesToBigInt(newNonceBuf);
 
-        const nonce1 = this.generateNonce16();
-
         const innerSerializer = new TLSerializer();
         innerSerializer.writeInt32(CONSTRUCTOR_PQ_INNER_DATA_TEMP);
         innerSerializer.writeBytes(this.bigIntToBytes(this.pq, 8));
         innerSerializer.writeBytes(this.bigIntToBytes(this.p, 4));
         innerSerializer.writeBytes(this.bigIntToBytes(this.q, 4));
-        innerSerializer.writeInt64(this.nonce);
-        innerSerializer.writeInt64(this.serverNonce);
-        innerSerializer.writeBytes(nonce1);
+        innerSerializer.writeInt128(this.nonce);
+        innerSerializer.writeInt128(this.serverNonce);
+        innerSerializer.writeInt256(newNonceBuf);
+        innerSerializer.writeInt32(604800);
         const innerData = innerSerializer.toBuffer();
 
-        const fingerprint = await this.getFingerprint(innerData);
+        const fingerprint = this.getFingerprint();
         const encryptedInner = await this.rsaEncrypt(innerData, fingerprint);
 
         const serializer = new TLSerializer();
         serializer.writeInt32(CONSTRUCTOR_REQ_DH_PARAMS);
-        serializer.writeInt64(this.nonce);
-        serializer.writeInt64(this.serverNonce);
+        serializer.writeInt128(this.nonce);
+        serializer.writeInt128(this.serverNonce);
         serializer.writeBytes(this.bigIntToBytes(this.pq, 8));
         serializer.writeBytes(this.bigIntToBytes(this.p, 4));
         serializer.writeBytes(this.bigIntToBytes(this.q, 4));
@@ -211,11 +213,13 @@ export class AuthKeyCreator {
             throw new Error(`Unexpected constructor: 0x${constructor.toString(16)}`);
         }
 
+        deserializer.readInt128();
+        deserializer.readInt128();
         const encryptedAnswer = deserializer.readBytes();
 
         const keyIv = Buffer.alloc(48);
-        this.nonce.toString(16).padStart(32, '0').match(/.{2}/g)!.forEach((h, i) => { keyIv[i] = parseInt(h, 16); });
-        this.serverNonce.toString(16).padStart(32, '0').match(/.{2}/g)!.forEach((h, i) => { keyIv[i + 16] = parseInt(h, 16); });
+        crypton.bigIntToBuffer(this.nonce, 16).copy(keyIv, 0);
+        crypton.bigIntToBuffer(this.serverNonce, 16).copy(keyIv, 16);
         this.bigIntToBytes(this.newNonce, 32).copy(keyIv, 32);
 
         const sha1Hash = await crypton.sha1(keyIv);
@@ -235,12 +239,12 @@ export class AuthKeyCreator {
             throw new Error(`Unexpected inner constructor: 0x${innerConstructor.toString(16)}`);
         }
 
-        innerDeserializer.readInt64();
-        innerDeserializer.readInt64();
+        innerDeserializer.readInt128();
+        innerDeserializer.readInt128();
         innerDeserializer.readInt64();
 
-        this.dhPrime = this.bytesToBigInt(innerDeserializer.readBytes());
         this.g = innerDeserializer.readInt32();
+        this.dhPrime = this.bytesToBigInt(innerDeserializer.readBytes());
         this.gA = this.bytesToBigInt(innerDeserializer.readBytes());
 
         if (this.g < 2 || this.g > 7) {
@@ -269,77 +273,84 @@ export class AuthKeyCreator {
         this.privateKeyBuf.fill(0);
         this.privateKey = 0n;
 
-        const gB = this.bigIntToBytes(this.publicKey, 256);
+        try {
+            const gB = this.bigIntToBytes(this.publicKey, 256);
 
-        const innerSerializer = new TLSerializer();
-        innerSerializer.writeInt32(CONSTRUCTOR_CLIENT_DH_INNER_DATA);
-        innerSerializer.writeInt64(this.nonce);
-        innerSerializer.writeInt64(this.serverNonce);
-        innerSerializer.writeInt64(this.retryId);
-        innerSerializer.writeBytes(gB);
-        const innerData = innerSerializer.toBuffer();
+            const innerSerializer = new TLSerializer();
+            innerSerializer.writeInt32(CONSTRUCTOR_CLIENT_DH_INNER_DATA);
+            innerSerializer.writeInt128(this.nonce);
+            innerSerializer.writeInt128(this.serverNonce);
+            innerSerializer.writeInt64(this.retryId);
+            innerSerializer.writeBytes(gB);
+            const innerData = innerSerializer.toBuffer();
 
-        const checksum = computeChecksum(innerData);
-        const dataForEncryption = Buffer.concat([innerData, Buffer.alloc(4)]);
-        dataForEncryption.writeInt32LE(checksum, innerData.length);
+            const checksum = computeChecksum(innerData);
+            const dataForEncryption = Buffer.concat([innerData, Buffer.alloc(4)]);
+            dataForEncryption.writeInt32LE(checksum, innerData.length);
 
-        const keyIv = Buffer.alloc(48);
-        this.nonce.toString(16).padStart(32, '0').match(/.{2}/g)!.forEach((h, i) => { keyIv[i] = parseInt(h, 16); });
-        this.serverNonce.toString(16).padStart(32, '0').match(/.{2}/g)!.forEach((h, i) => { keyIv[i + 16] = parseInt(h, 16); });
-        this.bigIntToBytes(this.newNonce, 32).copy(keyIv, 32);
+            const keyIv = Buffer.alloc(64);
+            this.bigIntToBytes(this.newNonce, 32).copy(keyIv, 0);
+            crypton.bigIntToBuffer(this.nonce, 16).copy(keyIv, 32);
+            crypton.bigIntToBuffer(this.serverNonce, 16).copy(keyIv, 48);
 
-        const sha1Hash = await crypton.sha1(keyIv);
-        const aesKey = Buffer.concat([sha1Hash.subarray(4, 20), sha1Hash.subarray(0, 4)]);
-        const aesIv = Buffer.concat([
-            this.bigIntToBytes(this.newNonce, 32).subarray(8, 24),
-            sha1Hash.subarray(0, 8)
-        ]);
+            const sha1Hash = await crypton.sha1(keyIv);
+            const aesKey = Buffer.concat([sha1Hash.subarray(4, 20), sha1Hash.subarray(0, 4)]);
+            const aesIv = Buffer.concat([
+                this.bigIntToBytes(this.newNonce, 32).subarray(8, 24),
+                sha1Hash.subarray(0, 8)
+            ]);
 
-        const encryptedInner = await crypton.AES256IGE.encrypt(dataForEncryption, aesKey, aesIv);
+            const encryptedInner = await crypton.AES256IGE.encrypt(dataForEncryption, aesKey, aesIv);
 
-        const serializer = new TLSerializer();
-        serializer.writeInt32(CONSTRUCTOR_SET_CLIENT_DH_PARAMS);
-        serializer.writeInt64(this.nonce);
-        serializer.writeInt64(this.serverNonce);
-        serializer.writeBytes(encryptedInner);
-        const payload = serializer.toBuffer();
+            const serializer = new TLSerializer();
+            serializer.writeInt32(CONSTRUCTOR_SET_CLIENT_DH_PARAMS);
+            serializer.writeInt128(this.nonce);
+            serializer.writeInt128(this.serverNonce);
+            serializer.writeBytes(encryptedInner);
+            const payload = serializer.toBuffer();
 
-        const response = await sendRequest(payload);
-        const deserializer = new TLDeserializer(response);
-        const constructor = deserializer.readInt32();
+            const response = await sendRequest(payload);
+            const deserializer = new TLDeserializer(response);
+            const constructor = deserializer.readInt32();
 
-        if (constructor === CONSTRUCTOR_DH_GEN_FAIL) {
-            throw new Error('DH gen failed');
+            if (constructor === CONSTRUCTOR_DH_GEN_FAIL) {
+                throw new Error('DH gen failed');
+            }
+
+            if (constructor !== CONSTRUCTOR_DH_GEN_OK) {
+                throw new Error(`Unexpected constructor: 0x${constructor.toString(16)}`);
+            }
+
+            deserializer.readInt128();
+            deserializer.readInt128();
+            const newNonceHash1Full = deserializer.readInt128();
+            const newNonceHash1 = newNonceHash1Full & 0xFFFFFFFFFFFFFFFFn;
+            const expectedHash1 = await this.computeNewNonceHash1(sharedSecret);
+            if (newNonceHash1 !== expectedHash1) {
+                throw new Error('New nonce hash mismatch');
+            }
+
+            const authKey = sharedSecret;
+            const authKeyId = await crypton.MTProtoKDF.computeAuthKeyId(authKey);
+
+            const salt = this.xorBuffers(
+                this.bigIntToBytes(this.nonce, 16).subarray(0, 8),
+                this.bigIntToBytes(this.serverNonce, 16).subarray(0, 8)
+            );
+
+            return {
+                authKey,
+                authKeyId,
+                salt: Buffer.from(salt),
+                serverSalt: salt.readBigUInt64LE(0),
+            };
+        } finally {
+            sharedSecret.fill(0);
         }
-
-        if (constructor !== CONSTRUCTOR_DH_GEN_OK) {
-            throw new Error(`Unexpected constructor: 0x${constructor.toString(16)}`);
-        }
-
-        const newNonceHash1 = deserializer.readInt64();
-        const expectedHash1 = await this.computeNewNonceHash1(sharedSecret, newNonceHash1);
-        if (newNonceHash1 !== expectedHash1) {
-            throw new Error('New nonce hash mismatch');
-        }
-
-        const authKey = sharedSecret;
-        const authKeyId = await crypton.MTProtoKDF.computeAuthKeyId(authKey);
-
-        const salt = this.xorBuffers(
-            this.bigIntToBytes(this.nonce, 16).subarray(0, 8),
-            this.bigIntToBytes(this.serverNonce, 16).subarray(0, 8)
-        );
-
-        return {
-            authKey,
-            authKeyId,
-            salt: Buffer.from(salt),
-            serverSalt: salt.readBigUInt64LE(0),
-        };
     }
 
-    private async computeNewNonceHash1(authKey: Buffer, expectedHash: bigint): Promise<bigint> {
-        const data = Buffer.alloc(49);
+    private async computeNewNonceHash1(authKey: Buffer): Promise<bigint> {
+        const data = Buffer.alloc(33);
         data.writeUInt8(1, 0);
         this.bigIntToBytes(this.newNonce, 32).copy(data, 1);
         const partialHash = await crypton.sha1(Buffer.concat([authKey, data]));
@@ -373,9 +384,13 @@ export class AuthKeyCreator {
         return result;
     }
 
-    private async getFingerprint(data: Buffer): Promise<bigint> {
-        const sha1Hash = await crypton.sha1(data);
-        return sha1Hash.readBigUInt64LE(12);
+    private getFingerprint(): bigint {
+        for (const fp of this.serverFingerprints) {
+            if (this.getPublicKeyForFingerprint(fp)) {
+                return fp;
+            }
+        }
+        throw new Error('No matching public key found for server fingerprints');
     }
 }
 

@@ -282,6 +282,7 @@ export class WsNode extends EventEmitter {
         if (!myDh) return;
 
         const sharedSecret = this.crypto.computeSharedSecret(myDh.privateKey, peerPubKey);
+        myDh.privateKeyBuf.fill(0);
         this.pendingDH.delete(peerId);
 
         await this.crypto.createSession(peerId, sharedSecret);

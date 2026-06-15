@@ -54,6 +54,20 @@ export class TLSerializer {
         this.offset += 8;
     }
 
+    writeInt128(value: bigint): void {
+        this.ensureSpace(16);
+        this.buffer.writeBigInt64LE(value & 0xFFFFFFFFFFFFFFFFn, this.offset);
+        this.buffer.writeBigInt64LE((value >> 64n) & 0xFFFFFFFFFFFFFFFFn, this.offset + 8);
+        this.offset += 16;
+    }
+
+    writeInt256(value: Buffer): void {
+        if (value.length !== 32) throw new Error('int256 requires exactly 32 bytes');
+        this.ensureSpace(32);
+        value.copy(this.buffer, this.offset);
+        this.offset += 32;
+    }
+
     writeUint32(value: number): void {
         this.ensureSpace(4);
         this.buffer.writeUInt32LE(value >>> 0, this.offset);
@@ -161,6 +175,21 @@ export class TLDeserializer {
         return value;
     }
 
+    readInt128(): bigint {
+        this.checkBounds(16);
+        const low = this.buffer.readBigUInt64LE(this.offset);
+        const high = this.buffer.readBigUInt64LE(this.offset + 8);
+        this.offset += 16;
+        return (high << 64n) | low;
+    }
+
+    readInt256(): Buffer {
+        this.checkBounds(32);
+        const value = Buffer.from(this.buffer.subarray(this.offset, this.offset + 32));
+        this.offset += 32;
+        return value;
+    }
+
     readUint32(): number {
         this.checkBounds(4);
         const value = this.buffer.readUInt32LE(this.offset);
@@ -195,6 +224,7 @@ export class TLDeserializer {
         const data = this.buffer.subarray(this.offset, this.offset + len);
         this.offset += len;
         const padding = (4 - (len % 4)) % 4;
+        if (padding > 0) this.checkBounds(padding);
         this.offset += padding;
         return Buffer.from(data);
     }
@@ -240,7 +270,7 @@ export class TLDeserializer {
 
     readVectorInt32(): number[] {
         const constructor = this.readInt32();
-        if (constructor !== 0x7092e7ba) throw new Error(`Invalid vector<int> constructor: 0x${constructor.toString(16)}`);
+        if (constructor !== 0x1cb5c415) throw new Error(`Invalid vector<int> constructor: 0x${constructor.toString(16)}`);
         const count = this.readInt32();
         if (count < 0 || count * 4 > this.remaining) {
             throw new Error(`Invalid vector count: ${count}`);
@@ -270,7 +300,7 @@ export class TLDeserializer {
         const constructor = this.readInt32();
         if (constructor !== 0x1cb5c415) throw new Error(`Invalid vector constructor: 0x${constructor.toString(16)}`);
         const count = this.readInt32();
-        if (count < 0) {
+        if (count < 0 || count > this.remaining / 2) {
             throw new Error(`Invalid vector count: ${count}`);
         }
         const result: Buffer[] = [];

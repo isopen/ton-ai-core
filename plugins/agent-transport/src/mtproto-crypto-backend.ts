@@ -114,6 +114,12 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
         const session = this.sessions.get(peerId);
         if (!session) return null;
 
+        if (session.pendingRekey) {
+            session.pendingRekey.privateKeyBuf.fill(0);
+            session.pendingRekey.privateKey = 0n;
+            session.pendingRekey.publicKey = 0n;
+        }
+
         const newKeys = this.generateDHKeys();
         session.pendingRekey = {
             privateKeyBuf: newKeys.privateKeyBuf,

@@ -69,8 +69,7 @@ export class MTProtoKDF {
       throw new Error(`Invalid authKey length`);
     }
     const hash = await sha1(authKey);
-    const lowBytes = hash.subarray(-8);
-    return BigInt('0x' + lowBytes.toString('hex'));
+    return hash.readBigUInt64LE(12);
   }
 
   static async computeAuthKeyIdBuffer(authKey: Buffer): Promise<Buffer> {

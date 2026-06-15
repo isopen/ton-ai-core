@@ -282,6 +282,7 @@ export class UdpNode extends EventEmitter {
 
         const sharedSecret = this.crypto.computeSharedSecret(myDh.privateKey, peerPubKey);
         clearTimeout(myDh.timer);
+        myDh.privateKeyBuf.fill(0);
         this.pendingDH.delete(peerId);
 
         await this.crypto.createSession(peerId, sharedSecret);
