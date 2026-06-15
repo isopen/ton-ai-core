@@ -32,25 +32,31 @@ export class WireFormat {
         isClient: boolean
     ): Promise<WireMessage> {
         const padding = this.generatePadding(messageBody.length);
-        const plaintext = this.buildPlaintext(salt, sessionId, messageId, seqNo, messageBody, padding);
+        const plaintext = this.buildPlaintext(salt, sessionId, messageId, seqNo, messageBody, Buffer.alloc(0));
 
-        const x = isClient ? 0 : 8;
-        const msgKey = await this.computeMsgKey(authKey.key, plaintext, x);
-        const { aesKey, aesIv } = await this.deriveKeys(authKey.key, msgKey, x);
+        const msgKey = await this.computeMsgKey(authKey.key, plaintext, padding, isClient);
+        const { aesKey, aesIv } = await this.deriveKeys(authKey.key, msgKey, isClient);
 
-        const encryptedData = await crypton.AES256IGE.encrypt(plaintext, aesKey, aesIv);
+        const plaintextWithPadding = Buffer.concat([plaintext, padding]);
 
-        const authKeyIdBuf = Buffer.alloc(8);
-        authKeyIdBuf.writeBigUInt64LE(authKey.id, 0);
+        try {
+            const encryptedData = await crypton.AES256IGE.encrypt(plaintextWithPadding, aesKey, aesIv);
 
-        const rawMessage = Buffer.concat([authKeyIdBuf, msgKey, encryptedData]);
+            const authKeyIdBuf = Buffer.alloc(8);
+            authKeyIdBuf.writeBigUInt64LE(authKey.id, 0);
 
-        return {
-            authKeyId: authKey.id,
-            msgKey,
-            encryptedData,
-            rawMessage,
-        };
+            const rawMessage = Buffer.concat([authKeyIdBuf, msgKey, encryptedData]);
+
+            return {
+                authKeyId: authKey.id,
+                msgKey,
+                encryptedData,
+                rawMessage,
+            };
+        } finally {
+            aesKey.fill(0);
+            aesIv.fill(0);
+        }
     }
 
     static async unwrapMessage(
@@ -66,14 +72,18 @@ export class WireFormat {
         const msgKey = data.subarray(8, 24);
         const encryptedData = data.subarray(24);
 
-        const x = isClient ? 0 : 8;
-        const { aesKey, aesIv } = await this.deriveKeys(authKey.key, msgKey, x);
+        const { aesKey, aesIv } = await this.deriveKeys(authKey.key, msgKey, isClient);
 
         let decrypted: Buffer;
         try {
             decrypted = await crypton.AES256IGE.decrypt(encryptedData, aesKey, aesIv);
         } catch {
+            aesKey.fill(0);
+            aesIv.fill(0);
             return null;
+        } finally {
+            aesKey.fill(0);
+            aesIv.fill(0);
         }
 
         return this.parsePlaintext(decrypted);
@@ -118,29 +128,12 @@ export class WireFormat {
         return { salt, sessionId, messageId, seqNo, messageBody, padding };
     }
 
-    static async computeMsgKey(authKey: Buffer, plaintext: Buffer, x: number): Promise<Buffer> {
-        const authKeyPart = authKey.subarray(88 + x, 88 + x + 32);
-        const msgKeyLarge = await crypton.sha256(Buffer.concat([authKeyPart, plaintext]));
-        return Buffer.from(msgKeyLarge.subarray(8, 24));
+    static async computeMsgKey(authKey: Buffer, plaintext: Buffer, randomPadding: Buffer, isClient: boolean): Promise<Buffer> {
+        return crypton.MTProtoKDF.computeMsgKey(authKey, plaintext, randomPadding, isClient);
     }
 
-    static async deriveKeys(authKey: Buffer, msgKey: Buffer, x: number): Promise<{ aesKey: Buffer; aesIv: Buffer }> {
-        const sha256_a = await crypton.sha256(Buffer.concat([msgKey, authKey.subarray(x, x + 36)]));
-        const sha256_b = await crypton.sha256(Buffer.concat([authKey.subarray(40 + x, 40 + x + 36), msgKey]));
-
-        const aesKey = Buffer.concat([
-            sha256_a.subarray(0, 8),
-            sha256_b.subarray(8, 24),
-            sha256_a.subarray(24, 32),
-        ]);
-
-        const aesIv = Buffer.concat([
-            sha256_b.subarray(0, 8),
-            sha256_a.subarray(8, 24),
-            sha256_b.subarray(24, 32),
-        ]);
-
-        return { aesKey, aesIv };
+    static async deriveKeys(authKey: Buffer, msgKey: Buffer, isClient: boolean): Promise<{ aesKey: Buffer; aesIv: Buffer }> {
+        return crypton.MTProtoKDF.deriveKeys(authKey, msgKey, isClient);
     }
 
     static generatePadding(dataLength: number): Buffer {

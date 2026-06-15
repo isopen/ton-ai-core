@@ -21,6 +21,7 @@ interface SessionState {
 }
 
 const REPLAY_WINDOW_SIZE = 1000;
+const MAX_SESSIONS = 1000;
 
 export class CryptoClient extends EventEmitter {
     private context: PluginContext;
@@ -81,10 +82,16 @@ export class CryptoClient extends EventEmitter {
     }
 
     setAuthKey(authKey: AuthKey): void {
+        if (!authKey.key || authKey.key.length !== 256) {
+            throw new Error('Auth key must be exactly 256 bytes');
+        }
         this.authKey = authKey;
     }
 
     setSecretAuthKey(authKey: AuthKey): void {
+        if (!authKey.key || authKey.key.length !== 256) {
+            throw new Error('Secret auth key must be exactly 256 bytes');
+        }
         this.secretAuthKey = authKey;
     }
 
@@ -272,6 +279,13 @@ export class CryptoClient extends EventEmitter {
     }
 
     async createSession(peerId: string, sharedSecret: Buffer): Promise<void> {
+        const existing = this.sessions.get(peerId);
+        if (existing) {
+            existing.authKey.key.fill(0);
+            existing.serverSalt.fill(0);
+        } else if (this.sessions.size >= MAX_SESSIONS) {
+            throw new Error('Maximum session count reached');
+        }
         const authKey = await this.generateAuthKey(sharedSecret);
         const salt = crypton.getRandomBytes(8);
         const sessionId = BigInt('0x' + crypton.getRandomBytes(8).toString('hex'));
@@ -289,6 +303,11 @@ export class CryptoClient extends EventEmitter {
     }
 
     setSessionKeys(peerId: string, authKey: AuthKey, salt: Buffer, sessionId?: bigint): void {
+        const existing = this.sessions.get(peerId);
+        if (existing) {
+            existing.authKey.key.fill(0);
+            existing.serverSalt.fill(0);
+        }
         this.sessions.set(peerId, {
             authKey,
             serverSalt: salt,

@@ -13,6 +13,7 @@ export class TimeSync {
     }
 
     start(): void {
+        if (this.timer) return;
         this.timer = setInterval(() => this.sync(), this.syncInterval);
     }
 

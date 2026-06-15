@@ -56,7 +56,11 @@ export class WsTransport extends EventEmitter {
     private async connectToServer(): Promise<void> {
         return new Promise((resolve, reject) => {
             const url = `ws://${this.host}:${this.port}`;
-            this.client = new WebSocket(url);
+            this.client = new WebSocket(url, {
+                headers: {
+                    'Sec-WebSocket-Protocol': 'binary',
+                },
+            });
             this.client.on('open', () => {
                 const id = 'server';
                 this.connections.set(id, {

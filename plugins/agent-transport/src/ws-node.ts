@@ -14,7 +14,6 @@ export interface WsConfig {
     transportType: WsTransportType;
     keepAliveInterval?: number;
     rekeyInterval?: number;
-    enableObfuscation?: boolean;
 }
 
 export class WsNode extends EventEmitter {
@@ -287,10 +286,8 @@ export class WsNode extends EventEmitter {
 
         await this.crypto.createSession(peerId, sharedSecret);
 
-        if (this.config.enableObfuscation) {
-            const initPayload = generateInitPayload();
-            this.obfuscationStates.set(peerId, await initObfuscation(initPayload));
-        }
+        const initPayload = generateInitPayload();
+        this.obfuscationStates.set(peerId, await initObfuscation(initPayload));
 
         this.emit('secureChannel', peerId);
     }
