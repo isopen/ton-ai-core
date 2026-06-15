@@ -63,6 +63,9 @@ export class CryptoClient extends EventEmitter {
         const sharedSecret = crypton.DiffieHellman.computeSharedSecret(privateKey, peerPublicKey);
         if (this.dhKeys) {
             this.dhKeys.sharedSecret = sharedSecret;
+            if (this.dhKeys.privateKeyBuf) {
+                this.dhKeys.privateKeyBuf.fill(0);
+            }
         }
         return sharedSecret;
     }
@@ -226,6 +229,8 @@ export class CryptoClient extends EventEmitter {
         if (this.authKey?.key) this.authKey.key.fill(0);
         if (this.secretAuthKey?.key) this.secretAuthKey.key.fill(0);
         if (this.serverSalt) this.serverSalt.fill(0);
+        if (this.dhKeys?.privateKeyBuf) this.dhKeys.privateKeyBuf.fill(0);
+        if (this.dhKeys?.sharedSecret) this.dhKeys.sharedSecret.fill(0);
         this.authKey = null;
         this.secretAuthKey = null;
         this.serverSalt = null;
@@ -242,6 +247,8 @@ export class CryptoClient extends EventEmitter {
         if (this.authKey?.key) this.authKey.key.fill(0);
         if (this.secretAuthKey?.key) this.secretAuthKey.key.fill(0);
         if (this.serverSalt) this.serverSalt.fill(0);
+        if (this.dhKeys?.privateKeyBuf) this.dhKeys.privateKeyBuf.fill(0);
+        if (this.dhKeys?.sharedSecret) this.dhKeys.sharedSecret.fill(0);
         this.dhKeys = null;
         for (const session of this.sessions.values()) {
             session.authKey.key.fill(0);

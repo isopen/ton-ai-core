@@ -25,6 +25,7 @@ export interface AuthKey {
 
 export interface DHKeys {
     privateKey: bigint;
+    privateKeyBuf: Buffer;
     publicKey: bigint;
     sharedSecret?: Buffer;
 }

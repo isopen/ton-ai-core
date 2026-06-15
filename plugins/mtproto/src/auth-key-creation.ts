@@ -40,6 +40,7 @@ export class AuthKeyCreator {
     private gA: bigint = 0n;
     private retryId: bigint = 0n;
     private privateKey!: bigint;
+    private privateKeyBuf!: Buffer;
     private publicKey!: bigint;
 
     constructor(config: AuthKeyCreationConfig) {
@@ -126,10 +127,16 @@ export class AuthKeyCreator {
     async createAuthKey(
         sendRequest: (data: Buffer) => Promise<Buffer>
     ): Promise<AuthKeyCreationResult> {
-        const step1Result = await this.step1_reqPq(sendRequest);
-        const step2Result = await this.step2_reqDHParams(sendRequest, step1Result);
-        const step3Result = await this.step3_createSession(sendRequest, step2Result);
-        return step3Result;
+        try {
+            const step1Result = await this.step1_reqPq(sendRequest);
+            const step2Result = await this.step2_reqDHParams(sendRequest, step1Result);
+            const step3Result = await this.step3_createSession(sendRequest, step2Result);
+            return step3Result;
+        } finally {
+            if (this.privateKeyBuf) {
+                this.privateKeyBuf.fill(0);
+            }
+        }
     }
 
     private async step1_reqPq(sendRequest: (data: Buffer) => Promise<Buffer>): Promise<Buffer> {
@@ -255,9 +262,11 @@ export class AuthKeyCreator {
     ): Promise<AuthKeyCreationResult> {
         const dhKeys = crypton.DiffieHellman.generateKeys(this.dhPrime, BigInt(this.g));
         this.privateKey = dhKeys.privateKey;
+        this.privateKeyBuf = crypton.bigIntToBuffer(dhKeys.privateKey, 256);
         this.publicKey = dhKeys.publicKey;
 
         const sharedSecret = crypton.DiffieHellman.computeSharedSecret(this.privateKey, this.gA, this.dhPrime);
+        this.privateKeyBuf.fill(0);
         this.privateKey = 0n;
 
         const gB = this.bigIntToBytes(this.publicKey, 256);

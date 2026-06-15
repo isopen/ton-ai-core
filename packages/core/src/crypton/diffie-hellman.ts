@@ -3,6 +3,7 @@ import { getRandomBytes, bigIntToBuffer, bufferToBigInt, modPowConstantTime, isP
 
 export interface DHKeys {
   privateKey: bigint;
+  privateKeyBuf: Buffer;
   publicKey: bigint;
   sharedSecret?: Buffer;
 }
@@ -69,7 +70,8 @@ export class DiffieHellman {
       publicKey = modPowConstantTime(generator, privateKey, prime);
     } while (!this.isValidPublicKey(publicKey, prime));
 
-    return { privateKey, publicKey };
+    const privateKeyBuf = bigIntToBuffer(privateKey, 256);
+    return { privateKey, privateKeyBuf, publicKey };
   }
 
   static computeSharedSecret(privateKey: bigint, peerPublicKey: bigint, p?: bigint): Buffer {
