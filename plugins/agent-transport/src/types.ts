@@ -46,6 +46,8 @@ export enum TransportType {
     INTERMEDIATE = 0xee,
     PADDED_INTERMEDIATE = 0xee,
     FULL = 0xdd,
+    OBFUSCATED2_INTERMEDIATE = 0xee,
+    OBFUSCATED2_PADDED_INTERMEDIATE = 0xee,
 }
 
 export interface SessionState {

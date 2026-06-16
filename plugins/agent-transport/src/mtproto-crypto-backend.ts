@@ -26,11 +26,12 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
 
         if (mode === 'telegram') {
             salt = Buffer.alloc(8);
-            session = sessionId ?? BigInt('0x' + crypton.getRandomBytes(8).toString('hex'));
+            session = sessionId ?? crypton.bufferToBigInt(crypton.getRandomBytes(8)) & 0x7FFFFFFFFFFFFFFFn;
         } else {
             const derived = await crypton.sha256(sharedSecret);
             salt = Buffer.from(derived.subarray(0, 8));
             session = sessionId ?? derived.readBigUInt64LE(8) & 0x7FFFFFFFFFFFFFFFn;
+            derived.fill(0);
         }
 
         this.plugin.setSessionKeys(peerId, authKey, salt, session);

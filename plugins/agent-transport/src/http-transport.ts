@@ -53,7 +53,7 @@ export class HttpTransport extends EventEmitter {
     }
 
     private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
-        if (req.method !== 'POST' || !req.url?.startsWith('/api')) {
+        if (req.method !== 'POST') {
             res.writeHead(404);
             res.end();
             return;
@@ -63,6 +63,15 @@ export class HttpTransport extends EventEmitter {
             res.writeHead(503);
             res.end('Too many connections');
             return;
+        }
+
+        const waitParam = this.parseWaitParam(req.url ?? '');
+        const connId = this.getOrCreateConnection(req);
+        const conn = this.connections.get(connId)!;
+
+        const peerIdHeader = req.headers['x-peer-id'] as string | undefined;
+        if (peerIdHeader) {
+            conn.peerId = peerIdHeader;
         }
 
         const chunks: Buffer[] = [];
@@ -81,13 +90,6 @@ export class HttpTransport extends EventEmitter {
 
         req.on('end', () => {
             const body = Buffer.concat(chunks);
-            const connId = this.getOrCreateConnection(req);
-            const conn = this.connections.get(connId)!;
-
-            const peerIdHeader = req.headers['x-peer-id'] as string | undefined;
-            if (peerIdHeader) {
-                conn.peerId = peerIdHeader;
-            }
 
             if (body.length > 0) {
                 this.emit('message', body, connId, conn.peerId);
@@ -100,14 +102,14 @@ export class HttpTransport extends EventEmitter {
                     'Content-Length': data.length.toString(),
                 });
                 res.end(data);
-            } else {
+            } else if (waitParam > 0) {
                 const timer = setTimeout(() => {
                     if (conn.pendingPoll?.res === res) {
                         conn.pendingPoll = null;
                         res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
                         res.end(Buffer.alloc(0));
                     }
-                }, 30000);
+                }, waitParam * 1000);
 
                 conn.pendingPoll = { res, timer };
 
@@ -117,6 +119,9 @@ export class HttpTransport extends EventEmitter {
                         conn.pendingPoll = null;
                     }
                 });
+            } else {
+                res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+                res.end(Buffer.alloc(0));
             }
         });
 
@@ -124,6 +129,14 @@ export class HttpTransport extends EventEmitter {
             res.writeHead(500);
             res.end();
         });
+    }
+
+    private parseWaitParam(url: string): number {
+        const questionIdx = url.indexOf('?');
+        if (questionIdx === -1) return 0;
+        const params = new URLSearchParams(url.substring(questionIdx));
+        const wait = parseInt(params.get('wait') ?? '0', 10);
+        return Math.min(Math.max(wait, 0), 25);
     }
 
     private hasConnection(req: http.IncomingMessage): boolean {
@@ -187,19 +200,19 @@ export class HttpTransport extends EventEmitter {
         }
     }
 
-    sendToServer(host: string, port: number, data: Buffer, peerId?: string): Promise<Buffer> {
+    sendToServer(host: string, port: number, data: Buffer, peerId?: string, wait: number = 0): Promise<Buffer> {
         return new Promise((resolve, reject) => {
+            const path = wait > 0 ? `/?wait=${wait}` : '/';
             const headers: Record<string, string> = {
                 'Content-Type': 'application/octet-stream',
                 'Content-Length': data.length.toString(),
-                'Connection': 'keep-alive',
             };
             if (peerId) {
                 headers['X-Peer-ID'] = peerId;
             }
 
             const req = http.request(
-                { hostname: host, port, path: '/api', method: 'POST', timeout: 35000, headers },
+                { hostname: host, port, path, method: 'POST', timeout: (wait + 5) * 1000, headers },
                 (res) => {
                     const responseChunks: Buffer[] = [];
                     res.on('data', (chunk: Buffer) => responseChunks.push(chunk));

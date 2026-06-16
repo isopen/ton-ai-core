@@ -16,4 +16,5 @@ export * from './container';
 export * from './tcp-transport';
 export * from './ws-transport';
 export * from './http-transport';
+export { Obfuscated2Transport, Obfuscated2TransportType } from './obfuscated2-transport';
 export { MTProtoCryptoBackend } from './mtproto-crypto-backend';

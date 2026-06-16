@@ -45,11 +45,11 @@ async function main() {
     await alice.initiateHandshake('bob');
     await bob.initiateHandshake('alice');
     await Promise.all([aSecure, bSecure]);
-    console.log('1. Handshake OK');
+    console.log('Handshake OK');
 
     let bobReceived = false;
     bob.on('message', ({ peerId, data }: { peerId: string; data: Buffer }) => {
-        console.log(`2. Bob received from ${peerId}: "${data.toString()}"`);
+        console.log(`Bob received from ${peerId}: "${data.toString()}"`);
         bobReceived = true;
     });
 
@@ -66,7 +66,7 @@ async function main() {
         setTimeout(() => { if (!bobReceived) { console.log('FAIL: message not received'); process.exit(1); } }, 10000);
     });
 
-    console.log('3. All passed');
+    console.log('\nALL PASSED');
     await aliceHttp.onDeactivate();
     await bobHttp.onDeactivate();
     process.exit(0);

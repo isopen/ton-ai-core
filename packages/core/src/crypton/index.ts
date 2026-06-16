@@ -22,7 +22,7 @@ import {
 } from './utils';
 
 import { sha1 } from './sha1';
-import { rsaVerify } from './rsa';
+import { rsaVerify, pemToBigInts, rsaFingerprint, rsaEncryptRaw } from './rsa';
 
 import {
   sha256,
@@ -89,6 +89,9 @@ export const crypton = {
   deriveEd25519Path,
   deriveSymmetricPath,
   rsaVerify,
+  pemToBigInts,
+  rsaFingerprint,
+  rsaEncryptRaw,
   modPow,
   modPowConstantTime,
   isProbablyPrime,

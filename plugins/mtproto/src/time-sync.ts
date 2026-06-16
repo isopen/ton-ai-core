@@ -3,7 +3,7 @@ import { crypton } from '@ton-ai/core';
 
 export class TimeSync {
     private offset: number = 0;
-    private lastSyncTime: number = 0;
+    private lastSyncTime: number = -Infinity;
     private syncInterval: number = 30000;
     private timer: NodeJS.Timeout | null = null;
     private events: EventEmitter;
@@ -77,7 +77,7 @@ export class TimeSync {
     }
 
     isTimeSynced(): boolean {
-        return this.offset !== 0 || Date.now() - this.lastSyncTime < 60000;
+        return this.lastSyncTime !== -Infinity && Date.now() - this.lastSyncTime < 60000;
     }
 
     handleTimeOffset(serverTime: number, salt: Buffer): void {

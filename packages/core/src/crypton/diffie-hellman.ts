@@ -65,7 +65,10 @@ export class DiffieHellman {
 
     let privateKey: bigint;
     let publicKey: bigint;
+    const maxIter = 100;
+    let iter = 0;
     do {
+      if (++iter > maxIter) throw new Error('Failed to generate valid DH public key');
       privateKey = this.generatePrivateKey(prime);
       publicKey = modPowConstantTime(generator, privateKey, prime);
     } while (!this.isValidPublicKey(publicKey, prime));

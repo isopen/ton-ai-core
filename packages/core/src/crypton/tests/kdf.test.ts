@@ -125,7 +125,7 @@ async function run() {
     /Invalid authKey length/
   );
   await assert.rejects(
-    () => MTProtoKDF.computeMsgKey(authKey, plain, Buffer.alloc(8), true),
+    () => MTProtoKDF.computeMsgKey(authKey, Buffer.alloc(31), Buffer.alloc(1025), true),
     /Padding length must be between/
   );
 

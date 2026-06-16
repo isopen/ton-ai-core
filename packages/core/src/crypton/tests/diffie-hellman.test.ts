@@ -91,10 +91,10 @@ async function run() {
   const expectedNum = modPow(bob.publicKey, alice.privateKey, defaultP);
   assert.strictEqual(sharedNum, expectedNum, 'Shared secret BigInt mismatch');
 
-  // 11. Strict mode rejects default Telegram prime because p mod 8 != 7
-  assert.throws(
+  // 11. Strict mode accepts default prime (p mod 8 == 7 for RFC 3526 Group 14)
+  assert.doesNotThrow(
     () => DiffieHellman.validateDhParams(defaultP, defaultG, true),
-    'Strict mode must reject default p because p mod 8 != 7'
+    'Strict mode should accept RFC 3526 Group 14 prime (p mod 8 == 7)'
   );
 
   // 12. New bit-length check: reject primes that are not 2^2047 < p < 2^2048

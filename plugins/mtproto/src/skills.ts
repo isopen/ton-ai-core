@@ -66,7 +66,7 @@ export class MTCryptoServices {
 
     private ensureSessionId(): void {
         if (this.currentSessionId === 0n) {
-            this.currentSessionId = BigInt('0x' + crypton.getRandomBytes(8).toString('hex'));
+            this.currentSessionId = crypton.bufferToBigInt(crypton.getRandomBytes(8)) & 0x7FFFFFFFFFFFFFFFn;
         }
     }
 

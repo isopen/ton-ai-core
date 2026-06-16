@@ -62,7 +62,8 @@ export class WireFormat {
     static async unwrapMessage(
         authKey: AuthKey,
         data: Buffer,
-        isClient: boolean
+        isClient: boolean,
+        expectOddMsgId: boolean = true
     ): Promise<WireMessageEncrypted | null> {
         if (data.length < 24) return null;
 
@@ -86,7 +87,7 @@ export class WireFormat {
             aesIv.fill(0);
         }
 
-        return this.parsePlaintext(decrypted);
+        return this.parsePlaintext(decrypted, expectOddMsgId);
     }
 
     static buildPlaintext(
@@ -111,7 +112,7 @@ export class WireFormat {
         return data;
     }
 
-    static parsePlaintext(data: Buffer): WireMessageEncrypted | null {
+    static parsePlaintext(data: Buffer, expectOddMsgId: boolean = true): WireMessageEncrypted | null {
         if (data.length < 32) return null;
 
         const salt = Buffer.from(data.subarray(0, 8));
@@ -123,6 +124,10 @@ export class WireFormat {
         if (msgLen < 0 || 32 + msgLen > data.length) return null;
 
         if (messageId === 0n || messageId === 0x7FFFFFFFFFFFFFFFn) return null;
+
+        const msgIdParity = Number(messageId & 1n);
+        if (expectOddMsgId && msgIdParity === 0) return null;
+        if (!expectOddMsgId && msgIdParity === 1) return null;
 
         const msgTime = Number(messageId >> 32n);
         const now = Math.floor(Date.now() / 1000);

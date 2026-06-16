@@ -2,11 +2,13 @@ import { Buffer } from 'buffer';
 import { EventEmitter } from 'events';
 import { crypton } from '@ton-ai/core';
 import { TLSerializer, TLDeserializer } from './tl-serialization';
+import { PublicRsaKeyInterface, RsaKeyInfo } from './public-rsa-key';
 
 export interface AuthKeyCreationConfig {
     host: string;
     port: number;
     dcId: number;
+    publicRsaKey?: PublicRsaKeyInterface;
 }
 
 export interface AuthKeyCreationResult {
@@ -49,6 +51,7 @@ export class AuthKeyCreator {
     private serverTime: number = 0;
     private tmpAesKey: Buffer = Buffer.alloc(0);
     private tmpAesIv: Buffer = Buffer.alloc(0);
+    private rsaKey: RsaKeyInfo | null = null;
 
     constructor(config: AuthKeyCreationConfig) {
         this.config = config;
@@ -56,11 +59,9 @@ export class AuthKeyCreator {
 
     private generateNonce16(): bigint {
         const bytes = crypton.getRandomBytes(16);
-        return bytes.readBigUInt64LE(0) | (bytes.readBigUInt64LE(8) << 64n);
-    }
-
-    private generateNonce16Buffer(): Buffer {
-        return crypton.getRandomBytes(16);
+        const nonce = bytes.readBigUInt64LE(0) | (bytes.readBigUInt64LE(8) << 64n);
+        bytes.fill(0);
+        return nonce;
     }
 
     private generateNonce32Buffer(): Buffer {
@@ -84,24 +85,26 @@ export class AuthKeyCreator {
             const tempKey = crypton.getRandomBytes(32);
 
             try {
-                const dataWithHash = Buffer.concat([
-                    dataPadReversed,
-                    await crypton.sha256(Buffer.concat([tempKey, dataWithPadding]))
-                ]);
+                const sha256Hash = await crypton.sha256(Buffer.concat([tempKey, dataWithPadding]));
+                const dataWithHash = Buffer.concat([dataPadReversed, sha256Hash]);
+                sha256Hash.fill(0);
 
                 const aesEncrypted = await crypton.AES256IGE.encrypt(
                     dataWithHash,
                     tempKey,
                     Buffer.alloc(32)
                 );
+                dataWithHash.fill(0);
 
                 const sha256Encrypted = await crypton.sha256(aesEncrypted);
                 const tempKeyXor = Buffer.alloc(32);
                 for (let i = 0; i < 32; i++) {
                     tempKeyXor[i] = tempKey[i] ^ sha256Encrypted[i];
                 }
+                sha256Encrypted.fill(0);
 
                 const keyAesEncrypted = Buffer.concat([tempKeyXor, aesEncrypted]);
+                tempKeyXor.fill(0);
 
                 const keyNum = this.bufferToBigIntBE(keyAesEncrypted);
                 if (keyNum < modulus) {
@@ -111,6 +114,7 @@ export class AuthKeyCreator {
             } finally {
                 tempKey.fill(0);
                 dataPadReversed.fill(0);
+                dataWithPadding.fill(0);
                 randomPadding.fill(0);
             }
         }
@@ -124,13 +128,12 @@ export class AuthKeyCreator {
         return this.rsaPad(data, keyInfo.modulus);
     }
 
-    private getPublicKeyForFingerprint(fingerprint: bigint): { modulus: bigint; exponent: bigint } | null {
-        for (const [fp, info] of Object.entries(TELEGRAM_PUBLIC_KEYS)) {
-            if (BigInt(fp) === fingerprint) {
-                return info;
-            }
+    private getPublicKeyForFingerprint(fingerprint: bigint): RsaKeyInfo | null {
+        const keyInterface = this.config.publicRsaKey;
+        if (!keyInterface) {
+            throw new Error('No PublicRsaKeyInterface configured');
         }
-        return null;
+        return keyInterface.getRsaKey([fingerprint]);
     }
 
     private bigintGcd(a: bigint, b: bigint): bigint {
@@ -188,6 +191,15 @@ export class AuthKeyCreator {
         } finally {
             if (this.privateKeyBuf) {
                 this.privateKeyBuf.fill(0);
+            }
+            if (this.tmpAesKey.length) {
+                this.tmpAesKey.fill(0);
+            }
+            if (this.tmpAesIv.length) {
+                this.tmpAesIv.fill(0);
+            }
+            if (this.newNonce.length) {
+                this.newNonce.fill(0);
             }
         }
     }
@@ -414,11 +426,19 @@ export class AuthKeyCreator {
                     randomPadding
                 ]);
 
-                const encryptedInner = await crypton.AES256IGE.encrypt(
-                    dataForEncryption,
-                    this.tmpAesKey,
-                    this.tmpAesIv
-                );
+                let encryptedInner: Buffer;
+                try {
+                    encryptedInner = await crypton.AES256IGE.encrypt(
+                        dataForEncryption,
+                        this.tmpAesKey,
+                        this.tmpAesIv
+                    );
+                } finally {
+                    dataForEncryption.fill(0);
+                    innerSha1.fill(0);
+                    randomPadding.fill(0);
+                    gB.fill(0);
+                }
 
                 const serializer = new TLSerializer();
                 serializer.writeInt32(CONSTRUCTOR_SET_CLIENT_DH_PARAMS);
@@ -438,7 +458,12 @@ export class AuthKeyCreator {
                 if (constructor === CONSTRUCTOR_DH_GEN_RETRY) {
                     deserializer.readInt128();
                     deserializer.readInt128();
-                    const newNonceHash2 = deserializer.readInt128();
+                    const newNonceHash2Full = deserializer.readInt128();
+                    const newNonceHash2 = newNonceHash2Full & ((1n << 128n) - 1n);
+                    const expectedHash2 = await this.computeNewNonceHash(sharedSecret, 2);
+                    if (newNonceHash2 !== expectedHash2) {
+                        throw new Error('New nonce hash 2 mismatch');
+                    }
                     this.retryId = (await this.computeAuthKeyAuxHash(sharedSecret));
                     throw new Error('DH gen retry - re-keying required');
                 }
@@ -451,7 +476,7 @@ export class AuthKeyCreator {
                 deserializer.readInt128();
                 const newNonceHash1Full = deserializer.readInt128();
                 const newNonceHash1 = newNonceHash1Full & ((1n << 128n) - 1n);
-                const expectedHash1 = await this.computeNewNonceHash1(sharedSecret);
+                const expectedHash1 = await this.computeNewNonceHash(sharedSecret, 1);
                 if (newNonceHash1 !== expectedHash1) {
                     throw new Error('New nonce hash mismatch');
                 }
@@ -460,16 +485,22 @@ export class AuthKeyCreator {
                 try {
                     const authKeyId = await crypton.MTProtoKDF.computeAuthKeyId(authKey);
 
+                    const serverNonceBuf = this.bigIntToBufferLE(this.serverNonce, 16);
                     const salt = this.xorBuffers(
                         this.newNonce.subarray(0, 8),
-                        this.bigIntToBufferLE(this.serverNonce, 16).subarray(0, 8)
+                        serverNonceBuf.subarray(0, 8)
                     );
+                    serverNonceBuf.fill(0);
+
+                    const saltCopy = Buffer.from(salt);
+                    salt.fill(0);
+                    const serverSalt = saltCopy.readBigUInt64LE(0);
 
                     return {
                         authKey,
                         authKeyId,
-                        salt: Buffer.from(salt),
-                        serverSalt: salt.readBigUInt64LE(0),
+                        salt: saltCopy,
+                        serverSalt,
                         serverTime: this.serverTime,
                     };
                 } catch (e) {
@@ -491,14 +522,15 @@ export class AuthKeyCreator {
         return hash.readBigUInt64LE(0);
     }
 
-    private async computeNewNonceHash1(authKey: Buffer): Promise<bigint> {
+    private async computeNewNonceHash(authKey: Buffer, selector: number): Promise<bigint> {
         const authKeyAuxHash = await this.computeAuthKeyAuxHash(authKey);
         const data = Buffer.alloc(41);
         this.newNonce.copy(data, 0);
-        data.writeUInt8(1, 32);
+        data.writeUInt8(selector, 32);
         const auxHashBuf = Buffer.alloc(8);
         auxHashBuf.writeBigUInt64LE(authKeyAuxHash, 0);
         auxHashBuf.copy(data, 33);
+        auxHashBuf.fill(0);
 
         const partialHash = await crypton.sha1(data);
         return partialHash.readBigUInt64LE(4) |
@@ -569,13 +601,17 @@ export class AuthKeyCreator {
     }
 }
 
-const TELEGRAM_PUBLIC_KEYS: Record<string, { modulus: bigint; exponent: bigint }> = {
-    'c3b42b026ce86b21': {
-        modulus: BigInt('00e15987e2c719c2066c36c9631657d3426c2067d3a42e3580c7c365fc975240f0a1a4f066ca43b085a6f06563ca0d3a960fd95a7961286660d3f498d0a383e72b9596b17b90eb98b7c4c89ab14e8e16a4524fa6718ef9ca72c62e2c56327b279d514b61c8b6c5409c41d306a48f233547c1ab6af4e12f2f09c6f02ef1d4c0d96b0007bf373f2e5962d43f015a68326e46b8a83f81e7d84e02f4e7b9b970f0e17c93715c9f5f62a2d3a03f5c4e7f3b8d2a1c6e9f0d4b3a2c1e5f8d7b6a4'),
-        exponent: BigInt('010001'),
-    },
-    'b0a4f6e3f4bc0731': {
-        modulus: BigInt('00c3b42b026ce86b21d46b0d3b7230f10f22aa7c719c2066c36c9631657d3426c2067d3a42e3580c7c365fc975240f0a1a4f066ca43b085a6f06563ca0d3a960fd95a7961286660d3f498d0a383e72b9596b17b90eb98b7c4c89ab14e8e16a4524fa6718ef9ca72c62e2c56327b279d514b61c8b6c5409c41d306a48f233547c1ab6af4e12f2f09c6f02ef1d4c0d96b0007bf373f2e5962d43f015a68326e46b8a83f81e7d84e02f4e7b9b970f0e17c93715c9f5f62a2d3a03f5c4e7f3b8d2a1c6e9f0d4b3a2c1e5f8d7b6a4'),
-        exponent: BigInt('010001'),
-    },
-};
+export const TELEGRAM_PUBLIC_KEY_PEMS: string[] = [
+    `-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEA1lBnfqjJC7zBH3kVxH+O0fVfYIR0T7jSjXqD7g4P8x1v3y4
+Z5kF2t8bQ0jNcKfR6wLmXaYhDp9sT4vU7bK2oJ5nH8gF3dW1iA6rC9eX0m
+LzQ7kJ4hP2tS8vY5nB1wR6fM3oU9aG7dK4xJ0iH5lC2sE8rT6qW3bN9fY1m
+uP4kV7aZ0xD5gJ8hL3cR6wQ2tF9sY4nB1mK7oU8jX5iH3dW6aC0rE2fL9pS
+-----END RSA PUBLIC KEY-----`,
+    `-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEAx7I4t2K0P8y5vA1wQ3mR6kL9dF4sH7bJ0nG5tY8cX2eU1iA
+3oP6rK4wS9mZ7dL5hB0jF8gN3vQ2xT6aW1cY4kE7rI5sU9fJ3oH8nD0mC6
+bL2tX4wP1iA5gR7kQ3eS6dF9hJ8mY0nV4cU2oW7rB1xL5aZ8sT3jG6iK4p
+E9fH0dQ7mC2wX5nJ8rY3lS6aU1iB4tP7gV0kW9oE2dF5hN3sL8cR6jQ4mX
+-----END RSA PUBLIC KEY-----`,
+];

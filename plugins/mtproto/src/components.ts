@@ -90,6 +90,7 @@ export class CryptoClient extends EventEmitter {
             const hkdfSalt = Buffer.from(await crypton.sha256(sharedSecret));
             const info = Buffer.from('ton-ai-agent-transport-auth-key-v1');
             key = await crypton.hkdfSha512(hkdfSalt, sharedSecret, info, 256);
+            hkdfSalt.fill(0);
             salt = crypton.getRandomBytes(8);
         }
 
@@ -145,7 +146,9 @@ export class CryptoClient extends EventEmitter {
             minPad = target;
         }
         const count = Math.floor((maxPadding - minPad) / blockSize) + 1;
-        const offset = count > 1 ? crypton.getRandomBytes(4).readUInt32LE(0) % count : 0;
+        const randBuf = crypton.getRandomBytes(4);
+        const offset = count > 1 ? randBuf.readUInt32LE(0) % count : 0;
+        randBuf.fill(0);
         const padding = minPad + offset * blockSize;
         return crypton.getRandomBytes(padding);
     }
@@ -159,15 +162,15 @@ export class CryptoClient extends EventEmitter {
     ): Promise<EncryptedData> {
         const secret = options?.secret ?? false;
         const key = secret ? this.secretAuthKey : this.authKey;
-        if (!key) throw new Error(`Auth key not set (secret: ${secret})`);
-        if (!this.serverSalt) throw new Error('Server salt not set');
+        if (!key) throw new Error('Encryption failed');
+        if (!this.serverSalt) throw new Error('Encryption failed');
 
         const plaintext = this.buildDataForEncryption(message, sessionId, messageId, seqNo);
         const randomPadding = this.generateRandomPadding(plaintext.length);
 
         let x: number;
         if (secret) {
-            if (options?.isInitiator === undefined) throw new Error('isInitiator required for secret chat');
+            if (options?.isInitiator === undefined) throw new Error('Encryption failed');
             x = options.isInitiator ? 0 : 8;
         } else {
             x = this.isClient ? 0 : 8;
@@ -188,7 +191,7 @@ export class CryptoClient extends EventEmitter {
     async decryptMessage(
         encrypted: EncryptedData,
         expectedSessionId: bigint,
-        options?: { secret?: boolean; isInitiator?: boolean }
+        options?: { secret?: boolean; isInitiator?: boolean; expectOddMsgId?: boolean }
     ): Promise<DecryptedData> {
         const secret = options?.secret ?? false;
         const key = secret ? this.secretAuthKey : this.authKey;
@@ -217,53 +220,65 @@ export class CryptoClient extends EventEmitter {
             if (aesIv!) aesIv!.fill(0);
         }
 
-        if (decrypted.length < 32) {
-            throw new Error('Decryption failed');
-        }
-
-        const messageLength = decrypted.readInt32LE(28);
-        if (messageLength < 0 || 32 + messageLength > decrypted.length) {
-            throw new Error('Decryption failed');
-        }
-
-        const padding = decrypted.subarray(32 + messageLength);
-        if (padding.length < 12 || padding.length > 1024 || decrypted.length % 16 !== 0) {
-            throw new Error('Decryption failed');
-        }
-
-        const plaintext = decrypted.subarray(0, 32 + messageLength);
-
-        let expectedMsgKey: Buffer;
         try {
-            expectedMsgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, padding, x === 0);
-        } catch {
-            throw new Error('Decryption failed');
-        }
+            if (decrypted.length < 32) {
+                throw new Error('Decryption failed');
+            }
 
-        if (!crypton.constantTimeEqual(expectedMsgKey, encrypted.msgKey)) {
-            throw new Error('Decryption failed');
-        }
+            const messageLength = decrypted.readInt32LE(28);
+            if (messageLength < 0 || 32 + messageLength > decrypted.length) {
+                throw new Error('Decryption failed');
+            }
 
-        const sessionId = decrypted.readBigInt64LE(8);
-        if (sessionId !== expectedSessionId) {
-            throw new Error('Decryption failed');
-        }
+            const padding = decrypted.subarray(32 + messageLength);
+            if (padding.length < 12 || padding.length > 1024 || decrypted.length % 16 !== 0) {
+                throw new Error('Decryption failed');
+            }
 
-        const msgId = decrypted.readBigInt64LE(16);
-        if (msgId === 0n || msgId === 0x7FFFFFFFFFFFFFFFn) {
-            throw new Error('Decryption failed');
-        }
+            const plaintext = decrypted.subarray(0, 32 + messageLength);
 
-        const msgTime = Number(msgId >> 32n);
-        const now = Math.floor(Date.now() / 1000);
-        const msgAge = now - msgTime;
-        if (msgAge > 300 || msgAge < -30) {
-            throw new Error('Decryption failed');
-        }
+            let expectedMsgKey: Buffer;
+            try {
+                expectedMsgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, padding, x === 0);
+            } catch {
+                throw new Error('Decryption failed');
+            }
 
-        const result = Buffer.from(decrypted.subarray(32, 32 + messageLength));
-        decrypted.fill(0);
-        return { data: result, isValid: true, msgKey: encrypted.msgKey };
+            if (!crypton.constantTimeEqual(expectedMsgKey, encrypted.msgKey)) {
+                throw new Error('Decryption failed');
+            }
+
+            const sessionId = decrypted.readBigInt64LE(8);
+            if (sessionId !== expectedSessionId) {
+                throw new Error('Decryption failed');
+            }
+
+            const msgId = decrypted.readBigInt64LE(16);
+            if (msgId === 0n || msgId === 0x7FFFFFFFFFFFFFFFn) {
+                throw new Error('Decryption failed');
+            }
+
+            const expectOdd = options?.expectOddMsgId ?? true;
+            const msgIdParity = Number(msgId & 1n);
+            if (expectOdd && msgIdParity === 0) {
+                throw new Error('Decryption failed');
+            }
+            if (!expectOdd && msgIdParity === 1) {
+                throw new Error('Decryption failed');
+            }
+
+            const msgTime = Number(msgId >> 32n);
+            const now = Math.floor(Date.now() / 1000);
+            const msgAge = now - msgTime;
+            if (msgAge > 300 || msgAge < -30) {
+                throw new Error('Decryption failed');
+            }
+
+            const result = Buffer.from(decrypted.subarray(32, 32 + messageLength));
+            return { data: result, isValid: true, msgKey: encrypted.msgKey };
+        } finally {
+            decrypted.fill(0);
+        }
     }
 
     getAuthKey(): AuthKey | null { return this.authKey; }
@@ -449,7 +464,7 @@ export class CryptoClient extends EventEmitter {
         authKeyBuf: Buffer,
         serverSalt: Buffer,
         expectedSessionId: bigint,
-        options?: { secret?: boolean; isInitiator?: boolean }
+        options?: { secret?: boolean; isInitiator?: boolean; expectOddMsgId?: boolean }
     ): Promise<DecryptedData> {
         const secret = options?.secret ?? false;
         if (!authKeyBuf) throw new Error('Decryption failed');
@@ -477,53 +492,65 @@ export class CryptoClient extends EventEmitter {
             if (aesIv!) aesIv!.fill(0);
         }
 
-        if (decrypted.length < 32) {
-            throw new Error('Decryption failed');
-        }
-
-        const messageLength = decrypted.readInt32LE(28);
-        if (messageLength < 0 || 32 + messageLength > decrypted.length) {
-            throw new Error('Decryption failed');
-        }
-
-        const padding = decrypted.subarray(32 + messageLength);
-        if (padding.length < 12 || padding.length > 1024 || decrypted.length % 16 !== 0) {
-            throw new Error('Decryption failed');
-        }
-
-        const plaintext = decrypted.subarray(0, 32 + messageLength);
-
-        let expectedMsgKey: Buffer;
         try {
-            expectedMsgKey = await crypton.MTProtoKDF.computeMsgKey(authKeyBuf, plaintext, padding, x === 0);
-        } catch {
-            throw new Error('Decryption failed');
-        }
+            if (decrypted.length < 32) {
+                throw new Error('Decryption failed');
+            }
 
-        if (!crypton.constantTimeEqual(expectedMsgKey, encrypted.msgKey)) {
-            throw new Error('Decryption failed');
-        }
+            const messageLength = decrypted.readInt32LE(28);
+            if (messageLength < 0 || 32 + messageLength > decrypted.length) {
+                throw new Error('Decryption failed');
+            }
 
-        const sessionId = decrypted.readBigInt64LE(8);
-        if (sessionId !== expectedSessionId) {
-            throw new Error('Decryption failed');
-        }
+            const padding = decrypted.subarray(32 + messageLength);
+            if (padding.length < 12 || padding.length > 1024 || decrypted.length % 16 !== 0) {
+                throw new Error('Decryption failed');
+            }
 
-        const msgId = decrypted.readBigInt64LE(16);
-        if (msgId === 0n || msgId === 0x7FFFFFFFFFFFFFFFn) {
-            throw new Error('Decryption failed');
-        }
+            const plaintext = decrypted.subarray(0, 32 + messageLength);
 
-        const msgTime = Number(msgId >> 32n);
-        const now = Math.floor(Date.now() / 1000);
-        const msgAge = now - msgTime;
-        if (msgAge > 300 || msgAge < -30) {
-            throw new Error('Decryption failed');
-        }
+            let expectedMsgKey: Buffer;
+            try {
+                expectedMsgKey = await crypton.MTProtoKDF.computeMsgKey(authKeyBuf, plaintext, padding, x === 0);
+            } catch {
+                throw new Error('Decryption failed');
+            }
 
-        const result = Buffer.from(decrypted.subarray(32, 32 + messageLength));
-        decrypted.fill(0);
-        return { data: result, isValid: true, msgKey: encrypted.msgKey };
+            if (!crypton.constantTimeEqual(expectedMsgKey, encrypted.msgKey)) {
+                throw new Error('Decryption failed');
+            }
+
+            const sessionId = decrypted.readBigInt64LE(8);
+            if (sessionId !== expectedSessionId) {
+                throw new Error('Decryption failed');
+            }
+
+            const msgId = decrypted.readBigInt64LE(16);
+            if (msgId === 0n || msgId === 0x7FFFFFFFFFFFFFFFn) {
+                throw new Error('Decryption failed');
+            }
+
+            const expectOdd = options?.expectOddMsgId ?? true;
+            const msgIdParity = Number(msgId & 1n);
+            if (expectOdd && msgIdParity === 0) {
+                throw new Error('Decryption failed');
+            }
+            if (!expectOdd && msgIdParity === 1) {
+                throw new Error('Decryption failed');
+            }
+
+            const msgTime = Number(msgId >> 32n);
+            const now = Math.floor(Date.now() / 1000);
+            const msgAge = now - msgTime;
+            if (msgAge > 300 || msgAge < -30) {
+                throw new Error('Decryption failed');
+            }
+
+            const result = Buffer.from(decrypted.subarray(32, 32 + messageLength));
+            return { data: result, isValid: true, msgKey: encrypted.msgKey };
+        } finally {
+            decrypted.fill(0);
+        }
     }
 
     private nextMsgId(session: SessionState): bigint {
