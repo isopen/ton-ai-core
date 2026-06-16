@@ -57,7 +57,7 @@ export class TimeSync {
         const serverTime = this.getServerTime();
         const now = BigInt(serverTime) << 32n;
         const randomPart = BigInt(crypton.getRandomBytes(4).readUInt32LE(0));
-        const raw = now | randomPart;
+        const raw = now + randomPart;
         return (raw - (raw % 4n)) & 0x7FFFFFFFFFFFFFFFn;
     }
 
@@ -65,7 +65,7 @@ export class TimeSync {
         const serverTime = this.getServerTime();
         const now = BigInt(serverTime) << 32n;
         const randomPart = BigInt(crypton.getRandomBytes(4).readUInt32LE(0));
-        const raw = now | randomPart;
+        const raw = now + randomPart;
         return ((raw - (raw % 4n)) + 1n) & 0x7FFFFFFFFFFFFFFFn;
     }
 
@@ -82,6 +82,6 @@ export class TimeSync {
 
     handleTimeOffset(serverTime: number, salt: Buffer): void {
         this.updateOffset(serverTime);
-        this.events.emit('mtproto:time:server_offset', { serverTime, salt: salt.toString('hex') });
+        this.events.emit('mtproto:time:server_offset', { serverTime, saltLength: salt.length });
     }
 }

@@ -44,8 +44,8 @@ export class MTCryptoServices {
         return secret;
     }
 
-    async generateAuthKey(sharedSecret: Buffer): Promise<AuthKey> {
-        const authKey = await this.components.client.generateAuthKey(sharedSecret);
+    async generateAuthKey(sharedSecret: Buffer, mode?: 'p2p' | 'telegram'): Promise<AuthKey> {
+        const authKey = await this.components.client.generateAuthKey(sharedSecret, mode);
         this.context.events.emit('mtproto:authkey:generated', { id: authKey.id.toString(16) });
         return authKey;
     }

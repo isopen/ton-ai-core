@@ -132,7 +132,6 @@ export class HttpNode extends EventEmitter {
     }
 
     async send(peerId: string, data: Buffer): Promise<void> {
-        console.log(`[send] hasSession('${peerId}'): ${this.crypto.hasSession(peerId)}`);
         if (!this.crypto.hasSession(peerId)) {
             const sessionReady = new Promise<void>((resolve) => {
                 this.once('secureChannel', (id: string) => { if (id === peerId) resolve(); });

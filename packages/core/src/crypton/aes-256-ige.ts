@@ -22,38 +22,42 @@ export class AES256IGE {
     let prevCipher = iv.subarray(0, this.BLOCK_SIZE);
     let prevPlain = iv.subarray(this.BLOCK_SIZE, this.BLOCK_SIZE * 2);
 
-    if (isNode()) {
-      const crypto = require('crypto');
-      for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
-        const plainBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
-        const tmp = xor(plainBlock, prevCipher);
-
-        const cipher = crypto.createCipheriv('aes-256-ecb', key, null);
-        cipher.setAutoPadding(false);
-        const enc = Buffer.concat([cipher.update(tmp), cipher.final()]);
-
-        const cipherBlock = xor(enc, prevPlain);
-        cipherBlock.copy(result, offset);
-
-        prevCipher = cipherBlock;
-        prevPlain = plainBlock;
-      }
-    } else {
-      const aesEcb = new AES256ECB(key);
-      try {
+    try {
+      if (isNode()) {
+        const crypto = require('crypto');
         for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
           const plainBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
           const tmp = xor(plainBlock, prevCipher);
-          const enc = aesEcb.encryptBlock(tmp);
+
+          const cipher = crypto.createCipheriv('aes-256-ecb', key, null);
+          cipher.setAutoPadding(false);
+          const enc = Buffer.concat([cipher.update(tmp), cipher.final()]);
+
           const cipherBlock = xor(enc, prevPlain);
           cipherBlock.copy(result, offset);
 
           prevCipher = cipherBlock;
           prevPlain = plainBlock;
         }
-      } finally {
-        aesEcb.destroy();
+      } else {
+        const aesEcb = new AES256ECB(key);
+        try {
+          for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
+            const plainBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
+            const tmp = xor(plainBlock, prevCipher);
+            const enc = aesEcb.encryptBlock(tmp);
+            const cipherBlock = xor(enc, prevPlain);
+            cipherBlock.copy(result, offset);
+
+            prevCipher = cipherBlock;
+            prevPlain = plainBlock;
+          }
+        } finally {
+          aesEcb.destroy();
+        }
       }
+    } finally {
+      iv.fill(0);
     }
 
     return result;
@@ -74,38 +78,42 @@ export class AES256IGE {
     let prevCipher = iv.subarray(0, this.BLOCK_SIZE);
     let prevPlain = iv.subarray(this.BLOCK_SIZE, this.BLOCK_SIZE * 2);
 
-    if (isNode()) {
-      const crypto = require('crypto');
-      for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
-        const cipherBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
-        const tmp = xor(cipherBlock, prevPlain);
-
-        const decipher = crypto.createDecipheriv('aes-256-ecb', key, null);
-        decipher.setAutoPadding(false);
-        const dec = Buffer.concat([decipher.update(tmp), decipher.final()]);
-
-        const plainBlock = xor(dec, prevCipher);
-        plainBlock.copy(result, offset);
-
-        prevCipher = cipherBlock;
-        prevPlain = plainBlock;
-      }
-    } else {
-      const aesEcb = new AES256ECB(key);
-      try {
+    try {
+      if (isNode()) {
+        const crypto = require('crypto');
         for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
           const cipherBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
           const tmp = xor(cipherBlock, prevPlain);
-          const dec = aesEcb.decryptBlock(tmp);
+
+          const decipher = crypto.createDecipheriv('aes-256-ecb', key, null);
+          decipher.setAutoPadding(false);
+          const dec = Buffer.concat([decipher.update(tmp), decipher.final()]);
+
           const plainBlock = xor(dec, prevCipher);
           plainBlock.copy(result, offset);
 
           prevCipher = cipherBlock;
           prevPlain = plainBlock;
         }
-      } finally {
-        aesEcb.destroy();
+      } else {
+        const aesEcb = new AES256ECB(key);
+        try {
+          for (let offset = 0; offset < data.length; offset += this.BLOCK_SIZE) {
+            const cipherBlock = data.subarray(offset, offset + this.BLOCK_SIZE);
+            const tmp = xor(cipherBlock, prevPlain);
+            const dec = aesEcb.decryptBlock(tmp);
+            const plainBlock = xor(dec, prevCipher);
+            plainBlock.copy(result, offset);
+
+            prevCipher = cipherBlock;
+            prevPlain = plainBlock;
+          }
+        } finally {
+          aesEcb.destroy();
+        }
       }
+    } finally {
+      iv.fill(0);
     }
 
     return result;

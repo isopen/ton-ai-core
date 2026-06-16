@@ -32,6 +32,7 @@ export class CryptoClient extends EventEmitter {
     private serverSalt: Buffer | null = null;
     private dhKeys: DHKeys | null = null;
     private isClient: boolean = true;
+    private authKeyMode: 'p2p' | 'telegram';
     private sessions: Map<string, SessionState> = new Map();
     private sessionLocks: Map<string, Promise<void>> = new Map();
 
@@ -40,6 +41,7 @@ export class CryptoClient extends EventEmitter {
         this.context = context;
         this.config = config;
         this.isClient = config.mode !== 'server';
+        this.authKeyMode = config.authKeyMode ?? 'p2p';
     }
 
     async initialize(): Promise<void> {
@@ -72,17 +74,28 @@ export class CryptoClient extends EventEmitter {
     }
 
     /**
-     * Generates an auth key from a DH shared secret using HKDF-SHA512.
-     * This is a custom P2P key derivation, NOT the standard MTProto cloud auth_key.
-     * Standard MTProto auth_key = DH shared secret directly.
+     * Generates an auth key from a DH shared secret.
+     * - 'p2p' mode: HKDF-SHA512 derivation (custom P2P, NOT standard MTProto).
+     * - 'telegram' mode: raw DH shared secret directly (standard MTProto 2.0 §7.2).
      */
-    async generateAuthKey(sharedSecret: Buffer): Promise<AuthKey> {
-        const salt = Buffer.from(await crypton.sha256(sharedSecret));
-        const info = Buffer.from('ton-ai-agent-transport-auth-key-v1');
-        const key = await crypton.hkdfSha512(salt, sharedSecret, info, 256);
+    async generateAuthKey(sharedSecret: Buffer, mode?: 'p2p' | 'telegram'): Promise<AuthKey> {
+        const keyMode = mode ?? this.authKeyMode;
+        let key: Buffer;
+        let salt: Buffer;
+
+        if (keyMode === 'telegram') {
+            key = Buffer.from(sharedSecret);
+            salt = Buffer.alloc(8);
+        } else {
+            const hkdfSalt = Buffer.from(await crypton.sha256(sharedSecret));
+            const info = Buffer.from('ton-ai-agent-transport-auth-key-v1');
+            key = await crypton.hkdfSha512(hkdfSalt, sharedSecret, info, 256);
+            salt = crypton.getRandomBytes(8);
+        }
+
         const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
         this.authKey = { key, id };
-        this.serverSalt = crypton.getRandomBytes(8);
+        this.serverSalt = salt;
         return this.authKey;
     }
 
@@ -292,7 +305,7 @@ export class CryptoClient extends EventEmitter {
         this.context.logger.info('MTProto crypto client disconnected');
     }
 
-    async createSession(peerId: string, sharedSecret: Buffer): Promise<void> {
+    async createSession(peerId: string, sharedSecret: Buffer, mode?: 'p2p' | 'telegram'): Promise<void> {
         const existing = this.sessions.get(peerId);
         if (existing) {
             existing.authKey.key.fill(0);
@@ -300,9 +313,9 @@ export class CryptoClient extends EventEmitter {
         } else if (this.sessions.size >= MAX_SESSIONS) {
             throw new Error('Maximum session count reached');
         }
-        const authKey = await this.generateAuthKey(sharedSecret);
-        const salt = crypton.getRandomBytes(8);
-        const sessionId = BigInt('0x' + crypton.getRandomBytes(8).toString('hex'));
+        const authKey = await this.generateAuthKey(sharedSecret, mode);
+        const salt = Buffer.alloc(8);
+        const sessionId = crypton.bufferToBigInt(crypton.getRandomBytes(8)) & 0x7FFFFFFFFFFFFFFFn;
         this.sessions.set(peerId, {
             authKey,
             serverSalt: salt,
@@ -325,7 +338,7 @@ export class CryptoClient extends EventEmitter {
         this.sessions.set(peerId, {
             authKey,
             serverSalt: salt,
-            sessionId: sessionId ?? BigInt('0x' + crypton.getRandomBytes(8).toString('hex')),
+            sessionId: sessionId ?? crypton.bufferToBigInt(crypton.getRandomBytes(8)) & 0x7FFFFFFFFFFFFFFFn,
             contentSeqNo: 0,
             nonContentSeqNo: 0,
             msgIdCounter: 0n,

@@ -84,6 +84,13 @@ export class DiffieHellman {
     return bigIntToBuffer(shared, 256);
   }
 
+  static wipePrivateKey(keys: DHKeys): void {
+    if (keys.privateKeyBuf) keys.privateKeyBuf.fill(0);
+    keys.privateKey = 0n;
+    keys.publicKey = 0n;
+    if (keys.sharedSecret) keys.sharedSecret.fill(0);
+  }
+
   static computePublicKey(privateKey: bigint, p?: bigint, g?: bigint): bigint {
     const prime = p ?? this.DEFAULT_P;
     const generator = g ?? this.DEFAULT_G;
@@ -108,10 +115,14 @@ export class DiffieHellman {
     const minPriv = this.MIN_DH_VALUE;
     const maxPriv = p - minPriv;
     let privateKey: bigint;
+    const maxIter = 100;
+    let iter = 0;
     do {
+      if (++iter > maxIter) throw new Error('Failed to generate valid DH private key');
       const bytes = getRandomBytes(256);
       privateKey = bufferToBigInt(bytes);
       privateKey &= (1n << 2048n) - 1n;
+      bytes.fill(0);
     } while (privateKey < minPriv || privateKey > maxPriv);
     return privateKey;
   }

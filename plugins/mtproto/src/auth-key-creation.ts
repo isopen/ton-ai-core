@@ -83,29 +83,35 @@ export class AuthKeyCreator {
 
             const tempKey = crypton.getRandomBytes(32);
 
-            const dataWithHash = Buffer.concat([
-                dataPadReversed,
-                await crypton.sha256(Buffer.concat([tempKey, dataWithPadding]))
-            ]);
+            try {
+                const dataWithHash = Buffer.concat([
+                    dataPadReversed,
+                    await crypton.sha256(Buffer.concat([tempKey, dataWithPadding]))
+                ]);
 
-            const aesEncrypted = await crypton.AES256IGE.encrypt(
-                dataWithHash,
-                tempKey,
-                Buffer.alloc(32)
-            );
+                const aesEncrypted = await crypton.AES256IGE.encrypt(
+                    dataWithHash,
+                    tempKey,
+                    Buffer.alloc(32)
+                );
 
-            const sha256Encrypted = await crypton.sha256(aesEncrypted);
-            const tempKeyXor = Buffer.alloc(32);
-            for (let i = 0; i < 32; i++) {
-                tempKeyXor[i] = tempKey[i] ^ sha256Encrypted[i];
-            }
+                const sha256Encrypted = await crypton.sha256(aesEncrypted);
+                const tempKeyXor = Buffer.alloc(32);
+                for (let i = 0; i < 32; i++) {
+                    tempKeyXor[i] = tempKey[i] ^ sha256Encrypted[i];
+                }
 
-            const keyAesEncrypted = Buffer.concat([tempKeyXor, aesEncrypted]);
+                const keyAesEncrypted = Buffer.concat([tempKeyXor, aesEncrypted]);
 
-            const keyNum = this.bufferToBigIntBE(keyAesEncrypted);
-            if (keyNum < modulus) {
-                const encrypted = crypton.modPowConstantTime(keyNum, BigInt('0x10001'), modulus);
-                return this.bigIntToBufferBE(encrypted, 256);
+                const keyNum = this.bufferToBigIntBE(keyAesEncrypted);
+                if (keyNum < modulus) {
+                    const encrypted = crypton.modPowConstantTime(keyNum, BigInt('0x10001'), modulus);
+                    return this.bigIntToBufferBE(encrypted, 256);
+                }
+            } finally {
+                tempKey.fill(0);
+                dataPadReversed.fill(0);
+                randomPadding.fill(0);
             }
         }
     }
@@ -482,7 +488,7 @@ export class AuthKeyCreator {
 
     private async computeAuthKeyAuxHash(authKey: Buffer): Promise<bigint> {
         const hash = await crypton.sha1(authKey);
-        return hash.readBigUInt64LE(4);
+        return hash.readBigUInt64LE(0);
     }
 
     private async computeNewNonceHash1(authKey: Buffer): Promise<bigint> {
@@ -494,9 +500,9 @@ export class AuthKeyCreator {
         auxHashBuf.writeBigUInt64LE(authKeyAuxHash, 0);
         auxHashBuf.copy(data, 33);
 
-        const partialHash = await crypton.sha1(Buffer.concat([authKey, data]));
-        return partialHash.readBigUInt64LE(0) |
-               (partialHash.readBigUInt64LE(8) << 64n);
+        const partialHash = await crypton.sha1(data);
+        return partialHash.readBigUInt64LE(4) |
+               (partialHash.readBigUInt64LE(12) << 64n);
     }
 
     private xorBuffers(a: Buffer, b: Buffer): Buffer {

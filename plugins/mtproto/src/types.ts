@@ -3,6 +3,7 @@ import { SimpleAgentConfig } from '@ton-ai/core';
 export interface MTCryptoConfig extends SimpleAgentConfig {
     mode?: 'client' | 'server';
     testMode?: boolean;
+    authKeyMode?: 'p2p' | 'telegram';
 }
 
 export interface EncryptedData {

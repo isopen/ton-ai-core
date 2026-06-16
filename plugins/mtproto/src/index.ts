@@ -73,9 +73,9 @@ export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
         return this.skills.computeSharedSecret(privateKey, peerPublicKey);
     }
 
-    async generateAuthKey(sharedSecret: Buffer): Promise<AuthKey> {
+    async generateAuthKey(sharedSecret: Buffer, mode?: 'p2p' | 'telegram'): Promise<AuthKey> {
         this.checkInitialized();
-        return this.skills.generateAuthKey(sharedSecret);
+        return this.skills.generateAuthKey(sharedSecret, mode);
     }
 
     setAuthKey(authKey: AuthKey): void {

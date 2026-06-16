@@ -18,17 +18,26 @@ export class MTProtoCryptoBackend implements ICryptoBackend {
         return crypton.DiffieHellman.computeSharedSecret(privateKey, peerPublicKey);
     }
 
-    async createSession(peerId: string, sharedSecret: Buffer, sessionId?: bigint) {
-        const authKey = await this.plugin.generateAuthKey(sharedSecret);
-        const derived = await crypton.sha256(sharedSecret);
-        const saltBuf = Buffer.from(derived.subarray(0, 8));
-        const salt = saltBuf.readBigUInt64LE(0);
-        const session = sessionId ?? derived.readBigUInt64LE(8) & 0x7FFFFFFFFFFFFFFFn;
-        this.plugin.setSessionKeys(peerId, authKey, saltBuf, session);
+    async createSession(peerId: string, sharedSecret: Buffer, sessionId?: bigint, mode?: 'p2p' | 'telegram') {
+        const authKey = await this.plugin.generateAuthKey(sharedSecret, mode);
+
+        let salt: Buffer;
+        let session: bigint;
+
+        if (mode === 'telegram') {
+            salt = Buffer.alloc(8);
+            session = sessionId ?? BigInt('0x' + crypton.getRandomBytes(8).toString('hex'));
+        } else {
+            const derived = await crypton.sha256(sharedSecret);
+            salt = Buffer.from(derived.subarray(0, 8));
+            session = sessionId ?? derived.readBigUInt64LE(8) & 0x7FFFFFFFFFFFFFFFn;
+        }
+
+        this.plugin.setSessionKeys(peerId, authKey, salt, session);
 
         this.sessions.set(peerId, {
             authKey: authKey.key,
-            salt,
+            salt: salt.readBigUInt64LE(0),
             sessionId: session,
             lastMessageId: 0n,
             seqNo: 0,
