@@ -95,74 +95,98 @@ export function pemToBigInts(pem: string): { modulus: bigint; exponent: bigint }
   const body = extractPemBody(pem);
   const der = Buffer.from(body, 'base64');
 
-  if (der[0] === 0x30 && der[1] === 0x82) {
-    const innerOffset = 4;
-    const seq = der.slice(2);
-    let off = 2;
-    if (der[innerOffset] === 0x30 && der[innerOffset + 1] === 0x0d) {
-      off = innerOffset + 2 + 13;
+  let offset = 0;
+
+  function readTagLength(): number {
+    if (der[offset] & 0x80) {
+      const numLenBytes = der[offset] & 0x7f;
+      offset++;
+      let len = 0;
+      for (let i = 0; i < numLenBytes; i++) {
+        len = (len << 8) | der[offset];
+        offset++;
+      }
+      return len;
     } else {
-      off = innerOffset;
+      const len = der[offset];
+      offset++;
+      return len;
     }
-    const n = derReadInteger(der, off);
-    const e = derReadInteger(der, n.newOffset);
-    return { modulus: n.value, exponent: e.value };
   }
 
-  if (der[0] === 0x30 && der[1] === 0x00) {
-    const n = derReadInteger(der, 2);
-    const e = derReadInteger(der, n.newOffset);
-    return { modulus: n.value, exponent: e.value };
+  if (der[offset] !== 0x30) {
+    throw new Error('Unsupported RSA key format');
+  }
+  offset++;
+  readTagLength();
+
+  if (der[offset] === 0x30) {
+    offset++;
+    const algoLen = readTagLength();
+    offset += algoLen;
   }
 
-  throw new Error('Unsupported RSA key format');
+  if (der[offset] === 0x03) {
+    offset++;
+    readTagLength();
+    offset++;
+  }
+
+  if (der[offset] === 0x30) {
+    offset++;
+    readTagLength();
+  }
+
+  const n = derReadInteger(der, offset);
+  const e = derReadInteger(der, n.newOffset);
+  return { modulus: n.value, exponent: e.value };
 }
 
 export function rsaFingerprint(modulus: bigint, exponent: bigint): bigint {
-  const nBuf = bigIntToDerInteger(modulus);
-  const eBuf = bigIntToDerInteger(exponent);
+  const nBytes = bigIntToRawBytes(modulus);
+  const eBytes = bigIntToRawBytes(exponent);
 
-  const seqContent = Buffer.concat([nBuf, eBuf]);
-  const seqHeader = Buffer.alloc(4);
-  seqHeader[0] = 0x30;
-  if (seqContent.length < 128) {
-    seqHeader[1] = seqContent.length;
-    const full = Buffer.concat([seqHeader.subarray(0, 2), seqContent]);
-    const hash = sha1Sync(full);
-    return hash.readBigUInt64LE(12);
-  }
-  seqHeader[1] = 0x82;
-  seqHeader[2] = (seqContent.length >> 8) & 0xff;
-  seqHeader[3] = seqContent.length & 0xff;
-  const full = Buffer.concat([seqHeader, seqContent]);
+  const CONSTRUCTOR_RSA_PUBLIC_KEY = 0xc3b42b02;
+  const parts: Buffer[] = [];
+  const idBuf = Buffer.alloc(4);
+  idBuf.writeUInt32LE(CONSTRUCTOR_RSA_PUBLIC_KEY, 0);
+  parts.push(idBuf);
+  parts.push(tlBytes(nBytes));
+  parts.push(tlBytes(eBytes));
+
+  const full = Buffer.concat(parts);
   const hash = sha1Sync(full);
   return hash.readBigUInt64LE(12);
 }
 
-function bigIntToDerInteger(value: bigint): Buffer {
-  if (value === 0n) {
-    return Buffer.from([0x02, 0x01, 0x00]);
-  }
-  const bytes: number[] = [];
-  let v = value;
-  while (v > 0n) {
-    bytes.unshift(Number(v & 0xffn));
-    v >>= 8n;
-  }
-  if (bytes[0] & 0x80) {
-    bytes.unshift(0x00);
-  }
-  const len = bytes.length;
-  const header: number[] = [0x02];
-  if (len < 128) {
-    header.push(len);
-  } else if (len < 256) {
-    header.push(0x81, len);
-  } else {
-    header.push(0x82, (len >> 8) & 0xff, len & 0xff);
-  }
-  return Buffer.from([...header, ...bytes]);
+function bigIntToRawBytes(value: bigint): Buffer {
+  if (value === 0n) return Buffer.from([0x00]);
+  const hex = value.toString(16);
+  const padded = hex.length % 2 === 0 ? hex : '0' + hex;
+  return Buffer.from(padded, 'hex');
 }
+
+function tlBytes(data: Buffer): Buffer {
+  const len = data.length;
+  let header: Buffer;
+  if (len < 254) {
+    header = Buffer.alloc(1);
+    header[0] = len;
+  } else {
+    header = Buffer.alloc(4);
+    header[0] = 254;
+    header[1] = len & 0xff;
+    header[2] = (len >> 8) & 0xff;
+    header[3] = (len >> 16) & 0xff;
+  }
+  const totalLen = header.length + len;
+  const padding = (4 - (totalLen % 4)) % 4;
+  const result = Buffer.alloc(totalLen + padding);
+  header.copy(result, 0);
+  data.copy(result, header.length);
+  return result;
+}
+
 
 function sha1Sync(data: Buffer): Buffer {
   if (typeof process !== 'undefined' && process.versions?.node) {

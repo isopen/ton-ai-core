@@ -56,6 +56,7 @@ export class WireFormat {
         } finally {
             aesKey.fill(0);
             aesIv.fill(0);
+            plaintextWithPadding.fill(0);
         }
     }
 
@@ -63,7 +64,8 @@ export class WireFormat {
         authKey: AuthKey,
         data: Buffer,
         isClient: boolean,
-        expectOddMsgId: boolean = true
+        expectOddMsgId: boolean = true,
+        timeOffset: number = 0
     ): Promise<WireMessageEncrypted | null> {
         if (data.length < 24) return null;
 
@@ -87,7 +89,11 @@ export class WireFormat {
             aesIv.fill(0);
         }
 
-        return this.parsePlaintext(decrypted, expectOddMsgId);
+        try {
+            return this.parsePlaintext(decrypted, expectOddMsgId, timeOffset);
+        } finally {
+            decrypted.fill(0);
+        }
     }
 
     static buildPlaintext(
@@ -112,7 +118,7 @@ export class WireFormat {
         return data;
     }
 
-    static parsePlaintext(data: Buffer, expectOddMsgId: boolean = true): WireMessageEncrypted | null {
+    static parsePlaintext(data: Buffer, expectOddMsgId: boolean = true, timeOffset: number = 0): WireMessageEncrypted | null {
         if (data.length < 32) return null;
 
         const salt = Buffer.from(data.subarray(0, 8));
@@ -125,12 +131,12 @@ export class WireFormat {
 
         if (messageId === 0n || messageId === 0x7FFFFFFFFFFFFFFFn) return null;
 
-        const msgIdParity = Number(messageId & 1n);
-        if (expectOddMsgId && msgIdParity === 0) return null;
-        if (!expectOddMsgId && msgIdParity === 1) return null;
+        const msgIdMod4 = Number(messageId & 3n);
+        if (expectOddMsgId && (msgIdMod4 !== 1 && msgIdMod4 !== 3)) return null;
+        if (!expectOddMsgId && msgIdMod4 !== 0) return null;
 
         const msgTime = Number(messageId >> 32n);
-        const now = Math.floor(Date.now() / 1000);
+        const now = Math.floor(Date.now() / 1000) + timeOffset;
         const msgAge = now - msgTime;
         if (msgAge > 300 || msgAge < -30) return null;
 
@@ -149,21 +155,12 @@ export class WireFormat {
     }
 
     static generatePadding(dataLength: number): Buffer {
-        const minPadding = 12;
-        const maxPadding = 1024;
-        const blockSize = 16;
-        const target = (blockSize - ((32 + dataLength) % blockSize)) % blockSize;
-        let minPad: number;
-        if (target === 0) {
-            minPad = blockSize;
-        } else if (target < minPadding) {
-            minPad = target + blockSize;
-        } else {
-            minPad = target;
-        }
-        const count = Math.floor((maxPadding - minPad) / blockSize) + 1;
-        const offset = count > 1 ? crypton.getRandomBytes(4).readUInt32LE(0) % count : 0;
-        const totalPadding = minPad + offset * blockSize;
-        return crypton.getRandomBytes(totalPadding);
+        const randBuf = crypton.getRandomBytes(4);
+        const randDataSize = randBuf.readUInt32LE(0) & 0xff;
+        randBuf.fill(0);
+        const plaintextSize = 32 + dataLength;
+        const rawSize = plaintextSize + 12 + randDataSize;
+        const paddedSize = (rawSize + 15) & ~15;
+        return crypton.getRandomBytes(paddedSize - plaintextSize);
     }
 }

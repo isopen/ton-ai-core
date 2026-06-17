@@ -83,12 +83,10 @@ function aes256CtrProcess(data: Buffer, key: Buffer, iv: Buffer, counter: number
     const aesEcb = new crypton.AES256ECB(key);
     try {
         while (offset < data.length) {
-            if (currentCounter > 0xFFFFFFFF) {
-                throw new Error('CTR counter overflow');
-            }
             const counterBlock = Buffer.alloc(16);
             iv.copy(counterBlock, 0, 0, 12);
-            counterBlock.writeUInt32LE(currentCounter, 12);
+            const ivCounter = iv.readUInt32LE(12);
+            counterBlock.writeUInt32LE((ivCounter + currentCounter) >>> 0, 12);
 
             const encrypted = aesEcb.encryptBlock(counterBlock);
 
@@ -126,11 +124,21 @@ export function deobfuscateData(data: Buffer, state: ObfuscationState): Buffer {
     return result;
 }
 
-export function createObfuscatedInit(init: Buffer): Buffer {
+export async function createObfuscatedInit(init: Buffer, secret?: Buffer): Promise<Buffer> {
     const result = Buffer.alloc(OBFUSCATION_INIT_SIZE);
-    const encrypted = aes256CtrProcess(init, init.subarray(8, 40), init.subarray(40, 56), 0);
+    init.copy(result, 0);
+
+    result.writeUInt32LE(0xeeeeeeee, 56);
+
+    let encryptKey = Buffer.from(init.subarray(8, 40));
+    if (secret) {
+        encryptKey = Buffer.from(await crypton.sha256(Buffer.concat([encryptKey, secret])));
+    }
+    const tailToEncrypt = Buffer.from(result.subarray(56, 64));
+    const encryptedTail = aes256CtrProcess(tailToEncrypt, encryptKey, result.subarray(40, 56), 0);
+
     init.copy(result, 0, 0, 56);
-    encrypted.copy(result, 56, 56, 64);
+    encryptedTail.copy(result, 56, 0, 8);
     return result;
 }
 

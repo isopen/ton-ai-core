@@ -11,9 +11,8 @@ export const HANDSHAKE_TIMEOUT_MS = 30000;
 export const RATE_LIMIT_WINDOW_MS = 1000;
 export const RATE_LIMIT_MAX = 100;
 export const INTERMEDIATE_MAGIC = 0xEEEEEEEE;
-export const PADDED_INTERMEDIATE_MAGIC = 0xEEEEEEEE;
+export const PADDED_INTERMEDIATE_MAGIC = 0xDDDDDDDD;
 export const ABRIDGED_MAGIC = 0xEF;
-export const FULL_MAGIC = 0xDDDDDDDD;
 export const INTERMEDIATE_HEADER_SIZE = 4;
 export const ABRIDGED_HEADER_SIZE = 1;
 export const OBFUSCATION_INIT_SIZE = 64;
@@ -44,10 +43,10 @@ export enum UdpPacketType {
 export enum TransportType {
     ABRIDGED = 0xef,
     INTERMEDIATE = 0xee,
-    PADDED_INTERMEDIATE = 0xee,
-    FULL = 0xdd,
+    PADDED_INTERMEDIATE = 0xdd,
+    FULL = 0x00,
     OBFUSCATED2_INTERMEDIATE = 0xee,
-    OBFUSCATED2_PADDED_INTERMEDIATE = 0xee,
+    OBFUSCATED2_PADDED_INTERMEDIATE = 0xdd,
 }
 
 export interface SessionState {

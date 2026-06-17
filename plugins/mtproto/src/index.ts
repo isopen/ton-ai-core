@@ -1,6 +1,7 @@
 import { BasePlugin } from '@ton-ai/core';
 import { CryptoComponents } from './components';
 import { MTCryptoServices } from './skills';
+import { DefaultPublicRsaKey, PublicRsaKeyInterface } from './public-rsa-key';
 import {
     MTCryptoConfig,
     EncryptedData,
@@ -13,6 +14,10 @@ export * from './types';
 export * from './components';
 export * from './skills';
 export * from './public-rsa-key';
+export * from './rpc-client';
+export * from './key-fetcher';
+export * from './mtproto-schema';
+export * from './transport';
 
 export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
     readonly metadata = {
@@ -25,6 +30,7 @@ export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
 
     private components!: CryptoComponents;
     public skills!: MTCryptoServices;
+    private publicRsaKey?: PublicRsaKeyInterface;
 
     protected defaults() {
         return { mode: 'client' as const, testMode: false };
@@ -32,9 +38,22 @@ export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
 
     protected async onInit() {
         this.logger.info('Initializing MTProto Crypto plugin...');
-        this.components = new CryptoComponents(this.context, this.config);
+        if (this.config.publicKeyPems && this.config.publicKeyPems.length > 0) {
+            this.publicRsaKey = new DefaultPublicRsaKey(this.config.publicKeyPems);
+            this.logger.info(`Loaded ${this.config.publicKeyPems.length} RSA public keys`);
+        }
+        this.components = new CryptoComponents(this.context, this.config, this.publicRsaKey);
         this.skills = new MTCryptoServices(this.context, this.components, this.config);
         this.logger.info('MTProto Crypto plugin initialized');
+    }
+
+    setPublicRsaKeys(pemKeys: string[]): void {
+        this.publicRsaKey = new DefaultPublicRsaKey(pemKeys);
+        this.logger.info(`Loaded ${pemKeys.length} RSA public keys`);
+    }
+
+    getPublicRsaKey(): PublicRsaKeyInterface | undefined {
+        return this.publicRsaKey;
     }
 
     async onActivate() {
@@ -184,8 +203,13 @@ export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
         return this.skills.encryptForSession(peerId, message);
     }
 
-    async decryptForSession(peerId: string, encrypted: EncryptedData): Promise<DecryptedData> {
+    async encryptForServerSession(peerId: string, message: Buffer): Promise<EncryptedData> {
         this.checkInitialized();
-        return this.skills.decryptForSession(peerId, encrypted);
+        return this.skills.encryptForServerSession(peerId, message);
+    }
+
+    async decryptForSession(peerId: string, encrypted: EncryptedData, expectOddMsgId?: boolean): Promise<DecryptedData> {
+        this.checkInitialized();
+        return this.skills.decryptForSession(peerId, encrypted, expectOddMsgId);
     }
 }

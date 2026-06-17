@@ -1,8 +1,9 @@
 import net from 'net';
 import { EventEmitter } from 'events';
 import { crypton } from '@ton-ai/core';
-import { MAX_MESSAGE_SIZE, MAX_CONNECTIONS, INTERMEDIATE_MAGIC, PADDED_INTERMEDIATE_MAGIC, ABRIDGED_MAGIC, FULL_MAGIC } from './types';
+import { MAX_MESSAGE_SIZE, MAX_CONNECTIONS, INTERMEDIATE_MAGIC, PADDED_INTERMEDIATE_MAGIC, ABRIDGED_MAGIC } from './types';
 import { BufferStream } from './buffer-stream';
+import { connectThroughProxy, ProxyConfig } from './proxy-connect';
 
 export enum TcpTransportType {
     ABRIDGED,
@@ -26,14 +27,16 @@ export class TcpTransport extends EventEmitter {
     private host: string;
     private transportType: TcpTransportType;
     private isServer: boolean;
+    private proxy?: ProxyConfig;
     private connections = new Map<string, ConnectionState>();
 
-    constructor(port: number, host: string = '127.0.0.1', transportType: TcpTransportType = TcpTransportType.INTERMEDIATE, isServer: boolean = false) {
+    constructor(port: number, host: string = '127.0.0.1', transportType: TcpTransportType = TcpTransportType.INTERMEDIATE, isServer: boolean = false, proxy?: ProxyConfig) {
         super();
         this.port = port;
         this.host = host;
         this.transportType = transportType;
         this.isServer = isServer;
+        this.proxy = proxy;
     }
 
     async start(): Promise<void> {
@@ -57,22 +60,18 @@ export class TcpTransport extends EventEmitter {
     }
 
     private async connectToServer(): Promise<void> {
-        return new Promise((resolve, reject) => {
-            this.client = net.createConnection({ port: this.port, host: this.host }, () => {
-                const id = 'server';
-                this.connections.set(id, {
-                    socket: this.client!,
-                    stream: new BufferStream(),
-                    headerReceived: true,
-                    headerSent: false,
-                    tcpSeqNo: 0,
-                });
-                this.setupSocket(this.client!, id);
-                this.sendHeader(id);
-                resolve();
-            });
-            this.client.on('error', reject);
+        const socket = await connectThroughProxy(this.host, this.port, this.proxy);
+        this.client = socket;
+        const id = 'server';
+        this.connections.set(id, {
+            socket: this.client,
+            stream: new BufferStream(),
+            headerReceived: true,
+            headerSent: false,
+            tcpSeqNo: 0,
         });
+        this.setupSocket(this.client, id);
+        this.sendHeader(id);
     }
 
     private handleConnection(socket: net.Socket): void {
@@ -135,12 +134,8 @@ export class TcpTransport extends EventEmitter {
                 abridgedHeader.writeUInt8(ABRIDGED_MAGIC, 0);
                 state.socket.write(abridgedHeader);
                 break;
-            case TcpTransportType.FULL: {
-                const fullMagicHeader = Buffer.alloc(4);
-                fullMagicHeader.writeUInt32LE(FULL_MAGIC, 0);
-                state.socket.write(fullMagicHeader);
+            case TcpTransportType.FULL:
                 break;
-            }
         }
     }
 
@@ -205,8 +200,7 @@ export class TcpTransport extends EventEmitter {
 
     private extractPaddedIntermediate(state: ConnectionState): { payload: Buffer; consumed: number } | null {
         if (state.stream.length < 4) return null;
-        const rawLen = state.stream.peekUInt32LE(0);
-        const payloadLen = rawLen & 0x7FFFFFFF;
+        const payloadLen = state.stream.peekUInt32LE(0);
         if (payloadLen > MAX_MESSAGE_SIZE) return null;
         if (state.stream.length < 4 + payloadLen) return null;
         return {
@@ -275,7 +269,7 @@ export class TcpTransport extends EventEmitter {
                 }
                 const paddedLen = data.length + padding;
                 const paddedHeader = Buffer.alloc(4);
-                paddedHeader.writeUInt32LE(paddedLen | 0x80000000, 0);
+                paddedHeader.writeUInt32LE(paddedLen, 0);
                 const paddedData = Buffer.concat([paddedHeader, data, Buffer.alloc(padding)]);
                 state.socket.write(paddedData);
                 break;

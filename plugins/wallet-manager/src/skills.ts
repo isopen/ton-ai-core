@@ -87,7 +87,7 @@ export class WalletSkills {
 
       return transactions.map(tx => ({
         hash: tx.hash,
-        time: new Date(tx.time).toLocaleString(),
+        time: tx.date || new Date(tx.timestamp).toLocaleString(),
         events: tx.events,
         lt: tx.lt
       }));

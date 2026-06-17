@@ -1,7 +1,7 @@
 import { WebSocket, WebSocketServer } from 'ws';
 import { EventEmitter } from 'events';
 import { crypton } from '@ton-ai/core';
-import { MAX_MESSAGE_SIZE, MAX_CONNECTIONS, INTERMEDIATE_MAGIC, PADDED_INTERMEDIATE_MAGIC, ABRIDGED_MAGIC, FULL_MAGIC } from './types';
+import { MAX_MESSAGE_SIZE, MAX_CONNECTIONS, INTERMEDIATE_MAGIC, PADDED_INTERMEDIATE_MAGIC, ABRIDGED_MAGIC } from './types';
 import { BufferStream } from './buffer-stream';
 
 export enum WsTransportType {
@@ -150,12 +150,8 @@ export class WsTransport extends EventEmitter {
                 abridgedHeader.writeUInt8(ABRIDGED_MAGIC, 0);
                 state.socket.send(abridgedHeader);
                 break;
-            case WsTransportType.FULL: {
-                const fullMagicHeader = Buffer.alloc(4);
-                fullMagicHeader.writeUInt32LE(FULL_MAGIC, 0);
-                state.socket.send(fullMagicHeader);
+            case WsTransportType.FULL:
                 break;
-            }
         }
     }
 

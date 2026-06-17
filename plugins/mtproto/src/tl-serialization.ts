@@ -75,11 +75,11 @@ export class TLSerializer {
     }
 
     writeBoolTrue(): void {
-        this.writeInt32(0x997275b5);
+        this.writeUint32(0x997275b5);
     }
 
     writeBoolFalse(): void {
-        this.writeInt32(0xbc799737);
+        this.writeUint32(0xbc799737);
     }
 
     writeBytes(data: Buffer): void {
@@ -88,23 +88,30 @@ export class TLSerializer {
             throw new Error(`Length ${len} exceeds TL bytes maximum`);
         }
         if (len < 254) {
-            this.ensureSpace(1 + len + (4 - (len % 4)) % 4);
+            const padding = (4 - ((1 + len) % 4)) % 4;
+            this.ensureSpace(1 + len + padding);
             this.buffer.writeUInt8(len, this.offset);
             this.offset += 1;
+            data.copy(this.buffer, this.offset);
+            this.offset += len;
+            if (padding > 0) {
+                this.buffer.fill(0, this.offset, this.offset + padding);
+                this.offset += padding;
+            }
         } else {
-            this.ensureSpace(4 + len + (4 - (len % 4)) % 4);
+            const padding = (4 - ((4 + len) % 4)) % 4;
+            this.ensureSpace(4 + len + padding);
             this.buffer.writeUInt8(254, this.offset);
             this.buffer.writeUInt8(len & 0xFF, this.offset + 1);
             this.buffer.writeUInt8((len >> 8) & 0xFF, this.offset + 2);
             this.buffer.writeUInt8((len >> 16) & 0xFF, this.offset + 3);
             this.offset += 4;
-        }
-        data.copy(this.buffer, this.offset);
-        this.offset += len;
-        const padding = (4 - (len % 4)) % 4;
-        if (padding > 0) {
-            this.buffer.fill(0, this.offset, this.offset + padding);
-            this.offset += padding;
+            data.copy(this.buffer, this.offset);
+            this.offset += len;
+            if (padding > 0) {
+                this.buffer.fill(0, this.offset, this.offset + padding);
+                this.offset += padding;
+            }
         }
     }
 
@@ -198,7 +205,7 @@ export class TLDeserializer {
     }
 
     readBool(): boolean {
-        const value = this.readInt32();
+        const value = this.readUint32();
         if (value === 0x997275b5) return true;
         if (value === 0xbc799737) return false;
         throw new Error(`Invalid bool value: 0x${value.toString(16)}`);
@@ -210,20 +217,23 @@ export class TLDeserializer {
         this.offset += 1;
 
         let len: number;
+        let prefixLen: number;
         if (firstByte < 254) {
             len = firstByte;
+            prefixLen = 1;
         } else {
             this.checkBounds(3);
             len = this.buffer.readUInt8(this.offset) |
                   (this.buffer.readUInt8(this.offset + 1) << 8) |
                   (this.buffer.readUInt8(this.offset + 2) << 16);
             this.offset += 3;
+            prefixLen = 4;
         }
 
         this.checkBounds(len);
         const data = this.buffer.subarray(this.offset, this.offset + len);
         this.offset += len;
-        const padding = (4 - (len % 4)) % 4;
+        const padding = (4 - ((prefixLen + len) % 4)) % 4;
         if (padding > 0) this.checkBounds(padding);
         this.offset += padding;
         return Buffer.from(data);

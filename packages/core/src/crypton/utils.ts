@@ -46,7 +46,9 @@ export function constantTimeEqual(a: Buffer, b: Buffer): boolean {
   const len = Math.max(a.length, b.length);
   let result = 0;
   for (let i = 0; i < len; i++) {
-    result |= (a[i % a.length] || 0) ^ (b[i % b.length] || 0);
+    const av = a[i % a.length];
+    const bv = b[i % b.length];
+    result |= av ^ bv;
   }
   result |= a.length ^ b.length;
   return result === 0;
@@ -121,6 +123,7 @@ export function isProbablyPrime(n: bigint, k: number = 40): boolean {
       if (++attempts > 1000) throw new Error('Failed to generate random base');
       const bytes = getRandomBytes(byteLength);
       candidate = bufferToBigInt(bytes);
+      bytes.fill(0);
     } while (candidate >= max);
     return candidate + 2n;
   }

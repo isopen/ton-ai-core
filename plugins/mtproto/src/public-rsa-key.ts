@@ -10,6 +10,7 @@ export interface RsaKeyInfo {
 export interface PublicRsaKeyInterface {
   getRsaKey(fingerprints: bigint[]): RsaKeyInfo | null;
   dropKeys(): void;
+  getFingerprints(): bigint[];
 }
 
 export class DefaultPublicRsaKey implements PublicRsaKeyInterface {

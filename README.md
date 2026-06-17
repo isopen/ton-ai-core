@@ -14,8 +14,8 @@ Create what you believe!
 0. install https://nodejs.org/en/download
 1. git clone https://github.com/isopen/ton-ai-core.git
 2. cd ton-ai-core
-3. make build-ton-ai-core
-4. npm install -g ./packages/core/ton-ai-core-*.tgz
+3. make build-core
+4. cd packages/core && npm pack && npm install -g ton-ai-core-*.tgz && cd ../..
 5. cd ../ && mkdir my-ton-agent && cd my-ton-agent
 6. npm init -y && npm install --save-dev typescript ts-node @types/node && npm link @ton-ai/core
 7. cat > tsconfig.json << EOF

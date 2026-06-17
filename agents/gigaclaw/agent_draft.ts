@@ -105,7 +105,7 @@ export class GigaClawAgent extends BaseAgentSimple {
                                 console.log(`Bot info retrieved: @${botInfo.username}`);
                                 break;
                             }
-                        } catch (e) { }
+                        } catch (e) { console.error('Retry error:', e); }
 
                         if (attempts < maxAttempts) {
                             await new Promise(resolve => setTimeout(resolve, 2000));

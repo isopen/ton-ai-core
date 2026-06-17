@@ -4,6 +4,7 @@ import { TcpTransport, TcpTransportType } from './tcp-transport';
 import { crypton } from '@ton-ai/core';
 import { REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, DEFAULT_HOST, HANDSHAKE_TIMEOUT_MS } from './types';
 import { BufferStream } from './buffer-stream';
+import { ProxyConfig } from './proxy-connect';
 
 export interface TcpConfig {
     cryptoBackend: ICryptoBackend;
@@ -13,6 +14,7 @@ export interface TcpConfig {
     transportType: TcpTransportType;
     keepAliveInterval?: number;
     rekeyInterval?: number;
+    proxy?: ProxyConfig;
 }
 
 export class TcpNode extends EventEmitter {
@@ -96,7 +98,7 @@ export class TcpNode extends EventEmitter {
 
         this.addrToPeer.set(addr, peerId);
 
-        const clientTransport = new TcpTransport(port, host, this.config.transportType, false);
+        const clientTransport = new TcpTransport(port, host, this.config.transportType, false, this.config.proxy);
         await clientTransport.start();
 
         const connId = `peer:${peerId}`;

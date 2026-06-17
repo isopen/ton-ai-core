@@ -14,9 +14,6 @@ export class MTCryptoServices {
     private config: MTCryptoConfig;
     private ready: boolean = false;
     private currentSessionId: bigint = 0n;
-    private msgIdCounter: bigint = 0n;
-    private contentSeqNo: number = 0;
-    private nonContentSeqNo: number = 0;
 
     constructor(context: PluginContext, components: CryptoComponents, config: MTCryptoConfig) {
         this.context = context;
@@ -70,34 +67,14 @@ export class MTCryptoServices {
         }
     }
 
-    private nextMsgId(): bigint {
-        const now = (BigInt(Math.floor(Date.now() / 1000)) & 0xFFFFFFFFn) << 32n;
-        this.msgIdCounter = (this.msgIdCounter + 1n) & 0xFFFFFFFFn;
-        const raw = now + this.msgIdCounter;
-        const isClient = this.config.mode !== 'server';
-        if (isClient) {
-            return (raw - (raw % 4n)) & 0x7FFFFFFFFFFFFFFFn;
-        }
-        return ((raw - (raw % 4n)) + 1n) & 0x7FFFFFFFFFFFFFFFn;
-    }
-
-    private nextSeqNo(contentRelated: boolean): number {
-        if (contentRelated) {
-            const seqNo = (this.contentSeqNo * 2) + 1;
-            this.contentSeqNo = (this.contentSeqNo + 1) & 0x7FFFFFFF;
-            return seqNo & 0x7FFFFFFF;
-        }
-        const seqNo = this.nonContentSeqNo * 2;
-        this.nonContentSeqNo = (this.nonContentSeqNo + 1) & 0x7FFFFFFF;
-        return seqNo & 0x7FFFFFFF;
+    setTimeOffset(offset: number): void {
+        this.components.client.setTimeOffset(offset);
     }
 
     async encrypt(data: Buffer | string): Promise<EncryptedData> {
         this.ensureSessionId();
         const buffer = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
-        const messageId = this.nextMsgId();
-        const seqNo = this.nextSeqNo(true);
-        const encrypted = await this.components.client.encryptMessage(buffer, this.currentSessionId, messageId, seqNo);
+        const encrypted = await this.components.client.encryptForSession('__default__', buffer);
         this.context.events.emit('mtproto:encrypted', { size: encrypted.data.length });
         return { ...encrypted, sessionId: this.currentSessionId };
     }
@@ -135,7 +112,7 @@ export class MTCryptoServices {
     async decryptMessage(
         encrypted: EncryptedData,
         sessionId: bigint,
-        options?: { secret?: boolean; isInitiator?: boolean }
+        options?: { secret?: boolean; isInitiator?: boolean; expectOddMsgId?: boolean }
     ): Promise<Buffer> {
         const decryptedData = await this.components.client.decryptMessage(encrypted, sessionId, options);
         const event = options?.secret ? 'mtproto:secret:message:decrypted' : 'mtproto:message:decrypted';
@@ -181,7 +158,11 @@ export class MTCryptoServices {
         return this.components.client.encryptForSession(peerId, message);
     }
 
-    async decryptForSession(peerId: string, encrypted: EncryptedData): Promise<DecryptedData> {
-        return this.components.client.decryptForSession(peerId, encrypted);
+    async encryptForServerSession(peerId: string, message: Buffer): Promise<EncryptedData> {
+        return this.components.client.encryptForServerSession(peerId, message);
+    }
+
+    async decryptForSession(peerId: string, encrypted: EncryptedData, expectOddMsgId?: boolean): Promise<DecryptedData> {
+        return this.components.client.decryptForSession(peerId, encrypted, expectOddMsgId);
     }
 }

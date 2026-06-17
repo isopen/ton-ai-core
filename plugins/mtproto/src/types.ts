@@ -4,6 +4,7 @@ export interface MTCryptoConfig extends SimpleAgentConfig {
     mode?: 'client' | 'server';
     testMode?: boolean;
     authKeyMode?: 'p2p' | 'telegram';
+    publicKeyPems?: string[];
 }
 
 export interface EncryptedData {

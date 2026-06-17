@@ -16,6 +16,7 @@ import {
     ObfuscationState,
     createObfuscatedInit,
 } from './obfuscation';
+import { connectThroughProxy, ProxyConfig } from './proxy-connect';
 
 export enum Obfuscated2TransportType {
     INTERMEDIATE,
@@ -40,19 +41,22 @@ export class Obfuscated2Transport extends EventEmitter {
     private host: string;
     private transportType: Obfuscated2TransportType;
     private isServer: boolean;
+    private proxy?: ProxyConfig;
     private connections = new Map<string, ConnectionState>();
 
     constructor(
         port: number,
         host: string = '127.0.0.1',
         transportType: Obfuscated2TransportType = Obfuscated2TransportType.INTERMEDIATE,
-        isServer: boolean = false
+        isServer: boolean = false,
+        proxy?: ProxyConfig
     ) {
         super();
         this.port = port;
         this.host = host;
         this.transportType = transportType;
         this.isServer = isServer;
+        this.proxy = proxy;
     }
 
     async start(): Promise<void> {
@@ -76,36 +80,32 @@ export class Obfuscated2Transport extends EventEmitter {
     }
 
     private async connectToServer(): Promise<void> {
-        return new Promise((resolve, reject) => {
-            this.client = net.createConnection({ port: this.port, host: this.host }, async () => {
-                const id = 'server';
-                const initPayload = generateInitPayload();
-                const obfuscatedInit = createObfuscatedInit(initPayload);
-                const clientState = await deriveObfuscationKeys(initPayload);
+        const socket = await connectThroughProxy(this.host, this.port, this.proxy);
+        this.client = socket;
+        const id = 'server';
+        const initPayload = generateInitPayload();
+        const obfuscatedInit = await createObfuscatedInit(initPayload);
+        const clientState = await deriveObfuscationKeys(initPayload);
 
-                this.connections.set(id, {
-                    socket: this.client!,
-                    stream: new BufferStream(),
-                    headerReceived: false,
-                    headerSent: true,
-                    clientState,
-                    serverState: null,
-                    firstPacket: true,
-                    tcpSeqNo: 0,
-                });
-
-                this.client!.on('data', (data: Buffer) => this.onData(id, data));
-                this.client!.on('close', () => {
-                    this.connections.delete(id);
-                    this.emit('disconnect', id);
-                });
-                this.client!.on('error', (err) => this.emit('error', err));
-
-                this.client!.write(obfuscatedInit);
-                resolve();
-            });
-            this.client!.on('error', reject);
+        this.connections.set(id, {
+            socket: this.client,
+            stream: new BufferStream(),
+            headerReceived: false,
+            headerSent: true,
+            clientState,
+            serverState: null,
+            firstPacket: true,
+            tcpSeqNo: 0,
         });
+
+        this.client.on('data', (data: Buffer) => this.onData(id, data));
+        this.client.on('close', () => {
+            this.connections.delete(id);
+            this.emit('disconnect', id);
+        });
+        this.client.on('error', (err) => this.emit('error', err));
+
+        this.client.write(obfuscatedInit);
     }
 
     private handleConnection(socket: net.Socket): void {
