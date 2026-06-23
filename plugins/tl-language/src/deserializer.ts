@@ -122,6 +122,41 @@ export class SchemaDeserializer {
         return result;
     }
 
+    readInt32Raw(): number {
+        this.checkBounds(4);
+        const value = this.buffer.readInt32LE(this.offset);
+        this.offset += 4;
+        return value;
+    }
+
+    readInt64Raw(): bigint {
+        this.checkBounds(8);
+        const value = this.buffer.readBigInt64LE(this.offset);
+        this.offset += 8;
+        return value;
+    }
+
+    readUint32Raw(): number {
+        this.checkBounds(4);
+        const value = this.buffer.readUInt32LE(this.offset);
+        this.offset += 4;
+        return value;
+    }
+
+    readDouble(): number {
+        this.checkBounds(8);
+        const value = this.buffer.readDoubleLE(this.offset);
+        this.offset += 8;
+        return value;
+    }
+
+    readRawBytes(len: number): Buffer {
+        this.checkBounds(len);
+        const data = this.buffer.subarray(this.offset, this.offset + len);
+        this.offset += len;
+        return Buffer.from(data);
+    }
+
     readVectorInt64(): bigint[] {
         const constructorId = this.readUint32();
         if (constructorId !== VECTOR_ID) throw new Error(`Invalid vector constructor: 0x${constructorId.toString(16)}`);
@@ -130,6 +165,10 @@ export class SchemaDeserializer {
         const result: bigint[] = [];
         for (let i = 0; i < count; i++) result.push(this.readInt64());
         return result;
+    }
+
+    readVectorLong(): bigint[] {
+        return this.readVectorInt64();
     }
 
     readVectorString(): string[] {

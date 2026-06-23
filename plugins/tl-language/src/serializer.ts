@@ -246,6 +246,30 @@ export class SchemaSerializer {
         }
     }
 
+    writeBytesRaw(data: Buffer): void {
+        this.ensureSpace(data.length);
+        data.copy(this.buffer, this.offset);
+        this.offset += data.length;
+    }
+
+    writeInt32Raw(value: number): void {
+        this.ensureSpace(4);
+        this.buffer.writeInt32LE(value, this.offset);
+        this.offset += 4;
+    }
+
+    writeInt64Raw(value: bigint): void {
+        this.ensureSpace(8);
+        this.buffer.writeBigInt64LE(value, this.offset);
+        this.offset += 8;
+    }
+
+    writeUint32Raw(value: number): void {
+        this.ensureSpace(4);
+        this.buffer.writeUInt32LE(value >>> 0, this.offset);
+        this.offset += 4;
+    }
+
     toBuffer(): Buffer {
         return this.buffer.subarray(0, this.offset);
     }

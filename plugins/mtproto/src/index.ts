@@ -14,10 +14,6 @@ export * from './types';
 export * from './components';
 export * from './skills';
 export * from './public-rsa-key';
-export * from './rpc-client';
-export * from './key-fetcher';
-export * from './mtproto-schema';
-export * from './transport';
 
 export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
     readonly metadata = {
@@ -137,7 +133,7 @@ export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
     async decryptMessage(
         encrypted: EncryptedData,
         sessionId: bigint,
-        options?: { secret?: boolean; isInitiator?: boolean }
+        options?: { secret?: boolean; isInitiator?: boolean; expectOddMsgId?: boolean }
     ): Promise<Buffer> {
         this.checkInitialized();
         return this.skills.decryptMessage(encrypted, sessionId, options);

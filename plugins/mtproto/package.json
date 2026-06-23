@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@ton-ai/core": "*",
+    "@ton-ai/tl-language": "*",
     "@types/node": "^20.19.33",
     "typescript": "^5.3.3"
   }

@@ -1,7 +1,6 @@
 import { Buffer } from 'buffer';
-import { EventEmitter } from 'events';
 import { crypton } from '@ton-ai/core';
-import { TLSerializer, TLDeserializer } from './tl-serialization';
+import { TLSerializer, TLDeserializer } from '@ton-ai/tl-language';
 import { PublicRsaKeyInterface, RsaKeyInfo } from './public-rsa-key';
 
 export interface AuthKeyCreationConfig {
