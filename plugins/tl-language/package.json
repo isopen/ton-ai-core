@@ -1,0 +1,19 @@
+{
+  "name": "@ton-ai/tl-language",
+  "version": "0.1.0",
+  "description": "TL Language parser, schema registry, and serialization engine for MTProto",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "author": "TON AI Core Team",
+  "license": "Boost Software License 1.0",
+  "scripts": {
+    "build": "tsc",
+    "test": "npx tsx test/tl-language.test.ts && npx tsx test/spec-compliance.test.ts",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@ton-ai/core": "*",
+    "@types/node": "^20.19.33",
+    "typescript": "^5.3.3"
+  }
+}
