@@ -94,7 +94,7 @@ function decodeRawContainer(data: Buffer): ContainerMessage[] {
         messages.push({
             msgId,
             seqNo,
-            body: data.subarray(offset, offset + bodyLen),
+            body: Buffer.from(data.subarray(offset, offset + bodyLen)),
         });
         offset += bodyLen;
     }
@@ -114,7 +114,7 @@ function decodeSingleMessage(data: Buffer): ContainerMessage[] {
     return [{
         msgId,
         seqNo,
-        body: data.subarray(16, 16 + bodyLen),
+        body: Buffer.from(data.subarray(16, 16 + bodyLen)),
     }];
 }
 

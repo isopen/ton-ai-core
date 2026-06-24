@@ -67,7 +67,9 @@ export class CryptoClient extends EventEmitter {
             this.context.logger.info('MTProto crypto client initialized');
         } catch (error) {
             this.context.logger.error('Failed to initialize:', error);
-            this.emit('error', error);
+            if (this.listenerCount('error') > 0) {
+                this.emit('error', error);
+            }
             throw error;
         }
     }
@@ -130,6 +132,8 @@ export class CryptoClient extends EventEmitter {
     }
 
     applyHandshakeResult(result: AuthKeyCreationResult): void {
+        if (this.authKey?.key) this.authKey.key.fill(0);
+        if (this.serverSalt) this.serverSalt.fill(0);
         this.authKey = { key: result.authKey, id: result.authKeyId };
         this.serverSalt = result.salt;
         this.setTimeOffset(result.serverTime - Math.floor(Date.now() / 1000));
@@ -141,12 +145,16 @@ export class CryptoClient extends EventEmitter {
     }
 
     private generateRandomPadding(dataLength: number): Buffer {
-        const randBuf = crypton.getRandomBytes(4);
-        const randDataSize = randBuf.readUInt32LE(0) & 0xff;
-        randBuf.fill(0);
-        const rawSize = dataLength + 12 + randDataSize;
-        const paddedSize = (rawSize + 15) & ~15;
-        return crypton.getRandomBytes(paddedSize - dataLength);
+        const minPad = 12;
+        const maxPad = 1024;
+        const blockSize = 16;
+        const aligned = (dataLength + blockSize - 1) & ~(blockSize - 1);
+        const basePad = aligned - dataLength;
+        const minPadAligned = basePad >= minPad ? basePad : basePad + blockSize;
+        const padSteps = Math.floor((maxPad - minPadAligned) / blockSize);
+        const steps = padSteps > 0 ? (crypton.getRandomBytes(4).readUInt32LE(0) % (padSteps + 1)) : 0;
+        const paddingSize = minPadAligned + steps * blockSize;
+        return crypton.getRandomBytes(paddingSize);
     }
 
     async encryptMessage(
@@ -256,12 +264,12 @@ export class CryptoClient extends EventEmitter {
                 throw new Error('Decryption failed');
             }
 
-            const expectOdd = options?.expectOddMsgId ?? true;
+            const expectOdd = options?.expectOddMsgId ?? false;
             const msgIdMod4 = Number(msgId & 3n);
             if (expectOdd && (msgIdMod4 !== 1 && msgIdMod4 !== 3)) {
                 throw new Error('Decryption failed');
             }
-            if (!expectOdd && msgIdMod4 !== 0) {
+            if (!expectOdd && (msgIdMod4 !== 0 && msgIdMod4 !== 2)) {
                 throw new Error('Decryption failed');
             }
 
@@ -320,28 +328,31 @@ export class CryptoClient extends EventEmitter {
 
     async createSession(peerId: string, sharedSecret: Buffer, mode?: 'p2p' | 'telegram', serverSalt?: Buffer): Promise<void> {
         return this.withLock(peerId, async () => {
-            const existing = this.sessions.get(peerId);
-            if (existing) {
-                existing.authKey.key.fill(0);
-                existing.serverSalt.fill(0);
-            } else if (this.sessions.size >= MAX_SESSIONS) {
-                throw new Error('Maximum session count reached');
+            try {
+                const existing = this.sessions.get(peerId);
+                if (existing) {
+                    existing.authKey.key.fill(0);
+                    existing.serverSalt.fill(0);
+                } else if (this.sessions.size >= MAX_SESSIONS) {
+                    throw new Error('Maximum session count reached');
+                }
+                const authKey = await this.generateAuthKey(sharedSecret, mode, serverSalt);
+                const salt = Buffer.from(this.serverSalt!);
+                const randBuf = crypton.getRandomBytes(8);
+                const sessionId = crypton.bufferToBigInt(randBuf) & 0x7FFFFFFFFFFFFFFFn;
+                randBuf.fill(0);
+                this.sessions.set(peerId, {
+                    authKey,
+                    serverSalt: salt,
+                    sessionId,
+                    seqNo: 0,
+                    lastMsgId: 0n,
+                    seenMsgIds: new Set(),
+                    seenMsgQueue: [],
+                });
+            } finally {
+                sharedSecret.fill(0);
             }
-            const authKey = await this.generateAuthKey(sharedSecret, mode, serverSalt);
-            const salt = Buffer.from(this.serverSalt!);
-            const randBuf = crypton.getRandomBytes(8);
-            const sessionId = crypton.bufferToBigInt(randBuf) & 0x7FFFFFFFFFFFFFFFn;
-            randBuf.fill(0);
-            this.sessions.set(peerId, {
-                authKey,
-                serverSalt: salt,
-                sessionId,
-                seqNo: 0,
-                lastMsgId: 0n,
-                seenMsgIds: new Set(),
-                seenMsgQueue: [],
-            });
-            sharedSecret.fill(0);
         });
     }
 
@@ -547,12 +558,12 @@ export class CryptoClient extends EventEmitter {
                 throw new Error('Decryption failed');
             }
 
-            const expectOdd = options?.expectOddMsgId ?? true;
+            const expectOdd = options?.expectOddMsgId ?? false;
             const msgIdMod4 = Number(msgId & 3n);
             if (expectOdd && (msgIdMod4 !== 1 && msgIdMod4 !== 3)) {
                 throw new Error('Decryption failed');
             }
-            if (!expectOdd && msgIdMod4 !== 0) {
+            if (!expectOdd && (msgIdMod4 !== 0 && msgIdMod4 !== 2)) {
                 throw new Error('Decryption failed');
             }
 
@@ -580,8 +591,7 @@ export class CryptoClient extends EventEmitter {
         let raw = t ^ xorLower;
         raw = raw & ~3n & 0x7FFFFFFFFFFFFFFFn;
         if (session.lastMsgId >= raw) {
-            const mul = BigInt(((rx >> 22) & 0x3FF) + 1);
-            raw = session.lastMsgId + mul * 8n;
+            raw = session.lastMsgId + 8n;
             raw = raw & ~3n & 0x7FFFFFFFFFFFFFFFn;
         }
         session.lastMsgId = raw;
@@ -598,8 +608,7 @@ export class CryptoClient extends EventEmitter {
         let raw = t ^ xorLower;
         raw = (raw | 1n) & 0x7FFFFFFFFFFFFFFFn;
         if (session.lastMsgId >= raw) {
-            const mul = BigInt(((rx >> 22) & 0x3FF) + 1);
-            raw = session.lastMsgId + mul * 8n;
+            raw = session.lastMsgId + 8n;
             raw = (raw | 1n) & 0x7FFFFFFFFFFFFFFFn;
         }
         session.lastMsgId = raw;

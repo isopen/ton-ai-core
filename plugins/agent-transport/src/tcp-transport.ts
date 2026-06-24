@@ -240,7 +240,7 @@ export class TcpTransport extends EventEmitter {
         const expectedCrc = state.stream.peekUInt32LE(len);
         const actualCrc = this.crc32(crcData);
         if (expectedCrc !== actualCrc) {
-            if (retries >= 3) return null;
+            if (retries >= 1) return null;
             state.stream.consume(len + 4);
             return this.extractFull(state, retries + 1);
         }

@@ -50,15 +50,15 @@ async function main() {
 
     console.log('Nodes started. Initiating handshake...\n');
 
-    await alice.udp.getNode().initiateHandshake(bobPeerId);
-    await bob.udp.getNode().initiateHandshake(alicePeerId);
-
     const aliceChannel = new Promise<string>((resolve) => {
         alice.udp.getNode().once('secureChannel', (peerId: string) => resolve(peerId));
     });
     const bobChannel = new Promise<string>((resolve) => {
         bob.udp.getNode().once('secureChannel', (peerId: string) => resolve(peerId));
     });
+
+    await alice.udp.getNode().initiateHandshake(bobPeerId);
+    await bob.udp.getNode().initiateHandshake(alicePeerId);
 
     const [aliceConnectedTo, bobConnectedTo] = await Promise.all([aliceChannel, bobChannel]);
     console.log(`Alice secured channel to: ${aliceConnectedTo}`);

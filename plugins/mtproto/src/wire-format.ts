@@ -72,8 +72,8 @@ export class WireFormat {
         const authKeyId = data.readBigUInt64LE(0);
         if (authKeyId !== authKey.id) return null;
 
-        const msgKey = data.subarray(8, 24);
-        const encryptedData = data.subarray(24);
+        const msgKey = Buffer.from(data.subarray(8, 24));
+        const encryptedData = Buffer.from(data.subarray(24));
 
         const { aesKey, aesIv } = await this.deriveKeys(authKey.key, msgKey, isClient);
 
@@ -81,6 +81,8 @@ export class WireFormat {
         try {
             decrypted = await crypton.AES256IGE.decrypt(encryptedData, aesKey, aesIv);
         } catch {
+            msgKey.fill(0);
+            encryptedData.fill(0);
             aesKey.fill(0);
             aesIv.fill(0);
             return null;
@@ -156,7 +158,7 @@ export class WireFormat {
 
     static generatePadding(dataLength: number): Buffer {
         const randBuf = crypton.getRandomBytes(4);
-        const randDataSize = randBuf.readUInt32LE(0) & 0xff;
+        const randDataSize = randBuf.readUInt32LE(0) % 1013;
         randBuf.fill(0);
         const plaintextSize = 32 + dataLength;
         const rawSize = plaintextSize + 12 + randDataSize;

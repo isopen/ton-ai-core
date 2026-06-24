@@ -70,7 +70,8 @@ function httpConnect(
     resolve: (s: net.Socket) => void,
     reject: (e: Error) => void,
 ): void {
-    socket.write(`CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n\r\n`);
+    const safeHost = targetHost.replace(/[\r\n]/g, '');
+    socket.write(`CONNECT ${safeHost}:${targetPort} HTTP/1.1\r\nHost: ${safeHost}:${targetPort}\r\n\r\n`);
 
     let headerBuf = Buffer.alloc(0);
     const onHeader = (chunk: Buffer) => {
@@ -115,12 +116,23 @@ function socks5Connect(
             }
             step = 1;
             const addr = targetHost.split('.').map(Number);
-            const req = Buffer.alloc(10);
-            req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x01;
-            req.writeUInt8(addr[0], 4); req.writeUInt8(addr[1], 5);
-            req.writeUInt8(addr[2], 6); req.writeUInt8(addr[3], 7);
-            req.writeUInt16BE(targetPort, 8);
-            socket.write(req);
+            const isIp = addr.length === 4 && addr.every(n => !isNaN(n) && n >= 0 && n <= 255);
+            if (isIp) {
+                const req = Buffer.alloc(10);
+                req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x01;
+                req.writeUInt8(addr[0], 4); req.writeUInt8(addr[1], 5);
+                req.writeUInt8(addr[2], 6); req.writeUInt8(addr[3], 7);
+                req.writeUInt16BE(targetPort, 8);
+                socket.write(req);
+            } else {
+                const hostBuf = Buffer.from(targetHost, 'ascii');
+                const req = Buffer.alloc(7 + hostBuf.length);
+                req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x03;
+                req.writeUInt8(hostBuf.length, 4);
+                hostBuf.copy(req, 5);
+                req.writeUInt16BE(targetPort, 5 + hostBuf.length);
+                socket.write(req);
+            }
         } else if (step === 1) {
             clearTimeout(timer);
             if (chunk[1] !== 0x00) {

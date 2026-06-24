@@ -137,7 +137,6 @@ export class TcpNode extends EventEmitter {
     async send(peerId: string, data: Buffer): Promise<void> {
         if (!this.crypto.hasSession(peerId)) {
             await this.initiateHandshake(peerId);
-            throw new Error('Session not yet established, handshake started');
         }
 
         await this.checkRekeyNeeded(peerId);
@@ -164,27 +163,44 @@ export class TcpNode extends EventEmitter {
     }
 
     async initiateHandshake(peerId: string): Promise<void> {
-        const dhKeys = this.crypto.generateDHKeys();
-        const timer = setTimeout(() => {
-            this.pendingDH.get(peerId)?.privateKeyBuf.fill(0);
-            this.pendingDH.delete(peerId);
-        }, HANDSHAKE_TIMEOUT_MS);
-        this.pendingDH.set(peerId, { ...dhKeys, timer });
+        return new Promise<void>((resolve, reject) => {
+            if (this.crypto.hasSession(peerId)) {
+                resolve();
+                return;
+            }
 
-        const nonce = Buffer.alloc(16);
-        nonce.writeBigInt64LE(BigInt(Date.now()), 0);
-        crypton.getRandomBytes(8).copy(nonce, 8);
-        const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
+            const onSecure = (id: string) => {
+                if (id === peerId) {
+                    clearTimeout(timer);
+                    this.removeListener('secureChannel', onSecure);
+                    resolve();
+                }
+            };
+            this.on('secureChannel', onSecure);
 
-        const packet = Buffer.concat([
-            Buffer.alloc(8),
-            Buffer.from([0x01]),
-            nonce,
-            pubKeyBytes,
-        ]);
+            const timer = setTimeout(() => {
+                this.removeListener('secureChannel', onSecure);
+                reject(new Error(`Handshake timeout for ${peerId}`));
+            }, HANDSHAKE_TIMEOUT_MS);
 
-        const connId = this.peerConnIds.get(peerId) || `peer:${peerId}`;
-        this.transport.send(packet, connId);
+            const dhKeys = this.crypto.generateDHKeys();
+            this.pendingDH.set(peerId, { ...dhKeys, timer });
+
+            const nonce = Buffer.alloc(16);
+            nonce.writeBigInt64LE(BigInt(Date.now()), 0);
+            crypton.getRandomBytes(8).copy(nonce, 8);
+            const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
+
+            const packet = Buffer.concat([
+                Buffer.alloc(8),
+                Buffer.from([0x01]),
+                nonce,
+                pubKeyBytes,
+            ]);
+
+            const connId = this.peerConnIds.get(peerId) || `peer:${peerId}`;
+            this.transport.send(packet, connId);
+        });
     }
 
     private async handleMessage(data: Buffer, connId: string) {

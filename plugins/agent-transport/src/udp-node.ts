@@ -61,7 +61,6 @@ export class UdpNode extends EventEmitter {
         if (!peer) throw new Error('Unknown peer');
         if (!this.crypto.hasSession(peerId)) {
             await this.initiateHandshake(peerId);
-            throw new Error('Session not yet established, handshake started');
         }
 
         await this.checkRekeyNeeded(peerId);
@@ -85,9 +84,7 @@ export class UdpNode extends EventEmitter {
         const parsed = this.parseAddress(peer.address);
         if (!parsed) throw new Error(`Invalid peer address: ${peer.address}`);
 
-        let finalPacket: Buffer = packet;
-
-        this.transport.send(finalPacket, parsed.host, parsed.port);
+        this.transport.send(packet, parsed.host, parsed.port);
     }
 
     async sendContainer(peerId: string, messages: ContainerMessage[]): Promise<void> {
@@ -95,7 +92,6 @@ export class UdpNode extends EventEmitter {
         if (!peer) throw new Error('Unknown peer');
         if (!this.crypto.hasSession(peerId)) {
             await this.initiateHandshake(peerId);
-            throw new Error('Session not yet established, handshake started');
         }
 
         await this.checkRekeyNeeded(peerId);
@@ -206,30 +202,56 @@ export class UdpNode extends EventEmitter {
     }
 
     async initiateHandshake(peerId: string): Promise<void> {
-        const dhKeys = this.crypto.generateDHKeys();
-        const timer = setTimeout(() => {
-            this.pendingDH.get(peerId)?.privateKeyBuf.fill(0);
-            this.pendingDH.delete(peerId);
-        }, HANDSHAKE_TIMEOUT_MS);
-        this.pendingDH.set(peerId, { ...dhKeys, timer });
+        return new Promise<void>((resolve, reject) => {
+            if (this.crypto.hasSession(peerId)) {
+                resolve();
+                return;
+            }
 
-        const nonce = Buffer.alloc(16);
-        nonce.writeBigInt64LE(BigInt(Date.now()), 0);
-        crypton.getRandomBytes(8).copy(nonce, 8);
-        const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
+            const onSecure = (id: string) => {
+                if (id === peerId) {
+                    clearTimeout(timer);
+                    this.removeListener('secureChannel', onSecure);
+                    resolve();
+                }
+            };
+            this.on('secureChannel', onSecure);
 
-        const packet = Buffer.concat([
-            Buffer.alloc(8),
-            Buffer.from([UdpPacketType.HANDSHAKE]),
-            nonce,
-            pubKeyBytes
-        ]);
+            const timer = setTimeout(() => {
+                this.removeListener('secureChannel', onSecure);
+                this.pendingDH.delete(peerId);
+                reject(new Error(`Handshake timeout for ${peerId}`));
+            }, HANDSHAKE_TIMEOUT_MS);
 
-        const peer = this.peers.get(peerId);
-        if (!peer) return;
-        const parsed = this.parseAddress(peer.address);
-        if (!parsed) return;
-        this.transport.send(packet, parsed.host, parsed.port);
+            const dhKeys = this.crypto.generateDHKeys();
+            this.pendingDH.set(peerId, { ...dhKeys, timer });
+
+            const nonce = Buffer.alloc(16);
+            nonce.writeBigInt64LE(BigInt(Date.now()), 0);
+            crypton.getRandomBytes(8).copy(nonce, 8);
+            const pubKeyBytes = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
+
+            const packet = Buffer.concat([
+                Buffer.alloc(8),
+                Buffer.from([UdpPacketType.HANDSHAKE]),
+                nonce,
+                pubKeyBytes
+            ]);
+
+            const peer = this.peers.get(peerId);
+            if (!peer) {
+                this.removeListener('secureChannel', onSecure);
+                reject(new Error(`Unknown peer: ${peerId}`));
+                return;
+            }
+            const parsed = this.parseAddress(peer.address);
+            if (!parsed) {
+                this.removeListener('secureChannel', onSecure);
+                reject(new Error(`Invalid peer address: ${peer.address}`));
+                return;
+            }
+            this.transport.send(packet, parsed.host, parsed.port);
+        });
     }
 
     private async handleHandshake(payload: Buffer, rinfo: any, peerId?: string) {

@@ -10,7 +10,8 @@ interface TcpNodeConfig {
 }
 
 async function createNode(
-    config: TcpNodeConfig
+    config: TcpNodeConfig,
+    mode: 'client' | 'server' = 'client'
 ): Promise<{ mtproto: MTProtoCryptoPlugin; tcp: TcpTransportPlugin }> {
     const mtproto = new MTProtoCryptoPlugin();
     const events = new EventEmitter();
@@ -18,7 +19,7 @@ async function createNode(
         mcp: undefined as any,
         logger: console,
         events,
-        config: { mode: 'client' },
+        config: { mode },
         getPlugin: undefined as any
     };
     await mtproto.initialize(context);
@@ -64,8 +65,8 @@ async function main() {
         transportType: TcpTransportType.INTERMEDIATE,
     };
 
-    const alice = await createNode(aliceConfig);
-    const bob = await createNode(bobConfig);
+    const alice = await createNode(aliceConfig, 'client');
+    const bob = await createNode(bobConfig, 'server');
 
     await alice.tcp.getNode().start();
     await bob.tcp.getNode().start();
@@ -77,10 +78,7 @@ async function main() {
 
     console.log('Initiating handshake...\n');
 
-    await alice.tcp.getNode().initiateHandshake('bob');
-    await bob.tcp.getNode().initiateHandshake('alice');
-
-    await new Promise<void>((resolve) => {
+    const handshakeDone = new Promise<void>((resolve) => {
         let aliceSecure = false;
         let bobSecure = false;
 
@@ -104,8 +102,12 @@ async function main() {
             }
         });
 
-        setTimeout(() => resolve(), 5000);
+        setTimeout(() => resolve(), 10000);
     });
+
+    await alice.tcp.getNode().initiateHandshake('bob');
+    await bob.tcp.getNode().initiateHandshake('alice');
+    await handshakeDone;
 
     console.log('');
 

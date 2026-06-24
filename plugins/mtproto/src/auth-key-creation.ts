@@ -155,7 +155,7 @@ export class AuthKeyCreator {
         let y = 1n;
         let c = 1n;
 
-        const maxIter = 1000000;
+        const maxIter = 10000000;
         let iter = 0;
 
         while (iter++ < maxIter) {

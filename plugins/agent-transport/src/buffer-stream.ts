@@ -55,7 +55,7 @@ export class BufferStream {
                 const start = Math.max(0, offset - pos);
                 const finish = Math.min(chunk.length, end - pos);
                 if (len <= chunk.length - start && end <= pos + chunk.length) {
-                    return chunk.subarray(start, start + len);
+                    return Buffer.from(chunk.subarray(start, start + len));
                 }
             }
             pos += chunk.length;
@@ -92,7 +92,7 @@ export class BufferStream {
                 remaining -= first.length;
                 this.chunks.shift();
             } else {
-                this.chunks[0] = first.subarray(remaining);
+                this.chunks[0] = Buffer.from(first.subarray(remaining));
                 remaining = 0;
             }
         }

@@ -137,7 +137,8 @@ export class HttpNode extends EventEmitter {
                 this.once('secureChannel', (id: string) => { if (id === peerId) resolve(); });
             });
             await this.initiateHandshake(peerId);
-            await Promise.race([sessionReady, new Promise<void>((_, r) => setTimeout(() => r(new Error('Handshake timeout')), 15000))]);
+            const timeout = new Promise<void>((_, r) => setTimeout(() => r(new Error('Handshake timeout')), 15000));
+            await Promise.race([sessionReady, timeout]);
             if (!this.crypto.hasSession(peerId)) {
                 throw new Error('Session not established after handshake');
             }
