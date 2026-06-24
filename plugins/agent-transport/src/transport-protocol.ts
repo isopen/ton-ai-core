@@ -71,7 +71,7 @@ export function encodePaddedIntermediate(payload: Buffer): Buffer {
     }
     const totalLen = payload.length + padding;
     const header = Buffer.alloc(4);
-    header.writeUInt32LE(totalLen | 0x80000000, 0);
+    header.writeUInt32LE((totalLen | 0x80000000) >>> 0, 0);
     return Buffer.concat([header, payload, Buffer.alloc(padding)]);
 }
 

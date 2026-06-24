@@ -242,7 +242,7 @@ export class Obfuscated2Transport extends EventEmitter {
             }
             const totalLen = data.length + padding;
             header = Buffer.alloc(4);
-            header.writeUInt32LE(totalLen | 0x80000000, 0);
+            header.writeUInt32LE((totalLen | 0x80000000) >>> 0, 0);
             const payload = Buffer.concat([header, data, Buffer.alloc(padding)]);
             if (state.clientState) {
                 const encrypted = obfuscateData(payload, state.clientState);

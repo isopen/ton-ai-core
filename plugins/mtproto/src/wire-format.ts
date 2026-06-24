@@ -31,8 +31,8 @@ export class WireFormat {
         messageBody: Buffer,
         isClient: boolean
     ): Promise<WireMessage> {
-        const padding = this.generatePadding(messageBody.length);
         const plaintext = this.buildPlaintext(salt, sessionId, messageId, seqNo, messageBody, Buffer.alloc(0));
+        const padding = this.generateRandomPadding(plaintext.length);
 
         const msgKey = await this.computeMsgKey(authKey.key, plaintext, padding, isClient);
         const { aesKey, aesIv } = await this.deriveKeys(authKey.key, msgKey, isClient);
@@ -156,13 +156,16 @@ export class WireFormat {
         return crypton.MTProtoKDF.deriveKeys(authKey, msgKey, isClient);
     }
 
-    static generatePadding(dataLength: number): Buffer {
-        const randBuf = crypton.getRandomBytes(4);
-        const randDataSize = randBuf.readUInt32LE(0) % 1013;
-        randBuf.fill(0);
-        const plaintextSize = 32 + dataLength;
-        const rawSize = plaintextSize + 12 + randDataSize;
-        const paddedSize = (rawSize + 15) & ~15;
-        return crypton.getRandomBytes(paddedSize - plaintextSize);
+    static generateRandomPadding(dataLength: number): Buffer {
+        const minPad = 12;
+        const maxPad = 1024;
+        const blockSize = 16;
+        const aligned = (dataLength + blockSize - 1) & ~(blockSize - 1);
+        const basePad = aligned - dataLength;
+        const minPadAligned = basePad >= minPad ? basePad : basePad + blockSize;
+        const padSteps = Math.floor((maxPad - minPadAligned) / blockSize);
+        const steps = padSteps > 0 ? (crypton.getRandomBytes(4).readUInt32LE(0) % (padSteps + 1)) : 0;
+        const paddingSize = minPadAligned + steps * blockSize;
+        return crypton.getRandomBytes(paddingSize);
     }
 }

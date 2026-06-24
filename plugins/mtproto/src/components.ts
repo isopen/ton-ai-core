@@ -589,10 +589,10 @@ export class CryptoClient extends EventEmitter {
         randBuf.fill(0);
         const xorLower = BigInt(rx & 0x3FFFFF);
         let raw = t ^ xorLower;
-        raw = raw & ~3n & 0x7FFFFFFFFFFFFFFFn;
+        raw = (raw | 1n) & 0x7FFFFFFFFFFFFFFFn;
         if (session.lastMsgId >= raw) {
             raw = session.lastMsgId + 8n;
-            raw = raw & ~3n & 0x7FFFFFFFFFFFFFFFn;
+            raw = (raw | 1n) & 0x7FFFFFFFFFFFFFFFn;
         }
         session.lastMsgId = raw;
         return raw;
@@ -606,10 +606,10 @@ export class CryptoClient extends EventEmitter {
         randBuf.fill(0);
         const xorLower = BigInt(rx & 0x3FFFFF);
         let raw = t ^ xorLower;
-        raw = (raw | 1n) & 0x7FFFFFFFFFFFFFFFn;
+        raw = raw & ~1n & 0x7FFFFFFFFFFFFFFFn;
         if (session.lastMsgId >= raw) {
             raw = session.lastMsgId + 8n;
-            raw = (raw | 1n) & 0x7FFFFFFFFFFFFFFFn;
+            raw = raw & ~1n & 0x7FFFFFFFFFFFFFFFn;
         }
         session.lastMsgId = raw;
         return raw;

@@ -286,7 +286,7 @@ export class WsTransport extends EventEmitter {
                 }
                 const wsPaddedLen = data.length + wsPadding;
                 const wsPaddedHeader = Buffer.alloc(4);
-                wsPaddedHeader.writeUInt32LE(wsPaddedLen | 0x80000000, 0);
+                wsPaddedHeader.writeUInt32LE((wsPaddedLen | 0x80000000) >>> 0, 0);
                 const wsPaddedData = Buffer.concat([wsPaddedHeader, data, Buffer.alloc(wsPadding)]);
                 state.socket.send(wsPaddedData);
                 break;
