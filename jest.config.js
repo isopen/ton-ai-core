@@ -6,7 +6,12 @@ const stubPath = path.resolve(__dirname, 'plugins/mtproto/tests/__mocks__');
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/plugins/mtproto/tests', '<rootDir>/packages/core/src/crypton/tests'],
+  roots: [
+    '<rootDir>/plugins/mtproto/tests',
+    '<rootDir>/packages/core/src/crypton/tests',
+    '<rootDir>/plugins/tl-language/tests',
+    '<rootDir>/plugins/agent-transport/tests'
+  ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
   transform: {

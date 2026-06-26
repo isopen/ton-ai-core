@@ -34,6 +34,7 @@ export interface TLSchema {
     types: Map<string, TLType>;
     constructors: Map<number, TLCombinator>;
     functions: Map<number, TLCombinator>;
+    allConstructors: TLCombinator[];
     raw: string;
 }
 

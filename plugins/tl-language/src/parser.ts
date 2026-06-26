@@ -5,6 +5,7 @@ interface ParseResult {
     types: Map<string, TLType>;
     constructors: Map<number, TLCombinator>;
     functions: Map<number, TLCombinator>;
+    allConstructors: TLCombinator[];
 }
 
 export function parseTLSchema(schemaText: string): TLSchema {
@@ -21,6 +22,7 @@ export function parseTLSchema(schemaText: string): TLSchema {
         types: result.types,
         constructors: result.constructors,
         functions: result.functions,
+        allConstructors: [...result.allConstructors, ...funcResult.allConstructors],
         raw: schemaText,
     };
 }
@@ -79,6 +81,7 @@ function parseDeclarations(text: string, isFunction: boolean): ParseResult {
     const types = new Map<string, TLType>();
     const constructors = new Map<number, TLCombinator>();
     const functions = new Map<number, TLCombinator>();
+    const allConstructors: TLCombinator[] = [];
 
     const declarations = splitDeclarations(text);
 
@@ -93,6 +96,8 @@ function parseDeclarations(text: string, isFunction: boolean): ParseResult {
                 const normalized = normalizeForCRC32(trimmed);
                 comb.id = crc32(normalized);
             }
+
+            allConstructors.push(comb);
 
             const targetMap = isFunction ? functions : constructors;
             targetMap.set(comb.id, comb);
@@ -116,7 +121,20 @@ function parseDeclarations(text: string, isFunction: boolean): ParseResult {
         }
     }
 
-    return { types, constructors, functions };
+    return { types, constructors, functions, allConstructors };
+}
+
+function lastIndexOfSemicolonOutsideStrings(text: string): number {
+    let inString = false;
+    for (let i = text.length - 1; i >= 0; i--) {
+        const ch = text[i];
+        if (ch === '"' && text[i - 1] !== '\\') {
+            inString = !inString;
+        } else if (!inString && ch === ';') {
+            return i;
+        }
+    }
+    return -1;
 }
 
 function splitDeclarations(text: string): string[] {
@@ -150,7 +168,7 @@ function splitDeclarations(text: string): string[] {
 }
 
 function parseCombinator(declaration: string, isFunction: boolean): TLCombinator {
-    const semicolonIdx = declaration.lastIndexOf(';');
+    const semicolonIdx = lastIndexOfSemicolonOutsideStrings(declaration);
     const body = (semicolonIdx >= 0 ? declaration.substring(0, semicolonIdx) : declaration).trim();
 
     const hashMatch = body.match(/^(\S+?)#([0-9a-fA-F]{8})\s/);
@@ -266,7 +284,7 @@ function parseConditionalType(typeStr: string): { type: string; flagsField?: str
     return { type: bang ? '!' + trimmed.substring(1) : trimmed };
 }
 
-function parseFieldToken(token: string): TLField {
+export function parseFieldToken(token: string): TLField {
     const trimmed = token.trim();
     if (!trimmed) return { name: '_', type: '' };
 
@@ -416,7 +434,7 @@ function findColonOutsideBrackets(text: string): number {
     return -1;
 }
 
-function splitTopLevel(text: string): string[] {
+export function splitTopLevel(text: string): string[] {
     const tokens: string[] = [];
     let current = '';
     let depth = 0;
@@ -445,7 +463,7 @@ function splitTopLevel(text: string): string[] {
     return tokens;
 }
 
-function tokenizeFields(text: string): string[] {
+export function tokenizeFields(text: string): string[] {
     const rawTokens: string[] = [];
     let current = '';
     let depth = 0;

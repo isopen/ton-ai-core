@@ -58,18 +58,8 @@ function extractBaseType(type: string): string {
 
 function validatePolymorphicParams(schema: TLSchema, errors: TLValidationError[]): void {
     for (const comb of schema.constructors.values()) {
-        const genericNames = new Set(comb.genericParams.map(p => p.name));
         for (const field of comb.fields) {
-            const typeStr = field.type;
-            for (const name of genericNames) {
-                if (typeStr.includes(name) && !comb.genericParams.some(p => p.name === name)) {
-                    errors.push({
-                        line: 0,
-                        message: `Undefined generic parameter '${name}' used in constructor '${comb.name}'`,
-                        severity: 'error',
-                    });
-                }
-            }
+            void field;
         }
     }
 }
@@ -81,16 +71,11 @@ function validateConditionalFields(schema: TLSchema, errors: TLValidationError[]
         for (const field of comb.fields) {
             if (field.conditionalFlagsField !== undefined) {
                 if (!fieldNames.has(field.conditionalFlagsField)) {
-                    const flagsFieldExists = comb.fields.some(f =>
-                        f.name === field.conditionalFlagsField && f.type === '#'
-                    );
-                    if (!flagsFieldExists) {
-                        errors.push({
-                            line: 0,
-                            message: `Conditional field '${field.name}' references undefined flags field '${field.conditionalFlagsField}' in constructor '${comb.name}'`,
-                            severity: 'error',
-                        });
-                    }
+                    errors.push({
+                        line: 0,
+                        message: `Conditional field '${field.name}' references undefined flags field '${field.conditionalFlagsField}' in constructor '${comb.name}'`,
+                        severity: 'error',
+                    });
                 }
             }
         }
@@ -99,7 +84,7 @@ function validateConditionalFields(schema: TLSchema, errors: TLValidationError[]
 
 function validateDuplicateConstructors(schema: TLSchema, errors: TLValidationError[]): void {
     const seen = new Map<number, string>();
-    for (const comb of schema.constructors.values()) {
+    for (const comb of schema.allConstructors) {
         if (seen.has(comb.id)) {
             errors.push({
                 line: 0,
