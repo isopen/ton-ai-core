@@ -3,172 +3,373 @@ import { Buffer } from 'buffer';
 import { crypton } from '@ton-ai/core';
 import { MTProtoCryptoPlugin } from '../src/index';
 
-function createTestContext() {
+function createTestContext(config?: Record<string, any>) {
     return {
-        logger: {
-            info: () => {},
-            warn: () => {},
-            error: () => {},
-            debug: () => {},
-        },
-        events: {
-            emit: () => {},
-            on: () => {},
-            off: () => {},
-        },
+        logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+        events: { emit: () => {}, on: () => {}, off: () => {} },
+        config: config ?? {},
     } as any;
 }
 
-async function run() {
-    // 1. Plugin metadata
-    const plugin = new MTProtoCryptoPlugin();
-    assert.strictEqual(plugin.metadata.name, 'mtproto', '1. name');
-    assert.strictEqual(plugin.metadata.version, '0.2.0', '1. version');
-    assert.ok(plugin.metadata.description.includes('MTProto'), '1. description');
+describe('MTProtoCryptoPlugin', () => {
+    test('plugin metadata', () => {
+        const plugin = new MTProtoCryptoPlugin();
+        assert.strictEqual(plugin.metadata.name, 'mtproto', 'name');
+        assert.strictEqual(plugin.metadata.version, '0.2.0', 'version');
+        assert.ok(plugin.metadata.description.includes('MTProto'), 'description');
+    });
 
-    // 2. Initialize plugin
-    const ctx = createTestContext();
-    plugin.initialize(ctx, { mode: 'client', testMode: false });
-    assert.strictEqual(plugin.isReady(), false, '2. not ready before activate');
-    await plugin.onActivate();
-    assert.ok(plugin.isReady(), '2. ready after activate');
-    await plugin.onDeactivate();
-    assert.ok(!plugin.isReady(), '3. not ready after deactivate');
+    test('initialize and activate/deactivate lifecycle', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client', testMode: false });
+        plugin.initialize(ctx);
+        assert.strictEqual(plugin.isReady(), false, 'not ready before activate');
+        await plugin.onActivate();
+        assert.ok(plugin.isReady(), 'ready after activate');
+        await plugin.onDeactivate();
+        assert.ok(!plugin.isReady(), 'not ready after deactivate');
+    });
 
-    // 3. Generate DH keys
-    await plugin.onActivate();
-    const dh = plugin.generateDHKeys();
-    assert.ok(dh.privateKey > 0n, '3. private key > 0');
-    assert.ok(dh.publicKey > 0n, '3. public key > 0');
-    assert.strictEqual(dh.privateKeyBuf.length, 256, '3. private key buf 256 bytes');
+    test('generate DH keys', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        const dh = plugin.generateDHKeys();
+        assert.ok(dh.privateKey > 0n, 'private key > 0');
+        assert.ok(dh.publicKey > 0n, 'public key > 0');
+        assert.strictEqual(dh.privateKeyBuf.length, 256, 'private key buf 256 bytes');
+        await plugin.onDeactivate();
+    });
 
-    // 4. Compute shared secret
-    const peerDh = crypton.DiffieHellman.generateKeys();
-    const shared = plugin.computeSharedSecret(dh.privateKey, peerDh.publicKey);
-    assert.strictEqual(shared.length, 256, '4. shared secret 256 bytes');
+    test('compute shared secret', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        const dh = plugin.generateDHKeys();
+        const peerDh = crypton.DiffieHellman.generateKeys();
+        const shared = plugin.computeSharedSecret(dh.privateKey, peerDh.publicKey);
+        assert.strictEqual(shared.length, 256, 'shared secret 256 bytes');
+        await plugin.onDeactivate();
+    });
 
-    // 5. Generate auth key
-    const authKey = await plugin.generateAuthKey(shared);
-    assert.strictEqual(authKey.key.length, 256, '5. auth key 256 bytes');
-    assert.ok(typeof authKey.id === 'bigint', '5. auth key id is bigint');
+    test('generate auth key', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        const dh = plugin.generateDHKeys();
+        const peerDh = crypton.DiffieHellman.generateKeys();
+        const shared = plugin.computeSharedSecret(dh.privateKey, peerDh.publicKey);
+        const authKey = await plugin.generateAuthKey(shared);
+        assert.strictEqual(authKey.key.length, 256, 'auth key 256 bytes');
+        assert.ok(typeof authKey.id === 'bigint', 'auth key id is bigint');
+        await plugin.onDeactivate();
+    });
 
-    // 6. Set/get auth key
-    plugin.setAuthKey(authKey);
-    const stored = plugin.getAuthKey();
-    assert.ok(stored!.key.equals(authKey.key), '6. auth key stored');
-    assert.strictEqual(stored!.id, authKey.id, '6. auth key id stored');
+    test('set/get auth key', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        const dh = plugin.generateDHKeys();
+        const peerDh = crypton.DiffieHellman.generateKeys();
+        const shared = plugin.computeSharedSecret(dh.privateKey, peerDh.publicKey);
+        const authKey = await plugin.generateAuthKey(shared);
+        plugin.setAuthKey(authKey);
+        const stored = plugin.getAuthKey();
+        assert.ok(stored!.key.equals(authKey.key), 'auth key stored');
+        assert.strictEqual(stored!.id, authKey.id, 'auth key id stored');
+        await plugin.onDeactivate();
+    });
 
-    // 7. Set/get server salt
-    const salt = crypton.getRandomBytes(8);
-    plugin.setServerSalt(salt);
-    assert.ok(plugin.getServerSalt()!.equals(salt), '7. salt stored');
+    test('set/get server salt', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        const salt = crypton.getRandomBytes(8);
+        plugin.setServerSalt(salt);
+        assert.ok(plugin.getServerSalt()!.equals(salt), 'salt stored');
+        await plugin.onDeactivate();
+    });
 
-    // 8. Encrypt/decrypt roundtrip (client→server pair)
-    const serverCtx = createTestContext();
-    serverCtx.config = { mode: 'server' };
-    const serverPlugin = new MTProtoCryptoPlugin();
-    serverPlugin.initialize(serverCtx, {});
-    await serverPlugin.onActivate();
-    serverPlugin.setAuthKey(authKey);
-    serverPlugin.setServerSalt(salt);
+    test('encrypt/decrypt roundtrip via plugin', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
 
-    const body = Buffer.from('hello mtproto');
-    const msgId8 = (BigInt(Math.floor(Date.now() / 1000)) << 32n) | 1n;
-    const enc = await plugin.encryptMessage(body, 0x12345678n, msgId8, 0);
-    assert.ok(enc.data.length > 0, '8. encrypted data');
-    assert.strictEqual(enc.msgKey.length, 16, '8. msgKey 16 bytes');
+        const serverPlugin = new MTProtoCryptoPlugin();
+        const serverCtx = createTestContext({ mode: 'server' });
+        serverPlugin.initialize(serverCtx);
+        await serverPlugin.onActivate();
 
-    const dec = await serverPlugin.decryptMessage(enc, 0x12345678n, { expectOddMsgId: true });
-    assert.ok(dec.equals(body), '8. roundtrip');
+        const key = crypton.getRandomBytes(256);
+        const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
+        const authKey = { key, id };
+        const salt = crypton.getRandomBytes(8);
+        plugin.setAuthKey(authKey);
+        plugin.setServerSalt(salt);
+        serverPlugin.setAuthKey(authKey);
+        serverPlugin.setServerSalt(salt);
 
-    // 9. Encrypt/decrypt with explicit parameters (client→server)
-    const msgBody = Buffer.from('explicit params');
-    const sessionId = 0x12345678n;
-    const messageId = (BigInt(Math.floor(Date.now() / 1000)) << 32n) | 1n;
-    const seqNo = 0;
-    const enc2 = await plugin.encryptMessage(msgBody, sessionId, messageId, seqNo);
-    assert.ok(enc2.data.length > 0, '9. explicit encrypt');
+        const body = Buffer.from('hello mtproto');
+        const now = Math.floor(Date.now() / 1000);
+        const msgId = (BigInt(now) << 32n) | 1n;
+        const enc = await plugin.encryptMessage(body, 0x12345678n, msgId, 0);
+        assert.ok(enc.data.length > 0, 'encrypted data');
+        assert.strictEqual(enc.msgKey.length, 16, 'msgKey 16 bytes');
 
-    const dec2 = await serverPlugin.decryptMessage(enc2, sessionId, { expectOddMsgId: true });
-    assert.ok(dec2.equals(msgBody), '9. explicit roundtrip');
+        const dec = await serverPlugin.decryptMessage(enc, 0x12345678n, { expectOddMsgId: true });
+        assert.ok(dec.data.equals(body), 'roundtrip');
 
-    await serverPlugin.onDeactivate();
+        await serverPlugin.onDeactivate();
+        await plugin.onDeactivate();
+    });
 
-    // 10. Metrics
-    const metrics = plugin.getMetrics();
-    assert.strictEqual(metrics.mode, 'client', '10. mode');
-    assert.strictEqual(metrics.ready, true, '10. ready');
-    assert.strictEqual(metrics.hasAuthKey, true, '10. hasAuthKey');
-    assert.ok(typeof metrics.authKeyId === 'string', '10. authKeyId is string');
+    test('metrics', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        const key = crypton.getRandomBytes(256);
+        const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
+        plugin.setAuthKey({ key, id });
+        plugin.setServerSalt(crypton.getRandomBytes(8));
+        const metrics = plugin.getMetrics();
+        assert.strictEqual(metrics.mode, 'client', 'mode');
+        assert.strictEqual(metrics.ready, true, 'ready');
+        assert.strictEqual(metrics.hasAuthKey, true, 'hasAuthKey');
+        assert.ok(typeof metrics.authKeyId === 'string', 'authKeyId is string');
+        await plugin.onDeactivate();
+    });
 
-    // 11. Reset
-    plugin.reset();
-    assert.strictEqual(plugin.getAuthKey(), null, '11. auth key cleared');
-    assert.strictEqual(plugin.getServerSalt(), null, '11. salt cleared');
-    assert.strictEqual(plugin.getDHKeys(), null, '11. dh keys cleared');
+    test('reset clears all state', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        plugin.setAuthKey({ key: crypton.getRandomBytes(256), id: 1n });
+        plugin.setServerSalt(crypton.getRandomBytes(8));
+        plugin.reset();
+        assert.strictEqual(plugin.getAuthKey(), null, 'auth key cleared');
+        assert.strictEqual(plugin.getServerSalt(), null, 'salt cleared');
+        assert.strictEqual(plugin.getDHKeys(), null, 'dh keys cleared');
+        await plugin.onDeactivate();
+    });
 
-    // 12. setPublicRsaKeys (empty array)
-    plugin.setPublicRsaKeys([]);
-    const rsaKey = plugin.getPublicRsaKey();
-    assert.ok(rsaKey !== undefined, '12. RSA key set');
+    test('setPublicRsaKeys', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        plugin.setPublicRsaKeys([]);
+        const rsaKey = plugin.getPublicRsaKey();
+        assert.ok(rsaKey !== undefined, 'RSA key set');
+        await plugin.onDeactivate();
+    });
 
-    // 13. Session management (client→server pair)
-    const peerId = 'test-peer';
-    const sharedAuthKey = authKey;
-    const sharedSalt = salt;
-    plugin.setSessionKeys(peerId, sharedAuthKey, sharedSalt, 999n);
-    serverPlugin.setSessionKeys(peerId, sharedAuthKey, sharedSalt, 999n);
+    test('session management roundtrip', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
 
-    const sessionMsg = Buffer.from('session message');
-    const sessionEnc = await plugin.encryptForSession(peerId, sessionMsg);
-    assert.ok(sessionEnc.data.length > 0, '13. session encrypt');
+        const serverPlugin = new MTProtoCryptoPlugin();
+        const serverCtx = createTestContext({ mode: 'server' });
+        serverPlugin.initialize(serverCtx);
+        await serverPlugin.onActivate();
 
-    const sessionDec = await serverPlugin.decryptForSession(peerId, sessionEnc, true);
-    assert.ok(sessionDec.isValid, '13. session decrypt valid');
-    assert.ok(sessionDec.data.equals(sessionMsg), '13. session roundtrip');
+        const key = crypton.getRandomBytes(256);
+        const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
+        const authKey = { key, id };
+        const salt = crypton.getRandomBytes(8);
+        plugin.setAuthKey(authKey);
+        plugin.setServerSalt(salt);
+        serverPlugin.setAuthKey(authKey);
+        serverPlugin.setServerSalt(salt);
 
-    plugin.removeSession(peerId);
-    serverPlugin.removeSession(peerId);
-    assert.ok(!plugin.hasSession(peerId), '13. session removed');
+        const peerId = 'test-peer';
+        plugin.setSessionKeys(peerId, authKey, salt, 999n);
+        serverPlugin.setSessionKeys(peerId, authKey, salt, 999n);
 
-    // 14. setSessionKeys
-    const peerId2 = 'test-peer-2';
-    const authKey2 = await plugin.generateAuthKey(crypton.getRandomBytes(256));
-    const salt2 = crypton.getRandomBytes(8);
-    plugin.setSessionKeys(peerId2, authKey2, salt2);
-    assert.ok(plugin.hasSession(peerId2), '14. session set');
+        const sessionMsg = Buffer.from('session message');
+        const sessionEnc = await plugin.encryptForSession(peerId, sessionMsg);
+        assert.ok(sessionEnc.data.length > 0, 'session encrypt');
 
-    // 15. Shutdown
-    await plugin.shutdown();
-    assert.ok(!plugin.isReady(), '15. not ready after shutdown');
+        const sessionDec = await serverPlugin.decryptForSession(peerId, sessionEnc, true);
+        assert.ok(sessionDec.isValid, 'session decrypt valid');
+        assert.ok(sessionDec.data.equals(sessionMsg), 'session roundtrip');
 
-    // 16. onConfigChange
-    await plugin.onActivate();
-    plugin.onConfigChange({ mode: 'server' });
-    // Should not throw
+        plugin.removeSession(peerId);
+        serverPlugin.removeSession(peerId);
+        assert.ok(!plugin.hasSession(peerId), 'session removed');
 
-    // 17. Plugin without RSA keys still works for crypto
-    const plugin2 = new MTProtoCryptoPlugin();
-    plugin2.initialize(ctx, { mode: 'client' });
-    await plugin2.onActivate();
-    plugin2.setAuthKey(authKey);
-    plugin2.setServerSalt(salt);
-    // Use encryptMessage directly (no session needed)
-    const msg17 = Buffer.from('no rsa');
-    const msgId17 = (BigInt(Math.floor(Date.now() / 1000)) << 32n) | 1n;
-    const enc17 = await plugin2.encryptMessage(msg17, 1n, msgId17, 0);
-    // Need a server-side plugin to decrypt (different x parameter)
-    const plugin2s = new MTProtoCryptoPlugin();
-    plugin2s.initialize(ctx, { mode: 'server' });
-    await plugin2s.onActivate();
-    plugin2s.setAuthKey(authKey);
-    plugin2s.setServerSalt(salt);
-    const dec17 = await plugin2s.decryptMessage(enc17, 1n, { expectOddMsgId: true });
-    assert.ok(dec17.equals(msg17), '17. works without RSA keys');
-    await plugin2.onDeactivate();
-    await plugin2s.onDeactivate();
+        await serverPlugin.onDeactivate();
+        await plugin.onDeactivate();
+    });
 
-    console.log('MTProtoCryptoPlugin tests passed');
-}
+    test('setSessionKeys', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        const peerId2 = 'test-peer-2';
+        const authKey2 = await plugin.generateAuthKey(crypton.getRandomBytes(256));
+        const salt2 = crypton.getRandomBytes(8);
+        plugin.setSessionKeys(peerId2, authKey2, salt2);
+        assert.ok(plugin.hasSession(peerId2), 'session set');
+        await plugin.onDeactivate();
+    });
 
-run().catch(err => { console.error(err); process.exit(1); });
+    test('shutdown', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        await plugin.shutdown();
+        assert.ok(!plugin.isReady(), 'not ready after shutdown');
+    });
+
+    test('onConfigChange', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        plugin.onConfigChange({ mode: 'server' });
+        await plugin.onDeactivate();
+    });
+
+    test('works without RSA keys', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.onActivate();
+
+        const serverPlugin = new MTProtoCryptoPlugin();
+        serverPlugin.initialize(createTestContext({ mode: 'server' }));
+        await serverPlugin.onActivate();
+
+        const key = crypton.getRandomBytes(256);
+        const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
+        const authKey = { key, id };
+        const salt = crypton.getRandomBytes(8);
+        plugin.setAuthKey(authKey);
+        plugin.setServerSalt(salt);
+        serverPlugin.setAuthKey(authKey);
+        serverPlugin.setServerSalt(salt);
+
+        const msg = Buffer.from('no rsa');
+        const now = Math.floor(Date.now() / 1000);
+        const msgId = (BigInt(now) << 32n) | 1n;
+        const enc = await plugin.encryptMessage(msg, 1n, msgId, 0);
+        const dec = await serverPlugin.decryptMessage(enc, 1n, { expectOddMsgId: true });
+        assert.ok(dec.data.equals(msg), 'works without RSA keys');
+        await plugin.onDeactivate();
+        await serverPlugin.onDeactivate();
+    });
+
+    test('plugin.decrypt returns isValid false on bad data', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.onActivate();
+        const key = crypton.getRandomBytes(256);
+        const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
+        plugin.setAuthKey({ key, id });
+        plugin.setServerSalt(crypton.getRandomBytes(8));
+        const peerId = 'decrypt-test';
+        plugin.setSessionKeys(peerId, { key, id }, plugin.getServerSalt()!, 1n);
+
+        const badEnc = { data: Buffer.alloc(32), msgKey: Buffer.alloc(16) };
+        const result = await plugin.decrypt(badEnc);
+        assert.strictEqual(result.isValid, false, 'bad data → isValid false');
+        assert.strictEqual(result.data.length, 0, 'empty data on failure');
+        await plugin.onDeactivate();
+    });
+
+    test('plugin.setSecretAuthKey sets secret key', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.onActivate();
+        const key = crypton.getRandomBytes(256);
+        const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
+        plugin.setSecretAuthKey({ key, id });
+        assert.strictEqual(plugin.getAuthKey(), null, 'secret key separate from auth key');
+        await plugin.onDeactivate();
+    });
+
+    test('plugin.createSession creates session', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.onActivate();
+        const peerId = 'create-session';
+        const secret = crypton.getRandomBytes(256);
+        await plugin.createSession(peerId, secret);
+        assert.ok(plugin.hasSession(peerId), 'session created');
+        plugin.removeSession(peerId);
+        await plugin.onDeactivate();
+    });
+
+    test('plugin.encryptForServerSession roundtrip', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.onActivate();
+
+        const serverPlugin = new MTProtoCryptoPlugin();
+        serverPlugin.initialize(createTestContext({ mode: 'server' }));
+        await serverPlugin.onActivate();
+
+        const key = crypton.getRandomBytes(256);
+        const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
+        const salt = crypton.getRandomBytes(8);
+        plugin.setAuthKey({ key, id });
+        plugin.setServerSalt(salt);
+        serverPlugin.setAuthKey({ key, id });
+        serverPlugin.setServerSalt(salt);
+
+        const peerId = 'server-session';
+        plugin.setSessionKeys(peerId, { key, id }, salt, 42n);
+        serverPlugin.setSessionKeys(peerId, { key, id }, salt, 42n);
+
+        const msg = Buffer.from('server session msg');
+        const enc = await plugin.encryptForServerSession(peerId, msg);
+        const dec = await serverPlugin.decryptForSession(peerId, enc, false);
+        assert.ok(dec.data.equals(msg), 'encryptForServerSession roundtrip');
+
+        plugin.removeSession(peerId);
+        serverPlugin.removeSession(peerId);
+        await plugin.onDeactivate();
+        await serverPlugin.onDeactivate();
+    });
+
+    test('plugin.setSecretAuthKey encrypt/decrypt', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.onActivate();
+
+        const serverPlugin = new MTProtoCryptoPlugin();
+        serverPlugin.initialize(createTestContext({ mode: 'server' }));
+        await serverPlugin.onActivate();
+
+        const key = crypton.getRandomBytes(256);
+        const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
+        const salt = crypton.getRandomBytes(8);
+        plugin.setAuthKey({ key, id });
+        plugin.setServerSalt(salt);
+        plugin.setSecretAuthKey({ key, id });
+        serverPlugin.setAuthKey({ key, id });
+        serverPlugin.setServerSalt(salt);
+        serverPlugin.setSecretAuthKey({ key, id });
+
+        const now = Math.floor(Date.now() / 1000);
+        const msg = Buffer.from('secret plugin msg');
+        const msgId = (BigInt(now) << 32n) | 1n;
+        const enc = await plugin.encryptMessage(msg, 1n, msgId, 0, { secret: true, isInitiator: true });
+        const dec = await serverPlugin.decryptMessage(enc, 1n, { secret: true, isInitiator: false, expectOddMsgId: true });
+        assert.ok(dec.data.equals(msg), 'secret plugin encrypt/decrypt');
+
+        await plugin.onDeactivate();
+        await serverPlugin.onDeactivate();
+    });
+});

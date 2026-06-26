@@ -56,6 +56,7 @@ export class WireFormat {
         } finally {
             aesKey.fill(0);
             aesIv.fill(0);
+            plaintext.fill(0);
             plaintextWithPadding.fill(0);
         }
     }
@@ -81,10 +82,7 @@ export class WireFormat {
         try {
             decrypted = await crypton.AES256IGE.decrypt(encryptedData, aesKey, aesIv);
         } catch {
-            msgKey.fill(0);
             encryptedData.fill(0);
-            aesKey.fill(0);
-            aesIv.fill(0);
             return null;
         } finally {
             aesKey.fill(0);
@@ -92,8 +90,23 @@ export class WireFormat {
         }
 
         try {
-            return this.parsePlaintext(decrypted, expectOddMsgId, timeOffset);
+            const parsed = this.parsePlaintext(decrypted, expectOddMsgId, timeOffset);
+            if (!parsed) return null;
+
+            const innerPlaintext = decrypted.subarray(0, 32 + parsed.messageBody.length);
+            let recomputedMsgKey: Buffer;
+            try {
+                recomputedMsgKey = await this.computeMsgKey(authKey.key, innerPlaintext, parsed.padding, isClient);
+            } catch {
+                return null;
+            }
+            if (!crypton.constantTimeEqual(recomputedMsgKey, msgKey)) {
+                return null;
+            }
+
+            return parsed;
         } finally {
+            msgKey.fill(0);
             decrypted.fill(0);
         }
     }
@@ -135,12 +148,12 @@ export class WireFormat {
 
         const msgIdMod4 = Number(messageId & 3n);
         if (expectOddMsgId && (msgIdMod4 !== 1 && msgIdMod4 !== 3)) return null;
-        if (!expectOddMsgId && msgIdMod4 !== 0) return null;
+        if (!expectOddMsgId && msgIdMod4 !== 3) return null;
 
         const msgTime = Number(messageId >> 32n);
         const now = Math.floor(Date.now() / 1000) + timeOffset;
         const msgAge = now - msgTime;
-        if (msgAge > 300 || msgAge < -30) return null;
+        if (msgAge > 300 || msgAge < -300) return null;
 
         const messageBody = Buffer.from(data.subarray(32, 32 + msgLen));
         const padding = Buffer.from(data.subarray(32 + msgLen));
@@ -164,7 +177,19 @@ export class WireFormat {
         const basePad = aligned - dataLength;
         const minPadAligned = basePad >= minPad ? basePad : basePad + blockSize;
         const padSteps = Math.floor((maxPad - minPadAligned) / blockSize);
-        const steps = padSteps > 0 ? (crypton.getRandomBytes(4).readUInt32LE(0) % (padSteps + 1)) : 0;
+        const limit = padSteps + 1;
+        const randBuf = crypton.getRandomBytes(4);
+        let val = randBuf.readUInt32LE(0);
+        const bias = (0x100000000 - limit) % limit;
+        while (val < bias) {
+            randBuf.fill(0);
+            const tmp = crypton.getRandomBytes(4);
+            tmp.copy(randBuf);
+            tmp.fill(0);
+            val = randBuf.readUInt32LE(0);
+        }
+        const steps = padSteps > 0 ? (val % limit) : 0;
+        randBuf.fill(0);
         const paddingSize = minPadAligned + steps * blockSize;
         return crypton.getRandomBytes(paddingSize);
     }

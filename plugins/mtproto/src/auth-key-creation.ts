@@ -74,13 +74,14 @@ export class AuthKeyCreator {
         }
 
         const RSA_PADDED_SIZE = 192;
+        const MAX_RSA_PAD_ATTEMPTS = 10;
 
-        while (true) {
+        for (let attempt = 0; attempt < MAX_RSA_PAD_ATTEMPTS; attempt++) {
             const randomPadding = crypton.getRandomBytes(RSA_PADDED_SIZE - data.length);
             const dataWithPadding = Buffer.concat([data, randomPadding]);
 
             const dataPadReversed = Buffer.from(dataWithPadding);
-            for (let i = 0, j = data.length - 1; i < j; i++, j--) {
+            for (let i = 0, j = dataWithPadding.length - 1; i < j; i++, j--) {
                 const tmp = dataPadReversed[i];
                 dataPadReversed[i] = dataPadReversed[j];
                 dataPadReversed[j] = tmp;
@@ -122,6 +123,7 @@ export class AuthKeyCreator {
                 randomPadding.fill(0);
             }
         }
+        throw new Error('RSA padding failed after max attempts');
     }
 
     private async rsaEncrypt(data: Buffer, keyFingerprint: bigint): Promise<Buffer> {
@@ -135,7 +137,7 @@ export class AuthKeyCreator {
     private getPublicKeyForFingerprint(fingerprint: bigint): RsaKeyInfo | null {
         const keyInterface = this.config.publicRsaKey;
         if (!keyInterface) {
-            throw new Error('No PublicRsaKeyInterface configured');
+            return null;
         }
         return keyInterface.getRsaKey([fingerprint]);
     }
@@ -152,33 +154,33 @@ export class AuthKeyCreator {
     private factorPQ(pq: bigint): { p: bigint; q: bigint } {
         if (pq % 2n === 0n) return { p: 2n, q: pq / 2n };
 
-        let y = 1n;
-        let c = 1n;
-
         const maxIter = 10000000;
-        let iter = 0;
 
-        while (iter++ < maxIter) {
-            y = (y * y + c) % pq;
-            const ys = (y * y + c) % pq;
-            const d = (y > ys ? y - ys : ys - y);
-            if (d === 0n) {
-                y = 1n;
-                c = 1n;
-                continue;
+        for (let restart = 0; restart < 10; restart++) {
+            let y = 1n;
+            let c = BigInt(1 + ((restart * 7 + 3) % 100));
+            let iter = 0;
+
+            while (iter++ < maxIter) {
+                y = (y * y + c) % pq;
+                const ys = (y * y + c) % pq;
+                const d = (y > ys ? y - ys : ys - y);
+                if (d === 0n) {
+                    break;
+                }
+                let g = this.bigintGcd(pq, d);
+                let d2 = d;
+                while (g === 1n) {
+                    d2 = (d2 * d2) % pq;
+                    g = this.bigintGcd(pq, d2);
+                }
+                if (g === pq) break;
+                const q2 = pq / g;
+                if (g > q2) {
+                    return { p: g, q: q2 };
+                }
+                return { p: q2, q: g };
             }
-            let g = this.bigintGcd(pq, d);
-            let d2 = d;
-            while (g === 1n) {
-                d2 = (d2 * d2) % pq;
-                g = this.bigintGcd(pq, d2);
-            }
-            if (g === pq) continue;
-            const q2 = pq / g;
-            if (g > q2) {
-                return { p: g, q: q2 };
-            }
-            return { p: q2, q: g };
         }
 
         throw new Error('Failed to factor PQ');
@@ -212,19 +214,22 @@ export class AuthKeyCreator {
         this.nonce = this.generateNonce16();
 
         const serializer = new TLSerializer();
-        serializer.writeInt32(CONSTRUCTOR_REQ_PQ_MULTI);
+        serializer.writeConstructorId(CONSTRUCTOR_REQ_PQ_MULTI);
         serializer.writeInt128(this.nonce);
         const payload = serializer.toBuffer();
 
         const response = await sendRequest(payload);
         const deserializer = new TLDeserializer(response);
-        const constructor = deserializer.readInt32();
+        const constructor = deserializer.readUint32();
 
         if (constructor !== CONSTRUCTOR_RES_PQ) {
             throw new Error('Unexpected constructor in resPQ');
         }
 
-        deserializer.readInt128();
+        const returnedNonce = deserializer.readInt128();
+        if (returnedNonce !== this.nonce) {
+            throw new Error('Nonce mismatch in resPQ response');
+        }
         this.serverNonce = deserializer.readInt128();
         const pqBytes = deserializer.readBytes();
         this.pq = this.bytesToBigInt(pqBytes);
@@ -245,7 +250,7 @@ export class AuthKeyCreator {
 
         const innerSerializer = new TLSerializer();
         const isTelegramMode = this.config.mode === 'telegram';
-        innerSerializer.writeInt32(isTelegramMode ? CONSTRUCTOR_PQ_INNER_DATA_DC : CONSTRUCTOR_PQ_INNER_DATA_TEMP_DC);
+        innerSerializer.writeConstructorId(isTelegramMode ? CONSTRUCTOR_PQ_INNER_DATA_DC : CONSTRUCTOR_PQ_INNER_DATA_TEMP_DC);
         innerSerializer.writeBytes(this.bigIntToBytes(this.pq, 8));
         innerSerializer.writeBytes(this.bigIntToBytes(this.p, 4));
         innerSerializer.writeBytes(this.bigIntToBytes(this.q, 4));
@@ -262,7 +267,7 @@ export class AuthKeyCreator {
         const encryptedInner = await this.rsaEncrypt(innerData, fingerprint);
 
         const serializer = new TLSerializer();
-        serializer.writeInt32(CONSTRUCTOR_REQ_DH_PARAMS);
+        serializer.writeConstructorId(CONSTRUCTOR_REQ_DH_PARAMS);
         serializer.writeInt128(this.nonce);
         serializer.writeInt128(this.serverNonce);
         serializer.writeBytes(this.bigIntToBytes(this.pq, 8));
@@ -272,9 +277,12 @@ export class AuthKeyCreator {
         serializer.writeBytes(encryptedInner);
         const payload = serializer.toBuffer();
 
+        innerData.fill(0);
+        encryptedInner.fill(0);
+
         const response = await sendRequest(payload);
         const deserializer = new TLDeserializer(response);
-        const constructor = deserializer.readInt32();
+        const constructor = deserializer.readUint32();
 
         if (constructor === CONSTRUCTOR_SERVER_DH_PARAMS_FAIL) {
             throw new Error('Server DH params failed');
@@ -284,8 +292,14 @@ export class AuthKeyCreator {
             throw new Error('Unexpected constructor in server_DH_params');
         }
 
-        deserializer.readInt128();
-        deserializer.readInt128();
+        const respNonce = deserializer.readInt128();
+        const respServerNonce = deserializer.readInt128();
+        if (respNonce !== this.nonce) {
+            throw new Error('Nonce mismatch in server DH params response');
+        }
+        if (respServerNonce !== this.serverNonce) {
+            throw new Error('Server nonce mismatch in server DH params response');
+        }
         const encryptedAnswer = deserializer.readBytes();
 
         const newNonceLE = this.newNonce;
@@ -341,13 +355,15 @@ export class AuthKeyCreator {
         const computedSha1 = await crypton.sha1(answerBody);
 
         if (!crypton.constantTimeEqual(answerSha1, computedSha1)) {
+            computedSha1.fill(0);
             throw new Error('SHA1 verification of server DH answer failed');
         }
+        computedSha1.fill(0);
 
         const innerDeserializer = new TLDeserializer(
             decryptedAnswer.subarray(innerOffset, innerOffset + innerLen)
         );
-        const innerConstructor = innerDeserializer.readInt32();
+        const innerConstructor = innerDeserializer.readUint32();
         if (innerConstructor !== CONSTRUCTOR_SERVER_DH_INNER_DATA) {
             throw new Error('Unexpected inner constructor in server_DH_inner_data');
         }
@@ -410,7 +426,7 @@ export class AuthKeyCreator {
         try {
             const dhKeys = crypton.DiffieHellman.generateKeys(this.dhPrime, BigInt(this.g));
             this.privateKey = dhKeys.privateKey;
-            this.privateKeyBuf = crypton.bigIntToBuffer(dhKeys.privateKey, 256);
+            this.privateKeyBuf = dhKeys.privateKeyBuf;
             this.publicKey = dhKeys.publicKey;
 
             const sharedSecret = crypton.DiffieHellman.computeSharedSecret(
@@ -424,7 +440,7 @@ export class AuthKeyCreator {
                     const gB = this.bigIntToBytes(this.publicKey, 256);
 
                     const innerSerializer = new TLSerializer();
-                    innerSerializer.writeInt32(CONSTRUCTOR_CLIENT_DH_INNER_DATA);
+                    innerSerializer.writeConstructorId(CONSTRUCTOR_CLIENT_DH_INNER_DATA);
                     innerSerializer.writeInt128(this.nonce);
                     innerSerializer.writeInt128(this.serverNonce);
                     innerSerializer.writeInt64(this.retryId);
@@ -453,10 +469,11 @@ export class AuthKeyCreator {
                         innerSha1.fill(0);
                         randomPadding.fill(0);
                         gB.fill(0);
+                        innerData.fill(0);
                     }
 
                     const serializer = new TLSerializer();
-                    serializer.writeInt32(CONSTRUCTOR_SET_CLIENT_DH_PARAMS);
+                    serializer.writeConstructorId(CONSTRUCTOR_SET_CLIENT_DH_PARAMS);
                     serializer.writeInt128(this.nonce);
                     serializer.writeInt128(this.serverNonce);
                     serializer.writeBytes(encryptedInner);
@@ -464,7 +481,7 @@ export class AuthKeyCreator {
 
                     const response = await sendRequest(payload);
                     const deserializer = new TLDeserializer(response);
-                    const constructor = deserializer.readInt32();
+                    const constructor = deserializer.readUint32();
 
                     if (constructor === CONSTRUCTOR_DH_GEN_FAIL) {
                         throw new Error('DH gen failed');
@@ -553,6 +570,7 @@ export class AuthKeyCreator {
         auxHashBuf.fill(0);
 
         const partialHash = await crypton.sha1(data);
+        data.fill(0);
         const result = partialHash.readBigUInt64LE(4) |
                (partialHash.readBigUInt64LE(12) << 64n);
         partialHash.fill(0);
@@ -560,8 +578,9 @@ export class AuthKeyCreator {
     }
 
     private xorBuffers(a: Buffer, b: Buffer): Buffer {
-        const result = Buffer.alloc(Math.min(a.length, b.length));
-        for (let i = 0; i < result.length; i++) {
+        const len = Math.min(a.length, b.length);
+        const result = Buffer.alloc(len);
+        for (let i = 0; i < len; i++) {
             result[i] = a[i] ^ b[i];
         }
         return result;

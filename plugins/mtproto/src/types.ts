@@ -17,6 +17,7 @@ export interface DecryptedData {
     data: Buffer;
     isValid: boolean;
     msgKey: Buffer;
+    messageId?: bigint;
 }
 
 export interface AuthKey {
@@ -28,7 +29,6 @@ export interface DHKeys {
     privateKey: bigint;
     privateKeyBuf: Buffer;
     publicKey: bigint;
-    sharedSecret?: Buffer;
 }
 
 export interface KDFResult {

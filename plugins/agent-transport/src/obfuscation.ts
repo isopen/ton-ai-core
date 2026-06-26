@@ -58,8 +58,14 @@ export async function deriveObfuscationKeys(init: Buffer, secret?: Buffer): Prom
     let decryptKey = Buffer.from(initRev.subarray(8, 40));
 
     if (secret) {
-        encryptKey = Buffer.from(await crypton.sha256(Buffer.concat([encryptKey, secret])));
-        decryptKey = Buffer.from(await crypton.sha256(Buffer.concat([decryptKey, secret])));
+        const encHash = await crypton.sha256(Buffer.concat([encryptKey, secret]));
+        encryptKey.fill(0);
+        encryptKey = Buffer.from(encHash);
+        encHash.fill(0);
+        const decHash = await crypton.sha256(Buffer.concat([decryptKey, secret]));
+        decryptKey.fill(0);
+        decryptKey = Buffer.from(decHash);
+        decHash.fill(0);
     }
 
     return {
@@ -81,9 +87,9 @@ function aes256CtrProcess(data: Buffer, key: Buffer, iv: Buffer, counter: number
     let offset = 0;
     let currentCounter = counter >>> 0;
     const aesEcb = new crypton.AES256ECB(key);
+    const counterBlock = Buffer.alloc(16);
     try {
         while (offset < data.length) {
-            const counterBlock = Buffer.alloc(16);
             iv.copy(counterBlock, 0, 0, 12);
             const ivCounter = iv.readUInt32LE(12);
             counterBlock.writeUInt32LE((ivCounter + currentCounter) >>> 0, 12);
@@ -139,6 +145,7 @@ export async function createObfuscatedInit(init: Buffer, secret?: Buffer): Promi
 
     init.copy(result, 0, 0, 56);
     encryptedTail.copy(result, 56, 0, 8);
+    encryptKey.fill(0);
     return result;
 }
 
@@ -149,6 +156,10 @@ export async function createSharedObfuscation(initPayload: Buffer): Promise<Obfu
 export async function rotateObfuscationKeys(state: ObfuscationState): Promise<void> {
     const newInit = generateInitPayload();
     const newState = await deriveObfuscationKeys(newInit);
+    state.encryptKey.fill(0);
+    state.encryptIv.fill(0);
+    state.decryptKey.fill(0);
+    state.decryptIv.fill(0);
     state.encryptKey = newState.encryptKey;
     state.encryptIv = newState.encryptIv;
     state.decryptKey = newState.decryptKey;

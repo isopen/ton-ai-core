@@ -42,16 +42,21 @@ export function xor(a: Buffer, b: Buffer): Buffer {
   return result;
 }
 
-export function constantTimeEqual(a: Buffer, b: Buffer): boolean {
-  const len = Math.max(a.length, b.length);
-  let result = 0;
+export function xorInto(out: Buffer, a: Buffer, b: Buffer): void {
+  const len = Math.min(a.length, b.length, out.length);
   for (let i = 0; i < len; i++) {
-    const av = a[i % a.length];
-    const bv = b[i % b.length];
-    result |= av ^ bv;
+    out[i] = a[i] ^ b[i];
   }
-  result |= a.length ^ b.length;
-  return result === 0;
+}
+
+export function constantTimeEqual(a: Buffer, b: Buffer): boolean {
+    const len = a.length;
+    let result = len ^ b.length;
+    const minLen = len < b.length ? len : b.length;
+    for (let i = 0; i < minLen; i++) {
+        result |= a[i] ^ b[i];
+    }
+    return result === 0;
 }
 
 export function bytesToHex(bytes: Uint8Array): string {
@@ -90,7 +95,7 @@ export function modPowConstantTime(base: bigint, exponent: bigint, modulus: bigi
   if (modulus === 1n) return 0n;
 
   let result = 1n;
-  let b = base % modulus;
+  let b = ((base % modulus) + modulus) % modulus;
 
   for (let i = 0; i < bitLength; i++) {
     const bit = (exponent >> BigInt(i)) & 1n;
@@ -170,11 +175,14 @@ export async function hkdfExpand(prk: Buffer, info: Buffer, length: number): Pro
 
   for (let i = 1; i <= n; i++) {
     const h = await hmac_sha512(prk, Buffer.concat([prev, info, Buffer.from([i])]));
+    prev.fill(0);
     prev = Buffer.from(h);
     chunks.push(prev);
   }
 
-  return Buffer.concat(chunks).subarray(0, length);
+  const result = Buffer.concat(chunks).subarray(0, length);
+  for (const c of chunks) c.fill(0);
+  return result;
 }
 
 export async function hkdfSha512(
@@ -184,5 +192,9 @@ export async function hkdfSha512(
   length: number
 ): Promise<Buffer> {
   const prk = await hkdfExtract(salt, ikm);
-  return hkdfExpand(prk, info, length);
+  try {
+    return await hkdfExpand(prk, info, length);
+  } finally {
+    prk.fill(0);
+  }
 }

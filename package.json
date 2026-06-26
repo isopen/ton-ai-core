@@ -12,7 +12,9 @@
     "build": "npm run build -w @ton-ai/core && npm run build -ws --if-present",
     "build:core": "npm run build -w @ton-ai/core",
     "clean": "npm run clean -ws --if-present",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest",
+    "test:mtproto": "jest plugins/mtproto/tests/",
+    "test:crypton": "jest packages/core/src/crypton/tests/",
     "version:core": "node scripts/set-version.mjs core",
     "version:plugins": "node scripts/set-version.mjs plugins",
     "version:plugin": "node scripts/set-version.mjs plugin",
@@ -26,5 +28,11 @@
     "blockchain"
   ],
   "author": "testertesterov",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@jest/globals": "^30.4.1",
+    "@types/jest": "^30.0.0",
+    "jest": "^30.4.2",
+    "ts-jest": "^29.4.11"
+  }
 }

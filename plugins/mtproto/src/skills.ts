@@ -43,13 +43,13 @@ export class MTCryptoServices {
 
     async generateAuthKey(sharedSecret: Buffer, mode?: 'p2p' | 'telegram'): Promise<AuthKey> {
         const authKey = await this.components.client.generateAuthKey(sharedSecret, mode);
-        this.context.events.emit('mtproto:authkey:generated', { id: authKey.id.toString(16) });
+        this.context.events.emit('mtproto:authkey:generated', { id: authKey.id.toString(16).slice(0, 8) + '...' });
         return authKey;
     }
 
     setAuthKey(authKey: AuthKey): void {
         this.components.client.setAuthKey(authKey);
-        this.context.events.emit('mtproto:authkey:set', { id: authKey.id.toString(16) });
+        this.context.events.emit('mtproto:authkey:set', { id: authKey.id.toString(16).slice(0, 8) + '...' });
     }
 
     setSecretAuthKey(authKey: AuthKey): void {
@@ -63,7 +63,9 @@ export class MTCryptoServices {
 
     private ensureSessionId(): void {
         if (this.currentSessionId === 0n) {
-            this.currentSessionId = crypton.bufferToBigInt(crypton.getRandomBytes(8)) & 0x7FFFFFFFFFFFFFFFn;
+            const randBuf = crypton.getRandomBytes(8);
+            this.currentSessionId = crypton.bufferToBigInt(randBuf) & 0x7FFFFFFFFFFFFFFFn;
+            randBuf.fill(0);
         }
     }
 
@@ -84,10 +86,12 @@ export class MTCryptoServices {
         try {
             return await this.components.client.decryptMessage(encrypted, sessionId);
         } catch (error) {
+            this.context.logger.warn('Decryption failed: invalid message key or corrupted data');
+            const msgKey = encrypted.msgKey;
             return {
                 data: Buffer.alloc(0),
                 isValid: false,
-                msgKey: encrypted.msgKey
+                msgKey
             };
         }
     }
@@ -113,11 +117,11 @@ export class MTCryptoServices {
         encrypted: EncryptedData,
         sessionId: bigint,
         options?: { secret?: boolean; isInitiator?: boolean; expectOddMsgId?: boolean }
-    ): Promise<Buffer> {
+    ): Promise<DecryptedData> {
         const decryptedData = await this.components.client.decryptMessage(encrypted, sessionId, options);
         const event = options?.secret ? 'mtproto:secret:message:decrypted' : 'mtproto:message:decrypted';
         this.context.events.emit(event, { size: decryptedData.data.length });
-        return decryptedData.data;
+        return decryptedData;
     }
 
     getAuthKey(): AuthKey | null {

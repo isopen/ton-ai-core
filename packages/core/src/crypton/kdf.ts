@@ -18,9 +18,9 @@ export class MTProtoKDF {
     if (authKey.length !== this.AUTH_KEY_LENGTH) {
       throw new Error(`Invalid authKey length: expected ${this.AUTH_KEY_LENGTH}, got ${authKey.length}`);
     }
-    const totalPlain = Buffer.concat([plaintext, randomPadding]);
-    if (totalPlain.length % 16 !== 0) {
-      throw new Error(`Plaintext + padding length must be a multiple of 16, got ${totalPlain.length}`);
+    const totalLen = plaintext.length + randomPadding.length;
+    if (totalLen % 16 !== 0) {
+      throw new Error(`Plaintext + padding length must be a multiple of 16, got ${totalLen}`);
     }
 
     if (randomPadding.length < this.MIN_PADDING_LENGTH || randomPadding.length > this.MAX_PADDING_LENGTH) {
@@ -29,8 +29,12 @@ export class MTProtoKDF {
 
     const x = isClient ? 0 : 8;
     const authKeyPart = authKey.subarray(88 + x, 88 + x + 32);
-    const msgKeyLarge = await sha256(Buffer.concat([authKeyPart, plaintext, randomPadding]));
-    return msgKeyLarge.subarray(8, 24);
+    const msgInput = Buffer.concat([authKeyPart, plaintext, randomPadding]);
+    const msgKeyLarge = await sha256(msgInput);
+    msgInput.fill(0);
+    const msgKey = Buffer.from(msgKeyLarge.subarray(8, 24));
+    msgKeyLarge.fill(0);
+    return msgKey;
   }
 
   static async deriveKeys(
@@ -61,6 +65,9 @@ export class MTProtoKDF {
       sha256_b.subarray(24, 32),
     ]);
 
+    sha256_a.fill(0);
+    sha256_b.fill(0);
+
     return { aesKey, aesIv };
   }
 
@@ -69,7 +76,9 @@ export class MTProtoKDF {
       throw new Error(`Invalid authKey length`);
     }
     const hash = await sha1(authKey);
-    return hash.readBigUInt64LE(12);
+    const id = hash.readBigUInt64LE(12);
+    hash.fill(0);
+    return id;
   }
 
   static async computeAuthKeyIdBuffer(authKey: Buffer): Promise<Buffer> {

@@ -46,7 +46,7 @@ export class SchemaDeserializer {
 
     readInt64(): bigint {
         this.checkBounds(8);
-        const value = this.buffer.readBigInt64LE(this.offset);
+        const value = this.buffer.readBigUInt64LE(this.offset);
         this.offset += 8;
         return value;
     }

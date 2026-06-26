@@ -44,7 +44,11 @@ export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
     }
 
     setPublicRsaKeys(pemKeys: string[]): void {
+        if (this.publicRsaKey) {
+            this.publicRsaKey.dropKeys();
+        }
         this.publicRsaKey = new DefaultPublicRsaKey(pemKeys);
+        this.components.publicRsaKey = this.publicRsaKey;
         this.logger.info(`Loaded ${pemKeys.length} RSA public keys`);
     }
 
@@ -75,6 +79,12 @@ export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
 
     async onConfigChange(newConfig: Record<string, any>) {
         this.config = { ...this.config, ...newConfig };
+        if (newConfig.mode !== undefined) {
+            this.components.client.setMode(newConfig.mode !== 'server');
+        }
+        if (newConfig.authKeyMode !== undefined) {
+            this.components.client.setAuthKeyMode(newConfig.authKeyMode);
+        }
         this.logger.info('MTProto Crypto config updated');
         this.events.emit('mtproto:config:updated', {});
     }
@@ -134,7 +144,7 @@ export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
         encrypted: EncryptedData,
         sessionId: bigint,
         options?: { secret?: boolean; isInitiator?: boolean; expectOddMsgId?: boolean }
-    ): Promise<Buffer> {
+    ): Promise<DecryptedData> {
         this.checkInitialized();
         return this.skills.decryptMessage(encrypted, sessionId, options);
     }

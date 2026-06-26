@@ -54,7 +54,7 @@ export class SchemaSerializer {
 
     writeInt64(value: bigint): void {
         this.ensureSpace(8);
-        this.buffer.writeBigInt64LE(value, this.offset);
+        this.buffer.writeBigUInt64LE(value & 0xFFFFFFFFFFFFFFFFn, this.offset);
         this.offset += 8;
     }
 

@@ -5,7 +5,6 @@ export interface DHKeys {
   privateKey: bigint;
   privateKeyBuf: Buffer;
   publicKey: bigint;
-  sharedSecret?: Buffer;
 }
 
 export class DiffieHellman {
@@ -91,7 +90,6 @@ export class DiffieHellman {
     if (keys.privateKeyBuf) keys.privateKeyBuf.fill(0);
     keys.privateKey = 0n;
     keys.publicKey = 0n;
-    if (keys.sharedSecret) keys.sharedSecret.fill(0);
   }
 
   static computePublicKey(privateKey: bigint, p?: bigint, g?: bigint): bigint {
