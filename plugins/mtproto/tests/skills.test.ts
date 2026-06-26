@@ -372,4 +372,71 @@ describe('MTProtoCryptoPlugin', () => {
         await plugin.onDeactivate();
         await serverPlugin.onDeactivate();
     });
+
+    test('setTimeOffset via skills', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        plugin.skills.setTimeOffset(42);
+        assert.strictEqual(plugin.skills.components.client.getTimeOffset(), 42, 'time offset set via skills');
+        await plugin.onDeactivate();
+    });
+
+    test('plugin with publicKeyPems config', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const { publicKey: pubPem } = require('crypto').generateKeyPairSync('rsa', {
+            modulusLength: 2048,
+            publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+            privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+        });
+        const ctx = createTestContext({ mode: 'client', publicKeyPems: [pubPem] });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        assert.ok(plugin.getPublicRsaKey() !== undefined, 'RSA key loaded from config');
+        await plugin.onDeactivate();
+    });
+
+    test('setPublicRsaKeys drops old keys', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        const { publicKey: pubPem } = require('crypto').generateKeyPairSync('rsa', {
+            modulusLength: 2048,
+            publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+            privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+        });
+        plugin.setPublicRsaKeys([pubPem]);
+        assert.ok(plugin.getPublicRsaKey() !== undefined, 'RSA key set');
+        await plugin.onDeactivate();
+    });
+
+    test('setPublicRsaKeys when no previous key', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        plugin.setPublicRsaKeys([]);
+        assert.ok(plugin.getPublicRsaKey() !== undefined, 'RSA key set even when no previous');
+        await plugin.onDeactivate();
+    });
+
+    test('onConfigChange with authKeyMode', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        plugin.onConfigChange({ authKeyMode: 'telegram' });
+        await plugin.onDeactivate();
+    });
+
+    test('onConfigChange with mode', async () => {
+        const plugin = new MTProtoCryptoPlugin();
+        const ctx = createTestContext({ mode: 'client' });
+        plugin.initialize(ctx);
+        await plugin.onActivate();
+        plugin.onConfigChange({ mode: 'server' });
+        await plugin.onDeactivate();
+    });
 });

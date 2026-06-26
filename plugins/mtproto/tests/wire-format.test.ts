@@ -269,4 +269,76 @@ describe('WireFormat', () => {
         const unwrappedEmpty = await WireFormat.unwrapMessage(authKey, wrappedEmpty.rawMessage, true, true, 0);
         assert.ok(unwrappedEmpty!.messageBody.equals(emptyBody), 'empty body roundtrip');
     });
+
+    test('unwrapMessage with corrupted encrypted data returns null', async () => {
+        const salt = crypton.getRandomBytes(8);
+        const sessionId = 0x0102030405060708n;
+        const seqNo = 42;
+        const body = Buffer.from('test');
+        const now = Math.floor(Date.now() / 1000);
+        const msgId = (BigInt(now) << 32n) | 1n;
+        const wrapped = await WireFormat.wrapMessage(authKey, salt, sessionId, msgId, seqNo, body, true);
+
+        const corrupted = Buffer.from(wrapped.rawMessage);
+        corrupted.fill(0xFF, 24);
+        const result = await WireFormat.unwrapMessage(authKey, corrupted, true, true, 0);
+        assert.strictEqual(result, null, 'corrupted data returns null');
+    });
+
+    test('generateRandomPadding with large data', () => {
+        for (let i = 0; i < 100; i++) {
+            const p = WireFormat.generateRandomPadding(2000);
+            assert.ok(p.length >= 12, `min pad for large data iter ${i}`);
+            assert.ok(p.length <= 1024, `max pad for large data iter ${i}`);
+            assert.strictEqual((2000 + p.length) % 16, 0, `alignment for large data iter ${i}`);
+        }
+    });
+
+    test('parsePlaintext with msgLen exceeding data returns null', () => {
+        const badPt = Buffer.alloc(32);
+        badPt.writeInt32LE(1000, 28);
+        assert.strictEqual(WireFormat.parsePlaintext(badPt, true, 0), null, 'msgLen > data');
+    });
+
+    test('unwrapMessage with authKeyId mismatch returns null', async () => {
+        const salt = crypton.getRandomBytes(8);
+        const sessionId = 0x0102030405060708n;
+        const seqNo = 42;
+        const body = Buffer.from('test');
+        const now = Math.floor(Date.now() / 1000);
+        const msgId = (BigInt(now) << 32n) | 1n;
+        const wrapped = await WireFormat.wrapMessage(authKey, salt, sessionId, msgId, seqNo, body, true);
+
+        const wrongKeyBuf = crypton.getRandomBytes(256);
+        const wrongKeyId = await crypton.MTProtoKDF.computeAuthKeyId(wrongKeyBuf);
+        const wrongAuthKey: AuthKey = { key: wrongKeyBuf, id: wrongKeyId };
+
+        const result = await WireFormat.unwrapMessage(wrongAuthKey, wrapped.rawMessage, true, true, 0);
+        assert.strictEqual(result, null, 'wrong authKeyId returns null');
+    });
+
+    test('unwrapMessage with too short data returns null', async () => {
+        const result = await WireFormat.unwrapMessage(authKey, Buffer.alloc(10), true, true, 0);
+        assert.strictEqual(result, null, 'short data returns null');
+    });
+
+    test('parsePlaintext with expectOddMsgId=false and even msgId returns null', () => {
+        const now = Math.floor(Date.now() / 1000);
+        const salt = crypton.getRandomBytes(8);
+        const body = Buffer.from('test');
+        const emptyPad = Buffer.alloc(0);
+        const evenMsgId = (BigInt(now) << 32n) | 2n;
+        const pt = WireFormat.buildPlaintext(salt, 1n, evenMsgId, 0, body, emptyPad);
+        assert.strictEqual(WireFormat.parsePlaintext(pt, false, 0), null, 'expectOdd=false rejects even msgId');
+    });
+
+    test('parsePlaintext with expectOddMsgId=false and msgId mod4=1 returns null', () => {
+        const now = Math.floor(Date.now() / 1000);
+        const salt = crypton.getRandomBytes(8);
+        const body = Buffer.from('test');
+        const emptyPad = Buffer.alloc(0);
+        const oddMsgId = (BigInt(now) << 32n) | 1n;
+        const pt = WireFormat.buildPlaintext(salt, 1n, oddMsgId, 0, body, emptyPad);
+        assert.strictEqual(WireFormat.parsePlaintext(pt, false, 0), null, 'expectOdd=false rejects mod4=1');
+    });
 });

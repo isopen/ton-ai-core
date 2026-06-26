@@ -1474,4 +1474,410 @@ describe('AuthKeyCreator', () => {
             (crypton as any).sha1 = origSha1;
         }
     });
+
+    test('step2 invalid dhPrime (<=1) throws', async () => {
+        const { publicKey: pubPem } = require('crypto').generateKeyPairSync('rsa', {
+            modulusLength: 2048,
+            publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+            privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+        });
+        const { modulus, exponent } = crypton.pemToBigInts(pubPem);
+        const fp = crypton.rsaFingerprint(modulus, exponent);
+        const rsaKeyInterface: PublicRsaKeyInterface = {
+            getRsaKey: (fps: bigint[]) => fps[0] === fp ? { pem: pubPem, modulus, exponent, fingerprint: fp } : null,
+            dropKeys: () => {},
+            getFingerprints: () => [fp],
+        };
+        const testPQ = 0xC3E9633C9EBBF2CEn * 0xD7B97E4F5A51D6B3n;
+        const creator = createAuthKeyCreator('test.host', 443, 2, rsaKeyInterface);
+        const origSha1 = crypton.sha1.bind(crypton);
+
+        try {
+            await assert.rejects(
+                () => creator.createAuthKey(async (data: Buffer) => {
+                    const deser = new TLDeserializer(data);
+                    const ctor = deser.readUint32();
+                    if (ctor === 0xbe7e8ef1) {
+                        const cn = deser.readInt128();
+                        const sn = bytesToBigInt(crypton.getRandomBytes(16));
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0x05162463); ser.writeInt128(cn); ser.writeInt128(sn);
+                        ser.writeBytes(bigIntToBytes(testPQ, 8)); ser.writeVectorInt64([fp]);
+                        return ser.toBuffer();
+                    }
+                    if (ctor === 0xd712e4be) {
+                        const cn = deser.readInt128();
+                        const sn = deser.readInt128();
+                        const newNonce = (creator as any).newNonce as Buffer;
+                        const bigIntToBufferLE = (creator as any).bigIntToBufferLE;
+                        const serverNonceBuf = bigIntToBufferLE.call(creator, sn, 16);
+                        const sha1A = await origSha1(Buffer.concat([newNonce, serverNonceBuf]));
+                        const sha1B = await origSha1(Buffer.concat([serverNonceBuf, newNonce]));
+                        const sha1C = await origSha1(Buffer.concat([newNonce, newNonce]));
+                        const tmpAesKey = Buffer.concat([sha1A.subarray(0, 20), sha1B.subarray(0, 12)]);
+                        const tmpAesIv = Buffer.concat([sha1B.subarray(12, 20), sha1C, newNonce.subarray(0, 4)]);
+                        const innerSer = new TLSerializer();
+                        innerSer.writeConstructorId(0xb5890dba); innerSer.writeInt128(cn); innerSer.writeInt128(sn);
+                        innerSer.writeInt32(Math.floor(Date.now() / 1000)); innerSer.writeInt32(2);
+                        innerSer.writeBytes(bigIntToBytes(1n, 256)); innerSer.writeBytes(bigIntToBytes(123n, 256));
+                        const innerData = innerSer.toBuffer();
+                        const innerLenBuf = Buffer.alloc(4); innerLenBuf.writeInt32LE(innerData.length, 0);
+                        const answerBody = Buffer.concat([innerLenBuf, innerData]);
+                        const innerSha1 = await origSha1(answerBody);
+                        const dataLen = innerSha1.length + answerBody.length;
+                        const padLen = (16 - (dataLen % 16)) % 16;
+                        const dataForEncryption = Buffer.concat([innerSha1, answerBody, crypton.getRandomBytes(padLen > 0 ? padLen : 16)]);
+                        innerSha1.fill(0);
+                        const encryptedAnswer = await crypton.AES256IGE.encrypt(dataForEncryption, tmpAesKey, tmpAesIv);
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0xd0e8075c); ser.writeInt128(cn); ser.writeInt128(sn); ser.writeBytes(encryptedAnswer);
+                        return ser.toBuffer();
+                    }
+                    throw new Error('unexpected');
+                }),
+                /Invalid DH prime/
+            );
+        } finally {
+            (crypton as any).sha1 = origSha1;
+        }
+    });
+
+    test('step2 invalid gA (gA=1) throws', async () => {
+        const { publicKey: pubPem } = require('crypto').generateKeyPairSync('rsa', {
+            modulusLength: 2048,
+            publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+            privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+        });
+        const { modulus, exponent } = crypton.pemToBigInts(pubPem);
+        const fp = crypton.rsaFingerprint(modulus, exponent);
+        const rsaKeyInterface: PublicRsaKeyInterface = {
+            getRsaKey: (fps: bigint[]) => fps[0] === fp ? { pem: pubPem, modulus, exponent, fingerprint: fp } : null,
+            dropKeys: () => {},
+            getFingerprints: () => [fp],
+        };
+        const testPQ = 0xC3E9633C9EBBF2CEn * 0xD7B97E4F5A51D6B3n;
+        const creator = createAuthKeyCreator('test.host', 443, 2, rsaKeyInterface);
+        const origSha1 = crypton.sha1.bind(crypton);
+
+        try {
+            await assert.rejects(
+                () => creator.createAuthKey(async (data: Buffer) => {
+                    const deser = new TLDeserializer(data);
+                    const ctor = deser.readUint32();
+                    if (ctor === 0xbe7e8ef1) {
+                        const cn = deser.readInt128();
+                        const sn = bytesToBigInt(crypton.getRandomBytes(16));
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0x05162463); ser.writeInt128(cn); ser.writeInt128(sn);
+                        ser.writeBytes(bigIntToBytes(testPQ, 8)); ser.writeVectorInt64([fp]);
+                        return ser.toBuffer();
+                    }
+                    if (ctor === 0xd712e4be) {
+                        const cn = deser.readInt128();
+                        const sn = deser.readInt128();
+                        const newNonce = (creator as any).newNonce as Buffer;
+                        const bigIntToBufferLE = (creator as any).bigIntToBufferLE;
+                        const serverNonceBuf = bigIntToBufferLE.call(creator, sn, 16);
+                        const sha1A = await origSha1(Buffer.concat([newNonce, serverNonceBuf]));
+                        const sha1B = await origSha1(Buffer.concat([serverNonceBuf, newNonce]));
+                        const sha1C = await origSha1(Buffer.concat([newNonce, newNonce]));
+                        const tmpAesKey = Buffer.concat([sha1A.subarray(0, 20), sha1B.subarray(0, 12)]);
+                        const tmpAesIv = Buffer.concat([sha1B.subarray(12, 20), sha1C, newNonce.subarray(0, 4)]);
+                        const innerSer = new TLSerializer();
+                        innerSer.writeConstructorId(0xb5890dba); innerSer.writeInt128(cn); innerSer.writeInt128(sn);
+                        innerSer.writeInt32(Math.floor(Date.now() / 1000)); innerSer.writeInt32(2);
+                        innerSer.writeBytes(bigIntToBytes(DH_PRIME, 256)); innerSer.writeBytes(bigIntToBytes(1n, 256));
+                        const innerData = innerSer.toBuffer();
+                        const innerLenBuf = Buffer.alloc(4); innerLenBuf.writeInt32LE(innerData.length, 0);
+                        const answerBody = Buffer.concat([innerLenBuf, innerData]);
+                        const innerSha1 = await origSha1(answerBody);
+                        const dataLen = innerSha1.length + answerBody.length;
+                        const padLen = (16 - (dataLen % 16)) % 16;
+                        const dataForEncryption = Buffer.concat([innerSha1, answerBody, crypton.getRandomBytes(padLen > 0 ? padLen : 16)]);
+                        innerSha1.fill(0);
+                        const encryptedAnswer = await crypton.AES256IGE.encrypt(dataForEncryption, tmpAesKey, tmpAesIv);
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0xd0e8075c); ser.writeInt128(cn); ser.writeInt128(sn); ser.writeBytes(encryptedAnswer);
+                        return ser.toBuffer();
+                    }
+                    throw new Error('unexpected');
+                }),
+                /Invalid gA from server/
+            );
+        } finally {
+            (crypton as any).sha1 = origSha1;
+        }
+    });
+
+    test('step2 DH prime not 2048-bit throws', async () => {
+        const { publicKey: pubPem } = require('crypto').generateKeyPairSync('rsa', {
+            modulusLength: 2048,
+            publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+            privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+        });
+        const { modulus, exponent } = crypton.pemToBigInts(pubPem);
+        const fp = crypton.rsaFingerprint(modulus, exponent);
+        const rsaKeyInterface: PublicRsaKeyInterface = {
+            getRsaKey: (fps: bigint[]) => fps[0] === fp ? { pem: pubPem, modulus, exponent, fingerprint: fp } : null,
+            dropKeys: () => {},
+            getFingerprints: () => [fp],
+        };
+        const testPQ = 0xC3E9633C9EBBF2CEn * 0xD7B97E4F5A51D6B3n;
+        const smallPrime = 104729n;
+        const creator = createAuthKeyCreator('test.host', 443, 2, rsaKeyInterface);
+        const origSha1 = crypton.sha1.bind(crypton);
+
+        try {
+            await assert.rejects(
+                () => creator.createAuthKey(async (data: Buffer) => {
+                    const deser = new TLDeserializer(data);
+                    const ctor = deser.readUint32();
+                    if (ctor === 0xbe7e8ef1) {
+                        const cn = deser.readInt128();
+                        const sn = bytesToBigInt(crypton.getRandomBytes(16));
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0x05162463); ser.writeInt128(cn); ser.writeInt128(sn);
+                        ser.writeBytes(bigIntToBytes(testPQ, 8)); ser.writeVectorInt64([fp]);
+                        return ser.toBuffer();
+                    }
+                    if (ctor === 0xd712e4be) {
+                        const cn = deser.readInt128();
+                        const sn = deser.readInt128();
+                        const newNonce = (creator as any).newNonce as Buffer;
+                        const bigIntToBufferLE = (creator as any).bigIntToBufferLE;
+                        const serverNonceBuf = bigIntToBufferLE.call(creator, sn, 16);
+                        const sha1A = await origSha1(Buffer.concat([newNonce, serverNonceBuf]));
+                        const sha1B = await origSha1(Buffer.concat([serverNonceBuf, newNonce]));
+                        const sha1C = await origSha1(Buffer.concat([newNonce, newNonce]));
+                        const tmpAesKey = Buffer.concat([sha1A.subarray(0, 20), sha1B.subarray(0, 12)]);
+                        const tmpAesIv = Buffer.concat([sha1B.subarray(12, 20), sha1C, newNonce.subarray(0, 4)]);
+                        const innerSer = new TLSerializer();
+                        innerSer.writeConstructorId(0xb5890dba); innerSer.writeInt128(cn); innerSer.writeInt128(sn);
+                        innerSer.writeInt32(Math.floor(Date.now() / 1000)); innerSer.writeInt32(2);
+                        innerSer.writeBytes(bigIntToBytes(smallPrime, 256)); innerSer.writeBytes(bigIntToBytes(123n, 256));
+                        const innerData = innerSer.toBuffer();
+                        const innerLenBuf = Buffer.alloc(4); innerLenBuf.writeInt32LE(innerData.length, 0);
+                        const answerBody = Buffer.concat([innerLenBuf, innerData]);
+                        const innerSha1 = await origSha1(answerBody);
+                        const dataLen = innerSha1.length + answerBody.length;
+                        const padLen = (16 - (dataLen % 16)) % 16;
+                        const dataForEncryption = Buffer.concat([innerSha1, answerBody, crypton.getRandomBytes(padLen > 0 ? padLen : 16)]);
+                        innerSha1.fill(0);
+                        const encryptedAnswer = await crypton.AES256IGE.encrypt(dataForEncryption, tmpAesKey, tmpAesIv);
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0xd0e8075c); ser.writeInt128(cn); ser.writeInt128(sn); ser.writeBytes(encryptedAnswer);
+                        return ser.toBuffer();
+                    }
+                    throw new Error('unexpected');
+                }),
+                /DH prime is not a 2048-bit number/
+            );
+        } finally {
+            (crypton as any).sha1 = origSha1;
+        }
+    });
+
+    test('step2 DH prime not prime throws', async () => {
+        const { publicKey: pubPem } = require('crypto').generateKeyPairSync('rsa', {
+            modulusLength: 2048,
+            publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+            privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+        });
+        const { modulus, exponent } = crypton.pemToBigInts(pubPem);
+        const fp = crypton.rsaFingerprint(modulus, exponent);
+        const rsaKeyInterface: PublicRsaKeyInterface = {
+            getRsaKey: (fps: bigint[]) => fps[0] === fp ? { pem: pubPem, modulus, exponent, fingerprint: fp } : null,
+            dropKeys: () => {},
+            getFingerprints: () => [fp],
+        };
+        const testPQ = 0xC3E9633C9EBBF2CEn * 0xD7B97E4F5A51D6B3n;
+        const composite = (1n << 2048n) - 1n;
+        const creator = createAuthKeyCreator('test.host', 443, 2, rsaKeyInterface);
+        const origSha1 = crypton.sha1.bind(crypton);
+
+        try {
+            await assert.rejects(
+                () => creator.createAuthKey(async (data: Buffer) => {
+                    const deser = new TLDeserializer(data);
+                    const ctor = deser.readUint32();
+                    if (ctor === 0xbe7e8ef1) {
+                        const cn = deser.readInt128();
+                        const sn = bytesToBigInt(crypton.getRandomBytes(16));
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0x05162463); ser.writeInt128(cn); ser.writeInt128(sn);
+                        ser.writeBytes(bigIntToBytes(testPQ, 8)); ser.writeVectorInt64([fp]);
+                        return ser.toBuffer();
+                    }
+                    if (ctor === 0xd712e4be) {
+                        const cn = deser.readInt128();
+                        const sn = deser.readInt128();
+                        const newNonce = (creator as any).newNonce as Buffer;
+                        const bigIntToBufferLE = (creator as any).bigIntToBufferLE;
+                        const serverNonceBuf = bigIntToBufferLE.call(creator, sn, 16);
+                        const sha1A = await origSha1(Buffer.concat([newNonce, serverNonceBuf]));
+                        const sha1B = await origSha1(Buffer.concat([serverNonceBuf, newNonce]));
+                        const sha1C = await origSha1(Buffer.concat([newNonce, newNonce]));
+                        const tmpAesKey = Buffer.concat([sha1A.subarray(0, 20), sha1B.subarray(0, 12)]);
+                        const tmpAesIv = Buffer.concat([sha1B.subarray(12, 20), sha1C, newNonce.subarray(0, 4)]);
+                        const innerSer = new TLSerializer();
+                        innerSer.writeConstructorId(0xb5890dba); innerSer.writeInt128(cn); innerSer.writeInt128(sn);
+                        innerSer.writeInt32(Math.floor(Date.now() / 1000)); innerSer.writeInt32(2);
+                        innerSer.writeBytes(bigIntToBytes(composite, 256)); innerSer.writeBytes(bigIntToBytes(123n, 256));
+                        const innerData = innerSer.toBuffer();
+                        const innerLenBuf = Buffer.alloc(4); innerLenBuf.writeInt32LE(innerData.length, 0);
+                        const answerBody = Buffer.concat([innerLenBuf, innerData]);
+                        const innerSha1 = await origSha1(answerBody);
+                        const dataLen = innerSha1.length + answerBody.length;
+                        const padLen = (16 - (dataLen % 16)) % 16;
+                        const dataForEncryption = Buffer.concat([innerSha1, answerBody, crypton.getRandomBytes(padLen > 0 ? padLen : 16)]);
+                        innerSha1.fill(0);
+                        const encryptedAnswer = await crypton.AES256IGE.encrypt(dataForEncryption, tmpAesKey, tmpAesIv);
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0xd0e8075c); ser.writeInt128(cn); ser.writeInt128(sn); ser.writeBytes(encryptedAnswer);
+                        return ser.toBuffer();
+                    }
+                    throw new Error('unexpected');
+                }),
+                /DH prime is not prime/
+            );
+        } finally {
+            (crypton as any).sha1 = origSha1;
+        }
+    });
+
+    test('step2 DH prime not safe prime throws', async () => {
+        const { publicKey: pubPem } = require('crypto').generateKeyPairSync('rsa', {
+            modulusLength: 2048,
+            publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+            privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+        });
+        const { modulus, exponent } = crypton.pemToBigInts(pubPem);
+        const fp = crypton.rsaFingerprint(modulus, exponent);
+        const rsaKeyInterface: PublicRsaKeyInterface = {
+            getRsaKey: (fps: bigint[]) => fps[0] === fp ? { pem: pubPem, modulus, exponent, fingerprint: fp } : null,
+            dropKeys: () => {},
+            getFingerprints: () => [fp],
+        };
+        const testPQ = 0xC3E9633C9EBBF2CEn * 0xD7B97E4F5A51D6B3n;
+        const creator = createAuthKeyCreator('test.host', 443, 2, rsaKeyInterface);
+        const origSha1 = crypton.sha1.bind(crypton);
+
+        const notSafePrime = (1n << 2048n) - 159n;
+        try {
+            await assert.rejects(
+                () => creator.createAuthKey(async (data: Buffer) => {
+                    const deser = new TLDeserializer(data);
+                    const ctor = deser.readUint32();
+                    if (ctor === 0xbe7e8ef1) {
+                        const cn = deser.readInt128();
+                        const sn = bytesToBigInt(crypton.getRandomBytes(16));
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0x05162463); ser.writeInt128(cn); ser.writeInt128(sn);
+                        ser.writeBytes(bigIntToBytes(testPQ, 8)); ser.writeVectorInt64([fp]);
+                        return ser.toBuffer();
+                    }
+                    if (ctor === 0xd712e4be) {
+                        const cn = deser.readInt128();
+                        const sn = deser.readInt128();
+                        const newNonce = (creator as any).newNonce as Buffer;
+                        const bigIntToBufferLE = (creator as any).bigIntToBufferLE;
+                        const serverNonceBuf = bigIntToBufferLE.call(creator, sn, 16);
+                        const sha1A = await origSha1(Buffer.concat([newNonce, serverNonceBuf]));
+                        const sha1B = await origSha1(Buffer.concat([serverNonceBuf, newNonce]));
+                        const sha1C = await origSha1(Buffer.concat([newNonce, newNonce]));
+                        const tmpAesKey = Buffer.concat([sha1A.subarray(0, 20), sha1B.subarray(0, 12)]);
+                        const tmpAesIv = Buffer.concat([sha1B.subarray(12, 20), sha1C, newNonce.subarray(0, 4)]);
+                        const innerSer = new TLSerializer();
+                        innerSer.writeConstructorId(0xb5890dba); innerSer.writeInt128(cn); innerSer.writeInt128(sn);
+                        innerSer.writeInt32(Math.floor(Date.now() / 1000)); innerSer.writeInt32(2);
+                        innerSer.writeBytes(bigIntToBytes(notSafePrime, 256)); innerSer.writeBytes(bigIntToBytes(123n, 256));
+                        const innerData = innerSer.toBuffer();
+                        const innerLenBuf = Buffer.alloc(4); innerLenBuf.writeInt32LE(innerData.length, 0);
+                        const answerBody = Buffer.concat([innerLenBuf, innerData]);
+                        const innerSha1 = await origSha1(answerBody);
+                        const dataLen = innerSha1.length + answerBody.length;
+                        const padLen = (16 - (dataLen % 16)) % 16;
+                        const dataForEncryption = Buffer.concat([innerSha1, answerBody, crypton.getRandomBytes(padLen > 0 ? padLen : 16)]);
+                        innerSha1.fill(0);
+                        const encryptedAnswer = await crypton.AES256IGE.encrypt(dataForEncryption, tmpAesKey, tmpAesIv);
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0xd0e8075c); ser.writeInt128(cn); ser.writeInt128(sn); ser.writeBytes(encryptedAnswer);
+                        return ser.toBuffer();
+                    }
+                    throw new Error('unexpected');
+                }),
+                Error
+            );
+        } finally {
+            (crypton as any).sha1 = origSha1;
+        }
+    });
+
+    test('step2 gA out of safe range throws', async () => {
+        const { publicKey: pubPem } = require('crypto').generateKeyPairSync('rsa', {
+            modulusLength: 2048,
+            publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+            privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+        });
+        const { modulus, exponent } = crypton.pemToBigInts(pubPem);
+        const fp = crypton.rsaFingerprint(modulus, exponent);
+        const rsaKeyInterface: PublicRsaKeyInterface = {
+            getRsaKey: (fps: bigint[]) => fps[0] === fp ? { pem: pubPem, modulus, exponent, fingerprint: fp } : null,
+            dropKeys: () => {},
+            getFingerprints: () => [fp],
+        };
+        const testPQ = 0xC3E9633C9EBBF2CEn * 0xD7B97E4F5A51D6B3n;
+        const smallGa = 100n;
+        const creator = createAuthKeyCreator('test.host', 443, 2, rsaKeyInterface);
+        const origSha1 = crypton.sha1.bind(crypton);
+
+        try {
+            await assert.rejects(
+                () => creator.createAuthKey(async (data: Buffer) => {
+                    const deser = new TLDeserializer(data);
+                    const ctor = deser.readUint32();
+                    if (ctor === 0xbe7e8ef1) {
+                        const cn = deser.readInt128();
+                        const sn = bytesToBigInt(crypton.getRandomBytes(16));
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0x05162463); ser.writeInt128(cn); ser.writeInt128(sn);
+                        ser.writeBytes(bigIntToBytes(testPQ, 8)); ser.writeVectorInt64([fp]);
+                        return ser.toBuffer();
+                    }
+                    if (ctor === 0xd712e4be) {
+                        const cn = deser.readInt128();
+                        const sn = deser.readInt128();
+                        const newNonce = (creator as any).newNonce as Buffer;
+                        const bigIntToBufferLE = (creator as any).bigIntToBufferLE;
+                        const serverNonceBuf = bigIntToBufferLE.call(creator, sn, 16);
+                        const sha1A = await origSha1(Buffer.concat([newNonce, serverNonceBuf]));
+                        const sha1B = await origSha1(Buffer.concat([serverNonceBuf, newNonce]));
+                        const sha1C = await origSha1(Buffer.concat([newNonce, newNonce]));
+                        const tmpAesKey = Buffer.concat([sha1A.subarray(0, 20), sha1B.subarray(0, 12)]);
+                        const tmpAesIv = Buffer.concat([sha1B.subarray(12, 20), sha1C, newNonce.subarray(0, 4)]);
+                        const innerSer = new TLSerializer();
+                        innerSer.writeConstructorId(0xb5890dba); innerSer.writeInt128(cn); innerSer.writeInt128(sn);
+                        innerSer.writeInt32(Math.floor(Date.now() / 1000)); innerSer.writeInt32(2);
+                        innerSer.writeBytes(bigIntToBytes(DH_PRIME, 256)); innerSer.writeBytes(bigIntToBytes(smallGa, 256));
+                        const innerData = innerSer.toBuffer();
+                        const innerLenBuf = Buffer.alloc(4); innerLenBuf.writeInt32LE(innerData.length, 0);
+                        const answerBody = Buffer.concat([innerLenBuf, innerData]);
+                        const innerSha1 = await origSha1(answerBody);
+                        const dataLen = innerSha1.length + answerBody.length;
+                        const padLen = (16 - (dataLen % 16)) % 16;
+                        const dataForEncryption = Buffer.concat([innerSha1, answerBody, crypton.getRandomBytes(padLen > 0 ? padLen : 16)]);
+                        innerSha1.fill(0);
+                        const encryptedAnswer = await crypton.AES256IGE.encrypt(dataForEncryption, tmpAesKey, tmpAesIv);
+                        const ser = new TLSerializer();
+                        ser.writeConstructorId(0xd0e8075c); ser.writeInt128(cn); ser.writeInt128(sn); ser.writeBytes(encryptedAnswer);
+                        return ser.toBuffer();
+                    }
+                    throw new Error('unexpected');
+                }),
+                /out of safe range|Invalid gA/
+            );
+        } finally {
+            (crypton as any).sha1 = origSha1;
+        }
+    });
 });
