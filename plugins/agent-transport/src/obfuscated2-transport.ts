@@ -253,10 +253,9 @@ export class Obfuscated2Transport extends EventEmitter {
 
         let header: Buffer;
         if (this.transportType === Obfuscated2TransportType.PADDED_INTERMEDIATE) {
-            let padding = crypton.getRandomBytes(1)[0] & 0x0F;
-            if ((data.length + padding) % 4 !== 0) {
-                padding = (4 - ((data.length + padding) % 4)) % 4;
-            }
+            const base = (4 - (data.length % 4)) % 4;
+            const steps = crypton.getRandomBytes(1)[0] & 0x03;
+            const padding = base + steps * 4;
             const totalLen = data.length + padding;
             header = Buffer.alloc(4);
             header.writeUInt32LE((totalLen | 0x80000000) >>> 0, 0);

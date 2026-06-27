@@ -20,7 +20,6 @@ async function createNode(
         logger: console,
         events,
         config: { mode },
-        getPlugin: undefined as any
     };
     await mtproto.initialize(context);
     await mtproto.onActivate();
@@ -39,7 +38,6 @@ async function createNode(
             peers: config.peers,
             transportType: config.transportType,
         },
-        getPlugin: undefined as any
     };
     await tcp.initialize(tcpContext);
     await tcp.onActivate();

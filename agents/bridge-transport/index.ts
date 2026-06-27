@@ -151,7 +151,6 @@ async function main() {
         await bridge.stop();
     }
 
-    console.log(`\n=== ${allPassed ? 'ALL PASSED' : 'SOME FAILED'} ===`);
     process.exit(allPassed ? 0 : 1);
 }
 

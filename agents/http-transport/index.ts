@@ -66,7 +66,6 @@ async function main() {
         setTimeout(() => { if (!bobReceived) { console.log('FAIL: message not received'); process.exit(1); } }, 10000);
     });
 
-    console.log('\nALL PASSED');
     await aliceHttp.onDeactivate();
     await bobHttp.onDeactivate();
     process.exit(0);

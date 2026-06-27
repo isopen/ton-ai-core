@@ -65,10 +65,10 @@ export function decodeAbridged(data: Buffer): Buffer | null {
 }
 
 export function encodePaddedIntermediate(payload: Buffer): Buffer {
-    let padding = crypton.getRandomBytes(1)[0] & 0x0F;
-    if ((payload.length + padding) % 4 !== 0) {
-        padding = (4 - ((payload.length + padding) % 4)) % 4;
-    }
+    const base = (4 - (payload.length % 4)) % 4;
+    const randByte = crypton.getRandomBytes(1)[0];
+    const steps = randByte & 0x03;
+    const padding = base + steps * 4;
     const totalLen = payload.length + padding;
     const header = Buffer.alloc(4);
     header.writeUInt32LE((totalLen | 0x80000000) >>> 0, 0);

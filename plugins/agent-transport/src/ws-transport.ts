@@ -276,10 +276,9 @@ export class WsTransport extends EventEmitter {
                 state.socket.send(Buffer.concat([intermHeader, data]));
                 break;
             case WsTransportType.PADDED_INTERMEDIATE:
-                let wsPadding = crypton.getRandomBytes(1)[0] & 0x0F;
-                if ((data.length + wsPadding) % 4 !== 0) {
-                    wsPadding = (4 - ((data.length + wsPadding) % 4)) % 4;
-                }
+                const wsBase = (4 - (data.length % 4)) % 4;
+                const wsSteps = crypton.getRandomBytes(1)[0] & 0x03;
+                const wsPadding = wsBase + wsSteps * 4;
                 const wsPaddedLen = data.length + wsPadding;
                 const wsPaddedHeader = Buffer.alloc(4);
                 wsPaddedHeader.writeUInt32LE((wsPaddedLen | 0x80000000) >>> 0, 0);
