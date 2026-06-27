@@ -291,7 +291,9 @@ export class UdpNode extends EventEmitter {
             }, HANDSHAKE_TIMEOUT_MS);
             this.pendingDH.set(peerId, { ...dhKeys, timer });
 
-            const myNonce = crypton.getRandomBytes(16);
+            const myNonce = Buffer.alloc(16);
+            myNonce.writeBigInt64LE(BigInt(Date.now()), 0);
+            crypton.getRandomBytes(8).copy(myNonce, 8);
             const myPub = crypton.bigIntToBuffer(dhKeys.publicKey, 256);
             const packet = Buffer.concat([
                 Buffer.alloc(8),

@@ -13,7 +13,6 @@ async function createNode(
         logger: console,
         events,
         config: { mode: 'client' },
-        getPlugin: undefined as any
     };
     await mtproto.initialize(context);
     await mtproto.onActivate();
@@ -31,7 +30,6 @@ async function createNode(
             peers,
             keepAliveInterval: 5000
         },
-        getPlugin: undefined as any
     };
     await udp.initialize(udpContext);
     await udp.onActivate();
