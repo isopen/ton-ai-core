@@ -2,7 +2,6 @@ import { EventEmitter } from 'events';
 import { ICryptoBackend } from './crypto-backend';
 import { WsTransport, WsTransportType } from './ws-transport';
 import { crypton } from '@ton-ai/core';
-import { generateInitPayload, initObfuscation, obfuscateData, deobfuscateData, ObfuscationState } from './obfuscation';
 import { REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, DEFAULT_HOST, HANDSHAKE_TIMEOUT_MS } from './types';
 import { BufferStream } from './buffer-stream';
 
@@ -21,7 +20,6 @@ export class WsNode extends EventEmitter {
     private crypto: ICryptoBackend;
     private peers = new Map<string, string>();
     private pendingDH = new Map<string, { privateKeyBuf: Buffer; privateKey: bigint; publicKey: bigint; timer?: NodeJS.Timeout }>();
-    private obfuscationStates = new Map<string, ObfuscationState>();
     private config: WsConfig;
     private peerConnIds = new Map<string, string>();
     private connToPeer = new Map<string, string>();
@@ -53,7 +51,6 @@ export class WsNode extends EventEmitter {
             if (peerId) {
                 this.connToPeer.delete(connId);
                 this.peerConnIds.delete(peerId);
-                this.obfuscationStates.delete(peerId);
             }
         };
         const onErr = (err: Error) => {
@@ -85,7 +82,6 @@ export class WsNode extends EventEmitter {
         this.peers.clear();
         this.peerConnIds.clear();
         this.connToPeer.clear();
-        this.obfuscationStates.clear();
         await this.transport.stop();
     }
 
@@ -158,8 +154,7 @@ export class WsNode extends EventEmitter {
         ]);
 
         const connId = this.peerConnIds.get(peerId) || `peer:${peerId}`;
-        const obfs = this.obfuscationStates.get(peerId);
-        const finalPacket = obfs ? obfuscateData(packet, obfs) : packet;
+        const finalPacket = packet;
 
         this.transport.send(finalPacket, connId);
     }
@@ -211,12 +206,6 @@ export class WsNode extends EventEmitter {
 
         const peerId = this.resolvePeerId(connId);
         let data = rawData;
-        if (peerId) {
-            const obfs = this.obfuscationStates.get(peerId);
-            if (obfs) {
-                data = deobfuscateData(rawData, obfs);
-            }
-        }
 
         const authKeyId = data.subarray(0, 8);
         const type = data[8];
@@ -302,9 +291,6 @@ export class WsNode extends EventEmitter {
         this.pendingDH.delete(peerId);
 
         await this.crypto.createSession(peerId, sharedSecret);
-
-        const initPayload = generateInitPayload();
-        this.obfuscationStates.set(peerId, await initObfuscation(initPayload));
 
         this.emit('secureChannel', peerId);
     }

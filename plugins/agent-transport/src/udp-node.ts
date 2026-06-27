@@ -155,10 +155,10 @@ export class UdpNode extends EventEmitter {
 
         if (type === UdpPacketType.HANDSHAKE) {
             if (!this.checkRateLimit(`unknown:${addr}`)) return;
+            if (!peerId) peerId = this.findPeerByHost(rinfo.address);
             await this.handleHandshake(payload, rinfo, peerId);
         } else {
             if (!peerId) return;
-            if (this.peers.get(peerId)!.address !== addr) return;
             if (!this.checkRateLimit(`peer:${peerId}`)) return;
 
             if (type === UdpPacketType.KEEPALIVE) {
@@ -179,6 +179,14 @@ export class UdpNode extends EventEmitter {
     private findPeerByAddress(addr: string): string | undefined {
         for (const [id, info] of this.peers) {
             if (info.address === addr) return id;
+        }
+        return undefined;
+    }
+
+    private findPeerByHost(host: string): string | undefined {
+        for (const [id, info] of this.peers) {
+            const parsed = this.parseAddress(info.address);
+            if (parsed && parsed.host === host) return id;
         }
         return undefined;
     }
@@ -308,6 +316,9 @@ export class UdpNode extends EventEmitter {
         this.pendingDH.delete(peerId);
 
         await this.crypto.createSession(peerId, sharedSecret);
+
+        const peer = this.peers.get(peerId);
+        if (peer) peer.address = `${rinfo.address}:${rinfo.port}`;
 
         this.emit('secureChannel', peerId);
     }

@@ -32,6 +32,7 @@ interface ConnectionState {
     serverState: ObfuscationState | null;
     firstPacket: boolean;
     tcpSeqNo: number;
+    processing: Promise<void>;
 }
 
 export class Obfuscated2Transport extends EventEmitter {
@@ -90,15 +91,21 @@ export class Obfuscated2Transport extends EventEmitter {
         this.connections.set(id, {
             socket: this.client,
             stream: new BufferStream(),
-            headerReceived: false,
+            headerReceived: true,
             headerSent: true,
             clientState,
-            serverState: null,
+            serverState: clientState,
             firstPacket: true,
             tcpSeqNo: 0,
+            processing: Promise.resolve(),
         });
 
-        this.client.on('data', (data: Buffer) => this.onData(id, data));
+        this.client.on('data', (data: Buffer) => {
+            const state = this.connections.get(id);
+            if (!state) return;
+            state.stream.push(data);
+            state.processing = state.processing.then(() => this.processData(id));
+        });
         this.client.on('close', () => {
             this.connections.delete(id);
             this.emit('disconnect', id);
@@ -123,13 +130,19 @@ export class Obfuscated2Transport extends EventEmitter {
             serverState: null,
             firstPacket: true,
             tcpSeqNo: 0,
+            processing: Promise.resolve(),
         };
         this.connections.set(addr, state);
         this.setupSocket(socket, addr);
     }
 
     private setupSocket(socket: net.Socket, id: string): void {
-        socket.on('data', (data: Buffer) => this.onData(id, data));
+        socket.on('data', (data: Buffer) => {
+            const state = this.connections.get(id);
+            if (!state) return;
+            state.stream.push(data);
+            state.processing = state.processing.then(() => this.processData(id));
+        });
         socket.on('close', () => {
             this.connections.delete(id);
             this.emit('disconnect', id);
@@ -137,11 +150,9 @@ export class Obfuscated2Transport extends EventEmitter {
         socket.on('error', (err) => this.emit('error', err));
     }
 
-    private async onData(id: string, data: Buffer): Promise<void> {
+    private async processData(id: string): Promise<void> {
         const state = this.connections.get(id);
         if (!state) return;
-
-        state.stream.push(data);
 
         if (!state.headerReceived) {
             if (state.stream.length < OBFUSCATION_INIT_SIZE) return;
@@ -151,14 +162,17 @@ export class Obfuscated2Transport extends EventEmitter {
             state.stream.consume(OBFUSCATION_INIT_SIZE);
 
             if (this.isServer) {
-                state.serverState = await deriveObfuscationKeys(initPayload);
                 const reverseInit = Buffer.alloc(OBFUSCATION_INIT_SIZE);
                 for (let i = 0; i < OBFUSCATION_INIT_SIZE; i++) {
                     reverseInit[i] = initPayload[OBFUSCATION_INIT_SIZE - 1 - i];
                 }
-                state.clientState = await deriveObfuscationKeys(reverseInit);
+                const obfs = await deriveObfuscationKeys(reverseInit);
+                state.serverState = obfs;
+                state.clientState = obfs;
             } else {
-                state.serverState = await deriveObfuscationKeys(initPayload);
+                const obfs = await deriveObfuscationKeys(initPayload);
+                state.serverState = obfs;
+                state.clientState = obfs;
             }
 
             state.headerReceived = true;
@@ -183,6 +197,14 @@ export class Obfuscated2Transport extends EventEmitter {
             }
         }
 
+        if (state.serverState && state.stream.length > 0) {
+            const rawLen = state.stream.length;
+            const raw = Buffer.from(state.stream.slice(0, rawLen));
+            state.stream.consume(rawLen);
+            const decrypted = deobfuscateData(raw, state.serverState);
+            state.stream.push(decrypted);
+        }
+
         while (state.stream.length > 0) {
             const result = this.extractPayload(state);
             if (!result) break;
@@ -190,12 +212,7 @@ export class Obfuscated2Transport extends EventEmitter {
             const { payload, consumed } = result;
             state.stream.consume(consumed);
 
-            if (state.serverState) {
-                const decrypted = deobfuscateData(payload, state.serverState);
-                this.emit('message', decrypted, id);
-            } else {
-                this.emit('message', payload, id);
-            }
+            this.emit('message', payload, id);
         }
     }
 

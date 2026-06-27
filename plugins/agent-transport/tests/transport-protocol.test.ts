@@ -182,4 +182,17 @@ describe('Transport Protocol', () => {
         assert.ok(decoded !== null);
         assert.ok(decoded!.payload.equals(payload));
     });
+
+    test('unwrapPayload FULL returns null for invalid data', () => {
+        const result = unwrapPayload(Buffer.alloc(8), TransportType.FULL);
+        assert.strictEqual(result, null);
+    });
+
+    test('unwrapPayload default case falls back to INTERMEDIATE', () => {
+        const payload = Buffer.from('fallback test');
+        const encoded = encodeIntermediate(payload);
+        const unwrapped = unwrapPayload(encoded, 999 as TransportType);
+        assert.ok(unwrapped !== null);
+        assert.ok(unwrapped!.equals(payload));
+    });
 });

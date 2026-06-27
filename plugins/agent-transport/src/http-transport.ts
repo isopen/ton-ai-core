@@ -112,13 +112,6 @@ export class HttpTransport extends EventEmitter {
                 }, waitParam * 1000);
 
                 conn.pendingPoll = { res, timer };
-
-                req.on('close', () => {
-                    if (conn.pendingPoll?.res === res) {
-                        clearTimeout(timer);
-                        conn.pendingPoll = null;
-                    }
-                });
             } else {
                 res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
                 res.end(Buffer.alloc(0));
