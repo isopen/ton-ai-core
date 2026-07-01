@@ -1,0 +1,19 @@
+{
+  "name": "@ton-ai/telegram-client-test",
+  "version": "0.1.0",
+  "description": "Telegram MTProto connection test agent",
+  "main": "index.ts",
+  "scripts": {
+    "start": "npx ts-node index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@ton-ai/core": "*",
+    "@ton-ai/telegram-client": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

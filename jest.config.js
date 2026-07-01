@@ -10,7 +10,8 @@ module.exports = {
     '<rootDir>/plugins/mtproto/tests',
     '<rootDir>/packages/core/src/crypton/tests',
     '<rootDir>/plugins/tl-language/tests',
-    '<rootDir>/plugins/agent-transport/tests'
+    '<rootDir>/plugins/agent-transport/tests',
+    '<rootDir>/plugins/telegram-client/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
@@ -40,5 +41,7 @@ module.exports = {
     '^@ton-ai/core$': '<rootDir>/packages/core/src/index.ts',
     '^@ton-ai/tl-language$': '<rootDir>/plugins/tl-language/src/index.ts',
     '^@ton-ai/agent-transport$': '<rootDir>/plugins/agent-transport/src/index.ts',
+    '^@ton-ai/telegram-client$': '<rootDir>/plugins/telegram-client/src/index.ts',
+    '^@ton-ai/mtproto$': '<rootDir>/plugins/mtproto/src/index.ts',
   },
 };

@@ -1,0 +1,18 @@
+{
+    "name": "@ton-ai/telegram-client",
+    "version": "0.1.0",
+    "description": "Telegram MTProto client with auth key handshake and encrypted sessions",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "test": "jest --config ../../jest.config.js --testPathPattern plugins/telegram-client",
+        "test:handshake": "node dist/test-handshake.js"
+    },
+    "dependencies": {
+        "@ton-ai/core": "*",
+        "@ton-ai/mtproto": "*",
+        "@ton-ai/agent-transport": "*"
+    },
+    "private": true
+}

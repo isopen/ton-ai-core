@@ -146,15 +146,7 @@ export function rsaFingerprint(modulus: bigint, exponent: bigint): bigint {
   const nBytes = bigIntToRawBytes(modulus);
   const eBytes = bigIntToRawBytes(exponent);
 
-  const CONSTRUCTOR_RSA_PUBLIC_KEY = 0xc3b42b02;
-  const parts: Buffer[] = [];
-  const idBuf = Buffer.alloc(4);
-  idBuf.writeUInt32LE(CONSTRUCTOR_RSA_PUBLIC_KEY, 0);
-  parts.push(idBuf);
-  parts.push(tlBytes(nBytes));
-  parts.push(tlBytes(eBytes));
-
-  const full = Buffer.concat(parts);
+  const full = Buffer.concat([tlBytes(nBytes), tlBytes(eBytes)]);
   const hash = sha1Sync(full);
   return hash.readBigUInt64LE(12);
 }
