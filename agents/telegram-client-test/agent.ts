@@ -127,9 +127,9 @@ export class TelegramClientAgent extends BaseAgentSimple {
         return this.telegram.updatesGetState();
     }
 
-    async call(method: string, params?: Record<string, any>): Promise<Buffer> {
+    async call(constructorId: number, params?: Record<string, any>): Promise<Buffer> {
         await this.ensureReady();
-        return this.telegram.call(method, params);
+        return this.telegram.call(constructorId, params);
     }
 
     createInputPeerUser(userId: number, accessHash: bigint): Buffer {

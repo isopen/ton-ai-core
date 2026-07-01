@@ -168,20 +168,18 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
     }
 
     private generateMsgId(): bigint {
-        const now = Math.floor(Date.now() / 1000);
+        const timeOffset = this.session!.serverTime - Math.floor(Date.now() / 1000);
+        const now = Math.floor(Date.now() / 1000) + timeOffset;
         const timeBig = (BigInt(now) & 0xFFFFFFFFn) << 32n;
         this.session!.msgIdCounter = (this.session!.msgIdCounter + 4) & 0xFFFFFFFF;
-        let msgId = timeBig | BigInt(this.session!.msgIdCounter);
-        if ((msgId & 1n) === 0n) {
-            msgId = msgId | 1n;
-        }
+        const msgId = timeBig | BigInt(this.session!.msgIdCounter);
         return msgId & 0x7FFFFFFFFFFFFFFFn;
     }
 
     private generateSeqNo(): number {
         const seq = this.session!.seqNo;
         this.session!.seqNo += 2;
-        return seq;
+        return seq | 1;
     }
 
     private async sendEncryptedMessage(msgId: bigint, seqNo: number, body: Buffer): Promise<void> {
@@ -235,7 +233,7 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
         return decrypted.data;
     }
 
-    private handleResponse(data: Buffer): Buffer {
+    private handleResponse(data: Buffer): Buffer | null {
         if (data.length < 4) throw new Error('Response too short');
 
         const deserializer = new TLDeserializer(data);
@@ -257,7 +255,20 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
                 this.pendingRequests.delete(key);
                 pending.resolve(innerBody);
             }
+            const innerReader = new TLDeserializer(innerBody);
+            const innerConstructor = innerReader.readUint32();
+            if (innerConstructor === TL_CONSTRUCTORS.RPC_ERROR) {
+                const errorCode = innerReader.readInt32();
+                const errorMessage = innerReader.readString();
+                throw new Error(`RPC Error ${errorCode}: ${errorMessage}`);
+            }
             return innerBody;
+        }
+
+        if (constructor === TL_CONSTRUCTORS.RPC_ERROR) {
+            const errorCode = deserializer.readInt32();
+            const errorMessage = deserializer.readString();
+            throw new Error(`RPC Error ${errorCode}: ${errorMessage}`);
         }
 
         if (constructor === TL_CONSTRUCTORS.RPC_ERROR) {
@@ -273,10 +284,58 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
             throw new Error(`RPC Error ${errorCode}: ${errorMessage}`);
         }
 
+        if (constructor === TL_CONSTRUCTORS.BAD_MSG_NOTIFICATION) {
+            const badMsgId = deserializer.readInt64();
+            const badSeqNo = deserializer.readInt32();
+            const errorCode = deserializer.readInt32();
+            throw new Error(`Bad message notification: msgId=${badMsgId} seqNo=${badSeqNo} errorCode=${errorCode}`);
+        }
+
+        if (constructor === TL_CONSTRUCTORS.BAD_SERVER_SALT) {
+            const badMsgId = deserializer.readInt64();
+            const badSeqNo = deserializer.readInt32();
+            const errorCode = deserializer.readInt32();
+            const newSalt = deserializer.readInt64();
+            this.logger.warn(`Bad server salt msgId=${badMsgId} errorCode=${errorCode}, updating salt to ${newSalt}`);
+            this.session!.serverSalt = newSalt;
+            return null;
+        }
+
+        if (constructor === TL_CONSTRUCTORS.NEW_SESSION_CREATED) {
+            const firstMsgId = deserializer.readInt64();
+            const uniqueId = deserializer.readInt64();
+            const newServerSalt = deserializer.readInt64();
+            this.logger.info(`New session created: firstMsgId=${firstMsgId} salt=${newServerSalt}`);
+            this.session!.serverSalt = newServerSalt;
+            return null;
+        }
+
+        if (constructor === TL_CONSTRUCTORS.MSG_CONTAINER) {
+            const count = deserializer.readInt32();
+            this.logger.info(`Message container with ${count} messages`);
+            for (let i = 0; i < count; i++) {
+                const innerMsgId = deserializer.readInt64();
+                const innerSeqNo = deserializer.readInt32();
+                const innerLen = deserializer.readInt32();
+                const innerBody = deserializer.readRawBytes(innerLen);
+                const padding = (4 - (innerLen % 4)) % 4;
+                if (padding > 0) deserializer.readRawBytes(padding);
+                const result = this.handleResponse(innerBody);
+                if (result !== null) return result;
+            }
+            return null;
+        }
+
+        if (constructor === TL_CONSTRUCTORS.MSGS_ACK) {
+            const count = deserializer.readInt32();
+            this.logger.debug(`Acknowledged ${count} messages`);
+            return null;
+        }
+
         return data;
     }
 
-    async call(method: string, params: Record<string, any> = {}): Promise<Buffer> {
+    async call(constructorId: number, params: Record<string, any> = {}): Promise<Buffer> {
         this.checkInitialized();
         if (!this.connection || !this.mtproto || !this.session || !this.authKeyResult) {
             throw new Error('Not connected and session not initialized');
@@ -289,22 +348,23 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
         serializer.writeInt32(layer);
 
         serializer.writeUint32(TL_CONSTRUCTORS.INIT_CONNECTION);
+        serializer.writeInt32(0);
         serializer.writeInt32(this.config.apiId);
         serializer.writeString(this.config.deviceModel || 'Node.js');
         serializer.writeString(this.config.systemVersion || 'linux');
         serializer.writeString(this.config.appVersion || '1.0.0');
+        serializer.writeString('en');
+        serializer.writeString('');
         serializer.writeString(this.config.langCode || 'en');
 
-        const methodSerializer = new TLSerializer();
-        methodSerializer.writeConstructorByName(method);
+        serializer.writeUint32(constructorId);
         for (const [key, value] of Object.entries(params)) {
-            if (typeof value === 'number') methodSerializer.writeInt32(value);
-            else if (typeof value === 'string') methodSerializer.writeString(value);
-            else if (typeof value === 'bigint') methodSerializer.writeInt64(value);
-            else if (Buffer.isBuffer(value)) methodSerializer.writeBytes(value);
-            else if (typeof value === 'boolean') methodSerializer.writeBool(value);
+            if (typeof value === 'number') serializer.writeInt32(value);
+            else if (typeof value === 'string') serializer.writeString(value);
+            else if (typeof value === 'bigint') serializer.writeInt64(value);
+            else if (Buffer.isBuffer(value)) serializer.writeBytes(value);
+            else if (typeof value === 'boolean') serializer.writeBool(value);
         }
-        serializer.writeBytesRaw(methodSerializer.toBuffer());
 
         const body = serializer.toBuffer();
         const msgId = this.generateMsgId();
@@ -312,21 +372,18 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
 
         await this.sendEncryptedMessage(msgId, seqNo, body);
 
-        const response = await this.readEncryptedMessage();
-        return this.handleResponse(response);
+        while (true) {
+            const response = await this.readEncryptedMessage();
+            const result = this.handleResponse(response);
+            if (result !== null) return result;
+        }
     }
 
     async fetchConfig(): Promise<Buffer> {
-        return this.call('help.getConfig');
+        return this.call(TL_CONSTRUCTORS.HELP_GET_CONFIG);
     }
 
-    connectAndCall(dcId: number, method: string, params: Record<string, any> = {}): Promise<Buffer> {
-        return (async () => {
-            await this.connectAndHandshake(dcId);
-            await this.initSession();
-            return this.call(method, params);
-        })();
-    }
+
 
     async authSendCode(phoneNumber: string, apiId: number, apiHash: string): Promise<Buffer> {
         const serializer = new TLSerializer();
@@ -334,37 +391,45 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
         serializer.writeString(phoneNumber);
         serializer.writeInt32(apiId);
         serializer.writeString(apiHash);
+        serializer.writeUint32(0xad253d78);
         serializer.writeInt32(0);
-        serializer.writeBool(false);
         return this.callRaw(serializer.toBuffer());
     }
 
     parseAuthSentCode(response: Buffer): { phoneCodeHash: string; type: string; nextType?: string; timeout?: number } {
         const reader = new TLDeserializer(response);
         const constructor = reader.readUint32();
-        if (constructor !== 0x1e0405eb) {
+        if (constructor !== TL_CONSTRUCTORS.AUTH_SENT_CODE) {
             throw new Error(`Unexpected constructor: 0x${constructor.toString(16)}`);
         }
         const flags = reader.readInt32();
-        if (flags & 1) {
-            reader.readUint32();
-        }
+
+        // Parse auth.SentCodeType
         const typeConstructor = reader.readUint32();
-        if (typeConstructor === 0x8ed12d56) {
-            reader.readInt32();
-        } else if (typeConstructor === 0x9f4b79a8) {
-            reader.readString();
-        } else if (typeConstructor === 0x60857a28) {
-            reader.readString();
+        let type = 'sms';
+        switch (typeConstructor) {
+            case 0x3dbb5986: type = 'app'; reader.readInt32(); break;
+            case 0xc000bba2: type = 'sms'; reader.readInt32(); break;
+            case 0x5353e5a7: type = 'call'; reader.readInt32(); break;
+            case 0xab03c6d9: type = 'flash'; reader.readString(); break;
+            case 0x82006484: type = 'missed'; reader.readString(); reader.readInt32(); break;
+            case 0x7e132aac: reader.readBytes(); reader.readString(); reader.readInt32(); break;
+            case 0xcd2570c9: reader.readString(); reader.readInt32(); break;
+            default: reader.readInt32(); break;
         }
+
         const phoneCodeHash = reader.readString();
         let nextType: string | undefined;
         if (flags & 2) {
-            nextType = 'call';
-            reader.readUint32();
+            const nextTypeConstructor = reader.readUint32();
+            if (nextTypeConstructor === 0xa57c432d || nextTypeConstructor === 0x1712cf51) {
+                nextType = 'call';
+            } else {
+                nextType = 'sms';
+            }
         }
         const timeout = (flags & 4) ? reader.readInt32() : undefined;
-        return { phoneCodeHash, type: 'sms', nextType, timeout };
+        return { phoneCodeHash, type, nextType, timeout };
     }
 
     async authSignIn(phoneNumber: string, phoneCodeHash: string, phoneCode: string): Promise<Buffer> {
@@ -439,18 +504,18 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
         }
 
         const layer = this.config.layer || 188;
-
         const serializer = new TLSerializer();
         serializer.writeUint32(TL_CONSTRUCTORS.INVOKE_WITH_LAYER);
         serializer.writeInt32(layer);
-
         serializer.writeUint32(TL_CONSTRUCTORS.INIT_CONNECTION);
+        serializer.writeInt32(0);
         serializer.writeInt32(this.config.apiId);
         serializer.writeString(this.config.deviceModel || 'Node.js');
         serializer.writeString(this.config.systemVersion || 'linux');
         serializer.writeString(this.config.appVersion || '1.0.0');
+        serializer.writeString('en');
+        serializer.writeString('');
         serializer.writeString(this.config.langCode || 'en');
-
         serializer.writeBytesRaw(body);
 
         const fullBody = serializer.toBuffer();
@@ -459,8 +524,11 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
 
         await this.sendEncryptedMessage(msgId, seqNo, fullBody);
 
-        const response = await this.readEncryptedMessage();
-        return this.handleResponse(response);
+        while (true) {
+            const response = await this.readEncryptedMessage();
+            const result = this.handleResponse(response);
+            if (result !== null) return result;
+        }
     }
 
     getAuthKeyResult(): AuthKeyResult | null {
