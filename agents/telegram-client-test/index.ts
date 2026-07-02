@@ -3,7 +3,6 @@ import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// Load .env
 const envPath = path.resolve(__dirname, '../../.env');
 if (fs.existsSync(envPath)) {
     for (const line of fs.readFileSync(envPath, 'utf-8').split('\n')) {
@@ -32,16 +31,14 @@ function ask(query: string, def?: string): Promise<string> {
 }
 
 async function main() {
-    const apiId = Number(process.env.API_ID || await ask('API_ID (94575): ', '94575'));
-    const apiHash = process.env.API_HASH || await ask('API_HASH: ');
-    const phone = process.env.PHONE_NUMBER || await ask('Phone: ');
+    const apiId = Number(process.env.API_ID || (await ask('API_ID (94575): ', '94575')));
+    const apiHash = process.env.API_HASH || (await ask('API_HASH: '));
+    if (!apiHash) { console.error('API_HASH required'); process.exit(1); }
+
     const proxy = process.env.PROXY || 'socks5://127.0.0.1:7897';
     const dcId = Number(process.env.DC_ID || '2');
     const isTestDc = process.env.IS_TEST_DC === 'true';
     const noObfuscation = process.env.NO_OBFUSCATION !== 'false';
-
-    if (!apiHash) { console.error('API_HASH required'); process.exit(1); }
-    if (!phone) { console.error('Phone required'); process.exit(1); }
 
     const agent = new TelegramClientAgent({
         name: 'telegram-client',
@@ -56,6 +53,9 @@ async function main() {
         console.log(`\nConnecting to DC${dcId}...`);
         await agent.connectAndInit();
         console.log('Connected.\n');
+
+        const phone = process.env.PHONE_NUMBER || await ask('Phone: ');
+        if (!phone) { console.error('Phone required'); process.exit(1); }
 
         console.log(`Sending code to ${phone}...`);
         const sentCode = await agent.authSendCode(phone);
