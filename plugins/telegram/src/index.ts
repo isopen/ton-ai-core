@@ -20,7 +20,7 @@ export * from './handshake';
 
 export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
     readonly metadata = {
-        name: 'telegram-client',
+        name: 'telegram',
         version: '0.1.0',
         description: 'Telegram MTProto client with session management and RPC',
         author: 'TON AI Core Team',
@@ -58,7 +58,7 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
 
     async onActivate(): Promise<void> {
         this.logger.info('Telegram Client plugin activated');
-        this.events.emit('telegram-client:activated', { dcId: this.config.dcId });
+        this.events.emit('telegram:activated', { dcId: this.config.dcId });
     }
 
     async onDeactivate(): Promise<void> {
@@ -96,7 +96,7 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
         await conn.connect(dcOption.host, dcOption.port, proxy, targetDc, useNoObfuscation, this.config.connectTimeout, this.config.readTimeout);
         this.logger.info('Connected');
 
-        this.events.emit('telegram-client:connected', { dcId: targetDc });
+        this.events.emit('telegram:connected', { dcId: targetDc });
     }
 
     async performHandshake(): Promise<AuthKeyResult> {
@@ -117,7 +117,7 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
         }
 
         this.logger.info(`Auth key created. Key ID: ${result.authKeyId.toString(16).slice(0, 16)}...`);
-        this.events.emit('telegram-client:authkey', { authKeyId: result.authKeyId });
+        this.events.emit('telegram:authkey', { authKeyId: result.authKeyId });
 
         return result;
     }
@@ -166,7 +166,7 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
         };
 
         this.logger.info(`Session initialized: ${this.session.sessionId.toString(16)}`);
-        this.events.emit('telegram-client:session', { sessionId: this.session.sessionId });
+        this.events.emit('telegram:session', { sessionId: this.session.sessionId });
     }
 
     private generateMsgId(): bigint {

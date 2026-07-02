@@ -1,6 +1,6 @@
 import { BaseAgentSimple, SimpleAgentConfig, AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
 import { MTProtoCryptoPlugin } from '@ton-ai/mtproto';
-import { TelegramClientPlugin, AuthKeyResult } from '@ton-ai/telegram-client';
+import { TelegramClientPlugin, AuthKeyResult } from '@ton-ai/telegram';
 
 export interface TelegramClientConfig extends SimpleAgentConfig {
     apiId: number;
