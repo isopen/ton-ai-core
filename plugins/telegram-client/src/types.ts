@@ -6,6 +6,12 @@ export const TELEGRAM_DC_OPTIONS = [
     { id: 5, host: '91.108.56.100', port: 443 },
 ];
 
+export const TELEGRAM_TEST_DC_OPTIONS = [
+    { id: 1, host: '149.154.175.10', port: 443 },
+    { id: 2, host: '149.154.167.40', port: 443 },
+    { id: 3, host: '149.154.175.117', port: 443 },
+];
+
 export const PROXY = 'socks5://127.0.0.1:7897';
 
 export const INTERMEDIATE_MAGIC = 0xEEEEEEEE;
@@ -61,6 +67,7 @@ export interface TelegramClientConfig {
     dcId?: number;
     proxy?: string;
     noObfuscation?: boolean;
+    isTestDc?: boolean;
     phoneNumber?: string;
     authKeyFile?: string;
     layer?: number;

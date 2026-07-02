@@ -9,6 +9,7 @@ import {
     AuthKeyResult,
     SessionData,
     TELEGRAM_DC_OPTIONS,
+    TELEGRAM_TEST_DC_OPTIONS,
     TL_CONSTRUCTORS,
 } from './types';
 import * as fs from 'fs';
@@ -74,7 +75,8 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
     async connect(dcId?: number, noObfuscation?: boolean): Promise<void> {
         this.checkInitialized();
         const targetDc = dcId || this.config.dcId || 2;
-        const dcOption = TELEGRAM_DC_OPTIONS.find(d => d.id === targetDc);
+        const dcOptions = this.config.isTestDc ? TELEGRAM_TEST_DC_OPTIONS : TELEGRAM_DC_OPTIONS;
+        const dcOption = dcOptions.find(d => d.id === targetDc);
         if (!dcOption) {
             throw new Error(`Unknown DC ID: ${targetDc}`);
         }
@@ -105,7 +107,7 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
 
         this.logger.info('Starting auth key handshake...');
 
-        const handshake = new TelegramAuthKeyHandshake(this.connection);
+        const handshake = new TelegramAuthKeyHandshake(this.connection, undefined, this.config.isTestDc);
         const result = await handshake.perform(this.config.dcId || 2);
 
         this.authKeyResult = result;

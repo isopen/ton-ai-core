@@ -8,6 +8,7 @@ export interface TelegramClientConfig extends SimpleAgentConfig {
     dcId?: number;
     proxy?: string;
     noObfuscation?: boolean;
+    isTestDc?: boolean;
     authKeyFile?: string;
     phoneNumber?: string;
     phoneCode?: string;
@@ -48,6 +49,7 @@ export class TelegramClientAgent extends BaseAgentSimple {
             dcId: this.agentConfig.dcId,
             proxy: this.agentConfig.proxy,
             noObfuscation: this.agentConfig.noObfuscation,
+            isTestDc: this.agentConfig.isTestDc,
             authKeyFile: this.agentConfig.authKeyFile,
             layer: 188,
             deviceModel: 'Node.js',
