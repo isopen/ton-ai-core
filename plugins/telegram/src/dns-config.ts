@@ -1,5 +1,4 @@
 import https from 'https';
-import crypto from 'crypto';
 import { crypton } from '@ton-ai/core';
 import { TLDeserializer } from '@ton-ai/tl-language';
 import { DcEndpoint } from './types';
@@ -66,7 +65,7 @@ function base64Filter(input: string): string {
     return result.join('');
 }
 
-function decodeConfig(input: Buffer): DcEndpoint[] {
+async function decodeConfig(input: Buffer): Promise<DcEndpoint[]> {
     if (input.length < 344 || input.length > 1024) {
         throw new Error(`Invalid input length: ${input.length}`);
     }
@@ -89,11 +88,9 @@ function decodeConfig(input: Buffer): DcEndpoint[] {
     const iv = Buffer.from(decryptedBuf.subarray(16, 32));
     const dataCbc = Buffer.from(decryptedBuf.subarray(32));
 
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-    decipher.setAutoPadding(false);
-    const decryptedCbc = Buffer.concat([decipher.update(dataCbc), decipher.final()]);
+    const decryptedCbc = crypton.AES256CBC.decrypt(dataCbc, key, iv);
 
-    const hash = crypto.createHash('sha256').update(decryptedCbc.subarray(0, 208)).digest();
+    const hash = await crypton.sha256(decryptedCbc.subarray(0, 208));
     if (!hash.subarray(0, 16).equals(decryptedCbc.subarray(208, 224))) {
         throw new Error('SHA256 verification failed');
     }

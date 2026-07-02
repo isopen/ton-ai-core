@@ -1,5 +1,6 @@
 import { AES256IGE } from './aes-256-ige';
 import { AES256ECB } from './aes-256-ecb';
+import { AES256CBC } from './aes-256-cbc';
 import { MTProtoKDF } from './kdf';
 import { DiffieHellman } from './diffie-hellman';
 
@@ -59,6 +60,7 @@ export type { KeyPair } from '@ton/crypto';
 export const crypton = {
   AES256IGE,
   AES256ECB,
+  AES256CBC,
   MTProtoKDF,
   DiffieHellman,
   sha256,
