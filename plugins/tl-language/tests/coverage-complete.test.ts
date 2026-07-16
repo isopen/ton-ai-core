@@ -1592,7 +1592,7 @@ describe('Coverage - remaining branch gaps', () => {
             const ser = new SchemaSerializer();
             ser.writeString('test');
             const deser = new SchemaDeserializer(ser.toBuffer());
-            const result = deser.readFieldValue('string', 1, undefined, 'flags');
+            const result = deser.readFieldValue('string', { flags: 1 }, undefined, 'flags');
             assert.strictEqual(result, 'test');
         });
     });

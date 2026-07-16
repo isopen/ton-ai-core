@@ -1,5 +1,12 @@
-import { MCPClient } from '../client';
-import { EventEmitter } from 'events';
+import type { MCPClient } from '../client';
+
+export interface EventBus {
+  on(event: string, listener: (...args: any[]) => void): this;
+  once(event: string, listener: (...args: any[]) => void): this;
+  off(event: string, listener: (...args: any[]) => void): this;
+  emit(event: string, ...args: any[]): boolean;
+  removeAllListeners(event?: string): this;
+}
 
 export interface PluginMetadata {
   name: string;
@@ -11,7 +18,7 @@ export interface PluginMetadata {
 
 export interface PluginContext {
   mcp?: MCPClient;
-  events: EventEmitter;
+  events: EventBus;
   logger: {
     info: (message: string, ...args: any[]) => void;
     error: (message: string, ...args: any[]) => void;

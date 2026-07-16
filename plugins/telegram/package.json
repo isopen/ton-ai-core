@@ -10,9 +10,14 @@
         "test:handshake": "node dist/test-handshake.js"
     },
     "dependencies": {
+        "@ton-ai/agent-transport": "*",
         "@ton-ai/core": "*",
         "@ton-ai/mtproto": "*",
-        "@ton-ai/agent-transport": "*"
+        "ws": "*"
+    },
+    "devDependencies": {
+        "@types/ws": "*",
+        "typescript": "^6.0.3"
     },
     "private": true
 }

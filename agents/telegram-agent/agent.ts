@@ -52,9 +52,9 @@ export class TelegramClientAgent extends BaseAgentSimple {
             isTestDc: this.agentConfig.isTestDc,
             authKeyFile: this.agentConfig.authKeyFile,
             layer: 188,
-            deviceModel: 'Node.js',
-            systemVersion: 'linux',
-            appVersion: '1.0.0',
+            deviceModel: process.platform + ' ' + process.arch,
+            systemVersion: process.platform,
+            appVersion: '0.0.1',
             langCode: 'en',
         });
         this.logger.info('Telegram Client Agent initialized');

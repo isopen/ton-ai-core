@@ -1,6 +1,5 @@
-import { MCPClient } from '../client';
-import { EventEmitter } from 'events';
-import { Plugin, PluginContext, PluginMetadata } from './plugin-interface';
+import type { MCPClient } from '../client';
+import { Plugin, PluginContext, PluginMetadata, EventBus } from './plugin-interface';
 
 export interface BasePluginConfig {
   [key: string]: any;
@@ -21,7 +20,7 @@ export abstract class BasePlugin<TConfig extends BasePluginConfig = BasePluginCo
     return this.context?.logger;
   }
 
-  get events(): EventEmitter {
+  get events(): EventBus {
     return this.context?.events;
   }
 

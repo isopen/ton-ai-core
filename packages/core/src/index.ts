@@ -13,12 +13,14 @@ export {
   Plugin,
   PluginContext,
   PluginMetadata,
+  EventBus,
   PluginManager,
   BasePlugin,
   BasePluginConfig
 } from './plugin';
 
 export {
+  EventEmitter,
   AGENT_EVENTS,
   PLUGIN_EVENTS,
   MCP_EVENTS

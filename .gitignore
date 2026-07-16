@@ -41,3 +41,4 @@ package.json.backup
 tdlib_data/
 tdlib_files/
 libtdjson.*
+.next/

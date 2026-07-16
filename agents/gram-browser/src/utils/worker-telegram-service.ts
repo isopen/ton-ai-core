@@ -1,0 +1,156 @@
+import { TelegramWorkerClient } from '@/worker/worker-adapter';
+import { TelegramService } from '@ton-ai/telegram/dist/telegram-service';
+import type { PeerInfo } from '@ton-ai/telegram/dist/types';
+import { serializePeer } from '@ton-ai/telegram/dist/types';
+
+export class WorkerTelegramService extends TelegramService {
+    workerClient: TelegramWorkerClient | null = null;
+    private updatesSource: EventSource | null = null;
+
+    constructor(sessionId: string, private onLog?: (msg: string) => void, private onUpdate?: (constructorId: number, data: string) => void) {
+        super({ baseUrl: '', sessionId });
+    }
+
+    async connect(dcId = 2): Promise<void> {
+        this.onLog?.('→ connect dc=' + dcId);
+        this.workerClient = new TelegramWorkerClient();
+        this.workerClient.onAuthInvalidated = () => {
+            this.onAuthInvalidated?.();
+        };
+        const apiId = parseInt(process.env.NEXT_PUBLIC_TELEGRAM_API_ID || '0', 10);
+        const apiHash = process.env.NEXT_PUBLIC_TELEGRAM_API_HASH || '';
+        await this.workerClient.start(apiId, apiHash);
+
+        if (this.onUpdate) {
+            this.workerClient.onUpdate((msg) => {
+                this.onUpdate?.(msg.constructorId, msg.data);
+            });
+        }
+
+        const connectResult = await this.workerClient.connect(this.config.sessionId, dcId);
+        this.connected = true;
+        this.authenticated = connectResult.authenticated;
+        this.onLog?.('← connect done, connected=' + this.connected + ' authenticated=' + this.authenticated);
+    }
+
+    async callRpc(method: string, params: Record<string, any> = {}): Promise<any> {
+        this.onLog?.('→ rpc ' + method);
+        if (!this.workerClient) throw new Error('not connected');
+        try {
+            const result = await this.workerClient.callRpc(method, params);
+            this.onLog?.('← rpc ' + method);
+            return result && result.result !== undefined ? result.result : result;
+        } catch (e: any) {
+            if (e.message?.includes('AUTH_KEY_UNREGISTERED') || e.message?.includes('AUTH_KEY_PERM_EMPTY')) {
+                this.onAuthInvalidated?.();
+            }
+            throw e;
+        }
+    }
+
+    async sendCode(phoneNumber: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean }> {
+        this.onLog?.('→ auth.sendCode');
+        if (!this.workerClient) throw new Error('not connected');
+        try {
+            return await this.workerClient.sendCode(phoneNumber);
+        } catch (e: any) {
+            if (e.message?.includes('AUTH_KEY_UNREGISTERED') || e.message?.includes('AUTH_KEY_PERM_EMPTY')) {
+                this.onAuthInvalidated?.();
+            }
+            throw e;
+        }
+    }
+
+    async signIn(phoneNumber: string, code: string): Promise<void> {
+        this.onLog?.('→ auth.signIn');
+        if (!this.workerClient) throw new Error('not connected');
+        try {
+            await this.workerClient.signIn(phoneNumber, code);
+        } catch (e: any) {
+            if (e.message?.includes('AUTH_KEY_UNREGISTERED') || e.message?.includes('AUTH_KEY_PERM_EMPTY')) {
+                this.onAuthInvalidated?.();
+            }
+            throw e;
+        }
+    }
+
+    async checkPassword(password: string): Promise<void> {
+        this.onLog?.('→ auth.checkPassword');
+        if (!this.workerClient) throw new Error('not connected');
+        try {
+            await this.workerClient.checkPassword(password);
+        } catch (e: any) {
+            if (e.message?.includes('AUTH_KEY_UNREGISTERED') || e.message?.includes('AUTH_KEY_PERM_EMPTY')) {
+                this.onAuthInvalidated?.();
+            }
+            throw e;
+        }
+    }
+
+    async getAuthState(): Promise<'none' | 'code_sent' | 'password_needed' | 'authenticated'> {
+        if (!this.workerClient) return 'none';
+        return this.workerClient.getAuthState();
+    }
+
+    async sendMessage(message: string, peer: Record<string, any>): Promise<any> {
+        this.onLog?.('→ messages.sendMessage');
+        if (!this.workerClient) throw new Error('not connected');
+        const r = await this.workerClient.sendMessage(message, peer);
+        return r;
+    }
+
+    async fetchDialogs(): Promise<any> {
+        this.onLog?.('→ messages.getDialogs');
+        if (!this.workerClient) throw new Error('not connected');
+        const resp = await this.workerClient.getDialogs(100);
+        return resp.result || resp;
+    }
+
+    async fetchHistory(peer: PeerInfo, limit = 50, maxId = 0): Promise<any> {
+        this.onLog?.('→ messages.getHistory');
+        if (!this.workerClient) throw new Error('not connected');
+        const resp = await this.workerClient.getHistory(serializePeer(peer), limit, maxId);
+        return resp.result || resp;
+    }
+
+    async readHistory(peer: PeerInfo, maxId = 0): Promise<void> {
+        this.onLog?.('→ messages.readHistory');
+        if (!this.workerClient) throw new Error('not connected');
+        await this.workerClient.readHistory(serializePeer(peer), maxId);
+    }
+
+    async sendTyping(peer: PeerInfo, action = 'sendMessageTypingAction'): Promise<any> {
+        if (!this.workerClient) throw new Error('not connected');
+        return this.workerClient.callRpc('messages.setTyping', { peer: serializePeer(peer), action: { _: action } });
+    }
+
+    async sendTypingCancel(peer: PeerInfo): Promise<any> {
+        return this.sendTyping(peer, 'sendMessageCancelAction');
+    }
+
+    async downloadFile(info: { document?: any; photo?: any }): Promise<{ bytes: string; type: string } | null> {
+        this.onLog?.('→ downloadFile');
+        if (!this.workerClient) throw new Error('not connected');
+        const result = await this.workerClient.downloadFile(info.document, info.photo);
+        if (result.error) throw new Error(result.error);
+        if (!result.bytes) return null;
+        return { bytes: result.bytes, type: result.fileType };
+    }
+
+    async requestPeerAvatar(peerType: string, peerId: string, accessHash: any, photo: any): Promise<string | null> {
+        if (!this.workerClient) return null;
+        return this.workerClient.requestPeerAvatar(peerType, peerId, accessHash, photo);
+    }
+
+    async logout(): Promise<void> {
+        this.onLog?.('→ auth.logout');
+        if (!this.workerClient) throw new Error('not connected');
+        await this.workerClient.logout();
+    }
+
+    destroy(): void {
+        this.stopUpdates();
+        this.workerClient?.destroy();
+        this.workerClient = null;
+    }
+}

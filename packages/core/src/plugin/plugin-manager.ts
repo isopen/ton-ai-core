@@ -1,6 +1,6 @@
-import { EventEmitter } from 'events';
+import { EventEmitter } from '../events/event-emitter';
 import { Plugin, PluginContext, PluginMetadata } from './plugin-interface';
-import { MCPClient } from '../client';
+import type { MCPClient } from '../client';
 
 export class PluginManager extends EventEmitter {
   private plugins: Map<string, Plugin> = new Map();

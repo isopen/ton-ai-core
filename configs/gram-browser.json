@@ -1,0 +1,34 @@
+{
+  "name": "ton-ai-gram-browser",
+  "version": "0.1.0",
+  "description": "ton-ai-gram-browser",
+  "scripts": {
+    "clean": "npm run clean:core && npm run clean:mtproto && npm run clean:telegram && npm run clean:gram-db && npm run clean:gram-ui && npm run clean:agent",
+    "clean:core": "cd packages/core && npm run clean",
+    "clean:mtproto": "cd plugins/mtproto && npm run clean",
+    "clean:telegram": "cd plugins/telegram && npm run clean",
+    "clean:gram-db": "cd plugins/gram-db && npm run clean",
+    "clean:gram-ui": "cd plugins/gram-ui && npm run clean",
+    "clean:agent": "cd agents/gram-browser && (test -d .next && rm -rf .next || true) && (test -d out && rm -rf out || true) && (test -d node_modules/@ton-ai && rm -rf node_modules/@ton-ai || true)",
+    "build:core": "cd packages/core && npm install && npm run build && npm pack",
+    "build:mtproto": "cd plugins/mtproto && npm install && npm run build && npm pack",
+    "build:telegram": "cd plugins/telegram && npm install && npm run build && npm pack",
+    "build:gram-db": "cd plugins/gram-db && npm install && npm run build && npm pack",
+    "build:gram-ui": "cd plugins/gram-ui && npm install && npm run build && npm pack",
+    "build:agent": "cd agents/gram-browser && npm install && npm run build",
+    "copy-packages": "mkdir -p agents/gram-browser/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.2.0.tgz agents/gram-browser/node_modules/@ton-ai/ 2>/dev/null || echo 'Core package copy skipped' && cp plugins/mtproto/ton-ai-mtproto-0.1.0.tgz agents/gram-browser/node_modules/@ton-ai/ 2>/dev/null || echo 'MTProto package copy skipped' && cp plugins/telegram/ton-ai-telegram-0.1.0.tgz agents/gram-browser/node_modules/@ton-ai/ 2>/dev/null || echo 'Telegram package copy skipped' && cp plugins/gram-db/ton-ai-gram-db-0.1.0.tgz agents/gram-browser/node_modules/@ton-ai/ 2>/dev/null || echo 'GramDb package copy skipped' && cp plugins/gram-ui/ton-ai-gram-ui-0.1.0.tgz agents/gram-browser/node_modules/@ton-ai/ 2>/dev/null || echo 'GramUI package copy skipped'",
+    "rebuild": "npm run clean && npm run build:core && npm run build:mtproto && npm run build:telegram && npm run build:gram-db && npm run build:gram-ui && npm run build:agent && npm run copy-packages",
+    "rebuild:quick": "npm run build:core && npm run build:mtproto && npm run build:telegram && npm run build:gram-db && npm run build:gram-ui && npm run copy-packages && cd agents/gram-browser && npm install && npm run build",
+    "start:agent": "cd agents/gram-browser && npm run dev",
+    "dev": "npm run rebuild && npm run start:agent"
+  },
+  "keywords": [
+    "ton",
+    "ai",
+    "telegram",
+    "browser",
+    "gram"
+  ],
+  "author": "testertesterov",
+  "license": "MIT"
+}

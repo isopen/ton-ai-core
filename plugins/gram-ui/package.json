@@ -1,0 +1,36 @@
+{
+  "name": "@ton-ai/gram-ui",
+  "version": "0.1.0",
+  "description": "Gram UI components for browser-based Telegram clients using MTProto",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/framework/jsx-runtime.d.ts",
+      "default": "./dist/framework/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./dist/framework/jsx-runtime.d.ts",
+      "default": "./dist/framework/jsx-runtime.js"
+    }
+  },
+  "author": "TON AI Core Team",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/inline-css.mjs && tsc && cp src/styles.css dist/styles.css",
+    "watch": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@ton-ai/core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.33",
+    "typescript": "^5.3.3"
+  }
+}

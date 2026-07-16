@@ -1,4 +1,4 @@
-import { EventEmitter } from 'events';
+import { EventEmitter } from '../events/event-emitter';
 import { fromNano } from '@ton/core';
 import { createTonWalletMCP } from '@ton/mcp';
 import {

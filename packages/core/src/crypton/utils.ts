@@ -59,6 +59,20 @@ export function constantTimeEqual(a: Buffer, b: Buffer): boolean {
     return result === 0;
 }
 
+export async function hmacSha256(key: Buffer, data: Uint8Array): Promise<Buffer> {
+  if (isNode()) {
+    const crypto = require('crypto');
+    return crypto.createHmac('sha256', key).update(data).digest();
+  }
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', new Uint8Array(key),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', keyMaterial, data);
+  return Buffer.from(sig);
+}
+
 export function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map(b => b.toString(16).padStart(2, '0'))

@@ -201,10 +201,11 @@ export class SchemaDeserializer {
         return result;
     }
 
-    readFieldValue(type: string, flags?: number, conditionalBit?: number, conditionalFlagsField?: string): any {
-        if (conditionalFlagsField !== undefined && flags !== undefined) {
+    readFieldValue(type: string, flagsMap?: Record<string, number>, conditionalBit?: number, conditionalFlagsField?: string): any {
+        if (conditionalFlagsField !== undefined && flagsMap !== undefined) {
+            const effectiveFlags = flagsMap[conditionalFlagsField] ?? 0;
             const bit = conditionalBit ?? 0;
-            if (!(flags & (1 << bit))) return undefined;
+            if (!(effectiveFlags & (1 << bit))) return undefined;
         }
 
         let rawType = type;
@@ -218,7 +219,7 @@ export class SchemaDeserializer {
             const repStr = rawType.substring('repetition:'.length);
             const starIdx = repStr.indexOf('*');
             const innerType = starIdx !== -1 ? repStr.substring(starIdx + 1) : repStr;
-            return this.readFieldValue(innerType, flags, conditionalBit, conditionalFlagsField);
+            return this.readFieldValue(innerType, flagsMap, conditionalBit, conditionalFlagsField);
         }
 
         const bareType = rawType.replace(/^%/, '').replace(/^\(/, '').replace(/\)$/, '').trim();
@@ -242,7 +243,16 @@ export class SchemaDeserializer {
         if (bareType === 'null') return null;
 
         if (/^(vector|Vector)/i.test(bareType)) {
-            return this.readGenericVector(() => this.readBoxedObject());
+            const innerMatch = bareType.match(/<(.+)>/);
+            const innerType = innerMatch ? innerMatch[1].toLowerCase() : '';
+            let elementReader: () => any;
+            if (innerType === 'int') elementReader = () => this.readInt32();
+            else if (innerType === 'long') elementReader = () => this.readInt64();
+            else if (innerType === 'double') elementReader = () => { this.checkBounds(8); const v = this.buffer.readDoubleLE(this.offset); this.offset += 8; return v; };
+            else if (innerType === 'string') elementReader = () => this.readString();
+            else if (innerType === 'bytes') elementReader = () => this.readBytes();
+            else elementReader = () => this.readBoxedObject();
+            return this.readGenericVector(elementReader);
         }
 
         return this.readBoxedObject();
@@ -272,21 +282,23 @@ export class SchemaDeserializer {
         }
 
         const fields: Record<string, any> = {};
-        let flags = 0;
+        const flagsMap: Record<string, number> = {};
 
         for (const field of comb.fields) {
-            if (field.name === 'flags' && field.type === '#') {
-                flags = this.readUint32();
-                fields['flags'] = flags;
+            if (/^flags\d*$/.test(field.name) && field.type === '#') {
+                const value = this.readUint32();
+                flagsMap[field.name] = value;
+                fields[field.name] = value;
                 continue;
             }
 
             if (field.conditionalFlagsField !== undefined && field.conditionalBit !== undefined) {
+                const effectiveFlags = flagsMap[field.conditionalFlagsField] ?? 0;
                 const bit = field.conditionalBit;
-                if (!(flags & (1 << bit))) continue;
+                if (!(effectiveFlags & (1 << bit))) continue;
             }
 
-            fields[field.name] = this.readFieldValue(field.type, flags, field.conditionalBit, field.conditionalFlagsField);
+            fields[field.name] = this.readFieldValue(field.type, flagsMap, field.conditionalBit, field.conditionalFlagsField);
         }
 
         return {
@@ -315,6 +327,10 @@ export class SchemaDeserializer {
 
     get position(): number {
         return this.offset;
+    }
+
+    set position(val: number) {
+        this.offset = val;
     }
 
     get totalLength(): number {

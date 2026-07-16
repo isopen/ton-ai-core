@@ -1,5 +1,6 @@
 import { Buffer } from 'buffer';
 import { modPowConstantTime } from './utils';
+import { sha1Sync } from './sha1';
 
 function extractPemBody(pem: string): string {
   const lines = pem.split(/\r?\n/);
@@ -179,14 +180,6 @@ function tlBytes(data: Buffer): Buffer {
   return result;
 }
 
-
-function sha1Sync(data: Buffer): Buffer {
-  if (typeof process !== 'undefined' && process.versions?.node) {
-    const crypto = require('crypto');
-    return crypto.createHash('sha1').update(data).digest();
-  }
-  throw new Error('sha1Sync requires Node.js environment');
-}
 
 export function rsaEncryptRaw(data: Buffer, modulus: bigint, exponent: bigint): Buffer {
   if (data.length !== 256) {

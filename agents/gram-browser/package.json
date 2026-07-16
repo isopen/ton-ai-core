@@ -1,0 +1,32 @@
+{
+  "name": "@ton-ai/gram-browser",
+  "version": "0.1.0",
+  "description": "Telegram MTProto browser agent — standalone browser-only app",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@ton-ai/core": "*",
+    "@ton-ai/mtproto": "*",
+    "@ton-ai/telegram": "*",
+    "@ton-ai/gram-db": "*",
+    "@ton-ai/gram-ui": "*",
+    "@ton-ai/tl-language": "*",
+    "@ton-ai/zlib": "*",
+    "buffer": "^6.0.3",
+    "encoding": "^0.1.13",
+    "next": "^16.2.10",
+    "process": "^0.11.10",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,101 +1,19 @@
 import net from 'net';
-import { crypton } from '@ton-ai/core';
 import {
+    aes256CtrProcess,
+    generateObfuscationInit,
+    abridgedEncode,
+    abridgedDecodeLength,
+    intermediateEncode,
+    intermediateDecodeLength,
     ObfuscationKeys,
+} from './obfuscation-utils';
+import {
     AuthKeyResult,
     NoCryptoMessage,
-    ABRIDGED_MAGIC,
-    INTERMEDIATE_MAGIC,
 } from './types';
 
-const OBFUSCATION_INIT_SIZE = 64;
-
-function isBlockedPrefix(firstByte: number, firstU32: number, secondU32: number): boolean {
-    if (firstByte === 0xef) return true;
-    const blocked = [0x44414548, 0x54534f50, 0x20544547,
-                     0xeeeeeeee, 0xdddddddd, 0x02010316];
-    if (blocked.includes(firstU32)) return true;
-    if (secondU32 === 0x00000000) return true;
-    return false;
-}
-
-function aes256CtrProcess(data: Buffer, key: Buffer, iv: Buffer, startCounter: number): Buffer {
-    const result = Buffer.alloc(data.length);
-    let offset = 0;
-    let counter = startCounter >>> 0;
-    const aesEcb = new crypton.AES256ECB(key);
-    const counterBlock = Buffer.alloc(16);
-    try {
-        while (offset < data.length) {
-            iv.copy(counterBlock);
-            if (counter > 0) {
-                let carry = counter;
-                for (let i = 15; i >= 0 && carry > 0; i--) {
-                    const sum = counterBlock[i] + carry;
-                    counterBlock[i] = sum & 0xFF;
-                    carry = sum >>> 8;
-                }
-            }
-            const encrypted = aesEcb.encryptBlock(counterBlock);
-            const chunkLen = Math.min(16, data.length - offset);
-            for (let i = 0; i < chunkLen; i++) {
-                result[offset + i] = data[offset + i] ^ encrypted[i];
-            }
-            offset += 16;
-            counter = (counter + 1) >>> 0;
-        }
-    } finally {
-        aesEcb.destroy();
-    }
-    return result;
-}
-
-function generateObfuscationInit(dcId: number, useAbridged?: boolean): { init: Buffer; obf: Buffer; keys: ObfuscationKeys } {
-    const init = Buffer.alloc(OBFUSCATION_INIT_SIZE);
-    let firstU32: number;
-    let secondU32: number;
-    do {
-        const bytes = crypton.getRandomBytes(OBFUSCATION_INIT_SIZE);
-        bytes.copy(init, 0, 0, 56);
-        firstU32 = init.readUInt32LE(0);
-        secondU32 = init.readUInt32LE(4);
-    } while (isBlockedPrefix(init[0], firstU32, secondU32));
-
-    const magic = useAbridged !== false ? ABRIDGED_MAGIC : INTERMEDIATE_MAGIC;
-    init.writeUInt32LE(magic, 56);
-    init.writeInt16LE(dcId, 60);
-    const tailRand = crypton.getRandomBytes(2);
-    tailRand.copy(init, 62);
-
-    const encryptKey = Buffer.from(init.subarray(8, 40));
-    const encryptIv = Buffer.from(init.subarray(40, 56));
-
-    const encryptedInit = aes256CtrProcess(init, encryptKey, encryptIv, 0);
-
-    const obf = Buffer.alloc(OBFUSCATION_INIT_SIZE);
-    init.copy(obf, 0, 0, 56);
-    encryptedInit.copy(obf, 56, 56, 64);
-
-    const initPart = Buffer.alloc(48);
-    init.subarray(8, 56).copy(initPart);
-    const initRev = Buffer.alloc(48);
-    for (let i = 0; i < 48; i++) {
-        initRev[i] = initPart[47 - i];
-    }
-    const decryptKey = Buffer.from(initRev.subarray(0, 32));
-    const decryptIv = Buffer.from(initRev.subarray(32, 48));
-
-    const keys: ObfuscationKeys = {
-        encryptKey,
-        encryptIv,
-        decryptKey,
-        decryptIv,
-        encryptCounter: 4,
-        decryptCounter: 0,
-    };
-
-    return { init, obf, keys };
-}
+const ABRIDGED_MAGIC = 0xefefefef;
 
 function socks5Connect(socket: net.Socket, targetHost: string, targetPort: number): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -131,55 +49,16 @@ function socks5Connect(socket: net.Socket, targetHost: string, targetPort: numbe
                     socket.destroy();
                     return reject(new Error('SOCKS5 connect failed'));
                 }
-                socket.removeListener('data', onData);
-                resolve();
+                const addrLen = chunk[3] === 0x01 ? 4 : chunk[3] === 0x03 ? chunk[4] + 1 : 16;
+                const responseLen = 6 + addrLen;
+                if (chunk.length >= responseLen) {
+                    socket.removeListener('data', onData);
+                    resolve();
+                }
             }
         };
         socket.on('data', onData);
     });
-}
-
-function abridgedEncode(data: Buffer): Buffer {
-    const intsLen = data.length / 4;
-    if (intsLen < 0x7F) {
-        const header = Buffer.alloc(1);
-        header[0] = intsLen;
-        return Buffer.concat([header, data]);
-    }
-    const header = Buffer.alloc(4);
-    header[0] = 0x7F;
-    header[1] = intsLen & 0xFF;
-    header[2] = (intsLen >> 8) & 0xFF;
-    header[3] = (intsLen >> 16) & 0xFF;
-    return Buffer.concat([header, data]);
-}
-
-function abridgedDecodeLength(buf: Buffer): number | null {
-    if (buf.length < 1) return null;
-    const first = buf[0];
-    if (first === 0x7F) {
-        if (buf.length < 4) return null;
-        const ints = buf[1] | (buf[2] << 8) | (buf[3] << 16);
-        if (ints < 0x7F) return null;
-        return (ints << 2) + 4;
-    }
-    if (first > 0 && first < 0x7F) {
-        return (first << 2) + 1;
-    }
-    return -1;
-}
-
-function intermediateEncode(data: Buffer): Buffer {
-    const header = Buffer.alloc(4);
-    header.writeUInt32LE(data.length, 0);
-    return Buffer.concat([header, data]);
-}
-
-function intermediateDecodeLength(buf: Buffer): number | null {
-    if (buf.length < 4) return null;
-    const len = buf.readUInt32LE(0);
-    if (len > 0x01000000) return -1;
-    return len + 4;
 }
 
 export class ObfuscatedConnection {
@@ -264,6 +143,7 @@ export class ObfuscatedConnection {
         }
 
         this.connected = true;
+        socket.setKeepAlive(true, 60000);
 
         socket.on('close', () => {
             this.connected = false;

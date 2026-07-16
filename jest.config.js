@@ -11,7 +11,8 @@ module.exports = {
     '<rootDir>/packages/core/src/crypton/tests',
     '<rootDir>/plugins/tl-language/tests',
     '<rootDir>/plugins/agent-transport/tests',
-    '<rootDir>/plugins/telegram/tests'
+    '<rootDir>/plugins/telegram/tests',
+    '<rootDir>/plugins/gram-db/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],

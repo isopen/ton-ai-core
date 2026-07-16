@@ -54,14 +54,16 @@ export class SchemaSerializer {
 
     writeInt64(value: bigint): void {
         this.ensureSpace(8);
-        this.buffer.writeBigUInt64LE(value & 0xFFFFFFFFFFFFFFFFn, this.offset);
+        const big = typeof value === 'bigint' ? value : BigInt(value);
+        this.buffer.writeBigUInt64LE(big & 0xFFFFFFFFFFFFFFFFn, this.offset);
         this.offset += 8;
     }
 
     writeInt128(value: bigint): void {
         this.ensureSpace(16);
-        this.buffer.writeBigUInt64LE(value & 0xFFFFFFFFFFFFFFFFn, this.offset);
-        this.buffer.writeBigUInt64LE((value >> 64n) & 0xFFFFFFFFFFFFFFFFn, this.offset + 8);
+        const big = typeof value === 'bigint' ? value : BigInt(value);
+        this.buffer.writeBigUInt64LE(big & 0xFFFFFFFFFFFFFFFFn, this.offset);
+        this.buffer.writeBigUInt64LE((big >> 64n) & 0xFFFFFFFFFFFFFFFFn, this.offset + 8);
         this.offset += 16;
     }
 
@@ -165,7 +167,10 @@ export class SchemaSerializer {
         this.writeConstructorId(combinator.id);
 
         for (const field of combinator.fields) {
-            const value = params[field.name];
+            if (field.name === 'flags' && field.type === '#') {
+                this.writeInt32(params['flags'] ?? 0);
+                continue;
+            }
 
             if (field.conditionalFlagsField !== undefined) {
                 const flags = params[field.conditionalFlagsField] ?? 0;
@@ -173,7 +178,16 @@ export class SchemaSerializer {
                 if (!(flags & (1 << bit))) continue;
             }
 
-            this.writeFieldValue(field.type, value);
+            const value = params[field.name];
+            if (value === undefined) {
+                if ((field.type === 'long' || field.type === 'Long') && field.name !== 'flags') {
+                    this.writeInt64(BigInt(Math.floor(Math.random() * 0x7FFFFFFFFFFFFFFF)));
+                } else {
+                    this.writeFieldValue(field.type, 0);
+                }
+            } else {
+                this.writeFieldValue(field.type, value);
+            }
         }
 
         return this.toBuffer();
@@ -203,9 +217,9 @@ export class SchemaSerializer {
         const bareType = rawType.replace(/^%/, '').replace(/^\(/, '').replace(/\)$/, '').trim();
 
         if (bareType === 'int' || bareType === 'Int') {
-            this.writeInt32(value);
+            this.writeInt32(typeof value === 'number' ? value : Number(value));
         } else if (bareType === 'long' || bareType === 'Long') {
-            this.writeInt64(value);
+            this.writeInt64(typeof value === 'bigint' ? value : BigInt(value));
         } else if (bareType === 'double' || bareType === 'Double') {
             this.ensureSpace(8);
             this.buffer.writeDoubleLE(value, this.offset);
@@ -219,13 +233,19 @@ export class SchemaSerializer {
         } else if (bareType === 'bool' || bareType === 'Bool') {
             this.writeBool(value);
         } else if (bareType.startsWith('vector') || bareType.startsWith('Vector')) {
+            const innerTypeMatch = bareType.match(/^vector<(.+)>$/i);
+            const innerType = innerTypeMatch ? innerTypeMatch[1] : null;
             this.writeUint32(0x1cb5c415);
             if (Array.isArray(value)) {
                 this.writeInt32(value.length);
                 for (const item of value) {
-                    if (typeof item === 'number') this.writeInt32(item);
+                    if (innerType && this.isBoxedType(innerType)) {
+                        this.writeBoxedField(innerType, item);
+                    } else if (typeof item === 'number') this.writeInt32(item);
                     else if (typeof item === 'bigint') this.writeInt64(item);
                     else if (Buffer.isBuffer(item)) this.writeBytes(item);
+                    else if (typeof item === 'string') this.writeString(item);
+                    else if (item && typeof item === 'object') this.writeBoxedField(innerType || '', item);
                 }
             }
         } else if (bareType === 'int128') {
@@ -239,10 +259,41 @@ export class SchemaSerializer {
         } else if (bareType === 'false') {
             this.writeBoolFalse();
         } else {
-            if (typeof value === 'number') this.writeInt32(value);
+            if (value && typeof value === 'object' && value._) {
+                this.writeBoxedField(bareType, value);
+            } else if (typeof value === 'number') this.writeInt32(value);
             else if (typeof value === 'bigint') this.writeInt64(value);
             else if (Buffer.isBuffer(value)) this.writeBytes(value);
             else if (typeof value === 'string') this.writeString(value);
+        }
+    }
+
+    private isBoxedType(type: string): boolean {
+        if (!this.registry) return false;
+        const cleaned = type.replace(/[!%]/g, '');
+        return !!this.registry.getType(cleaned);
+    }
+
+    private writeBoxedField(type: string, value: any): void {
+        if (!value || !value._) {
+            this.writeFieldValue(type, value);
+            return;
+        }
+        const comb = this.registry?.findConstructorByName(value._);
+        if (comb) {
+            const nestedParams: Record<string, any> = {};
+            for (const field of comb.fields) {
+                if (field.name in value) {
+                    nestedParams[field.name] = value[field.name];
+                }
+            }
+            this.serializeCombinator(comb, nestedParams);
+        } else {
+            this.writeConstructorByName(value._);
+            for (const [fk, fv] of Object.entries(value)) {
+                if (fk === '_') continue;
+                this.writeFieldValue('', fv);
+            }
         }
     }
 

@@ -1,0 +1,21 @@
+{
+  "name": "@ton-ai/zlib",
+  "version": "0.1.0",
+  "description": "Cross-platform gzip/zlib compression utilities for browser and Node.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "author": "TON AI Core Team",
+  "license": "Boost Software License 1.0",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "buffer": "^6.0.3"
+  },
+  "devDependencies": {
+    "@ton-ai/core": "*",
+    "@types/node": "^20.19.33",
+    "typescript": "^5.3.3"
+  }
+}

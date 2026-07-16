@@ -1,5 +1,6 @@
 import { AES256IGE } from './aes-256-ige';
 import { AES256ECB } from './aes-256-ecb';
+import { AES256CTR } from './aes-256-ctr';
 import { AES256CBC } from './aes-256-cbc';
 import { MTProtoKDF } from './kdf';
 import { DiffieHellman } from './diffie-hellman';
@@ -16,6 +17,7 @@ import {
   xorInto,
   isNode,
   constantTimeEqual,
+  hmacSha256,
   bytesToHex,
   hexToBytes,
   hkdfExtract,
@@ -23,7 +25,7 @@ import {
   hkdfSha512
 } from './utils';
 
-import { sha1 } from './sha1';
+import { sha1, sha1Sync } from './sha1';
 import { rsaVerify, pemToBigInts, rsaFingerprint, rsaEncryptRaw } from './rsa';
 
 import {
@@ -59,6 +61,7 @@ export type { KeyPair } from '@ton/crypto';
 
 export const crypton = {
   AES256IGE,
+  AES256CTR,
   AES256ECB,
   AES256CBC,
   MTProtoKDF,
@@ -68,6 +71,7 @@ export const crypton = {
   sha512,
   sha512_sync,
   sha1,
+  sha1Sync,
   hmac_sha512,
   pbkdf2_sha512,
   getSecureRandomBytes,
@@ -107,6 +111,7 @@ export const crypton = {
   xorInto,
   isNode,
   constantTimeEqual,
+  hmacSha256,
   hkdfExtract,
   hkdfExpand,
   hkdfSha512

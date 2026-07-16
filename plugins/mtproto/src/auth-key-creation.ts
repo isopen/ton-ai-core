@@ -21,6 +21,7 @@ export interface AuthKeyCreationResult {
 
 const CONSTRUCTOR_REQ_PQ_MULTI = 0xbe7e8ef1;
 const CONSTRUCTOR_RES_PQ = 0x05162463;
+const CONSTRUCTOR_PQ_INNER_DATA = 0x83c95aec;
 const CONSTRUCTOR_PQ_INNER_DATA_DC = 0xa9f55f95;
 const CONSTRUCTOR_PQ_INNER_DATA_TEMP_DC = 0x56fddf88;
 const CONSTRUCTOR_REQ_DH_PARAMS = 0xd712e4be;
@@ -250,15 +251,25 @@ export class AuthKeyCreator {
 
         const innerSerializer = new TLSerializer();
         const isTelegramMode = this.config.mode === 'telegram';
-        innerSerializer.writeConstructorId(isTelegramMode ? CONSTRUCTOR_PQ_INNER_DATA_DC : CONSTRUCTOR_PQ_INNER_DATA_TEMP_DC);
-        innerSerializer.writeBytes(this.bigIntToBytes(this.pq, 8));
-        innerSerializer.writeBytes(this.bigIntToBytes(this.p, 4));
-        innerSerializer.writeBytes(this.bigIntToBytes(this.q, 4));
-        innerSerializer.writeInt128(this.nonce);
-        innerSerializer.writeInt128(this.serverNonce);
-        innerSerializer.writeInt256(this.newNonce);
-        innerSerializer.writeInt32(this.config.dcId);
-        if (!isTelegramMode) {
+        if (isTelegramMode) {
+            // Official Telegram format: p_q_inner_data_dc#a9f55f95 (p,q as strings)
+            innerSerializer.writeConstructorId(CONSTRUCTOR_PQ_INNER_DATA_DC);
+            innerSerializer.writeBytes(this.bigIntToBytes(this.pq, 8));
+            innerSerializer.writeBytes(this.bigIntToBytes(this.p, 4));
+            innerSerializer.writeBytes(this.bigIntToBytes(this.q, 4));
+            innerSerializer.writeInt128(this.nonce);
+            innerSerializer.writeInt128(this.serverNonce);
+            innerSerializer.writeInt256(this.newNonce);
+            innerSerializer.writeInt32(this.config.dcId);
+        } else {
+            innerSerializer.writeConstructorId(CONSTRUCTOR_PQ_INNER_DATA_TEMP_DC);
+            innerSerializer.writeBytes(this.bigIntToBytes(this.pq, 8));
+            innerSerializer.writeBytes(this.bigIntToBytes(this.p, 4));
+            innerSerializer.writeBytes(this.bigIntToBytes(this.q, 4));
+            innerSerializer.writeInt128(this.nonce);
+            innerSerializer.writeInt128(this.serverNonce);
+            innerSerializer.writeInt256(this.newNonce);
+            innerSerializer.writeInt32(this.config.dcId);
             innerSerializer.writeInt32(604800);
         }
         const innerData = innerSerializer.toBuffer();

@@ -1,0 +1,18 @@
+# Telegram session files (auth keys, server salts)
+sessions/
+
+# Next.js build output
+.next/
+
+# Dependencies
+node_modules/
+
+# Environment files with credentials
+.env
+.env.local
+.env.*.local
+
+# Auto-generated Next.js TypeScript declarations
+next-env.d.ts
+
+

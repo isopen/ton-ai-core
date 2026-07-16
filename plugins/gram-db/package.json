@@ -1,0 +1,21 @@
+{
+  "name": "@ton-ai/gram-db",
+  "version": "0.1.0",
+  "description": "TDLib-style encrypted IndexedDB storage plugin for TON AI Framework",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "author": "TON AI Core Team",
+  "license": "Boost Software License 1.0",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "buffer": "^6.0.3"
+  },
+  "devDependencies": {
+    "@ton-ai/core": "*",
+    "@types/node": "^20.19.33",
+    "typescript": "^5.3.3"
+  }
+}

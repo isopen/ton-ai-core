@@ -229,7 +229,7 @@ describe('SchemaDeserializer Extended', () => {
         ser.writeString('hello');
 
         const deser = new SchemaDeserializer(ser.toBuffer(), registry);
-        const result = deser.readFieldValue('string', 1, 0, 'flags');
+        const result = deser.readFieldValue('string', { flags: 1 }, 0, 'flags');
         assert.strictEqual(result, 'hello');
     });
 

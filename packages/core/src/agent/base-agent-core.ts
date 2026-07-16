@@ -1,5 +1,4 @@
-import { EventEmitter } from 'events';
-import { randomBytes } from 'crypto';
+import { EventEmitter } from '../events/event-emitter';
 import { PluginManager } from '../plugin';
 import { Plugin } from '../plugin/plugin-interface';
 import { AGENT_EVENTS, PLUGIN_EVENTS } from '../events';
@@ -40,7 +39,7 @@ export abstract class BaseAgentCore<TConfig extends BaseAgentConfig = BaseAgentC
       this.logger.debug = () => { };
     }
 
-    this.id = config.id || `agent-${Date.now()}-${randomBytes(8).toString('hex')}`;
+    this.id = config.id || this.generateId();
     this.name = config.name || this.id;
     this.config = config;
     this.plugins = new PluginManager(config.mcp, config.plugins);
@@ -140,6 +139,13 @@ export abstract class BaseAgentCore<TConfig extends BaseAgentConfig = BaseAgentC
       uptime: this.startTime ? Date.now() - this.startTime.getTime() : 0,
       activePlugins: this.listActivePlugins()
     };
+  }
+
+  private generateId(): string {
+    const rand = typeof globalThis?.crypto?.getRandomValues === 'function'
+      ? Array.from(new Uint8Array(8), b => b.toString(16).padStart(2, '0')).join('')
+      : Math.random().toString(36).slice(2, 10);
+    return `agent-${Date.now()}-${rand}`;
   }
 
   protected abstract onInitialize(): Promise<void>;

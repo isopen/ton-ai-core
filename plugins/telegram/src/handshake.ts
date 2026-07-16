@@ -1,7 +1,6 @@
 import { crypton } from '@ton-ai/core';
 import { AuthKeyCreator, PublicRsaKeyInterface, DefaultPublicRsaKey } from '@ton-ai/mtproto';
-import { ObfuscatedConnection } from './connection';
-import { AuthKeyResult } from './types';
+import { IConnection, AuthKeyResult } from './types';
 
 const TELEGRAM_PUBLIC_KEY = `-----BEGIN RSA PUBLIC KEY-----
 MIIBCgKCAQEA6LszBcC1LGzyr992NzE0ieY+BSaOW622Aa9Bd4ZHLl+TuFQ4lo4g
@@ -25,10 +24,10 @@ const defaultRsaKey = new DefaultPublicRsaKey([TELEGRAM_PUBLIC_KEY]);
 const testRsaKey = new DefaultPublicRsaKey([TELEGRAM_PUBLIC_KEY_TEST, TELEGRAM_PUBLIC_KEY]);
 
 export class TelegramAuthKeyHandshake {
-    private connection: ObfuscatedConnection;
+    private connection: IConnection;
     private publicRsaKey: PublicRsaKeyInterface;
 
-    constructor(connection: ObfuscatedConnection, publicRsaKey?: PublicRsaKeyInterface, isTestDc?: boolean) {
+    constructor(connection: IConnection, publicRsaKey?: PublicRsaKeyInterface, isTestDc?: boolean) {
         this.connection = connection;
         this.publicRsaKey = publicRsaKey || (isTestDc ? testRsaKey : defaultRsaKey);
     }
