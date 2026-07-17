@@ -1,6 +1,6 @@
 'use client';
 
-import { GramApp } from './gram-bootstrap';
+import { GramApp } from './gram-app';
 
 let app: GramApp | null = null;
 

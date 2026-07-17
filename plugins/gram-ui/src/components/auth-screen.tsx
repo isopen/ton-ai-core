@@ -452,32 +452,26 @@ function SignUpView({ state, dispatch }: { state: AppState; dispatch: Dispatch }
 
 function QrCodeView({ dispatch }: { dispatch: Dispatch }) {
   const [qrDataUrl, setQrDataUrl] = useState('');
-  const [imgLoaded, setImgLoaded] = useState(false);
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
-    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
     const handler = (e: any) => {
       setQrDataUrl(e.detail.url);
-      setImgLoaded(false);
-      if (fallbackTimer) clearTimeout(fallbackTimer);
-      fallbackTimer = setTimeout(() => setImgLoaded(true), 8000);
     };
     window.addEventListener('tg-auth-qr-url', handler);
     return () => {
       window.removeEventListener('tg-auth-qr-url', handler);
-      if (fallbackTimer) clearTimeout(fallbackTimer);
     };
   }, []);
 
-  const showLoader = !qrDataUrl || !imgLoaded;
+  const showLoader = !qrDataUrl;
 
   return (
     <Flex direction="column" gap="16px" align="center" style={{textAlign: 'center'}}>
       <Text variant="title">{t(S.AUTH_QR_TITLE)}</Text>
       <div class="tgui-qr-container">
         {qrDataUrl
-          ? <img key={qrDataUrl} src={qrDataUrl} alt="QR Code" class="tgui-qr-image" style={{opacity: showLoader ? 0 : 1}} onLoad={() => setImgLoaded(true)} onError={() => setImgLoaded(true)} />
+          ? <img src={qrDataUrl} alt="QR Code" class="tgui-qr-image" style={{opacity: showLoader ? 0 : 1}} />
           : null
         }
         {showLoader ? <div class="tgui-qr-loader"><Spinner /></div> : null}

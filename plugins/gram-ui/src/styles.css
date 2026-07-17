@@ -931,7 +931,6 @@ body {
   flex-direction: column;
   background: var(--bg-surface);
   transition: width 0.2s ease, min-width 0.2s ease;
-  overflow: hidden;
   box-shadow: var(--shadow-sm);
   position: relative;
   z-index: 1000;
