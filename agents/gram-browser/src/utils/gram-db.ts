@@ -4,7 +4,7 @@ let _gramDb: GramDbSkills | null = null;
 
 export function getGramDb(): GramDbSkills {
     if (!_gramDb) {
-        _gramDb = createStandaloneGramDb();
+        _gramDb = createStandaloneGramDb({ engineType: 'binlog' });
     }
     return _gramDb;
 }

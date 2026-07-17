@@ -1,5 +1,8 @@
+export type EngineType = 'opfs' | 'binlog';
+
 export interface GramDbConfig {
   pbkdf2Iterations?: number;
+  engineType?: EngineType;
 }
 
 export interface StoredSession {

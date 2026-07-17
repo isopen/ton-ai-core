@@ -1,10 +1,12 @@
 import { crypton } from '@ton-ai/core';
 import { Buffer } from 'buffer';
+import type { GramDbConfig } from './types';
+import { BinlogEngine } from './binlog';
 
 const KEY_LEN = 32;
 const KEY_SALT_SIZE = 32;
 export const IV_SIZE = 16;
-const DIR = '_7a';
+export const DIR = '_7a';
 const PBKDF2_ITERATIONS = 310000;
 
 declare global {
@@ -33,6 +35,7 @@ export interface StorageEngine {
   removeItem(key: string): Promise<void>;
   getAllKeys(): Promise<string[]>;
   clear(): Promise<void>;
+  setEncryptionKey?(key: Uint8Array | null): Promise<void>;
 }
 
 export class OpfsEngine implements StorageEngine {
@@ -188,9 +191,11 @@ export class EncryptedStore {
 export class GramDbComponents {
   private _engine: StorageEngine | null = null;
   private _initPromise: Promise<void> | null = null;
+  private config: GramDbConfig;
 
-  constructor(engine?: StorageEngine) {
+  constructor(engine?: StorageEngine, config?: GramDbConfig) {
     if (engine) this._engine = engine;
+    this.config = config || {};
   }
 
   get engine(): StorageEngine {
@@ -210,15 +215,28 @@ export class GramDbComponents {
       if (typeof navigator === 'undefined' || typeof (navigator as any).storage?.getDirectory !== 'function') {
         throw new Error('OPFS not available');
       }
-      const e = new OpfsEngine();
-      await e.init();
-      this._engine = e;
+      const engineType = this.config.engineType || 'opfs';
+      if (engineType === 'binlog') {
+        const e = new BinlogEngine();
+        await e.init();
+        this._engine = e;
+      } else {
+        const e = new OpfsEngine();
+        await e.init();
+        this._engine = e;
+      }
     })();
     return this._initPromise;
   }
 
   async cleanup(): Promise<void> {
     this._engine = null;
+    this._initPromise = null;
+  }
+
+  async replaceEngine(newEngine: StorageEngine): Promise<void> {
+    await newEngine.init();
+    this._engine = newEngine;
     this._initPromise = null;
   }
 }
