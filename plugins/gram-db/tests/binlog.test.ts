@@ -291,19 +291,19 @@ describe('binlog replay from buffer', () => {
 // Encrypted replay (whole-file AES-CTR)
 // ---------------------------------------------------------------------------
 describe('encrypted binlog replay', () => {
-  const key = Buffer.from(crypton.getRandomBytes(32));
-  const iv = Buffer.from(crypton.getRandomBytes(16));
+  const rawKey = Buffer.from(crypton.getRandomBytes(32));
 
   test('encrypted then decrypted replay', async () => {
     // Build plaintext events
     const events: Uint8Array[] = [];
     let id = 1n;
 
-    // Encryption event
-    const keyHash = await crypton.hmacSha256(key, new TextEncoder().encode('cucumbers everywhere'));
-    const encEvent = buildEncryptionEvent(
-      new Uint8Array(crypton.getRandomBytes(32)), new Uint8Array(iv), new Uint8Array(keyHash), id++,
-    );
+    // Encryption event (TDLib: PBKDF2-SHA256 derived key)
+    const salt = new Uint8Array(crypton.getRandomBytes(32));
+    const iv = Buffer.from(crypton.getRandomBytes(16));
+    const derivedKey = await crypton.pbkdf2Sha256(rawKey, salt, 2, 32);
+    const keyHash = await crypton.hmacSha256(derivedKey, new TextEncoder().encode('cucumbers everywhere'));
+    const encEvent = buildEncryptionEvent(salt, new Uint8Array(iv), new Uint8Array(keyHash), id++);
     events.push(encEvent);
 
     // Build plain events
@@ -321,7 +321,7 @@ describe('encrypted binlog replay', () => {
     const encEventLen = events[0].length;
     const plainPortion = plainBuf.subarray(encEventLen);
     const encPortion = Buffer.from(
-      await crypton.AES256CTR.processAsync(Buffer.from(plainPortion), key, iv, 0),
+      await crypton.AES256CTR.processAsync(Buffer.from(plainPortion), derivedKey, iv, 0),
     );
     const encBuf = Buffer.concat([Buffer.from(events[0]), encPortion]);
 
@@ -335,10 +335,15 @@ describe('encrypted binlog replay', () => {
     assert.strictEqual(hdr0.type, -3);
     o += hdr0.size;
 
-    // Phase 2: decrypt rest
-    let aesCounter = 0;
+    // Phase 2: re-derive key and decrypt rest
+    const encSalt = parseEncryptionEvent(encBuf.subarray(28, hdr0.size - 4));
+    assert.ok(encSalt !== null);
+    const replayDerivedKey = await crypton.pbkdf2Sha256(rawKey, encSalt.salt, 2, 32);
+    const replayKeyHash = await crypton.hmacSha256(replayDerivedKey, new TextEncoder().encode('cucumbers everywhere'));
+    assert.ok(Buffer.from(encSalt.keyHash).equals(Buffer.from(replayKeyHash)));
+
     const rest = encBuf.subarray(o);
-    const decRest = Buffer.from(await crypton.AES256CTR.processAsync(rest, key, iv, 0));
+    const decRest = Buffer.from(await crypton.AES256CTR.processAsync(rest, replayDerivedKey, iv, 0));
     o = 0;
     while (o + 32 <= decRest.length) {
       const hdr = parseEventHeader(new Uint8Array(decRest), o);

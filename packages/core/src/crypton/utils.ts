@@ -212,3 +212,23 @@ export async function hkdfSha512(
     prk.fill(0);
   }
 }
+
+export async function pbkdf2Sha256(
+  password: Buffer,
+  salt: Uint8Array,
+  iterations: number,
+  keyLen: number,
+): Promise<Buffer> {
+  const gCrypto = globalThis.crypto;
+  if (gCrypto?.subtle && typeof gCrypto.subtle.importKey === 'function') {
+    const key = await gCrypto.subtle.importKey('raw', password, 'PBKDF2', false, ['deriveBits']);
+    const bits = await gCrypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+      key, keyLen * 8,
+    );
+    return Buffer.from(new Uint8Array(bits));
+  }
+  // Node.js fallback
+  const { pbkdf2Sync } = require('crypto');
+  return pbkdf2Sync(password, salt, iterations, keyLen, 'sha256') as Buffer;
+}

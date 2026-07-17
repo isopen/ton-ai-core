@@ -22,7 +22,8 @@ import {
   hexToBytes,
   hkdfExtract,
   hkdfExpand,
-  hkdfSha512
+  hkdfSha512,
+  pbkdf2Sha256,
 } from './utils';
 
 import { sha1, sha1Sync } from './sha1';
@@ -114,5 +115,6 @@ export const crypton = {
   hmacSha256,
   hkdfExtract,
   hkdfExpand,
-  hkdfSha512
+  hkdfSha512,
+  pbkdf2Sha256,
 };
