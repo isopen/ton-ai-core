@@ -9,6 +9,8 @@ const nextConfig: NextConfig = {
       ...config.resolve.fallback,
       buffer: require.resolve('buffer/'),
       process: require.resolve('process/browser'),
+      'utf-8-validate': false,
+      bufferutil: false,
     };
 
     if (!isServer) {

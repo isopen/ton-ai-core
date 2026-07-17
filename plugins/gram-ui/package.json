@@ -16,6 +16,10 @@
     "./jsx-dev-runtime": {
       "types": "./dist/framework/jsx-runtime.d.ts",
       "default": "./dist/framework/jsx-runtime.js"
+    },
+    "./framework/hooks": {
+      "types": "./dist/framework/hooks.d.ts",
+      "default": "./dist/framework/hooks.js"
     }
   },
   "author": "TON AI Core Team",
