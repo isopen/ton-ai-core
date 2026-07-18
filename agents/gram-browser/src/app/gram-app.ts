@@ -1,9 +1,9 @@
 import { WorkerTelegramService } from '@/utils/worker-telegram-service';
 import { TelegramUI, setStrings, t, tpl, S, LANG_FALLBACKS } from '@ton-ai/gram-ui';
 import type { PeerInfo, Dialog, Message, TelegramUICallbacks } from '@ton-ai/gram-ui';
-import {
-  dbGet, dbSet, dbDel, dbClearCacheKeepSession, migrateFromLocalStorage, setEncryptionKey,
-} from '@/utils/db';
+import { dbGet, dbSet, dbDel, dbKeys, dbCompact, dbClearCacheKeepSession, migrateFromLocalStorage, setEncryptionKey, dbDeleteAvatar, dbDeleteAvatarByOpfsName, dbListAvatars } from '@/utils/db';
+import { crypton } from '@ton-ai/core';
+import { parseEventHeader, decodeKvPayload, parseEncryptionEvent } from '@ton-ai/gram-db';
 import { genId, LANG_CACHE_VERSION } from './gram-constants';
 import type { GramState } from './gram-state';
 import { createGramState } from './gram-state';
@@ -38,6 +38,7 @@ export class GramApp {
     await loadOrphanedDialogs(s);
     await loadMessageCache(s);
     await loadCachedDialogs(s);
+    setTimeout(() => dbCompact().catch(() => {}), 5000);
 
     const onSetLang = (e: Event) => {
       const detail = (e as CustomEvent).detail;
@@ -55,11 +56,9 @@ export class GramApp {
     window.addEventListener('tg-auth-set-lang', onSetLang);
     window.addEventListener('tg-auth-set-step', onSetStep);
     const onAuthInvalidated = () => {
-      if (s.tgui.current) {
-        s.tgui.current.setConnectionStatus('disconnected');
-        s.tgui.current.setStep('phone');
-        s.tgui.current.setError('Session terminated from another device');
-      }
+      s.tgui.current?.setConnectionStatus('disconnected');
+      s.tgui.current?.setStep('phone');
+      s.tgui.current?.setError('Session terminated from another device');
     };
     window.addEventListener('tg-auth-invalidated', onAuthInvalidated);
     const onClearCache = () => {
@@ -70,11 +69,223 @@ export class GramApp {
       });
     };
     window.addEventListener('tg-clear-cache', onClearCache);
+    const onInspectCache = async () => {
+      try {
+        const keys = await dbKeys('');
+        const entries: Array<{ key: string; value: string }> = [];
+        for (const key of keys) {
+          try {
+            const val = await dbGet(key);
+            if (val !== undefined) entries.push({ key, value: JSON.stringify(val, null, 2) });
+          } catch {}
+        }
+        const dir = await navigator.storage.getDirectory();
+        const opfsRoot: Array<{ name: string; size: number }> = [];
+        for await (const [name] of (dir as any).entries()) {
+          try {
+            const h = await dir.getFileHandle(name);
+            const f = await h.getFile();
+            opfsRoot.push({ name, size: f.size });
+          } catch {}
+        }
+        let opfs7a: Array<{ name: string; size: number }> = [];
+        try {
+          const d7a = await dir.getDirectoryHandle('_7a');
+          for await (const [name] of (d7a as any).entries()) {
+            try {
+              const h = await d7a.getFileHandle(name);
+              const f = await h.getFile();
+              opfs7a.push({ name, size: f.size });
+            } catch {}
+          }
+        } catch {}
+        let binlogInfo: { size: number; exists: boolean; events?: any[] } = { size: 0, exists: false };
+        let tdsessionInfo: { size: number; exists: boolean; events?: any[] } = { size: 0, exists: false };
+        try {
+          const bh = await dir.getFileHandle('binlog');
+          const bf = await bh.getFile();
+          const raw = new Uint8Array(await bf.arrayBuffer());
+          const events: any[] = [];
+          let off = 0;
+          if (raw.length >= 4) {
+            const magic = (raw[0] | (raw[1] << 8) | (raw[2] << 16) | (raw[3] << 24)) >>> 0;
+            if (magic === 0xBC11E3E1) off = 4;
+          }
+          const EVENT_HEADER_SIZE = 28;
+          const EVENT_TAIL_SIZE = 4;
+          const EVENT_MIN_SIZE = EVENT_HEADER_SIZE + EVENT_TAIL_SIZE;
+          while (off + EVENT_MIN_SIZE <= raw.length) {
+            const hdr = parseEventHeader(raw, off);
+            if (!hdr) break;
+            const payload = raw.subarray(off + EVENT_HEADER_SIZE, off + hdr.size - EVENT_TAIL_SIZE);
+            let key: string | undefined;
+            let value: string | undefined;
+            if (hdr.type > 0) {
+              const kv = decodeKvPayload(hdr.type, payload);
+              if (kv) { key = kv.key; if (kv.value !== undefined) value = kv.value; }
+            } else if (hdr.type === -3) {
+              const enc = parseEncryptionEvent(payload);
+              if (enc) key = 'keyHash=' + Array.from(enc.keyHash.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
+            }
+            events.push({
+              off, size: hdr.size, type: hdr.type, id: hdr.id.toString(), flags: hdr.flags,
+              typeName: ({ 1: 'SET', 2: 'DEL', [-1]: 'HEADER', [-2]: 'EMPTY', [-3]: 'AES_CTR', [-4]: 'NO_ENCR' } as any)[hdr.type] ?? 'UNKNOWN',
+              key, value,
+            });
+            off += hdr.size;
+          }
+          binlogInfo = { size: raw.length, exists: true, events };
+        } catch {}
+        try {
+          const th = await dir.getFileHandle('tdsession');
+          const tf = await th.getFile();
+          const raw = new Uint8Array(await tf.arrayBuffer());
+          const tdEvents: any[] = [];
+          const sessionId = s.sessionIdRef.current;
+          if (sessionId && raw.length > 0) {
+            try {
+              const encKey = await crypton.pbkdf2Sha256(
+                Buffer.from(sessionId, 'utf-8'),
+                new TextEncoder().encode('tdbinlog-v1'),
+                310000, 32,
+              );
+              let off = 0;
+              if (raw.length >= 8) {
+                let hasMagic = true;
+                const magic = [0x54, 0x44, 0x42, 0x4c, 0x0d, 0x0a, 0x1a, 0x0a];
+                for (let i = 0; i < 8; i++) { if (raw[i] !== magic[i]) { hasMagic = false; break; } }
+                if (hasMagic) off = 8;
+              }
+              while (off + 28 <= raw.length) {
+                const iv = Buffer.from(raw.subarray(off, off + 16));
+                const type = (raw[off + 19] << 24) | (raw[off + 18] << 16) | (raw[off + 17] << 8) | raw[off + 16];
+                const len = (raw[off + 23] << 24) | (raw[off + 22] << 16) | (raw[off + 21] << 8) | raw[off + 20];
+                const chunkStart = off + 24;
+                if (chunkStart + len > raw.length) break;
+                const enc = raw.subarray(chunkStart, chunkStart + len);
+                let dataStr: string | undefined;
+                let eventFields: Record<string, any> = { type, typeName: ({1:'AuthKey',2:'HomeAuthKey',3:'SessionFlags',4:'ServerTimeOffset',5:'PendingCodeHash'} as any)[type] ?? '?' };
+                try {
+                  const dec = crypton.AES256CTR.process(Buffer.from(enc), encKey, iv, 0);
+                  if (type === 1 || type === 2) {
+                    const dcId = dec.readInt32LE(0);
+                    const kLen = dec.readInt32LE(4);
+                    const authKey = dec.subarray(8, 8 + kLen);
+                    const authKeyId = dec.readBigUInt64LE(8 + kLen);
+                    const serverSalt = dec.readBigUInt64LE(16 + kLen);
+                    dataStr = `dcId=${dcId} authKeyId=${authKeyId} serverSalt=${serverSalt} keyLen=${kLen}`;
+                    eventFields = { ...eventFields, dcId, authKeyId: String(authKeyId), serverSalt: String(serverSalt), keyLen: kLen };
+                  } else if (type === 3) {
+                    const flags = dec.readInt32LE(0);
+                    eventFields = { ...eventFields, flags, authenticated: !!(flags & 1), passwordPending: !!(flags & 2) };
+                  } else if (type === 4) {
+                    eventFields = { ...eventFields, offset: dec.readInt32LE(0) };
+                  } else if (type === 5) {
+                    const hLen = dec.readInt32LE(0);
+                    const hash = new TextDecoder().decode(dec.subarray(4, 4 + hLen));
+                    eventFields = { ...eventFields, hash };
+                    dataStr = `hash=${hash}`;
+                  }
+                } catch {}
+                tdEvents.push({ ...eventFields, data: dataStr || 'decrypt failed' });
+                off = chunkStart + len;
+              }
+            } catch {}
+          }
+          tdsessionInfo = { size: raw.length, exists: true, events: tdEvents };
+        } catch {}
+        const avatars = await dbListAvatars();
+        window.dispatchEvent(new CustomEvent('tg-inspect-cache-data', {
+          detail: { dbKeys: entries, opfsRoot, opfs7a, binlogInfo, tdsessionInfo, avatars },
+        }));
+      } catch (e) {
+        console.error('[gram-app] inspect cache error:', e);
+      }
+    };
+    window.addEventListener('tg-inspect-cache', onInspectCache);
+    const onReadBinlog = async () => {
+      try {
+        const dir = await navigator.storage.getDirectory();
+        const bh = await dir.getFileHandle('binlog');
+        const bf = await bh.getFile();
+        const buf = await bf.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let hex = '';
+        const max = 4096;
+        const len = Math.min(bytes.length, max);
+        for (let i = 0; i < len; i++) {
+          hex += bytes[i].toString(16).padStart(2, '0');
+          if ((i + 1) % 32 === 0) hex += '\n';
+          else if ((i + 1) % 4 === 0) hex += ' ';
+        }
+        if (bytes.length > max) hex += '\n... (' + bytes.length + ' bytes total)';
+        window.dispatchEvent(new CustomEvent('tg-cache-binlog-raw', { detail: { hex } }));
+      } catch (e) {
+        console.error('[gram-app] read binlog error:', e);
+      }
+    };
+    window.addEventListener('tg-cache-read-binlog', onReadBinlog);
+    const onDeleteKey = async (e: Event) => {
+      const key = (e as CustomEvent).detail?.key;
+      if (!key) return;
+      try { await dbDel(key); } catch (err) { console.error('[gram-app] delete key error:', err); }
+    };
+    window.addEventListener('tg-cache-delete-key', onDeleteKey);
+    const onDeleteBinlogFiles = async (e: Event) => {
+      const target = (e as CustomEvent).detail?.target;
+      try {
+        const dir = await navigator.storage.getDirectory();
+        if (target === 'binlog' || target === 'all') {
+          await dir.removeEntry('binlog').catch(() => {});
+        }
+        if (target === 'tdsession' || target === 'all') {
+          await dir.removeEntry('tdsession').catch(() => {});
+        }
+      } catch {}
+    };
+    window.addEventListener('tg-cache-delete-binlog', onDeleteBinlogFiles);
+    const onDeleteAvatar = async (e: Event) => {
+      const { opfsName } = (e as CustomEvent).detail || {};
+      if (!opfsName) return;
+      try {
+        await dbDeleteAvatarByOpfsName(opfsName);
+      } catch (err) { console.error('[gram-app] delete avatar error:', err); }
+      window.location.reload();
+    };
+    window.addEventListener('tg-cache-delete-avatar', onDeleteAvatar);
+    const onDeleteAllAvatars = async (e: Event) => {
+      const { names } = (e as CustomEvent).detail || {};
+      if (!names?.length) return;
+      try {
+        await Promise.all(names.map((n: string) => dbDeleteAvatarByOpfsName(n)));
+      } catch (err) { console.error('[gram-app] delete all avatars error:', err); }
+      window.location.reload();
+    };
+    window.addEventListener('tg-cache-delete-all-avatars', onDeleteAllAvatars);
+    const onDeleteOpfsFile = async (e: Event) => {
+      const { dir, name } = (e as CustomEvent).detail || {};
+      if (!name) return;
+      try {
+        const root = await navigator.storage.getDirectory();
+        if (dir === '_7a') {
+          const d7a = await root.getDirectoryHandle('_7a');
+          await d7a.removeEntry(name).catch(() => {});
+        } else {
+          await root.removeEntry(name).catch(() => {});
+        }
+      } catch {}
+    };
+    window.addEventListener('tg-cache-delete-opfs-file', onDeleteOpfsFile);
     s.cleanupFns.push(() => {
       window.removeEventListener('tg-auth-set-lang', onSetLang);
       window.removeEventListener('tg-auth-set-step', onSetStep);
       window.removeEventListener('tg-auth-invalidated', onAuthInvalidated);
       window.removeEventListener('tg-clear-cache', onClearCache);
+      window.removeEventListener('tg-inspect-cache', onInspectCache);
+      window.removeEventListener('tg-cache-read-binlog', onReadBinlog);
+      window.removeEventListener('tg-cache-delete-key', onDeleteKey);
+      window.removeEventListener('tg-cache-delete-binlog', onDeleteBinlogFiles);
+      window.removeEventListener('tg-cache-delete-opfs-file', onDeleteOpfsFile);
     });
 
     const callbacks: TelegramUICallbacks = {

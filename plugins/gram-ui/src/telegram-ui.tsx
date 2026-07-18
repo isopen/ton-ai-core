@@ -17,6 +17,7 @@ import { ChatArea } from './components/chat-area.js';
 import { ChatInput } from './components/chat-input.js';
 import { DebugView } from './components/debug-view.js';
 import { SettingsView } from './components/settings-view.js';
+import { CacheView } from './components/cache-view.js';
 import { S } from './strings.js';
 export type { AppState, UIAction, PeerInfo, Dialog, Message };
 
@@ -169,7 +170,14 @@ export class TelegramUI {
       render: ({ state, dispatch }) => h(SettingsView, { state, dispatch }),
     });
 
-    this.registerSkills([debugPlugin, settingsPlugin]);
+    const cachePlugin = new SkillPlugin({
+      id: '_cache_',
+      label: S.SIDEBAR_CACHE,
+      icon: () => h('div', { class: 'ListItem__icon' }, 'C'),
+      render: () => h(CacheView, {}),
+    });
+
+    this.registerSkills([debugPlugin, settingsPlugin, cachePlugin]);
   }
 
   registerSkills(skills: SkillPlugin[]) {

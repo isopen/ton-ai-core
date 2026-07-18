@@ -53,12 +53,16 @@ export class GramDbSkills {
         if (storedHash) {
           const computedHash = await KeyManager.createKeyHash(this._masterKey);
           if (!crypton.constantTimeEqual(computedHash, Buffer.from(storedHash, 'base64'))) {
+            // Key mismatch: sessionId changed, regenerate
             this.scrubMasterKey();
             this._masterKey = null;
-            throw new Error('Encryption key mismatch');
+            await this.engine.setItem(SALT_KEY, '');
+            await this.engine.setItem(KEY_VERIFY_KEY, '');
+            this._keyIndex = null;
           }
         }
-      } else {
+      }
+      if (!this._masterKey) {
         const salt = await KeyManager.generateSalt();
         this._masterKey = await KeyManager.deriveKey(sessionId, salt);
         const keyHash = await KeyManager.createKeyHash(this._masterKey);
@@ -445,6 +449,59 @@ export class GramDbSkills {
     const hk = await this.encKey('avatar:' + key);
     await this.engine.setItem(hk,
       await EncryptedStore.encryptToBase64(this._masterKey, dataUri));
+    if (this._sessionId) {
+      const avatarUserKey = 'avatar:' + key;
+      const idx = await this.loadKeyIndex();
+      if (!idx.includes(avatarUserKey)) {
+        idx.push(avatarUserKey);
+        this._keyIndex = idx;
+        await this.saveKeyIndex();
+      }
+    }
+  }
+
+  async listAvatars(): Promise<Array<{ opfsName: string; dataUri: string }>> {
+    if (!this._masterKey) return [];
+    await this.ensureEngine();
+    const result: Array<{ opfsName: string; dataUri: string }> = [];
+    const allKeys = await this.engine.getAllKeys();
+    for (const opfsName of allKeys) {
+      try {
+        const raw = await this.engine.getItem(opfsName);
+        if (!raw) continue;
+        const val = await EncryptedStore.decryptFromBase64(this._masterKey, raw);
+        if (val.startsWith('data:')) {
+          result.push({ opfsName, dataUri: val });
+        }
+      } catch {}
+    }
+    return result;
+  }
+
+  async deleteAvatar(key: string): Promise<void> {
+    if (!this._masterKey) return;
+    await this.ensureEngine();
+    const hk = await this.encKey('avatar:' + key);
+    await this.engine.removeItem(hk);
+    if (this._sessionId) {
+      const avatarUserKey = 'avatar:' + key;
+      const idx = await this.loadKeyIndex();
+      this._keyIndex = idx.filter(k => k !== avatarUserKey);
+      await this.saveKeyIndex();
+    }
+  }
+
+  async deleteAvatarByOpfsName(opfsName: string): Promise<void> {
+    if (!this._masterKey) return;
+    await this.ensureEngine();
+    await this.engine.removeItem(opfsName);
+  }
+
+  async compact(): Promise<void> {
+    await this.ensureEngine();
+    if (typeof (this.engine as any).compact === 'function') {
+      await (this.engine as any).compact();
+    }
   }
 
   async clearCache(): Promise<void> {

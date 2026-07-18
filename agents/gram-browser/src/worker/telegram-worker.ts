@@ -28,7 +28,7 @@ import { getAvatarFromCache, saveAvatarToCache, setAvatarEncryptionKey, needAvat
 import { BrowserObfuscatedConnection } from '@ton-ai/telegram/dist/browser-connection';
 import { generateObfuscationInit, abridgedEncode } from '@ton-ai/telegram/dist/obfuscation-utils';
 
-import { saveSession, loadSession, deleteSession } from './idb-session';
+import { TdBinlog, EventType } from './tdbinlog';
 
 interface TgSession {
     authKey: Buffer;
@@ -97,6 +97,7 @@ let msgIdCounter = 0;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 let connectionInitialized = false;
 let homeSession: TgSession | null = null;
+let tdBinlog: TdBinlog | null = null;
 
 let onUpdateCb: ((constructorId: number, data: string) => void) | null = null;
 let onAuthInvalidatedCb: (() => void) | null = null;
@@ -1174,7 +1175,7 @@ async function processAvatarBatch(tasks: Array<{ peer: any; photo: any; cacheKey
     // Home DC: 5 concurrent workers via normal callRpc
     const runConcurrent = async (batch: Array<{ peer: any; photo: any; cacheKey: string }>): Promise<void> => {
         const it = batch[Symbol.iterator]();
-        const workers = Array.from({ length: Math.min(5, batch.length) }, async () => {
+        const workers = Array.from({ length: Math.min(10, batch.length) }, async () => {
             for (const t of it) {
                 try {
                     const cached = await needAvatar(t.cacheKey);
@@ -1195,67 +1196,60 @@ async function processAvatarBatch(tasks: Array<{ peer: any; photo: any; cacheKey
         await Promise.all(workers);
     };
 
-    // Parallel DCs: ensure all remote connections first (sequential export),
-    // then download avatars on each DC in parallel across DCs.
+    // Run home DC in parallel with remote DC setup + sequential download per DC
     const dcIds = Array.from(remoteByDc.keys());
-
-    // Phase 1: sequentially export auth for all remote DCs on the main connection
-    console.log('[avatar] exporting auth for', dcIds.length, 'remote DCs');
-    for (const dcId of dcIds) {
-        try {
-            await ensureDcConnection(dcId);
-        } catch (e: any) {
-            console.log('[avatar] failed to setup connection for DC', dcId, ':', e.message);
-        }
-    }
-
-    // Phase 2: download home DC avatars concurrently with remote DCs
-    const remoteWork = dcIds.map(async (dcId) => {
-        const dcTasks = remoteByDc.get(dcId)!;
-        console.log('[avatar] downloading', dcTasks.length, 'avatars on DC', dcId);
-        for (const t of dcTasks) {
+    await Promise.all([
+        runConcurrent(homeTasks),
+        ...dcIds.map(async (dcId) => {
             try {
-                const cached = await needAvatar(t.cacheKey);
-                if (!cached) {
-                    const url = await getAvatarFromCache(t.cacheKey);
-                    if (url && cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: url }));
-                    continue;
-                }
-                const inlineThumb = getInlineThumb(t.photo);
-                if (inlineThumb && cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: inlineThumb }));
-
-                const photoId = typeof t.photo.photo_id === 'string' ? BigInt(t.photo.photo_id) : t.photo.photo_id;
-                const peer: any = { _: 'inputPeer' + (t.peer.type === 'user' ? 'User' : t.peer.type === 'chat' ? 'Chat' : 'Channel') };
-                if (t.peer.type === 'user') {
-                    peer.user_id = BigInt(t.peer.id);
-                    if (t.peer.accessHash) peer.access_hash = typeof t.peer.accessHash === 'string' ? BigInt(t.peer.accessHash) : t.peer.accessHash;
-                } else if (t.peer.type === 'chat') {
-                    peer.chat_id = BigInt(t.peer.id);
-                } else {
-                    peer.channel_id = BigInt(t.peer.id);
-                    if (t.peer.accessHash) peer.access_hash = typeof t.peer.accessHash === 'string' ? BigInt(t.peer.accessHash) : t.peer.accessHash;
-                }
-                const location = { _: 'inputPeerPhotoFileLocation', flags: 0, peer, photo_id: photoId };
-                const params = { precise: false, location, offset: BigInt(0), limit: 1048576 };
-
-                const result = await callRpcOnDc(dcId, 'upload.getFile', params);
-                if (result && result._ === 'upload.file') {
-                    const bytes = result.bytes;
-                    const chunk = typeof bytes === 'string' ? Buffer.from(bytes, 'hex') : bytes;
-                    if (chunk && chunk.length >= 100) {
-                        const url = 'data:image/jpeg;base64,' + chunk.toString('base64');
-                        saveAvatarToCache(t.cacheKey, url).catch(() => {});
-                        if (cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: url }));
-                    }
-                }
+                await ensureDcConnection(dcId);
             } catch (e: any) {
-                console.log('[avatar] error on DC', dcId, 'for', t.peer.type, t.peer.id, ':', e.message);
+                console.log('[avatar] failed to setup connection for DC', dcId, ':', e.message);
+                return;
             }
-        }
-    });
+            const dcTasks = remoteByDc.get(dcId)!;
+            console.log('[avatar] downloading', dcTasks.length, 'avatars on DC', dcId);
+            for (const t of dcTasks) {
+                try {
+                    const cached = await needAvatar(t.cacheKey);
+                    if (!cached) {
+                        const url = await getAvatarFromCache(t.cacheKey);
+                        if (url && cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: url }));
+                        continue;
+                    }
+                    const inlineThumb = getInlineThumb(t.photo);
+                    if (inlineThumb && cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: inlineThumb }));
 
-    // Run home DC + all remote DCs in parallel
-    await Promise.all([runConcurrent(homeTasks), ...remoteWork]);
+                    const photoId = typeof t.photo.photo_id === 'string' ? BigInt(t.photo.photo_id) : t.photo.photo_id;
+                    const peer: any = { _: 'inputPeer' + (t.peer.type === 'user' ? 'User' : t.peer.type === 'chat' ? 'Chat' : 'Channel') };
+                    if (t.peer.type === 'user') {
+                        peer.user_id = BigInt(t.peer.id);
+                        if (t.peer.accessHash) peer.access_hash = typeof t.peer.accessHash === 'string' ? BigInt(t.peer.accessHash) : t.peer.accessHash;
+                    } else if (t.peer.type === 'chat') {
+                        peer.chat_id = BigInt(t.peer.id);
+                    } else {
+                        peer.channel_id = BigInt(t.peer.id);
+                        if (t.peer.accessHash) peer.access_hash = typeof t.peer.accessHash === 'string' ? BigInt(t.peer.accessHash) : t.peer.accessHash;
+                    }
+                    const location = { _: 'inputPeerPhotoFileLocation', flags: 0, peer, photo_id: photoId };
+                    const params = { precise: false, location, offset: BigInt(0), limit: 1048576 };
+
+                    const result = await callRpcOnDc(dcId, 'upload.getFile', params);
+                    if (result && result._ === 'upload.file') {
+                        const bytes = result.bytes;
+                        const chunk = typeof bytes === 'string' ? Buffer.from(bytes, 'hex') : bytes;
+                        if (chunk && chunk.length >= 100) {
+                            const url = 'data:image/jpeg;base64,' + chunk.toString('base64');
+                            saveAvatarToCache(t.cacheKey, url).catch(() => {});
+                            if (cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: url }));
+                        }
+                    }
+                } catch (e: any) {
+                    console.log('[avatar] error on DC', dcId, 'for', t.peer.type, t.peer.id, ':', e.message);
+                }
+            }
+        }),
+    ]);
 }
 
 let resolveReadLoopEnd: (() => void) | null = null;
@@ -1371,9 +1365,8 @@ async function scheduleReconnect(): Promise<void> {
 function notifyAuthInvalidated(): void {
     authenticated = false;
     stopHealthCheck();
-    if (curSessionId) deleteSession(curSessionId).catch(() => {});
+    if (tdBinlog) tdBinlog.clear().catch(() => {});
     onAuthInvalidatedCb?.();
-    // Fallback: directly dispatch event for the UI
     try { self.dispatchEvent(new CustomEvent('tg-auth-invalidated')); } catch {}
 }
 
@@ -2053,21 +2046,19 @@ async function initUpdates(): Promise<void> {
 }
 
 async function persistSession(): Promise<void> {
-    if (!ses || !curSessionId) return;
-    await saveSession(curSessionId, {
-        authKey: ses.authKey.toString('hex'),
-        authKeyId: ses.authKeyId.toString(),
-        serverSalt: ses.serverSalt.toString(),
-        serverTimeOffset,
-        dcId: ses.dcId,
-        authenticated,
-        homeAuthKey: homeSession?.authKey?.toString('hex'),
-        homeAuthKeyId: homeSession?.authKeyId?.toString(),
-        homeServerSalt: homeSession?.serverSalt?.toString(),
-        homeDcId: homeSession?.dcId,
-        pendingCodeHash: pendingAuth?.phoneCodeHash,
-        passwordPending: passwordPending || undefined,
-    });
+    if (!ses || !curSessionId || !tdBinlog) return;
+    await tdBinlog.append(EventType.AuthKey, ses.dcId, ses.authKey, ses.authKeyId, ses.serverSalt);
+    if (homeSession) {
+        await tdBinlog.append(EventType.HomeAuthKey, homeSession.dcId, homeSession.authKey, homeSession.authKeyId, homeSession.serverSalt);
+    }
+    let flags = 0;
+    if (authenticated) flags |= 1;
+    if (passwordPending) flags |= 2;
+    await tdBinlog.append(EventType.SessionFlags, flags);
+    await tdBinlog.append(EventType.ServerTimeOffset, serverTimeOffset);
+    if (pendingAuth?.phoneCodeHash) {
+        await tdBinlog.append(EventType.PendingCodeHash, pendingAuth.phoneCodeHash);
+    }
 }
 
 const TELEGRAM_PUBLIC_KEY = `-----BEGIN RSA PUBLIC KEY-----
@@ -2117,12 +2108,17 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     curSessionId = reqSessionId;
     await setAvatarEncryptionKey(reqSessionId);
 
-    const saved = reqSessionId ? await loadSession(reqSessionId) : null;
+    if (!tdBinlog) {
+      tdBinlog = new TdBinlog();
+      await tdBinlog.init(reqSessionId);
+    }
+    const state = tdBinlog.getState();
+    const saved = state.authKey ? state : null;
     if (saved) {
         serverTimeOffset = saved.serverTimeOffset;
-        const authKey = Buffer.from(saved.authKey, 'hex');
-        const authKeyId = BigInt(saved.authKeyId);
-        const serverSalt = BigInt(saved.serverSalt);
+        const authKey = saved.authKey!;
+        const authKeyId = saved.authKeyId!;
+        const serverSalt = saved.serverSalt!;
         setAuthKeys(authKey, authKeyId, serverSalt);
         ses = {
             authKey, authKeyId, serverSalt,
@@ -2138,9 +2134,9 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
         passwordPending = saved.passwordPending || false;
         if (authenticated && saved.homeAuthKey && saved.homeAuthKeyId && saved.homeServerSalt && saved.homeDcId != null) {
             homeSession = {
-                authKey: Buffer.from(saved.homeAuthKey, 'hex'),
-                authKeyId: BigInt(saved.homeAuthKeyId),
-                serverSalt: BigInt(saved.homeServerSalt),
+                authKey: saved.homeAuthKey,
+                authKeyId: saved.homeAuthKeyId,
+                serverSalt: saved.homeServerSalt,
                 serverTime: Math.floor(Date.now() / 1000) + serverTimeOffset,
                 dcId: saved.homeDcId,
                 sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
@@ -2166,7 +2162,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
         try {
             c = new BrowserObfuscatedConnection();
             if (saved) {
-                const aki = BigInt(saved.authKeyId);
+                const aki = saved.authKeyId!;
                 const akBuf = Buffer.alloc(8);
                 akBuf.writeBigUInt64LE(aki, 0);
                 c.expectedAuthKeyBuf = akBuf;
@@ -2198,7 +2194,6 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
             setTimeout(() => initUpdates().catch(() => {}), 100);
             startHealthCheck();
         }
-        if (curSessionId && authenticated) persistSession();
         return;
     }
 
@@ -2271,7 +2266,7 @@ async function handleLogout(): Promise<void> {
     passwordPending = false;
     stopHealthCheck();
     pendingAuth = null;
-    if (curSessionId) { await deleteSession(curSessionId); }
+    if (tdBinlog) await tdBinlog.clear();
     await setAvatarEncryptionKey(null);
     await handleDisconnect();
 }

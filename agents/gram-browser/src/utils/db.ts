@@ -14,4 +14,9 @@ export async function dbKeys(prefix: string): Promise<string[]> { return g().key
 export async function dbDelMany(keys: string[]): Promise<void> { return g().delMany(keys); }
 export async function dbGetAvatar(key: string): Promise<string | null> { return g().getAvatar(key); }
 export async function dbSaveAvatar(key: string, dataUri: string): Promise<void> { return g().saveAvatar(key, dataUri); }
+export async function dbListAvatars(): Promise<Array<{ opfsName: string; dataUri: string }>> { return g().listAvatars(); }
+export async function dbDeleteAvatar(key: string): Promise<void> { return g().deleteAvatar(key); }
+export async function dbDeleteAvatarByOpfsName(opfsName: string): Promise<void> { return g().deleteAvatarByOpfsName(opfsName); }
+export async function dbCompact(): Promise<void> { return g().compact(); }
+export async function dbClearCache(): Promise<void> { return g().clearCache(); }
 export async function dbClearCacheKeepSession(): Promise<void> { return g().clearCacheKeepSession(); }

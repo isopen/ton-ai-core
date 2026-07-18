@@ -1969,3 +1969,449 @@ body {
     font-size: 20px;
   }
 }
+
+/* ===== Cache Inspector ===== */
+.tgui-cache {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.tgui-cache-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+
+.tgui-cache-toolbar {
+  margin-bottom: 12px;
+}
+
+.tgui-cache-refresh {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.tgui-cache-refresh:hover {
+  background: var(--bg-hover);
+}
+
+.tgui-cache-loading {
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 20px 0;
+}
+
+.tgui-cache-summary {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding: 12px;
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.tgui-cache-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tgui-cache-summary-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tgui-cache-summary-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tgui-cache-section {
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.tgui-cache-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tgui-cache-section-header:hover {
+  background: var(--bg-hover);
+}
+
+.tgui-cache-toggle {
+  font-size: 10px;
+  color: var(--text-secondary);
+  width: 12px;
+}
+
+.tgui-cache-section-title {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.tgui-cache-section-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  padding: 1px 8px;
+  border-radius: 10px;
+}
+
+.tgui-cache-kv-list {
+  border-top: 1px solid var(--border);
+}
+
+.tgui-cache-kv-row {
+  border-bottom: 1px solid var(--border);
+}
+
+.tgui-cache-kv-row:last-child {
+  border-bottom: none;
+}
+
+.tgui-cache-kv-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tgui-cache-kv-key:hover {
+  background: var(--bg-hover);
+}
+
+.tgui-cache-kv-toggle {
+  font-size: 9px;
+  color: var(--text-secondary);
+  width: 10px;
+}
+
+.tgui-cache-kv-key-text {
+  flex: 1;
+  font-size: 12px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  color: var(--accent);
+  word-break: break-all;
+}
+
+.tgui-cache-kv-size {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.tgui-cache-kv-json-badge {
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: 'Consolas', monospace;
+}
+
+.tgui-cache-kv-del {
+  background: none;
+  border: none;
+  color: #e74c3c;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+
+.tgui-cache-kv-del:hover {
+  opacity: 1;
+}
+
+.tgui-cache-kv-value {
+  padding: 8px 12px 8px 30px;
+  margin: 0;
+  font-size: 11px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.4;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.tgui-cache-empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.tgui-cache-opfs {
+  border-top: 1px solid var(--border);
+}
+
+.tgui-cache-opfs-dir {
+  padding: 8px 12px;
+}
+
+.tgui-cache-opfs-dir-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  padding: 4px 0;
+}
+
+.tgui-cache-opfs-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0 3px 16px;
+}
+
+.tgui-cache-opfs-file-name {
+  flex: 1;
+  font-size: 12px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.tgui-cache-opfs-file-size {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.tgui-cache-binlog {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+}
+
+.tgui-cache-binlog-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.tgui-cache-binlog-raw-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.tgui-cache-binlog-raw-btn:hover {
+  background: var(--bg-hover);
+}
+
+.tgui-cache-binlog-hex {
+  margin: 8px 0 0;
+  padding: 8px;
+  font-size: 11px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.tgui-cache-bevent {
+  border-bottom: 1px solid var(--border);
+}
+
+.tgui-cache-bevent:last-child {
+  border-bottom: none;
+}
+
+.tgui-cache-bevent-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 32px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  list-style: none;
+  position: relative;
+}
+
+.tgui-cache-bevent-header::-webkit-details-marker {
+  display: none;
+}
+
+.tgui-cache-bevent-header::before {
+  content: '▶';
+  position: absolute;
+  left: 10px;
+  font-size: 9px;
+  color: var(--text-secondary);
+  transition: transform 0.15s;
+}
+
+.tgui-cache-bevent[open] .tgui-cache-bevent-header::before {
+  content: '▼';
+}
+
+.tgui-cache-bevent-header:hover {
+  background: var(--bg-hover);
+}
+
+.tgui-cache-bevent-type {
+  font-family: 'Consolas', monospace;
+  font-weight: 600;
+  color: #1abe43;
+  min-width: 32px;
+}
+
+.tgui-cache-bevent-type[data-enc] {
+  color: #ff9800;
+}
+
+.tgui-cache-bevent-key {
+  flex: 1;
+  font-family: 'Consolas', monospace;
+  color: var(--text-primary);
+  word-break: break-all;
+  font-size: 11px;
+}
+
+.tgui-cache-bevent-id {
+  font-family: 'Consolas', monospace;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.tgui-cache-bevent-off {
+  font-family: 'Consolas', monospace;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.tgui-cache-bevent-meta {
+  padding: 4px 12px 6px 30px;
+  font-size: 11px;
+  font-family: 'Consolas', monospace;
+  color: var(--text-secondary);
+}
+
+.tgui-cache-bevent-raw-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.tgui-cache-bevent-raw-btn:hover {
+  background: var(--bg-hover);
+}
+
+.tgui-cache-bevent-del-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: #e74c3c;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 7px;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+
+.tgui-cache-bevent-del-btn:hover {
+  opacity: 1;
+  background: rgba(231, 76, 60, 0.1);
+}
+
+.tgui-cache-bevent-del-all-btn {
+  padding: 5px 14px;
+  border: 1px solid #e74c3c;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: #e74c3c;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.tgui-cache-bevent-del-all-btn:hover {
+  opacity: 1;
+  background: rgba(231, 76, 60, 0.1);
+}
+
+.tgui-cache-bevent-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 12px 4px;
+}
+
+.tgui-cache-bevent-list {
+  border-top: 1px solid var(--border);
+}
+
+.tgui-cache-binlog-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  flex-wrap: wrap;
+}
+
+.tgui-cache-binlog-bar-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tgui-cache-binlog-bar-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.tgui-cache-binlog-bar-val {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: 'Consolas', monospace;
+}
