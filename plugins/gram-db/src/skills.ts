@@ -1,6 +1,5 @@
 import { crypton } from '@ton-ai/core';
 import { GramDbComponents, KeyManager, EncryptedStore, StorageEngine, DbVersion, currentDbVersion, IV_SIZE, HMAC_LABEL, OpfsEngine } from './components';
-import { BinlogEngine } from './binlog';
 import type { StoredSession, GramDbConfig, EngineType } from './types';
 import { Buffer } from 'buffer';
 
@@ -82,13 +81,12 @@ export class GramDbSkills {
   }
 
   async migrateStorage(targetType: EngineType): Promise<void> {
-    if (this.components.engine instanceof BinlogEngine && targetType === 'binlog') return;
     if (this.components.engine instanceof OpfsEngine && targetType === 'opfs') return;
 
     const oldEngine = this.components.engine;
     const keys = await oldEngine.getAllKeys();
 
-    const newEngine: StorageEngine = targetType === 'binlog' ? new BinlogEngine() : new OpfsEngine();
+    const newEngine: StorageEngine = new OpfsEngine();
     await newEngine.init();
 
     for (const key of keys) {

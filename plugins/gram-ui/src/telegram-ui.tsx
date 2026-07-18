@@ -9,7 +9,7 @@ import { PluginManager } from '@ton-ai/core';
 import { defaultState, reducer } from './state.js';
 import { injectStyles } from './styles.js';
 import { render } from './framework/render.js';
-import { useState } from './framework/hooks.js';
+import { useState, useEffect, useRef } from './framework/hooks.js';
 import { Header } from './components/header.js';
 import { AuthScreen } from './components/auth-screen.js';
 import { Sidebar } from './components/sidebar.js';
@@ -58,11 +58,55 @@ export class TelegramUI {
     this.callbacks = callbacks;
     injectStyles();
 
-    const self = this;
     const merged = { ...defaultState(), ...initialState };
+    document.documentElement.setAttribute('data-theme', merged.theme);
+
+    const self = this;
 
     function App() {
       const [state, setState] = useState<AppState>(merged);
+      const firstRun = useRef(true);
+
+      useEffect(() => {
+        const root = document.documentElement;
+        if (firstRun.current) {
+          firstRun.current = false;
+          root.setAttribute('data-theme', state.theme);
+          return;
+        }
+
+        const btn = document.querySelector('.tgui-theme-toggle');
+        let cx = window.innerWidth - 28;
+        let cy = 28;
+        if (btn) {
+          const r = btn.getBoundingClientRect();
+          cx = r.left + r.width / 2;
+          cy = r.top + r.height / 2;
+        }
+
+        const newTheme = state.theme;
+        const oldTheme = root.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+        const oldBg = oldTheme === 'light' ? '#ffffff' : '#121212';
+
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `position:fixed;inset:0;z-index:99999;pointer-events:none;background:${oldBg};clip-path:circle(150% at ${cx}px ${cy}px);transition:clip-path .4s cubic-bezier(.4,0,.2,1)`;
+        document.body.appendChild(overlay);
+
+        root.setAttribute('data-theme', newTheme);
+
+        overlay.getBoundingClientRect();
+
+        requestAnimationFrame(() => {
+          overlay.style.clipPath = `circle(0% at ${cx}px ${cy}px)`;
+        });
+
+        const onEnd = () => {
+          overlay.remove();
+        };
+        overlay.addEventListener('transitionend', onEnd, { once: true });
+
+        return () => overlay.remove();
+      }, [state.theme]);
 
       self._dispatch = (action: UIAction) => {
         setState((prev: AppState) => {
@@ -134,6 +178,10 @@ export class TelegramUI {
 
   dispatch(action: UIAction) {
     if (this._dispatch) this._dispatch(action);
+  }
+
+  setTheme(theme: AppState['theme']) {
+    this.dispatch({ type: 'SET_THEME', theme });
   }
 
   setStep(step: AppState['step']) { this.dispatch({ type: 'SET_STEP', step }); }

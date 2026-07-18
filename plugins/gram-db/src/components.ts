@@ -1,8 +1,6 @@
 import { crypton } from '@ton-ai/core';
 import { Buffer } from 'buffer';
 import type { GramDbConfig } from './types';
-import { BinlogEngine } from './binlog';
-
 const KEY_LEN = 32;
 const KEY_SALT_SIZE = 32;
 export const IV_SIZE = 16;
@@ -215,16 +213,9 @@ export class GramDbComponents {
       if (typeof navigator === 'undefined' || typeof (navigator as any).storage?.getDirectory !== 'function') {
         throw new Error('OPFS not available');
       }
-      const engineType = this.config.engineType || 'opfs';
-      if (engineType === 'binlog') {
-        const e = new BinlogEngine();
-        await e.init();
-        this._engine = e;
-      } else {
-        const e = new OpfsEngine();
-        await e.init();
-        this._engine = e;
-      }
+      const e = new OpfsEngine();
+      await e.init();
+      this._engine = e;
     })();
     return this._initPromise;
   }

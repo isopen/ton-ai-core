@@ -40,6 +40,7 @@ export interface Country {
 }
 
 export interface AppState {
+    theme: 'light' | 'dark';
     step: 'loading' | 'phone' | 'code' | 'password' | 'signup' | 'qr_login' | 'ready';
     phone: string;
     code: string;
@@ -70,6 +71,7 @@ export interface AppState {
 }
 
 export type UIAction =
+    | { type: 'SET_THEME'; theme: AppState['theme'] }
     | { type: 'SET_STEP'; step: AppState['step'] }
     | { type: 'SET_PHONE'; phone: string }
     | { type: 'SET_CODE'; code: string }

@@ -31,14 +31,18 @@ function StickerBubble({ m, timeStr, out, status }: { m: any; timeStr: string; o
   );
 }
 
-function PhotoBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {
+function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; sameSenderPrev?: boolean; sameSenderNext?: boolean }) {
+  let cls = 'MessageBubble';
+  cls += out ? ' MessageBubble_out' : ' MessageBubble_in';
+  if (sameSenderPrev) cls += ' MessageBubble_group_prev';
+  if (sameSenderNext) cls += ' MessageBubble_group_next';
   return (
-    <div class="tgui-photo">
+    <div class={cls}>
       <div class="tgui-photo-preview">
         {t(S.PHOTO_PLACEHOLDER)}
       </div>
-      {m.message ? <div class="tgui-photo-caption">{m.message}</div> : null}
-      <div class="tgui-sticker-meta">
+      {m.message ? <div class="MessageBubble__text">{m.message}</div> : null}
+      <div class="MessageBubble__meta">
         <span class="MessageBubble__time">{timeStr}</span>
         {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
       </div>
@@ -73,7 +77,7 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
       {mediaType === 'sticker'
         ? <StickerBubble m={m} timeStr={timeStr} out={m.out} status={status} />
         : mediaType === 'photo' || mediaType === 'image'
-          ? <PhotoBubble m={m} timeStr={timeStr} out={m.out} status={status} />
+          ? <PhotoBubble m={m} timeStr={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
           : <MessageBubble text={m.message || ''} time={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
       }
     </div>
@@ -117,7 +121,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
 
   const msgListChildren: any[] = [];
   const msgs = Array.isArray(state.messages) ? state.messages : [];
-  const isGroup = !!(state.selectedPeer && (state.selectedPeer as any).type !== 'user');
+  const isGroup = (state.selectedPeer as any)?.type === 'chat';
 
   msgs.forEach((m, i) => {
     const sameSenderPrev = i > 0 && msgs[i - 1].out === m.out && msgs[i - 1].sender === m.sender && msgs[i - 1].date - m.date < 300;

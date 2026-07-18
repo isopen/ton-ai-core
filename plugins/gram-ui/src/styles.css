@@ -38,6 +38,53 @@
   --font: system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans", "Noto Sans Arabic", "Noto Sans Armenian", "Noto Sans Bengali", "Noto Sans Devanagari", "Noto Sans Ethiopic", "Noto Sans Georgian", "Noto Sans Gujarati", "Noto Sans Gurmukhi", "Noto Sans Hebrew", "Noto Sans Kannada", "Noto Sans Khmer", "Noto Sans Lao", "Noto Sans Malayalam", "Noto Sans Myanmar", "Noto Sans Sinhala", "Noto Sans Tamil", "Noto Sans Telugu", "Noto Sans Thai", "Noto Sans SC", "Noto Sans TC", "Noto Sans JP", "Noto Sans KR", "Segoe UI", "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+  --chat-bg: #0d1418;
+  --bubble-out: #2b5278;
+  --bubble-in: #1f2c33;
+  --bubble-text: #fff;
+  --bubble-meta: rgba(255,255,255,0.48);
+  --chat-input-bg: #1f2c33;
+  --text-on-accent: #fff;
+  --text-on-danger: #fff;
+  --chat-glow-1: rgba(42, 82, 120, 0.08);
+  --chat-glow-2: rgba(31, 44, 51, 0.15);
+  --scrollbar-thumb: rgba(255,255,255,0.16);
+  --scrollbar-thumb-hover: rgba(255,255,255,0.24);
+}
+
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-surface: #f4f4f5;
+  --bg-card: #ffffff;
+  --bg-input: #f0f0f2;
+  --bg-hover: rgba(0,0,0,0.04);
+  --bg-active: rgba(0,0,0,0.08);
+  --text-primary: rgba(0,0,0,0.84);
+  --text-secondary: rgba(0,0,0,0.52);
+  --text-tertiary: rgba(0,0,0,0.28);
+  --accent: #007aff;
+  --accent-hover: #0066d6;
+  --accent-pressed: #0052b3;
+  --danger: #ff303c;
+  --danger-hover: #d62933;
+  --danger-pressed: #b3242d;
+  --border: rgba(0,0,0,0.12);
+  --border-hover: rgba(0,0,0,0.2);
+  --border-focus: #007aff;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+  --chat-bg: #e6ebee;
+  --bubble-out: #eeffde;
+  --bubble-in: #ffffff;
+  --bubble-text: #000000;
+  --bubble-meta: rgba(0,0,0,0.48);
+  --chat-input-bg: #ffffff;
+  --text-on-accent: #fff;
+  --text-on-danger: #fff;
+  --chat-glow-1: rgba(0, 122, 255, 0.04);
+  --chat-glow-2: rgba(0, 0, 0, 0.03);
+  --scrollbar-thumb: rgba(0,0,0,0.16);
+  --scrollbar-thumb-hover: rgba(0,0,0,0.24);
 }
 
 body {
@@ -46,7 +93,9 @@ body {
   overflow: hidden;
   font-family: var(--font);
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
+
 
 @font-face {
   font-family: 'Roboto';
@@ -189,12 +238,12 @@ body {
 }
 
 .Scrollable::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.16);
+  background: var(--scrollbar-thumb);
   border-radius: 999px;
 }
 
 .Scrollable::-webkit-scrollbar-thumb:hover {
-  background: rgba(255,255,255,0.24);
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* ===== Scrollbar ===== */
@@ -207,17 +256,17 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.16);
+  background: var(--scrollbar-thumb);
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255,255,255,0.24);
+  background: var(--scrollbar-thumb-hover);
 }
 
 * {
   scrollbar-width: auto;
-  scrollbar-color: rgba(255,255,255,0.16) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 /* ===== MUI Elevation Shadows ===== */
@@ -230,8 +279,8 @@ body {
 .mui-subtitle1 { font-size: 16px; font-weight: 400; line-height: 1.5; letter-spacing: 0.15px; }
 .mui-subtitle2 { font-size: 14px; font-weight: 500; line-height: 1.5; letter-spacing: 0.1px; }
 .mui-body2 { font-size: 14px; font-weight: 400; line-height: 1.5; letter-spacing: 0.17px; }
-.mui-caption { font-size: 12px; font-weight: 400; line-height: 1.5; letter-spacing: 0.4px; color: rgba(255,255,255,0.6); }
-.mui-overline { font-size: 10px; font-weight: 400; line-height: 2; letter-spacing: 1.5px; text-transform: uppercase; color: rgba(255,255,255,0.6); }
+.mui-caption { font-size: 12px; font-weight: 400; line-height: 1.5; letter-spacing: 0.4px; color: var(--text-secondary); }
+.mui-overline { font-size: 10px; font-weight: 400; line-height: 2; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-secondary); }
 
 /* ===== Panel ===== */
 .Panel {
@@ -272,7 +321,7 @@ body {
   text-decoration: none;
   -webkit-tap-highlight-color: transparent;
   background-color: var(--Button-bg, var(--accent));
-  color: var(--Button-fg, #fff);
+  color: var(--Button-fg, var(--text-on-accent));
   transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
 }
 
@@ -321,7 +370,7 @@ body {
 
 .Button_variant_primary {
   --Button-bg: var(--accent);
-  --Button-fg: #fff;
+  --Button-fg: var(--text-on-accent);
   --Button-bg-hover: var(--accent-hover);
   --Button-bg-active: var(--accent-pressed);
   --Button-bg-disabled: rgba(0,122,255,0.3);
@@ -350,7 +399,7 @@ body {
 
 .Button_variant_destructive {
   --Button-bg: var(--danger);
-  --Button-fg: #fff;
+  --Button-fg: var(--text-on-danger);
   --Button-bg-hover: var(--danger-hover);
   --Button-bg-active: var(--danger-pressed);
   --Button-bg-disabled: rgba(255,48,60,0.3);
@@ -364,7 +413,7 @@ body {
 
 .Button_pressed {
   --Button-bg: var(--accent);
-  --Button-fg: #fff;
+  --Button-fg: var(--text-on-accent);
   --Button-bg-hover: var(--accent-hover);
   --Button-bg-active: var(--accent-pressed);
 }
@@ -438,6 +487,29 @@ body {
 .tgui-header-session {
   font-size: 12px;
   color: var(--text-tertiary);
+}
+
+.tgui-theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.tgui-theme-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tgui-theme-toggle:active {
+  background: var(--bg-active);
 }
 
 /* ===== Language Selector ===== */
@@ -522,7 +594,7 @@ body {
 }
 .Input_mode_default:hover {
   border-color: var(--border-hover);
-  background: rgba(255,255,255,0.04);
+  background: var(--bg-hover);
 }
 .Input_mode_default:focus {
   border-color: var(--border-focus);
@@ -537,7 +609,7 @@ body {
   flex: 1;
   border: none;
   background: transparent;
-  color: #e0e0e0;
+  color: var(--text-primary);
   font-size: 15px;
   outline: none;
   padding: 10px 0;
@@ -840,7 +912,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #fff;
+  background: var(--bg-primary);
   border-radius: 10px;
   transition: opacity 0.3s ease-in-out;
 }
@@ -1131,7 +1203,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--text-on-accent);
   font-weight: 500;
   flex-shrink: 0;
   overflow: hidden;
@@ -1173,7 +1245,7 @@ body {
 
 .Badge_variant_pill {
   background: var(--accent);
-  color: #fff;
+  color: var(--text-on-accent);
   border-radius: 10px;
   padding: 0 8px;
   font-size: 12px;
@@ -1188,7 +1260,7 @@ body {
   top: -2px;
   right: -2px;
   background: var(--accent);
-  color: #fff;
+  color: var(--text-on-accent);
   border-radius: 50%;
   width: 18px;
   height: 18px;
@@ -1334,9 +1406,9 @@ body {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  background: #0d1418;
-  background-image: radial-gradient(ellipse at 20% 50%, rgba(42, 82, 120, 0.08) 0%, transparent 60%),
-                    radial-gradient(ellipse at 80% 50%, rgba(31, 44, 51, 0.15) 0%, transparent 60%);
+  background: var(--chat-bg);
+  background-image: radial-gradient(ellipse at 20% 50%, var(--chat-glow-1) 0%, transparent 60%),
+                    radial-gradient(ellipse at 80% 50%, var(--chat-glow-2) 0%, transparent 60%);
 }
 
 .tgui-msg-list {
@@ -1355,7 +1427,7 @@ body {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
-  background: rgba(255,255,255,0.05);
+  background: var(--bg-hover);
   padding: 3px 14px;
   border-radius: 10px;
   letter-spacing: 0.2px;
@@ -1372,9 +1444,7 @@ body {
   margin-right: 4px;
 }
 
-.tgui-msg-row:hover {
-  background: rgba(255,255,255,0.02);
-}
+
 
 .tgui-msg-row-out {
   align-items: flex-end;
@@ -1407,7 +1477,7 @@ body {
 }
 
 .MessageBubble_out {
-  background: #2b5278;
+  background: var(--bubble-out);
   border-radius: 16px 16px 4px 16px;
 }
 
@@ -1424,7 +1494,7 @@ body {
 }
 
 .MessageBubble_in {
-  background: #1f2c33;
+  background: var(--bubble-in);
   border-radius: 16px 16px 16px 4px;
 }
 
@@ -1443,7 +1513,7 @@ body {
 .MessageBubble__text {
   font-size: 15px;
   line-height: 1.45;
-  color: #fff;
+  color: var(--bubble-text);
   unicode-bidi: plaintext;
   word-break: break-word;
   white-space: pre-wrap;
@@ -1460,7 +1530,7 @@ body {
 
 .MessageBubble__time {
   font-size: 11px;
-  color: rgba(255,255,255,0.48);
+  color: var(--bubble-meta);
   line-height: 1;
   letter-spacing: 0.2px;
 }
@@ -1511,7 +1581,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255,255,255,0.05);
+  background: var(--bg-surface);
   border-radius: 16px;
   overflow: hidden;
   position: relative;
@@ -1534,20 +1604,20 @@ body {
   max-width: 320px;
 }
 
-.tgui-photo-preview {
-  border-radius: 12px;
+.MessageBubble .tgui-photo-preview {
+  margin: -8px -11px 0;
   overflow: hidden;
   position: relative;
-  background: rgba(255,255,255,0.08);
+  background: var(--bg-surface);
   padding: 20px;
   text-align: center;
-  color: rgba(255,255,255,0.5);
+  color: var(--text-secondary);
+  border-radius: 16px 16px 0 0;
 }
 
-.tgui-photo-caption {
-  margin-top: 4px;
-  padding: 0 4px;
-  font-size: 14px;
+.MessageBubble_out.MessageBubble_group_next .tgui-photo-preview,
+.MessageBubble_in.MessageBubble_group_next .tgui-photo-preview {
+  border-radius: 6px 6px 0 0;
 }
 
 /* ===== Debug ===== */
@@ -1721,26 +1791,26 @@ body {
   display: flex;
   gap: 6px;
   align-items: center;
-  background: #1f2c33;
+  background: var(--chat-input-bg);
   border-radius: 24px;
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid var(--border);
   padding: 2px 2px 2px 18px;
   transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
 }
 
 .chat-input-wrap:hover {
-  border-color: rgba(255,255,255,0.3);
-  background: rgba(255,255,255,0.06);
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
 }
 
 .chat-input-wrap:focus-within {
   border-color: var(--accent);
-  background: rgba(255,255,255,0.04);
+  background: var(--bg-hover);
   box-shadow: 0 0 0 2px rgba(0,122,255,0.15);
 }
 
 .Input_mode_chat::placeholder {
-  color: rgba(255,255,255,0.35);
+  color: var(--text-tertiary);
 }
 
 .tgui-emoji-picker {
@@ -1774,7 +1844,7 @@ body {
 }
 
 .tgui-emoji-item:hover {
-  background: rgba(255,255,255,0.08);
+  background: var(--bg-hover);
 }
 
 /* ===== MUI Chip (Status Bar) ===== */

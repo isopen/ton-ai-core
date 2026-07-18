@@ -20,8 +20,14 @@ function detectBrowserLang(): string {
   return SUPPORTED_LANGS.includes(code) ? code : 'en';
 }
 
+function detectBrowserTheme(): 'light' | 'dark' {
+  if (typeof window === 'undefined') return 'dark';
+  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
 export function defaultState(): AppState {
   return {
+    theme: detectBrowserTheme(),
     step: 'loading',
     phone: '',
     code: '',
@@ -54,6 +60,7 @@ export function defaultState(): AppState {
 
 export function reducer(state: AppState, action: UIAction): AppState {
   switch (action.type) {
+    case 'SET_THEME': return { ...state, theme: action.theme };
     case 'SET_STEP': return { ...state, step: action.step };
     case 'SET_PHONE': return { ...state, phone: action.phone };
     case 'SET_CODE': return { ...state, code: action.code };

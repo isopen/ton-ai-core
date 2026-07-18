@@ -1,4 +1,4 @@
-export type EngineType = 'opfs' | 'binlog';
+export type EngineType = 'opfs';
 
 export interface GramDbConfig {
   pbkdf2Iterations?: number;

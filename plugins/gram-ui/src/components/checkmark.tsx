@@ -6,10 +6,10 @@ interface CheckmarkProps {
 }
 
 const COLOR: Record<CheckmarkProps['status'], string> = {
-  pending: '#888',
-  sent: '#888',
-  delivered: '#888',
-  read: '#5ba3ff',
+  pending: 'var(--bubble-meta)',
+  sent: 'var(--bubble-meta)',
+  delivered: 'var(--bubble-meta)',
+  read: 'var(--accent)',
 };
 
 export function Checkmark({ status, className = '' }: CheckmarkProps) {
