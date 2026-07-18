@@ -28,7 +28,7 @@ import { getAvatarFromCache, saveAvatarToCache, setAvatarEncryptionKey, needAvat
 import { BrowserObfuscatedConnection } from '@ton-ai/telegram/dist/browser-connection';
 import { generateObfuscationInit, abridgedEncode } from '@ton-ai/telegram/dist/obfuscation-utils';
 
-import { TdBinlog, EventType } from './tdbinlog';
+import { BinlogEngine } from '@ton-ai/gram-db';
 
 interface TgSession {
     authKey: Buffer;
@@ -97,7 +97,7 @@ let msgIdCounter = 0;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 let connectionInitialized = false;
 let homeSession: TgSession | null = null;
-let tdBinlog: TdBinlog | null = null;
+let sessionDb: BinlogEngine | null = null;
 
 let onUpdateCb: ((constructorId: number, data: string) => void) | null = null;
 let onAuthInvalidatedCb: (() => void) | null = null;
@@ -1365,7 +1365,7 @@ async function scheduleReconnect(): Promise<void> {
 function notifyAuthInvalidated(): void {
     authenticated = false;
     stopHealthCheck();
-    if (tdBinlog) tdBinlog.clear().catch(() => {});
+    if (sessionDb) sessionDb.removeItem('__tdsession').catch(() => {});
     onAuthInvalidatedCb?.();
     try { self.dispatchEvent(new CustomEvent('tg-auth-invalidated')); } catch {}
 }
@@ -2046,19 +2046,26 @@ async function initUpdates(): Promise<void> {
 }
 
 async function persistSession(): Promise<void> {
-    if (!ses || !curSessionId || !tdBinlog) return;
-    await tdBinlog.append(EventType.AuthKey, ses.dcId, ses.authKey, ses.authKeyId, ses.serverSalt);
+    if (!ses || !curSessionId || !sessionDb) return;
+    const data: Record<string, any> = {
+        dcId: ses.dcId,
+        authKey: ses.authKey.toString('hex'),
+        authKeyId: ses.authKeyId.toString(),
+        serverSalt: ses.serverSalt.toString(),
+        serverTimeOffset,
+        authenticated,
+        passwordPending,
+    };
     if (homeSession) {
-        await tdBinlog.append(EventType.HomeAuthKey, homeSession.dcId, homeSession.authKey, homeSession.authKeyId, homeSession.serverSalt);
+        data.homeDcId = homeSession.dcId;
+        data.homeAuthKey = homeSession.authKey.toString('hex');
+        data.homeAuthKeyId = homeSession.authKeyId.toString();
+        data.homeServerSalt = homeSession.serverSalt.toString();
     }
-    let flags = 0;
-    if (authenticated) flags |= 1;
-    if (passwordPending) flags |= 2;
-    await tdBinlog.append(EventType.SessionFlags, flags);
-    await tdBinlog.append(EventType.ServerTimeOffset, serverTimeOffset);
     if (pendingAuth?.phoneCodeHash) {
-        await tdBinlog.append(EventType.PendingCodeHash, pendingAuth.phoneCodeHash);
+        data.pendingCodeHash = pendingAuth.phoneCodeHash;
     }
+    await sessionDb.setItem('__tdsession', JSON.stringify(data));
 }
 
 const TELEGRAM_PUBLIC_KEY = `-----BEGIN RSA PUBLIC KEY-----
@@ -2108,17 +2115,19 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     curSessionId = reqSessionId;
     await setAvatarEncryptionKey(reqSessionId);
 
-    if (!tdBinlog) {
-      tdBinlog = new TdBinlog();
-      await tdBinlog.init(reqSessionId);
+    if (!sessionDb) {
+      sessionDb = new BinlogEngine();
+      await sessionDb.init();
+      await sessionDb.setEncryptionKey(new TextEncoder().encode(reqSessionId));
     }
-    const state = tdBinlog.getState();
+    const raw = await sessionDb.getItem('__tdsession');
+    const state = raw ? JSON.parse(raw) : {};
     const saved = state.authKey ? state : null;
     if (saved) {
         serverTimeOffset = saved.serverTimeOffset;
-        const authKey = saved.authKey!;
-        const authKeyId = saved.authKeyId!;
-        const serverSalt = saved.serverSalt!;
+        const authKey = Buffer.from(saved.authKey, 'hex');
+        const authKeyId = BigInt(saved.authKeyId);
+        const serverSalt = BigInt(saved.serverSalt);
         setAuthKeys(authKey, authKeyId, serverSalt);
         ses = {
             authKey, authKeyId, serverSalt,
@@ -2134,9 +2143,9 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
         passwordPending = saved.passwordPending || false;
         if (authenticated && saved.homeAuthKey && saved.homeAuthKeyId && saved.homeServerSalt && saved.homeDcId != null) {
             homeSession = {
-                authKey: saved.homeAuthKey,
-                authKeyId: saved.homeAuthKeyId,
-                serverSalt: saved.homeServerSalt,
+                authKey: Buffer.from(saved.homeAuthKey, 'hex'),
+                authKeyId: BigInt(saved.homeAuthKeyId),
+                serverSalt: BigInt(saved.homeServerSalt),
                 serverTime: Math.floor(Date.now() / 1000) + serverTimeOffset,
                 dcId: saved.homeDcId,
                 sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
@@ -2266,7 +2275,7 @@ async function handleLogout(): Promise<void> {
     passwordPending = false;
     stopHealthCheck();
     pendingAuth = null;
-    if (tdBinlog) await tdBinlog.clear();
+    if (sessionDb) await sessionDb.removeItem('__tdsession');
     await setAvatarEncryptionKey(null);
     await handleDisconnect();
 }
@@ -2559,7 +2568,10 @@ export function getAuthState(): 'none' | 'code_sent' | 'password_needed' | 'auth
 
 
 try {
-    postMessage({ type: 'ready' });
-} catch (e: any) {
-    postMessage({ type: 'error', error: 'Worker init error: ' + e.message });
+    // Notify owner when loaded as a dedicated worker (SharedWorker handles this via onconnect)
+    if (typeof postMessage !== 'undefined') {
+        postMessage({ type: 'ready' });
+    }
+} catch {
+    // Not in a DedicatedWorker context (e.g. SharedWorker or in-process) — ignore
 }

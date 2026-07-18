@@ -1,6 +1,6 @@
 import { WorkerTelegramService } from '@/utils/worker-telegram-service';
 import { TelegramUI, setStrings, t, tpl, S, LANG_FALLBACKS } from '@ton-ai/gram-ui';
-import type { PeerInfo, Dialog, Message, TelegramUICallbacks } from '@ton-ai/gram-ui';
+import type { PeerInfo, Dialog, Message, AppState, TelegramUICallbacks } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbKeys, dbCompact, dbClearCacheKeepSession, migrateFromLocalStorage, setEncryptionKey, dbDeleteAvatar, dbDeleteAvatarByOpfsName, dbListAvatars } from '@/utils/db';
 import { crypton } from '@ton-ai/core';
 import { parseEventHeader, decodeKvPayload, parseEncryptionEvent } from '@ton-ai/gram-db';
@@ -717,7 +717,13 @@ export class GramApp {
       setStrings({ ...extra, ...(cached || {}) });
     } catch {}
 
-    s.tgui.current = new TelegramUI(container, callbacks);
+    const tguiInit = saved ? {
+      step: 'ready' as AppState['step'],
+      dialogs: s.dialogsRef.current,
+      connectionStatus: 'connecting' as AppState['connectionStatus'],
+    } : undefined;
+
+    s.tgui.current = new TelegramUI(container, callbacks, tguiInit);
 
     const savedLang = await dbGet<string>('langCode');
     if (savedLang) {

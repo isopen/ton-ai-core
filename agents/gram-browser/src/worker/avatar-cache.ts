@@ -1,7 +1,9 @@
 import { getGramDb } from '../utils/gram-db';
 
 export async function setAvatarEncryptionKey(sessionId: string | null): Promise<void> {
-    return getGramDb().setAvatarEncryptionKey(sessionId);
+    const db = getGramDb();
+    await db.getSessionId();
+    return db.setAvatarEncryptionKey(sessionId);
 }
 
 export async function getAvatarFromCache(key: string): Promise<string | null> {

@@ -24,6 +24,12 @@ const nextConfig: NextConfig = {
           resource.request = path.resolve(__dirname, 'src/polyfill/core-stub.ts');
         })
       );
+      // Patch @ton/crypto-primitives to use globalThis instead of window (works in SharedWorker)
+      const replaceWindowLoader = path.resolve(__dirname, 'src/loader/replace-window.js');
+      config.module.rules.push({
+        test: /@ton\/crypto-primitives\/dist\/browser\/.*\.js$/,
+        loader: replaceWindowLoader,
+      });
     }
 
     return config;

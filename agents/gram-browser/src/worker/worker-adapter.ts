@@ -1,19 +1,19 @@
-import { InProcessWorkerClient } from './inprocess-adapter';
+import { SharedWorkerClient } from './shared-worker-client';
 
 type WorkerMessageHandler = (msg: any) => void;
 type WorkerStatus = 'idle' | 'connecting' | 'connected';
 
 export class TelegramWorkerClient {
-    private client: InProcessWorkerClient;
+    private client: SharedWorkerClient;
     private updateHandler: WorkerMessageHandler | null = null;
     private status: WorkerStatus = 'idle';
     private statusListeners = new Set<(s: WorkerStatus) => void>();
     onAuthInvalidated: (() => void) | null = null;
 
     constructor() {
-        this.client = new InProcessWorkerClient();
+        this.client = new SharedWorkerClient();
         this.client.onUpdate((msg) => {
-            if (msg.type === 'update' && this.updateHandler) {
+            if (this.updateHandler) {
                 this.updateHandler(msg);
             }
         });

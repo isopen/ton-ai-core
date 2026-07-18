@@ -54,14 +54,15 @@ export class TelegramUI {
 
   get state(): AppState { return this._state; }
 
-  constructor(container: HTMLElement, callbacks: TelegramUICallbacks) {
+  constructor(container: HTMLElement, callbacks: TelegramUICallbacks, initialState?: Partial<AppState>) {
     this.callbacks = callbacks;
     injectStyles();
 
     const self = this;
+    const merged = { ...defaultState(), ...initialState };
 
     function App() {
-      const [state, setState] = useState<AppState>(defaultState());
+      const [state, setState] = useState<AppState>(merged);
 
       self._dispatch = (action: UIAction) => {
         setState((prev: AppState) => {
