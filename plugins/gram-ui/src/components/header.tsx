@@ -38,7 +38,7 @@ export function Header({ state, dispatch }: { state: AppState; dispatch: Dispatc
         <button class="tgui-theme-toggle" onClick={() => dispatch({ type: 'SET_THEME', theme: state.theme === 'dark' ? 'light' : 'dark' })}>
           <ThemeIcon theme={state.theme} />
         </button>
-        {state.step === 'ready'
+        {state.page === 'dialogs'
           ? <Button variant="destructive" size="small" onClick={() => dispatch({ type: 'LOGOUT' })}>{t(S.HEADER_LOGOUT)}</Button>
           : null}
       </div>

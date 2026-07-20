@@ -78,33 +78,6 @@ function KeyValueRow({ k, v, onDelete }: { k: string; v: string; onDelete: (key:
   );
 }
 
-function BinlogEventRow({ ev }: { ev: BinlogEventItem }) {
-  const [open, setOpen] = useState(false);
-  const isEnc = ev.type === -3 || ev.type === -4;
-  const isData = ev.type === 1 || ev.type === 2;
-  return (
-    <div class="tgui-cache-bevent">
-      <div class="tgui-cache-bevent-header" onClick={() => setOpen(!open)}>
-        <span class="tgui-cache-kv-toggle">{open ? '▼' : '▶'}</span>
-        <span class="tgui-cache-bevent-type" data-enc={isEnc ? '' : undefined}>{ev.typeName}</span>
-        <span class="tgui-cache-bevent-key">{ev.key || ''}</span>
-        <span class="tgui-cache-bevent-id">#{ev.id}</span>
-        <span class="tgui-cache-bevent-off">@{ev.off}</span>
-        <span class="tgui-cache-kv-size">{formatSize(ev.size)}</span>
-      </div>
-      {open && isData && ev.value != null && (
-        <pre class="tgui-cache-kv-value">{tryPrettyJson(ev.value).formatted}</pre>
-      )}
-      {open && isEnc && (
-        <div class="tgui-cache-bevent-meta">
-          flags={ev.flags ?? 0}
-          {ev.key && <span> key={ev.key}</span>}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function TdSessionRow({ ev }: { ev: TdSessionEvent }) {
   const hasStructured = ev.dcId !== undefined || ev.flags !== undefined || ev.offset !== undefined || ev.hash !== undefined;
   const summary = hasStructured
@@ -488,15 +461,7 @@ export function CacheView({ }: { state: AppState }) {
                   </div>
                 )}
 
-                {/* Binlog events */}
-                {binlogEvents.length > 0 && (
-                  <div class="tgui-cache-bevent-list" style="margin-top:8px">
-                    <div class="tgui-cache-bevent-section-label">Binlog events</div>
-                    {binlogEvents.map((ev, i) => (
-                      <BinlogEventRow key={i} ev={ev} />
-                    ))}
-                  </div>
-                )}
+                
               </div>
             )}
           </div>

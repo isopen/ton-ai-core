@@ -40,6 +40,9 @@ export class GramApp {
     await loadCachedDialogs(s);
     setTimeout(() => dbCompact().catch(() => {}), 5000);
 
+    const savedTheme = await dbGet<string>('theme')
+      || (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' as const : 'dark' as const);
+
     const onSetLang = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.langCode) {
@@ -50,14 +53,15 @@ export class GramApp {
     const onSetStep = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.step) {
-        s.tgui.current?.setStep(detail.step);
+        s.tgui.current?.setAuthStep(detail.step);
       }
     };
     window.addEventListener('tg-auth-set-lang', onSetLang);
     window.addEventListener('tg-auth-set-step', onSetStep);
     const onAuthInvalidated = () => {
       s.tgui.current?.setConnectionStatus('disconnected');
-      s.tgui.current?.setStep('phone');
+      s.tgui.current?.setPage('auth');
+      s.tgui.current?.setAuthStep('phone');
       s.tgui.current?.setError('Session terminated from another device');
     };
     window.addEventListener('tg-auth-invalidated', onAuthInvalidated);
@@ -297,16 +301,18 @@ export class GramApp {
             s.tgui.current!.dispatch({ type: 'SET_PHONE_CODE_HASH', hash: result.phoneCodeHash });
           }
           addLog(s, tpl(S.LOG_CODE_SENT, { phone }));
-          s.tgui.current!.setStep('code');
+          s.tgui.current!.setAuthStep('code');
         } catch (e: any) {
           s.tgui.current!.setError(e.message);
-          s.tgui.current!.setStep('phone');
+          s.tgui.current!.setAuthStep('phone');
         }
       },
       signIn: async (code: string) => {
         try {
           await s.tgService.current!.signIn(s.tgui.current!.state.phone, code);
-          s.tgui.current!.setStep('ready');
+          await dbDel('authInvalidated').catch(() => {});
+          s.tgui.current!.setConnectionStatus('connected');
+          s.tgui.current!.setPage('dialogs');
           const dialogsResult = await s.tgService.current!.fetchDialogs();
           if (dialogsResult) {
             setDialogsFromServer(s, dialogsResult);
@@ -314,19 +320,21 @@ export class GramApp {
           await fetchSelfUserId(s);
         } catch (e: any) {
           if (e.message.includes('SESSION_PASSWORD_NEEDED')) {
-            s.tgui.current!.setStep('password');
+            s.tgui.current!.setAuthStep('password');
           } else if (e.message.includes('AUTH_KEY_UNREGISTERED') || e.message.includes('auth.authorizationSignUpRequired')) {
-            s.tgui.current!.setStep('signup');
+            s.tgui.current!.setAuthStep('signup');
           } else {
             s.tgui.current!.setError(e.message);
-            s.tgui.current!.setStep('phone');
+            s.tgui.current!.setAuthStep('phone');
           }
         }
       },
       checkPassword: async (password: string) => {
         try {
           await s.tgService.current!.checkPassword(password);
-          s.tgui.current!.setStep('ready');
+          await dbDel('authInvalidated').catch(() => {});
+          s.tgui.current!.setConnectionStatus('connected');
+          s.tgui.current!.setPage('dialogs');
           const dialogsResult = await s.tgService.current!.fetchDialogs();
           if (dialogsResult) {
             setDialogsFromServer(s, dialogsResult);
@@ -334,7 +342,7 @@ export class GramApp {
           await fetchSelfUserId(s);
         } catch (e: any) {
           s.tgui.current!.setError(e.message);
-          s.tgui.current!.setStep('password');
+          s.tgui.current!.setAuthStep('password');
         }
       },
       sendMessage: async (text: string) => {
@@ -518,7 +526,8 @@ export class GramApp {
         }
       },
       logout: async () => {
-        s.tgui.current!.setStep('loading');
+        s.tgui.current!.setPage('auth');
+        s.tgui.current!.setAuthStep('loading');
         s.tgui.current!.dispatch({ type: 'SET_CONNECTION_STATUS', status: 'disconnected' });
         try {
           await s.tgService.current!.logout();
@@ -530,7 +539,7 @@ export class GramApp {
           s.tgui.current!.setError(e.message);
         }
         requestAnimationFrame(() => {
-          s.tgui.current!.setStep('phone');
+          s.tgui.current!.setAuthStep('phone');
         });
       },
       signUp: async (firstname: string, lastname: string) => {
@@ -543,7 +552,9 @@ export class GramApp {
             first_name: firstname,
             last_name: lastname,
           });
-          s.tgui.current!.setStep('ready');
+          await dbDel('authInvalidated').catch(() => {});
+          s.tgui.current!.setConnectionStatus('connected');
+          s.tgui.current!.setPage('dialogs');
           const dialogsResult = await s.tgService.current!.fetchDialogs();
           if (dialogsResult) {
             setDialogsFromServer(s, dialogsResult);
@@ -551,7 +562,7 @@ export class GramApp {
           await fetchSelfUserId(s);
         } catch (e: any) {
           s.tgui.current!.setError(e.message);
-          s.tgui.current!.setStep('signup');
+          s.tgui.current!.setAuthStep('signup');
         }
       },
       requestQrCode: async () => {
@@ -565,13 +576,13 @@ export class GramApp {
           });
           if (result?._ === 'auth.loginTokenMigrateTo') {
             s.tgui.current!.setError('DC migration not supported');
-            s.tgui.current!.setStep('phone');
+            s.tgui.current!.setAuthStep('phone');
             return;
           }
           let tokenHex: string = result?.token;
           if (!tokenHex) {
             s.tgui.current!.setError('No token in response');
-            s.tgui.current!.setStep('phone');
+            s.tgui.current!.setAuthStep('phone');
             return;
           }
           const makeQrUrl = (hex: string) => {
@@ -600,7 +611,7 @@ export class GramApp {
               });
               if (pollResult?._ === 'auth.loginTokenSuccess') {
                 s.tgService.current!.authenticated = true;
-                s.tgui.current!.setStep('loading');
+                s.tgui.current!.setAuthStep('loading');
                 const dialogsResult = await s.tgService.current!.fetchDialogs();
                 if (dialogsResult) {
                   setDialogsFromServer(s, dialogsResult);
@@ -623,7 +634,9 @@ export class GramApp {
                   }
                 }
                 await fetchSelfUserId(s);
-                s.tgui.current!.setStep('ready');
+                await dbDel('authInvalidated').catch(() => {});
+                s.tgui.current!.setConnectionStatus('connected');
+                s.tgui.current!.setPage('dialogs');
                 return true;
               }
               if (pollResult?._ === 'auth.loginTokenMigrateTo') {
@@ -646,7 +659,7 @@ export class GramApp {
           }, 120000);
         } catch (e: any) {
           s.tgui.current!.setError(e.message);
-          s.tgui.current!.setStep('phone');
+          s.tgui.current!.setAuthStep('phone');
         }
       },
       selectPeer: (peer: PeerInfo) => {
@@ -717,35 +730,64 @@ export class GramApp {
       setStrings({ ...extra, ...(cached || {}) });
     } catch {}
 
-    const tguiInit = saved ? {
-      step: 'ready' as AppState['step'],
-      dialogs: s.dialogsRef.current,
+    const savedLang = await dbGet<string>('langCode');
+    const savedId = (await dbGet<string>('sessionId')) || s.sessionIdRef.current;
+    const authInvalidated = await dbGet<string>('authInvalidated');
+    await dbDel('authInvalidated').catch(() => {});
+
+    const tguiInit = {
+      page: authInvalidated ? 'auth' as AppState['page'] : 'dialogs' as AppState['page'],
+      authStep: 'loading' as AppState['authStep'],
+      theme: savedTheme as AppState['theme'],
+      dialogs: [],
       connectionStatus: 'connecting' as AppState['connectionStatus'],
-    } : undefined;
+    };
 
     s.tgui.current = new TelegramUI(container, callbacks, tguiInit);
 
-    const savedLang = await dbGet<string>('langCode');
+    const onThemeChanged = (e: Event) => {
+      const theme = (e as CustomEvent).detail?.theme;
+      if (theme) {
+        dbSet('theme', theme).catch(() => {});
+        document.cookie = `tg-theme=${theme};path=/;max-age=31536000;SameSite=Lax`;
+      }
+    };
+    window.addEventListener('tg-theme-changed', onThemeChanged);
+    s.cleanupFns.push(() => window.removeEventListener('tg-theme-changed', onThemeChanged));
+
     if (savedLang) {
       s.tgui.current!.dispatch({ type: 'SET_LANG_CODE', langCode: savedLang });
     }
-    const savedId = (await dbGet<string>('sessionId')) || s.sessionIdRef.current;
 
     const handleUpdate = createHandleUpdate(s);
 
     const service = new WorkerTelegramService(savedId, (msg) => addLog(s, msg), handleUpdate);
     s.tgService.current = service;
 
-    service.onAuthInvalidated = () => {
+    service.onAuthInvalidated = async () => {
+      s.tgui.current?.dispatch({ type: 'SET_DIALOGS', dialogs: [] });
       s.tgui.current?.setConnectionStatus('disconnected');
-      s.tgui.current?.setStep('phone');
+      s.tgui.current?.setPage('auth');
+      s.tgui.current?.setAuthStep('phone');
       s.tgui.current?.setError('Session terminated from another device');
+      await dbSet('authInvalidated', '1').catch(() => {});
     };
-    service.workerClient?.onStatusChange((status: string) => {
-      s.tgui.current?.setConnectionStatus(status === 'connected' ? 'connected' : status === 'connecting' ? 'connecting' : 'disconnected');
-    });
 
-    await service.connect();
+    try {
+      await Promise.race([
+        service.connect(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000)),
+      ]);
+    } catch (e) {
+      addLog(s, 'Connect error: ' + ((e as any)?.message || 'unknown'));
+      if (s.tgui.current) {
+        s.tgui.current.setConnectionStatus('disconnected');
+        s.tgui.current.setPage('auth');
+        s.tgui.current.setAuthStep('phone');
+        s.tgui.current.setError('Connection failed');
+      }
+      return;
+    }
 
     const langDeps = { tgui: s.tgui, tgService: s.tgService };
     const loadStringsFn = () => loadStrings(langDeps);
@@ -753,7 +795,6 @@ export class GramApp {
     await loadStringsFn();
 
     s.tgui.current!.setSessionId(savedId);
-    s.tgui.current!.setConnectionStatus(service.connected ? 'connected' : 'disconnected');
     addLog(s, t(S.LOG_CONNECTED));
 
     (async () => {
@@ -786,7 +827,9 @@ export class GramApp {
     })();
 
     if (service.authenticated) {
-      s.tgui.current!.setStep('ready');
+      await dbDel('authInvalidated').catch(() => {});
+      s.tgui.current!.setPage('dialogs');
+      s.tgui.current!.setConnectionStatus('connected');
       try {
         const dialogsResult = await service.fetchDialogs();
         if (dialogsResult) {
@@ -797,13 +840,15 @@ export class GramApp {
       }
       await fetchSelfUserId(s);
     } else {
+      s.tgui.current!.setPage('auth');
+      s.tgui.current?.dispatch({ type: 'SET_DIALOGS', dialogs: [] });
       try {
         const state = await service.getAuthState();
-        if (state === 'code_sent') s.tgui.current!.setStep('code');
-        else if (state === 'password_needed') s.tgui.current!.setStep('password');
-        else s.tgui.current!.setStep('phone');
+        if (state === 'code_sent') s.tgui.current!.setAuthStep('code');
+        else if (state === 'password_needed') s.tgui.current!.setAuthStep('password');
+        else s.tgui.current!.setAuthStep('phone');
       } catch {
-        s.tgui.current!.setStep('phone');
+        s.tgui.current!.setAuthStep('phone');
       }
     }
   }

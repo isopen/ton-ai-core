@@ -12,6 +12,7 @@ interface PortLike {
 const ctx = self as unknown as { onconnect: ((event: { ports: PortLike[] }) => void) | null };
 
 const ports = new Set<PortLike>();
+let lastSessionId = '';
 
 TW.setOnUpdate((constructorId, data) => {
     for (const port of ports) {
@@ -43,17 +44,27 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
     port.start();
 };
 
+async function ensureConnected(): Promise<void> {
+    if (!TW.isConnected() && lastSessionId) {
+        await TW.handleConnect(lastSessionId, 2);
+    }
+}
+
 async function handleMessage(msg: Record<string, any>): Promise<any> {
     switch (msg.type) {
         case 'connect':
+            lastSessionId = msg.sessionId;
             await TW.handleConnect(msg.sessionId, msg.dcId || 2);
             return { type: 'connected', authenticated: TW.isAuthenticated() };
         case 'sendCode':
+            await ensureConnected();
             return { type: 'codeSent', ...(await TW.sendCode(msg.phoneNumber)) };
         case 'signIn':
+            await ensureConnected();
             await TW.signIn(msg.phoneNumber, msg.code);
             return { type: 'signedIn' };
         case 'checkPassword':
+            await ensureConnected();
             await TW.checkPassword(msg.password);
             return { type: 'passwordOk' };
         case 'getAuthState': {

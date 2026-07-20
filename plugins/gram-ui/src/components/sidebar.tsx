@@ -1,6 +1,7 @@
 import { h, Fragment } from '../framework/jsx-runtime.js';
 import { Scrollable } from '../primitives/scrollable.js';
 import { IconButton } from '../primitives/icon-button.js';
+import { Spinner } from '../primitives/spinner.js';
 import { DialogItem } from './dialog-item.js';
 import { ConnectionIndicator } from './connection-indicator.js';
 import { ActionMenu } from './action-menu.js';
@@ -28,21 +29,26 @@ export function Sidebar({ state, dispatch }: { state: AppState; dispatch: Dispat
           </div>
         </div>
         <Scrollable className="tgui-sidebar-list">
-          {state.dialogs.map(d =>
-            <DialogItem
-              d={d}
-              selected={state.selectedPeer?.id === d.peer.id && state.selectedPeer?.type === d.peer.type}
-              collapsed={collapsed}
-              key={`${d.peer.type}_${d.peer.id}`}
-              typingText={state.selectedPeer?.id === d.peer.id && state.selectedPeer?.type === d.peer.type ? '' : (state.typingByPeer[`${d.peer.type}_${d.peer.id}`] || '')}
-              selfUserId={state.selfUserId}
-              onClick={() => {
-                dispatch({ type: 'SET_ACTIVE_SKILL', id: null });
-                dispatch({ type: 'SET_SELECTED_PEER', peer: d.peer });
-                if (window.innerWidth <= 768) dispatch({ type: 'SET_SIDEBAR_COLLAPSED', v: true });
-              }}
-            />
-          )}
+          {state.dialogs.length === 0
+            ? <div class="tgui-sidebar-loader"><Spinner /></div>
+            : state.dialogs.length > 0
+              ? state.dialogs.map(d => (
+                <DialogItem
+                  d={d}
+                  selected={state.selectedPeer?.id === d.peer.id && state.selectedPeer?.type === d.peer.type}
+                  collapsed={collapsed}
+                  key={`${d.peer.type}_${d.peer.id}`}
+                  typingText={state.selectedPeer?.id === d.peer.id && state.selectedPeer?.type === d.peer.type ? '' : (state.typingByPeer[`${d.peer.type}_${d.peer.id}`] || '')}
+                  selfUserId={state.selfUserId}
+                  onClick={() => {
+                    dispatch({ type: 'SET_ACTIVE_SKILL', id: null });
+                    dispatch({ type: 'SET_SELECTED_PEER', peer: d.peer });
+                    if (window.innerWidth <= 768) dispatch({ type: 'SET_SIDEBAR_COLLAPSED', v: true });
+                  }}
+                />
+              ))
+              : null
+          }
 
         </Scrollable>
       </div>

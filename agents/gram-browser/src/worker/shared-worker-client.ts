@@ -26,7 +26,8 @@ export class SharedWorkerClient {
 
     async start(apiId: number, apiHash: string): Promise<void> {
         if (this.worker) return;
-        this.worker = new SharedWorker(new URL('./shared-worker.ts', import.meta.url), { name: 'mtproto' });
+        const workerId = Math.random().toString(36).substring(2, 10);
+        this.worker = new SharedWorker(new URL('./shared-worker.ts', import.meta.url), { name: `gram-browser-${workerId}` });
         this.port = this.worker.port;
 
         this.port.onmessage = (event) => {

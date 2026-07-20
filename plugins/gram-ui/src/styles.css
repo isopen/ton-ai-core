@@ -1055,6 +1055,13 @@ body {
   padding: 8px 0;
 }
 
+.tgui-sidebar-loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 0;
+}
+
 /* ===== Sidebar header actions ===== */
 .tgui-sidebar-header-actions {
   display: flex;

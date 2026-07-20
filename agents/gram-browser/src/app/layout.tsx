@@ -15,8 +15,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
     return (
-        <html lang="en" style={{ overflow: 'hidden', height: '100%', background: '#0d0d0d' }}>
+        <html lang="en" suppressHydrationWarning style={{ overflow: 'hidden', height: '100%', background: '#0d0d0d' }}>
             <head>
+                <script dangerouslySetInnerHTML={{
+                    __html: `(function(){try{var m=document.cookie.match(/(?:^|;\\s*)tg-theme=([^;]*)/);if(m){var t=m[1];document.documentElement.setAttribute('data-theme',t);document.documentElement.style.background=t==='light'?'#ffffff':'#121212'}}catch(e){}})()`
+                }} />
                 <link rel="apple-touch-icon" href="/icon.svg" />
                 <meta name="apple-mobile-web-app-capable" content="yes" />
                 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

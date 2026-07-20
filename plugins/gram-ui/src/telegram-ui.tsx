@@ -76,7 +76,7 @@ export class TelegramUI {
         }
 
         const btn = document.querySelector('.tgui-theme-toggle');
-        let cx = window.innerWidth - 28;
+        let cx = 16;
         let cy = 28;
         if (btn) {
           const r = btn.getBoundingClientRect();
@@ -86,13 +86,25 @@ export class TelegramUI {
 
         const newTheme = state.theme;
         const oldTheme = root.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-        const oldBg = oldTheme === 'light' ? '#ffffff' : '#121212';
+
+        const oldBg = getComputedStyle(root).getPropertyValue('--bg-primary').trim() || (oldTheme === 'light' ? '#ffffff' : '#121212');
 
         const overlay = document.createElement('div');
-        overlay.style.cssText = `position:fixed;inset:0;z-index:99999;pointer-events:none;background:${oldBg};clip-path:circle(150% at ${cx}px ${cy}px);transition:clip-path .4s cubic-bezier(.4,0,.2,1)`;
+        overlay.style.cssText = [
+          'position:fixed',
+          'inset:0',
+          'z-index:99999',
+          'pointer-events:none',
+          `background:${oldBg}`,
+          `clip-path:circle(150% at ${cx}px ${cy}px)`,
+          'transition:clip-path .35s cubic-bezier(0.4,0.0,0.2,1)',
+          'will-change:clip-path',
+        ].join(';');
         document.body.appendChild(overlay);
 
         root.setAttribute('data-theme', newTheme);
+
+        window.dispatchEvent(new CustomEvent('tg-theme-changed', { detail: { theme: newTheme } }));
 
         overlay.getBoundingClientRect();
 
@@ -130,7 +142,7 @@ export class TelegramUI {
           <div class="tgui-header-wrapper">
             <Header state={state} dispatch={self._dispatch} />
           </div>
-          {state.step !== 'ready'
+          {state.page === 'auth'
             ? <Flex key="auth-body" direction="row" grow className="tgui-body">
                 <AuthScreen state={state} dispatch={self._dispatch} />
               </Flex>
@@ -184,7 +196,12 @@ export class TelegramUI {
     this.dispatch({ type: 'SET_THEME', theme });
   }
 
-  setStep(step: AppState['step']) { this.dispatch({ type: 'SET_STEP', step }); }
+  setPage(page: AppState['page']) {
+    this.dispatch({ type: 'SET_PAGE', page });
+  }
+  setAuthStep(authStep: AppState['authStep']) {
+    this.dispatch({ type: 'SET_AUTH_STEP', authStep });
+  }
   setPhone(phone: string) { this.dispatch({ type: 'SET_PHONE', phone }); }
   setError(error: string) { this.dispatch({ type: 'SET_ERROR', error }); }
   setSessionId(id: string) { this.dispatch({ type: 'SET_SESSION_ID', id }); }

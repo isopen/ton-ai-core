@@ -28,7 +28,8 @@ function detectBrowserTheme(): 'light' | 'dark' {
 export function defaultState(): AppState {
   return {
     theme: detectBrowserTheme(),
-    step: 'loading',
+    page: 'auth',
+    authStep: 'loading',
     phone: '',
     code: '',
     password: '',
@@ -61,7 +62,8 @@ export function defaultState(): AppState {
 export function reducer(state: AppState, action: UIAction): AppState {
   switch (action.type) {
     case 'SET_THEME': return { ...state, theme: action.theme };
-    case 'SET_STEP': return { ...state, step: action.step };
+    case 'SET_PAGE': return { ...state, page: action.page };
+    case 'SET_AUTH_STEP': return { ...state, authStep: action.authStep };
     case 'SET_PHONE': return { ...state, phone: action.phone };
     case 'SET_CODE': return { ...state, code: action.code };
     case 'SET_PASSWORD': return { ...state, password: action.password };
@@ -98,7 +100,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_SELF_USER_ID': return { ...state, selfUserId: action.userId };
     case 'SET_PLUGIN_SKILLS': return { ...state, pluginSkills: action.skills };
     case 'SET_ACTIVE_SKILL': return { ...state, activeSkill: action.id, ...(action.id ? { selectedPeer: null } : {}) };
-    case 'LOGOUT': return { ...state, step: 'phone', dialogs: [], selectedPeer: null, messages: [], phone: '', code: '', password: '', error: '', signupFirstname: '', signupLastname: '', phoneCodeHash: '', qrToken: '', selfUserId: '', typingText: '', typingByPeer: {}, pluginSkills: [], activeSkill: null };
+    case 'LOGOUT': return { ...state, page: 'auth', authStep: 'phone', dialogs: [], selectedPeer: null, messages: [], phone: '', code: '', password: '', error: '', signupFirstname: '', signupLastname: '', phoneCodeHash: '', qrToken: '', selfUserId: '', typingText: '', typingByPeer: {}, pluginSkills: [], activeSkill: null };
     case 'TICK': return { ...state, renderTick: state.renderTick + 1 };
     default: return state;
   }

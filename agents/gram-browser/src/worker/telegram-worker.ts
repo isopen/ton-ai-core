@@ -1849,7 +1849,7 @@ async function signIn(phoneNumber: string, code: string): Promise<void> {
     passwordPending = false;
     authenticated = true;
     if (ses) homeSession = { ...ses };
-    if (curSessionId) persistSession();
+    if (curSessionId) await persistSession();
     setTimeout(() => initUpdates().catch(() => {}), 100);
 }
 
@@ -1868,7 +1868,7 @@ async function checkPassword(password: string): Promise<void> {
     passwordPending = false;
     authenticated = true;
     if (ses) homeSession = { ...ses };
-    if (curSessionId) persistSession();
+    if (curSessionId) await persistSession();
     setTimeout(() => initUpdates().catch(() => {}), 100);
 }
 
@@ -2169,15 +2169,14 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     reconnectAttempts = 0;
 
     if (saved) {
-        console.log('[worker] saved session, starting read loop (no immediate ping)');
+        console.log('[worker] saved session, starting read loop');
         connected = true;
         startReadLoop();
-        // Don't send an immediate ping — the first API call includes initConnection.
-        // Just set up periodic keep-alive pings.
         stopPing();
         pingTimer = setInterval(() => {
             sendPing().catch(() => {});
         }, 30000);
+        authenticated = saved.authenticated;
         if (authenticated) {
             setTimeout(() => initUpdates().catch(() => {}), 100);
             startHealthCheck();
@@ -2537,6 +2536,7 @@ export { handleConnectInternal as handleConnect };
 export { handleDisconnect as disconnect };
 export { handleLogout as logout };
 export { sendMessageAction as sendMessage_ };
+export function isConnected(): boolean { return connected; }
 export function isAuthenticated(): boolean { return authenticated; }
 export function getAuthState(): 'none' | 'code_sent' | 'password_needed' | 'authenticated' {
     if (authenticated) return 'authenticated';

@@ -265,7 +265,7 @@ function handleSendCode(state: AppState, dispatch: Dispatch) {
   const prefix = phoneCode ? `+${phoneCode}` : '';
   const fullPhone = `${prefix}${localDigits}`;
   dispatch({ type: 'SET_PHONE', phone: fullPhone });
-  dispatch({ type: 'SET_STEP', step: 'loading' } as any);
+  dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
   window.dispatchEvent(new CustomEvent('tg-auth-send-code'));
 }
 
@@ -324,14 +324,14 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
 function handleSignIn(dispatch: Dispatch) {
   const input = document.getElementById('tg-code-input') as HTMLInputElement | null;
   dispatch({ type: 'SET_CODE', code: input?.value || '' });
-  dispatch({ type: 'SET_STEP', step: 'loading' } as any);
+  dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
   window.dispatchEvent(new CustomEvent('tg-auth-sign-in'));
 }
 
 function handleCheckPassword(dispatch: Dispatch) {
   const input = document.getElementById('tg-password-input') as HTMLInputElement | null;
   dispatch({ type: 'SET_PASSWORD', password: input?.value || '' });
-  dispatch({ type: 'SET_STEP', step: 'loading' } as any);
+  dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
   window.dispatchEvent(new CustomEvent('tg-auth-check-password'));
 }
 
@@ -402,7 +402,7 @@ function handleSignUp(dispatch: Dispatch) {
   }
   dispatch({ type: 'SET_SIGNUP_FIRSTNAME', firstname });
   dispatch({ type: 'SET_SIGNUP_LASTNAME', lastname });
-  dispatch({ type: 'SET_STEP', step: 'loading' } as any);
+  dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
   window.dispatchEvent(new CustomEvent('tg-auth-sign-up'));
 }
 
@@ -486,7 +486,7 @@ function QrCodeView({ dispatch }: { dispatch: Dispatch }) {
       </Flex>
       <Button variant="ghost" onClick={() => {
         window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } }));
-        dispatch({ type: 'SET_STEP', step: 'phone' } as any);
+        dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
       }}>
         {t(S.AUTH_QR_PHONE_LOGIN)}
       </Button>
@@ -503,12 +503,12 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
           <h1 class="tgui-auth-title">{t(S.AUTH_APP_NAME)}</h1>
         </div>
         {state.error ? renderError(state.error) : null}
-        {state.step === 'loading' ? <LoadingView /> : null}
-        {state.step === 'phone' ? <PhoneView state={state} dispatch={dispatch} /> : null}
-        {state.step === 'code' ? <CodeView dispatch={dispatch} /> : null}
-        {state.step === 'password' ? <PasswordView dispatch={dispatch} /> : null}
-        {state.step === 'signup' ? <SignUpView state={state} dispatch={dispatch} /> : null}
-        {state.step === 'qr_login' ? <QrCodeView dispatch={dispatch} /> : null}
+        {state.authStep === 'loading' ? <LoadingView /> : null}
+        {state.authStep === 'phone' ? <PhoneView state={state} dispatch={dispatch} /> : null}
+        {state.authStep === 'code' ? <CodeView dispatch={dispatch} /> : null}
+        {state.authStep === 'password' ? <PasswordView dispatch={dispatch} /> : null}
+        {state.authStep === 'signup' ? <SignUpView state={state} dispatch={dispatch} /> : null}
+        {state.authStep === 'qr_login' ? <QrCodeView dispatch={dispatch} /> : null}
       </div>
     </Flex>
   );
