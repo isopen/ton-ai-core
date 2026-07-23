@@ -16,27 +16,13 @@ interface BinlogEventItem {
   flags?: number;
 }
 
-interface TdSessionEvent {
-  type: number;
-  typeName: string;
-  dcId?: number;
-  authKeyId?: string;
-  serverSalt?: string;
-  keyLen?: number;
-  flags?: number;
-  authenticated?: boolean;
-  passwordPending?: boolean;
-  offset?: number;
-  hash?: string;
-  data?: string;
-}
+
 
 interface CacheInspectData {
   dbKeys: Array<{ key: string; value: string }>;
   opfsRoot: Array<{ name: string; size: number }>;
   opfs7a: Array<{ name: string; size: number }>;
   binlogInfo: { size: number; exists: boolean; events?: BinlogEventItem[] };
-  tdsessionInfo: { size: number; exists: boolean; events?: TdSessionEvent[] };
   avatars?: Array<{ opfsName: string; dataUri: string }>;
 }
 
@@ -78,53 +64,6 @@ function KeyValueRow({ k, v, onDelete }: { k: string; v: string; onDelete: (key:
   );
 }
 
-function TdSessionRow({ ev }: { ev: TdSessionEvent }) {
-  const hasStructured = ev.dcId !== undefined || ev.flags !== undefined || ev.offset !== undefined || ev.hash !== undefined;
-  const summary = hasStructured
-    ? ev.type === 1 || ev.type === 2
-      ? `dcId=${ev.dcId} authKeyId=${ev.authKeyId} salt=${ev.serverSalt}`
-      : ev.type === 3
-        ? `authenticated=${ev.authenticated} passwordPending=${ev.passwordPending}`
-        : ev.type === 4
-          ? `offset=${ev.offset}`
-          : ev.type === 5
-            ? `hash=${ev.hash}`
-            : ''
-    : (ev.data ?? '');
-
-  return (
-    <details class="tgui-cache-bevent">
-      <summary class="tgui-cache-bevent-header">
-        <span class="tgui-cache-bevent-type">{ev.typeName}</span>
-        <span class="tgui-cache-bevent-key">{summary}</span>
-      </summary>
-      <div class="tgui-cache-kv-value" style="padding:6px 12px 6px 32px;font-family:var(--font-mono)">
-        {hasStructured ? (
-          (ev.type === 1 || ev.type === 2) ? (
-            <>
-              <div>dcId: <b>{ev.dcId ?? '?'}</b></div>
-              <div>authKeyId: <b>{ev.authKeyId ?? '?'}</b></div>
-              <div>serverSalt: <b>{ev.serverSalt ?? '?'}</b></div>
-              <div>keyLen: <b>{ev.keyLen ?? '?'}</b></div>
-            </>
-          ) : ev.type === 3 ? (
-            <>
-              <div>flags: <b>{ev.flags ?? '?'}</b> (0b{ev.flags?.toString(2) ?? '?'})</div>
-              <div>authenticated: <b>{String(ev.authenticated)}</b></div>
-              <div>passwordPending: <b>{String(ev.passwordPending)}</b></div>
-            </>
-          ) : ev.type === 4 ? (
-            <div>offset: <b>{ev.offset ?? '?'}</b></div>
-          ) : ev.type === 5 ? (
-            <div>hash: <b>{ev.hash ?? '?'}</b></div>
-          ) : null
-        ) : (
-          <div style="white-space:pre-wrap;word-break:break-all">{ev.data}</div>
-        )}
-      </div>
-    </details>
-  );
-}
 
 function SectionHeader({ title, count, expanded, onToggle }: {
   title: string; count?: number; expanded: boolean; onToggle: () => void;
@@ -210,12 +149,9 @@ export function CacheView({ }: { state: AppState }) {
       setData(prev => prev ? {
         ...prev,
         binlogInfo: { size: 0, exists: false, events: [] },
-        tdsessionInfo: { size: 0, exists: false, events: [] },
       } : prev);
     } else if (target === 'binlog') {
       setData(prev => prev ? { ...prev, binlogInfo: { size: 0, exists: false, events: [] } } : prev);
-    } else if (target === 'tdsession') {
-      setData(prev => prev ? { ...prev, tdsessionInfo: { size: 0, exists: false, events: [] } } : prev);
     }
   }
 
@@ -223,7 +159,6 @@ export function CacheView({ }: { state: AppState }) {
   const totalOpfsSize = data?.opfsRoot.reduce((acc, f) => acc + f.size, 0) ?? 0;
   const total7aSize = data?.opfs7a.reduce((acc, f) => acc + f.size, 0) ?? 0;
   const binlogEvents = data?.binlogInfo?.events ?? [];
-  const tdEvents = data?.tdsessionInfo?.events ?? [];
   const avatars = data?.avatars ?? [];
   const binlogSets = binlogEvents.filter(e => e.type === 1).length;
   const binlogDels = binlogEvents.filter(e => e.type === 2).length;
@@ -275,7 +210,7 @@ export function CacheView({ }: { state: AppState }) {
             </div>
             <div class="tgui-cache-summary-item">
               <span class="tgui-cache-summary-label">Session ev</span>
-              <span class="tgui-cache-summary-value">{tdEvents.length}</span>
+                <span class="tgui-cache-summary-value">0</span>
             </div>
           </div>
 
@@ -379,7 +314,7 @@ export function CacheView({ }: { state: AppState }) {
           <div class="tgui-cache-section">
             <SectionHeader
               title={t(S.CACHE_BINLOG)}
-              count={binlogEvents.length + tdEvents.length}
+              count={binlogEvents.length}
               expanded={sec.binlog}
               onToggle={() => setSec(s => ({ ...s, binlog: !s.binlog }))}
             />
@@ -416,49 +351,11 @@ export function CacheView({ }: { state: AppState }) {
                   )}
                 </div>
 
-                {/* tdsession summary */}
-                <div class="tgui-cache-binlog-bar">
-                  <div class="tgui-cache-binlog-bar-item">
-                    <span class="tgui-cache-binlog-bar-label">tdsession</span>
-                    <span class="tgui-cache-binlog-bar-val">
-                      {data.tdsessionInfo.exists ? formatSize(data.tdsessionInfo.size) : '—'}
-                    </span>
-                  </div>
-                  <div class="tgui-cache-binlog-bar-item">
-                    <span class="tgui-cache-binlog-bar-label">Events</span>
-                    <span class="tgui-cache-binlog-bar-val">{tdEvents.length}</span>
-                  </div>
-                  {data.tdsessionInfo.exists && (
-                    <button class="tgui-cache-bevent-del-btn" title="Delete tdsession"
-                      onClick={() => deleteBinlogFile('tdsession')}>✕</button>
-                  )}
-                </div>
-
-                {/* Delete all button */}
-                {(data.binlogInfo.exists || data.tdsessionInfo.exists) && (
-                  <div class="tgui-cache-binlog-bar" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px">
-                    <button class="tgui-cache-bevent-del-all-btn"
-                      onClick={() => deleteBinlogFile('all')}>
-                      Delete all binlog files
-                    </button>
-                  </div>
-                )}
-
                 {showBinlogRaw && binlogRaw !== null && (
                   <pre class="tgui-cache-binlog-hex">{binlogRaw}</pre>
                 )}
                 {showBinlogRaw && binlogRaw === null && (
                   <div class="tgui-cache-loading">Loading raw data...</div>
-                )}
-
-                {/* TdSession events */}
-                {tdEvents.length > 0 && (
-                  <div class="tgui-cache-bevent-list" style="margin-top:8px">
-                    <div class="tgui-cache-bevent-section-label">Session events</div>
-                    {tdEvents.map((ev, i) => (
-                      <TdSessionRow key={i} ev={ev} />
-                    ))}
-                  </div>
                 )}
 
                 

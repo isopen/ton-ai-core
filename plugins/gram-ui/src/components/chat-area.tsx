@@ -1,4 +1,5 @@
 import { h, Fragment } from '../framework/jsx-runtime.js';
+import { useEffect, useRef } from '../framework/hooks.js';
 import { Spinner } from '../primitives/spinner.js';
 import { Avatar } from '../primitives/avatar.js';
 import { Flex } from '../primitives/flex.js';
@@ -11,9 +12,12 @@ import { TypingIndicator } from './typing-indicator.js';
 import type { AppState, Message } from '../types.js';
 import type { Dispatch } from '../state.js';
 import type { SkillDef } from '../plugin/types.js';
+import { TelegramImage } from '../primitives/telegram-image.js';
+import type { ImageSpec } from '../types.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
-import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji } from '../utils.js';
+import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, hexToDataUrl, hexToBytes, strippedToDataUrl, isAnimatedMedia } from '../utils.js';
+import { MediaPlayer } from './media-player.js';
 
 function StickerBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {
   const doc = m.media?.document;
@@ -31,20 +35,167 @@ function StickerBubble({ m, timeStr, out, status }: { m: any; timeStr: string; o
   );
 }
 
+function sizeUrl(s: any): string {
+  let url = s.src || s.url || '';
+  if (!url && s._ === 'photoStrippedSize' && s.bytes?.length > 3) {
+    try { url = strippedToDataUrl(s.bytes); } catch {}
+    return url;
+  }
+  if (!url && s.bytes?.length > 40) {
+    const bytes = typeof s.bytes === 'string' ? s.bytes : Array.from(new Uint8Array(s.bytes as ArrayBufferLike), b => b.toString(16).padStart(2, '0')).join('');
+    try { url = hexToDataUrl(bytes); } catch {}
+  }
+  return url;
+}
+
+function sizeDim(s: any): { w: number; h: number } {
+  let w = s.w || s.width || 0;
+  let h = s.h || s.height || 0;
+  if (!w && !h && s._ === 'photoStrippedSize' && s.bytes?.length > 2) {
+    const b = s.bytes;
+    const bytes = typeof b === 'string' ? hexToBytes(b) : new Uint8Array(b as ArrayBufferLike);
+    if (bytes[0] === 0x01) { w = bytes[2]; h = bytes[1]; }
+  }
+  return { w, h };
+}
+
+function buildImageSpec(m: any): ImageSpec | null {
+  const media = m.media;
+  if (!media) return null;
+  const photo = media.photo;
+  if (!photo) { console.debug('[buildImageSpec] no photo in message', m.id); return null; }
+
+  const sizes = photo.sizes || [];
+  if (sizes.length === 0) { console.debug('[buildImageSpec] no sizes', m.id, photo._); return null; }
+
+  let maxW = 0, maxH = 0;
+  for (const s of sizes) {
+    const { w, h } = sizeDim(s);
+    if (w > maxW) { maxW = w; maxH = h; }
+  }
+  let w = photo.w || photo.width || maxW || 0;
+  let h = photo.h || photo.height || maxH || 0;
+  if (!w || !h) return null;
+
+  let thumb: ImageSpec['thumbnail'];
+  let medium: ImageSpec['medium'];
+  let original: ImageSpec['original'];
+
+  for (const s of sizes) {
+    const type = s.type || '';
+    const { w: sw, h: sh } = sizeDim(s);
+    const src = sizeUrl(s);
+    if (!src && !s.url && !s.src) {
+      console.log('[buildImageSpec] size needs download', m.id, type, s._);
+    }
+    if (src) {
+      console.log('[buildImageSpec] size HAS url', m.id, type, 'url len:', src.length);
+    }
+    if (!src || !sw || !sh) continue;
+
+    const srcData: ImageSpec['thumbnail'] = { url: src, width: sw, height: sh };
+
+    if (type === 'm') {
+      if (!medium) medium = srcData;
+    } else if (type === 'x' || type === 'y' || type === 'w' || type === 'v' || type === 'u') {
+      original = srcData;
+    } else if (!thumb) {
+      thumb = srcData;
+    }
+  }
+
+  if (!thumb && sizes.length > 0) {
+    const s = sizes[0];
+    const src = sizeUrl(s);
+    const { w: sw, h: sh } = sizeDim(s);
+    if (src && sw && sh) thumb = { url: src, width: sw, height: sh };
+  }
+  if (!original && medium) original = medium;
+
+  return {
+    id: String(photo.id || m.id),
+    thumbnail: thumb,
+    medium,
+    original,
+    width: w,
+    height: h,
+  };
+}
+
 function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; sameSenderPrev?: boolean; sameSenderNext?: boolean }) {
-  let cls = 'MessageBubble';
+  let cls = 'MessageBubble MessageBubble_photo';
   cls += out ? ' MessageBubble_out' : ' MessageBubble_in';
   if (sameSenderPrev) cls += ' MessageBubble_group_prev';
   if (sameSenderNext) cls += ' MessageBubble_group_next';
+
+  const imgSpec = buildImageSpec(m);
+  if (imgSpec) {
+    console.log('[PhotoBubble] render', m.id, 'sizes:', m.media?.photo?.sizes?.length, 'hasUrls:', { thumb: !!imgSpec.thumbnail?.url, medium: !!imgSpec.medium?.url, original: !!imgSpec.original?.url });
+  } else {
+    console.log('[PhotoBubble] render', m.id, 'imgSpec: null');
+  }
+
+  const imgWidth = imgSpec ? Math.min(imgSpec.width || 320, 320) : 0;
+
+  const obsRef = useRef<IntersectionObserver | null>(null);
+  const visibleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const el = document.getElementById(`msg-${m.id}`);
+      if (!el) return;
+      const obs = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting) {
+          if (visibleTimerRef.current) return;
+          visibleTimerRef.current = setTimeout(() => {
+            visibleTimerRef.current = null;
+            obs.disconnect();
+            if (!m.media?.photo?.sizes) return;
+            const prio = ['x', 'y', 'w', 'v', 'u', 'm'];
+            let best: any;
+            for (const t of prio) {
+              best = m.media.photo.sizes.find((s: any) => s.type === t && !s.url && !s.src);
+              if (best) break;
+            }
+            if (best) {
+              window.dispatchEvent(new CustomEvent('tg-download-photo', {
+                detail: { photo: m.media.photo, sizeType: best.type, messageId: m.id },
+              }));
+            }
+          }, 200);
+        } else if (visibleTimerRef.current) {
+          clearTimeout(visibleTimerRef.current);
+          visibleTimerRef.current = null;
+        }
+      }, { rootMargin: '0px' });
+      obsRef.current = obs;
+      obs.observe(el);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      if (visibleTimerRef.current) {
+        clearTimeout(visibleTimerRef.current);
+        visibleTimerRef.current = null;
+      }
+      if (obsRef.current) {
+        obsRef.current.disconnect();
+        obsRef.current = null;
+      }
+    };
+  }, [m.id]);
+
   return (
-    <div class={cls}>
+    <div class={cls} style={imgWidth ? `width:${imgWidth}px` : ''}>
       <div class="tgui-photo-preview">
-        {t(S.PHOTO_PLACEHOLDER)}
-      </div>
-      {m.message ? <div class="MessageBubble__text">{m.message}</div> : null}
-      <div class="MessageBubble__meta">
-        <span class="MessageBubble__time">{timeStr}</span>
-        {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
+        {imgSpec ? (
+          <TelegramImage image={imgSpec} maxWidth={320} lazy={false} />
+        ) : (
+          t(S.PHOTO_PLACEHOLDER)
+        )}
+        {m.message ? <div class="MessageBubble__text">{m.message}</div> : null}
+        <div class="MessageBubble__meta MessageBubble__meta_overlay">
+          <span class="MessageBubble__time">{timeStr}</span>
+          {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
+        </div>
       </div>
     </div>
   );
@@ -57,7 +208,7 @@ function msgStatus(m: any, readOutboxMaxId?: number): 'pending' | 'sent' | 'deli
   return 'sent';
 }
 
-function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number }) {
+function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrls, documentProgress }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrls: Record<number, string>; documentProgress: Record<number, number> }) {
   const timeStr = formatMessageTime(m.date);
   const status = msgStatus(m, readOutboxMaxId);
   const mediaType = getMediaType(m.media);
@@ -78,7 +229,9 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
         ? <StickerBubble m={m} timeStr={timeStr} out={m.out} status={status} />
         : mediaType === 'photo' || mediaType === 'image'
           ? <PhotoBubble m={m} timeStr={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
-          : <MessageBubble text={m.message || ''} time={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
+          : mediaType === 'video'
+            ? <MediaPlayer m={m} timeStr={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={documentUrls} documentProgress={documentProgress} />
+            : <MessageBubble text={m.message || ''} time={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
       }
     </div>
   );
@@ -114,7 +267,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
 
   const p = peer as any;
   const avatarBg = p.avatarUrl ? 'transparent' : (p.type === 'user' ? '#1a4d8c' : '#2d5a27');
-  const initial = (p.firstName?.[0] || p.title?.[0] || '?').toUpperCase();
+  const initial = getInitials(p);
 
   const currentDialog = state.dialogs.find(d => d.peer.id === peer.id && d.peer.type === peer.type);
   const readOutboxMaxId = currentDialog?.readOutboxMaxId;
@@ -134,7 +287,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
         </div>
       );
     }
-    msgListChildren.push(<MessageItem key={`msg-${m.id}`} m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} />);
+    msgListChildren.push(<MessageItem key={`msg-${m.id}`} m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrls={state.documentUrls || {}} documentProgress={state.documentProgress || {}} />);
   });
 
   if (msgListChildren.length === 0) {
@@ -161,7 +314,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
           size="small"
         />
         <div class="tgui-chat-info">
-          <span class="tgui-chat-name">{p.type === 'user' && state.selfUserId && p.id === state.selfUserId ? t(S.SAVED_MESSAGES_PEER) : p.firstName || p.title || t(S.CHAT_USER_FALLBACK)}</span>
+          <span class="tgui-chat-name">{p.type === 'user' && state.selfUserId && p.id === state.selfUserId ? t(S.SAVED_MESSAGES_PEER) : getPeerName(p)}</span>
           {state.typingText ? <span class="chat-subtitle"><TypingIndicator text={state.typingText} /></span> : null}
         </div>
       </div>

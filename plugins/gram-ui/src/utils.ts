@@ -7,7 +7,7 @@ export function getPeerName(p: any, selfUserId?: string): string {
     if (p.id === '_debug_') return t(S.LOGS_PEER);
     if (p.id === '_settings_') return t(S.SETTINGS_PEER);
     if (p.type === 'user' && selfUserId && p.id === selfUserId) return t(S.SAVED_MESSAGES_PEER);
-    if (p.type === 'user') return p.firstName || p.lastName || p.username || `${t(S.USER_FALLBACK_NAME)} ${p.id}`;
+    if (p.type === 'user') return [p.firstName, p.lastName].filter(Boolean).join(' ') || p.username || `${t(S.USER_FALLBACK_NAME)} ${p.id}`;
     return p.title || `${t(S.CHAT_FALLBACK_NAME)} ${p.id}`;
 }
 
@@ -71,6 +71,91 @@ export function getStickerEmoji(doc: any): string {
     if (!doc) return '';
     const attr = (doc.attributes || []).find((a: any) => a._ === 'documentAttributeSticker');
     return attr?.alt || '';
+}
+
+export function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+  return bytes;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+export function hexToDataUrl(hex: string, mime = 'image/jpeg'): string {
+  return 'data:' + mime + ';base64,' + bytesToBase64(hexToBytes(hex));
+}
+
+const MINI_HEADER_B64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDACgcHiMeGSgjISMtKygwPGRBPDc3PHtYXUlkkYCZlo+AjIqgtObDoKrarYqMyP/L2u71////m8H///6/+b9//j/2wBDASstLTw1PHZBQXb4pYyl+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj/wAARCAAAAAADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwA=';
+const MINI_FOOTER_B64 = '/9k=';
+
+// Reconstruct JPEG from TDLib minithumbnail format: \x01 + height + width + stripped_jpeg_data
+export function strippedToDataUrl(packed: string | Uint8Array, mime = 'image/jpeg'): string {
+  const bytes = typeof packed === 'string' ? hexToBytes(packed) : packed;
+  if (bytes.length < 3 || bytes[0] !== 0x01) {
+    console.error('[strippedToDataUrl] invalid format: len=' + bytes.length + ' byte0=' + bytes[0]?.toString(16) + ' type=' + typeof packed);
+    return '';
+  }
+  const header = (() => {
+    const s = atob(MINI_HEADER_B64);
+    const b = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
+    return b;
+  })();
+  const footer = (() => {
+    const s = atob(MINI_FOOTER_B64);
+    const b = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
+    return b;
+  })();
+  const jpeg = new Uint8Array(header.length + bytes.length - 3 + footer.length);
+  jpeg.set(header, 0);
+  jpeg[164] = bytes[1];
+  jpeg[166] = bytes[2];
+  jpeg.set(bytes.subarray(3), header.length);
+  jpeg.set(footer, header.length + bytes.length - 3);
+  return 'data:' + mime + ';base64,' + bytesToBase64(jpeg);
+}
+
+export function getInitials(p: any): string {
+  if (p.type === 'user') {
+    const first = p.firstName?.[0] || '';
+    const last = p.lastName?.[0] || '';
+    return (first + last || '?').toUpperCase();
+  }
+  return (p.title || '?').slice(0, 2).toUpperCase();
+}
+
+export function buildDocumentThumb(doc: any): { url: string; width: number; height: number } | null {
+  if (!doc?.thumbs?.length) {
+    if (doc?.videoThumbs?.length) {
+      const vt = doc.videoThumbs[0];
+      return vt?.url || vt?.src ? { url: vt.url || vt.src, width: vt.w || 0, height: vt.h || 0 } : null;
+    }
+    return null;
+  }
+  let best: any = null;
+  let bestType = '';
+  const prio = ['m', 'x', 'y', 'w', 'v', 'u'];
+  for (const t of prio) {
+    const s = doc.thumbs.find((s: any) => s.type === t);
+    if (s) { best = s; bestType = t; break; }
+  }
+  if (!best) best = doc.thumbs[0];
+  return best ? { url: best.url || best.src || '', width: best.w || 0, height: best.h || 0 } : null;
+}
+
+export function isAnimatedMedia(media: any): boolean {
+  if (!media || media._ !== 'messageMediaDocument') return false;
+  const doc = media.document;
+  if (!doc) return false;
+  const attrs: any[] = doc.attributes || [];
+  const hasAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
+  const mime = (doc.mime_type || '').toLowerCase();
+  return hasAnimated || mime === 'image/gif';
 }
 
 export const SENDER_COLORS = ['#6bc3ff', '#f5a623', '#4cd964', '#ff6b6b', '#a6a6ff', '#ff85a2', '#50c8c8', '#ffcc02'];

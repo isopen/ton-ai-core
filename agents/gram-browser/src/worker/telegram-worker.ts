@@ -655,8 +655,6 @@ async function ensureDcConnection(dcId: number): Promise<DcConnection> {
         counter: { value: 0 },
         initialized: false,
     };
-    dcConnectionPool.set(dcId, entry);
-
     // Export auth from home DC and import here
     if (!isHomeDc && !isCurrentDc && authenticated) {
         let exportedAuth: { id: bigint; bytes: Buffer } | null = null;
@@ -691,6 +689,15 @@ async function ensureDcConnection(dcId: number): Promise<DcConnection> {
         }
     }
 
+    // Only cache the connection after successful auth (if needed)
+    if (!isCurrentDc && !isHomeDc && authenticated) {
+        if (entry.initialized) {
+            dcConnectionPool.set(dcId, entry);
+        }
+    } else {
+        dcConnectionPool.set(dcId, entry);
+    }
+
     return entry;
 }
 
@@ -701,13 +708,22 @@ async function callRpcOnDc(dcId: number, methodName: string, params: Record<stri
         return await callRpc(methodName, params, { noMigrate: true });
     }
     const dc = await ensureDcConnection(dcId);
-    const result = await directRpcWith(
-        dc.conn, dc.authKey, dc.authKeyId,
-        dc.serverSalt, dc.session, dc.counter, dc.initialized,
-        methodName, params
-    );
-    dc.initialized = true;
-    return result;
+    try {
+        const result = await directRpcWith(
+            dc.conn, dc.authKey, dc.authKeyId,
+            dc.serverSalt, dc.session, dc.counter, dc.initialized,
+            methodName, params
+        );
+        dc.initialized = true;
+        return result;
+    } catch (e: any) {
+        if (e.message?.includes('AUTH_BYTES_INVALID')) {
+            console.log('[worker] AUTH_BYTES_INVALID on DC ' + dcId + ', invalidating pool entry');
+            dcConnectionPool.delete(dcId);
+            try { dc.conn.close(); } catch {}
+        }
+        throw e;
+    }
 }
 
 function closeAllDcConnections(): void {
@@ -992,37 +1008,47 @@ async function downloadAvatar(peerType: string, peerId: string, accessHash: any,
     const location = { _: 'inputPeerPhotoFileLocation', flags: 0, peer, photo_id: photoId };
     const params = { precise: false, location, offset: BigInt(0), limit: 1048576 };
 
-    try {
-        const result = await callRpc('upload.getFile', params, { noMigrate: true });
-        if (result && result._ === 'upload.file') {
-            const chunk = Buffer.from(result.bytes || '', 'hex');
-            if (chunk.length >= 100) {
-                const url = 'data:image/jpeg;base64,' + chunk.toString('base64');
-                saveAvatarToCache(cacheKey, url).catch(() => {});
-                return url;
-            }
+    let lastError: any = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) {
+            console.log('[worker] downloadAvatar retry', attempt, 'key:', cacheKey);
+            await new Promise(r => setTimeout(r, 1000));
         }
-        return null;
-    } catch (e: any) {
-        const m = e.message?.match(/^FILE_MIGRATE_(\d+)$/);
-        if (m) {
-            const targetDc = parseInt(m[1]);
-            try {
-                const result = await callRpcOnDc(targetDc, 'upload.getFile', params);
-                if (result && result._ === 'upload.file') {
-                    const chunk = Buffer.from(result.bytes || '', 'hex');
-                    if (chunk.length >= 100) {
-                        const url = 'data:image/jpeg;base64,' + chunk.toString('base64');
-                        saveAvatarToCache(cacheKey, url).catch(() => {});
-                        return url;
-                    }
+        try {
+            const result = await runWithSem(() => callRpc('upload.getFile', params, { noMigrate: true }));
+            if (result && result._ === 'upload.file') {
+                const chunk = Buffer.from(result.bytes || '', 'hex');
+                if (chunk.length >= 100) {
+                    const url = 'data:image/jpeg;base64,' + chunk.toString('base64');
+                    saveAvatarToCache(cacheKey, url).catch(() => {});
+                    return url;
                 }
-            } catch (e2: any) {
-                console.log('[worker] downloadAvatar migrate error:', e2.message);
             }
+            return null;
+        } catch (e: any) {
+            lastError = e;
+            const m = e.message?.match(/^FILE_MIGRATE_(\d+)$/);
+            if (m) {
+                const targetDc = parseInt(m[1]);
+                try {
+                    const result = await runWithSem(() => callRpcOnDc(targetDc, 'upload.getFile', params));
+                    if (result && result._ === 'upload.file') {
+                        const chunk = Buffer.from(result.bytes || '', 'hex');
+                        if (chunk.length >= 100) {
+                            const url = 'data:image/jpeg;base64,' + chunk.toString('base64');
+                            saveAvatarToCache(cacheKey, url).catch(() => {});
+                            return url;
+                        }
+                    }
+                } catch (e2: any) {
+                    console.log('[worker] downloadAvatar migrate error:', e2.message);
+                }
+            }
+            console.error('[worker] downloadAvatar error (attempt', attempt, '):', e.message, 'key:', cacheKey);
         }
-        return null;
     }
+    console.error('[worker] downloadAvatar: all retries exhausted', lastError?.message, 'key:', cacheKey);
+    return null;
 }
 
 async function requestPeerAvatar(peerType: string, peerId: string, accessHash?: any, photo?: any): Promise<string | null> {
@@ -1050,6 +1076,32 @@ async function requestPeerAvatar(peerType: string, peerId: string, accessHash?: 
         onUpdateCb(0x41564154, payload);
     }
     return url;
+}
+
+async function requestPhotoDownload(photo: any, sizeType: string): Promise<string | null> {
+    console.log('[worker] requestPhotoDownload CALLED', { sizeType, photoId: photo?.id?.toString(), hasId: !!photo?.id, hasAccessHash: !!photo?.access_hash, hasFileRef: !!photo?.file_reference, fileRefType: typeof photo?.file_reference, fileRefLen: photo?.file_reference?.length });
+    if (!photo) { console.log('[worker] requestPhotoDownload: photo is null'); return null; }
+    const photoWithThumb = { ...photo, thumb_size: sizeType };
+    if (!buildDownloadLocation(undefined, photoWithThumb)) {
+        console.log('[worker] requestPhotoDownload: buildDownloadLocation returned null', { id: photo?.id, access_hash: photo?.access_hash, file_reference: !!photo?.file_reference, sizeType });
+        return null;
+    }
+    const genRef = { value: photoDownloadGen };
+    const result = await downloadFile_(undefined, photoWithThumb, genRef);
+    if (result.error === 'ABORTED') {
+        console.log('[worker] requestPhotoDownload: ABORTED', 'sizeType:', sizeType);
+        return null;
+    }
+    if (result.error) {
+        console.error('[worker] requestPhotoDownload error:', result.error, 'sizeType:', sizeType);
+        if (result.error.includes('FILE_REFERENCE_EXPIRED')) throw new Error('FILE_REFERENCE_EXPIRED');
+        return null;
+    }
+    if (!result.bytes || result.bytes.length < 200) {
+        console.log('[worker] requestPhotoDownload: downloaded too small', result.bytes?.length, 'sizeType:', sizeType);
+        return null;
+    }
+    return 'data:image/jpeg;base64,' + result.bytes;
 }
 
 export async function processDialogsResult(dialogsResult: any): Promise<{ dialogs: any[] }> {
@@ -1718,13 +1770,15 @@ function buildCallBody(constructorId: number, params: Record<string, any>): Buff
 async function call(constructorId: number, params: Record<string, any> = {}): Promise<Buffer> {
     if (!conn || !ses) throw new Error('Not connected');
 
-    for (let retry = 0; retry < 10; retry++) {
+    let nonFloodRetries = 0;
+    let floodWaitStart = 0;
+    while (nonFloodRetries < 10) {
         let key = '';
         try {
             if (!conn?.isConnected()) throw new Error('Not connected');
             const body = buildCallBody(constructorId, params);
             const { encrypted, msgId } = await synchronizedEncrypt(body);
-            console.log('[worker] call sending constructorId=0x' + constructorId.toString(16) + ' msgId=' + msgId + ' attempt=' + (retry + 1));
+            console.log('[worker] call sending constructorId=0x' + constructorId.toString(16) + ' msgId=' + msgId + ' attempt=' + (nonFloodRetries + 1));
             key = msgId.toString();
             const promise = new Promise<Buffer>((resolve, reject) => {
                 const timer = setTimeout(() => { console.log('[worker] Таймаут RPC msgId=' + msgId); pendingCalls.delete(key); reject(new Error('RPC timeout')); }, 30000);
@@ -1740,7 +1794,7 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
             return await promise;
         } catch (e: any) {
             const m = (e as Error).message || '';
-            console.log('[worker] вызов отклонён: ' + m + ' для constructorId=0x' + constructorId.toString(16) + ' попытка=' + (retry + 1));
+            console.log('[worker] вызов отклонён: ' + m + ' для constructorId=0x' + constructorId.toString(16) + ' попытка=' + (nonFloodRetries + 1));
             if (m === 'NEW_SESSION_CREATED' ||
                 m.startsWith('Bad msg error code: 48') ||
                 m.startsWith('Bad msg error code: 64') ||
@@ -1749,11 +1803,13 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
                 m.startsWith('Bad msg error code: 32') ||
                 m.startsWith('Bad msg error code: 33')) {
                 pendingCalls.delete(key);
+                nonFloodRetries++;
                 continue;
             }
             const migrateMatch = m.match(/^RPC Error 303: (PHONE_MIGRATE|FILE_MIGRATE|USER_MIGRATE)_(\d+)$/);
             if (migrateMatch) {
                 pendingCalls.delete(key);
+                nonFloodRetries++;
                 if (migratingDc !== 0) {
                     while (migratingDc !== 0) {
                         await new Promise(r => setTimeout(r, 100));
@@ -1769,18 +1825,24 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
                 if (waitSec > 60) {
                     throw new Error('FLOOD_WAIT_' + waitSec);
                 }
+                if (floodWaitStart === 0) floodWaitStart = Date.now();
+                if (Date.now() - floodWaitStart > 90000) {
+                    throw new Error('FLOOD_WAIT_totaltime');
+                }
                 console.log('[worker] flood wait ' + waitSec + 'с, повтор');
                 await new Promise(r => setTimeout(r, waitSec * 1000));
                 continue;
             }
             if (m.includes('CONNECTION_NOT_INITED')) {
                 pendingCalls.delete(key);
+                nonFloodRetries++;
                 connectionInitialized = false;
                 console.log('[worker] CONNECTION_NOT_INITED, сбрасываю флаг и повтор');
                 continue;
             }
             if (m === 'Not connected') {
                 pendingCalls.delete(key);
+                nonFloodRetries++;
                 console.log('[worker] Нет соединения, повтор');
                 while (migratingDc !== 0) {
                     await new Promise(r => setTimeout(r, 100));
@@ -1888,7 +1950,9 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
     const comb = registry.findFunctionByName(methodName);
     if (!comb) throw new Error(`Unknown method: ${methodName}`);
 
-    for (let retry = 0; retry < 10; retry++) {
+    let nonFloodRetries = 0;
+    let floodWaitStart = 0;
+    while (nonFloodRetries < 10) {
         let key = '';
         try {
             if (!conn?.isConnected()) throw new Error('Not connected');
@@ -1977,11 +2041,13 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
                 m.startsWith('Bad msg error code: 32') ||
                 m.startsWith('Bad msg error code: 33')) {
                 pendingCalls.delete(key);
+                nonFloodRetries++;
                 continue;
             }
             const migrateMatch = m.match(/^RPC Error 303: (PHONE_MIGRATE|FILE_MIGRATE|USER_MIGRATE)_(\d+)$/);
             if (migrateMatch) {
                 pendingCalls.delete(key);
+                nonFloodRetries++;
                 if (options?.noMigrate) {
                     throw new Error('FILE_MIGRATE_' + migrateMatch[2]);
                 }
@@ -2000,18 +2066,24 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
                 if (waitSec > 60) {
                     throw new Error('FLOOD_WAIT_' + waitSec);
                 }
+                if (floodWaitStart === 0) floodWaitStart = Date.now();
+                if (Date.now() - floodWaitStart > 90000) {
+                    throw new Error('FLOOD_WAIT_totaltime');
+                }
                 console.log('[worker] flood wait ' + waitSec + 'с, повтор');
                 await new Promise(r => setTimeout(r, waitSec * 1000));
                 continue;
             }
             if (m.includes('CONNECTION_NOT_INITED')) {
                 pendingCalls.delete(key);
+                nonFloodRetries++;
                 connectionInitialized = false;
                 console.log('[worker] CONNECTION_NOT_INITED, сбрасываю флаг и повтор');
                 continue;
             }
             if (m === 'Not connected') {
                 pendingCalls.delete(key);
+                nonFloodRetries++;
                 console.log('[worker] Нет соединения, повтор');
                 while (migratingDc !== 0) {
                     await new Promise(r => setTimeout(r, 100));
@@ -2034,19 +2106,31 @@ async function initUpdates(): Promise<void> {
 }
 
 async function persistSession(): Promise<void> {
-    if (!ses || !curSessionId || !tdBinlog) return;
-    await tdBinlog.append(EventType.AuthKey, ses.dcId, ses.authKey, ses.authKeyId, ses.serverSalt);
-    if (homeSession) {
-        await tdBinlog.append(EventType.HomeAuthKey, homeSession.dcId, homeSession.authKey, homeSession.authKeyId, homeSession.serverSalt);
+    if (!ses || !curSessionId || !tdBinlog) { console.log('[worker] persistSession: skipped (ses=' + !!ses + ' curSessionId=' + !!curSessionId + ' tdBinlog=' + !!tdBinlog + ')'); return; }
+    console.log('[worker] persistSession: dcId=' + ses.dcId + ' authenticated=' + authenticated + ' flags=' + (authenticated ? 1 : 0));
+    try {
+      await tdBinlog.append(EventType.AuthKey, ses.dcId, ses.authKey, ses.authKeyId, ses.serverSalt);
+      if (homeSession) {
+          await tdBinlog.append(EventType.HomeAuthKey, homeSession.dcId, homeSession.authKey, homeSession.authKeyId, homeSession.serverSalt);
+      }
+      let flags = 0;
+      if (authenticated) flags |= 1;
+      if (passwordPending) flags |= 2;
+      await tdBinlog.append(EventType.SessionFlags, flags);
+      await tdBinlog.append(EventType.ServerTimeOffset, serverTimeOffset);
+      if (pendingAuth?.phoneCodeHash) {
+          await tdBinlog.append(EventType.PendingCodeHash, pendingAuth.phoneCodeHash);
+      }
+      console.log('[worker] persistSession: completed successfully');
+    } catch (e: any) {
+      console.log('[worker] persistSession: FAILED ' + e.message);
     }
-    let flags = 0;
-    if (authenticated) flags |= 1;
-    if (passwordPending) flags |= 2;
-    await tdBinlog.append(EventType.SessionFlags, flags);
-    await tdBinlog.append(EventType.ServerTimeOffset, serverTimeOffset);
-    if (pendingAuth?.phoneCodeHash) {
-        await tdBinlog.append(EventType.PendingCodeHash, pendingAuth.phoneCodeHash);
-    }
+}
+
+let photoDownloadGen = 0;
+
+function cancelPhotoDownloads(): void {
+    photoDownloadGen++;
 }
 
 const TELEGRAM_PUBLIC_KEY = `-----BEGIN RSA PUBLIC KEY-----
@@ -2100,8 +2184,10 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
       tdBinlog = new TdBinlog();
       await tdBinlog.init(reqSessionId);
     }
+    console.log('[worker] handleConnectInternal: tdBinlog initialized, getting state');
     const state = tdBinlog.getState();
     const saved = state.authKey ? state : null;
+    console.log('[worker] handleConnectInternal: saved=' + !!saved + ' authenticated=' + state.authenticated + ' dcId=' + state.dcId + ' authKey=' + (state.authKey ? state.authKey.length + 'bytes' : 'null'));
     if (saved) {
         serverTimeOffset = saved.serverTimeOffset;
         const authKey = saved.authKey!;
@@ -2115,7 +2201,8 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
             sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
             seqNo: 0,
         };
-        authenticated = saved.authenticated;
+        authenticated = true; // authKey exists → session IS authenticated, even if SessionFlags event was lost
+        console.log('[worker] handleConnectInternal: session restored, authenticated=' + authenticated);
         if (saved.pendingCodeHash) {
             pendingAuth = { phoneCodeHash: saved.pendingCodeHash };
         }
@@ -2176,7 +2263,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
         pingTimer = setInterval(() => {
             sendPing().catch(() => {});
         }, 30000);
-        authenticated = saved.authenticated;
+        // authKey existence implies authenticated
         if (authenticated) {
             setTimeout(() => initUpdates().catch(() => {}), 100);
             startHealthCheck();
@@ -2309,6 +2396,24 @@ const downloadQueue: Array<{
 let downloadInFlight = 0;
 const MAX_PARALLEL_DOWNLOADS = 1;
 
+const uploadSemMax = 3;
+let uploadSemActive = 0;
+const uploadSemQueue: Array<() => void> = [];
+
+function acquireUploadSem(): Promise<void> {
+    if (uploadSemActive < uploadSemMax) { uploadSemActive++; return Promise.resolve(); }
+    return new Promise<void>(r => { uploadSemQueue.push(r); });
+}
+function releaseUploadSem(): void {
+    if (uploadSemQueue.length > 0) { const next = uploadSemQueue.shift()!; next(); }
+    else { uploadSemActive--; }
+}
+async function runWithSem<T>(fn: () => Promise<T>): Promise<T> {
+    await acquireUploadSem();
+    try { return await fn(); }
+    finally { releaseUploadSem(); }
+}
+
 async function processDownloadQueue(): Promise<void> {
     while (downloadQueue.length > 0 && downloadInFlight < MAX_PARALLEL_DOWNLOADS) {
         const item = downloadQueue.shift()!;
@@ -2327,7 +2432,7 @@ function enqueueDownload(document?: any, photo?: any): Promise<{ type: string; b
     });
 }
 
-async function downloadFile_(document?: any, photo?: any): Promise<{ type: string; bytes: string; error?: string }> {
+async function downloadFile_(document?: any, photo?: any, genRef?: { value: number }): Promise<{ type: string; bytes: string; error?: string }> {
     try {
         const location = buildDownloadLocation(document, photo);
         if (!location) return { type: '', bytes: '', error: 'No document or photo provided' };
@@ -2339,6 +2444,9 @@ async function downloadFile_(document?: any, photo?: any): Promise<{ type: strin
         let targetDc = 0;
 
         const doCall = async (ofs: bigint): Promise<any> => {
+            if (genRef && genRef.value !== photoDownloadGen) {
+                throw new Error('ABORTED');
+            }
             const p = { precise: false, location, offset: ofs, limit };
             if (targetDc > 0) {
                 return await callRpcOnDc(targetDc, 'upload.getFile', p);
@@ -2356,7 +2464,13 @@ async function downloadFile_(document?: any, photo?: any): Promise<{ type: strin
         };
 
         while (true) {
+            if (genRef && genRef.value !== photoDownloadGen) {
+                return { type: '', bytes: '', error: 'ABORTED' };
+            }
             const result = await doCall(offset);
+            if (genRef && genRef.value !== photoDownloadGen) {
+                return { type: '', bytes: '', error: 'ABORTED' };
+            }
             if (result._ === 'upload.file') {
                 const typeName = result.type?._ || 'storage.fileUnknown';
                 const bytesHex = result.bytes || '';
@@ -2369,8 +2483,8 @@ async function downloadFile_(document?: any, photo?: any): Promise<{ type: strin
                     break;
                 }
                 offset = BigInt(Number(offset) + chunk.length);
-                if (Number(offset) > 20 * 1024 * 1024) {
-                    return { type: '', bytes: '', error: 'File too large (>20MB)' };
+                if (Number(offset) > 200 * 1024 * 1024) {
+                    return { type: '', bytes: '', error: 'File too large (>200MB)' };
                 }
             } else if (result._ === 'upload.fileCdnRedirect') {
                 return { type: '', bytes: '', error: 'CDN redirect not supported' };
@@ -2385,13 +2499,68 @@ async function downloadFile_(document?: any, photo?: any): Promise<{ type: strin
     }
 }
 
+async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, final: boolean, fileType: string) => void): Promise<void> {
+    const location = buildDownloadLocation(document, null);
+    if (!location) throw new Error('No document provided');
+
+    let offset = BigInt(0);
+    const limit = 1048576;
+    let finalType = 'storage.fileUnknown';
+    let targetDc = 0;
+
+    const doCall = async (ofs: bigint): Promise<any> => {
+        const p = { precise: false, location, offset: ofs, limit };
+        if (targetDc > 0) return await callRpcOnDc(targetDc, 'upload.getFile', p);
+        try {
+            return await callRpc('upload.getFile', p, { noMigrate: true });
+        } catch (e: any) {
+            const m = e.message.match(/^FILE_MIGRATE_(\d+)$/);
+            if (m) { targetDc = parseInt(m[1]); return await callRpcOnDc(targetDc, 'upload.getFile', p); }
+            throw e;
+        }
+    };
+
+    while (true) {
+        let result: any;
+        let retries = 0;
+        while (true) {
+            try {
+                result = await doCall(offset);
+                break;
+            } catch (e: any) {
+                if (e.message?.includes('FILE_REFERENCE_EXPIRED')) throw e;
+                if (e.message?.includes('FLOOD_WAIT')) throw e;
+                retries++;
+                if (retries > 3) throw e;
+                await new Promise(r => setTimeout(r, Math.min(1000 * retries, 5000)));
+            }
+        }
+        if (result._ === 'upload.file') {
+            const typeName = result.type?._ || 'storage.fileUnknown';
+            const bytesHex = result.bytes || '';
+            const chunk = Buffer.from(bytesHex, 'hex');
+            if (typeName !== 'storage.filePartial') finalType = typeName;
+            const isFinal = chunk.length < limit || typeName !== 'storage.filePartial';
+            const ab = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength);
+            onChunk(ab, isFinal, finalType);
+            if (isFinal) break;
+            offset = BigInt(Number(offset) + chunk.length);
+            if (Number(offset) > 200 * 1024 * 1024) throw new Error('File too large (>200MB)');
+        } else if (result._ === 'upload.fileCdnRedirect') {
+            throw new Error('CDN redirect not supported');
+        } else {
+            throw new Error('Unknown response: ' + result._);
+        }
+    }
+}
+
 function buildDownloadLocation(document?: any, photo?: any): Record<string, any> {
     if (document) {
         const id = typeof document.id === 'string' ? BigInt(document.id) : document.id;
         const accessHash = typeof document.access_hash === 'string' ? BigInt(document.access_hash) : document.access_hash;
         const buf = typeof document.file_reference === 'string'
             ? Buffer.from(document.file_reference, 'hex')
-            : document.file_reference;
+            : Buffer.from(document.file_reference);
         return {
             _: 'inputDocumentFileLocation',
             id,
@@ -2405,7 +2574,7 @@ function buildDownloadLocation(document?: any, photo?: any): Record<string, any>
         const accessHash = typeof photo.access_hash === 'string' ? BigInt(photo.access_hash) : photo.access_hash;
         const buf = typeof photo.file_reference === 'string'
             ? Buffer.from(photo.file_reference, 'hex')
-            : photo.file_reference;
+            : Buffer.from(photo.file_reference);
         return {
             _: 'inputPhotoFileLocation',
             id,
@@ -2518,6 +2687,23 @@ self.onmessage = async (e: MessageEvent) => {
                 respond(msg, { type: 'peerAvatarResult', avatarUrl });
                 break;
             }
+            case 'requestPhotoDownload': {
+                try {
+                    const photoUrl = await requestPhotoDownload(msg.photo, msg.sizeType);
+                    respond(msg, { type: 'photoDownloadResult', photoUrl, sizeType: msg.sizeType, messageId: msg.messageId });
+                } catch (e: any) {
+                    if (e.message?.includes('FILE_REFERENCE_EXPIRED')) {
+                        respond(msg, { type: 'photoDownloadResult', photoUrl: null, sizeType: msg.sizeType, messageId: msg.messageId, fileRefExpired: true, photo: msg.photo });
+                    } else {
+                        throw e;
+                    }
+                }
+                break;
+            }
+            case 'cancelPhotoDownloads':
+                cancelPhotoDownloads();
+                respond(msg, { type: 'photoDownloadsCancelled' });
+                break;
             default:
                 respond(msg, { type: 'error', error: `Unknown message type: ${msg.type}` });
         }
@@ -2531,7 +2717,7 @@ self.onerror = (e: string | Event) => {
     postMessage({ type: 'error', error: 'Worker unhandled: ' + msg });
 };
 
-export { callRpc, resolvePeer, sendCode, signIn, checkPassword, downloadFile_, requestPeerAvatar };
+export { callRpc, resolvePeer, sendCode, signIn, checkPassword, downloadFile_, downloadFileStream_, requestPeerAvatar, requestPhotoDownload, cancelPhotoDownloads };
 export { handleConnectInternal as handleConnect };
 export { handleDisconnect as disconnect };
 export { handleLogout as logout };

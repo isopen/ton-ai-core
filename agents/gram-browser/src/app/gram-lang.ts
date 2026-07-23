@@ -1,7 +1,7 @@
 import { setStrings, TLG_KEYS, LANG_FALLBACKS } from '@ton-ai/gram-ui';
 import type { TelegramUI } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbKeys } from '@/utils/db';
-import { LANG_CODE_MAP, LANG_CACHE_VERSION } from './gram-constants';
+import { LANG_CODE_MAP, REVERSE_LANG_CODE_MAP, LANG_CACHE_VERSION } from './gram-constants';
 
 export interface LangDeps {
   tgui: { current: TelegramUI | null };
@@ -65,10 +65,82 @@ export async function fetchLangStrings(
   return null;
 }
 
-export async function loadStrings(
+const LANG_OPTIONS_CACHE = 'langOptions_' + LANG_CACHE_VERSION;
+const COUNTRIES_CACHE = 'countries_' + LANG_CACHE_VERSION;
+
+export interface CountryInfo {
+  iso2: string;
+  defaultName: string;
+  name: string;
+  phoneCode: string;
+  patterns?: string[];
+}
+
+export async function fetchCachedCountries(
   deps: LangDeps
+): Promise<CountryInfo[]> {
+  try {
+    const cached = await dbGet<CountryInfo[]>(COUNTRIES_CACHE);
+    if (cached && cached.length > 0) return cached;
+  } catch {}
+  const svc = deps.tgService.current;
+  if (!svc) return [];
+  try {
+    const result = await svc.callRpc('help.getCountriesList', { lang_code: 'en', hash: 0 });
+    let countries: any[] = [];
+    if (Array.isArray(result)) countries = result;
+    else if (result?.countries) countries = result.countries;
+    const mapped = countries.map((c: any) => ({
+      iso2: c.iso2 || '',
+      defaultName: c.default_name || '',
+      name: c.name || '',
+      phoneCode: String(c.country_codes?.[0]?.country_code || ''),
+      patterns: c.country_codes?.[0]?.patterns
+        ? c.country_codes[0].patterns.map((p: any) => p.pattern)
+        : undefined,
+    })).filter((c: any) => c.iso2 && c.phoneCode);
+    mapped.sort((a: any, b: any) => a.defaultName.localeCompare(b.defaultName));
+    try { await dbSet(COUNTRIES_CACHE, mapped); } catch {}
+    return mapped;
+  } catch (e: any) {
+    console.log('[lang] getCountries error:', e?.message);
+    return [];
+  }
+}
+
+export async function fetchLangOptions(
+  deps: LangDeps
+): Promise<Array<{ code: string; label: string }>> {
+  try {
+    const cached = await dbGet<Array<{ code: string; label: string }>>(LANG_OPTIONS_CACHE);
+    if (cached && cached.length > 0) return cached;
+  } catch {}
+  const svc = deps.tgService.current;
+  if (!svc) return [];
+  try {
+    const raw = await svc.callRpc('langpack.getLanguages', { lang_pack: 'tdesktop' });
+    const langs: any[] = Array.isArray(raw) ? raw : raw?.items || raw?.result?.items || [];
+    const seen = new Set<string>();
+    const result: Array<{ code: string; label: string }> = [];
+    for (const l of langs) {
+      const code = REVERSE_LANG_CODE_MAP[l.lang_code] || l.lang_code;
+      if (!code || seen.has(code)) continue;
+      seen.add(code);
+      result.push({ code, label: l.native_name || l.name || l.lang_code });
+    }
+    try { await dbSet(LANG_OPTIONS_CACHE, result); } catch {}
+    return result;
+  } catch (e: any) {
+    console.log('[lang] getLanguages error:', e?.message);
+    return [];
+  }
+}
+
+export async function loadStrings(
+  deps: LangDeps,
+  overrideLangCode?: string
 ): Promise<void> {
-  const langCode = await getLangCode();
+  const langCode = overrideLangCode || await getLangCode();
   try {
     const mapped = await fetchLangStrings(langCode, deps);
     const enExtra = LANG_FALLBACKS['en'] || {};

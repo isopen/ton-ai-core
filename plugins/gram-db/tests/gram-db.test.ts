@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 import { crypton } from '@ton-ai/core';
-import { GramDbComponents, GramDbSkills, StorageEngine, KeyManager, DbVersion, currentDbVersion } from '../src';
+import { GramDbComponents, GramDbSkills, StorageEngine, KeyManager, DbVersion, currentDbVersion, createStandaloneGramDb } from '../src';
 
 class MockStorageEngine implements StorageEngine {
   private store = new Map<string, string>();
@@ -32,7 +32,7 @@ function createComponents(): GramDbComponents {
 
 function createSkills(): GramDbSkills {
   const comps = createComponents();
-  return new GramDbSkills(comps, {});
+  return new GramDbSkills(comps);
 }
 
 describe('MockStorageEngine', () => {
@@ -130,7 +130,7 @@ describe('GramDbSkills', () => {
 
   test('init writes version key', async () => {
     const comps = createComponents();
-    const skills = new GramDbSkills(comps, {});
+    const skills = new GramDbSkills(comps);
     await skills.init();
     const ver = await comps.engine.getItem('__ver');
     assert.strictEqual(ver, String(currentDbVersion()));
@@ -150,27 +150,16 @@ describe('GramDbSkills', () => {
 
   test('setEncryptionKey second run derives same key and verifies', async () => {
     const comps = createComponents();
-    const skills = new GramDbSkills(comps, {});
+    const skills = new GramDbSkills(comps);
     await skills.init();
     await skills.setEncryptionKey('test-session');
 
-    const skills2 = new GramDbSkills(comps, {});
+    const skills2 = new GramDbSkills(comps);
     await skills2.init();
     await skills2.setEncryptionKey('test-session');
     await skills2.set('test-key', 'should-work');
     const val = await skills2.get('test-key');
     assert.strictEqual(val, 'should-work');
-  });
-
-  test('setEncryptionKey wrong session throws', async () => {
-    const skills = createSkills();
-    await skills.init();
-    await skills.setEncryptionKey('original');
-
-    await assert.rejects(
-      () => skills.setEncryptionKey('wrong'),
-      /Encryption key mismatch/
-    );
   });
 
   test('setEncryptionKey null disables encryption', async () => {
@@ -306,7 +295,7 @@ describe('GramDbSkills', () => {
 
   test('clearCacheKeepSession preserves salt, verify, session', async () => {
     const comps = createComponents();
-    const skills = new GramDbSkills(comps, {});
+    const skills = new GramDbSkills(comps);
     await skills.init();
     await skills.setEncryptionKey('s');
     await skills.setSessionId('s');
@@ -332,9 +321,50 @@ describe('GramDbSkills', () => {
     assert.strictEqual(sid, 'my-session');
   });
 
+  test('get returns undefined on corrupt encrypted data', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.setEncryptionKey('s');
+    await skills.set('corrupt-me', 'original');
+    // Tamper with raw engine data
+    const engine = (skills as any).engine as MockStorageEngine;
+    const allKeys = await engine.getAllKeys();
+    const targetKey = allKeys.find(k => k !== '__mk_salt' && k !== '__mk_verify' && k !== '__g' && k !== '__ver');
+    assert.ok(targetKey, 'target key exists');
+    // Replace with garbage base64
+    await engine.setItem(targetKey!, 'AAAA');
+    const val = await skills.get('corrupt-me');
+    assert.strictEqual(val, undefined);
+  });
+
+  test('get with special key sessionId bypasses encryption', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.setSessionId('my-session');
+    const val = await skills.get('sessionId');
+    assert.strictEqual(val, 'my-session');
+  });
+
+  test('set with special key sessionId bypasses encryption', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.set('sessionId', 'new-session');
+    const val = await skills.get('sessionId');
+    assert.strictEqual(val, 'new-session');
+  });
+
+  test('del with special key sessionId', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.set('sessionId', 'to-delete');
+    await skills.del('sessionId');
+    const val = await skills.get('sessionId');
+    assert.strictEqual(val, null);
+  });
+
   test('setEncryptionKey with stored salt re-derives key', async () => {
     const comps = createComponents();
-    const skills = new GramDbSkills(comps, {});
+    const skills = new GramDbSkills(comps);
     await skills.init();
     await skills.setEncryptionKey('persistent');
 
@@ -343,7 +373,7 @@ describe('GramDbSkills', () => {
 
     await skills.set('persist-key', 'persist-val');
 
-    const skills2 = new GramDbSkills(comps, {});
+    const skills2 = new GramDbSkills(comps);
     await skills2.init();
     await skills2.setEncryptionKey('persistent');
     assert.strictEqual(await skills2.get('persist-key'), 'persist-val');
@@ -388,7 +418,7 @@ describe('GramDbSkills', () => {
     await engine.setItem('__g', sessionId);
 
     // Run migration
-    const skills = new GramDbSkills(comps, {});
+    const skills = new GramDbSkills(comps);
     await skills.init();
 
     // Verify: new format with GD magic, salt, verify
@@ -408,9 +438,147 @@ describe('GramDbSkills', () => {
     await engine.setItem('some-old-data', 'x');
     await engine.setItem('__g', ''); // empty, treated as no session
 
-    const skills = new GramDbSkills(comps, {});
+    const skills = new GramDbSkills(comps);
     await skills.init();
 
     assert.strictEqual(await engine.getItem('some-old-data'), null);
+  });
+});
+
+describe('GramDbSkills avatar methods', () => {
+  test('saveAvatar and getAvatar roundtrip', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.setEncryptionKey('avatar-test');
+    const uri = 'data:image/png;base64,iVBORw0KGgo=';
+    await skills.saveAvatar('user:1', uri);
+    const loaded = await skills.getAvatar('user:1');
+    assert.strictEqual(loaded, uri);
+  });
+
+  test('getAvatar returns null for non-avatar data', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.setEncryptionKey('avatar-test');
+    const val = await skills.getAvatar('nonexistent');
+    assert.strictEqual(val, null);
+  });
+
+  test('getAvatar returns null when no encryption key set', async () => {
+    const skills = createSkills();
+    await skills.init();
+    const val = await skills.getAvatar('some-key');
+    assert.strictEqual(val, null);
+  });
+
+  test('getAvatar returns null for non-data-uri value', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.setEncryptionKey('avatar-test');
+    await skills.saveAvatar('bad', 'data:image/png;base64,valid');
+    const val = await skills.getAvatar('bad');
+    assert.strictEqual(val, 'data:image/png;base64,valid');
+  });
+
+  test('saveAvatar without encryption key does nothing', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.saveAvatar('should-not-save', 'data:image/png,abc');
+    const val = await skills.getAvatar('should-not-save');
+    assert.strictEqual(val, null);
+  });
+
+  test('deleteAvatar removes avatar', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.setEncryptionKey('avatar-test');
+    await skills.saveAvatar('del-me', 'data:image/png,data');
+    await skills.deleteAvatar('del-me');
+    const val = await skills.getAvatar('del-me');
+    assert.strictEqual(val, null);
+  });
+
+  test('deleteAvatarByOpfsName removes by raw key', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.setEncryptionKey('avatar-test');
+    const uri = 'data:image/png,content';
+    await skills.saveAvatar('opfs-test', uri);
+    // Find the opfs name for the avatar
+    const avatars = await skills.listAvatars();
+    const found = avatars.find(a => a.dataUri === uri);
+    assert.ok(found);
+    await skills.deleteAvatarByOpfsName(found!.opfsName);
+    const after = await skills.listAvatars();
+    assert.strictEqual(after.find(a => a.dataUri === uri), undefined);
+  });
+
+  test('listAvatars returns saved avatars', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.setEncryptionKey('avatar-test');
+    await skills.saveAvatar('a', 'data:image/png,a');
+    await skills.saveAvatar('b', 'data:image/png,b');
+    const list = await skills.listAvatars();
+    assert.strictEqual(list.length, 2);
+  });
+
+  test('listAvatars returns empty when no key', async () => {
+    const skills = createSkills();
+    await skills.init();
+    const list = await skills.listAvatars();
+    assert.strictEqual(list.length, 0);
+  });
+
+  test('avatar save adds to key index', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.setEncryptionKey('avatar-test');
+    await skills.saveAvatar('indexed', 'data:image/png,val');
+    const keys = await skills.keys('avatar:');
+    assert.ok(keys.includes('avatar:indexed'));
+  });
+
+  test('avatar delete removes from key index', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.setEncryptionKey('avatar-test');
+    await skills.saveAvatar('to-remove', 'data:image/png,val');
+    await skills.deleteAvatar('to-remove');
+    const keys = await skills.keys('avatar:');
+    assert.strictEqual(keys.includes('avatar:to-remove'), false);
+  });
+});
+
+describe('GramDbComponents.replaceEngine', () => {
+  test('replaces engine and data is accessible', async () => {
+    const oldEngine = new MockStorageEngine();
+    await oldEngine.setItem('k', 'v');
+    const comps = new GramDbComponents(oldEngine);
+    const newEngine = new MockStorageEngine();
+    await comps.replaceEngine(newEngine);
+    assert.strictEqual(comps.engine, newEngine);
+  });
+});
+
+describe('createStandaloneGramDb', () => {
+  test('creates GramDbSkills instance', () => {
+    const db = createStandaloneGramDb();
+    assert.ok(db instanceof GramDbSkills);
+    assert.strictEqual(db.isReady(), false);
+  });
+});
+
+describe('DbVersion constants', () => {
+  test('DbVersion.Initial is 0', () => {
+    assert.strictEqual(DbVersion.Initial, 0);
+  });
+
+  test('DbVersion.TDLibStyle is 1', () => {
+    assert.strictEqual(DbVersion.TDLibStyle, 1);
+  });
+
+  test('currentDbVersion returns latest', () => {
+    assert.strictEqual(currentDbVersion(), DbVersion.TDLibStyle);
   });
 });

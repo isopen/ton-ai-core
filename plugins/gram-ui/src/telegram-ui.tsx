@@ -213,6 +213,7 @@ export class TelegramUI {
   setTypingText(text: string) { this.dispatch({ type: 'SET_TYPING_TEXT', text }); }
   setDialogTyping(peerKey: string, text: string) { this.dispatch({ type: 'SET_DIALOG_TYPING', peerKey, text }); }
   setSelfUserId(userId: string) { this.dispatch({ type: 'SET_SELF_USER_ID', userId }); }
+  setLangOptions(options: Array<{ code: string; label: string }>) { this.dispatch({ type: 'SET_LANG_OPTIONS', options }); }
 
   private registerBuiltinSkills() {
     const debugPlugin = new SkillPlugin({

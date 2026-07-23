@@ -1,13 +1,10 @@
 import { SharedWorkerClient } from './shared-worker-client';
 
 type WorkerMessageHandler = (msg: any) => void;
-type WorkerStatus = 'idle' | 'connecting' | 'connected';
 
 export class TelegramWorkerClient {
     private client: SharedWorkerClient;
     private updateHandler: WorkerMessageHandler | null = null;
-    private status: WorkerStatus = 'idle';
-    private statusListeners = new Set<(s: WorkerStatus) => void>();
     onAuthInvalidated: (() => void) | null = null;
 
     constructor() {
@@ -17,23 +14,9 @@ export class TelegramWorkerClient {
                 this.updateHandler(msg);
             }
         });
-        this.client.onStatusChange((s) => {
-            this.status = s as WorkerStatus;
-            this.statusListeners.forEach(cb => cb(this.status));
-        });
         this.client.onAuthInvalidated = () => {
             this.onAuthInvalidated?.();
         };
-    }
-
-    private setStatus(s: WorkerStatus): void {
-        this.status = s;
-        this.statusListeners.forEach(cb => cb(s));
-    }
-
-    onStatusChange(cb: (s: WorkerStatus) => void): void {
-        this.statusListeners.add(cb);
-        cb(this.status);
     }
 
     onUpdate(handler: WorkerMessageHandler): void {
@@ -45,14 +28,8 @@ export class TelegramWorkerClient {
     }
 
     async connect(sessionId: string, dcId = 2): Promise<{ authenticated: boolean }> {
-        this.setStatus('connecting');
-        try {
-            const r = await this.client.connect(sessionId, dcId);
-            return r;
-        } catch (e) {
-            this.setStatus('idle');
-            throw e;
-        }
+        const r = await this.client.connect(sessionId, dcId);
+        return r;
     }
 
     async sendCode(phoneNumber: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean }> {
@@ -61,12 +38,10 @@ export class TelegramWorkerClient {
 
     async signIn(phoneNumber: string, code: string): Promise<void> {
         await this.client.signIn(phoneNumber, code);
-        this.setStatus('connected');
     }
 
     async checkPassword(password: string): Promise<void> {
         await this.client.checkPassword(password);
-        this.setStatus('connected');
     }
 
     async getAuthState(): Promise<'none' | 'code_sent' | 'password_needed' | 'authenticated'> {
@@ -85,8 +60,16 @@ export class TelegramWorkerClient {
         return this.client.downloadFile(document, photo);
     }
 
+    async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<void> {
+        return this.client.startVideoStream(document, onChunk);
+    }
+
     async requestPeerAvatar(peerType: string, peerId: string, accessHash: any, photo: any): Promise<string | null> {
         return this.client.requestPeerAvatar(peerType, peerId, accessHash, photo);
+    }
+
+    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
+        return this.client.requestPhotoDownload(photo, sizeType, messageId);
     }
 
     async getDialogs(limit = 100): Promise<any> {
@@ -97,18 +80,20 @@ export class TelegramWorkerClient {
         return this.client.getHistory(peer, limit, offsetId);
     }
 
+    async cancelPhotoDownloads(): Promise<void> {
+        await this.client.cancelPhotoDownloads();
+    }
+
     async readHistory(peer: Record<string, any>, maxId = 0): Promise<void> {
         await this.client.readHistory(peer, maxId);
     }
 
     async disconnect(): Promise<void> {
         await this.client.disconnect();
-        this.setStatus('idle');
     }
 
     async logout(): Promise<void> {
         await this.client.logout();
-        this.setStatus('idle');
     }
 
     onMessages(handler: (updates: any[]) => void): void {
@@ -119,6 +104,5 @@ export class TelegramWorkerClient {
 
     destroy(): void {
         this.client.destroy();
-        this.setStatus('idle');
     }
 }

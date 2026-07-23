@@ -1,6 +1,6 @@
 import { crypton } from '@ton-ai/core';
 import { GramDbComponents, KeyManager, EncryptedStore, StorageEngine, DbVersion, currentDbVersion, IV_SIZE, HMAC_LABEL, OpfsEngine } from './components';
-import type { StoredSession, GramDbConfig, EngineType } from './types';
+import type { StoredSession, GramDbConfig } from './types';
 import { Buffer } from 'buffer';
 
 const KEY_INDEX_KEY = '__key_index';
@@ -17,12 +17,11 @@ export class GramDbSkills {
   private _masterKey: Buffer | null = null;
   private _keyIndex: string[] | null = null;
 
-  constructor(components: GramDbComponents, config: GramDbConfig) {
+  constructor(components: GramDbComponents) {
     this.components = components;
   }
 
   isReady(): boolean { return this.ready; }
-  setReady(ready: boolean): void { this.ready = ready; }
   get engine(): StorageEngine { return this.components.engine; }
 
   private scrubMasterKey(): void {
@@ -43,7 +42,6 @@ export class GramDbSkills {
   async setEncryptionKey(sessionId: string | null): Promise<void> {
     this.scrubMasterKey();
     this._sessionId = sessionId;
-    let binlogKey: Uint8Array | null = null;
     if (sessionId) {
       const rawSalt = await this.engine.getItem(SALT_KEY);
       if (rawSalt) {
@@ -52,7 +50,6 @@ export class GramDbSkills {
         if (storedHash) {
           const computedHash = await KeyManager.createKeyHash(this._masterKey);
           if (!crypton.constantTimeEqual(computedHash, Buffer.from(storedHash, 'base64'))) {
-            // Key mismatch: sessionId changed, regenerate
             this.scrubMasterKey();
             this._masterKey = null;
             await this.engine.setItem(SALT_KEY, '');
@@ -69,35 +66,11 @@ export class GramDbSkills {
         await this.engine.setItem(KEY_VERIFY_KEY, keyHash.toString('base64'));
         salt.fill(0);
       }
-      binlogKey = await crypton.hmacSha256(this._masterKey!, new TextEncoder().encode('gram-db-binlog-v1'));
     } else {
       this._masterKey = null;
     }
-    if (typeof (this.engine as any).setEncryptionKey === 'function') {
-      await (this.engine as any).setEncryptionKey(binlogKey ? new Uint8Array(binlogKey) : null);
-    }
     this._keyIndex = null;
     this.ready = true;
-  }
-
-  async migrateStorage(targetType: EngineType): Promise<void> {
-    if (this.components.engine instanceof OpfsEngine && targetType === 'opfs') return;
-
-    const oldEngine = this.components.engine;
-    const keys = await oldEngine.getAllKeys();
-
-    const newEngine: StorageEngine = new OpfsEngine();
-    await newEngine.init();
-
-    for (const key of keys) {
-      const val = await oldEngine.getItem(key);
-      if (val !== null) {
-        await newEngine.setItem(key, val);
-      }
-    }
-
-    await this.components.replaceEngine(newEngine);
-    this._keyIndex = null;
   }
 
   dispose(): void {

@@ -1,5 +1,5 @@
-import { t, S, tpl } from '@ton-ai/gram-ui';
-import type { PeerInfo, Dialog, Message } from '@ton-ai/gram-ui';
+import { tpl } from '@ton-ai/gram-ui';
+import type { Dialog, Message } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbGetMany, dbKeys, dbGetAvatar } from '@/utils/db';
 import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, ORPHANED_KEY } from './gram-constants';
 import type { GramState } from './gram-state';

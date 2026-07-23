@@ -2,22 +2,10 @@ import type { AppState, UIAction } from './types.js';
 
 export type Dispatch = (action: UIAction) => void;
 
-const ALL_LANG_CODES = [
-  'en', 'af', 'sq', 'am', 'ar', 'hy', 'az', 'eu', 'be', 'bn', 'bg', 'my', 'ca',
-  'zh', 'zh-TW', 'hr', 'cs', 'da', 'nl', 'eo', 'et', 'fil', 'fi', 'fr', 'gl', 'ka',
-  'de', 'el', 'gu', 'he', 'hi', 'hu', 'id', 'ga', 'it', 'ja', 'kn', 'kk', 'km',
-  'ko', 'lv', 'lt', 'ms', 'ml', 'mt', 'mr', 'ne', 'nb', 'or', 'fa',
-  'pl', 'pt', 'pt-PT', 'ro', 'ru', 'sr', 'sk', 'sl', 'es', 'sw', 'sv',
-  'tg', 'ta', 'te', 'th', 'tr', 'tk', 'uk', 'ur', 'uz', 'vi',
-];
-
-const SUPPORTED_LANGS = ALL_LANG_CODES;
-
 function detectBrowserLang(): string {
   const raw = typeof navigator !== 'undefined' ? navigator.language : '';
   if (!raw) return 'en';
-  const code = raw.split('-')[0].toLowerCase();
-  return SUPPORTED_LANGS.includes(code) ? code : 'en';
+  return raw.split('-')[0].toLowerCase();
 }
 
 function detectBrowserTheme(): 'light' | 'dark' {
@@ -56,6 +44,9 @@ export function defaultState(): AppState {
     selfUserId: '',
     pluginSkills: [],
     activeSkill: null,
+    langOptions: [],
+    documentUrls: {},
+    documentProgress: {},
   };
 }
 
@@ -100,7 +91,32 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_SELF_USER_ID': return { ...state, selfUserId: action.userId };
     case 'SET_PLUGIN_SKILLS': return { ...state, pluginSkills: action.skills };
     case 'SET_ACTIVE_SKILL': return { ...state, activeSkill: action.id, ...(action.id ? { selectedPeer: null } : {}) };
-    case 'LOGOUT': return { ...state, page: 'auth', authStep: 'phone', dialogs: [], selectedPeer: null, messages: [], phone: '', code: '', password: '', error: '', signupFirstname: '', signupLastname: '', phoneCodeHash: '', qrToken: '', selfUserId: '', typingText: '', typingByPeer: {}, pluginSkills: [], activeSkill: null };
+    case 'SET_LANG_OPTIONS': return { ...state, langOptions: action.options };
+    case 'UPDATE_MESSAGE_PHOTO': return {
+      ...state,
+      messages: state.messages.map(m =>
+        m.id === action.messageId && m.media?.photo?.sizes
+          ? { ...m, media: { ...m.media, photo: { ...m.media.photo, sizes: m.media.photo.sizes.map((s: any) => s.type === action.sizeType ? { ...s, url: action.url } : s) } } }
+          : m
+      ),
+    };
+    case 'REFRESH_MESSAGE_PHOTO': return {
+      ...state,
+      messages: state.messages.map(m =>
+        m.id === action.messageId
+          ? { ...m, media: { ...m.media, photo: action.photo } }
+          : m
+      ),
+    };
+    case 'UPDATE_MESSAGE_DOCUMENT': return {
+      ...state,
+      documentUrls: { ...state.documentUrls, [action.messageId]: action.url },
+    };
+    case 'UPDATE_MESSAGE_DOCUMENT_PROGRESS': return {
+      ...state,
+      documentProgress: { ...state.documentProgress, [action.messageId]: action.progress },
+    };
+    case 'LOGOUT': return { ...state, page: 'auth', authStep: 'phone', dialogs: [], selectedPeer: null, messages: [], phone: '', code: '', password: '', error: '', signupFirstname: '', signupLastname: '', phoneCodeHash: '', qrToken: '', selfUserId: '', typingText: '', typingByPeer: {}, pluginSkills: [], activeSkill: null, langOptions: [], documentUrls: {}, documentProgress: {} };
     case 'TICK': return { ...state, renderTick: state.renderTick + 1 };
     default: return state;
   }

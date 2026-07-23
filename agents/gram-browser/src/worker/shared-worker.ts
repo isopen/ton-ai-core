@@ -1,9 +1,7 @@
 import * as TW from './telegram-worker';
 
-
-
 interface PortLike {
-    postMessage(msg: any): void;
+    postMessage(msg: any, transfer?: ArrayBuffer[]): void;
     onmessage: ((event: { data: any }) => void) | null;
     start(): void;
     close(): void;
@@ -13,6 +11,7 @@ const ctx = self as unknown as { onconnect: ((event: { ports: PortLike[] }) => v
 
 const ports = new Set<PortLike>();
 let lastSessionId = '';
+let lastDcId = 2;
 
 TW.setOnUpdate((constructorId, data) => {
     for (const port of ports) {
@@ -34,8 +33,20 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
     port.onmessage = async (event) => {
         const msg = event.data;
         try {
-            const result = await handleMessage(msg);
-            port.postMessage({ type: 'response', id: msg.id, result });
+            if (msg.type === 'startVideoStream') {
+                try {
+                    await TW.downloadFileStream_(msg.document, (ab, final, fileType) => {
+                        try { port.postMessage({ type: 'videoChunk', streamId: msg.id, data: ab, final, fileType }, [ab]); } catch {}
+                    });
+                    try { port.postMessage({ type: 'response', id: msg.id, result: { success: true } }); } catch {}
+                } catch (e: any) {
+                    try { port.postMessage({ type: 'videoChunk', streamId: msg.id, error: e.message, final: true }); } catch {}
+                    try { port.postMessage({ type: 'response', id: msg.id, error: e.message }); } catch {}
+                }
+            } else {
+                const result = await handleMessage(msg);
+                port.postMessage({ type: 'response', id: msg.id, result });
+            }
         } catch (e: any) {
             port.postMessage({ type: 'response', id: msg.id, error: e.message });
         }
@@ -46,7 +57,7 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
 
 async function ensureConnected(): Promise<void> {
     if (!TW.isConnected() && lastSessionId) {
-        await TW.handleConnect(lastSessionId, 2);
+        await TW.handleConnect(lastSessionId, lastDcId);
     }
 }
 
@@ -54,7 +65,8 @@ async function handleMessage(msg: Record<string, any>): Promise<any> {
     switch (msg.type) {
         case 'connect':
             lastSessionId = msg.sessionId;
-            await TW.handleConnect(msg.sessionId, msg.dcId || 2);
+            lastDcId = msg.dcId || 2;
+            await TW.handleConnect(msg.sessionId, lastDcId);
             return { type: 'connected', authenticated: TW.isAuthenticated() };
         case 'sendCode':
             await ensureConnected();
@@ -105,6 +117,20 @@ async function handleMessage(msg: Record<string, any>): Promise<any> {
             const avatarUrl = await TW.requestPeerAvatar(msg.peerType, msg.peerId, msg.accessHash, msg.photo);
             return { type: 'peerAvatarResult', avatarUrl };
         }
+        case 'requestPhotoDownload': {
+            try {
+                const photoUrl = await TW.requestPhotoDownload(msg.photo, msg.sizeType);
+                return { type: 'photoDownloadResult', photoUrl, sizeType: msg.sizeType, messageId: msg.messageId };
+            } catch (e: any) {
+                if (e.message?.includes('FILE_REFERENCE_EXPIRED')) {
+                    return { type: 'photoDownloadResult', photoUrl: null, sizeType: msg.sizeType, messageId: msg.messageId, fileRefExpired: true, photo: msg.photo };
+                }
+                throw e;
+            }
+        }
+        case 'cancelPhotoDownloads':
+            TW.cancelPhotoDownloads();
+            return { type: 'photoDownloadsCancelled' };
         case 'readHistory': {
             const rPeer = typeof TW.resolvePeer === 'function' ? await TW.resolvePeer(msg.peer) : msg.peer;
             if (rPeer?._ === 'inputPeerChannel') {

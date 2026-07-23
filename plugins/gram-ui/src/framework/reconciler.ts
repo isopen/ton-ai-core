@@ -60,8 +60,13 @@ function setProp(el: Element, key: string, value: any) {
     else el.removeAttribute(key);
     return;
   }
-  if (key === 'value' && el.tagName === 'SELECT') {
-    requestAnimationFrame(() => { (el as HTMLSelectElement).value = String(value); });
+  if (key === 'value') {
+    const tag = el.tagName;
+    if (tag === 'SELECT') {
+      requestAnimationFrame(() => { (el as HTMLSelectElement).value = String(value); });
+    } else if (tag === 'INPUT' || tag === 'TEXTAREA') {
+      (el as HTMLInputElement).value = String(value);
+    }
     return;
   }
   if (value === '') {

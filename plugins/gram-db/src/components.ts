@@ -16,6 +16,7 @@ declare global {
   }
   interface FileSystemFileHandle {
     createWritable(options?: FileSystemCreateWritableOptions): Promise<FileSystemWritableFileStream>;
+    move(name: string): Promise<void>;
   }
   interface FileSystemCreateWritableOptions {
     keepExistingData?: boolean;

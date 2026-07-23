@@ -1,9 +1,4 @@
-export type EngineType = 'opfs';
-
-export interface GramDbConfig {
-  pbkdf2Iterations?: number;
-  engineType?: EngineType;
-}
+export interface GramDbConfig {}
 
 export interface StoredSession {
   authKey: string;

@@ -32,9 +32,10 @@ export function useState<T>(initial: T): [T, (v: T | ((prev: T) => T)) => void] 
 
 export function useEffect(fn: () => (() => void) | void, deps?: any[]) {
   const inst = getInstance();
-  const idx = inst.hookIndex++;
+  const depsIdx = inst.hookIndex++;
+  const cleanupIdx = inst.hookIndex++;
 
-  const oldDeps = inst.hookStates[idx] as any[] | undefined;
+  const oldDeps = inst.hookStates[depsIdx] as any[] | undefined;
   let changed = true;
 
   if (oldDeps !== undefined && deps !== undefined) {
@@ -42,12 +43,11 @@ export function useEffect(fn: () => (() => void) | void, deps?: any[]) {
   }
 
   if (changed) {
-    const cleanupIdx = idx + 1;
     const oldCleanup = inst.hookStates[cleanupIdx] as (() => void) | undefined;
     if (oldCleanup) {
       try { oldCleanup(); } catch (e) { console.error('useEffect cleanup error:', e); }
     }
-    inst.hookStates[idx] = deps;
+    inst.hookStates[depsIdx] = deps;
     const cleanup = fn();
     inst.hookStates[cleanupIdx] = typeof cleanup === 'function' ? cleanup : undefined;
   }

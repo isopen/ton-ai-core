@@ -5,14 +5,14 @@ import { serializePeer } from '@ton-ai/telegram/dist/types';
 
 export class WorkerTelegramService extends TelegramService {
     workerClient: TelegramWorkerClient | null = null;
-    private updatesSource: EventSource | null = null;
 
     constructor(sessionId: string, private onLog?: (msg: string) => void, private onUpdate?: (constructorId: number, data: string) => void) {
         super({ baseUrl: '', sessionId });
     }
 
-    async connect(dcId = 2): Promise<void> {
+    async connect(dcId = 2, signal?: AbortSignal): Promise<void> {
         this.onLog?.('→ connect dc=' + dcId);
+        if (this.workerClient) this.workerClient.destroy();
         this.workerClient = new TelegramWorkerClient();
         this.workerClient.onAuthInvalidated = () => {
             this.onAuthInvalidated?.();
@@ -27,7 +27,18 @@ export class WorkerTelegramService extends TelegramService {
             });
         }
 
+        if (signal?.aborted) {
+            this.workerClient.destroy();
+            this.workerClient = null;
+            throw new Error('timeout');
+        }
+
         const connectResult = await this.workerClient.connect(this.config.sessionId, dcId);
+        if (signal?.aborted) {
+            this.workerClient.destroy();
+            this.workerClient = null;
+            throw new Error('timeout');
+        }
         this.connected = true;
         this.authenticated = connectResult.authenticated;
         this.onLog?.('← connect done, connected=' + this.connected + ' authenticated=' + this.authenticated);
@@ -137,9 +148,25 @@ export class WorkerTelegramService extends TelegramService {
         return { bytes: result.bytes, type: result.fileType };
     }
 
+    async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<void> {
+        this.onLog?.('→ startVideoStream');
+        if (!this.workerClient) throw new Error('not connected');
+        return this.workerClient.startVideoStream(document, onChunk);
+    }
+
     async requestPeerAvatar(peerType: string, peerId: string, accessHash: any, photo: any): Promise<string | null> {
         if (!this.workerClient) return null;
         return this.workerClient.requestPeerAvatar(peerType, peerId, accessHash, photo);
+    }
+
+    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
+        if (!this.workerClient) return { photoUrl: null };
+        return this.workerClient.requestPhotoDownload(photo, sizeType, messageId);
+    }
+
+    async cancelPhotoDownloads(): Promise<void> {
+        if (!this.workerClient) return;
+        await this.workerClient.cancelPhotoDownloads();
     }
 
     async logout(): Promise<void> {

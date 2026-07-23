@@ -10,10 +10,6 @@ export default function Page() {
     if (appRef.current) return;
 
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then(regs => {
-        regs.forEach(r => r.unregister());
-      });
-      caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))));
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
 

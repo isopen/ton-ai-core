@@ -10,15 +10,15 @@ const CRC32_TABLE: Uint32Array = (() => {
     return table;
 })();
 
-export function crc32(data: string | Buffer): number {
+export function crc32(data: string | Buffer | Uint8Array): number {
     let crc = 0xFFFFFFFF;
-    const input = typeof data === 'string' ? Buffer.from(data, 'utf-8') : data;
+    const input = typeof data === 'string' ? Buffer.from(data, 'utf-8') : Buffer.from(data);
     for (let i = 0; i < input.length; i++) {
         crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ input[i]) & 0xFF];
     }
     return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
-export function crc32Hex(data: string | Buffer): string {
+export function crc32Hex(data: string | Buffer | Uint8Array): string {
     return '0x' + crc32(data).toString(16).padStart(8, '0');
 }

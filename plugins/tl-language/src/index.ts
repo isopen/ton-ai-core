@@ -7,6 +7,10 @@ import { validateTLSchema, TLValidationError } from './validator';
 import { crc32, crc32Hex } from './crc32';
 import { normalizeForCRC32, normalizeTypeRef, stripBang } from './schema-normalizer';
 import {
+  tlBytesLength, readTlString, readTlBytes, writeTlBytes, writeTlString, encodeTlString,
+  encodeKvPayload, decodeKvPayload,
+} from './tl-b';
+import {
     TLSchema, TLCombinator, TLType, TLField, TLOptionalParam,
     TL_BUILTINS, BOOL_TRUE_ID, BOOL_FALSE_ID, VECTOR_ID,
     BOXED_BUILTINS, BARE_BUILTINS,
@@ -172,4 +176,9 @@ export type {
 export {
     TL_BUILTINS, BOOL_TRUE_ID, BOOL_FALSE_ID, VECTOR_ID,
     BOXED_BUILTINS, BARE_BUILTINS,
+};
+
+export {
+    tlBytesLength, readTlString, readTlBytes, writeTlBytes, writeTlString, encodeTlString,
+    encodeKvPayload, decodeKvPayload,
 };

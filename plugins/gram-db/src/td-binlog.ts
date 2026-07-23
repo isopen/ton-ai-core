@@ -1,35 +1,23 @@
-import { crypton } from '@ton-ai/core';
+import { crypton, AesCtrCipher } from '@ton-ai/core';
+import { crc32, tlBytesLength, readTlString, readTlBytes, writeTlBytes, encodeKvPayload, decodeKvPayload } from '@ton-ai/tl-language';
 import { Buffer } from 'buffer';
 
 const BINLOG_FILE = 'binlog';
-const BINLOG_MAGIC = 0xBC11E3E1;
 const EVENT_HEADER_SIZE = 28;
 const EVENT_TAIL_SIZE = 4;
 const EVENT_MIN_SIZE = EVENT_HEADER_SIZE + EVENT_TAIL_SIZE;
-const TYPE_AES_CTR_ENCRYPTION = -3;
-const KDF_ITERATIONS = 310000;
-const KDF_LABEL = 'tdbinlog-v1';
 const KEY_SIZE = 32;
-const SALT_SIZE = 16;
+const SALT_SIZE = 32;
 const IV_SIZE = 16;
 const KEY_HASH_LABEL = 'cucumbers everywhere';
 
-const CRC32_TABLE = new Uint32Array(256);
-for (let i = 0; i < 256; i++) {
-  let c = i;
-  for (let j = 0; j < 8; j++) {
-    c = (c >>> 1) ^ (c & 1 ? 0xEDB88320 : 0);
-  }
-  CRC32_TABLE[i] = c;
-}
+const SERVICE_TYPE_EMPTY = -2;
+const SERVICE_TYPE_AES_CTR = -3;
 
-function crc32(data: Uint8Array): number {
-  let c = 0xFFFFFFFF;
-  for (let i = 0; i < data.length; i++) {
-    c = CRC32_TABLE[(c ^ data[i]) & 0xFF] ^ (c >>> 8);
-  }
-  return (c ^ 0xFFFFFFFF) >>> 0;
-}
+const FLAG_REWRITE = 1;
+const FLAG_PARTIAL = 2;
+
+const KDF_ITERATIONS = 60002;
 
 function readU32(buf: Uint8Array, off: number): number {
   return (buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24)) >>> 0;
@@ -39,21 +27,6 @@ function readS32(buf: Uint8Array, off: number): number {
   return (readU32(buf, off)) | 0;
 }
 
-function readTlString(buf: Uint8Array, off: number): { value: string; end: number } | null {
-  if (off + 4 > buf.length) return null;
-  const len = readU32(buf, off);
-  if (off + 4 + len > buf.length) return null;
-  const value = new TextDecoder().decode(buf.subarray(off + 4, off + 4 + len));
-  return { value, end: 4 + len };
-}
-
-function readTlBytes(buf: Uint8Array, off: number): { value: Uint8Array; end: number } | null {
-  if (off + 4 > buf.length) return null;
-  const len = readU32(buf, off);
-  if (off + 4 + len > buf.length) return null;
-  return { value: buf.slice(off + 4, off + 4 + len), end: 4 + len };
-}
-
 function writeU32(buf: Buffer, off: number, val: number): void {
   buf[off] = val & 0xff;
   buf[off + 1] = (val >>> 8) & 0xff;
@@ -61,23 +34,10 @@ function writeU32(buf: Buffer, off: number, val: number): void {
   buf[off + 3] = (val >>> 24) & 0xff;
 }
 
-function writeTlString(buf: Buffer, off: number, val: string): number {
-  const enc = new TextEncoder().encode(val);
-  writeU32(buf, off, enc.length);
-  buf.set(enc, off + 4);
-  return 4 + enc.length;
-}
-
-function writeTlBytes(buf: Buffer, off: number, data: Uint8Array): number {
-  writeU32(buf, off, data.length);
-  buf.set(data, off + 4);
-  return 4 + data.length;
-}
-
 export function buildEvent(id: bigint, type: number, flags: number, extra: bigint, payload: Uint8Array): Buffer {
-  const payloadSize = EVENT_HEADER_SIZE + payload.length + EVENT_TAIL_SIZE;
-  const buf = Buffer.alloc(payloadSize);
-  writeU32(buf, 0, payloadSize);
+  const totalSize = EVENT_HEADER_SIZE + payload.length + EVENT_TAIL_SIZE;
+  const buf = Buffer.alloc(totalSize);
+  writeU32(buf, 0, totalSize);
   const idLow = Number(id & 0xFFFFFFFFn);
   const idHigh = Number((id >> 32n) & 0xFFFFFFFFn);
   writeU32(buf, 4, idLow);
@@ -89,74 +49,20 @@ export function buildEvent(id: bigint, type: number, flags: number, extra: bigin
   writeU32(buf, 20, extraLow);
   writeU32(buf, 24, extraHigh);
   buf.set(payload, EVENT_HEADER_SIZE);
-  const c = crc32(buf.subarray(0, payloadSize - EVENT_TAIL_SIZE));
-  writeU32(buf, payloadSize - EVENT_TAIL_SIZE, c);
+  const c = crc32(buf.subarray(0, totalSize - EVENT_TAIL_SIZE));
+  writeU32(buf, totalSize - EVENT_TAIL_SIZE, c);
   return buf;
 }
 
 export function buildEncryptionPayload(salt: Uint8Array, iv: Uint8Array, keyHash: Uint8Array): Buffer {
-  const totalLen = 4 + salt.length + 4 + iv.length + 4 + keyHash.length;
+  const totalLen = 4 + tlBytesLength(salt.length) + tlBytesLength(iv.length) + tlBytesLength(keyHash.length);
   const buf = Buffer.alloc(totalLen);
-  let off = writeTlBytes(buf, 0, salt);
+  writeU32(buf, 0, 0);
+  let off = 4;
+  off += writeTlBytes(buf, off, salt);
   off += writeTlBytes(buf, off, iv);
   writeTlBytes(buf, off, keyHash);
   return buf;
-}
-
-export function encodeKvPayload(key: string, value?: string): Buffer {
-  const keyEnc = new TextEncoder().encode(key);
-  const valEnc = value != null ? new TextEncoder().encode(value) : null;
-  const totalLen = 4 + keyEnc.length + (valEnc ? 4 + valEnc.length : 0);
-  const buf = Buffer.alloc(totalLen);
-  let off = writeTlString(buf, 0, key);
-  if (valEnc) {
-    writeU32(buf, off, valEnc.length);
-    buf.set(valEnc, off + 4);
-  }
-  return buf;
-}
-
-export class AesCtrCipher {
-  private ecb: any;
-  private counterBlock: Uint8Array;
-  private keystreamBlock: Uint8Array;
-  private blockOffset: number = 0;
-
-  constructor(key: Uint8Array, iv: Uint8Array, startCounter: number) {
-    this.ecb = new crypton.AES256ECB(key);
-    this.counterBlock = new Uint8Array(16);
-    this.counterBlock.set(iv);
-    this.addToCounter(startCounter);
-    this.keystreamBlock = this.ecb.encryptBlock(this.counterBlock);
-  }
-
-  private addToCounter(n: number): void {
-    let carry = n;
-    for (let i = 15; i >= 0 && carry > 0; i--) {
-      const sum = this.counterBlock[i] + (carry & 0xff);
-      this.counterBlock[i] = sum & 0xff;
-      carry = (carry >>> 8) + ((sum >> 8) & 0xff);
-    }
-  }
-
-  process(data: Uint8Array): Uint8Array {
-    const out = new Uint8Array(data.length);
-    let off = 0;
-    while (off < data.length) {
-      const take = Math.min(16 - this.blockOffset, data.length - off);
-      for (let i = 0; i < take; i++) {
-        out[off + i] = data[off + i] ^ this.keystreamBlock[this.blockOffset + i];
-      }
-      this.blockOffset += take;
-      off += take;
-      if (this.blockOffset === 16) {
-        this.blockOffset = 0;
-        this.addToCounter(1);
-        this.keystreamBlock = this.ecb.encryptBlock(this.counterBlock);
-      }
-    }
-    return out;
-  }
 }
 
 export function parseEventHeader(buf: Uint8Array, off: number): {
@@ -164,41 +70,38 @@ export function parseEventHeader(buf: Uint8Array, off: number): {
 } | null {
   if (off + EVENT_MIN_SIZE > buf.length) return null;
   const size = readU32(buf, off);
-  if (size < EVENT_MIN_SIZE || (size & 3) !== 0 || off + size > buf.length) return null;
-  const crcField = readU32(buf, off + size - 4);
-  const computed = crc32(buf.subarray(off, off + size - 4));
-  if (crcField !== computed) return null;
+  if (size < EVENT_MIN_SIZE || size > 1 << 24 || (size & 3) !== 0) return null;
   return {
     size,
-    id: (BigInt(readU32(buf, off + 4)) << 32n) | BigInt(readU32(buf, off + 8)),
+    id: (BigInt(readU32(buf, off + 8)) << 32n) | BigInt(readU32(buf, off + 4)),
     type: readS32(buf, off + 12),
     flags: readS32(buf, off + 16),
-    extra: (BigInt(readU32(buf, off + 20)) << 32n) | BigInt(readU32(buf, off + 24)),
-    crc32: crcField,
+    extra: (BigInt(readU32(buf, off + 24)) << 32n) | BigInt(readU32(buf, off + 20)),
+    crc32: off + size <= buf.length ? readU32(buf, off + size - 4) : 0,
   };
+}
+
+export function validateEventCrc(buf: Uint8Array, off: number, size: number): boolean {
+  if (off + size > buf.length) return false;
+  const storedCrc = readU32(buf, off + size - 4);
+  const computed = crc32(buf.subarray(off, off + size - 4));
+  return storedCrc === computed;
 }
 
 export function parseEncryptionEvent(payload: Uint8Array): {
   salt: Uint8Array; iv: Uint8Array; keyHash: Uint8Array;
 } | null {
-  if (payload.length < 12) return null;
-  const r1 = readTlBytes(payload, 0);
+  if (payload.length < 16) return null;
+  let off = 4;
+  const r1 = readTlBytes(payload, off);
   if (!r1) return null;
-  const r2 = readTlBytes(payload, r1.end);
+  off += r1.end;
+  const r2 = readTlBytes(payload, off);
   if (!r2) return null;
-  const r3 = readTlBytes(payload, r1.end + r2.end);
+  off += r2.end;
+  const r3 = readTlBytes(payload, off);
   if (!r3) return null;
   return { salt: r1.value, iv: r2.value, keyHash: r3.value };
-}
-
-export function decodeKvPayload(type: number, payload: Uint8Array): { type: 'set' | 'del'; key: string; value?: string } | null {
-  if (payload.length < 4) return null;
-  const keyR = readTlString(payload, 0);
-  if (!keyR) return null;
-  if (type === 2) return { type: 'del', key: keyR.value };
-  const valR = readTlString(payload, keyR.end);
-  if (!valR) return null;
-  return { type: 'set', key: keyR.value, value: valR.value };
 }
 
 export enum EventType {
@@ -227,137 +130,122 @@ export interface TdSessionState {
 export class TdBinlog {
   private fileHandle: FileSystemFileHandle | null = null;
   private fileSize: number = 0;
-  private rawKey: Buffer | null = null;
+  private sessionBytes: Buffer | null = null;
   private encKey: Buffer | null = null;
   private encIv: Uint8Array | null = null;
   private encDataOffset: number = 0;
   private streamCipher: AesCtrCipher | null = null;
-  private entries: Array<{ t: EventType; buf: Buffer }> = [];
+  private entries: Array<{ id: bigint; type: EventType; buf: Buffer }> = [];
+  private nextId: bigint = 1n;
+  private totalEventsSize: number = 0;
+  private deletedCount: number = 0;
+  private pendingEntries: Array<{ type: EventType; buf: Buffer }> = [];
 
   async init(sessionId: string): Promise<void> {
     const dir = await navigator.storage.getDirectory();
     this.fileHandle = await dir.getFileHandle(BINLOG_FILE, { create: true });
 
-    this.rawKey = Buffer.from(await crypton.pbkdf2Sha256(
-      Buffer.from(sessionId, 'utf-8'),
-      new TextEncoder().encode(KDF_LABEL),
-      KDF_ITERATIONS, KEY_SIZE,
-    ));
-
+    this.sessionBytes = Buffer.from(sessionId, 'utf-8');
+    const file = await this.fileHandle!.getFile();
+    console.log('[td-binlog] init sessionId=' + sessionId + ' fileSize=' + file.size + ' exists=' + (file.size > 0));
     await this.replay();
+    console.log('[td-binlog] init done entries=' + this.entries.length + ' encKey=' + !!this.encKey);
   }
 
   private async replay(): Promise<void> {
     try {
       const file = await this.fileHandle!.getFile();
-      const buf = await file.arrayBuffer();
-      this.fileSize = buf.byteLength;
+      const fileSize = file.size;
+      this.fileSize = fileSize;
 
-      if (this.fileSize === 0) {
-        await this.writeMagic();
-        this.fileSize = 4;
-        return;
-      }
+      if (fileSize === 0) { console.log('[td-binlog] replay: empty file'); return; }
 
-      const data = new Uint8Array(buf);
       let offset = 0;
-      let isTdlib = false;
+      let lastGoodOffset = 0;
+      let eventCount = 0;
 
-      if (data.length >= 4) {
-        const magic = readU32(data, 0);
-        if (magic === BINLOG_MAGIC) {
-          offset = 4;
-          isTdlib = true;
-        }
-      }
+      while (offset + EVENT_MIN_SIZE <= fileSize) {
+        const chunk = new Uint8Array(await file.slice(offset, offset + EVENT_MIN_SIZE).arrayBuffer());
+        const hdr = parseEventHeader(chunk, 0);
+        if (!hdr) { console.log('[td-binlog] replay: bad header at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
+        if (offset + hdr.size > fileSize) { console.log('[td-binlog] replay: event exceeds file at offset=' + offset + ' size=' + hdr.size + ' fileSize=' + fileSize + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
 
-      if (!isTdlib) {
-        await this.clear();
-        return;
-      }
+        const eventBuf = new Uint8Array(await file.slice(offset, offset + hdr.size).arrayBuffer());
+        if (!validateEventCrc(eventBuf, 0, hdr.size)) { console.log('[td-binlog] replay: CRC fail at offset=' + offset + ' size=' + hdr.size + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
+        const payload = eventBuf.subarray(EVENT_HEADER_SIZE, hdr.size - EVENT_TAIL_SIZE);
 
-      let encEventFound = false;
-
-      while (offset + EVENT_MIN_SIZE <= data.length) {
-        const hdr = parseEventHeader(data, offset);
-        if (!hdr) { console.log('[tdbinlog] parseEventHeader failed at', offset, 'fileSize', this.fileSize); break; }
-
-        const payload = data.subarray(offset + EVENT_HEADER_SIZE, offset + hdr.size - EVENT_TAIL_SIZE);
-
-        if (hdr.type === TYPE_AES_CTR_ENCRYPTION) {
+        if (hdr.type === SERVICE_TYPE_AES_CTR) {
           const parsed = parseEncryptionEvent(payload);
-          if (parsed) {
-            const encKey = Buffer.from(await crypton.pbkdf2Sha256(
-              this.rawKey!, parsed.salt, 2, KEY_SIZE,
-            ));
-            const computedHash = await crypton.hmacSha256(
-              encKey, new TextEncoder().encode(KEY_HASH_LABEL),
-            );
-            if (!Buffer.from(computedHash).equals(Buffer.from(parsed.keyHash))) {
-              console.log('[tdbinlog] keyHash mismatch');
-              break;
-            }
-            this.encKey = encKey;
-            this.encIv = parsed.iv;
-            this.encDataOffset = offset + hdr.size;
+          if (!parsed) { console.log('[td-binlog] replay: bad encryption event at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
 
-            const encPortion = data.subarray(this.encDataOffset);
-            const cipher = new AesCtrCipher(this.encKey, this.encIv, 0);
-            const dec = cipher.process(encPortion);
-            this.streamCipher = cipher;
-            console.log('[tdbinlog] decrypted', encPortion.length, 'bytes');
+          const encKey = Buffer.from(await crypton.pbkdf2Sha256(
+            this.sessionBytes!, parsed.salt, KDF_ITERATIONS, KEY_SIZE,
+          ));
+          const computedHash = await crypton.hmacSha256(
+            encKey, new TextEncoder().encode(KEY_HASH_LABEL),
+          );
+          if (!Buffer.from(computedHash).equals(Buffer.from(parsed.keyHash))) {
+            console.log('[td-binlog] replay: keyHash mismatch truncating to ' + lastGoodOffset);
+            await this.truncate(lastGoodOffset);
+            return;
+          }
+          this.encKey = encKey;
+          this.encIv = parsed.iv;
+          this.encDataOffset = offset + hdr.size;
+          console.log('[td-binlog] replay: encryption event found, encDataOffset=' + this.encDataOffset + ' encryptedPortion=' + (fileSize - this.encDataOffset));
 
-            let decOff = 0;
-            let parsedCount = 0;
-            let parseFailed = false;
-            while (decOff + EVENT_MIN_SIZE <= dec.length) {
-              const decHdr = parseEventHeader(dec, decOff);
-              if (!decHdr) {
-                console.log('[tdbinlog] dec parseEventHeader failed at', decOff, 'of', dec.length);
-                parseFailed = true;
-                break;
-              }
-              const decPayload = dec.subarray(decOff + EVENT_HEADER_SIZE, decOff + decHdr.size - EVENT_TAIL_SIZE);
-              this.entries.push({
-                t: decHdr.type as EventType,
-                buf: Buffer.from(decPayload),
-              });
-              parsedCount++;
-              decOff += decHdr.size;
-            }
-            if (parseFailed) {
-              console.log('[tdbinlog] decrypted data corrupted (CRC mismatch), clearing binlog');
-              this.encKey = null;
-              this.encIv = null;
-              this.streamCipher = null;
-              await this.clear();
+          const encPortion = new Uint8Array(await file.slice(this.encDataOffset, fileSize).arrayBuffer());
+          const cipher = new AesCtrCipher(this.encKey, this.encIv, 0);
+          const dec = cipher.process(encPortion);
+          this.streamCipher = cipher;
+
+          let decOff = 0;
+          let decEventCount = 0;
+          while (decOff + EVENT_MIN_SIZE <= dec.length) {
+            const decHdr = parseEventHeader(dec, decOff);
+            if (!decHdr || !validateEventCrc(dec, decOff, decHdr.size)) {
+              console.log('[td-binlog] replay: decrypted CRC fail at decOff=' + decOff + ' truncating file to badOffset=' + (this.encDataOffset + decOff) + ' but keeping ' + this.entries.length + ' valid entries');
+              const badOffset = this.encDataOffset + decOff;
+              try {
+                const w = await this.fileHandle!.createWritable({ keepExistingData: true });
+                await w.truncate(badOffset);
+                await w.close();
+              } catch {}
+              this.fileSize = badOffset;
+              this.streamCipher = new AesCtrCipher(this.encKey!, this.encIv!, (decOff + 15) >>> 4);
               return;
             }
-            console.log('[tdbinlog] parsed', parsedCount, 'decrypted events');
-            encEventFound = true;
-          } else {
-            console.log('[tdbinlog] parseEncryptionEvent failed');
+            const decPayload = dec.subarray(decOff + EVENT_HEADER_SIZE, decOff + decHdr.size - EVENT_TAIL_SIZE);
+            if (!this.commitEvent(decHdr, decPayload)) {
+              console.log('[td-binlog] replay: commitEvent failed for decrypted event type=' + decHdr.type + ' truncating to badOffset=' + (this.encDataOffset + decOff) + ' keeping ' + this.entries.length + ' entries');
+              const badOffset = this.encDataOffset + decOff;
+              try {
+                const w = await this.fileHandle!.createWritable({ keepExistingData: true });
+                await w.truncate(badOffset);
+                await w.close();
+              } catch {}
+              this.fileSize = badOffset;
+              this.streamCipher = new AesCtrCipher(this.encKey!, this.encIv!, (decOff + 15) >>> 4);
+              return;
+            }
+            decEventCount++;
+            decOff += decHdr.size;
           }
-          break;
+          console.log('[td-binlog] replay: processed ' + decEventCount + ' decrypted events');
+          return;
         }
 
         if (hdr.type > 0) {
-          this.entries.push({
-            t: hdr.type as EventType,
-            buf: Buffer.from(payload),
-          });
+          if (!this.commitEvent(hdr, payload)) { console.log('[td-binlog] replay: commitEvent failed for unencrypted event type=' + hdr.type); await this.truncate(offset); return; }
         }
 
-        offset += hdr.size;
+        eventCount++;
+        lastGoodOffset = offset + hdr.size;
+        offset = lastGoodOffset;
       }
-
-      if (!encEventFound) {
-        console.log('[tdbinlog] encEvent not found, entries:', this.entries.length);
-        this.encKey = null;
-        this.streamCipher = null;
-      }
+      console.log('[td-binlog] replay: processed ' + eventCount + ' unencrypted events, remaining entries=' + this.entries.length);
     } catch (e) {
-      console.log('[tdbinlog] replay error:', e);
+      console.error('[td-binlog] replay: unexpected error', e);
     }
   }
 
@@ -367,14 +255,14 @@ export class TdBinlog {
     const salt = crypton.getRandomBytes(SALT_SIZE);
     const iv = crypton.getRandomBytes(IV_SIZE);
     const encKey = Buffer.from(await crypton.pbkdf2Sha256(
-      this.rawKey!, salt, 2, KEY_SIZE,
+      this.sessionBytes!, salt, KDF_ITERATIONS, KEY_SIZE,
     ));
     const keyHash = Buffer.from(await crypton.hmacSha256(
       encKey, new TextEncoder().encode(KEY_HASH_LABEL),
     ));
 
     const encPayload = buildEncryptionPayload(salt, iv, keyHash);
-    const encEvent = buildEvent(1n, TYPE_AES_CTR_ENCRYPTION, 0, 0n, encPayload);
+    const encEvent = buildEvent(0n, SERVICE_TYPE_AES_CTR, 0, 0n, encPayload);
 
     const w = await this.fileHandle!.createWritable({ keepExistingData: true });
     await w.write({ type: 'write', position: this.fileSize, data: encEvent as any });
@@ -389,18 +277,31 @@ export class TdBinlog {
 
   async append(type: EventType, ...values: (number | bigint | string | Buffer)[]): Promise<void> {
     const payload = this.serializePayload(values);
-    this.entries.push({ t: type, buf: payload });
+    const eventSize = EVENT_HEADER_SIZE + payload.length + EVENT_TAIL_SIZE;
+    const id = this.nextId++;
+    this.entries.push({ id: id * 2n, type, buf: payload });
+    this.totalEventsSize += eventSize;
 
     await this.ensureEncryptionEvent();
 
-    const event = buildEvent(BigInt(this.entries.length), type, 0, 0n, payload);
+    const event = buildEvent(id, type, 0, 0n, payload);
     const eventBuf = Buffer.from(event);
     const encrypted = this.streamCipher!.process(eventBuf);
 
-    const file = await this.fileHandle!.getFile();
     const w = await this.fileHandle!.createWritable({ keepExistingData: true });
-    await w.write({ type: 'write', position: file.size, data: encrypted as any });
+    await w.write({ type: 'write', position: this.fileSize, data: encrypted as any });
     await w.close();
+    this.fileSize += encrypted.length;
+
+    await this.maybeReindex();
+  }
+
+  private async maybeReindex(): Promise<void> {
+    const needReindex = (minSize: number, rate: number) =>
+      this.fileSize > minSize && this.fileSize / rate > this.totalEventsSize;
+    if (needReindex(50000, 5) || needReindex(100000, 4) || needReindex(300000, 3) || needReindex(500000, 2)) {
+      await this.doReindex();
+    }
   }
 
   private serializePayload(values: (number | bigint | string | Buffer)[]): Buffer {
@@ -416,13 +317,13 @@ export class TdBinlog {
         parts.push(b);
       } else if (typeof v === 'string') {
         const enc = new TextEncoder().encode(v);
-        const len = Buffer.alloc(4);
-        len.writeInt32LE(enc.length, 0);
-        parts.push(len, Buffer.from(enc));
+        const b = Buffer.alloc(tlBytesLength(enc.length));
+        writeTlBytes(b, 0, enc);
+        parts.push(b);
       } else if (Buffer.isBuffer(v)) {
-        const len = Buffer.alloc(4);
-        len.writeInt32LE(v.length, 0);
-        parts.push(len, v);
+        const b = Buffer.alloc(tlBytesLength(v.length));
+        writeTlBytes(b, 0, v);
+        parts.push(b);
       }
     }
     return Buffer.concat(parts);
@@ -442,19 +343,15 @@ export class TdBinlog {
         result.push(buf.readBigUInt64LE(off));
         off += 8;
       } else if (f === 'string') {
-        if (off + 4 > buf.length) { result.push(undefined); continue; }
-        const len = buf.readInt32LE(off);
-        off += 4;
-        if (off + len > buf.length || len < 0) { result.push(''); continue; }
-        result.push(new TextDecoder().decode(buf.subarray(off, off + len)));
-        off += len;
+        const r = readTlString(new Uint8Array(buf), off);
+        if (!r) { result.push(''); continue; }
+        result.push(r.value);
+        off += r.end;
       } else if (f === 'bytes') {
-        if (off + 4 > buf.length) { result.push(undefined); continue; }
-        const len = buf.readInt32LE(off);
-        off += 4;
-        if (off + len > buf.length || len < 0) { result.push(Buffer.alloc(0)); continue; }
-        result.push(buf.subarray(off, off + len));
-        off += len;
+        const r = readTlBytes(new Uint8Array(buf), off);
+        if (!r) { result.push(Buffer.alloc(0)); continue; }
+        result.push(Buffer.from(r.value));
+        off += r.end;
       }
     }
     return result;
@@ -464,8 +361,11 @@ export class TdBinlog {
     const state: TdSessionState = {
       dcId: 0, serverTimeOffset: 0, authenticated: false, passwordPending: false,
     };
+    let foundAuthKey = false;
+    let foundSessionFlags = false;
     for (const e of this.entries) {
-      switch (e.t) {
+      if ((e.id & 1n) !== 0n) continue;
+      switch (e.type) {
         case EventType.AuthKey: {
           const [dcId, authKey, authKeyId, serverSalt] = this.deserializePayload(e.buf, ['int32', 'bytes', 'int64', 'int64']);
           if (typeof dcId === 'number' && dcId >= 1 && dcId <= 5) {
@@ -473,6 +373,7 @@ export class TdBinlog {
             state.authKey = Buffer.from(authKey || Buffer.alloc(0));
             state.authKeyId = authKeyId;
             state.serverSalt = serverSalt;
+            foundAuthKey = true;
           }
           break;
         }
@@ -490,6 +391,7 @@ export class TdBinlog {
           const [flags] = this.deserializePayload(e.buf, ['int32']);
           state.authenticated = !!(flags & 1);
           state.passwordPending = !!(flags & 2);
+          foundSessionFlags = true;
           break;
         }
         case EventType.ServerTimeOffset: {
@@ -504,49 +406,139 @@ export class TdBinlog {
         }
       }
     }
+    console.log('[td-binlog] getState: entries=' + this.entries.length + ' foundAuthKey=' + foundAuthKey + ' foundSessionFlags=' + foundSessionFlags + ' authenticated=' + state.authenticated + ' authKey=' + (state.authKey ? state.authKey.length + 'bytes' : 'null'));
     return state;
   }
 
-  private async writeMagic(): Promise<void> {
+  private commitEvent(hdr: { type: number; flags: number; id: bigint }, payload: Uint8Array): boolean {
+    if (hdr.flags & FLAG_PARTIAL) {
+      this.pendingEntries.push({ type: hdr.type as EventType, buf: Buffer.from(payload) });
+      return true;
+    }
+    for (const p of this.pendingEntries) {
+      this.entries.push({ id: 0n, type: p.type, buf: p.buf });
+      this.totalEventsSize += EVENT_HEADER_SIZE + p.buf.length + EVENT_TAIL_SIZE;
+    }
+    this.pendingEntries = [];
+
+    if (hdr.flags & FLAG_REWRITE) {
+      const searchId = hdr.id * 2n;
+      let idx = -1;
+      if (this.entries.length > 0 && this.entries[this.entries.length - 1].id >= searchId) {
+        let lo = 0, hi = this.entries.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (this.entries[mid].id < searchId) lo = mid + 1;
+          else hi = mid;
+        }
+        if (lo < this.entries.length && this.entries[lo].id === searchId) {
+          idx = lo;
+        }
+      }
+      if (idx === -1) return true;
+      this.totalEventsSize -= EVENT_HEADER_SIZE + this.entries[idx].buf.length + EVENT_TAIL_SIZE;
+      if (hdr.type === SERVICE_TYPE_EMPTY) {
+        this.entries[idx].id |= 1n;
+        this.deletedCount++;
+      } else {
+        this.entries[idx] = { id: searchId, type: hdr.type as EventType, buf: Buffer.from(payload) };
+        this.totalEventsSize += EVENT_HEADER_SIZE + payload.length + EVENT_TAIL_SIZE;
+      }
+    } else if (hdr.type < 0) {
+      return true;
+    } else {
+      const searchId = hdr.id * 2n;
+      if (this.entries.length > 0 && this.entries[this.entries.length - 1].id >= searchId) {
+        return false;
+      }
+      this.entries.push({ id: searchId, type: hdr.type as EventType, buf: Buffer.from(payload) });
+      this.totalEventsSize += EVENT_HEADER_SIZE + payload.length + EVENT_TAIL_SIZE;
+      if (hdr.id >= this.nextId) this.nextId = hdr.id + 1n;
+    }
+
+    if (this.entries.length > 10 && this.deletedCount * 4 > this.entries.length * 3) {
+      this.compactify();
+    }
+    return true;
+  }
+
+  private compactify(): void {
+    const alive = this.entries.filter(e => (e.id & 1n) === 0n);
+    this.deletedCount = 0;
+    this.entries = alive;
+  }
+
+  private async doReindex(): Promise<void> {
+    const dir = await navigator.storage.getDirectory();
+
+    const salt = crypton.getRandomBytes(SALT_SIZE);
+    const iv = crypton.getRandomBytes(IV_SIZE);
+    const encKey = Buffer.from(await crypton.pbkdf2Sha256(
+      this.sessionBytes!, salt, KDF_ITERATIONS, KEY_SIZE,
+    ));
+    const keyHash = Buffer.from(await crypton.hmacSha256(
+      encKey, new TextEncoder().encode(KEY_HASH_LABEL),
+    ));
+    const encPayload = buildEncryptionPayload(salt, iv, keyHash);
+    const encEvent = buildEvent(0n, SERVICE_TYPE_AES_CTR, 0, 0n, encPayload);
+
+    const newCipher = new AesCtrCipher(encKey, iv, 0);
+
+    const tempHandle = await dir.getFileHandle(BINLOG_FILE + '.new', { create: true });
+    const w = await tempHandle.createWritable();
+    await w.write({ type: 'write', data: encEvent as any });
+
+    let runningId = 1n;
+    let totalSize = encEvent.length;
+    let newTotalEventsSize = 0;
+    for (const e of this.entries) {
+      if ((e.id & 1n) !== 0n) continue;
+      const event = buildEvent(runningId++, e.type, 0, 0n, e.buf);
+      const encrypted = newCipher.process(new Uint8Array(Buffer.from(event)));
+      await w.write({ type: 'write', data: encrypted as any });
+      totalSize += encrypted.length;
+      newTotalEventsSize += EVENT_HEADER_SIZE + e.buf.length + EVENT_TAIL_SIZE;
+    }
+    await w.close();
+
+    const oldName = BINLOG_FILE;
+    await dir.removeEntry(oldName);
     try {
-      const file = await this.fileHandle!.getFile();
-      if (file.size >= 4) return;
-      const magicBuf = Buffer.alloc(4);
-      writeU32(magicBuf, 0, BINLOG_MAGIC);
+      await tempHandle.move(oldName);
+    } catch {}
+    this.fileHandle = await dir.getFileHandle(oldName);
+
+    this.encKey = encKey;
+    this.encIv = iv;
+    this.streamCipher = newCipher;
+    this.encDataOffset = encEvent.length;
+    this.fileSize = totalSize;
+    this.totalEventsSize = newTotalEventsSize;
+    this.deletedCount = 0;
+    this.nextId = runningId;
+  }
+
+  private async truncate(offset: number): Promise<void> {
+    this.entries = [];
+    this.pendingEntries = [];
+    this.encKey = null;
+    this.encIv = null;
+    this.streamCipher = null;
+    this.encDataOffset = 0;
+    this.totalEventsSize = 0;
+    this.deletedCount = 0;
+    this.nextId = 1n;
+    this.fileSize = offset;
+    try {
       const w = await this.fileHandle!.createWritable({ keepExistingData: true });
-      await w.write({ type: 'write', position: 0, data: magicBuf as any });
+      await w.truncate(offset);
       await w.close();
     } catch {}
   }
 
   async clear(): Promise<void> {
-    this.entries = [];
-    this.encKey = null;
-    this.encIv = null;
-    this.streamCipher = null;
-    this.encDataOffset = 0;
-    this.fileSize = 0;
-    try {
-      const w = await this.fileHandle!.createWritable({ keepExistingData: false });
-      await w.close();
-      await this.writeMagic();
-      this.fileSize = 4;
-    } catch {}
-  }
-
-  getEncDataOffset(): number {
-    return this.encDataOffset;
-  }
-
-  getEncKey(): Buffer | null {
-    return this.encKey;
-  }
-
-  getEncIv(): Uint8Array | null {
-    return this.encIv;
-  }
-
-  getEntries(): Array<{ t: EventType; buf: Buffer }> {
-    return this.entries;
+    return this.truncate(0);
   }
 }
+
+export const TYPE_AES_CTR_ENCRYPTION = SERVICE_TYPE_AES_CTR;

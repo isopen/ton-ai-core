@@ -5,6 +5,8 @@ export function isNode(): boolean {
   return typeof process !== 'undefined' && process.versions?.node !== undefined;
 }
 
+
+
 export function getRandomBytes(length: number): Buffer {
   if (isNode()) {
     const crypto = require('crypto');
@@ -44,7 +46,14 @@ export function xor(a: Buffer, b: Buffer): Buffer {
 
 export function xorInto(out: Buffer, a: Buffer, b: Buffer): void {
   const len = Math.min(a.length, b.length, out.length);
-  for (let i = 0; i < len; i++) {
+  let i = 0;
+  for (; i + 4 <= len; i += 4) {
+    out[i] = a[i] ^ b[i];
+    out[i+1] = a[i+1] ^ b[i+1];
+    out[i+2] = a[i+2] ^ b[i+2];
+    out[i+3] = a[i+3] ^ b[i+3];
+  }
+  for (; i < len; i++) {
     out[i] = a[i] ^ b[i];
   }
 }

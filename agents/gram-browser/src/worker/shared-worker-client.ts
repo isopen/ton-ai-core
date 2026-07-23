@@ -5,6 +5,7 @@ export class SharedWorkerClient {
     private port: MessagePort | null = null;
     private msgId = 0;
     private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+    private streamListeners = new Map<number, (chunk: { data: string; final: boolean; fileType: string; error?: string }) => void>();
     private updateHandler: ((msg: any) => void) | null = null;
     private status: WorkerStatus = 'idle';
     private statusListeners = new Set<(s: WorkerStatus) => void>();
@@ -26,8 +27,11 @@ export class SharedWorkerClient {
 
     async start(apiId: number, apiHash: string): Promise<void> {
         if (this.worker) return;
-        const workerId = Math.random().toString(36).substring(2, 10);
-        this.worker = new SharedWorker(new URL('./shared-worker.ts', import.meta.url), { name: `gram-browser-${workerId}` });
+        try {
+            this.worker = new SharedWorker(new URL('./shared-worker.ts', import.meta.url), { name: 'gram-browser' });
+        } catch (e: any) {
+            throw new Error('Failed to create SharedWorker: ' + e.message);
+        }
         this.port = this.worker.port;
 
         this.port.onmessage = (event) => {
@@ -44,6 +48,11 @@ export class SharedWorkerClient {
                 this.onAuthInvalidated?.();
                 return;
             }
+            if (msg.type === 'videoChunk') {
+                const handler = this.streamListeners.get(msg.streamId);
+                if (handler) handler(msg);
+                return;
+            }
             if (msg.type === 'response') {
                 const pending = this.pending.get(msg.id);
                 if (pending) {
@@ -58,15 +67,33 @@ export class SharedWorkerClient {
             }
         };
 
+        this.port.onmessageerror = () => {
+            for (const [, p] of this.pending) p.reject(new Error('Worker port error'));
+            this.pending.clear();
+        };
+
         this.port.start();
     }
 
-    private send(msg: Record<string, any>): Promise<any> {
+    private send(msg: Record<string, any>, timeoutMs = 30000): Promise<any> {
         return new Promise((resolve, reject) => {
             if (!this.port) { reject(new Error('Not started')); return; }
             const id = ++this.msgId;
-            this.pending.set(id, { resolve, reject });
-            this.port.postMessage({ ...msg, id });
+            const timer = setTimeout(() => {
+                this.pending.delete(id);
+                reject(new Error('Response timeout for ' + (msg.type || 'unknown')));
+            }, timeoutMs);
+            this.pending.set(id, {
+                resolve: (v: any) => { clearTimeout(timer); resolve(v); },
+                reject: (e: Error) => { clearTimeout(timer); reject(e); },
+            });
+            try {
+                this.port.postMessage({ ...msg, id });
+            } catch (e: any) {
+                clearTimeout(timer);
+                this.pending.delete(id);
+                reject(new Error('postMessage failed: ' + e.message));
+            }
         });
     }
 
@@ -100,12 +127,42 @@ export class SharedWorkerClient {
     }
 
     async downloadFile(document: any, photo: any): Promise<{ fileType: string; bytes: string; error?: string }> {
-        return this.send({ type: 'downloadFile', document, photo });
+        return this.send({ type: 'downloadFile', document, photo }, 120_000);
+    }
+
+    async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<void> {
+        return new Promise((resolve, reject) => {
+            if (!this.port) { reject(new Error('Not started')); return; }
+            const id = ++this.msgId;
+            const timer = setTimeout(() => {
+                this.streamListeners.delete(id);
+                this.pending.delete(id);
+                reject(new Error('Stream timeout'));
+            }, 300_000);
+            this.streamListeners.set(id, (chunk: any) => {
+                onChunk(chunk.data, chunk.final, chunk.fileType || '');
+                if (chunk.error) {
+                    clearTimeout(timer);
+                    this.streamListeners.delete(id);
+                    this.pending.delete(id);
+                    reject(new Error(chunk.error));
+                }
+            });
+            this.pending.set(id, {
+                resolve: (v: any) => { clearTimeout(timer); this.streamListeners.delete(id); resolve(v); },
+                reject: (e: Error) => { clearTimeout(timer); this.streamListeners.delete(id); reject(e); },
+            });
+            this.port.postMessage({ type: 'startVideoStream', document, id });
+        });
     }
 
     async requestPeerAvatar(peerType: string, peerId: string, accessHash: any, photo: any): Promise<string | null> {
         const r = await this.send({ type: 'requestPeerAvatar', peerType, peerId, accessHash, photo });
         return r.avatarUrl;
+    }
+
+    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
+        return this.send({ type: 'requestPhotoDownload', photo, sizeType, messageId }, 120_000);
     }
 
     async getDialogs(limit = 100): Promise<any> {
@@ -114,6 +171,10 @@ export class SharedWorkerClient {
 
     async getHistory(peer: Record<string, any>, limit = 50, offsetId = 0): Promise<any> {
         return this.send({ type: 'getHistory', peer, limit, offsetId });
+    }
+
+    async cancelPhotoDownloads(): Promise<void> {
+        await this.send({ type: 'cancelPhotoDownloads' });
     }
 
     async readHistory(peer: Record<string, any>, maxId = 0): Promise<void> {

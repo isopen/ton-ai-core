@@ -67,8 +67,36 @@ export interface AppState {
     qrToken: string;
     phoneCodeHash: string;
     selfUserId: string;
-    pluginSkills: Array<{ id: string; label: string }>;
-    activeSkill: string | null;
+  pluginSkills: Array<{ id: string; label: string }>;
+  activeSkill: string | null;
+  langOptions: Array<{ code: string; label: string }>;
+  documentUrls: Record<number, string>;
+  documentProgress: Record<number, number>;
+}
+
+export interface ImageSource {
+  url: string;
+  width: number;
+  height: number;
+}
+
+export interface ImageSpec {
+  id: string;
+  thumbnail?: ImageSource;
+  medium?: ImageSource;
+  original?: ImageSource;
+  width: number;
+  height: number;
+}
+
+export interface TelegramImageProps {
+  image: ImageSpec;
+  width?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+  lazy?: boolean;
+  rounded?: boolean;
+  onOpenViewer?: (id: string) => void;
 }
 
 export type UIAction =
@@ -103,5 +131,10 @@ export type UIAction =
     | { type: 'SET_SELF_USER_ID'; userId: string }
     | { type: 'SET_PLUGIN_SKILLS'; skills: Array<{ id: string; label: string }> }
     | { type: 'SET_ACTIVE_SKILL'; id: string | null }
+    | { type: 'SET_LANG_OPTIONS'; options: Array<{ code: string; label: string }> }
+    | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number; sizeType: string; url: string }
+    | { type: 'REFRESH_MESSAGE_PHOTO'; messageId: number; photo: any }
+    | { type: 'UPDATE_MESSAGE_DOCUMENT'; messageId: number; url: string }
+    | { type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS'; messageId: number; progress: number }
     | { type: 'LOGOUT' };
 

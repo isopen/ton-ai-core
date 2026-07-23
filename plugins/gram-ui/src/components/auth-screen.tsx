@@ -13,79 +13,7 @@ import { Flex } from '../primitives/flex.js';
 import { Text } from '../primitives/text.js';
 import { Panel } from '../primitives/panel.js';
 
-const LANG_OPTIONS: { code: string; label: string }[] = [
-  { code: 'en', label: 'English' },
-  { code: 'af', label: 'Afrikaans' },
-  { code: 'sq', label: 'Shqip' },
-  { code: 'am', label: 'አማርኛ' },
-  { code: 'ar', label: 'العربية' },
-  { code: 'hy', label: 'Հայերեն' },
-  { code: 'az', label: 'Azərbaycan dili' },
-  { code: 'eu', label: 'Euskara' },
-  { code: 'be', label: 'Беларуская' },
-  { code: 'bn', label: 'বাংলা' },
-  { code: 'bg', label: 'Български' },
-  { code: 'my', label: 'မြန်မာဘာသာ' },
-  { code: 'ca', label: 'Català' },
-  { code: 'zh', label: '中文(简体)' },
-  { code: 'zh-TW', label: '中文(繁體)' },
-  { code: 'hr', label: 'Hrvatski' },
-  { code: 'cs', label: 'Čeština' },
-  { code: 'da', label: 'Dansk' },
-  { code: 'nl', label: 'Nederlands' },
-  { code: 'eo', label: 'Esperanto' },
-  { code: 'et', label: 'Eesti' },
-  { code: 'fil', label: 'Filipino' },
-  { code: 'fi', label: 'Suomi' },
-  { code: 'fr', label: 'Français' },
-  { code: 'gl', label: 'Galego' },
-  { code: 'ka', label: 'ქართული' },
-  { code: 'de', label: 'Deutsch' },
-  { code: 'el', label: 'Ελληνικά' },
-  { code: 'gu', label: 'ગુજરાતી' },
-  { code: 'he', label: 'עברית' },
-  { code: 'hi', label: 'हिन्दी' },
-  { code: 'hu', label: 'Magyar' },
-  { code: 'id', label: 'Bahasa Indonesia' },
-  { code: 'ga', label: 'Gaeilge' },
-  { code: 'it', label: 'Italiano' },
-  { code: 'ja', label: '日本語' },
-  { code: 'kn', label: 'ಕನ್ನಡ' },
-  { code: 'kk', label: 'Қазақша' },
-  { code: 'km', label: 'ភាសាខ្មែរ' },
-  { code: 'ko', label: '한국어' },
-  { code: 'lv', label: 'Latviešu' },
-  { code: 'lt', label: 'Lietuvių' },
-  { code: 'ms', label: 'Bahasa Melayu' },
-  { code: 'ml', label: 'മലയാളം' },
-  { code: 'mt', label: 'Malti' },
-  { code: 'mr', label: 'मराठी' },
-  { code: 'ne', label: 'नेपाली' },
-  { code: 'nb', label: 'Norsk (Bokmål)' },
-  { code: 'or', label: 'ଓଡ଼ିଆ' },
-  { code: 'fa', label: 'فارسی' },
-  { code: 'pl', label: 'Polski' },
-  { code: 'pt', label: 'Português (Brasil)' },
-  { code: 'pt-PT', label: 'Português (Portugal)' },
-  { code: 'ro', label: 'Română' },
-  { code: 'ru', label: 'Русский' },
-  { code: 'sr', label: 'Српски' },
-  { code: 'sk', label: 'Slovenčina' },
-  { code: 'sl', label: 'Slovenščina' },
-  { code: 'es', label: 'Español' },
-  { code: 'sw', label: 'Kiswahili' },
-  { code: 'sv', label: 'Svenska' },
-  { code: 'tg', label: 'Тоҷикӣ' },
-  { code: 'ta', label: 'தமிழ்' },
-  { code: 'te', label: 'తెలుగు' },
-  { code: 'th', label: 'ไทย' },
-  { code: 'tr', label: 'Türkçe' },
-  { code: 'tk', label: 'Türkmen' },
-  { code: 'uk', label: 'Українська' },
-  { code: 'ur', label: 'اردو' },
-  { code: 'uz', label: 'Oʻzbek' },
-  { code: 'vi', label: 'Tiếng Việt' },
-];
+
 
 const LANG_SUGGESTIONS: Record<string, string> = {
   en: 'Continue in English',
@@ -175,9 +103,7 @@ function LoadingView() {
 function getBrowserLang(): string | null {
   const raw = typeof navigator !== 'undefined' ? navigator.language : '';
   if (!raw) return null;
-  const code = raw.split('-')[0].toLowerCase();
-  if (code && LANG_OPTIONS.some(o => o.code === code)) return code;
-  return null;
+  return raw.split('-')[0].toLowerCase() || null;
 }
 
 function handleLangChange(e: any) {
@@ -185,10 +111,10 @@ function handleLangChange(e: any) {
   window.dispatchEvent(new CustomEvent('tg-auth-set-lang', { detail: { langCode: code } }));
 }
 
-function LanguageSuggestion({ current }: { current: string }) {
+function LanguageSuggestion({ current, options }: { current: string; options: Array<{ code: string; label: string }> }) {
   const browserLang = getBrowserLang();
   const [dismissed, setDismissed] = useState(false);
-  if (!browserLang || browserLang === current || dismissed) return null;
+  if (!browserLang || !options.some(o => o.code === browserLang) || browserLang === current || dismissed) return null;
   const label = LANG_SUGGESTIONS[browserLang];
   if (!label) return null;
   return (
@@ -203,16 +129,16 @@ function LanguageSuggestion({ current }: { current: string }) {
   );
 }
 
-function LanguageSelector({ current }: { current: string }) {
-  const opts = LANG_OPTIONS.map(o => ({ value: o.code, label: o.label }));
-  if (opts.every(o => o.value !== current)) {
-    opts.push({ value: current, label: current });
+function LanguageSelector({ current, options }: { current: string; options: Array<{ code: string; label: string }> }) {
+  const mapped = options.map(o => ({ value: o.code, label: o.label }));
+  if (mapped.every(o => o.value !== current)) {
+    mapped.push({ value: current, label: current });
   }
   return (
     <Select
       value={current}
       onChange={handleLangChange}
-      options={opts}
+      options={mapped}
       searchable
       label={t(S.AUTH_LANGUAGE)}
     />
@@ -311,8 +237,8 @@ function handleRequestQr() {
 function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
   return (
     <Flex direction="column" gap="16px">
-      <LanguageSelector current={state.langCode} />
-      <LanguageSuggestion key={state.langCode} current={state.langCode} />
+      <LanguageSelector current={state.langCode} options={state.langOptions} />
+      <LanguageSuggestion key={state.langCode} current={state.langCode} options={state.langOptions} />
       <CountrySelector state={state} dispatch={dispatch} />
       <PhoneInput key={state.countryIso2 || '_'} state={state} dispatch={dispatch} />
       <Button onClick={() => handleSendCode(state, dispatch)}>{t(S.AUTH_NEXT)}</Button>

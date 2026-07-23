@@ -1,12 +1,12 @@
 import { t, S, tpl } from '@ton-ai/gram-ui';
 import type { Message } from '@ton-ai/gram-ui';
-import { dbSet, dbDel } from '@/utils/db';
+import { dbSet } from '@/utils/db';
 import { DIALOG_CACHE_KEY } from './gram-constants';
 import type { GramState } from './gram-state';
 import {
   addLog, setMessageCache, deleteMessageCache, scheduleDialogsFlush,
   scheduleMessagesFlush, applyReadReceipt, addOrphanedDialog,
-  fetchPeerInfo, getLastVisibleMsgId, setDialogsFromServer,
+  fetchPeerInfo,
 } from './gram-utils';
 import { isTypingUpdate, handleTypingUpdate } from './gram-typing';
 

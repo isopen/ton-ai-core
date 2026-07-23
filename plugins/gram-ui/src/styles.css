@@ -1206,6 +1206,7 @@ body {
 }
 
 .Avatar {
+  position: relative;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1226,7 +1227,6 @@ body {
   width: 48px;
   height: 48px;
   font-size: 16px;
-  position: relative;
 }
 
 .Avatar_size_large {
@@ -1235,11 +1235,32 @@ body {
   font-size: 20px;
 }
 
-.Avatar__img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 50%;
+.Avatar__initial {
+  position: relative;
+}
+
+.Avatar__initial_double {
+  font-size: 0.85em;
+  letter-spacing: -0.03em;
+}
+
+.Avatar .TelegramImage {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  z-index: 1;
+}
+
+.Avatar .TelegramImage__placeholder {
+  background: transparent;
+}
+
+.Avatar .TelegramImage__error {
+  background: transparent;
+}
+
+.Avatar .TelegramImage__progress {
+  display: none;
 }
 
 .Badge {
@@ -1328,11 +1349,16 @@ body {
 }
 
 .Text_variant_label {
-  font-size: 16px;
-  font-weight: 400;
-  line-height: 1.5;
-  letter-spacing: 0.15px;
+  display: block;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 0;
   color: var(--text-primary);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .Text_variant_desc {
@@ -1391,12 +1417,17 @@ body {
 .tgui-chat-info {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .tgui-chat-name {
   font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-subtitle {
@@ -1542,6 +1573,29 @@ body {
   letter-spacing: 0.2px;
 }
 
+.MessageBubble__meta_overlay {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(0,0,0,0.45);
+  backdrop-filter: blur(4px);
+  border-radius: 4px;
+  padding: 3px 6px;
+  margin: 0;
+}
+
+.MessageBubble__meta_overlay .MessageBubble__time {
+  color: #fff;
+}
+
+.MessageBubble__meta_overlay .Checkmark {
+  color: #fff;
+  font-size: 12px;
+}
+
 .MessageBubble__status {
   display: inline-flex;
   align-items: center;
@@ -1606,6 +1660,79 @@ body {
   padding: 0 4px;
 }
 
+/* ===== Media Player (Video / GIF) ===== */
+.MessageBubble_media {
+  max-width: none;
+  padding: 0;
+}
+
+.tgui-media-container {
+  position: relative;
+  overflow: hidden;
+  border-radius: inherit;
+  background: var(--bg-surface);
+}
+
+.tgui-media-preview {
+  position: relative;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.tgui-media-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(12px);
+  transform: scale(1.05);
+}
+
+.tgui-media-play-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.3);
+  transition: background 0.2s;
+  color: #fff;
+}
+
+.tgui-media-preview:hover .tgui-media-play-overlay {
+  background: rgba(0,0,0,0.45);
+}
+
+.tgui-media-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+.tgui-media-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+
+.tgui-media-gif {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+
 /* ===== Photo ===== */
 .tgui-photo {
   max-width: 320px;
@@ -1616,15 +1743,110 @@ body {
   overflow: hidden;
   position: relative;
   background: var(--bg-surface);
-  padding: 20px;
-  text-align: center;
-  color: var(--text-secondary);
   border-radius: 16px 16px 0 0;
 }
 
 .MessageBubble_out.MessageBubble_group_next .tgui-photo-preview,
 .MessageBubble_in.MessageBubble_group_next .tgui-photo-preview {
   border-radius: 6px 6px 0 0;
+}
+
+.MessageBubble_photo {
+  max-width: none;
+  padding: 0;
+}
+
+.MessageBubble_photo .tgui-photo-preview {
+  margin: 0;
+  border-radius: inherit;
+}
+
+.MessageBubble_photo .MessageBubble__text {
+  padding: 8px 11px 7px;
+  word-break: break-word;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--bubble-text);
+  unicode-bidi: plaintext;
+  white-space: pre-wrap;
+}
+
+/* ===== TelegramImage ===== */
+.TelegramImage {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-surface);
+  cursor: default;
+}
+
+.TelegramImage_rounded {
+  border-radius: 12px;
+}
+
+.TelegramImage_loaded {
+  cursor: pointer;
+}
+
+.TelegramImage__placeholder {
+  width: 100%;
+  height: 100%;
+  background: var(--bg-surface);
+}
+
+.TelegramImage__thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(12px);
+  transform: scale(1.05);
+  opacity: 0.9;
+  transition: opacity 0.3s ease;
+}
+
+.TelegramImage_loaded .TelegramImage__thumb {
+  opacity: 0;
+}
+
+.TelegramImage__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.TelegramImage__img_loaded {
+  opacity: 1;
+}
+
+.TelegramImage__loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-surface) 60%, transparent);
+}
+
+.TelegramImage__error {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-surface);
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.TelegramImage__error::after {
+  content: '⚠';
+  font-size: 24px;
+  opacity: 0.5;
 }
 
 /* ===== Debug ===== */

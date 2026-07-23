@@ -5,7 +5,7 @@ export interface GramState {
   sessionIdRef: { current: string };
   tgService: { current: WorkerTelegramService | null };
   tgui: { current: TelegramUI | null };
-  loadStringsRef: { current: () => Promise<void> };
+  loadStringsRef: { current: (code?: string) => Promise<void> };
   selectedPeerRef: { current: PeerInfo | null };
   messagesCache: { current: Map<string, Message[]> };
   dialogsRef: { current: Dialog[] };
@@ -30,6 +30,7 @@ export interface GramState {
   orphanedDialogsRef: { current: Map<string, Dialog> };
   loadStringsSeq: number;
   cleanupFns: (() => void)[];
+  cancelDocumentDownloads: () => void;
 }
 
 export function createGramState(): GramState {
@@ -62,5 +63,6 @@ export function createGramState(): GramState {
     orphanedDialogsRef: { current: new Map() },
     loadStringsSeq: 0,
     cleanupFns: [],
+    cancelDocumentDownloads: () => {},
   };
 }

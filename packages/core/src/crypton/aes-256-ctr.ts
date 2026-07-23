@@ -110,3 +110,21 @@ export class AES256CTR {
     return this.process(data, key, iv, startCounter);
   }
 }
+
+export class AesCtrCipher {
+  private key: Buffer;
+  private iv: Buffer;
+  private blockCounter: number;
+
+  constructor(key: Uint8Array, iv: Uint8Array, startCounter: number) {
+    this.key = Buffer.from(key);
+    this.iv = Buffer.from(iv);
+    this.blockCounter = startCounter >>> 0;
+  }
+
+  process(data: Uint8Array): Uint8Array {
+    const result = AES256CTR.process(Buffer.from(data), this.key, this.iv, this.blockCounter);
+    this.blockCounter += (data.length + 15) >>> 4;
+    return new Uint8Array(result);
+  }
+}

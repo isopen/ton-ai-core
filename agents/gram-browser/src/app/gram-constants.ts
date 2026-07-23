@@ -35,3 +35,10 @@ export const LANG_CODE_MAP: Record<string, string> = {
   'pt': 'pt-br',
   'pt-PT': 'pt-pt',
 };
+
+export const REVERSE_LANG_CODE_MAP: Record<string, string> = {
+  'zh-hans': 'zh',
+  'zh-hant': 'zh-TW',
+  'pt-br': 'pt',
+  'pt-pt': 'pt-PT',
+};
