@@ -1,4 +1,4 @@
-import { h } from './framework/jsx-runtime.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
 import { Panel } from './primitives/panel.js';
 import { Flex } from './primitives/flex.js';
 import type { AppState, UIAction, PeerInfo, Dialog, Message } from './types.js';
@@ -8,8 +8,8 @@ import { SkillPlugin } from './plugin/skill-plugin.js';
 import { PluginManager } from '@ton-ai/core';
 import { defaultState, reducer } from './state.js';
 import { injectStyles } from './styles.js';
-import { render } from './framework/render.js';
-import { useState, useEffect, useRef } from './framework/hooks.js';
+import { render } from '@ton-ai/atom/render';
+import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
 import { Header } from './components/header.js';
 import { AuthScreen } from './components/auth-screen.js';
 import { Sidebar } from './components/sidebar.js';
@@ -139,9 +139,11 @@ export class TelegramUI {
 
       return (
         <Panel>
-          <div class="tgui-header-wrapper">
-            <Header state={state} dispatch={self._dispatch} />
-          </div>
+          {state.page !== 'auth' ? (
+            <div class="tgui-header-wrapper">
+              <Header state={state} dispatch={self._dispatch} />
+            </div>
+          ) : null}
           {state.page === 'auth'
             ? <Flex key="auth-body" direction="row" grow className="tgui-body">
                 <AuthScreen state={state} dispatch={self._dispatch} />

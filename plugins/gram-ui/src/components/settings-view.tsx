@@ -1,4 +1,4 @@
-import { h } from '../framework/jsx-runtime.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
 import { Scrollable } from '../primitives/scrollable.js';
 import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';

@@ -1,4 +1,4 @@
-import { h } from '../framework/jsx-runtime.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
 import type { Dispatch } from '../state.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';

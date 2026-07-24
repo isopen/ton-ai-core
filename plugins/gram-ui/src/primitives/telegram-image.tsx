@@ -1,5 +1,5 @@
-import { h } from '../framework/jsx-runtime.js';
-import { useState, useEffect, useRef, useCallback } from '../framework/hooks.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
+import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
 import { Spinner } from './spinner.js';
 

@@ -1,5 +1,5 @@
-import { h, Fragment } from '../framework/jsx-runtime.js';
-import { useEffect, useRef, useState } from '../framework/hooks.js';
+import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
+import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { t } from '../locale.js';
 import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';

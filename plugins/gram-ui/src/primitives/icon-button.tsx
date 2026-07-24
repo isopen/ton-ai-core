@@ -1,4 +1,4 @@
-import { h } from '../framework/jsx-runtime.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
 
 interface IconButtonProps {
   onClick?: (e: MouseEvent) => void;

@@ -1,4 +1,4 @@
-import { h } from '../framework/jsx-runtime.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
 import { TelegramImage } from './telegram-image.js';
 import type { ImageSpec } from '../types.js';
 

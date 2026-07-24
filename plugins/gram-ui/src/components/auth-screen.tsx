@@ -1,45 +1,61 @@
-import { h } from '../framework/jsx-runtime.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
 import type { AppState, UIAction } from '../types.js';
 import type { Dispatch } from '../state.js';
-import { useState, useEffect } from '../framework/hooks.js';
+import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
-import { Button } from '../primitives/button.js';
-import { TextField } from '../primitives/text-field.js';
-import { Select } from '../primitives/select.js';
-import { Spinner } from '../primitives/spinner.js';
 import { GramLogo } from './gram-logo.js';
-import { Flex } from '../primitives/flex.js';
-import { Text } from '../primitives/text.js';
-import { Panel } from '../primitives/panel.js';
+import { LangSelector } from './lang-selector.js';
 
+function ThemeIcon({ theme }: { theme: 'light' | 'dark' }) {
+  if (theme === 'dark') {
+    return (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="5"/>
+        <line x1="12" y1="1" x2="12" y2="3"/>
+        <line x1="12" y1="21" x2="12" y2="23"/>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+        <line x1="1" y1="12" x2="3" y2="12"/>
+        <line x1="21" y1="12" x2="23" y2="12"/>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+      </svg>
+    );
+  }
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </svg>
+  );
+}
 
+function TelegramCrystal({ size = 100 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M26.6081 4.5332H13.3897C11.6293 4.5332 10.7493 4.5332 9.95291 4.7796C9.24808 4.99749 8.59412 5.35453 8.02971 5.8296C7.39211 6.366 6.91611 7.1064 5.96411 8.5872L1.76211 15.124C1.13331 16.1024 0.818905 16.592 0.733305 17.1064C0.657977 17.5605 0.708043 18.0266 0.878105 18.4544C1.07091 18.9392 1.48211 19.3504 2.30491 20.1728L17.9181 35.7864C18.6465 36.5144 19.0105 36.8788 19.4305 37.0152C19.8001 37.1352 20.1977 37.1352 20.5673 37.0152C20.9873 36.8792 21.3513 36.5148 22.0793 35.7864L37.6933 20.1728C38.5157 19.3504 38.9269 18.9392 39.1197 18.4544C39.2898 18.0266 39.3399 17.5605 39.2645 17.1064C39.1789 16.5916 38.8645 16.1024 38.2357 15.124L34.0337 8.588C33.0817 7.1068 32.6057 6.3664 31.9681 5.83C31.4037 5.35493 30.7497 4.99789 30.0449 4.78C29.2489 4.5336 28.3685 4.5332 26.6081 4.5332Z" fill="url(#crystal-grad)"/>
+      <path d="M24.1064 9.68988C24.3212 9.10988 25.1424 9.10988 25.3568 9.68988L26.8407 13.7007C26.8848 13.8197 26.9541 13.9278 27.0438 14.0176C27.1336 14.1074 27.2417 14.1766 27.3607 14.2207L31.3716 15.7047C31.952 15.9195 31.952 16.7407 31.3716 16.9551L27.3607 18.4391C27.2417 18.4831 27.1336 18.5524 27.0438 18.6422C26.9541 18.7319 26.8848 18.84 26.8407 18.9591L25.3568 22.9699C25.142 23.5503 24.3208 23.5503 24.1064 22.9699L22.6224 18.9591C22.5783 18.84 22.509 18.7319 22.4193 18.6422C22.3295 18.5524 22.2214 18.4831 22.1024 18.4391L18.0915 16.9551C17.5111 16.7403 17.5111 15.9195 18.0915 15.7047L22.1024 14.2207C22.2214 14.1766 22.3295 14.1074 22.4193 14.0176C22.509 13.9278 22.5783 13.8197 22.6224 13.7007L24.1064 9.68988Z" fill="white"/>
+      <defs>
+        <linearGradient id="crystal-grad" x1="20" y1="4" x2="20" y2="37" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#5CB6F5"/>
+          <stop offset="1" stop-color="#2288D8"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
 
-const LANG_SUGGESTIONS: Record<string, string> = {
-  en: 'Continue in English',
-  ru: 'Продолжить на русском',
-  uk: 'Продовжити українською',
-  de: 'Weiter auf Deutsch',
-  fr: 'Continuer en français',
-  es: 'Continuar en español',
-  it: 'Continua in italiano',
-  pt: 'Continuar em português',
-  tr: 'Türkçe devam',
-  ar: 'المتابعة بالعربية',
-  hi: 'हिन्दी में जारी रखें',
-  zh: '继续使用中文',
-  ja: '日本語で続ける',
-  ko: '한국어로 계속',
-  pl: 'Kontynuuj po polsku',
-  nl: 'Doorgaan in het Nederlands',
-};
 
 function iso2ToFlag(iso2: string): string {
   return iso2.toUpperCase().replace(/./g, c => String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65));
 }
 
 const PATTERN_PLACEHOLDER = 'X';
-const DEFAULT_PATTERN = 'XXX XXX XXX XXX';
+const DEFAULT_PATTERN = 'XXX XXX XX XX';
+
+function patternDigitCount(pattern: string): number {
+  return (pattern.match(new RegExp(PATTERN_PLACEHOLDER, 'g')) || []).length;
+}
 
 function getBestPattern(digits: string, patterns?: string[]): string {
   if (!patterns || patterns.length === 0) return DEFAULT_PATTERN;
@@ -65,10 +81,9 @@ function formatPhoneNumber(digits: string, patterns?: string[]): string {
   for (let i = 0; i < digits.length; i++) {
     while (j < pattern.length && pattern[j] !== PATTERN_PLACEHOLDER) {
       result.push(pattern[j]);
-      if (pattern[j] === digits[i]) { i++; if (i >= digits.length) break; }
       j++;
     }
-    if (i >= digits.length) break;
+    if (j >= pattern.length) break;
     result.push(digits[i]);
     j++;
   }
@@ -77,117 +92,20 @@ function formatPhoneNumber(digits: string, patterns?: string[]): string {
 
 function renderError(err: string) {
   return (
-    <div class="tgui-auth-error">
+    <div class="tgui-auth-error-new">
       {err}
     </div>
   );
 }
 
-function ConnectedIcon() {
-  return (
-    <svg width="56" height="56" viewBox="0 0 40 40" fill="none" class="tgui-auth-icon">
-      <path d="M26.6081 4.5332H13.3897C11.6293 4.5332 10.7493 4.5332 9.95291 4.7796C9.24808 4.99749 8.59412 5.35453 8.02971 5.8296C7.39211 6.366 6.91611 7.1064 5.96411 8.5872L1.76211 15.124C1.13331 16.1024 0.818905 16.592 0.733305 17.1064C0.657977 17.5605 0.708043 18.0266 0.878105 18.4544C1.07091 18.9392 1.48211 19.3504 2.30491 20.1728L17.9181 35.7864C18.6465 36.5144 19.0105 36.8788 19.4305 37.0152C19.8001 37.1352 20.1977 37.1352 20.5673 37.0152C20.9873 36.8792 21.3513 36.5148 22.0793 35.7864L37.6933 20.1728C38.5157 19.3504 38.9269 18.9392 39.1197 18.4544C39.2898 18.0266 39.3399 17.5605 39.2645 17.1064C39.1789 16.5916 38.8645 16.1024 38.2357 15.124L34.0337 8.588C33.0817 7.1068 32.6057 6.3664 31.9681 5.83C31.4037 5.35493 30.7497 4.99789 30.0449 4.78C29.2489 4.5336 28.3685 4.5332 26.6081 4.5332Z" fill="#30A1F5"/>
-      <path d="M24.1064 9.68988C24.3212 9.10988 25.1424 9.10988 25.3568 9.68988L26.8407 13.7007C26.8848 13.8197 26.9541 13.9278 27.0438 14.0176C27.1336 14.1074 27.2417 14.1766 27.3607 14.2207L31.3716 15.7047C31.952 15.9195 31.952 16.7407 31.3716 16.9551L27.3607 18.4391C27.2417 18.4831 27.1336 18.5524 27.0438 18.6422C26.9541 18.7319 26.8848 18.84 26.8407 18.9591L25.3568 22.9699C25.142 23.5503 24.3208 23.5503 24.1064 22.9699L22.6224 18.9591C22.5783 18.84 22.509 18.7319 22.4193 18.6422C22.3295 18.5524 22.2214 18.4831 22.1024 18.4391L18.0915 16.9551C17.5111 16.7403 17.5111 15.9195 18.0915 15.7047L22.1024 14.2207C22.2214 14.1766 22.3295 14.1074 22.4193 14.0176C22.509 13.9278 22.5783 13.8197 22.6224 13.7007L24.1064 9.68988Z" fill="white"/>
-    </svg>
-  );
-}
-
-function LoadingView() {
-  return (
-    <Flex direction="column" align="center" className="tgui-loading-view">
-      <Spinner />
-    </Flex>
-  );
-}
-
-function getBrowserLang(): string | null {
-  const raw = typeof navigator !== 'undefined' ? navigator.language : '';
-  if (!raw) return null;
-  return raw.split('-')[0].toLowerCase() || null;
-}
-
-function handleLangChange(e: any) {
-  const code = e.target.value;
-  window.dispatchEvent(new CustomEvent('tg-auth-set-lang', { detail: { langCode: code } }));
-}
-
-function LanguageSuggestion({ current, options }: { current: string; options: Array<{ code: string; label: string }> }) {
-  const browserLang = getBrowserLang();
-  const [dismissed, setDismissed] = useState(false);
-  if (!browserLang || !options.some(o => o.code === browserLang) || browserLang === current || dismissed) return null;
-  const label = LANG_SUGGESTIONS[browserLang];
-  if (!label) return null;
-  return (
-    <div class="tgui-lang-suggestion">
-      <Button variant="ghost" className="tgui-lang-suggestion-btn" onClick={() => {
-        setDismissed(true);
-        window.dispatchEvent(new CustomEvent('tg-auth-set-lang', { detail: { langCode: browserLang } }));
-      }}>
-        {label}
-      </Button>
-    </div>
-  );
-}
-
-function LanguageSelector({ current, options }: { current: string; options: Array<{ code: string; label: string }> }) {
-  const mapped = options.map(o => ({ value: o.code, label: o.label }));
-  if (mapped.every(o => o.value !== current)) {
-    mapped.push({ value: current, label: current });
-  }
-  return (
-    <Select
-      value={current}
-      onChange={handleLangChange}
-      options={mapped}
-      searchable
-      label={t(S.AUTH_LANGUAGE)}
-    />
-  );
-}
-
-function CountrySelector({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
-  const options = state.countries.map(c => ({
-    value: c.iso2,
-    label: c.name || c.defaultName,
-    _flag: c.iso2,
-    _code: `+${c.phoneCode}`,
-  }));
-
-  function handleChange(e: any) {
-    dispatch({ type: 'SET_COUNTRY_ISO2', countryIso2: e.target.value });
-  }
-
-  if (state.countries.length === 0) return null;
-
-  return (
-    <Select
-      value={state.countryIso2}
-      onChange={handleChange}
-      options={options}
-      searchable
-      label={t(S.AUTH_COUNTRY)}
-      renderOption={(opt) => h('span', { class: 'country-option' }, [
-        h('span', { class: 'country-option-flag' }, iso2ToFlag((opt as any)._flag)),
-        h('span', { class: 'country-option-name' }, opt.label),
-        h('span', { class: 'country-option-code' }, (opt as any)._code),
-      ])}
-      renderTrigger={(opt) => h('span', { class: 'country-option' }, [
-        h('span', { class: 'country-option-flag' }, iso2ToFlag((opt as any)._flag)),
-        h('span', { class: 'country-option-name' }, opt.label),
-        h('span', { class: 'country-option-code' }, (opt as any)._code),
-      ])}
-    />
-  );
-}
 
 function handleSendCode(state: AppState, dispatch: Dispatch) {
   const country = state.countries.find(c => c.iso2 === state.countryIso2);
   const phoneCode = country?.phoneCode || '';
-  const input = document.getElementById('tg-phone-input') as HTMLInputElement | null;
+  const input = document.getElementById('login-phone-input') as HTMLInputElement | null;
   const raw = input?.value || '';
   const allDigits = raw.replace(/\D/g, '');
-  const ccLen = phoneCode.length;
-  const localDigits = ccLen > 0 && allDigits.length >= ccLen ? allDigits.substring(ccLen) : allDigits;
+  const localDigits = allDigits;
   const prefix = phoneCode ? `+${phoneCode}` : '';
   const fullPhone = `${prefix}${localDigits}`;
   dispatch({ type: 'SET_PHONE', phone: fullPhone });
@@ -195,56 +113,8 @@ function handleSendCode(state: AppState, dispatch: Dispatch) {
   window.dispatchEvent(new CustomEvent('tg-auth-send-code'));
 }
 
-function PhoneInput({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
-  const country = state.countries.find(c => c.iso2 === state.countryIso2);
-  const phoneCode = country?.phoneCode || '';
-  const patterns = country?.patterns;
-  const [phoneDigits, setPhoneDigits] = useState('');
-
-  const formatted = formatPhoneNumber(phoneDigits, patterns);
-  const displayValue = phoneCode
-    ? `+${phoneCode} ${formatted}`
-    : '';
-
-  function handleInput(e: any) {
-    const raw = e.target?.value || '';
-    const allDigits = raw.replace(/\D/g, '');
-    const ccLen = phoneCode.length;
-    const local = ccLen > 0 && allDigits.length >= ccLen ? allDigits.substring(ccLen) : allDigits;
-    setPhoneDigits(local);
-    requestAnimationFrame(() => {
-      const el = document.getElementById('tg-phone-input') as HTMLInputElement | null;
-      if (el) el.setSelectionRange(el.value.length, el.value.length);
-    });
-  }
-
-  return (
-    <TextField
-      id="tg-phone-input"
-      value={displayValue}
-      placeholder={t(S.AUTH_PHONE_PLACEHOLDER)}
-      onChange={handleInput}
-      onKeyDown={(e: any) => { if (e.key === 'Enter') handleSendCode(state, dispatch); }}
-      label={t(S.AUTH_PHONE_LABEL)}
-    />
-  );
-}
-
 function handleRequestQr() {
   window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'qr_login' } }));
-}
-
-function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
-  return (
-    <Flex direction="column" gap="16px">
-      <LanguageSelector current={state.langCode} options={state.langOptions} />
-      <LanguageSuggestion key={state.langCode} current={state.langCode} options={state.langOptions} />
-      <CountrySelector state={state} dispatch={dispatch} />
-      <PhoneInput key={state.countryIso2 || '_'} state={state} dispatch={dispatch} />
-      <Button onClick={() => handleSendCode(state, dispatch)}>{t(S.AUTH_NEXT)}</Button>
-      <Button variant="ghost" onClick={handleRequestQr}>{t(S.AUTH_QR_BUTTON)}</Button>
-    </Flex>
-  );
 }
 
 function handleSignIn(dispatch: Dispatch) {
@@ -263,6 +133,145 @@ function handleCheckPassword(dispatch: Dispatch) {
 
 const RESEND_DELAY = 30;
 
+function LoadingView() {
+  return (
+    <div class="login-loading">
+      <div class="login-spinner"></div>
+    </div>
+  );
+}
+
+function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
+  const country = state.countries.find(c => c.iso2 === state.countryIso2);
+  const phoneCode = country?.phoneCode || '';
+  const patterns = country?.patterns;
+  const [phoneDigits, setPhoneDigits] = useState('');
+
+  const formatted = formatPhoneNumber(phoneDigits, patterns);
+  const displayValue = formatted;
+
+  function handleInput(e: any) {
+    const raw = e.target?.value || '';
+    const allDigits = raw.replace(/\D/g, '');
+    const limited = maxDigits > 0 ? allDigits.slice(0, maxDigits) : allDigits;
+    setPhoneDigits(limited);
+    requestAnimationFrame(() => {
+      const el = document.getElementById('login-phone-input') as HTMLInputElement | null;
+      if (el) el.setSelectionRange(el.value.length, el.value.length);
+    });
+  }
+
+  const [countryOpen, setCountryOpen] = useState(false);
+  const [countrySearch, setCountrySearch] = useState('');
+  const [focused, setFocused] = useState(false);
+  const countryRef = useRef<HTMLElement | null>(null);
+
+  const pattern = getBestPattern(phoneDigits, patterns) || DEFAULT_PATTERN;
+  const phoneMask = pattern.replace(new RegExp(PATTERN_PLACEHOLDER, 'g'), '_');
+  const maxDigits = patternDigitCount(pattern);
+
+  useEffect(() => {
+    if (!countryOpen) return;
+    const handler = (e: Event) => {
+      if (countryRef.current && !countryRef.current.contains(e.target as Node)) {
+        setCountryOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [countryOpen]);
+  const filtered = countrySearch
+    ? state.countries.filter(c => (c.name || c.defaultName || '').toLowerCase().includes(countrySearch.toLowerCase()))
+    : state.countries;
+
+  return (
+    <div class="login-form">
+        <div class="login-phone-field" ref={countryRef}>
+          <div class="login-phone-row">
+            <label class="login-field-label" for="login-phone-input">{t(S.AUTH_PHONE_LABEL)}</label>
+            <button class="login-country-btn" type="button" onClick={() => setCountryOpen(!countryOpen)}>
+            <span class="login-country-flag">{country ? iso2ToFlag(country.iso2) : '🏳️'}</span>
+            <span class="login-country-code">+{phoneCode || '?'}</span>
+            <svg width="10" height="7" viewBox="0 0 10 7" fill="none">
+              <path d="M1 1.5L5 5.5L9 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <input
+            class="login-phone-input"
+            type="tel"
+            id="login-phone-input"
+            name="phone"
+            placeholder={focused ? phoneMask : ''}
+            inputmode="numeric"
+            autocomplete="tel"
+            value={displayValue}
+            onInput={handleInput}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            onKeyDown={(e: any) => { if (e.key === 'Enter') handleSendCode(state, dispatch); }}
+          />
+        </div>
+        {countryOpen ? (
+          <div class="login-country-dropdown">
+            <div class="login-country-search-wrap">
+              <input
+                class="login-country-search"
+                type="text"
+                placeholder="Search country..."
+                value={countrySearch}
+                onInput={(e: any) => setCountrySearch(e.target.value)}
+              />
+            </div>
+            <div class="login-country-list">
+              {filtered.length === 0 ? (
+                <div class="login-country-empty">No countries found</div>
+              ) : filtered.map(c => (
+                <button
+                  class={`login-country-item${c.iso2 === state.countryIso2 ? ' active' : ''}`}
+                  type="button"
+                  onClick={() => { dispatch({ type: 'SET_COUNTRY_ISO2', countryIso2: c.iso2 }); setCountryOpen(false); setCountrySearch(''); }}
+                >
+                  <span class="login-country-item-flag">{iso2ToFlag(c.iso2)}</span>
+                  <span class="login-country-item-name">{c.name || c.defaultName}</span>
+                  <span class="login-country-item-code">+{c.phoneCode}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <button class="login-btn login-btn-primary" type="button" onClick={() => handleSendCode(state, dispatch)}>
+        <span>{t(S.AUTH_NEXT)}</span>
+        <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
+          <path d="M1 7H17M17 7L11 1M17 7L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+
+
+      <div class="login-divider">
+        <span class="login-divider-line"></span>
+        <span class="login-divider-text">{t(S.AUTH_QR_BUTTON) ? '' : 'or'}</span>
+        <span class="login-divider-line"></span>
+      </div>
+
+      <button class="login-btn login-btn-secondary" type="button" onClick={handleRequestQr}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+        </svg>
+        <span>{t(S.AUTH_QR_BUTTON)}</span>
+      </button>
+
+      <button class="login-btn login-btn-link" type="button" onClick={() => dispatch({ type: 'SET_AUTH_STEP', authStep: 'signup' })}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>
+        </svg>
+        <span>{t(S.AUTH_SIGNUP_SUBMIT)}</span>
+      </button>
+    </div>
+  );
+}
+
 function CodeView({ dispatch }: { dispatch: Dispatch }) {
   const [countdown, setCountdown] = useState(RESEND_DELAY);
 
@@ -280,40 +289,37 @@ function CodeView({ dispatch }: { dispatch: Dispatch }) {
   }, [countdown]);
 
   return (
-    <Flex direction="column" gap="16px">
-      <TextField
+    <div class="login-form">
+      <label class="login-field-label" for="tg-code-input">{t(S.AUTH_CODE_LABEL)}</label>
+      <input
+        class="login-code-input"
         id="tg-code-input"
         placeholder={t(S.AUTH_CODE_PLACEHOLDER)}
-        label={t(S.AUTH_CODE_LABEL)}
-        code
         autofocus
         onKeyDown={(e: any) => { if (e.key === 'Enter') handleSignIn(dispatch); }}
       />
       {countdown > 0
-        ? <span class="tgui-auth-resend-timer">{t(S.AUTH_RESEND_CODE)} ({countdown}s)</span>
-        : <Button variant="ghost" onClick={() => {
-            setCountdown(RESEND_DELAY);
-            window.dispatchEvent(new CustomEvent('tg-auth-resend-code'));
-          }}>{t(S.AUTH_RESEND_CODE)}</Button>
+        ? <span class="login-resend-timer">{t(S.AUTH_RESEND_CODE)} ({countdown}s)</span>
+        : <button class="login-btn login-btn-ghost" type="button" onClick={() => { setCountdown(RESEND_DELAY); window.dispatchEvent(new CustomEvent('tg-auth-resend-code')); }}>{t(S.AUTH_RESEND_CODE)}</button>
       }
-      <Button onClick={() => handleSignIn(dispatch)}>{t(S.AUTH_SIGN_IN)}</Button>
-      <Button variant="destructive" onClick={() => dispatch({ type: 'LOGOUT' })}>{t(S.HEADER_LOGOUT)}</Button>
-    </Flex>
+      <button class="login-btn login-btn-primary" type="button" onClick={() => handleSignIn(dispatch)}>{t(S.AUTH_SIGN_IN)}</button>
+    </div>
   );
 }
 
 function PasswordView({ dispatch }: { dispatch: Dispatch }) {
   return (
-    <Flex direction="column" gap="16px">
-      <TextField
-        id="tg-password-input"
+    <div class="login-form">
+      <label class="login-field-label" for="tg-password-input">{t(S.AUTH_PASSWORD_LABEL)}</label>
+      <input
+        class="login-code-input"
         type="password"
+        id="tg-password-input"
         placeholder={t(S.AUTH_PASSWORD_PLACEHOLDER)}
-        label={t(S.AUTH_PASSWORD_LABEL)}
         onKeyDown={(e: any) => { if (e.key === 'Enter') handleCheckPassword(dispatch); }}
       />
-      <Button onClick={() => handleCheckPassword(dispatch)}>{t(S.AUTH_SUBMIT)}</Button>
-    </Flex>
+      <button class="login-btn login-btn-primary" type="button" onClick={() => handleCheckPassword(dispatch)}>{t(S.AUTH_SUBMIT)}</button>
+    </div>
   );
 }
 
@@ -336,43 +342,31 @@ function SignUpView({ state, dispatch }: { state: AppState; dispatch: Dispatch }
   const [agreed, setAgreed] = useState(false);
 
   return (
-    <Flex direction="column" gap="16px">
-      <Text variant="desc">{t(S.AUTH_SIGNUP_DESC)}</Text>
-      <TextField
+    <div class="login-form">
+      <p class="login-signup-desc">{t(S.AUTH_SIGNUP_DESC)}</p>
+      <input
+        class="login-code-input"
         id="tg-firstname-input"
         placeholder={t(S.AUTH_SIGNUP_FIRSTNAME)}
-        label={t(S.AUTH_SIGNUP_FIRSTNAME)}
         autofocus
         value={state.signupFirstname}
-        onChange={(e: any) => dispatch({ type: 'SET_SIGNUP_FIRSTNAME', firstname: e.target.value })}
+        onInput={(e: any) => dispatch({ type: 'SET_SIGNUP_FIRSTNAME', firstname: e.target.value })}
         onKeyDown={(e: any) => { if (e.key === 'Enter' && agreed) handleSignUp(dispatch); }}
       />
-      <TextField
+      <input
+        class="login-code-input"
         id="tg-lastname-input"
         placeholder={t(S.AUTH_SIGNUP_LASTNAME)}
-        label={t(S.AUTH_SIGNUP_LASTNAME)}
         value={state.signupLastname}
-        onChange={(e: any) => dispatch({ type: 'SET_SIGNUP_LASTNAME', lastname: e.target.value })}
+        onInput={(e: any) => dispatch({ type: 'SET_SIGNUP_LASTNAME', lastname: e.target.value })}
         onKeyDown={(e: any) => { if (e.key === 'Enter' && agreed) handleSignUp(dispatch); }}
       />
-      <label class="tgui-auth-terms">
-        <input
-          type="checkbox"
-          checked={agreed}
-          onChange={() => setAgreed(!agreed)}
-        />
-        <span>
-          {t(S.AUTH_SIGNUP_TERMS).replace('{link}', '')}
-          {' '}
-          <a href="https://telegram.org/tos" target="_blank" rel="noopener noreferrer">
-            {t(S.AUTH_SIGNUP_TERMS_LINK)}
-          </a>
-        </span>
+      <label class="login-terms-check">
+        <input type="checkbox" checked={agreed} onChange={() => setAgreed(!agreed)} />
+        <span>{t(S.AUTH_SIGNUP_TERMS).replace('{link}', '')} <a href="https://telegram.org/tos" target="_blank" rel="noopener noreferrer">{t(S.AUTH_SIGNUP_TERMS_LINK)}</a></span>
       </label>
-      <Button onClick={() => handleSignUp(dispatch)} disabled={!agreed}>
-        {t(S.AUTH_SIGNUP_SUBMIT)}
-      </Button>
-    </Flex>
+      <button class="login-btn login-btn-primary" type="button" disabled={!agreed} onClick={() => handleSignUp(dispatch)}>{t(S.AUTH_SIGNUP_SUBMIT)}</button>
+    </div>
   );
 }
 
@@ -381,54 +375,70 @@ function QrCodeView({ dispatch }: { dispatch: Dispatch }) {
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
-    const handler = (e: any) => {
-      setQrDataUrl(e.detail.url);
-    };
+    const handler = (e: any) => { setQrDataUrl(e.detail.url); };
     window.addEventListener('tg-auth-qr-url', handler);
-    return () => {
-      window.removeEventListener('tg-auth-qr-url', handler);
-    };
+    return () => window.removeEventListener('tg-auth-qr-url', handler);
   }, []);
 
-  const showLoader = !qrDataUrl;
-
   return (
-    <Flex direction="column" gap="16px" align="center" style={{textAlign: 'center'}}>
-      <Text variant="title">{t(S.AUTH_QR_TITLE)}</Text>
-      <div class="tgui-qr-container">
-        {qrDataUrl
-          ? <img src={qrDataUrl} alt="QR Code" class="tgui-qr-image" style={{opacity: showLoader ? 0 : 1}} />
-          : null
-        }
-        {showLoader ? <div class="tgui-qr-loader"><Spinner /></div> : null}
-        <div class="tgui-qr-logo" style={{opacity: showLoader ? 0 : 1}}>
-          <GramLogo />
-        </div>
+    <div class="login-form" style={{textAlign: 'center'}}>
+      <h2 class="login-qr-title">{t(S.AUTH_QR_TITLE)}</h2>
+      <div class="login-qr-wrap">
+        {qrDataUrl ? <img src={qrDataUrl} alt="QR Code" class="login-qr-img" /> : <div class="login-spinner"></div>}
+        <div class="login-qr-logo"><GramLogo size={28} /></div>
       </div>
-      <Flex direction="column" gap="8px" align="center" className="tgui-qr-steps">
-        <div class="tgui-qr-step">1. {t(S.AUTH_QR_STEP1)}</div>
-        <div class="tgui-qr-step">2. {t(S.AUTH_QR_STEP2)}</div>
-        <div class="tgui-qr-step">3. {t(S.AUTH_QR_STEP3)}</div>
-      </Flex>
-      <Button variant="ghost" onClick={() => {
-        window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } }));
-        dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
-      }}>
+      <div class="login-qr-steps">
+        <div>1. {t(S.AUTH_QR_STEP1)}</div>
+        <div>2. {t(S.AUTH_QR_STEP2)}</div>
+        <div>3. {t(S.AUTH_QR_STEP3)}</div>
+      </div>
+      <button class="login-btn login-btn-ghost" type="button" onClick={() => { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } })); dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' }); }}>
         {t(S.AUTH_QR_PHONE_LOGIN)}
-      </Button>
-    </Flex>
+      </button>
+    </div>
   );
 }
 
 export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
+  const browserLang = typeof navigator !== 'undefined' ? navigator.language?.split('-')[0]?.toLowerCase() : null;
+
+  const setLang = (code: string) => window.dispatchEvent(new CustomEvent('tg-auth-set-lang', { detail: { langCode: code } }));
+
+  const showSuggestion = browserLang && state.langOptions.some(o => o.code === browserLang) && browserLang !== state.langCode;
+
   return (
-    <Flex direction="column" align="center" justify="center" grow style={{padding: '0 24px'}} className="tgui-auth-container">
-      <div class="tgui-auth-card">
-        <div class="tgui-auth-heading">
-          <ConnectedIcon />
-          <h1 class="tgui-auth-title">{t(S.AUTH_APP_NAME)}</h1>
+    <div class="login-page">
+      <div class="login-bg-decor"></div>
+      <div class="login-card">
+        {state.authStep !== 'qr_login' ? (
+          <LangSelector
+            current={state.langCode}
+            options={state.langOptions}
+            onChange={setLang}
+            suggestionLang={showSuggestion ? browserLang : null}
+            onAcceptSuggestion={showSuggestion ? () => setLang(browserLang!) : undefined}
+          />
+        ) : null}
+        <button class="login-theme-toggle" type="button" onClick={() => dispatch({ type: 'SET_THEME', theme: state.theme === 'dark' ? 'light' : 'dark' })}>
+          <ThemeIcon theme={state.theme} />
+        </button>
+
+        <div class="login-logo-wrap">
+          <TelegramCrystal size={100} />
         </div>
+
+        {state.authStep !== 'phone' ? (
+          <button class="login-btn-back" type="button" onClick={() => dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' })}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          </button>
+        ) : (
+          <div>
+            <h1 class="login-title login-title-plain">Gram</h1>
+          </div>
+        )}
+
         {state.error ? renderError(state.error) : null}
+
         {state.authStep === 'loading' ? <LoadingView /> : null}
         {state.authStep === 'phone' ? <PhoneView state={state} dispatch={dispatch} /> : null}
         {state.authStep === 'code' ? <CodeView dispatch={dispatch} /> : null}
@@ -436,6 +446,6 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
         {state.authStep === 'signup' ? <SignUpView state={state} dispatch={dispatch} /> : null}
         {state.authStep === 'qr_login' ? <QrCodeView dispatch={dispatch} /> : null}
       </div>
-    </Flex>
+    </div>
   );
 }

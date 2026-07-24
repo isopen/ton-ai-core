@@ -1,4 +1,4 @@
-import { h } from '../framework/jsx-runtime.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
 import { Avatar } from '../primitives/avatar.js';
 import { ListItem } from '../primitives/list-item.js';
 import { Text } from '../primitives/text.js';

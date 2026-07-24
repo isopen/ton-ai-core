@@ -1,5 +1,5 @@
-import { h } from '../framework/jsx-runtime.js';
-import { useState, useEffect, useRef } from '../framework/hooks.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
+import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
 import { Scrollable } from './scrollable.js';
 import { SelectSearch } from './select-search.js';
 

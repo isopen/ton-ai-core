@@ -1,5 +1,5 @@
 import { BasePlugin, type BasePluginConfig, type PluginContext, type PluginMetadata } from '@ton-ai/core';
-import type { VNode } from '../framework/vdom';
+import type { VNode } from '@ton-ai/atom/vdom';
 import type { AppState } from '../types';
 import type { Dispatch } from '../state';
 

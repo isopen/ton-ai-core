@@ -1,5 +1,5 @@
-import { h } from '../framework/jsx-runtime.js';
-import { useEffect, useRef } from '../framework/hooks.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
+import { useEffect, useRef } from '@ton-ai/atom/hooks';
 
 interface SelectSearchProps {
   value: string;

@@ -1,0 +1,48 @@
+{
+  "name": "@ton-ai/atom",
+  "version": "0.1.0",
+  "description": "Atom — lightweight JSX UI framework for TON AI browser-based clients",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/jsx-runtime.d.ts",
+      "default": "./dist/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./dist/jsx-runtime.d.ts",
+      "default": "./dist/jsx-runtime.js"
+    },
+    "./hooks": {
+      "types": "./dist/hooks.d.ts",
+      "default": "./dist/hooks.js"
+    },
+    "./vdom": {
+      "types": "./dist/vdom.d.ts",
+      "default": "./dist/vdom.js"
+    },
+    "./render": {
+      "types": "./dist/render.d.ts",
+      "default": "./dist/render.js"
+    },
+    "./reconciler": {
+      "types": "./dist/reconciler.d.ts",
+      "default": "./dist/reconciler.js"
+    }
+  },
+  "author": "TON AI Core Team",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.33",
+    "typescript": "^5.3.3"
+  }
+}

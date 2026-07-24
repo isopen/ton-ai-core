@@ -1,5 +1,5 @@
-import { h } from '../framework/jsx-runtime.js';
-import { useState, useEffect, useRef } from '../framework/hooks.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
+import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
 
 function preloadImage(url: string, signal: AbortSignal): Promise<string> {

@@ -1,4 +1,4 @@
-import { h } from '../framework/jsx-runtime.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
 
 export function TypingIndicator({ text }: { text: string }) {
   if (!text) return null;

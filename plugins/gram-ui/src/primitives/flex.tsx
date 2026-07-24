@@ -1,4 +1,4 @@
-import { h } from '../framework/jsx-runtime.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
 
 interface FlexProps {
   direction?: 'row' | 'column' | 'row-reverse' | 'column-reverse';

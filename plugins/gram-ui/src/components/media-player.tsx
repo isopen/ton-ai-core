@@ -1,5 +1,5 @@
-import { h } from '../framework/jsx-runtime.js';
-import { useRef } from '../framework/hooks.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
+import { useRef } from '@ton-ai/atom/hooks';
 import { Checkmark } from './checkmark.js';
 import { buildDocumentThumb, isAnimatedMedia } from '../utils.js';
 import { GifPlayer } from './gif-player.js';

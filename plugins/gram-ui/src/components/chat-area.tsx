@@ -1,5 +1,5 @@
-import { h, Fragment } from '../framework/jsx-runtime.js';
-import { useEffect, useRef } from '../framework/hooks.js';
+import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
+import { useEffect, useRef } from '@ton-ai/atom/hooks';
 import { Spinner } from '../primitives/spinner.js';
 import { Avatar } from '../primitives/avatar.js';
 import { Flex } from '../primitives/flex.js';

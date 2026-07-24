@@ -1,4 +1,4 @@
-import { h, Fragment } from '../framework/jsx-runtime.js';
+import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { Scrollable } from '../primitives/scrollable.js';
 import { IconButton } from '../primitives/icon-button.js';
 import { Spinner } from '../primitives/spinner.js';

@@ -1,6 +1,6 @@
-import { h, Fragment } from '../framework/jsx-runtime.js';
+import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { Scrollable } from '../primitives/scrollable.js';
-import { useState, useEffect, useRef } from '../framework/hooks.js';
+import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
 import type { AppState } from '../types.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
