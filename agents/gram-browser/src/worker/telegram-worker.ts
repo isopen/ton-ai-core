@@ -560,9 +560,10 @@ function parseUpdatePayload(body: Buffer): any {
 }
 
 
-// ─── Persistent connection pool per DC ───────────────────────────────────────
+// ─── Connection pool per DC (TDLib-style) ─────────────────────────────────
 
 interface DcConnection {
+    dcId: number;
     conn: BrowserObfuscatedConnection;
     authKey: Buffer;
     authKeyId: bigint;
@@ -570,34 +571,27 @@ interface DcConnection {
     session: any;
     counter: { value: number };
     initialized: boolean;
+    busy: boolean;
 }
 
-const dcConnectionPool = new Map<number, DcConnection>();
+const dcConnectionPool: DcConnection[] = [];
 
-/** Get or create a persistent connection to the given DC. */
-async function ensureDcConnection(dcId: number): Promise<DcConnection> {
-    const existing = dcConnectionPool.get(dcId);
-    if (existing && existing.conn.isConnected()) return existing;
+/** Gates only the DH handshake per DC — concurrent WebSocket creation is allowed without blocking. */
+let dcDhInFlight = Promise.resolve();
 
+interface StoredAuthKey {
+    authKey: Buffer;
+    authKeyId: bigint;
+    serverSalt: bigint;
+    serverTime: number;
+}
+const dcStoredAuthKeys = new Map<number, StoredAuthKey>();
+
+/** Create a brand new download connection to the DC (no caching, no busy check). */
+async function createDcConnection(dcId: number): Promise<DcConnection> {
     const dcOpts = TELEGRAM_WS_DC_OPTIONS.find(d => d.id === dcId);
     if (!dcOpts) throw new Error('Unknown DC ' + dcId);
 
-    // Close stale connection if any
-    if (existing) {
-        try { existing.conn.close(); } catch {}
-        dcConnectionPool.delete(dcId);
-    }
-
-    const isHomeDc = !!(homeSession && dcId === homeSession.dcId);
-    const isCurrentDc = ses?.dcId === dcId;
-
-    // Pool is for REMOTE DCs only. The current DC uses callRpc directly
-    // to avoid readResolve conflicts with the main connection's read loop.
-    if (isCurrentDc && conn?.isConnected()) {
-        throw new Error('DC ' + dcId + ' is the current DC — use callRpc directly');
-    }
-
-    // Create new connection
     const newConn = new BrowserObfuscatedConnection();
     const hosts: { host: string; noObfuscation?: boolean }[] = [
         { host: dcOpts.host },
@@ -613,8 +607,38 @@ async function ensureDcConnection(dcId: number): Promise<DcConnection> {
     }
     if (!newConn.isConnected()) throw new Error('Failed to connect to DC ' + dcId);
 
+    const isCurrentDc = ses?.dcId === dcId;
+    const isHomeDc = !!(homeSession && dcId === homeSession.dcId);
+    const storedAuth = dcStoredAuthKeys.get(dcId);
     let session: any;
-    if (isHomeDc && homeSession) {
+    let needsAuthImport = false;
+
+    if (storedAuth) {
+        const akBuf = Buffer.alloc(8);
+        akBuf.writeBigUInt64LE(storedAuth.authKeyId, 0);
+        newConn.expectedAuthKeyBuf = akBuf;
+        session = {
+            authKey: storedAuth.authKey,
+            authKeyId: storedAuth.authKeyId,
+            serverSalt: storedAuth.serverSalt,
+            serverTime: storedAuth.serverTime,
+            dcId,
+            sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
+            seqNo: 0,
+        };
+    } else if (isCurrentDc && authKey) {
+        const akBuf = Buffer.alloc(8);
+        akBuf.writeBigUInt64LE(authKeyId, 0);
+        newConn.expectedAuthKeyBuf = akBuf;
+        session = {
+            authKey, authKeyId, serverSalt,
+            serverTime: Math.floor(Date.now() / 1000) + serverTimeOffset,
+            dcId,
+            sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
+            seqNo: 0,
+        };
+        dcStoredAuthKeys.set(dcId, { authKey, authKeyId, serverSalt, serverTime: Math.floor(Date.now() / 1000) + serverTimeOffset });
+    } else if (isHomeDc && homeSession) {
         const akBuf = Buffer.alloc(8);
         akBuf.writeBigUInt64LE(homeSession.authKeyId, 0);
         newConn.expectedAuthKeyBuf = akBuf;
@@ -623,23 +647,56 @@ async function ensureDcConnection(dcId: number): Promise<DcConnection> {
             sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
             seqNo: 0,
         };
+        dcStoredAuthKeys.set(dcId, { authKey: homeSession.authKey, authKeyId: homeSession.authKeyId, serverSalt: homeSession.serverSalt, serverTime: homeSession.serverTime });
     } else {
-        const rsaKey = new DefaultPublicRsaKey([TELEGRAM_PUBLIC_KEY]);
-        const creator = new AuthKeyCreator({ host: '', port: 0, dcId, publicRsaKey: rsaKey, mode: 'telegram' });
-        const authResult = await creator.createAuthKey(async (tlPayload: Buffer) => {
-            const msgId = BigInt(Math.floor(Date.now() / 1000)) << 32n;
-            await newConn.sendNoCrypto(msgId, tlPayload);
-            const response = await newConn.readPacket();
-            return parseNoCryptoResponse(response);
-        });
+        // DH handshake — gate concurrent DH to the same DC
+        const prevDh = dcDhInFlight;
+        let dhDone = false;
+        dcDhInFlight = (async () => {
+            await prevDh;
+            if (dcStoredAuthKeys.has(dcId)) return; // another caller already did DH for this DC
+            const rsaKey = new DefaultPublicRsaKey([TELEGRAM_PUBLIC_KEY]);
+            const creator = new AuthKeyCreator({ host: '', port: 0, dcId, publicRsaKey: rsaKey, mode: 'telegram' });
+            const authResult = await creator.createAuthKey(async (tlPayload: Buffer) => {
+                const msgId = BigInt(Math.floor(Date.now() / 1000)) << 32n;
+                await newConn.sendNoCrypto(msgId, tlPayload);
+                const response = await newConn.readPacket();
+                return parseNoCryptoResponse(response);
+            });
+            dcStoredAuthKeys.set(dcId, { authKey: authResult.authKey, authKeyId: authResult.authKeyId, serverSalt: authResult.serverSalt, serverTime: authResult.serverTime });
+            needsAuthImport = !isHomeDc && !isCurrentDc && authenticated;
+            dhDone = true;
+        })();
+        await dcDhInFlight;
+        if (!dhDone) {
+            // DH was done by another caller — stored auth key now exists
+            const stored = dcStoredAuthKeys.get(dcId)!;
+            const akBuf = Buffer.alloc(8);
+            akBuf.writeBigUInt64LE(stored.authKeyId, 0);
+            newConn.expectedAuthKeyBuf = akBuf;
+            session = {
+                authKey: stored.authKey,
+                authKeyId: stored.authKeyId,
+                serverSalt: stored.serverSalt,
+                serverTime: stored.serverTime,
+                dcId,
+                sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
+                seqNo: 0,
+            };
+        }
+    }
+
+    if (!session) {
+        // session was set inside the DH closure
+        const stored = dcStoredAuthKeys.get(dcId)!;
         const akBuf = Buffer.alloc(8);
-        akBuf.writeBigUInt64LE(authResult.authKeyId, 0);
+        akBuf.writeBigUInt64LE(stored.authKeyId, 0);
         newConn.expectedAuthKeyBuf = akBuf;
         session = {
-            authKey: authResult.authKey,
-            authKeyId: authResult.authKeyId,
-            serverSalt: authResult.serverSalt,
-            serverTime: authResult.serverTime,
+            authKey: stored.authKey,
+            authKeyId: stored.authKeyId,
+            serverSalt: stored.serverSalt,
+            serverTime: stored.serverTime,
             dcId,
             sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
             seqNo: 0,
@@ -647,16 +704,18 @@ async function ensureDcConnection(dcId: number): Promise<DcConnection> {
     }
 
     const entry: DcConnection = {
+        dcId,
         conn: newConn,
         authKey: session.authKey,
         authKeyId: session.authKeyId,
         serverSalt: session.serverSalt,
         session,
-        counter: { value: 0 },
+        counter: { value: msgIdCounter },
         initialized: false,
+        busy: false,
     };
-    // Export auth from home DC and import here
-    if (!isHomeDc && !isCurrentDc && authenticated) {
+
+    if (needsAuthImport) {
         let exportedAuth: { id: bigint; bytes: Buffer } | null = null;
         try {
             if (homeSession && ses!.dcId !== homeSession.dcId) {
@@ -674,40 +733,48 @@ async function ensureDcConnection(dcId: number): Promise<DcConnection> {
             console.log('[worker] export auth error for DC ' + dcId + ': ' + e.message);
         }
         if (exportedAuth) {
-            if (entry.counter.value < msgIdCounter) {
-                entry.counter.value = msgIdCounter;
-            }
+            if (entry.counter.value < msgIdCounter) entry.counter.value = msgIdCounter;
             await directRpcWith(
                 entry.conn, entry.authKey, entry.authKeyId,
                 entry.serverSalt, entry.session, entry.counter, entry.initialized,
                 'auth.importAuthorization', { id: exportedAuth.id, bytes: exportedAuth.bytes }
             );
             entry.initialized = true;
-            if (entry.counter.value > msgIdCounter) {
-                msgIdCounter = entry.counter.value;
-            }
+            if (entry.counter.value > msgIdCounter) msgIdCounter = entry.counter.value;
         }
     }
 
-    // Only cache the connection after successful auth (if needed)
-    if (!isCurrentDc && !isHomeDc && authenticated) {
-        if (entry.initialized) {
-            dcConnectionPool.set(dcId, entry);
-        }
-    } else {
-        dcConnectionPool.set(dcId, entry);
-    }
-
+    dcConnectionPool.push(entry);
     return entry;
 }
 
-/** Call an RPC on a pooled DC connection. Auto-initializes after first call. */
-async function callRpcOnDc(dcId: number, methodName: string, params: Record<string, any>): Promise<any> {
-    // Current DC → use callRpc (no wrapper, avoid readResolve conflicts)
-    if (ses?.dcId === dcId && conn?.isConnected()) {
-        return await callRpc(methodName, params, { noMigrate: true });
+/** Acquire an idle connection to the DC, or create a new one. */
+async function acquireDcConnection(dcId: number): Promise<DcConnection> {
+    // Clean stale connections for this DC
+    for (let i = dcConnectionPool.length - 1; i >= 0; i--) {
+        const c = dcConnectionPool[i];
+        if (c.dcId === dcId && !c.conn.isConnected()) {
+            try { c.conn.close(); } catch {}
+            dcConnectionPool.splice(i, 1);
+        }
     }
-    const dc = await ensureDcConnection(dcId);
+    const free = dcConnectionPool.find(c => c.dcId === dcId && !c.busy && c.conn.isConnected());
+    if (free) {
+        free.busy = true;
+        return free;
+    }
+    const entry = await createDcConnection(dcId);
+    entry.busy = true;
+    return entry;
+}
+
+function releaseDcConnection(entry: DcConnection): void {
+    entry.busy = false;
+}
+
+/** Call an RPC on a download connection for the given DC. */
+async function callRpcOnDc(dcId: number, methodName: string, params: Record<string, any>): Promise<any> {
+    const dc = await acquireDcConnection(dcId);
     try {
         const result = await directRpcWith(
             dc.conn, dc.authKey, dc.authKeyId,
@@ -718,19 +785,21 @@ async function callRpcOnDc(dcId: number, methodName: string, params: Record<stri
         return result;
     } catch (e: any) {
         if (e.message?.includes('AUTH_BYTES_INVALID')) {
-            console.log('[worker] AUTH_BYTES_INVALID on DC ' + dcId + ', invalidating pool entry');
-            dcConnectionPool.delete(dcId);
+            const idx = dcConnectionPool.indexOf(dc);
+            if (idx >= 0) dcConnectionPool.splice(idx, 1);
             try { dc.conn.close(); } catch {}
         }
         throw e;
+    } finally {
+        dc.busy = false;
     }
 }
 
 function closeAllDcConnections(): void {
-    for (const [, entry] of dcConnectionPool) {
+    for (const entry of dcConnectionPool) {
         try { entry.conn.close(); } catch {}
     }
-    dcConnectionPool.clear();
+    dcConnectionPool.length = 0;
 }
 
 /**
@@ -1007,6 +1076,7 @@ async function downloadAvatar(peerType: string, peerId: string, accessHash: any,
     }
     const location = { _: 'inputPeerPhotoFileLocation', flags: 0, peer, photo_id: photoId };
     const params = { precise: false, location, offset: BigInt(0), limit: 1048576 };
+    const knownDc = photo.dc_id ? (typeof photo.dc_id === 'number' ? photo.dc_id : Number(photo.dc_id)) : 0;
 
     let lastError: any = null;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -1015,7 +1085,9 @@ async function downloadAvatar(peerType: string, peerId: string, accessHash: any,
             await new Promise(r => setTimeout(r, 1000));
         }
         try {
-            const result = await runWithSem(() => callRpc('upload.getFile', params, { noMigrate: true }));
+            const result = await runWithSem(() =>
+                knownDc > 0 ? callRpcOnDc(knownDc, 'upload.getFile', params) : callRpc('upload.getFile', params, { noMigrate: true })
+            );
             if (result && result._ === 'upload.file') {
                 const chunk = Buffer.from(result.bytes || '', 'hex');
                 if (chunk.length >= 100) {
@@ -1241,12 +1313,6 @@ async function processAvatarBatch(tasks: Array<{ peer: any; photo: any; cacheKey
     await Promise.all([
         runConcurrent(homeTasks),
         ...dcIds.map(async (dcId) => {
-            try {
-                await ensureDcConnection(dcId);
-            } catch (e: any) {
-                console.log('[avatar] failed to setup connection for DC', dcId, ':', e.message);
-                return;
-            }
             const dcTasks = remoteByDc.get(dcId)!;
             console.log('[avatar] downloading', dcTasks.length, 'avatars on DC', dcId);
             for (const t of dcTasks) {
@@ -1912,6 +1978,7 @@ async function signIn(phoneNumber: string, code: string): Promise<void> {
     authenticated = true;
     if (ses) homeSession = { ...ses };
     if (curSessionId) await persistSession();
+    createDcConnection(ses!.dcId).catch(() => {});
     setTimeout(() => initUpdates().catch(() => {}), 100);
 }
 
@@ -1931,6 +1998,7 @@ async function checkPassword(password: string): Promise<void> {
     authenticated = true;
     if (ses) homeSession = { ...ses };
     if (curSessionId) await persistSession();
+    createDcConnection(ses!.dcId).catch(() => {});
     setTimeout(() => initUpdates().catch(() => {}), 100);
 }
 
@@ -2027,7 +2095,9 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
             if (rpcResult && typeof rpcResult === 'object' && rpcResult._ === 'auth.loginTokenSuccess') {
                 authenticated = true;
                 passwordPending = false;
+                if (ses) homeSession = { ...ses };
                 if (curSessionId) await persistSession();
+                createDcConnection(ses!.dcId).catch(() => {});
                 setTimeout(() => initUpdates().catch(() => {}), 100);
             }
             return rpcResult;
@@ -2104,6 +2174,7 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
 async function initUpdates(): Promise<void> {
     try { await call(TL_CONSTRUCTORS.UPDATES_GET_STATE, {}); } catch {}
 }
+
 
 async function persistSession(): Promise<void> {
     if (!ses || !curSessionId || !tdBinlog) { console.log('[worker] persistSession: skipped (ses=' + !!ses + ' curSessionId=' + !!curSessionId + ' tdBinlog=' + !!tdBinlog + ')'); return; }
@@ -2266,6 +2337,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
         // authKey existence implies authenticated
         if (authenticated) {
             setTimeout(() => initUpdates().catch(() => {}), 100);
+            createDcConnection(ses!.dcId).catch(() => {});
             startHealthCheck();
         }
         return;
@@ -2327,6 +2399,7 @@ async function handleDisconnect(): Promise<void> {
     authKeyId = 0n;
     pendingAuth = null;
     closeAllDcConnections();
+    dcStoredAuthKeys.clear();
 }
 
 async function handleLogout(): Promise<void> {
@@ -2441,7 +2514,8 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         let offset = BigInt(0);
         const limit = 1048576;
         let finalType = 'storage.fileUnknown';
-        let targetDc = 0;
+        let targetDc = photo?.dc_id || document?.dc_id || 0;
+        if (typeof targetDc !== 'number') targetDc = Number(targetDc);
 
         const doCall = async (ofs: bigint): Promise<any> => {
             if (genRef && genRef.value !== photoDownloadGen) {
@@ -2510,12 +2584,15 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
 
     const doCall = async (ofs: bigint): Promise<any> => {
         const p = { precise: false, location, offset: ofs, limit };
-        if (targetDc > 0) return await callRpcOnDc(targetDc, 'upload.getFile', p);
+        const callDc = targetDc > 0 ? targetDc : ses!.dcId;
         try {
-            return await callRpc('upload.getFile', p, { noMigrate: true });
+            return await callRpcOnDc(callDc, 'upload.getFile', p);
         } catch (e: any) {
-            const m = e.message.match(/^FILE_MIGRATE_(\d+)$/);
-            if (m) { targetDc = parseInt(m[1]); return await callRpcOnDc(targetDc, 'upload.getFile', p); }
+            const m = e.message.match(/FILE_MIGRATE_(\d+)/);
+            if (m) {
+                targetDc = parseInt(m[1]);
+                return await doCall(ofs);
+            }
             throw e;
         }
     };

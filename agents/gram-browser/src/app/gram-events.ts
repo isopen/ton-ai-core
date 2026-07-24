@@ -199,11 +199,22 @@ export function setupEventListeners(s: GramState): void {
     return (msgsResult?.messages || []).find((m: any) => Number(m.id) === Number(messageId));
   };
 
-  const onDownloadPhoto = async (e: Event) => {
-    const { photo, sizeType, messageId } = (e as CustomEvent).detail || {};
-    console.log('[gram-app] onDownloadPhoto RECEIVED', { messageId, sizeType, photoId: photo?.id, hasTgService: !!s.tgService.current, photoKeys: photo ? Object.keys(photo) : null });
-    if (!photo || !sizeType || messageId == null) { console.log('[gram-app] onDownloadPhoto: missing params', { photo: !!photo, sizeType, messageId }); return; }
+  const photoQueue: Array<{ photo: any; sizeType: string; messageId: number }> = [];
+  let photoInFlight = 0;
+  const MAX_PARALLEL_PHOTOS = 2;
 
+  const processPhotoQueue = () => {
+    while (photoQueue.length > 0 && photoInFlight < MAX_PARALLEL_PHOTOS) {
+      const item = photoQueue.pop()!;
+      photoInFlight++;
+      execPhotoDownload(item.photo, item.sizeType, item.messageId).finally(() => {
+        photoInFlight--;
+        processPhotoQueue();
+      });
+    }
+  };
+
+  const execPhotoDownload = async (photo: any, sizeType: string, messageId: number) => {
     const MAX_RETRIES = 3;
     const RETRY_DELAYS = [1000, 3000, 5000];
     let currentPhoto = photo;
@@ -260,6 +271,13 @@ export function setupEventListeners(s: GramState): void {
       }
     }
   };
+
+  const onDownloadPhoto = async (e: Event) => {
+    const { photo, sizeType, messageId } = (e as CustomEvent).detail || {};
+    if (!photo || !sizeType || messageId == null) return;
+    photoQueue.push({ photo, sizeType, messageId });
+    processPhotoQueue();
+  };
   window.addEventListener('tg-download-photo', onDownloadPhoto);
 
   const base64ToBlobUrl = (base64: string, mime: string): string => {
@@ -271,15 +289,36 @@ export function setupEventListeners(s: GramState): void {
 
   let documentDownloadGen = 0;
   const documentPending = new Set<number>();
-  const cancelDocumentDownloads = () => { documentDownloadGen++; };
-  const onDownloadDocument = async (e: Event) => {
-    const { document, messageId } = (e as CustomEvent).detail || {};
-    console.log('[gram-app] onDownloadDocument RECEIVED', { messageId, docId: document?.id?.toString(), mime: document?.mime_type });
-    if (!document || messageId == null) { console.log('[gram-app] onDownloadDocument: missing params'); return; }
-    if (documentPending.has(messageId)) { console.log('[gram-app] onDownloadDocument: already pending', messageId); return; }
-    documentPending.add(messageId);
 
-    const mime = (document.mime_type || 'application/octet-stream').toLowerCase();
+  type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue';
+  const downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number; mime: string }>> = { video_queue: [], gif_queue: [], photo_queue: [] };
+  const downloadInProgress: Record<QueueKey, boolean> = { video_queue: false, gif_queue: false, photo_queue: false };
+
+  const getQueueKey = (mime: string, isAnimated: boolean): QueueKey => {
+    if (mime.startsWith('video/') && !isAnimated) return 'video_queue';
+    if (mime.startsWith('video/') && isAnimated) return 'gif_queue';
+    return 'photo_queue';
+  };
+
+  const processDownloadQueue = (queueKey: QueueKey) => {
+    const queue = downloadQueues[queueKey];
+    if (queue.length === 0 || downloadInProgress[queueKey]) return;
+    const item = queue.pop()!;
+    downloadInProgress[queueKey] = true;
+    execDownload(item.document, item.messageId, item.mime).finally(() => {
+      downloadInProgress[queueKey] = false;
+      processDownloadQueue(queueKey);
+    });
+  };
+
+  const cancelDocumentDownloads = () => {
+    documentDownloadGen++;
+    for (const key of Object.keys(downloadQueues) as QueueKey[]) {
+      downloadQueues[key].length = 0;
+    }
+  };
+
+  const execDownload = async (document: any, messageId: number, mime: string) => {
     const gen = documentDownloadGen;
     const attrs = (document.attributes || []) as any[];
     const isAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
@@ -291,21 +330,22 @@ export function setupEventListeners(s: GramState): void {
           const chunks: ArrayBuffer[] = [];
           const totalBytes = Number(doc.size) || 0;
           let receivedBytes = 0;
+          let chunkCount = 0;
           let lastProgress = -1;
-
-          s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
 
           await s.tgService.current!.startVideoStream(doc, (data: ArrayBuffer | undefined, final: boolean, fileType: string) => {
             if (gen !== documentDownloadGen) return;
             if (!data) return;
             chunks.push(data);
+            chunkCount++;
             receivedBytes += data.byteLength;
-            if (totalBytes > 0) {
-              const pct = Math.min(99, Math.round((receivedBytes / totalBytes) * 100));
-              if (pct !== lastProgress) {
-                lastProgress = pct;
-                s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
-              }
+            const pct = totalBytes > 0
+              ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100))
+              : Math.min(99, chunkCount);
+            if (pct !== lastProgress) {
+              lastProgress = pct;
+              console.log('[gram-app] progress dispatch', messageId, pct);
+              s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
             }
           });
 
@@ -392,6 +432,20 @@ export function setupEventListeners(s: GramState): void {
     }
 
     documentPending.delete(messageId);
+  };
+
+  const onDownloadDocument = async (e: Event) => {
+    const { document, messageId } = (e as CustomEvent).detail || {};
+    if (!document || messageId == null) return;
+    if (documentPending.has(messageId)) return;
+    documentPending.add(messageId);
+    s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
+    const mime = (document.mime_type || 'application/octet-stream').toLowerCase();
+    const attrs = (document.attributes || []) as any[];
+    const isAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
+    const queueKey = getQueueKey(mime, isAnimated);
+    downloadQueues[queueKey].push({ document, messageId, mime });
+    processDownloadQueue(queueKey);
   };
   window.addEventListener('tg-download-document', onDownloadDocument);
   s.cancelDocumentDownloads = cancelDocumentDownloads;
