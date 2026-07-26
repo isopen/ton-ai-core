@@ -1,5 +1,6 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
+import { Scrollable } from '../primitives/scrollable.js';
 
 interface LangSelectorProps {
   current: string;
@@ -42,7 +43,7 @@ export function LangSelector({ current, options, onChange, suggestionLang, onAcc
         </button>
         {open ? (
           <div class="login-lang-dropdown">
-            <div class="login-lang-list">
+            <Scrollable className="login-lang-list">
               {options.map(o => (
                 <button
                   class={`login-lang-opt${o.code === current ? ' active' : ''}`}
@@ -52,7 +53,7 @@ export function LangSelector({ current, options, onChange, suggestionLang, onAcc
                   {o.label}
                 </button>
               ))}
-            </div>
+            </Scrollable>
           </div>
         ) : null}
       </div>

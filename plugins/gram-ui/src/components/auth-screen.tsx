@@ -1,11 +1,12 @@
-import { h } from '@ton-ai/atom/jsx-runtime';
+import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import type { AppState, UIAction } from '../types.js';
 import type { Dispatch } from '../state.js';
 import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
-import { GramLogo } from './gram-logo.js';
 import { LangSelector } from './lang-selector.js';
+import { QrCodeView } from './qr-code-view.js';
+import { Scrollable } from '../primitives/scrollable.js';
 
 function ThemeIcon({ theme }: { theme: 'light' | 'dark' }) {
   if (theme === 'dark') {
@@ -108,8 +109,7 @@ function handleSendCode(state: AppState, dispatch: Dispatch) {
   const localDigits = allDigits;
   const prefix = phoneCode ? `+${phoneCode}` : '';
   const fullPhone = `${prefix}${localDigits}`;
-  dispatch({ type: 'SET_PHONE', phone: fullPhone });
-  dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
+  dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading', phone: fullPhone });
   window.dispatchEvent(new CustomEvent('tg-auth-send-code'));
 }
 
@@ -145,7 +145,7 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
   const country = state.countries.find(c => c.iso2 === state.countryIso2);
   const phoneCode = country?.phoneCode || '';
   const patterns = country?.patterns;
-  const [phoneDigits, setPhoneDigits] = useState('');
+  const [phoneDigits, setPhoneDigits] = useState(state.phone ? state.phone.replace(/\D/g, '').slice(phoneCode.length) : '');
 
   const formatted = formatPhoneNumber(phoneDigits, patterns);
   const displayValue = formatted;
@@ -222,7 +222,7 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
                 onInput={(e: any) => setCountrySearch(e.target.value)}
               />
             </div>
-            <div class="login-country-list">
+            <Scrollable className="login-country-list">
               {filtered.length === 0 ? (
                 <div class="login-country-empty">No countries found</div>
               ) : filtered.map(c => (
@@ -236,7 +236,7 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
                   <span class="login-country-item-code">+{c.phoneCode}</span>
                 </button>
               ))}
-            </div>
+            </Scrollable>
           </div>
         ) : null}
       </div>
@@ -370,35 +370,6 @@ function SignUpView({ state, dispatch }: { state: AppState; dispatch: Dispatch }
   );
 }
 
-function QrCodeView({ dispatch }: { dispatch: Dispatch }) {
-  const [qrDataUrl, setQrDataUrl] = useState('');
-
-  useEffect(() => {
-    window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
-    const handler = (e: any) => { setQrDataUrl(e.detail.url); };
-    window.addEventListener('tg-auth-qr-url', handler);
-    return () => window.removeEventListener('tg-auth-qr-url', handler);
-  }, []);
-
-  return (
-    <div class="login-form" style={{textAlign: 'center'}}>
-      <h2 class="login-qr-title">{t(S.AUTH_QR_TITLE)}</h2>
-      <div class="login-qr-wrap">
-        {qrDataUrl ? <img src={qrDataUrl} alt="QR Code" class="login-qr-img" /> : <div class="login-spinner"></div>}
-        <div class="login-qr-logo"><GramLogo size={28} /></div>
-      </div>
-      <div class="login-qr-steps">
-        <div>1. {t(S.AUTH_QR_STEP1)}</div>
-        <div>2. {t(S.AUTH_QR_STEP2)}</div>
-        <div>3. {t(S.AUTH_QR_STEP3)}</div>
-      </div>
-      <button class="login-btn login-btn-ghost" type="button" onClick={() => { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } })); dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' }); }}>
-        {t(S.AUTH_QR_PHONE_LOGIN)}
-      </button>
-    </div>
-  );
-}
-
 export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
   const browserLang = typeof navigator !== 'undefined' ? navigator.language?.split('-')[0]?.toLowerCase() : null;
 
@@ -406,45 +377,49 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
 
   const showSuggestion = browserLang && state.langOptions.some(o => o.code === browserLang) && browserLang !== state.langCode;
 
+  const isLoading = state.authStep === 'loading';
+
   return (
     <div class="login-page">
       <div class="login-bg-decor"></div>
       <div class="login-card">
-        {state.authStep !== 'qr_login' ? (
-          <LangSelector
-            current={state.langCode}
-            options={state.langOptions}
-            onChange={setLang}
-            suggestionLang={showSuggestion ? browserLang : null}
-            onAcceptSuggestion={showSuggestion ? () => setLang(browserLang!) : undefined}
-          />
-        ) : null}
-        <button class="login-theme-toggle" type="button" onClick={() => dispatch({ type: 'SET_THEME', theme: state.theme === 'dark' ? 'light' : 'dark' })}>
-          <ThemeIcon theme={state.theme} />
-        </button>
-
         <div class="login-logo-wrap">
           <TelegramCrystal size={100} />
         </div>
-
-        {state.authStep !== 'phone' ? (
-          <button class="login-btn-back" type="button" onClick={() => dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' })}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
-          </button>
+        {isLoading ? (
+          <LoadingView />
         ) : (
-          <div>
-            <h1 class="login-title login-title-plain">Gram</h1>
+          <div class="auth-content">
+            <LangSelector
+              current={state.langCode}
+              options={state.langOptions}
+              onChange={setLang}
+              suggestionLang={showSuggestion ? browserLang : null}
+              onAcceptSuggestion={showSuggestion ? () => setLang(browserLang!) : undefined}
+            />
+            <button class="login-theme-toggle" type="button" onClick={() => dispatch({ type: 'SET_THEME', theme: state.theme === 'dark' ? 'light' : 'dark' })}>
+              <ThemeIcon theme={state.theme} />
+            </button>
+
+            {state.authStep !== 'phone' ? (
+              <button class="login-btn-back" type="button" onClick={() => dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' })}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+              </button>
+            ) : (
+              <div>
+                <h1 class="login-title login-title-plain">Gram</h1>
+              </div>
+            )}
+
+            {state.error ? renderError(state.error) : null}
+
+            {state.authStep === 'phone' ? <PhoneView state={state} dispatch={dispatch} /> : null}
+            {state.authStep === 'code' ? <CodeView dispatch={dispatch} /> : null}
+            {state.authStep === 'password' ? <PasswordView dispatch={dispatch} /> : null}
+            {state.authStep === 'signup' ? <SignUpView state={state} dispatch={dispatch} /> : null}
+            {state.authStep === 'qr_login' ? <QrCodeView dispatch={dispatch} /> : null}
           </div>
         )}
-
-        {state.error ? renderError(state.error) : null}
-
-        {state.authStep === 'loading' ? <LoadingView /> : null}
-        {state.authStep === 'phone' ? <PhoneView state={state} dispatch={dispatch} /> : null}
-        {state.authStep === 'code' ? <CodeView dispatch={dispatch} /> : null}
-        {state.authStep === 'password' ? <PasswordView dispatch={dispatch} /> : null}
-        {state.authStep === 'signup' ? <SignUpView state={state} dispatch={dispatch} /> : null}
-        {state.authStep === 'qr_login' ? <QrCodeView dispatch={dispatch} /> : null}
       </div>
     </div>
   );

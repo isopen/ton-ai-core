@@ -1,5 +1,5 @@
 import { tpl, S } from '@ton-ai/gram-ui';
-import { dbDel } from '@/utils/db';
+import { dbSet, dbDel } from '@/utils/db';
 import { addLog, setDialogsFromServer, fetchSelfUserId } from './gram-utils';
 import type { GramState } from './gram-state';
 import type { WorkerTelegramService } from '@/utils/worker-telegram-service';
@@ -28,6 +28,7 @@ export function createAuthCallbacks(
     signIn: async (code: string) => {
       try {
         await svc()!.signIn(s.tgui.current!.state.phone, code);
+        await dbSet('authenticated', '1').catch(() => {});
         await dbDel('authInvalidated').catch(() => {});
         s.tgui.current!.setConnectionStatus('connected');
         s.tgui.current!.setPage('dialogs');
@@ -50,6 +51,7 @@ export function createAuthCallbacks(
     checkPassword: async (password: string) => {
       try {
         await svc()!.checkPassword(password);
+        await dbSet('authenticated', '1').catch(() => {});
         await dbDel('authInvalidated').catch(() => {});
         s.tgui.current!.setConnectionStatus('connected');
         s.tgui.current!.setPage('dialogs');
@@ -70,6 +72,7 @@ export function createAuthCallbacks(
       try {
         await svc()!.logout();
       } catch {}
+      await dbDel('authenticated').catch(() => {});
       try {
         await svc()!.connect();
         s.tgui.current!.dispatch({ type: 'SET_CONNECTION_STATUS', status: svc()!.connected ? 'connected' : 'disconnected' });
@@ -90,6 +93,7 @@ export function createAuthCallbacks(
           first_name: firstname,
           last_name: lastname,
         });
+        await dbSet('authenticated', '1').catch(() => {});
         await dbDel('authInvalidated').catch(() => {});
         s.tgui.current!.setConnectionStatus('connected');
         s.tgui.current!.setPage('dialogs');
@@ -105,8 +109,8 @@ export function createAuthCallbacks(
     },
     requestQrCode: async () => {
       try {
-        const apiId = parseInt(process.env.NEXT_PUBLIC_TELEGRAM_API_ID || '0', 10);
-        const apiHash = process.env.NEXT_PUBLIC_TELEGRAM_API_HASH || '';
+        const apiId = parseInt(process.env.TELEGRAM_API_ID || '0', 10);
+        const apiHash = process.env.TELEGRAM_API_HASH || '';
         const result = await svc()!.callRpc('auth.exportLoginToken', {
           api_id: apiId,
           api_hash: apiHash,
@@ -172,6 +176,7 @@ export function createAuthCallbacks(
                 }
               }
               await fetchSelfUserId(s);
+              await dbSet('authenticated', '1').catch(() => {});
               await dbDel('authInvalidated').catch(() => {});
               s.tgui.current!.setConnectionStatus('connected');
               s.tgui.current!.setPage('dialogs');

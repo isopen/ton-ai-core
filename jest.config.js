@@ -12,7 +12,8 @@ module.exports = {
     '<rootDir>/plugins/tl-language/tests',
     '<rootDir>/plugins/agent-transport/tests',
     '<rootDir>/plugins/telegram/tests',
-    '<rootDir>/plugins/gram-db/tests'
+    '<rootDir>/plugins/gram-db/tests',
+    '<rootDir>/plugins/atom/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
@@ -44,5 +45,8 @@ module.exports = {
     '^@ton-ai/agent-transport$': '<rootDir>/plugins/agent-transport/src/index.ts',
     '^@ton-ai/telegram$': '<rootDir>/plugins/telegram/src/index.ts',
     '^@ton-ai/mtproto$': '<rootDir>/plugins/mtproto/src/index.ts',
+    '^@ton-ai/atom$': '<rootDir>/plugins/atom/src/index.ts',
+    '^@ton-ai/atom/(.*)$': '<rootDir>/plugins/atom/src/$1',
+    '^(\\.{1,2}/.*)\\.js$': '$1',
   },
 };

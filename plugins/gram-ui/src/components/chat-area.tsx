@@ -276,21 +276,15 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   const msgs = Array.isArray(state.messages) ? state.messages : [];
   const isGroup = (state.selectedPeer as any)?.type === 'chat';
 
-  msgs.forEach((m, i) => {
-    const sameSenderPrev = i > 0 && msgs[i - 1].out === m.out && msgs[i - 1].sender === m.sender && msgs[i - 1].date - m.date < 300;
-    const sameSenderNext = i < msgs.length - 1 && msgs[i + 1].out === m.out && msgs[i + 1].sender === m.sender && m.date - msgs[i + 1].date < 300;
-    const showDaySep = !!m.date && (i === 0 || !msgs[i - 1].date || new Date(m.date * 1000).toDateString() !== new Date(msgs[i - 1].date * 1000).toDateString());
-    if (showDaySep) {
-      msgListChildren.push(
-        <div key={`day-${m.id}`} class="tgui-day-sep">
-          <Text variant="caption" className="tgui-day-sep-text">{formatDaySeparator(m.date)}</Text>
-        </div>
-      );
-    }
-    msgListChildren.push(<MessageItem key={`msg-${m.id}`} m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrls={state.documentUrls || {}} documentProgress={state.documentProgress || {}} />);
-  });
+  const readInboxMaxId = currentDialog?.readInboxMaxId;
+  const firstUnreadIdx = readInboxMaxId != null
+    ? msgs.findIndex(m => !m.out && Number(m.id) > readInboxMaxId)
+    : -1;
+  const hasUnread = firstUnreadIdx >= 0;
 
-  if (msgListChildren.length === 0) {
+  const hasMessages = msgs.length > 0;
+
+  if (!hasMessages) {
     if (state.loadingMessages) {
       msgListChildren.push(
         <Flex key="loading" direction="row" justify="center" className="tgui-loading-msgs">
@@ -319,13 +313,32 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
         </div>
       </div>
       <Scrollable
+        key={`msg-list-${peer.id}`}
         id="tg-msg-list"
         className="tgui-msg-list"
-        onScroll={(e: any) => {
-          if (e.target.scrollTop < 80) {
-            dispatch({ type: 'LOAD_MORE' });
+        startAtBottom={!hasUnread}
+        estimatedItemHeight={48}
+        virtualItems={hasMessages ? msgs : undefined}
+        renderVirtualItem={hasMessages ? (m: any, i: number) => {
+          const sameSenderPrev = i > 0 && msgs[i - 1].out === m.out && msgs[i - 1].sender === m.sender && msgs[i - 1].date - m.date < 300;
+          const sameSenderNext = i < msgs.length - 1 && msgs[i + 1].out === m.out && msgs[i + 1].sender === m.sender && m.date - msgs[i + 1].date < 300;
+          const showDaySep = !!m.date && (i === 0 || !msgs[i - 1].date || new Date(m.date * 1000).toDateString() !== new Date(msgs[i - 1].date * 1000).toDateString());
+          return (
+            <div>
+              {showDaySep ? <div key={`day-${m.id}`} class="tgui-day-sep"><Text variant="caption" className="tgui-day-sep-text">{formatDaySeparator(m.date)}</Text></div> : null}
+              <MessageItem m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrls={state.documentUrls || {}} documentProgress={state.documentProgress || {}} />
+            </div>
+          );
+        } : undefined}
+        onReadyContent={(el) => {
+          if (firstUnreadIdx >= 0) {
+            requestAnimationFrame(() => {
+              const msg = el.querySelector(`#msg-${msgs[firstUnreadIdx].id}`);
+              if (msg) msg.scrollIntoView({ block: 'start' });
+            });
           }
         }}
+        onNearTop={() => dispatch({ type: 'LOAD_MORE' })}
       >
         {msgListChildren}
       </Scrollable>

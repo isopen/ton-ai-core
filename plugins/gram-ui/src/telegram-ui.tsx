@@ -266,9 +266,9 @@ export class TelegramUI {
   }
 
   scrollChatToBottom() {
-    const msgList = document.getElementById('tg-msg-list');
-    if (msgList) {
-      requestAnimationFrame(() => { msgList.scrollTop = msgList.scrollHeight; });
+    const el = document.getElementById('tg-msg-list-content');
+    if (el) {
+      requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
     }
   }
 

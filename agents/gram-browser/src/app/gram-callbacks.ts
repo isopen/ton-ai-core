@@ -86,7 +86,9 @@ export function createCallbacks(
         const _cached = s.messagesCache.current.get(peerKey);
         if (Array.isArray(_cached)) existing = _cached;
         const maxId = s.maxFetchedIdRef.current.get(peerKey) || 0;
-        const count = 50;
+        const count = maxId === 0
+          ? Math.ceil((document.getElementById('tg-msg-list')?.clientHeight || window.innerHeight) / 60) + 5
+          : 50;
         const data = await s.tgService.current!.fetchHistory(p, count, maxId);
         if (data) {
           if (data.users && Array.isArray(data.users)) {
@@ -212,7 +214,7 @@ export function createCallbacks(
       if (peer.id !== '_debug_' && peer.id !== '_settings_') {
         requestAnimationFrame(() => {
           if (!s.scrollReadAttached.current) {
-            const el = document.getElementById('tg-msg-list');
+            const el = document.getElementById('tg-msg-list-content');
             if (el) {
               el.addEventListener('scroll', () => scrollReadHandler(s), { passive: true });
               s.scrollReadAttached.current = true;

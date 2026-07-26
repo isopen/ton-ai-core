@@ -1,6 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
-import { Scrollable } from '../primitives/scrollable.js';
-import { IconButton } from '../primitives/icon-button.js';
+import { CustomScrollbar } from '../primitives/custom-scrollbar.js';
 import { Spinner } from '../primitives/spinner.js';
 import { DialogItem } from './dialog-item.js';
 import { ConnectionIndicator } from './connection-indicator.js';
@@ -21,14 +20,9 @@ export function Sidebar({ state, dispatch }: { state: AppState; dispatch: Dispat
           {!collapsed ? <ConnectionIndicator status={state.connectionStatus} /> : null}
           <div class="tgui-sidebar-header-actions">
             <ActionMenu state={state} dispatch={dispatch} />
-            <IconButton onClick={() => dispatch({ type: 'SET_SIDEBAR_COLLAPSED', v: !collapsed })}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" class={`tgui-sidebar-toggle-icon${collapsed ? ' tgui-sidebar-toggle-icon-collapsed' : ''}`}>
-                <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </IconButton>
           </div>
         </div>
-        <Scrollable className="tgui-sidebar-list">
+        <CustomScrollbar className="tgui-sidebar-list">
           {state.dialogs.length === 0
             ? <div class="tgui-sidebar-loader"><Spinner /></div>
             : state.dialogs.length > 0
@@ -50,7 +44,7 @@ export function Sidebar({ state, dispatch }: { state: AppState; dispatch: Dispat
               : null
           }
 
-        </Scrollable>
+        </CustomScrollbar>
       </div>
     </>
   );

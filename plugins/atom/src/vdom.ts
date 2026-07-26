@@ -21,10 +21,13 @@ export class ComponentInstance {
   props: Record<string, any>;
   cleanupFns: (() => void)[] = [];
   vnode: VNode | null = null;
+  unmountCleanups: (() => void)[] = [];
+  displayName: string;
 
   constructor(component: ComponentType, props: Record<string, any>) {
     this.component = component;
     this.props = props;
+    this.displayName = (component as any).displayName || component.name || '(anonymous)';
   }
 
   render(): VNode {

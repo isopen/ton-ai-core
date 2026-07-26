@@ -102,7 +102,7 @@ export interface TelegramImageProps {
 export type UIAction =
     | { type: 'SET_THEME'; theme: AppState['theme'] }
     | { type: 'SET_PAGE'; page: AppState['page'] }
-    | { type: 'SET_AUTH_STEP'; authStep: AppState['authStep'] }
+    | { type: 'SET_AUTH_STEP'; authStep: AppState['authStep']; phone?: string }
     | { type: 'SET_PHONE'; phone: string }
     | { type: 'SET_CODE'; code: string }
     | { type: 'SET_PASSWORD'; password: string }

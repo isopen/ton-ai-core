@@ -45,7 +45,7 @@ const TELEGRAM_API_ID = parseInt(
     (typeof self !== 'undefined' && self.location?.search
         ? new URLSearchParams(self.location.search).get('apiId')
         : null) ||
-    (typeof process !== 'undefined' && (process as any).env?.NEXT_PUBLIC_TELEGRAM_API_ID) ||
+    (typeof process !== 'undefined' && (process as any).env?.TELEGRAM_API_ID) ||
     '0',
     10
 );
@@ -53,7 +53,7 @@ const TELEGRAM_API_HASH =
     (typeof self !== 'undefined' && self.location?.search
         ? new URLSearchParams(self.location.search).get('apiHash')
         : null) ||
-    (typeof process !== 'undefined' && (process as any).env?.NEXT_PUBLIC_TELEGRAM_API_HASH) ||
+    (typeof process !== 'undefined' && (process as any).env?.TELEGRAM_API_HASH) ||
     '';
 
 let conn: BrowserObfuscatedConnection | null = null;
@@ -2272,7 +2272,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
             sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
             seqNo: 0,
         };
-        authenticated = true; // authKey exists → session IS authenticated, even if SessionFlags event was lost
+        authenticated = state.authenticated || (!saved.pendingCodeHash && !saved.passwordPending);
         console.log('[worker] handleConnectInternal: session restored, authenticated=' + authenticated);
         if (saved.pendingCodeHash) {
             pendingAuth = { phoneCodeHash: saved.pendingCodeHash };

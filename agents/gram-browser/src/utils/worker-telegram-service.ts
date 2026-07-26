@@ -17,8 +17,8 @@ export class WorkerTelegramService extends TelegramService {
         this.workerClient.onAuthInvalidated = () => {
             this.onAuthInvalidated?.();
         };
-        const apiId = parseInt(process.env.NEXT_PUBLIC_TELEGRAM_API_ID || '0', 10);
-        const apiHash = process.env.NEXT_PUBLIC_TELEGRAM_API_HASH || '';
+        const apiId = parseInt(process.env.TELEGRAM_API_ID || '0', 10);
+        const apiHash = process.env.TELEGRAM_API_HASH || '';
         await this.workerClient.start(apiId, apiHash);
 
         if (this.onUpdate) {

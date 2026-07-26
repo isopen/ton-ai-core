@@ -1,5 +1,25 @@
 import { TEXT, FRAGMENT, SLOT, SLOTTABLE, ComponentInstance, setCurrentInstance, type VNode, type ComponentType } from './vdom.js';
 
+function runUnmountCleanups(vnode: VNode) {
+  if (vnode.componentInstance) {
+    const inst = vnode.componentInstance;
+    const cleanups = inst.unmountCleanups;
+    for (const fn of cleanups) {
+      try { fn(); } catch (e) { console.error('useEffect unmount cleanup error:', e); }
+    }
+    cleanups.length = 0;
+    if (inst.vnode) {
+      for (const child of inst.vnode.children) {
+        runUnmountCleanups(child);
+      }
+    }
+    return;
+  }
+  for (const child of vnode.children) {
+    runUnmountCleanups(child);
+  }
+}
+
 const SVG_TAGS = new Set(['svg', 'path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'g', 'text', 'use', 'defs', 'stop', 'linearGradient', 'radialGradient', 'clipPath', 'mask', 'filter', 'image']);
 
 function isSvgTag(tag: string): boolean {
@@ -279,6 +299,7 @@ function getKey(vnode: VNode, index: number): string | number {
 
 export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   if (!isSameNodeType(oldVNode, newVNode)) {
+    runUnmountCleanups(oldVNode);
     const newDom = createDOM(newVNode);
     if (dom.parentNode) {
       dom.parentNode.replaceChild(newDom, dom);
@@ -390,6 +411,7 @@ function reconcileChildren(
 
   for (const [, entry] of oldKeyed) {
     if (!usedKeys.has(entry.matchedKey)) {
+      runUnmountCleanups(entry.vnode);
       for (const node of entry.nodes) {
         if (node.parentNode) {
           node.parentNode.removeChild(node);

@@ -46,5 +46,32 @@ export function render(component: ComponentType, container: HTMLElement): Node {
   rootData = { instance, oldVNode: vnode, container, rootDom: dom };
 
   __setReroot(() => scheduleRender());
+
+  if (typeof window !== 'undefined') {
+    (window as any).__ATOM_DEVTOOLS__ = {
+      getRoot: () => rootData?.instance || null,
+      inspect: () => inspectTree(instance),
+    };
+  }
+
   return dom;
+}
+
+function inspectTree(inst: ComponentInstance): any {
+  const children: any[] = [];
+  const walk = (vnode: VNode) => {
+    for (const child of vnode.children) {
+      if (child.componentInstance) {
+        children.push(inspectTree(child.componentInstance));
+      }
+      walk(child);
+    }
+  };
+  if (inst.vnode) walk(inst.vnode);
+  return {
+    name: inst.displayName,
+    props: inst.props,
+    state: [...inst.hookStates],
+    children,
+  };
 }

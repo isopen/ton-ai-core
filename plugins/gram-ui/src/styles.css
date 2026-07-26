@@ -269,6 +269,33 @@ body {
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
+.CustomScrollbar-thumb {
+  position: absolute;
+  right: 2px;
+  width: 8px;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  z-index: 10;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.CustomScrollbar:hover .CustomScrollbar-thumb,
+.CustomScrollbar-thumb:hover {
+  opacity: 1;
+}
+.CustomScrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* Chat messages: always visible */
+.tgui-msg-list .CustomScrollbar-thumb {
+  opacity: 1;
+}
+.tgui-msg-list .CustomScrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
 /* ===== MUI Elevation Shadows ===== */
 .mui-elevation-1 { box-shadow: 0 2px 1px -1px rgba(0,0,0,0.2), 0 1px 1px 0 rgba(0,0,0,0.14), 0 1px 3px 0 rgba(0,0,0,0.12); }
 .mui-elevation-2 { box-shadow: 0 3px 1px -2px rgba(0,0,0,0.2), 0 2px 2px 0 rgba(0,0,0,0.14), 0 1px 5px 0 rgba(0,0,0,0.12); }
@@ -1050,16 +1077,11 @@ body {
 }
 
 .tgui-sidebar-list {
-  flex: 1;
-  overflow-y: auto;
   padding: 8px 0;
 }
 
 .tgui-sidebar-loader {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 48px 0;
+  padding: 0; /* spinner at top */
 }
 
 /* ===== Sidebar header actions ===== */
@@ -2458,8 +2480,6 @@ body {
   white-space: pre-wrap;
   word-break: break-all;
   line-height: 1.4;
-  max-height: 300px;
-  overflow-y: auto;
 }
 
 .tgui-cache-empty {
@@ -2544,8 +2564,6 @@ body {
   white-space: pre-wrap;
   word-break: break-all;
   line-height: 1.5;
-  max-height: 400px;
-  overflow-y: auto;
 }
 
 .tgui-cache-bevent {
@@ -2818,7 +2836,6 @@ body {
 }
 
 .login-lang-list {
-  overflow-y: auto;
   max-height: 260px;
   border-radius: 12px;
 }
@@ -3058,7 +3075,6 @@ body {
 }
 
 .login-country-list {
-  overflow-y: auto;
   flex: 1;
 }
 
@@ -3354,8 +3370,8 @@ body {
 
 .login-qr-wrap {
   position: relative;
-  width: 200px;
-  height: 200px;
+  width: 280px;
+  height: 280px;
   margin: 0 auto 16px;
   display: flex;
   align-items: center;
@@ -3363,13 +3379,31 @@ body {
 }
 
 .login-qr-img {
-  width: 200px;
-  height: 200px;
-  border-radius: 12px;
+  width: 280px;
+  height: 280px;
+  border-radius: 16px;
+}
+
+.login-qr-content {
+  position: relative;
+  width: 280px;
+  height: 280px;
+}
+
+.login-qr-content.loaded {
+  animation: qrReveal 0.5s ease-out;
+}
+
+@keyframes qrReveal {
+  0% { clip-path: circle(0%); }
+  100% { clip-path: circle(100%); }
 }
 
 .login-qr-logo {
   position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   width: 48px;
   height: 48px;
   background: #fff;
@@ -3583,10 +3617,6 @@ body {
 
 [data-theme="dark"] .login-divider-text {
   color: #5A6170;
-}
-
-[data-theme="dark"] .login-qr-wrap {
-  background: #1E2330;
 }
 
 [data-theme="dark"] .login-qr-steps {

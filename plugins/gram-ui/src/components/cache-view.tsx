@@ -58,7 +58,9 @@ function KeyValueRow({ k, v, onDelete }: { k: string; v: string; onDelete: (key:
         </button>
       </div>
       {open && (
-        <pre class="tgui-cache-kv-value">{formatted}</pre>
+        <Scrollable style={{ maxHeight: '300px' }}>
+          <pre class="tgui-cache-kv-value">{formatted}</pre>
+        </Scrollable>
       )}
     </div>
   );
@@ -352,7 +354,9 @@ export function CacheView({ }: { state: AppState }) {
                 </div>
 
                 {showBinlogRaw && binlogRaw !== null && (
-                  <pre class="tgui-cache-binlog-hex">{binlogRaw}</pre>
+                  <Scrollable style={{ maxHeight: '400px' }}>
+                    <pre class="tgui-cache-binlog-hex">{binlogRaw}</pre>
+                  </Scrollable>
                 )}
                 {showBinlogRaw && binlogRaw === null && (
                   <div class="tgui-cache-loading">Loading raw data...</div>

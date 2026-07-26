@@ -1,4 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
+import { CustomScrollbar } from './custom-scrollbar.js';
 
 interface ScrollableProps {
   id?: string;
@@ -6,25 +7,21 @@ interface ScrollableProps {
   style?: any;
   maxHeight?: string;
   onScroll?: (e: Event) => void;
+  onNearTop?: () => void;
+  startAtBottom?: boolean;
+  onReadyContent?: (el: HTMLDivElement) => void;
   children?: any;
+  virtualItems?: any[];
+  renderVirtualItem?: (item: any, index: number) => any;
+  estimatedItemHeight?: number;
 }
 
 export function Scrollable(props: ScrollableProps) {
-  const { id, className = '', style, maxHeight, onScroll, children } = props;
-
-  const styles: any = {
-    overflowY: 'auto',
-    overflowX: 'hidden',
-    minHeight: 0,
-    flex: 1,
-    ...(style || {}),
-  };
-
-  if (maxHeight) styles.maxHeight = maxHeight;
+  const { id, className, style, maxHeight, onScroll, onNearTop, startAtBottom, onReadyContent, children, virtualItems, renderVirtualItem, estimatedItemHeight } = props;
 
   return (
-    <div id={id} class={'Scrollable' + (className ? ' ' + className : '')} style={styles} onScroll={onScroll}>
+    <CustomScrollbar id={id} className={className} style={style} maxHeight={maxHeight} onScroll={onScroll} onNearTop={onNearTop} startAtBottom={startAtBottom} onReadyContent={onReadyContent} virtualItems={virtualItems} renderVirtualItem={renderVirtualItem} estimatedItemHeight={estimatedItemHeight}>
       {children}
-    </div>
+    </CustomScrollbar>
   );
 }

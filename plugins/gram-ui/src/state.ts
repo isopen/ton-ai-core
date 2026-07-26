@@ -54,7 +54,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
   switch (action.type) {
     case 'SET_THEME': return { ...state, theme: action.theme };
     case 'SET_PAGE': return { ...state, page: action.page };
-    case 'SET_AUTH_STEP': return { ...state, authStep: action.authStep };
+    case 'SET_AUTH_STEP': return { ...state, authStep: action.authStep, ...('phone' in action ? { phone: action.phone! } : {}) };
     case 'SET_PHONE': return { ...state, phone: action.phone };
     case 'SET_CODE': return { ...state, code: action.code };
     case 'SET_PASSWORD': return { ...state, password: action.password };
@@ -116,7 +116,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
       ...state,
       documentProgress: { ...state.documentProgress, [action.messageId]: action.progress },
     };
-    case 'LOGOUT': return { ...state, page: 'auth', authStep: 'phone', dialogs: [], selectedPeer: null, messages: [], phone: '', code: '', password: '', error: '', signupFirstname: '', signupLastname: '', phoneCodeHash: '', qrToken: '', selfUserId: '', typingText: '', typingByPeer: {}, pluginSkills: [], activeSkill: null, langOptions: [], documentUrls: {}, documentProgress: {} };
+    case 'LOGOUT': return { ...state, page: 'auth', authStep: 'phone', dialogs: [], selectedPeer: null, messages: [], phone: '', code: '', password: '', error: '', signupFirstname: '', signupLastname: '', phoneCodeHash: '', qrToken: '', selfUserId: '', typingText: '', typingByPeer: {}, pluginSkills: [], activeSkill: null, documentUrls: {}, documentProgress: {} };
     case 'TICK': return { ...state, renderTick: state.renderTick + 1 };
     default: return state;
   }

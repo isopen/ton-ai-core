@@ -66,10 +66,11 @@ export class GramApp {
     const savedLang = await dbGet<string>('langCode');
     const savedId = (await dbGet<string>('sessionId')) || s.sessionIdRef.current;
     const authInvalidated = await dbGet<string>('authInvalidated');
+    const wasAuthenticated = await dbGet<string>('authenticated');
     await dbDel('authInvalidated').catch(() => {});
 
     const tguiInit = {
-      page: authInvalidated ? 'auth' as AppState['page'] : 'dialogs' as AppState['page'],
+      page: (wasAuthenticated && !authInvalidated ? 'dialogs' : 'auth') as AppState['page'],
       authStep: 'loading' as AppState['authStep'],
       theme: savedTheme as AppState['theme'],
       dialogs: [],
@@ -93,16 +94,19 @@ export class GramApp {
       s.tgui.current?.setPage('auth');
       s.tgui.current?.setAuthStep('phone');
       s.tgui.current?.setError('Session terminated from another device');
+      await dbDel('authenticated').catch(() => {});
       await dbSet('authInvalidated', '1').catch(() => {});
     };
 
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => abortController.abort(), 30000);
     try {
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
       await service.connect(2, abortController.signal);
     } catch (e) {
       clearTimeout(timeoutId);
       addLog(s, 'Connect error: ' + ((e as any)?.message || 'unknown'));
+      await dbDel('authenticated').catch(() => {});
       if (s.tgui.current) {
         s.tgui.current.setConnectionStatus('disconnected');
         s.tgui.current.setPage('auth');
@@ -142,21 +146,26 @@ export class GramApp {
     })();
 
     if (service.authenticated) {
+      await dbSet('authenticated', '1').catch(() => {});
       await dbDel('authInvalidated').catch(() => {});
-      s.tgui.current!.setPage('dialogs');
       s.tgui.current!.setConnectionStatus('connected');
       try {
         const dialogsResult = await service.fetchDialogs();
+        s.tgui.current!.setPage('dialogs');
         if (dialogsResult) {
           setDialogsFromServer(s, dialogsResult);
         }
+        await fetchSelfUserId(s);
       } catch (e: any) {
         addLog(s, tpl(S.LOG_GET_DIALOGS_ERROR, { error: e.message }));
+        s.tgui.current!.setPage('auth');
+        s.tgui.current!.setAuthStep('phone');
+        s.tgui.current!.setError('Session error. Please log in again.');
       }
-      await fetchSelfUserId(s);
     } else {
+      await dbDel('authenticated').catch(() => {});
       s.tgui.current!.setPage('auth');
-      s.tgui.current?.dispatch({ type: 'SET_DIALOGS', dialogs: [] });
+      s.tgui.current!.dispatch({ type: 'SET_DIALOGS', dialogs: [] });
       try {
         const state = await service.getAuthState();
         if (state === 'code_sent') s.tgui.current!.setAuthStep('code');
