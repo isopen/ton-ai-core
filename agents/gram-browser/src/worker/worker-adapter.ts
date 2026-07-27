@@ -68,6 +68,10 @@ export class TelegramWorkerClient {
         return this.client.requestPeerAvatar(peerType, peerId, accessHash, photo);
     }
 
+    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
+        return this.client.startPhotoDownload(photo, sizeType, messageId, onProgress);
+    }
+
     async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
         return this.client.requestPhotoDownload(photo, sizeType, messageId);
     }

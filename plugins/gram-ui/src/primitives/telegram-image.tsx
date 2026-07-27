@@ -26,8 +26,9 @@ export function TelegramImage(props: {
   lazy?: boolean;
   rounded?: boolean;
   onOpenViewer?: (id: string) => void;
+  onLoad?: () => void;
 }) {
-  const { image, width, maxWidth, maxHeight, lazy = true, rounded = false, onOpenViewer } = props;
+  const { image, width, maxWidth, maxHeight, lazy = true, rounded = false, onOpenViewer, onLoad } = props;
 
   const [visible, setVisible] = useState(!lazy);
   const [loaded, setLoaded] = useState(false);
@@ -82,6 +83,7 @@ export function TelegramImage(props: {
             setCurrentSrc(url);
             setLoaded(true);
             setError(false);
+            onLoad?.();
             return;
           }
         } catch {

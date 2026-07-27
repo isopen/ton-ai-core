@@ -219,6 +219,8 @@ export function setupEventListeners(s: GramState): void {
     const RETRY_DELAYS = [1000, 3000, 5000];
     let currentPhoto = photo;
 
+    s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_PROGRESS', messageId, progress: 0 });
+
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (attempt > 0) {
         console.log('[gram-app] retrying photo download', messageId, sizeType, 'attempt', attempt);
@@ -226,7 +228,9 @@ export function setupEventListeners(s: GramState): void {
       }
 
       try {
-        const result = await s.tgService.current?.requestPhotoDownload(currentPhoto, sizeType, messageId);
+        const result = await s.tgService.current?.startPhotoDownload(currentPhoto, sizeType, messageId, (pct: number) => {
+          s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_PROGRESS', messageId, progress: pct });
+        });
         console.log('[gram-app] requestPhotoDownload RESULT', messageId, sizeType, attempt, result ? { photoUrl: result.photoUrl?.slice(0, 30), fileRefExpired: result.fileRefExpired } : null);
 
         if (result?.photoUrl) {
@@ -323,7 +327,7 @@ export function setupEventListeners(s: GramState): void {
     const attrs = (document.attributes || []) as any[];
     const isAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
 
-    if (mime.startsWith('video/') && !isAnimated && typeof MediaSource !== 'undefined') {
+    if (mime.startsWith('video/') && typeof MediaSource !== 'undefined') {
       let doc = document;
       for (let streamAttempt = 0; streamAttempt < 3; streamAttempt++) {
         try {

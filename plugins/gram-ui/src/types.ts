@@ -133,6 +133,7 @@ export type UIAction =
     | { type: 'SET_ACTIVE_SKILL'; id: string | null }
     | { type: 'SET_LANG_OPTIONS'; options: Array<{ code: string; label: string }> }
     | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number; sizeType: string; url: string }
+    | { type: 'UPDATE_MESSAGE_PHOTO_PROGRESS'; messageId: number; progress: number }
     | { type: 'REFRESH_MESSAGE_PHOTO'; messageId: number; photo: any }
     | { type: 'UPDATE_MESSAGE_DOCUMENT'; messageId: number; url: string }
     | { type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS'; messageId: number; progress: number }

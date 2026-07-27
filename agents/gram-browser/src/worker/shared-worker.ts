@@ -43,6 +43,24 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
                     try { port.postMessage({ type: 'videoChunk', streamId: msg.id, error: e.message, final: true }); } catch {}
                     try { port.postMessage({ type: 'response', id: msg.id, error: e.message }); } catch {}
                 }
+            } else if (msg.type === 'startPhotoDownload') {
+                try {
+                    const photoUrl = await TW.requestPhotoDownload(msg.photo, msg.sizeType, (pct: number) => {
+                        try { port.postMessage({ type: 'photoProgress', streamId: msg.id, progress: pct }); } catch {}
+                    });
+                    try { port.postMessage({ type: 'photoProgress', streamId: msg.id, progress: 100 }); } catch {}
+                    if (photoUrl) {
+                        try { port.postMessage({ type: 'response', id: msg.id, result: { photoUrl, sizeType: msg.sizeType, messageId: msg.messageId } }); } catch {}
+                    } else {
+                        try { port.postMessage({ type: 'response', id: msg.id, result: { photoUrl: null, sizeType: msg.sizeType, messageId: msg.messageId } }); } catch {}
+                    }
+                } catch (e: any) {
+                    if (e.message?.includes('FILE_REFERENCE_EXPIRED')) {
+                        try { port.postMessage({ type: 'response', id: msg.id, result: { photoUrl: null, sizeType: msg.sizeType, messageId: msg.messageId, fileRefExpired: true, photo: msg.photo } }); } catch {}
+                    } else {
+                        try { port.postMessage({ type: 'response', id: msg.id, error: e.message }); } catch {}
+                    }
+                }
             } else {
                 const result = await handleMessage(msg);
                 port.postMessage({ type: 'response', id: msg.id, result });

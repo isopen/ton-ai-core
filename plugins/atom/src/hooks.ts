@@ -23,6 +23,7 @@ export function useState<T>(initial: T): [T, (v: T | ((prev: T) => T)) => void] 
     const newVal = typeof v === 'function' ? (v as (prev: T) => T)(inst.hookStates[idx]) : v;
     if (newVal !== inst.hookStates[idx]) {
       inst.hookStates[idx] = newVal;
+      inst._dirty = true;
       if (reroot) reroot();
     }
   };

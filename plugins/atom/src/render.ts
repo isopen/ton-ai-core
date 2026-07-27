@@ -11,27 +11,41 @@ interface RootData {
 
 let rootData: RootData | null = null;
 let renderScheduled = false;
+let rafId: number | null = null;
+let useRafBatching = false;
+
+export function setUseRafBatching(v: boolean) {
+  useRafBatching = v;
+}
+
+function flushRender() {
+  renderScheduled = false;
+  rafId = null;
+  if (!rootData) return;
+  const { instance, oldVNode, rootDom } = rootData;
+  instance._dirty = false;
+  instance.props = {};
+  setCurrentInstance(instance);
+  instance.hookIndex = 0;
+  const newVNode = instance.component({});
+  instance.vnode = newVNode;
+  newVNode.componentInstance = instance;
+
+  if (rootDom && oldVNode) {
+    patch(rootDom, oldVNode, newVNode);
+  }
+  rootData.oldVNode = newVNode;
+}
 
 function scheduleRender() {
   if (renderScheduled) return;
   renderScheduled = true;
-  queueMicrotask(() => {
-    renderScheduled = false;
-    if (rootData) {
-      const { instance, oldVNode, rootDom } = rootData;
-      instance.props = {};
-      setCurrentInstance(instance);
-      instance.hookIndex = 0;
-      const newVNode = instance.component({});
-      instance.vnode = newVNode;
-      newVNode.componentInstance = instance;
-
-      if (rootDom && oldVNode) {
-        patch(rootDom, oldVNode, newVNode);
-      }
-      rootData.oldVNode = newVNode;
-    }
-  });
+  if (useRafBatching) {
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(flushRender);
+  } else {
+    queueMicrotask(flushRender);
+  }
 }
 
 export function render(component: ComponentType, container: HTMLElement): Node {

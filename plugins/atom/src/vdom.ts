@@ -23,6 +23,7 @@ export class ComponentInstance {
   vnode: VNode | null = null;
   unmountCleanups: (() => void)[] = [];
   displayName: string;
+  _dirty: boolean = false;
 
   constructor(component: ComponentType, props: Record<string, any>) {
     this.component = component;
@@ -42,6 +43,35 @@ export let currentInstance: ComponentInstance | null = null;
 
 export function setCurrentInstance(inst: ComponentInstance | null) {
   currentInstance = inst;
+}
+
+const MEMO_CACHE = new WeakMap<ComponentInstance, { props: Record<string, any>; vnode: VNode }>();
+
+export function memo(component: ComponentType): ComponentType {
+  const wrapped: ComponentType = (props) => {
+    const inst = currentInstance;
+    if (!inst) return component(props);
+
+    const cached = MEMO_CACHE.get(inst);
+    if (cached && !inst._dirty && shallowEqual(cached.props, props)) {
+      return cached.vnode;
+    }
+    const vnode = component(props);
+    MEMO_CACHE.set(inst, { props, vnode });
+    return vnode;
+  };
+  (wrapped as any).displayName = (component as any).displayName || component.name || '(memo)';
+  return wrapped;
+}
+
+function shallowEqual(a: Record<string, any>, b: Record<string, any>): boolean {
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    if (a[k] !== b[k]) return false;
+  }
+  return true;
 }
 
 export function normalizeChild(child: any): VNode | null {

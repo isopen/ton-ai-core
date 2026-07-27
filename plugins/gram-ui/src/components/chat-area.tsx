@@ -1,11 +1,11 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef } from '@ton-ai/atom/hooks';
+import { VirtualList } from '@ton-ai/atom';
 import { Spinner } from '../primitives/spinner.js';
 import { Avatar } from '../primitives/avatar.js';
 import { Flex } from '../primitives/flex.js';
 import { Button } from '../primitives/button.js';
 import { Text } from '../primitives/text.js';
-import { Scrollable } from '../primitives/scrollable.js';
 import { MessageBubble } from './message-bubble.js';
 import { Checkmark } from './checkmark.js';
 import { TypingIndicator } from './typing-indicator.js';
@@ -18,6 +18,15 @@ import { t } from '../locale.js';
 import { S } from '../strings.js';
 import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, hexToDataUrl, hexToBytes, strippedToDataUrl, isAnimatedMedia } from '../utils.js';
 import { MediaPlayer } from './media-player.js';
+import { VideoMessage } from './video-message.js';
+import { PhotoLoader } from './photo-loader.js';
+
+function toFileSize(bytes?: number): string {
+  if (!bytes) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
 
 function StickerBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {
   const doc = m.media?.document;
@@ -183,15 +192,30 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext }
     };
   }, [m.id]);
 
+  const photoSizes = m.media?.photo?.sizes;
+  const hasAnyUrl = Array.isArray(photoSizes) && photoSizes.some((s: any) => !!(s.url || s.src));
+  const progress = m.media?.photo?.progress;
+  const pct = progress !== undefined ? progress : 0;
+  const fileSize = toFileSize(m.media?.photo?.size);
+  const isPreloading = !hasAnyUrl;
+
+  let mediaCls = 'tgui-photo-preview';
+  if (isPreloading) mediaCls += ' tgui-photo-preview_loading';
+
   return (
     <div class={cls} style={imgWidth ? `width:${imgWidth}px` : ''}>
-      <div class="tgui-photo-preview">
+      <div class={mediaCls}>
         {imgSpec ? (
           <TelegramImage image={imgSpec} maxWidth={320} lazy={false} />
         ) : (
           t(S.PHOTO_PLACEHOLDER)
         )}
-        {m.message ? <div class="MessageBubble__text">{m.message}</div> : null}
+        {isPreloading ? (
+          <>
+            <div class="tgui-photo-scrim" />
+            <PhotoLoader percent={pct} fileSize={fileSize} hidePercent={imgWidth > 0 && imgWidth < 140} />
+          </>
+        ) : null}
         <div class="MessageBubble__meta MessageBubble__meta_overlay">
           <span class="MessageBubble__time">{timeStr}</span>
           {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
@@ -229,8 +253,10 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
         ? <StickerBubble m={m} timeStr={timeStr} out={m.out} status={status} />
         : mediaType === 'photo' || mediaType === 'image'
           ? <PhotoBubble m={m} timeStr={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
-          : mediaType === 'video'
+          : mediaType === 'video' && isAnimatedMedia(m.media)
             ? <MediaPlayer m={m} timeStr={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={documentUrls} documentProgress={documentProgress} />
+          : mediaType === 'video'
+            ? <VideoMessage m={m} timeStr={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={documentUrls} documentProgress={documentProgress} />
             : <MessageBubble text={m.message || ''} time={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
       }
     </div>
@@ -246,7 +272,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
     const skill = skills.find(s => s.id === state.activeSkill);
     if (skill) {
       return (
-        <Scrollable className="tgui-plugin-panel">
+        <div class="tgui-plugin-panel" style="flex:1;overflow-y:auto;min-height:0">
           <div class="tgui-plugin-panel-header">
             <Button variant="ghost" onClick={() => dispatch({ type: 'SET_ACTIVE_SKILL', id: null })}>
               ← Back
@@ -254,7 +280,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
             <Text variant="title">{t(skill.label) !== skill.label ? t(skill.label) : skill.label}</Text>
           </div>
           {skill.render({ state, dispatch })}
-        </Scrollable>
+        </div>
       );
     }
   }
@@ -312,36 +338,36 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
           {state.typingText ? <span class="chat-subtitle"><TypingIndicator text={state.typingText} /></span> : null}
         </div>
       </div>
-      <Scrollable
-        key={`msg-list-${peer.id}`}
-        id="tg-msg-list"
-        className="tgui-msg-list"
-        startAtBottom={!hasUnread}
-        estimatedItemHeight={48}
-        virtualItems={hasMessages ? msgs : undefined}
-        renderVirtualItem={hasMessages ? (m: any, i: number) => {
-          const sameSenderPrev = i > 0 && msgs[i - 1].out === m.out && msgs[i - 1].sender === m.sender && msgs[i - 1].date - m.date < 300;
-          const sameSenderNext = i < msgs.length - 1 && msgs[i + 1].out === m.out && msgs[i + 1].sender === m.sender && m.date - msgs[i + 1].date < 300;
-          const showDaySep = !!m.date && (i === 0 || !msgs[i - 1].date || new Date(m.date * 1000).toDateString() !== new Date(msgs[i - 1].date * 1000).toDateString());
-          return (
-            <div>
-              {showDaySep ? <div key={`day-${m.id}`} class="tgui-day-sep"><Text variant="caption" className="tgui-day-sep-text">{formatDaySeparator(m.date)}</Text></div> : null}
-              <MessageItem m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrls={state.documentUrls || {}} documentProgress={state.documentProgress || {}} />
-            </div>
-          );
-        } : undefined}
-        onReadyContent={(el) => {
-          if (firstUnreadIdx >= 0) {
-            requestAnimationFrame(() => {
-              const msg = el.querySelector(`#msg-${msgs[firstUnreadIdx].id}`);
-              if (msg) msg.scrollIntoView({ block: 'start' });
-            });
-          }
-        }}
-        onNearTop={() => dispatch({ type: 'LOAD_MORE' })}
-      >
-        {msgListChildren}
-      </Scrollable>
+      {hasMessages ? (
+        <VirtualList
+          key={`msg-list-${peer.id}`}
+          id="tg-msg-list-content"
+          className="tgui-msg-list"
+          data={msgs}
+          estimatedItemHeight={48}
+          startAtBottom={!hasUnread}
+          renderItem={({ item: m, index: i }: { item: any; index: number }) => {
+            const sameSenderPrev = i > 0 && msgs[i - 1].out === m.out && msgs[i - 1].sender === m.sender && msgs[i - 1].date - m.date < 300;
+            const sameSenderNext = i < msgs.length - 1 && msgs[i + 1].out === m.out && msgs[i + 1].sender === m.sender && m.date - msgs[i + 1].date < 300;
+            const showDaySep = !!m.date && (i === 0 || !msgs[i - 1].date || new Date(m.date * 1000).toDateString() !== new Date(msgs[i - 1].date * 1000).toDateString());
+            return (
+              <div>
+                {showDaySep ? <div key={`day-${m.id}`} class="tgui-day-sep"><Text variant="caption" className="tgui-day-sep-text">{formatDaySeparator(m.date)}</Text></div> : null}
+                <MessageItem m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrls={state.documentUrls || {}} documentProgress={state.documentProgress || {}} />
+              </div>
+            );
+          }}
+          onReadyContent={(el) => {
+            if (firstUnreadIdx >= 0) {
+              requestAnimationFrame(() => {
+                const msg = el.querySelector(`#msg-${msgs[firstUnreadIdx].id}`);
+                if (msg) msg.scrollIntoView({ block: 'start' });
+              });
+            }
+          }}
+          onNearTop={() => dispatch({ type: 'LOAD_MORE' })}
+        />
+      ) : msgListChildren}
     </div>
   );
 }

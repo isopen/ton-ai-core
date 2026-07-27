@@ -159,6 +159,11 @@ export class WorkerTelegramService extends TelegramService {
         return this.workerClient.requestPeerAvatar(peerType, peerId, accessHash, photo);
     }
 
+    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
+        if (!this.workerClient) return { photoUrl: null };
+        return this.workerClient.startPhotoDownload(photo, sizeType, messageId, onProgress);
+    }
+
     async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
         if (!this.workerClient) return { photoUrl: null };
         return this.workerClient.requestPhotoDownload(photo, sizeType, messageId);

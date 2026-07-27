@@ -48,7 +48,7 @@ export class SharedWorkerClient {
                 this.onAuthInvalidated?.();
                 return;
             }
-            if (msg.type === 'videoChunk') {
+            if (msg.type === 'videoChunk' || msg.type === 'photoProgress') {
                 const handler = this.streamListeners.get(msg.streamId);
                 if (handler) handler(msg);
                 return;
@@ -159,6 +159,28 @@ export class SharedWorkerClient {
     async requestPeerAvatar(peerType: string, peerId: string, accessHash: any, photo: any): Promise<string | null> {
         const r = await this.send({ type: 'requestPeerAvatar', peerType, peerId, accessHash, photo });
         return r.avatarUrl;
+    }
+
+    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
+        return new Promise((resolve, reject) => {
+            if (!this.port) { reject(new Error('Not started')); return; }
+            const id = ++this.msgId;
+            const timer = setTimeout(() => {
+                this.streamListeners.delete(id);
+                this.pending.delete(id);
+                reject(new Error('Photo download timeout'));
+            }, 120_000);
+            this.streamListeners.set(id, (msg: any) => {
+                if (msg.progress !== undefined) {
+                    onProgress(msg.progress);
+                }
+            });
+            this.pending.set(id, {
+                resolve: (v: any) => { clearTimeout(timer); this.streamListeners.delete(id); resolve(v); },
+                reject: (e: Error) => { clearTimeout(timer); this.streamListeners.delete(id); reject(e); },
+            });
+            this.port.postMessage({ type: 'startPhotoDownload', photo, sizeType, messageId, id });
+        });
     }
 
     async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {

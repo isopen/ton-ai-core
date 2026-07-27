@@ -43,6 +43,23 @@ function eventNameFromProp(name: string): string {
   return name.slice(2).toLowerCase();
 }
 
+function styleObjToCss(style: Record<string, any>): string {
+  const parts: string[] = [];
+  for (const k in style) {
+    const v = style[k];
+    if (v != null && v !== '') {
+      let prop = '';
+      for (let i = 0; i < k.length; i++) {
+        const c = k[i];
+        if (c >= 'A' && c <= 'Z') prop += '-' + c.toLowerCase();
+        else prop += c;
+      }
+      parts.push(prop + ':' + v);
+    }
+  }
+  return parts.join(';');
+}
+
 function setProp(el: Element, key: string, value: any) {
   if (key === 'key' || key === 'children') return;
   if (key === 'ref') {
@@ -58,9 +75,7 @@ function setProp(el: Element, key: string, value: any) {
     if (typeof value === 'string') {
       el.setAttribute('style', value);
     } else if (typeof value === 'object' && value !== null) {
-      for (const k in value) {
-        (el as HTMLElement).style[k as any] = value[k];
-      }
+      (el as HTMLElement).style.cssText = styleObjToCss(value);
     }
     return;
   }
@@ -118,16 +133,22 @@ function removeProp(el: Element, key: string, oldValue: any) {
 
 function updateProp(el: Element, key: string, oldValue: any, newValue: any) {
   if (oldValue === newValue) return;
-  if (key === 'style' && typeof oldValue === 'object' && typeof newValue === 'object') {
-    for (const k in oldValue) {
-      if (!(k in (newValue || {}))) {
-        (el as HTMLElement).style[k as any] = '';
+  if (key === 'style') {
+    if (typeof newValue === 'object' && newValue !== null) {
+      if (typeof oldValue === 'object' && oldValue !== null) {
+        for (const k in oldValue) {
+          if (!(k in newValue)) (el as HTMLElement).style[k as any] = '';
+        }
+        for (const k in newValue) {
+          if (oldValue[k] !== newValue[k]) (el as HTMLElement).style[k as any] = newValue[k];
+        }
+      } else {
+        (el as HTMLElement).style.cssText = styleObjToCss(newValue);
       }
-    }
-    for (const k in newValue) {
-      if (oldValue[k] !== newValue[k]) {
-        (el as HTMLElement).style[k as any] = newValue[k];
-      }
+    } else if (typeof newValue === 'string') {
+      el.setAttribute('style', newValue);
+    } else {
+      el.removeAttribute('style');
     }
     return;
   }
@@ -247,9 +268,13 @@ export function createDOM(vnode: VNode): Node {
     }
   }
 
-  for (const child of vnode.children) {
-    const childDom = createDOM(child);
-    if (childDom) el.appendChild(childDom);
+  if (vnode.children.length > 0) {
+    const frag = document.createDocumentFragment();
+    for (const child of vnode.children) {
+      const childDom = createDOM(child);
+      if (childDom) frag.appendChild(childDom);
+    }
+    el.appendChild(frag);
   }
 
   return el;
@@ -339,6 +364,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
 
     setCurrentInstance(instance);
     const result = instance.render();
+    instance._dirty = false;
 
     const oldResult = oldVNode.componentInstance?.vnode || oldVNode;
     instance.vnode = result;
@@ -377,15 +403,15 @@ function reconcileChildren(
   const oldLen = oldChildren.length;
   const newLen = newChildren.length;
 
-  const oldKeyed = new Map<string | number, { vnode: VNode; nodes: Node[]; matchedKey: string | number }>();
+  const oldKeyed = new Map<string | number, { vnode: VNode; nodes: Node[]; origKey: string | number }>();
   for (let i = 0; i < oldLen; i++) {
     const key = getKey(oldChildren[i], i);
-    const nodes = findAllDomNodes(oldChildren[i]);
-    oldKeyed.set(key, { vnode: oldChildren[i], nodes, matchedKey: key });
+    oldKeyed.set(key, { vnode: oldChildren[i], nodes: findAllDomNodes(oldChildren[i]), origKey: key });
   }
 
   const usedKeys = new Set<string | number>();
-  const patches: { vnode: VNode; dom: Node }[] = [];
+  interface PatchEntry { nodes: Node[] }
+  const patches: PatchEntry[] = [];
 
   for (let i = 0; i < newLen; i++) {
     const newChild = newChildren[i];
@@ -398,60 +424,56 @@ function reconcileChildren(
       if (oldDom && oldDom.parentNode) {
         const newDom = patch(oldDom, oldEntry.vnode, newChild);
         newChild.dom = newDom;
-        patches.push({ vnode: newChild, dom: newDom });
+        const nodes = newDom === oldDom ? oldEntry.nodes : findAllDomNodes(newChild);
+        patches.push({ nodes });
       } else {
         const newDom = createDOM(newChild);
-        patches.push({ vnode: newChild, dom: newDom });
+        newChild.dom = newDom;
+        patches.push({ nodes: findAllDomNodes(newChild) });
       }
     } else {
       const newDom = createDOM(newChild);
-      patches.push({ vnode: newChild, dom: newDom });
+      newChild.dom = newDom;
+      patches.push({ nodes: findAllDomNodes(newChild) });
     }
   }
 
   for (const [, entry] of oldKeyed) {
-    if (!usedKeys.has(entry.matchedKey)) {
+    if (!usedKeys.has(entry.origKey)) {
       runUnmountCleanups(entry.vnode);
       for (const node of entry.nodes) {
-        if (node.parentNode) {
-          node.parentNode.removeChild(node);
-        }
+        if (node.parentNode) node.parentNode.removeChild(node);
       }
     }
   }
 
   const parent = parentEl as HTMLElement;
-  const baseOffset = (() => {
-    if (oldChildren.length === 0) return 0;
-    const firstNodes = findAllDomNodes(oldChildren[0]);
-    if (firstNodes.length === 0) return 0;
-    const idx = Array.from(parent.childNodes).indexOf(firstNodes[0] as ChildNode);
-    return idx < 0 ? 0 : idx;
-  })();
-  const domCounts: number[] = [];
-  let running = 0;
-  for (let i = 0; i < newLen; i++) {
-    domCounts.push(running);
-    const nodes = findAllDomNodes(patches[i].vnode);
-    running += nodes.length || 1;
-  }
-  for (let i = 0; i < newLen; i++) {
-    const { vnode, dom } = patches[i];
-    const nodes = findAllDomNodes(vnode);
-    const offset = baseOffset + domCounts[i];
-    if (!dom || !dom.parentNode) {
-      if (dom && nodes.length > 0) {
-        const refNode = parent.childNodes[offset] || null;
-        parent.insertBefore(dom, refNode);
-      }
-    } else {
-      const firstNodeOffset = Array.from(parent.childNodes).indexOf(nodes[0] as ChildNode);
-      if (firstNodeOffset !== offset) {
-        const refNode = parent.childNodes[offset] || null;
-        for (const node of nodes) {
-          parent.insertBefore(node, refNode);
-        }
+  if (patches.length === 0) return;
+
+  let cursor = parent.firstChild;
+
+  // Skip past any non-patch siblings (fragment case)
+  firstOf: if (cursor) {
+    for (const p of patches) {
+      if (p.nodes.length && p.nodes[0].parentNode === parent) {
+        while (cursor && cursor !== p.nodes[0]) cursor = cursor.nextSibling;
+        break firstOf;
       }
     }
+    cursor = null;
+  }
+
+  for (let i = 0; i < newLen; i++) {
+    const nodes = patches[i].nodes;
+    if (nodes.length === 0) continue;
+
+    const first = nodes[0];
+    if (first !== cursor) {
+      for (const node of nodes) {
+        parent.insertBefore(node, cursor);
+      }
+    }
+
+    cursor = nodes[nodes.length - 1].nextSibling;
   }
 }

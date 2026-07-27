@@ -1150,7 +1150,7 @@ async function requestPeerAvatar(peerType: string, peerId: string, accessHash?: 
     return url;
 }
 
-async function requestPhotoDownload(photo: any, sizeType: string): Promise<string | null> {
+async function requestPhotoDownload(photo: any, sizeType: string, onProgress?: (pct: number) => void): Promise<string | null> {
     console.log('[worker] requestPhotoDownload CALLED', { sizeType, photoId: photo?.id?.toString(), hasId: !!photo?.id, hasAccessHash: !!photo?.access_hash, hasFileRef: !!photo?.file_reference, fileRefType: typeof photo?.file_reference, fileRefLen: photo?.file_reference?.length });
     if (!photo) { console.log('[worker] requestPhotoDownload: photo is null'); return null; }
     const photoWithThumb = { ...photo, thumb_size: sizeType };
@@ -1159,7 +1159,15 @@ async function requestPhotoDownload(photo: any, sizeType: string): Promise<strin
         return null;
     }
     const genRef = { value: photoDownloadGen };
-    const result = await downloadFile_(undefined, photoWithThumb, genRef);
+    const sizeEntry = (photo.sizes || []).find((s: any) => s.type === sizeType);
+    let totalSize = sizeEntry?.size || 0;
+    if (!totalSize && sizeEntry?.bytes) {
+        totalSize = typeof sizeEntry.bytes === 'string' ? sizeEntry.bytes.length : (sizeEntry.bytes as any)?.length || 0;
+    }
+    if (!totalSize && Array.isArray(sizeEntry?.sizes)) {
+        totalSize = Math.max(...sizeEntry.sizes);
+    }
+    const result = await downloadFile_(undefined, photoWithThumb, genRef, onProgress, totalSize);
     if (result.error === 'ABORTED') {
         console.log('[worker] requestPhotoDownload: ABORTED', 'sizeType:', sizeType);
         return null;
@@ -2505,7 +2513,7 @@ function enqueueDownload(document?: any, photo?: any): Promise<{ type: string; b
     });
 }
 
-async function downloadFile_(document?: any, photo?: any, genRef?: { value: number }): Promise<{ type: string; bytes: string; error?: string }> {
+async function downloadFile_(document?: any, photo?: any, genRef?: { value: number }, onProgress?: (pct: number) => void, totalSize?: number): Promise<{ type: string; bytes: string; error?: string }> {
     try {
         const location = buildDownloadLocation(document, photo);
         if (!location) return { type: '', bytes: '', error: 'No document or photo provided' };
@@ -2552,6 +2560,11 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 chunks.push(chunk);
                 if (typeName !== 'storage.filePartial') {
                     finalType = typeName;
+                }
+                if (onProgress) {
+                    const received = Number(offset) + chunk.length;
+                    const estTotal = totalSize && totalSize > 0 ? totalSize : Math.max(received + limit, limit * 2);
+                    onProgress(Math.min(99, Math.round((received / estTotal) * 100)));
                 }
                 if (chunk.length < limit || typeName !== 'storage.filePartial') {
                     break;

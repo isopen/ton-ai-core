@@ -120,6 +120,7 @@ export function CustomScrollbar(props: CustomScrollbarProps) {
     s.current.ro.observe(c);
     s.current._lastST = c.scrollTop;
     s.current._lastSH = c.scrollHeight;
+    requestAnimationFrame(() => update());
   }
 
   function handleScroll(e: Event) {
@@ -172,7 +173,9 @@ export function CustomScrollbar(props: CustomScrollbarProps) {
 
   useEffect(() => {
     const el = s.current.content;
-    if (el && s.current.ready) anchor(el);
+    if (el && s.current.ready) {
+      requestAnimationFrame(() => anchor(el));
+    }
   });
 
   function onContentRef(el: HTMLDivElement | null) {

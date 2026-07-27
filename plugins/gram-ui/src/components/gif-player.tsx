@@ -1,17 +1,19 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef } from '@ton-ai/atom/hooks';
-import { Spinner } from '../primitives/spinner.js';
 import { buildDocumentThumb } from '../utils.js';
+import { PhotoLoader } from './photo-loader.js';
 
 interface GifPlayerProps {
   m: any;
   documentUrls: Record<number, string>;
+  documentProgress?: Record<number, number>;
 }
 
 export function GifPlayer(props: GifPlayerProps) {
-  const { m, documentUrls } = props;
+  const { m, documentUrls, documentProgress } = props;
   const doc = m.media?.document;
   const url = documentUrls[m.id] || '';
+  const progress = documentProgress?.[m.id] ?? -1;
   const thumb = buildDocumentThumb(doc);
   const mime = (doc?.mime_type || '').toLowerCase();
   const isVideoGif = mime.startsWith('video/');
@@ -27,6 +29,8 @@ export function GifPlayer(props: GifPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const obsRef = useRef<IntersectionObserver | null>(null);
   const visibleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isLoading = !url && progress >= 0;
 
   const triggerDownload = () => {
     if (url) return;
@@ -100,13 +104,12 @@ export function GifPlayer(props: GifPlayerProps) {
           />
         )
       ) : (
-        <div class="tgui-media-preview" style={containerStyle}>
+        <div class="tgui-media-preview tgui-media-preview_loading" style={containerStyle}>
           {thumb?.url ? (
             <img class="tgui-media-thumb" src={thumb.url} alt="" />
           ) : null}
-          <div class="TelegramImage__loading">
-            <Spinner />
-          </div>
+          <div class="tgui-photo-scrim" />
+          <PhotoLoader percent={Math.max(0, progress)} />
         </div>
       )}
     </div>

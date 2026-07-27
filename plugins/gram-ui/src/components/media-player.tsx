@@ -31,7 +31,7 @@ export function MediaPlayer(props: MediaPlayerProps) {
     return (
       <div class={cls}>
         <div class="tgui-media-container">
-          <GifPlayer m={m} documentUrls={documentUrls} />
+          <GifPlayer m={m} documentUrls={documentUrls} documentProgress={documentProgress} />
           <div class="MessageBubble__meta MessageBubble__meta_overlay">
             <span class="MessageBubble__time">{timeStr}</span>
             {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}

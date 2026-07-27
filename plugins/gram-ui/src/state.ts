@@ -100,6 +100,15 @@ export function reducer(state: AppState, action: UIAction): AppState {
           : m
       ),
     };
+    case 'UPDATE_MESSAGE_PHOTO_PROGRESS': return {
+      ...state,
+      renderTick: state.renderTick + 1,
+      messages: state.messages.map(m =>
+        m.id === action.messageId && m.media?.photo
+          ? { ...m, media: { ...m.media, photo: { ...m.media.photo, progress: action.progress } } }
+          : m
+      ),
+    };
     case 'REFRESH_MESSAGE_PHOTO': return {
       ...state,
       messages: state.messages.map(m =>
