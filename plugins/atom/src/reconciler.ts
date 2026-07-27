@@ -452,7 +452,6 @@ function reconcileChildren(
 
   let cursor = parent.firstChild;
 
-  // Skip past any non-patch siblings (fragment case)
   firstOf: if (cursor) {
     for (const p of patches) {
       if (p.nodes.length && p.nodes[0].parentNode === parent) {

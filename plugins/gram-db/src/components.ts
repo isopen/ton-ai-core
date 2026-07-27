@@ -150,7 +150,7 @@ export class EncryptedStore {
     const ptBuf = Buffer.from(plaintext, 'utf-8');
     const ciphertext = await crypton.AES256CTR.processAsync(ptBuf, key, Buffer.from(iv), 0);
     const hmacKey = await crypton.hmacSha256(key, new TextEncoder().encode(HMAC_LABEL));
-    const magic = new Uint8Array([0x47, 0x44]); // GD — big-endian counter, Web Crypto (constant-time)
+    const magic = new Uint8Array([0x47, 0x44]);
     const hmac = await crypton.hmacSha256(hmacKey, Buffer.concat([magic, Buffer.from(iv), Buffer.from(ciphertext)]));
     const result = new Uint8Array(magic.length + iv.length + ciphertext.length + HMAC_SIZE);
     result.set(magic, 0);

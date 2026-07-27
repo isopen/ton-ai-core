@@ -13,8 +13,6 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
 }
 
-/* ===== SVG-спрайт через отдельные компоненты ===== */
-
 function PosterThumb() {
   return (
     <svg class="video-message__thumb" viewBox="0 0 400 225" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
@@ -215,7 +213,6 @@ export function VideoMessage(props: VideoMessageProps) {
     if (isRealVideo) videoRef.current?.pause();
   }, [isRealVideo]);
 
-  /* track download progress — auto-play when url arrives */
   useEffect(() => {
     if (!url) {
       if (progress >= 0 && progress < 100) {
@@ -238,7 +235,6 @@ export function VideoMessage(props: VideoMessageProps) {
     }
   }, [url, progress]);
 
-  /* real video events */
   useEffect(() => {
     if (!isRealVideo || !videoRef.current) return;
     const v = videoRef.current;

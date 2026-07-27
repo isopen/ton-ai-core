@@ -65,7 +65,6 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
   const containerHeight = ch ?? measuredH;
 
-  // -- heights array management (dynamic mode) --
   if (dynamicMode) {
     const len = data.length;
     if (len !== st.current.prevLen) {
@@ -97,7 +96,6 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
   const vh = totalHeight();
 
-  // -- visible range calculation --
   let visibleStartIndex = 0;
   let visibleEndIndex = data.length;
   let topHeight = 0;
@@ -150,7 +148,6 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     }
   }
 
-  // -- scroll handler (anchoring + throttle) --
   const handleScroll = useCallback((e: Event) => {
     const el = e.target as HTMLElement;
     const newSH = el.scrollHeight;
@@ -181,7 +178,6 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     if (el.scrollTop < 80) onNearTop?.();
   }, [dynamicMode, estH, onNearTop]);
 
-  // -- onEndReached effect --
   useEffect(() => {
     if (!onEndReached || data.length === 0) return;
     const scrollBottom = scrollTop + containerHeight;
@@ -196,7 +192,6 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     }
   }, [scrollTop, containerHeight, data.length, vh, onEndReached, onEndReachedThreshold]);
 
-  // -- build items --
   const items: VNode[] = [];
 
   function makeItemVNode(item: T, i: number, withRef: boolean): VNode {
@@ -263,7 +258,6 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     }
   }
 
-  // -- container style --
   const containerStyle: Record<string, any> = {
     overflowY: 'auto',
     overflowX: 'hidden',
@@ -277,7 +271,6 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     containerStyle.minHeight = 0;
   }
 
-  // -- ref callback for initial anchoring and onReadyContent --
   function onContainerRef(el: HTMLDivElement | null) {
     containerRef.current = el;
     if (el && !readyFired.current) {

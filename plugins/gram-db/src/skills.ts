@@ -87,8 +87,6 @@ export class GramDbSkills {
     }
   }
 
-  // ---- Bootstrap ----
-
   async getSessionId(): Promise<string | null> {
     await this.ensureEngine();
     return this.engine.getItem(SESSION_ID_KEY);
@@ -98,8 +96,6 @@ export class GramDbSkills {
     await this.ensureEngine();
     await this.engine.setItem(SESSION_ID_KEY, sid);
   }
-
-  // ---- KV Operations ----
 
   async get<T = any>(key: string): Promise<T | undefined> {
     await this.ensureEngine();
@@ -185,8 +181,6 @@ export class GramDbSkills {
     }
   }
 
-  // ---- Key Index ----
-
   private async loadKeyIndex(): Promise<string[]> {
     if (this._keyIndex) return this._keyIndex;
     await this.ensureEngine();
@@ -215,8 +209,6 @@ export class GramDbSkills {
     await this.engine.setItem(hk,
       await EncryptedStore.encryptToBase64(this._masterKey!, JSON.stringify(this._keyIndex)));
   }
-
-  // ---- Migration ----
 
   async migrateFromLocalStorage(): Promise<void> {
     await this.ensureEngine();
@@ -298,8 +290,6 @@ export class GramDbSkills {
     }
 
     const oldKey = await KeyManager.deriveMasterKey(sessionId);
-
-    // Read old key index
     const indexHk = await KeyManager.hash(sessionId, KEY_INDEX_KEY);
     const indexRaw = await this.engine.getItem(indexHk);
     let userKeys: string[] = [];
@@ -312,7 +302,6 @@ export class GramDbSkills {
       }
     }
 
-    // Decrypt values with old key
     const migrated: Array<{ userKey: string; plaintext: string }> = [];
     for (const userKey of userKeys) {
       const hk = await KeyManager.hash(sessionId, userKey);
@@ -324,7 +313,6 @@ export class GramDbSkills {
       if (pt !== null) migrated.push({ userKey, plaintext: pt });
     }
 
-    // Read old session data
     const sessionHk = await KeyManager.hash(sessionId, 'session:' + sessionId);
     const sessionRaw = await this.engine.getItem(sessionHk);
     let sessionPlaintext: string | null = null;
@@ -334,7 +322,6 @@ export class GramDbSkills {
         ?? await this.decryptV0Legacy(sessionId, sessionRaw);
     }
 
-    // Clear and set up new format
     await this.engine.clear();
     await this.engine.setItem(SESSION_ID_KEY, sessionId);
 
@@ -364,8 +351,6 @@ export class GramDbSkills {
     newSalt.fill(0);
   }
 
-  // ---- Session Storage ----
-
   async saveSession(sessionId: string, data: StoredSession): Promise<void> {
     await this.ensureEngine();
     const mk = await this.ensureMasterKey(sessionId);
@@ -393,8 +378,6 @@ export class GramDbSkills {
     const hk = await this.encKey('session:' + sessionId);
     await this.engine.removeItem(hk);
   }
-
-  // ---- Avatar Cache ----
 
   async setAvatarEncryptionKey(sessionId: string | null): Promise<void> {
     await this.setEncryptionKey(sessionId);
