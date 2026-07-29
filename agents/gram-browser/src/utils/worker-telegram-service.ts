@@ -148,9 +148,9 @@ export class WorkerTelegramService extends TelegramService {
         return { bytes: result.bytes, type: result.fileType };
     }
 
-    async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<void> {
+    async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<{ cacheSource?: string }> {
         this.onLog?.('→ startVideoStream');
-        if (!this.workerClient) throw new Error('not connected');
+        this.onLog?.('  startVideoStream →');
         return this.workerClient.startVideoStream(document, onChunk);
     }
 
@@ -172,6 +172,16 @@ export class WorkerTelegramService extends TelegramService {
     async cancelPhotoDownloads(): Promise<void> {
         if (!this.workerClient) return;
         await this.workerClient.cancelPhotoDownloads();
+    }
+
+    async batchCheckPhotoCache(requests: Array<{ photo: any; sizeType: string }>): Promise<Record<string, string>> {
+        if (!this.workerClient) return {};
+        return this.workerClient.batchCheckPhotoCache(requests);
+    }
+
+    async batchCheckDocumentCache(documents: Array<{ id: string | number; thumb_size?: string }>): Promise<Record<string, string>> {
+        if (!this.workerClient) return {};
+        return this.workerClient.batchCheckDocumentCache(documents);
     }
 
     async logout(): Promise<void> {

@@ -5,6 +5,7 @@ import {
   addLog, setMessageCache, getLastVisibleMsgId,
   applyReadReceipt, scrollReadHandler, addOrphanedDialog,
 } from './gram-utils';
+import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
 
 export function createCallbacks(
   s: GramState,
@@ -36,19 +37,32 @@ export function createCallbacks(
         const updates = data?.data;
         let sentId = optimisticId;
         let sentDate = Math.floor(Date.now() / 1000);
+        let sentMedia: any = undefined;
         if (updates?._ === 'updateShortSentMessage') {
           sentId = updates.id || optimisticId;
           sentDate = updates.date || sentDate;
+          sentMedia = updates.media;
         } else if (updates?._ === 'updates' && Array.isArray(updates.updates)) {
           const newMsgUpdate = updates.updates.find((u: any) => u._ === 'updateNewMessage' || u._ === 'updateNewChannelMessage');
           if (newMsgUpdate?.message) {
             sentId = newMsgUpdate.message.id || optimisticId;
             sentDate = newMsgUpdate.message.date || sentDate;
+            sentMedia = newMsgUpdate.message.media;
           }
         }
-        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null };
+        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null, media: sentMedia };
+        const wasNearBottom = (() => {
+          const el = document.getElementById('tg-msg-list-content');
+          return el && el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
+        })();
         const updatedMsgs = (s.tgui.current?.state.messages || []).map(p => p.id === optimisticId ? realMsg : p);
         s.tgui.current!.setMessages(updatedMsgs);
+        if (wasNearBottom) {
+          requestAnimationFrame(() => {
+            const el = document.getElementById('tg-msg-list-content');
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+        }
         const cacheKey = peerKey;
         const cached = s.messagesCache.current.get(cacheKey);
         if (Array.isArray(cached)) {
@@ -164,7 +178,12 @@ export function createCallbacks(
             result = merged;
           }
           if (s.selectedPeerRef.current?.id === p.id && s.selectedPeerRef.current?.type === p.type) {
-            s.tgui.current!.setMessages([...result]);
+            await prefetchPhotoCaches(s, result);
+            injectCachedDocumentSources(s, result);
+            const { messages: injectedMsgs, cachedIds } = injectCachedPhotoUrls(result);
+            const cachedSources: Record<number, string> = {};
+            for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
+            s.tgui.current!.dispatch({ type: 'SET_MESSAGES', messages: injectedMsgs, photoSources: cachedSources });
           }
         } else if (!data) {
           addLog(s, tpl(S.LOG_HISTORY_NO_DATA, { peerKey }));
@@ -174,7 +193,10 @@ export function createCallbacks(
         if (!s.historyInitRef.current.has(peerKey)) {
           s.historyInitRef.current.add(peerKey);
           if (s.selectedPeerRef.current?.id === p.id && s.selectedPeerRef.current?.type === p.type) {
-            requestAnimationFrame(() => s.tgui.current!.scrollChatToBottom());
+            requestAnimationFrame(() => {
+              const el = document.getElementById('tg-msg-list-content');
+              if (el) el.scrollTop = el.scrollHeight;
+            });
           }
         }
       } catch (e: any) {
@@ -201,15 +223,22 @@ export function createCallbacks(
       s.tgui.current?.setTypingText('');
       const peerKey = `${peer.type}_${peer.id}`;
       const cached = s.messagesCache.current.get(peerKey);
-      s.tgui.current!.setMessages(Array.isArray(cached) ? cached : []);
-      if (!Array.isArray(cached) || cached.length === 0) {
-        s.tgui.current!.setLoadingMessages(true);
-      }
+      const rawMsgs = Array.isArray(cached) ? cached : [];
+      prefetchPhotoCaches(s, rawMsgs).catch(() => {});
+      injectCachedDocumentSources(s, rawMsgs);
+      const { messages: cachedMsgs, cachedIds } = injectCachedPhotoUrls(rawMsgs);
+      const cachedSources: Record<number, string> = {};
+      for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
+      s.tgui.current!.dispatch({ type: 'SET_MESSAGES', messages: cachedMsgs, photoSources: cachedSources });
       if (!s.historyInitRef.current.has(peerKey)) {
+        s.tgui.current!.setLoadingMessages(true);
         getCallbacks().loadHistory();
       } else {
         s.tgui.current!.setLoadingMessages(false);
-        requestAnimationFrame(() => s.tgui.current!.scrollChatToBottom());
+        requestAnimationFrame(() => {
+          const el = document.getElementById('tg-msg-list-content');
+          if (el) el.scrollTop = el.scrollHeight;
+        });
       }
       if (peer.id !== '_debug_' && peer.id !== '_settings_') {
         requestAnimationFrame(() => {

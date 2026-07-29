@@ -1,6 +1,7 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import { Checkmark } from './checkmark.js';
+import { buildDocumentThumb } from '../utils.js';
 
 const RING_CIRC = 2 * Math.PI * 28;
 
@@ -15,36 +16,7 @@ function clamp(v: number, min: number, max: number): number {
 
 function PosterThumb() {
   return (
-    <svg class="video-message__thumb" viewBox="0 0 400 225" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-      <defs>
-        <linearGradient id="pm-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3E7CA6"/><stop offset="55%" stop-color="#8FC1DD"/><stop offset="100%" stop-color="#DCEEF4"/></linearGradient>
-        <linearGradient id="pm-lake" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3E8FA0"/><stop offset="100%" stop-color="#1C4F5F"/></linearGradient>
-        <linearGradient id="pm-far" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#AEC8DA"/><stop offset="100%" stop-color="#84A8BF"/></linearGradient>
-        <linearGradient id="pm-near" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4E6E5F"/><stop offset="100%" stop-color="#31463C"/></linearGradient>
-      </defs>
-      <rect x="0" y="0" width="400" height="225" fill="url(#pm-sky)"/>
-      <g fill="#FFFFFF" opacity="0.5">
-        <ellipse cx="68" cy="36" rx="32" ry="9"/><ellipse cx="92" cy="30" rx="24" ry="8"/>
-        <ellipse cx="298" cy="24" rx="28" ry="8"/><ellipse cx="322" cy="30" rx="18" ry="6"/>
-      </g>
-      <polygon points="0,120 45,72 85,104 132,52 178,98 222,68 262,108 400,78 400,138 0,138" fill="url(#pm-far)"/>
-      <polygon points="45,72 58,88 68,78 85,104" fill="#FFFFFF" opacity="0.65"/>
-      <polygon points="132,52 150,74 162,63 178,98" fill="#FFFFFF" opacity="0.65"/>
-      <polygon points="0,148 58,88 108,132 168,66 228,138 288,96 338,142 400,116 400,153 0,153" fill="url(#pm-near)"/>
-      <polygon points="58,88 76,110 88,98 108,132" fill="#E9F2F1" opacity="0.8"/>
-      <polygon points="168,66 188,92 200,79 228,138" fill="#E9F2F1" opacity="0.55"/>
-      <g fill="#22352A">
-        <polygon points="26,153 34,130 42,153"/><polygon points="36,153 47,122 58,153"/>
-        <polygon points="328,153 338,124 348,153"/><polygon points="344,153 356,112 368,153"/><polygon points="360,153 371,130 382,153"/>
-      </g>
-      <rect x="0" y="153" width="400" height="72" fill="url(#pm-lake)"/>
-      <polygon points="0,153 58,183 108,160 168,192 228,158 288,178 338,161 400,171 400,153" fill="#153C48" opacity="0.35"/>
-      <g stroke="#DFF1F4" stroke-width="1" opacity="0.3">
-        <line x1="18" y1="178" x2="86" y2="178"/><line x1="148" y1="193" x2="226" y2="193"/>
-        <line x1="256" y1="207" x2="344" y2="207"/><line x1="38" y1="212" x2="136" y2="212"/>
-      </g>
-      <rect x="0" y="0" width="400" height="225" fill="#04060A" opacity="0.08"/>
-    </svg>
+    <div class="video-message__thumb video-message__poster-blur" aria-hidden="true" />
   );
 }
 
@@ -134,13 +106,14 @@ interface VideoMessageProps {
   status: 'pending' | 'sent' | 'delivered' | 'read';
   documentUrls: Record<number, string>;
   documentProgress?: Record<number, number>;
+  documentSources?: Record<number, string>;
   sameSenderPrev?: boolean;
   sameSenderNext?: boolean;
   onFullscreen?: (messageId: number) => void;
 }
 
 export function VideoMessage(props: VideoMessageProps) {
-  const { m, timeStr, out, status, documentUrls, documentProgress, sameSenderPrev, sameSenderNext, onFullscreen } = props;
+  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext, onFullscreen } = props;
 
   const frameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -166,6 +139,18 @@ export function VideoMessage(props: VideoMessageProps) {
   const videoH = videoAttr?.h || doc?.h || 0;
   const displayW = videoW ? Math.min(videoW, 480) : 0;
   const displayH = videoH && videoW ? Math.round(videoH * (displayW / videoW)) : 0;
+  const thumb = buildDocumentThumb(doc);
+
+  const thumbReqSentRef = useRef(false);
+  useEffect(() => {
+    if (thumb && !thumb.url && doc?.video_thumbs?.length && m.id && !thumbReqSentRef.current) {
+      thumbReqSentRef.current = true;
+      const vt = doc.video_thumbs[0];
+      window.dispatchEvent(new CustomEvent('tg-download-document-thumb', {
+        detail: { document: doc, messageId: m.id, thumbType: vt.type },
+      }));
+    }
+  }, [thumb?.url]);
 
   const durLabel = fmt(duration);
   const pct = duration > 0 ? (ct / duration) * 100 : 0;
@@ -279,14 +264,14 @@ export function VideoMessage(props: VideoMessageProps) {
     if (uiState === 'error') {
       setUiState('loading'); setLpct(0);
       window.dispatchEvent(new CustomEvent('tg-download-document', {
-        detail: { document: doc, messageId: m.id },
+        detail: { document: doc, messageId: m.id, priority: 2 },
       }));
       return;
     }
     if (uiState === 'playing') { pause(); return; }
     if (!url) {
       window.dispatchEvent(new CustomEvent('tg-download-document', {
-        detail: { document: doc, messageId: m.id },
+        detail: { document: doc, messageId: m.id, priority: 1 },
       }));
       return;
     }
@@ -344,10 +329,16 @@ export function VideoMessage(props: VideoMessageProps) {
           onClick={frameClick}
         >
           {isRealVideo && url ? (
-            <video ref={videoRef} class="video-message__thumb" src={url} muted={muted} autoplay={forceAutoplay} loop playsinline preload="auto"
+            <video ref={videoRef} class="video-message__thumb" src={url}
+              poster={thumb?.url || undefined}
+              muted={muted} autoplay={forceAutoplay} loop playsinline preload="auto"
               style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000"
               onTimeUpdate={onTimeUpdate}
               onCanPlay={() => setLoaded(true)} />
+          ) : thumb?.url ? (
+            <img class="video-message__thumb video-message__thumb-blurred" src={thumb.url} alt=""
+              style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000"
+            />
           ) : (
             <PosterThumb />
           )}
@@ -362,6 +353,11 @@ export function VideoMessage(props: VideoMessageProps) {
               </button>
             </div>
             <div class="video-message__top-right">
+              {documentSources?.[m.id] ? (
+                <span style={`padding:1px 5px;border-radius:4px;background:${documentSources[m.id] === 'memory' ? '#22c55e' : documentSources[m.id] === 'persisted' ? '#3b82f6' : '#ef4444'};color:#fff;font-size:10px;line-height:14px;white-space:nowrap`}>
+                  {documentSources[m.id] === 'memory' ? 'in-memory' : documentSources[m.id] === 'persisted' ? 'gram-db' : documentSources[m.id] === 'cdn-server' ? 'cdn-server' : documentSources[m.id] === 'migrate-server' ? 'migrate-server' : 'home-server'}
+                </span>
+              ) : null}
               <button type="button" class="badge badge--icon video-message__action" data-action="download" onClick={(e: any) => { e.stopPropagation(); toast('Демо-компонент: файл недоступен для скачивания'); }}>
                 <IconDownload />
               </button>

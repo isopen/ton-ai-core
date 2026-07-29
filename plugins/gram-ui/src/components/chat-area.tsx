@@ -20,6 +20,7 @@ import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getSt
 import { MediaPlayer } from './media-player.js';
 import { VideoMessage } from './video-message.js';
 import { PhotoLoader } from './photo-loader.js';
+import { WebPageBubble } from './link-preview.js';
 
 function toFileSize(bytes?: number): string {
   if (!bytes) return '';
@@ -131,7 +132,7 @@ function buildImageSpec(m: any): ImageSpec | null {
   };
 }
 
-function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; sameSenderPrev?: boolean; sameSenderNext?: boolean }) {
+function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, cacheSource }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; sameSenderPrev?: boolean; sameSenderNext?: boolean; cacheSource?: string }) {
   let cls = 'MessageBubble MessageBubble_photo';
   cls += out ? ' MessageBubble_out' : ' MessageBubble_in';
   if (sameSenderPrev) cls += ' MessageBubble_group_prev';
@@ -216,6 +217,11 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext }
             <PhotoLoader percent={pct} fileSize={fileSize} hidePercent={imgWidth > 0 && imgWidth < 140} />
           </>
         ) : null}
+        {cacheSource ? (
+          <span style={`position:absolute;top:4px;right:4px;padding:1px 5px;border-radius:4px;background:${cacheSource === 'memory' ? '#22c55e' : cacheSource === 'persisted' ? '#3b82f6' : '#ef4444'};color:#fff;font-size:10px;line-height:14px;white-space:nowrap;z-index:2`}>
+            {cacheSource === 'memory' ? 'in-memory' : cacheSource === 'persisted' ? 'gram-db' : cacheSource === 'cdn-server' ? 'cdn-server' : cacheSource === 'migrate-server' ? 'migrate-server' : 'home-server'}
+          </span>
+        ) : null}
         <div class="MessageBubble__meta MessageBubble__meta_overlay">
           <span class="MessageBubble__time">{timeStr}</span>
           {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
@@ -232,38 +238,46 @@ function msgStatus(m: any, readOutboxMaxId?: number): 'pending' | 'sent' | 'deli
   return 'sent';
 }
 
-function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrls, documentProgress }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrls: Record<number, string>; documentProgress: Record<number, number> }) {
+function isUrlMessage(m: any): boolean {
+  if (getMediaType(m.media) === 'webpage') return true;
+  if (!m.message) return false;
+  return /^https?:\/\/\S+$/i.test(m.message.trim());
+}
+
+function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrls, documentProgress, documentSources, photoSources, selfPeer }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrls: Record<number, string>; documentProgress: Record<number, number>; documentSources?: Record<number, string>; photoSources?: Record<number, string>; selfPeer?: boolean }) {
   const timeStr = formatMessageTime(m.date);
+  const out = selfPeer ? true : m.out;
   const status = msgStatus(m, readOutboxMaxId);
   const mediaType = getMediaType(m.media);
   const senderStr = m.sender || 'U';
   const color = senderColor(senderStr);
+  const isLinkMsg = mediaType === 'webpage' || isUrlMessage(m);
 
   const marginBottom = sameSenderPrev ? 2 : 8;
   return (
     <div
       id={`msg-${m.id}`}
-      class={`tgui-msg-row ${m.out ? 'tgui-msg-row-out' : 'tgui-msg-row-in'}`}
+      class={`tgui-msg-row ${out ? 'tgui-msg-row-out' : 'tgui-msg-row-in'}`}
       style={`margin-bottom:${marginBottom}px`}
     >
-      {isGroup && !m.out && !sameSenderPrev
+      {isGroup && !out && !sameSenderPrev
         ? <div class="tgui-msg-sender" style={`color:${color}`}>{m.sender}</div>
         : null}
       {mediaType === 'sticker'
-        ? <StickerBubble m={m} timeStr={timeStr} out={m.out} status={status} />
+        ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} />
         : mediaType === 'photo' || mediaType === 'image'
-          ? <PhotoBubble m={m} timeStr={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
+          ? <PhotoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} cacheSource={photoSources?.[m.id]} />
           : mediaType === 'video' && isAnimatedMedia(m.media)
-            ? <MediaPlayer m={m} timeStr={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={documentUrls} documentProgress={documentProgress} />
+            ? <MediaPlayer m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={documentUrls} documentProgress={documentProgress} documentSources={documentSources} />
           : mediaType === 'video'
-            ? <VideoMessage m={m} timeStr={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={documentUrls} documentProgress={documentProgress} />
-            : <MessageBubble text={m.message || ''} time={timeStr} out={m.out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
+            ? <VideoMessage m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={documentUrls} documentProgress={documentProgress} documentSources={documentSources} />
+          : isLinkMsg
+            ? <WebPageBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
+            : <MessageBubble text={m.message || ''} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
       }
     </div>
   );
 }
-
-
 
 export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; dispatch: Dispatch; skills?: SkillDef[] }) {
   const peer = state.selectedPeer;
@@ -295,6 +309,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   const avatarBg = p.avatarUrl ? 'transparent' : (p.type === 'user' ? '#1a4d8c' : '#2d5a27');
   const initial = getInitials(p);
 
+  const selfPeer = state.selfUserId != null && p.id === state.selfUserId && p.type === 'user';
   const currentDialog = state.dialogs.find(d => d.peer.id === peer.id && d.peer.type === peer.type);
   const readOutboxMaxId = currentDialog?.readOutboxMaxId;
 
@@ -313,7 +328,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   if (!hasMessages) {
     if (state.loadingMessages) {
       msgListChildren.push(
-        <Flex key="loading" direction="row" justify="center" className="tgui-loading-msgs">
+        <Flex key="loading" direction="row" justify="center" align="flex-end" className="tgui-loading-msgs">
           <Spinner />
         </Flex>
       );
@@ -353,7 +368,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
             return (
               <div>
                 {showDaySep ? <div key={`day-${m.id}`} class="tgui-day-sep"><Text variant="caption" className="tgui-day-sep-text">{formatDaySeparator(m.date)}</Text></div> : null}
-                <MessageItem m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrls={state.documentUrls || {}} documentProgress={state.documentProgress || {}} />
+                <MessageItem m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrls={state.documentUrls || {}} documentProgress={state.documentProgress || {}} documentSources={state.documentSources || {}} photoSources={state.photoSources || {}} selfPeer={selfPeer} />
               </div>
             );
           }}

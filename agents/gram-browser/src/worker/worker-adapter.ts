@@ -60,7 +60,7 @@ export class TelegramWorkerClient {
         return this.client.downloadFile(document, photo);
     }
 
-    async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<void> {
+    async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<{ cacheSource?: string }> {
         return this.client.startVideoStream(document, onChunk);
     }
 
@@ -68,11 +68,11 @@ export class TelegramWorkerClient {
         return this.client.requestPeerAvatar(peerType, peerId, accessHash, photo);
     }
 
-    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
+    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return this.client.startPhotoDownload(photo, sizeType, messageId, onProgress);
     }
 
-    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
+    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return this.client.requestPhotoDownload(photo, sizeType, messageId);
     }
 
@@ -86,6 +86,14 @@ export class TelegramWorkerClient {
 
     async cancelPhotoDownloads(): Promise<void> {
         await this.client.cancelPhotoDownloads();
+    }
+
+    async batchCheckPhotoCache(requests: Array<{ photo: any; sizeType: string }>): Promise<Record<string, string>> {
+        return this.client.batchCheckPhotoCache(requests);
+    }
+
+    async batchCheckDocumentCache(documents: Array<{ id: string | number; thumb_size?: string }>): Promise<Record<string, string>> {
+        return this.client.batchCheckDocumentCache(documents);
     }
 
     async readHistory(peer: Record<string, any>, maxId = 0): Promise<void> {

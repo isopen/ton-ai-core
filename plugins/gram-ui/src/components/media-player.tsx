@@ -1,4 +1,4 @@
-import { h } from '@ton-ai/atom/jsx-runtime';
+import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useRef } from '@ton-ai/atom/hooks';
 import { Checkmark } from './checkmark.js';
 import { buildDocumentThumb, isAnimatedMedia } from '../utils.js';
@@ -11,12 +11,13 @@ interface MediaPlayerProps {
   status: 'pending' | 'sent' | 'delivered' | 'read';
   documentUrls: Record<number, string>;
   documentProgress?: Record<number, number>;
+  documentSources?: Record<number, string>;
   sameSenderPrev?: boolean;
   sameSenderNext?: boolean;
 }
 
 export function MediaPlayer(props: MediaPlayerProps) {
-  const { m, timeStr, out, status, documentUrls, documentProgress, sameSenderPrev, sameSenderNext } = props;
+  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext } = props;
   const doc = m.media?.document;
   const url = documentUrls[m.id] || '';
   const progress = documentProgress?.[m.id] ?? -1;
@@ -31,7 +32,7 @@ export function MediaPlayer(props: MediaPlayerProps) {
     return (
       <div class={cls}>
         <div class="tgui-media-container">
-          <GifPlayer m={m} documentUrls={documentUrls} documentProgress={documentProgress} />
+          <GifPlayer m={m} documentUrls={documentUrls} documentProgress={documentProgress} documentSources={documentSources} />
           <div class="MessageBubble__meta MessageBubble__meta_overlay">
             <span class="MessageBubble__time">{timeStr}</span>
             {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
@@ -54,7 +55,7 @@ export function MediaPlayer(props: MediaPlayerProps) {
   const triggerDownload = () => {
     if (url) return;
     window.dispatchEvent(new CustomEvent('tg-download-document', {
-      detail: { document: doc, messageId: m.id },
+      detail: { document: doc, messageId: m.id, priority: 1 },
     }));
   };
 
@@ -82,10 +83,13 @@ export function MediaPlayer(props: MediaPlayerProps) {
 
   const containerStyle = displayW && displayH ? `width:${displayW}px;height:${displayH}px` : displayW ? `width:${displayW}px` : '';
 
+  const cacheSource = documentSources?.[m.id];
+
   return (
     <div class={cls} style={containerStyle}>
       <div class="tgui-media-container" style={containerStyle}>
         {url ? (
+          <>
           <video
             ref={videoRef}
             class="tgui-media-video"
@@ -104,6 +108,12 @@ export function MediaPlayer(props: MediaPlayerProps) {
               console.error('[MediaPlayer] video error code:', el?.error?.code, 'msg:', mc, 'src:', el?.src?.slice(0, 60));
             }}
           />
+          {cacheSource ? (
+            <span style={`position:absolute;top:4px;right:4px;padding:1px 5px;border-radius:4px;background:${cacheSource === 'memory' ? '#22c55e' : cacheSource === 'persisted' ? '#3b82f6' : '#ef4444'};color:#fff;font-size:10px;line-height:14px;white-space:nowrap;z-index:2`}>
+              {cacheSource === 'memory' ? 'in-memory' : cacheSource === 'persisted' ? 'gram-db' : cacheSource === 'cdn-server' ? 'cdn-server' : cacheSource === 'migrate-server' ? 'migrate-server' : 'home-server'}
+            </span>
+          ) : null}
+          </>
         ) : (
           <div class="tgui-media-preview" style={containerStyle} onClick={isLoading ? undefined : triggerDownload}>
             {thumb?.url ? (

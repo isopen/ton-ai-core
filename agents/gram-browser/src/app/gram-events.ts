@@ -2,6 +2,74 @@ import { parseEventHeader, parseEncryptionEvent } from '@ton-ai/gram-db';
 import { decodeKvPayload } from '@ton-ai/tl-language';
 import { dbGet, dbSet, dbDel, dbKeys, dbClearCacheKeepSession, dbDeleteAvatarByOpfsName, dbListAvatars } from '@/utils/db';
 import type { GramState } from './gram-state';
+import type { Message } from '@ton-ai/gram-ui';
+
+export const photoUrlCache = new Map<string, string>();
+
+export const getPhotoCacheKey = (photo: any, sizeType: string): string => {
+  return `${photo.id || ''}_${sizeType}`;
+};
+
+export async function injectCachedDocumentSources(s: GramState, msgs: Message[]): Promise<void> {
+  const docToMsgs = new Map<string, number[]>();
+  for (const m of msgs) {
+    const doc = m.media?.document;
+    if (!doc?.id) continue;
+    const docId = doc.id.toString();
+    if (!docToMsgs.has(docId)) docToMsgs.set(docId, []);
+    docToMsgs.get(docId)!.push(m.id);
+  }
+  if (docToMsgs.size === 0) return;
+  const documents = Array.from(docToMsgs.keys()).map(id => ({ id }));
+  const cacheResult = await s.tgService.current?.batchCheckDocumentCache(documents) || {};
+  for (const [docId, cacheSource] of Object.entries(cacheResult)) {
+    const msgIds = docToMsgs.get(docId);
+    if (msgIds) {
+      for (const msgId of msgIds) {
+        s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_SOURCE', messageId: msgId, cacheSource });
+      }
+    }
+  }
+}
+
+export async function prefetchPhotoCaches(s: GramState, msgs: Message[]): Promise<void> {
+  const requests: Array<{ photo: any; sizeType: string }> = [];
+  for (const m of msgs) {
+    const photo = m.media?.photo;
+    if (!photo?.sizes) continue;
+    for (const size of photo.sizes) {
+      if (size.url || size.src) continue;
+      requests.push({ photo, sizeType: size.type });
+    }
+  }
+  if (requests.length === 0) return;
+  const cacheResult = await s.tgService.current?.batchCheckPhotoCache(requests) || {};
+  for (const [cacheKey, url] of Object.entries(cacheResult)) {
+    if (url) photoUrlCache.set(cacheKey, url);
+  }
+}
+
+export function injectCachedPhotoUrls(msgs: Message[]): { messages: Message[]; cachedIds: number[] } {
+  const cachedIds: number[] = [];
+  const messages = msgs.map(m => {
+    const photo = m.media?.photo;
+    if (!photo?.sizes) return m;
+    const photoId = photo.id;
+    if (!photoId) return m;
+    let changed = false;
+    const newSizes = photo.sizes.map((s: any) => {
+      if (s.url || s.src) return s;
+      const ck = getPhotoCacheKey(photo, s.type);
+      const url = photoUrlCache.get(ck);
+      if (url) { changed = true; return { ...s, url }; }
+      return s;
+    });
+    if (!changed) return m;
+    cachedIds.push(m.id);
+    return { ...m, media: { ...m.media, photo: { ...photo, sizes: newSizes } } };
+  });
+  return { messages, cachedIds };
+}
 
 export function setupEventListeners(s: GramState): void {
   const onSetLang = (e: Event) => {
@@ -206,6 +274,12 @@ export function setupEventListeners(s: GramState): void {
   const processPhotoQueue = () => {
     while (photoQueue.length > 0 && photoInFlight < MAX_PARALLEL_PHOTOS) {
       const item = photoQueue.pop()!;
+      const ck = getPhotoCacheKey(item.photo, item.sizeType);
+      const cached = photoUrlCache.get(ck);
+      if (cached) {
+        s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached });
+        continue;
+      }
       photoInFlight++;
       execPhotoDownload(item.photo, item.sizeType, item.messageId).finally(() => {
         photoInFlight--;
@@ -218,6 +292,12 @@ export function setupEventListeners(s: GramState): void {
     const MAX_RETRIES = 3;
     const RETRY_DELAYS = [1000, 3000, 5000];
     let currentPhoto = photo;
+    const ck = getPhotoCacheKey(photo, sizeType);
+    const cached = photoUrlCache.get(ck);
+    if (cached) {
+      s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: cached, cacheSource: 'memory' });
+      return;
+    }
 
     s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_PROGRESS', messageId, progress: 0 });
 
@@ -228,51 +308,53 @@ export function setupEventListeners(s: GramState): void {
       }
 
       try {
-        const result = await s.tgService.current?.startPhotoDownload(currentPhoto, sizeType, messageId, (pct: number) => {
+          const result = await s.tgService.current?.startPhotoDownload(currentPhoto, sizeType, messageId, (pct: number) => {
           s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_PROGRESS', messageId, progress: pct });
         });
-        console.log('[gram-app] requestPhotoDownload RESULT', messageId, sizeType, attempt, result ? { photoUrl: result.photoUrl?.slice(0, 30), fileRefExpired: result.fileRefExpired } : null);
+          console.log('[gram-app] requestPhotoDownload RESULT', messageId, sizeType, attempt, result ? { photoUrl: result.photoUrl?.slice(0, 30), fileRefExpired: result.fileRefExpired, cacheSource: result.cacheSource } : null);
 
-        if (result?.photoUrl) {
-          console.log('[gram-app] DISPATCHING UPDATE_MESSAGE_PHOTO', messageId, sizeType, 'tgui:', !!s.tgui.current, 'url len:', result.photoUrl.length);
-          s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: result.photoUrl });
-          return;
-        }
-
-        if (result?.fileRefExpired) {
-          console.warn('[gram-app] FILE_REFERENCE_EXPIRED, re-fetching message', messageId, 'attempt', attempt);
-          const freshMsg = await refreshMessage(messageId);
-          if (freshMsg?.media?.photo) {
-            currentPhoto = freshMsg.media.photo;
-            s.tgui.current?.dispatch({ type: 'REFRESH_MESSAGE_PHOTO', messageId, photo: currentPhoto });
-            continue;
-          } else {
-            console.error('[gram-app] could not refresh photo for message', messageId);
+          if (result?.photoUrl) {
+            const ck2 = getPhotoCacheKey(currentPhoto, sizeType);
+            photoUrlCache.set(ck2, result.photoUrl);
+            console.log('[gram-app] DISPATCHING UPDATE_MESSAGE_PHOTO', messageId, sizeType, 'tgui:', !!s.tgui.current, 'url len:', result.photoUrl.length);
+            s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: result.photoUrl, cacheSource: result.cacheSource || 'home-server' });
             return;
           }
-        }
 
-        if (attempt >= MAX_RETRIES) {
-          console.error('[gram-app] photo download failed for message', messageId, 'size', sizeType, 'after', MAX_RETRIES, 'retries');
-        }
-      } catch (err: any) {
-        if (err.message?.includes('FILE_REFERENCE_EXPIRED')) {
-          console.warn('[gram-app] FILE_REFERENCE_EXPIRED (catch), re-fetching message', messageId, 'attempt', attempt);
-          const freshMsg = await refreshMessage(messageId);
-          if (freshMsg?.media?.photo) {
-            currentPhoto = freshMsg.media.photo;
-            s.tgui.current?.dispatch({ type: 'REFRESH_MESSAGE_PHOTO', messageId, photo: currentPhoto });
-            continue;
-          } else {
-            console.error('[gram-app] could not refresh photo for message', messageId);
-            return;
+          if (result?.fileRefExpired) {
+            console.warn('[gram-app] FILE_REFERENCE_EXPIRED, re-fetching message', messageId, 'attempt', attempt);
+            const freshMsg = await refreshMessage(messageId);
+            if (freshMsg?.media?.photo) {
+              currentPhoto = freshMsg.media.photo;
+              s.tgui.current?.dispatch({ type: 'REFRESH_MESSAGE_PHOTO', messageId, photo: currentPhoto });
+              continue;
+            } else {
+              console.error('[gram-app] could not refresh photo for message', messageId);
+              return;
+            }
+          }
+
+          if (attempt >= MAX_RETRIES) {
+            console.error('[gram-app] photo download failed for message', messageId, 'size', sizeType, 'after', MAX_RETRIES, 'retries');
+          }
+        } catch (err: any) {
+          if (err.message?.includes('FILE_REFERENCE_EXPIRED')) {
+            console.warn('[gram-app] FILE_REFERENCE_EXPIRED (catch), re-fetching message', messageId, 'attempt', attempt);
+            const freshMsg = await refreshMessage(messageId);
+            if (freshMsg?.media?.photo) {
+              currentPhoto = freshMsg.media.photo;
+              s.tgui.current?.dispatch({ type: 'REFRESH_MESSAGE_PHOTO', messageId, photo: currentPhoto });
+              continue;
+            } else {
+              console.error('[gram-app] could not refresh photo for message', messageId);
+              return;
+            }
+          }
+
+          if (attempt >= MAX_RETRIES) {
+            console.error('[gram-app] photo download error:', err.message, messageId, sizeType, 'after', MAX_RETRIES, 'retries');
           }
         }
-
-        if (attempt >= MAX_RETRIES) {
-          console.error('[gram-app] photo download error:', err.message, messageId, sizeType, 'after', MAX_RETRIES, 'retries');
-        }
-      }
     }
   };
 
@@ -295,7 +377,7 @@ export function setupEventListeners(s: GramState): void {
   const documentPending = new Set<number>();
 
   type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue';
-  const downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number; mime: string }>> = { video_queue: [], gif_queue: [], photo_queue: [] };
+  const downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number; mime: string; priority: number }>> = { video_queue: [], gif_queue: [], photo_queue: [] };
   const downloadInProgress: Record<QueueKey, boolean> = { video_queue: false, gif_queue: false, photo_queue: false };
 
   const getQueueKey = (mime: string, isAnimated: boolean): QueueKey => {
@@ -307,8 +389,13 @@ export function setupEventListeners(s: GramState): void {
   const processDownloadQueue = (queueKey: QueueKey) => {
     const queue = downloadQueues[queueKey];
     if (queue.length === 0 || downloadInProgress[queueKey]) return;
-    const item = queue.pop()!;
+    let bestIdx = 0;
+    for (let i = 1; i < queue.length; i++) {
+      if (queue[i].priority > queue[bestIdx].priority) bestIdx = i;
+    }
+    const item = queue.splice(bestIdx, 1)[0];
     downloadInProgress[queueKey] = true;
+    console.log('[gram-app] queue dequeue ' + queueKey + ' messageId=' + item.messageId + ' priority=' + item.priority + ' remaining=' + queue.length);
     execDownload(item.document, item.messageId, item.mime).finally(() => {
       downloadInProgress[queueKey] = false;
       processDownloadQueue(queueKey);
@@ -337,7 +424,7 @@ export function setupEventListeners(s: GramState): void {
           let chunkCount = 0;
           let lastProgress = -1;
 
-          await s.tgService.current!.startVideoStream(doc, (data: ArrayBuffer | undefined, final: boolean, fileType: string) => {
+          const streamResult = await s.tgService.current!.startVideoStream(doc, (data: ArrayBuffer | undefined, final: boolean, fileType: string) => {
             if (gen !== documentDownloadGen) return;
             if (!data) return;
             chunks.push(data);
@@ -352,6 +439,7 @@ export function setupEventListeners(s: GramState): void {
               s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
             }
           });
+          const streamCacheSource = (streamResult as any)?.cacheSource;
 
           if (chunks.length === 0) throw new Error('No data received');
 
@@ -367,7 +455,7 @@ export function setupEventListeners(s: GramState): void {
           const blob = new Blob([merged], { type: mime });
           const url = URL.createObjectURL(blob);
           if (gen !== documentDownloadGen) return;
-          s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url });
+          s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url, cacheSource: streamCacheSource });
 
           const u8 = new Uint8Array(chunks[0]);
           const magic = Array.from(u8.slice(0, 12)).map(b => b.toString(16).padStart(2, '0')).join(' ');
@@ -385,7 +473,7 @@ export function setupEventListeners(s: GramState): void {
           try {
             const fb = await s.tgService.current?.downloadFile({ document: doc });
             if (gen !== documentDownloadGen) return;
-            if (fb?.bytes) s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url: base64ToBlobUrl(fb.bytes, mime) });
+            if (fb?.bytes) s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url: base64ToBlobUrl(fb.bytes, mime), cacheSource: fb.cacheSource });
           } catch (e2: any) {
             if (gen !== documentDownloadGen) return;
             console.error('[gram-app] video stream fallback error:', e2.message, messageId);
@@ -411,7 +499,7 @@ export function setupEventListeners(s: GramState): void {
           const url = mime.startsWith('video/')
             ? base64ToBlobUrl(result.bytes, mime)
             : 'data:' + mime + ';base64,' + result.bytes;
-          s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url });
+          s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url, cacheSource: result.cacheSource });
         }
       } catch (err: any) {
         if (gen !== documentDownloadGen) return;
@@ -426,7 +514,7 @@ export function setupEventListeners(s: GramState): void {
               const url = m.startsWith('video/')
                 ? base64ToBlobUrl(retry.bytes, m)
                 : 'data:' + m + ';base64,' + retry.bytes;
-              s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url });
+              s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url, cacheSource: retry.cacheSource });
             }
           }
         } else {
@@ -436,19 +524,44 @@ export function setupEventListeners(s: GramState): void {
     }
 
     documentPending.delete(messageId);
+    console.log('[gram-app] execDownload done messageId=' + messageId);
   };
 
+  const onDownloadDocumentThumb = async (e: Event) => {
+    const { document, messageId, thumbType } = (e as CustomEvent).detail || {};
+    if (!document || messageId == null || !thumbType) return;
+    console.log('[gram-app] tg-download-document-thumb START messageId=' + messageId + ' thumbType=' + thumbType + ' docId=' + document.id);
+    s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
+    try {
+      const doc = { ...document, thumb_size: thumbType };
+      const result = await s.tgService.current?.downloadFile({ document: doc });
+      if (result?.bytes) {
+        const url = 'data:image/jpeg;base64,' + result.bytes;
+        console.log('[gram-app] tg-download-document-thumb SUCCESS messageId=' + messageId + ' thumbType=' + thumbType + ' bytesLen=' + result.bytes.length);
+        s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_THUMB', messageId, thumbType, url });
+      } else {
+        console.log('[gram-app] tg-download-document-thumb NO_BYTES messageId=' + messageId + ' thumbType=' + thumbType);
+      }
+    } catch (err) {
+      console.error('[gram-app] tg-download-document-thumb ERROR:', err, messageId, thumbType);
+    } finally {
+      s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
+    }
+  };
+  window.addEventListener('tg-download-document-thumb', onDownloadDocumentThumb);
+
   const onDownloadDocument = async (e: Event) => {
-    const { document, messageId } = (e as CustomEvent).detail || {};
+    const { document, messageId, priority = 0 } = (e as CustomEvent).detail || {};
     if (!document || messageId == null) return;
     if (documentPending.has(messageId)) return;
     documentPending.add(messageId);
+    console.log('[gram-app] tg-download-document messageId=' + messageId + ' priority=' + priority + ' docId=' + document.id);
     s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
     const mime = (document.mime_type || 'application/octet-stream').toLowerCase();
     const attrs = (document.attributes || []) as any[];
     const isAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
     const queueKey = getQueueKey(mime, isAnimated);
-    downloadQueues[queueKey].push({ document, messageId, mime });
+    downloadQueues[queueKey].push({ document, messageId, mime, priority });
     processDownloadQueue(queueKey);
   };
   window.addEventListener('tg-download-document', onDownloadDocument);
@@ -469,5 +582,6 @@ export function setupEventListeners(s: GramState): void {
     window.removeEventListener('tg-theme-changed', onThemeChanged);
     window.removeEventListener('tg-download-photo', onDownloadPhoto);
     window.removeEventListener('tg-download-document', onDownloadDocument);
+    window.removeEventListener('tg-download-document-thumb', onDownloadDocumentThumb);
   });
 }

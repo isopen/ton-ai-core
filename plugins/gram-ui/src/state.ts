@@ -47,6 +47,8 @@ export function defaultState(): AppState {
     langOptions: [],
     documentUrls: {},
     documentProgress: {},
+    photoSources: {},
+    documentSources: {},
   };
 }
 
@@ -61,8 +63,8 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_ERROR': return { ...state, error: action.error };
     case 'SET_SESSION_ID': return { ...state, sessionId: action.id };
     case 'SET_DIALOGS': return { ...state, dialogs: action.dialogs };
-    case 'SET_MESSAGES': return { ...state, messages: action.messages };
-    case 'SET_SELECTED_PEER': return { ...state, selectedPeer: action.peer };
+    case 'SET_MESSAGES': return { ...state, messages: action.messages, photoSources: { ...state.photoSources, ...(action.photoSources || {}) } };
+    case 'SET_SELECTED_PEER': return { ...state, selectedPeer: action.peer, photoSources: {} };
     case 'ADD_LOG': return { ...state, log: state.log.length > 500 ? [...state.log.slice(-499), action.text] : [...state.log, action.text] };
     case 'SET_SIDEBAR_COLLAPSED': return { ...state, sidebarCollapsed: action.v };
     case 'SET_EMOJI_PICKER': return { ...state, showEmojiPicker: action.v };
@@ -94,6 +96,8 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_LANG_OPTIONS': return { ...state, langOptions: action.options };
     case 'UPDATE_MESSAGE_PHOTO': return {
       ...state,
+      renderTick: state.renderTick + 1,
+      photoSources: action.cacheSource && !state.photoSources[action.messageId] ? { ...state.photoSources, [action.messageId]: action.cacheSource } : state.photoSources,
       messages: state.messages.map(m =>
         m.id === action.messageId && m.media?.photo?.sizes
           ? { ...m, media: { ...m.media, photo: { ...m.media.photo, sizes: m.media.photo.sizes.map((s: any) => s.type === action.sizeType ? { ...s, url: action.url } : s) } } }
@@ -120,12 +124,30 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'UPDATE_MESSAGE_DOCUMENT': return {
       ...state,
       documentUrls: { ...state.documentUrls, [action.messageId]: action.url },
+      documentSources: action.cacheSource ? { ...state.documentSources, [action.messageId]: action.cacheSource } : state.documentSources,
+    };
+    case 'UPDATE_MESSAGE_DOCUMENT_THUMB': return {
+      ...state,
+      renderTick: state.renderTick + 1,
+      messages: state.messages.map(m =>
+        m.id === action.messageId && m.media?.document?.video_thumbs
+          ? { ...m, media: { ...m.media, document: { ...m.media.document, video_thumbs: m.media.document.video_thumbs.map((s: any) => s.type === action.thumbType ? { ...s, url: action.url } : s) } } }
+          : m
+      ),
     };
     case 'UPDATE_MESSAGE_DOCUMENT_PROGRESS': return {
       ...state,
       documentProgress: { ...state.documentProgress, [action.messageId]: action.progress },
     };
-    case 'LOGOUT': return { ...state, page: 'auth', authStep: 'phone', dialogs: [], selectedPeer: null, messages: [], phone: '', code: '', password: '', error: '', signupFirstname: '', signupLastname: '', phoneCodeHash: '', qrToken: '', selfUserId: '', typingText: '', typingByPeer: {}, pluginSkills: [], activeSkill: null, documentUrls: {}, documentProgress: {} };
+    case 'UPDATE_MESSAGE_DOCUMENT_SOURCE': return {
+      ...state,
+      documentSources: { ...state.documentSources, [action.messageId]: action.cacheSource },
+    };
+    case 'LOGOUT': return { ...state, page: 'auth', authStep: 'phone', dialogs: [], selectedPeer: null, messages: [], phone: '', code: '', password: '', error: '', signupFirstname: '', signupLastname: '', phoneCodeHash: '', qrToken: '', selfUserId: '', typingText: '', typingByPeer: {}, pluginSkills: [], activeSkill: null,     documentUrls: {},
+
+    documentProgress: {},
+
+    documentSources: {}, photoSources: {} };
     case 'TICK': return { ...state, renderTick: state.renderTick + 1 };
     default: return state;
   }

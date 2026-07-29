@@ -130,7 +130,7 @@ export class SharedWorkerClient {
         return this.send({ type: 'downloadFile', document, photo }, 120_000);
     }
 
-    async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<void> {
+    async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<{ cacheSource?: string }> {
         return new Promise((resolve, reject) => {
             if (!this.port) { reject(new Error('Not started')); return; }
             const id = ++this.msgId;
@@ -161,7 +161,7 @@ export class SharedWorkerClient {
         return r.avatarUrl;
     }
 
-    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
+    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return new Promise((resolve, reject) => {
             if (!this.port) { reject(new Error('Not started')); return; }
             const id = ++this.msgId;
@@ -183,8 +183,18 @@ export class SharedWorkerClient {
         });
     }
 
-    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
+    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return this.send({ type: 'requestPhotoDownload', photo, sizeType, messageId }, 120_000);
+    }
+
+    async batchCheckPhotoCache(requests: Array<{ photo: any; sizeType: string }>): Promise<Record<string, string>> {
+        const resp = await this.send({ type: 'batchCheckPhotoCache', requests }, 30_000);
+        return resp.cacheResult || {};
+    }
+
+    async batchCheckDocumentCache(documents: Array<{ id: string | number; thumb_size?: string }>): Promise<Record<string, string>> {
+        const resp = await this.send({ type: 'batchCheckDocumentCache', documents }, 30_000);
+        return resp.docResult || {};
     }
 
     async getDialogs(limit = 100): Promise<any> {

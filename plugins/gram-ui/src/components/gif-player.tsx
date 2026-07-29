@@ -1,4 +1,4 @@
-import { h } from '@ton-ai/atom/jsx-runtime';
+import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef } from '@ton-ai/atom/hooks';
 import { buildDocumentThumb } from '../utils.js';
 import { PhotoLoader } from './photo-loader.js';
@@ -7,10 +7,12 @@ interface GifPlayerProps {
   m: any;
   documentUrls: Record<number, string>;
   documentProgress?: Record<number, number>;
+  documentSources?: Record<number, string>;
 }
 
 export function GifPlayer(props: GifPlayerProps) {
-  const { m, documentUrls, documentProgress } = props;
+  const { m, documentUrls, documentProgress, documentSources } = props;
+  const cacheSource = documentSources?.[m.id];
   const doc = m.media?.document;
   const url = documentUrls[m.id] || '';
   const progress = documentProgress?.[m.id] ?? -1;
@@ -35,7 +37,7 @@ export function GifPlayer(props: GifPlayerProps) {
   const triggerDownload = () => {
     if (url) return;
     window.dispatchEvent(new CustomEvent('tg-download-document', {
-      detail: { document: doc, messageId: m.id },
+      detail: { document: doc, messageId: m.id, priority: 1 },
     }));
   };
 
@@ -85,24 +87,31 @@ export function GifPlayer(props: GifPlayerProps) {
   return (
     <div class="tgui-media-gif-wrapper" style={containerStyle}>
       {url ? (
-        isVideoGif ? (
-          <video
-            ref={videoRef}
-            class="tgui-media-video tgui-media-gif"
-            src={url}
-            autoPlay
-            loop
-            muted
-            playsInline
-            onClick={handleClick}
-          />
-        ) : (
-          <img
-            class="tgui-media-gif"
-            src={url}
-            alt="GIF"
-          />
-        )
+        <>
+          {isVideoGif ? (
+            <video
+              ref={videoRef}
+              class="tgui-media-video tgui-media-gif"
+              src={url}
+              autoPlay
+              loop
+              muted
+              playsInline
+              onClick={handleClick}
+            />
+          ) : (
+            <img
+              class="tgui-media-gif"
+              src={url}
+              alt="GIF"
+            />
+          )}
+          {cacheSource ? (
+            <span style={`position:absolute;top:4px;right:4px;padding:1px 5px;border-radius:4px;background:${cacheSource === 'memory' ? '#22c55e' : cacheSource === 'persisted' ? '#3b82f6' : '#ef4444'};color:#fff;font-size:10px;line-height:14px;white-space:nowrap;z-index:2`}>
+              {cacheSource === 'memory' ? 'in-memory' : cacheSource === 'persisted' ? 'gram-db' : cacheSource === 'cdn-server' ? 'cdn-server' : cacheSource === 'migrate-server' ? 'migrate-server' : 'home-server'}
+            </span>
+          ) : null}
+        </>
       ) : (
         <div class="tgui-media-preview tgui-media-preview_loading" style={containerStyle}>
           {thumb?.url ? (

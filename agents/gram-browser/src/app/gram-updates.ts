@@ -140,6 +140,8 @@ export function createHandleUpdate(s: GramState) {
         if (pushMsg) processNewMsg(pushMsg);
         if (u._ === 'updateShort' && u.update?._ === 'updateNewMessage') processNewMsg(u.update.message);
         if (u._ === 'updateShort' && u.update?._ === 'updateNewChannelMessage') processNewMsg(u.update.message);
+        if (u._ === 'updateShort' && u.update?._ === 'updateEditMessage') processNewMsg(u.update.message);
+        if (u._ === 'updateShort' && u.update?._ === 'updateEditChannelMessage') processNewMsg(u.update.message);
         if (u._ === 'updateShort' && isTypingUpdate(u.update)) handleTypingUpdate(u.update, {
           typingMap: s.typingMap.current,
           typingTimers: s.typingTimers.current,
@@ -150,10 +152,10 @@ export function createHandleUpdate(s: GramState) {
           userNameMap: s.userNameMap.current,
         });
         if (u._ === 'updateShortMessage') {
-          processNewMsg({ id: u.id, from_id: { _: 'peerUser', user_id: u.user_id }, peer_id: { _: 'peerUser', user_id: u.user_id }, date: u.date, message: u.message, out: !!u.out });
+          processNewMsg({ id: u.id, from_id: { _: 'peerUser', user_id: u.user_id }, peer_id: { _: 'peerUser', user_id: u.user_id }, date: u.date, message: u.message, out: !!u.out, media: u.media });
         }
         if (u._ === 'updateShortChatMessage') {
-          processNewMsg({ id: u.id, from_id: { _: 'peerUser', user_id: u.from_id }, peer_id: { _: 'peerChat', chat_id: u.chat_id }, date: u.date, message: u.message, out: !!u.out });
+          processNewMsg({ id: u.id, from_id: { _: 'peerUser', user_id: u.from_id }, peer_id: { _: 'peerChat', chat_id: u.chat_id }, date: u.date, message: u.message, out: !!u.out, media: u.media });
         }
         const handleReadHistoryInbox = (upd: any) => {
           const key = upd.peer?.user_id?.toString() || upd.peer?.chat_id?.toString() || upd.peer?.channel_id?.toString();
@@ -186,6 +188,7 @@ export function createHandleUpdate(s: GramState) {
         if ((u._ === 'updates' || u._ === 'updatesCombined') && Array.isArray(u.updates)) {
           for (const upd of u.updates) {
             if (upd._ === 'updateNewMessage' || upd._ === 'updateNewChannelMessage') processNewMsg(upd.message);
+            if (upd._ === 'updateEditMessage' || upd._ === 'updateEditChannelMessage') processNewMsg(upd.message);
             const applyMsgDeletions = (peerKey: string, deletedIds: Set<number>): boolean => {
               const cached = s.messagesCache.current.get(peerKey);
               if (!Array.isArray(cached)) return false;

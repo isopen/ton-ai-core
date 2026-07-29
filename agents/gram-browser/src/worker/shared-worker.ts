@@ -35,22 +35,22 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
         try {
             if (msg.type === 'startVideoStream') {
                 try {
-                    await TW.downloadFileStream_(msg.document, (ab, final, fileType) => {
+                    const cacheSource = await TW.downloadFileStream_(msg.document, (ab, final, fileType) => {
                         try { port.postMessage({ type: 'videoChunk', streamId: msg.id, data: ab, final, fileType }, [ab]); } catch {}
                     });
-                    try { port.postMessage({ type: 'response', id: msg.id, result: { success: true } }); } catch {}
+                    try { port.postMessage({ type: 'response', id: msg.id, result: { success: true, cacheSource } }); } catch {}
                 } catch (e: any) {
                     try { port.postMessage({ type: 'videoChunk', streamId: msg.id, error: e.message, final: true }); } catch {}
                     try { port.postMessage({ type: 'response', id: msg.id, error: e.message }); } catch {}
                 }
             } else if (msg.type === 'startPhotoDownload') {
                 try {
-                    const photoUrl = await TW.requestPhotoDownload(msg.photo, msg.sizeType, (pct: number) => {
+                    const result = await TW.requestPhotoDownload(msg.photo, msg.sizeType, (pct: number) => {
                         try { port.postMessage({ type: 'photoProgress', streamId: msg.id, progress: pct }); } catch {}
                     });
                     try { port.postMessage({ type: 'photoProgress', streamId: msg.id, progress: 100 }); } catch {}
-                    if (photoUrl) {
-                        try { port.postMessage({ type: 'response', id: msg.id, result: { photoUrl, sizeType: msg.sizeType, messageId: msg.messageId } }); } catch {}
+                    if (result) {
+                        try { port.postMessage({ type: 'response', id: msg.id, result: { photoUrl: result.photoUrl, sizeType: msg.sizeType, messageId: msg.messageId, cacheSource: result.cacheSource } }); } catch {}
                     } else {
                         try { port.postMessage({ type: 'response', id: msg.id, result: { photoUrl: null, sizeType: msg.sizeType, messageId: msg.messageId } }); } catch {}
                     }
@@ -128,7 +128,7 @@ async function handleMessage(msg: Record<string, any>): Promise<any> {
             return { type: 'historyResult', result: historyResult };
         }
         case 'downloadFile': {
-            const dfResult = await TW.downloadFile_(msg.document, msg.photo);
+            const dfResult = await TW.enqueueDownload(msg.document, msg.photo, msg.priority || 0);
             return { type: 'downloadFileResult', fileType: dfResult.type, bytes: dfResult.bytes, error: dfResult.error };
         }
         case 'requestPeerAvatar': {
@@ -137,14 +137,22 @@ async function handleMessage(msg: Record<string, any>): Promise<any> {
         }
         case 'requestPhotoDownload': {
             try {
-                const photoUrl = await TW.requestPhotoDownload(msg.photo, msg.sizeType);
-                return { type: 'photoDownloadResult', photoUrl, sizeType: msg.sizeType, messageId: msg.messageId };
+                const result = await TW.requestPhotoDownload(msg.photo, msg.sizeType);
+                return { type: 'photoDownloadResult', photoUrl: result?.photoUrl, sizeType: msg.sizeType, messageId: msg.messageId, cacheSource: result?.cacheSource };
             } catch (e: any) {
                 if (e.message?.includes('FILE_REFERENCE_EXPIRED')) {
                     return { type: 'photoDownloadResult', photoUrl: null, sizeType: msg.sizeType, messageId: msg.messageId, fileRefExpired: true, photo: msg.photo };
                 }
                 throw e;
             }
+        }
+        case 'batchCheckPhotoCache': {
+            const cacheResult = await TW.batchCheckPhotoCache(msg.requests || []);
+            return { type: 'batchCheckPhotoCacheResult', cacheResult };
+        }
+        case 'batchCheckDocumentCache': {
+            const docResult = await TW.batchCheckDocumentCache(msg.documents || []);
+            return { type: 'batchCheckDocumentCacheResult', docResult };
         }
         case 'cancelPhotoDownloads':
             TW.cancelPhotoDownloads();

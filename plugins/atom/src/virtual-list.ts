@@ -47,6 +47,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   const [scrollTop, setScrollTop] = useState(0);
   const [measuredH, setMeasuredH] = useState(ch ?? 600);
   const endReachedRef = useRef(false);
+  const nearTopFiredRef = useRef(false);
   const readyFired = useRef(false);
 
   const st = useRef<{
@@ -68,11 +69,23 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   if (dynamicMode) {
     const len = data.length;
     if (len !== st.current.prevLen) {
-      if (len > st.current.prevLen && st.current.prevLen > 0) {
+      const itemsAdded = len > st.current.prevLen && st.current.prevLen > 0;
+      if (itemsAdded) {
         const added = len - st.current.prevLen;
         const shifted = new Array(len).fill(0);
         for (let i = 0; i < st.current.prevLen; i++) shifted[i + added] = st.current.heights[i] || 0;
         st.current.heights = shifted;
+        const oldSH = st.current.lastSH;
+        const oldST = st.current.lastST;
+        queueMicrotask(() => {
+          const el = containerRef.current;
+          if (el && oldSH > 0) {
+            const diff = el.scrollHeight - oldSH;
+            el.scrollTop = oldST + diff;
+            st.current.lastST = el.scrollTop;
+            st.current.lastSH = el.scrollHeight;
+          }
+        });
       } else {
         st.current.heights = new Array(len).fill(0);
       }
@@ -175,7 +188,14 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       setScrollTop(el.scrollTop);
     }
 
-    if (el.scrollTop < 80) onNearTop?.();
+    if (el.scrollTop < 80) {
+      if (!nearTopFiredRef.current) {
+        nearTopFiredRef.current = true;
+        onNearTop?.();
+      }
+    } else if (el.scrollTop > 200) {
+      nearTopFiredRef.current = false;
+    }
   }, [dynamicMode, estH, onNearTop]);
 
   useEffect(() => {

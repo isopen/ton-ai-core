@@ -72,6 +72,8 @@ export interface AppState {
   langOptions: Array<{ code: string; label: string }>;
   documentUrls: Record<number, string>;
   documentProgress: Record<number, number>;
+  photoSources: Record<number, string>;
+  documentSources: Record<number, string>;
 }
 
 export interface ImageSource {
@@ -109,7 +111,7 @@ export type UIAction =
     | { type: 'SET_ERROR'; error: string }
     | { type: 'SET_SESSION_ID'; id: string }
     | { type: 'SET_DIALOGS'; dialogs: Dialog[] }
-    | { type: 'SET_MESSAGES'; messages: Message[] }
+    | { type: 'SET_MESSAGES'; messages: Message[]; photoSources?: Record<number, string> }
     | { type: 'SET_SELECTED_PEER'; peer: PeerInfo | null }
     | { type: 'ADD_LOG'; text: string }
     | { type: 'SET_SIDEBAR_COLLAPSED'; v: boolean }
@@ -132,10 +134,12 @@ export type UIAction =
     | { type: 'SET_PLUGIN_SKILLS'; skills: Array<{ id: string; label: string }> }
     | { type: 'SET_ACTIVE_SKILL'; id: string | null }
     | { type: 'SET_LANG_OPTIONS'; options: Array<{ code: string; label: string }> }
-    | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number; sizeType: string; url: string }
+    | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number; sizeType: string; url: string; cacheSource?: string }
     | { type: 'UPDATE_MESSAGE_PHOTO_PROGRESS'; messageId: number; progress: number }
     | { type: 'REFRESH_MESSAGE_PHOTO'; messageId: number; photo: any }
-    | { type: 'UPDATE_MESSAGE_DOCUMENT'; messageId: number; url: string }
+    | { type: 'UPDATE_MESSAGE_DOCUMENT'; messageId: number; url: string; cacheSource?: string }
     | { type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS'; messageId: number; progress: number }
+    | { type: 'UPDATE_MESSAGE_DOCUMENT_THUMB'; messageId: number; thumbType: string; url: string }
+    | { type: 'UPDATE_MESSAGE_DOCUMENT_SOURCE'; messageId: number; cacheSource: string }
     | { type: 'LOGOUT' };
 

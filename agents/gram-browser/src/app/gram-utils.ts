@@ -3,6 +3,7 @@ import type { Dialog, Message } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbGetMany, dbKeys, dbGetAvatar } from '@/utils/db';
 import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, ORPHANED_KEY } from './gram-constants';
 import type { GramState } from './gram-state';
+import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
 
 export function addLog(s: GramState, text: string) {
   s.tgui.current?.addLog(text);
@@ -97,8 +98,12 @@ export function scheduleMessagesFlush(s: GramState) {
     const cacheKey = s.selectedPeerRef.current ? `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` : '';
     const cached = cacheKey ? s.messagesCache.current.get(cacheKey) : undefined;
     if (Array.isArray(cached)) {
-      s.tgui.current?.setMessages([...cached]);
-      s.tgui.current?.scrollChatToBottom();
+      prefetchPhotoCaches(s, cached).catch(() => {});
+      injectCachedDocumentSources(s, cached);
+      const { messages: cachedMsgs, cachedIds } = injectCachedPhotoUrls(cached);
+      const cachedSources: Record<number, string> = {};
+      for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
+      s.tgui.current?.dispatch({ type: 'SET_MESSAGES', messages: cachedMsgs, photoSources: cachedSources });
     }
   });
 }
@@ -169,7 +174,7 @@ export async function fetchSelfUserId(s: GramState) {
 }
 
 export function getLastVisibleMsgId(): number {
-  const container = document.getElementById('tg-msg-list');
+  const container = document.getElementById('tg-msg-list-content');
   if (!container) return 0;
   const containerRect = container.getBoundingClientRect();
   const rows = container.querySelectorAll<HTMLElement>('.tgui-msg-row[id^="msg-"]');

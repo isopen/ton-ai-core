@@ -13,6 +13,7 @@ const TELEGRAM_WS_FALLBACKS: Record<number, Array<{ host: string; noObfuscation?
 };
 import { getSchemaRegistry, SchemaSerializer, SchemaDeserializer } from '@ton-ai/telegram/dist/schema-setup';
 import { getAvatarFromCache, saveAvatarToCache, setAvatarEncryptionKey, needAvatar } from './avatar-cache';
+import { getGramDb } from '../utils/gram-db';
 import { BrowserObfuscatedConnection } from '@ton-ai/telegram/dist/browser-connection';
 import { generateObfuscationInit, abridgedEncode } from '@ton-ai/telegram/dist/obfuscation-utils';
 
@@ -1150,7 +1151,7 @@ async function requestPeerAvatar(peerType: string, peerId: string, accessHash?: 
     return url;
 }
 
-async function requestPhotoDownload(photo: any, sizeType: string, onProgress?: (pct: number) => void): Promise<string | null> {
+async function requestPhotoDownload(photo: any, sizeType: string, onProgress?: (pct: number) => void): Promise<{ photoUrl: string; cacheSource: string } | null> {
     console.log('[worker] requestPhotoDownload CALLED', { sizeType, photoId: photo?.id?.toString(), hasId: !!photo?.id, hasAccessHash: !!photo?.access_hash, hasFileRef: !!photo?.file_reference, fileRefType: typeof photo?.file_reference, fileRefLen: photo?.file_reference?.length });
     if (!photo) { console.log('[worker] requestPhotoDownload: photo is null'); return null; }
     const photoWithThumb = { ...photo, thumb_size: sizeType };
@@ -1181,7 +1182,7 @@ async function requestPhotoDownload(photo: any, sizeType: string, onProgress?: (
         console.log('[worker] requestPhotoDownload: downloaded too small', result.bytes?.length, 'sizeType:', sizeType);
         return null;
     }
-    return 'data:image/jpeg;base64,' + result.bytes;
+    return { photoUrl: 'data:image/jpeg;base64,' + result.bytes, cacheSource: result.cacheSource || 'server' };
 }
 
 export async function processDialogsResult(dialogsResult: any): Promise<{ dialogs: any[] }> {
@@ -2257,6 +2258,7 @@ function doReq(payload: Buffer, host: string, port: number, timeout = 15000): Pr
 async function handleConnectInternal(reqSessionId: string, dcId: number): Promise<void> {
     if (conn?.isConnected()) return;
     curSessionId = reqSessionId;
+    await getGramDb().init();
     await setAvatarEncryptionKey(reqSessionId);
 
     if (!tdBinlog) {
@@ -2469,13 +2471,45 @@ async function resolvePeer(peer: any): Promise<any> {
 
 
 // Limit parallel file downloads to avoid connection storms
+const downloadCache = new Map<string, { type: string; bytes: string }>();
+
+// Persistent download cache via gram-db (encrypted KV store)
+const DLCACHE_PREFIX = 'dlcache:';
+async function persistDownloadCache(key: string, type: string, bytesBase64: string): Promise<void> {
+    if (!key) return;
+    try {
+        const db = getGramDb();
+        if (!db.isReady()) { console.log('[dlc] gram-db not ready, skipping persist', key); return; }
+        await db.set(DLCACHE_PREFIX + key, { type, bytes: bytesBase64 });
+        console.log('[dlc] saved key=' + key + ' type=' + type + ' bytesLen=' + bytesBase64.length);
+    } catch (e) {
+        console.error('[dlc] persist error key=' + key, e);
+    }
+}
+async function loadPersistedDownloadCache(key: string): Promise<{ type: string; bytes: string } | null> {
+    if (!key) return null;
+    try {
+        const db = getGramDb();
+        if (!db.isReady()) { console.log('[dlc] gram-db not ready, skipping load', key); return null; }
+        const val = await db.get<{ type: string; bytes: string }>(DLCACHE_PREFIX + key);
+        if (val && val.type && val.bytes) {
+            console.log('[dlc] loaded key=' + key + ' type=' + val.type + ' bytesLen=' + val.bytes.length);
+            return val;
+        }
+        console.log('[dlc] not found key=' + key);
+    } catch (e) {
+        console.error('[dlc] load error key=' + key, e);
+    }
+    return null;
+}
+
 const downloadQueue: Array<{
-    document: any; photo: any;
+    document: any; photo: any; priority: number;
     resolve: (v: { type: string; bytes: string; error?: string }) => void;
     reject: (e: any) => void;
 }> = [];
 let downloadInFlight = 0;
-const MAX_PARALLEL_DOWNLOADS = 1;
+const MAX_PARALLEL_DOWNLOADS = 3;
 
 const uploadSemMax = 3;
 let uploadSemActive = 0;
@@ -2497,133 +2531,321 @@ async function runWithSem<T>(fn: () => Promise<T>): Promise<T> {
 
 async function processDownloadQueue(): Promise<void> {
     while (downloadQueue.length > 0 && downloadInFlight < MAX_PARALLEL_DOWNLOADS) {
-        const item = downloadQueue.shift()!;
+        // Pick highest priority item
+        let bestIdx = 0;
+        for (let i = 1; i < downloadQueue.length; i++) {
+            if (downloadQueue[i].priority > downloadQueue[bestIdx].priority) bestIdx = i;
+        }
+        const item = downloadQueue.splice(bestIdx, 1)[0];
         downloadInFlight++;
+        const label = item.photo ? 'photo' : item.document?.thumb_size ? `thumb:${item.document.thumb_size}` : 'document';
+        const id = item.document?.id?.toString() || item.photo?.id?.toString() || '?';
+        console.log('[dlq] dequeue id=' + id + ' label=' + label + ' priority=' + item.priority + ' inflight=' + downloadInFlight + ' queued=' + downloadQueue.length);
         downloadFile_(item.document, item.photo).then(item.resolve, item.reject).finally(() => {
             downloadInFlight--;
+            console.log('[dlq] done id=' + id + ' label=' + label + ' inflight=' + downloadInFlight);
             processDownloadQueue();
         });
     }
 }
 
-function enqueueDownload(document?: any, photo?: any): Promise<{ type: string; bytes: string; error?: string }> {
+function enqueueDownload(document?: any, photo?: any, priority = 0): Promise<{ type: string; bytes: string; error?: string; cacheSource?: string }> {
+    const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
+    const id = document?.id?.toString() || photo?.id?.toString() || '?';
+    console.log('[dlq] enqueue id=' + id + ' label=' + label + ' priority=' + priority + ' queued_before=' + downloadQueue.length);
     return new Promise((resolve, reject) => {
-        downloadQueue.push({ document, photo, resolve, reject });
+        downloadQueue.push({ document, photo, priority, resolve, reject });
         processDownloadQueue();
     });
 }
 
-async function downloadFile_(document?: any, photo?: any, genRef?: { value: number }, onProgress?: (pct: number) => void, totalSize?: number): Promise<{ type: string; bytes: string; error?: string }> {
+async function downloadFile_(document?: any, photo?: any, genRef?: { value: number }, onProgress?: (pct: number) => void, totalSize?: number): Promise<{ type: string; bytes: string; error?: string; cacheSource?: string }> {
+    const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
+    const id = document?.id?.toString() || photo?.id?.toString() || '?';
+    console.log('[dl] start id=' + id + ' label=' + label + ' thumbSuffix=' + (document?.thumb_size || photo?.thumb_size || '') + ' totalSize=' + (totalSize || 0));
     try {
         const location = buildDownloadLocation(document, photo);
         if (!location) return { type: '', bytes: '', error: 'No document or photo provided' };
 
-        const chunks: Buffer[] = [];
-        let offset = BigInt(0);
-        const limit = 1048576;
+        // Check in-memory cache (include thumb_size in key to avoid document↔thumb collision)
+        const baseKey = document?.id?.toString() || photo?.id?.toString() || '';
+        const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : photo?.thumb_size ? `_thumb_${photo.thumb_size}` : '';
+        const cacheKey = baseKey + thumbSuffix;
+        if (cacheKey) {
+            if (downloadCache.has(cacheKey)) {
+                const cached = downloadCache.get(cacheKey)!;
+                console.log('[dl] cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey);
+                if (cached.type && cached.bytes) return { type: cached.type, bytes: cached.bytes, cacheSource: 'memory' };
+            }
+            // Check persistent cache (gram-db)
+            const persisted = await loadPersistedDownloadCache(cacheKey);
+            if (persisted && persisted.type && persisted.bytes) {
+                console.log('[dl] gram-db cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey + ' bytesLen=' + persisted.bytes.length);
+                downloadCache.set(cacheKey, persisted);
+                return { ...persisted, cacheSource: 'persisted' };
+            }
+        }
+        console.log('[dl] cache MISS id=' + id + ' label=' + label + ' cacheKey=' + cacheKey);
+
+        const PART_SIZE = 1048576;
+        const MAX_CONCURRENT = 3;
         let finalType = 'storage.fileUnknown';
         let targetDc = photo?.dc_id || document?.dc_id || 0;
+        let serverType: 'home-server' | 'cdn-server' | 'migrate-server' = 'home-server';
         if (typeof targetDc !== 'number') targetDc = Number(targetDc);
+        const knownSize = totalSize || Number(document?.size || photo?.size || 0);
 
-        const doCall = async (ofs: bigint): Promise<any> => {
-            if (genRef && genRef.value !== photoDownloadGen) {
-                throw new Error('ABORTED');
+        // CDN state
+        let cdnDcId = 0;
+        let cdnFileToken: Buffer | null = null;
+        let cdnKey: Buffer | null = null;
+        let cdnIv: Buffer | null = null;
+
+        const doCall = async (ofs: bigint, lim: number): Promise<any> => {
+            if (genRef && genRef.value !== photoDownloadGen) throw new Error('ABORTED');
+            if (cdnDcId > 0 && cdnFileToken) {
+                const p = { file_token: cdnFileToken, offset: ofs, limit: lim };
+                const result = await callRpcOnDc(cdnDcId, 'upload.getCdnFile', p);
+                if (result._ === 'upload.cdnFileReuploadNeeded') {
+                    const requestToken = Buffer.from(result.request_token, 'hex');
+                    await callRpcOnDc(targetDc, 'upload.reuploadCdnFile', {
+                        file_token: cdnFileToken, request_token: requestToken,
+                    });
+                    return doCall(ofs, lim);
+                }
+                if (result._ === 'upload.cdnFile') {
+                    const encrypted = Buffer.from(result.bytes || '', 'hex');
+                    const startCounter = Number(ofs) / 16;
+                    const decrypted = crypton.AES256CTR.process(encrypted, cdnKey!, cdnIv!, startCounter);
+                    return { _: 'upload.file', type: { _: 'storage.filePartial' }, bytes: decrypted.toString('hex') };
+                }
+                return result;
             }
-            const p = { precise: false, location, offset: ofs, limit };
-            if (targetDc > 0) {
-                return await callRpcOnDc(targetDc, 'upload.getFile', p);
-            }
+            const p = { precise: false, location, offset: ofs, limit: lim };
+            if (targetDc > 0) return await callRpcOnDc(targetDc, 'upload.getFile', p);
             try {
                 return await callRpc('upload.getFile', p, { noMigrate: true });
             } catch (e: any) {
                 const m = e.message.match(/^FILE_MIGRATE_(\d+)$/);
+                if (m) { targetDc = parseInt(m[1]); serverType = 'migrate-server'; return await callRpcOnDc(targetDc, 'upload.getFile', p); }
+                throw e;
+            }
+        };
+
+        // First call
+        const firstResult = await doCall(BigInt(0), PART_SIZE);
+        if (genRef && genRef.value !== photoDownloadGen) return { type: '', bytes: '', error: 'ABORTED' };
+
+        // Handle CDN redirect
+        let result: any = firstResult;
+        if (firstResult._ === 'upload.fileCdnRedirect') {
+            cdnDcId = firstResult.dc_id;
+            serverType = 'cdn-server';
+            cdnFileToken = typeof firstResult.file_token === 'string'
+                ? Buffer.from(firstResult.file_token, 'hex')
+                : Buffer.from(firstResult.file_token);
+            cdnKey = Buffer.from(firstResult.encryption_key, 'hex');
+            cdnIv = Buffer.from(firstResult.encryption_iv, 'hex');
+            console.log('[dl] CDN redirect id=' + id + ' label=' + label + ' cdnDc=' + cdnDcId);
+            // Re-run through CDN
+            const p = { file_token: cdnFileToken, offset: BigInt(0), limit: PART_SIZE };
+            const cdnResult = await callRpcOnDc(cdnDcId, 'upload.getCdnFile', p);
+            if (cdnResult._ === 'upload.cdnFileReuploadNeeded') {
+                console.log('[dl] CDN reupload needed id=' + id);
+                const requestToken = Buffer.from(cdnResult.request_token, 'hex');
+                await callRpcOnDc(targetDc, 'upload.reuploadCdnFile', {
+                    file_token: cdnFileToken, request_token: requestToken,
+                });
+                // retry
+                const p2 = { file_token: cdnFileToken, offset: BigInt(0), limit: PART_SIZE };
+                const cdnResult2 = await callRpcOnDc(cdnDcId, 'upload.getCdnFile', p2);
+                if (cdnResult2._ === 'upload.cdnFile') {
+                    console.log('[dl] CDN reupload success, decrypting id=' + id);
+                    const encrypted = Buffer.from(cdnResult2.bytes || '', 'hex');
+                    const decrypted = crypton.AES256CTR.process(encrypted, cdnKey, cdnIv, 0);
+                    result = { _: 'upload.file', type: { _: 'storage.filePartial' }, bytes: decrypted.toString('hex') };
+                } else {
+                    return { type: '', bytes: '', error: 'CDN download failed after reupload' };
+                }
+            } else if (cdnResult._ === 'upload.cdnFile') {
+                console.log('[dl] CDN got encrypted chunk, decrypting id=' + id + ' len=' + (cdnResult.bytes?.length || 0));
+                const encrypted = Buffer.from(cdnResult.bytes || '', 'hex');
+                const decrypted = crypton.AES256CTR.process(encrypted, cdnKey, cdnIv, 0);
+                result = { _: 'upload.file', type: { _: 'storage.filePartial' }, bytes: decrypted.toString('hex') };
+            } else {
+                return { type: '', bytes: '', error: 'Unexpected CDN response: ' + cdnResult._ };
+            }
+        }
+
+        if (result._ !== 'upload.file') return { type: '', bytes: '', error: 'Unexpected response: ' + result._ };
+
+        const typeName = result.type?._ || 'storage.fileUnknown';
+        const firstChunk = Buffer.from(result.bytes || '', 'hex');
+        const chunks: Buffer[] = [firstChunk];
+        finalType = typeName;
+
+        if (firstChunk.length < PART_SIZE || typeName !== 'storage.filePartial') {
+            console.log('[dl] single chunk id=' + id + ' label=' + label + ' chunkLen=' + firstChunk.length + ' type=' + typeName);
+            const allBytes = Buffer.concat(chunks);
+        const res = { type: finalType, bytes: allBytes.toString('base64') };
+            if (cacheKey) {
+                downloadCache.set(cacheKey, res);
+                persistDownloadCache(cacheKey, finalType, res.bytes);
+            }
+            return res;
+        }
+
+        // Parallel download remaining parts
+        let maxTotal = Math.min(knownSize || 200 * 1024 * 1024, 200 * 1024 * 1024);
+        let nextPart = 1;
+        let totalParts = 0;
+
+        while (nextPart * PART_SIZE < maxTotal) {
+            if (genRef && genRef.value !== photoDownloadGen) return { type: '', bytes: '', error: 'ABORTED' };
+            const batch: Promise<{ idx: number; chunk: Buffer | null }>[] = [];
+            for (let i = 0; i < MAX_CONCURRENT; i++) {
+                const partIdx = nextPart + i;
+                const partOffset = BigInt(partIdx * PART_SIZE);
+                batch.push(
+                    (async () => {
+                        try {
+                            const r = await doCall(partOffset, PART_SIZE);
+                            if (r._ === 'upload.file') {
+                                const c = Buffer.from(r.bytes || '', 'hex');
+                                return { idx: partIdx, chunk: c };
+                            }
+                            return { idx: partIdx, chunk: null };
+                        } catch { return { idx: partIdx, chunk: null }; }
+                    })()
+                );
+            }
+            const batchResults = await Promise.all(batch);
+            batchResults.sort((a, b) => a.idx - b.idx);
+            for (const { idx, chunk } of batchResults) {
+                if (!chunk) { console.log('[dl] part fail at idx=' + idx + ' id=' + id + ' — truncating'); maxTotal = idx * PART_SIZE; break; }
+                chunks.push(chunk);
+                totalParts++;
+                nextPart = idx + 1;
+                if (onProgress) {
+                    const received = chunks.reduce((s, c) => s + c.length, 0);
+                    onProgress(Math.min(99, Math.round((received / (knownSize || maxTotal)) * 100)));
+                }
+                if (chunk.length < PART_SIZE) { maxTotal = (idx + 1) * PART_SIZE; break; }
+            }
+        }
+        console.log('[dl] done id=' + id + ' label=' + label + ' totalChunks=' + chunks.length + ' totalParts=' + totalParts + ' totalBytes=' + chunks.reduce((s,c)=>s+c.length,0));
+
+        const allBytes = Buffer.concat(chunks);
+        const res = { type: finalType, bytes: allBytes.toString('base64'), cacheSource: serverType };
+        if (cacheKey) {
+            downloadCache.set(cacheKey, res);
+            persistDownloadCache(cacheKey, finalType, res.bytes);
+        }
+        return res;
+    } catch (e: any) {
+        console.log('[dl] error id=' + id + ' label=' + label + ' ' + e.message);
+        return { type: '', bytes: '', error: e.message };
+    }
+}
+
+async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, final: boolean, fileType: string) => void): Promise<string | undefined> {
+    const location = buildDownloadLocation(document, null);
+    if (!location) throw new Error('No document provided');
+
+    // Check in-memory cache
+    const baseKey = document?.id?.toString() || '';
+    const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : '';
+    const cacheKey = baseKey + thumbSuffix;
+    if (cacheKey) {
+        if (downloadCache.has(cacheKey)) {
+            const cached = downloadCache.get(cacheKey)!;
+            if (cached.type && cached.bytes) {
+                const buf = Buffer.from(cached.bytes, 'base64');
+                const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+                onChunk(ab, true, cached.type);
+                return 'memory';
+            }
+        }
+        const persisted = await loadPersistedDownloadCache(cacheKey);
+        if (persisted && persisted.type && persisted.bytes) {
+            downloadCache.set(cacheKey, persisted);
+            const buf = Buffer.from(persisted.bytes, 'base64');
+            const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+            onChunk(ab, true, persisted.type);
+            return 'persisted';
+        }
+    }
+
+    const cacheChunks: Buffer[] = [];
+    let offset = BigInt(0);
+    const limit = 1048576;
+    let finalType = 'storage.fileUnknown';
+    let targetDc = 0;
+    let serverType: 'home-server' | 'cdn-server' | 'migrate-server' = 'home-server';
+    let cdnDcId = 0;
+    let cdnFileToken: Buffer | null = null;
+    let cdnKey: Buffer | null = null;
+    let cdnIv: Buffer | null = null;
+
+    const doCall = async (ofs: bigint): Promise<any> => {
+        if (cdnDcId > 0 && cdnFileToken) {
+            const p = { file_token: cdnFileToken, offset: ofs, limit };
+            const result = await callRpcOnDc(cdnDcId, 'upload.getCdnFile', p);
+            if (result._ === 'upload.cdnFileReuploadNeeded') {
+                const requestToken = Buffer.from(result.request_token, 'hex');
+                await callRpcOnDc(targetDc || ses!.dcId, 'upload.reuploadCdnFile', {
+                    file_token: cdnFileToken, request_token: requestToken,
+                });
+                return doCall(ofs);
+            }
+            if (result._ === 'upload.cdnFile') {
+                const encrypted = Buffer.from(result.bytes || '', 'hex');
+                const startCounter = Number(ofs) / 16;
+                const decrypted = crypton.AES256CTR.process(encrypted, cdnKey!, cdnIv!, startCounter);
+                const typeName = decrypted.length < limit ? 'storage.fileJpeg' : 'storage.filePartial';
+                return { _: 'upload.file', type: { _: typeName }, bytes: decrypted.toString('hex') };
+            }
+            return result;
+        }
+        const p = { precise: false, location, offset: ofs, limit };
+        const callDc = targetDc > 0 ? targetDc : ses!.dcId;
+        try {
+            return await callRpcOnDc(callDc, 'upload.getFile', p);
+            } catch (e: any) {
+                const m = e.message.match(/FILE_MIGRATE_(\d+)/);
                 if (m) {
                     targetDc = parseInt(m[1]);
-                    return await callRpcOnDc(targetDc, 'upload.getFile', p);
+                    serverType = 'migrate-server';
+                    return await doCall(ofs);
                 }
                 throw e;
             }
         };
 
         while (true) {
-            if (genRef && genRef.value !== photoDownloadGen) {
-                return { type: '', bytes: '', error: 'ABORTED' };
-            }
-            const result = await doCall(offset);
-            if (genRef && genRef.value !== photoDownloadGen) {
-                return { type: '', bytes: '', error: 'ABORTED' };
-            }
-            if (result._ === 'upload.file') {
-                const typeName = result.type?._ || 'storage.fileUnknown';
-                const bytesHex = result.bytes || '';
-                const chunk = Buffer.from(bytesHex, 'hex');
-                chunks.push(chunk);
-                if (typeName !== 'storage.filePartial') {
-                    finalType = typeName;
-                }
-                if (onProgress) {
-                    const received = Number(offset) + chunk.length;
-                    const estTotal = totalSize && totalSize > 0 ? totalSize : Math.max(received + limit, limit * 2);
-                    onProgress(Math.min(99, Math.round((received / estTotal) * 100)));
-                }
-                if (chunk.length < limit || typeName !== 'storage.filePartial') {
+            let result: any;
+            let retries = 0;
+            while (true) {
+                try {
+                    result = await doCall(offset);
                     break;
+                } catch (e: any) {
+                    if (e.message?.includes('FILE_REFERENCE_EXPIRED')) throw e;
+                    if (e.message?.includes('FLOOD_WAIT')) throw e;
+                    retries++;
+                    if (retries > 3) throw e;
+                    await new Promise(r => setTimeout(r, Math.min(1000 * retries, 5000)));
                 }
-                offset = BigInt(Number(offset) + chunk.length);
-                if (Number(offset) > 200 * 1024 * 1024) {
-                    return { type: '', bytes: '', error: 'File too large (>200MB)' };
-                }
-            } else if (result._ === 'upload.fileCdnRedirect') {
-                return { type: '', bytes: '', error: 'CDN redirect not supported' };
-            } else {
-                return { type: '', bytes: '', error: 'Unknown response: ' + result._ };
             }
-        }
-        const allBytes = Buffer.concat(chunks);
-        return { type: finalType, bytes: allBytes.toString('base64') };
-    } catch (e: any) {
-        return { type: '', bytes: '', error: e.message };
-    }
-}
-
-async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, final: boolean, fileType: string) => void): Promise<void> {
-    const location = buildDownloadLocation(document, null);
-    if (!location) throw new Error('No document provided');
-
-    let offset = BigInt(0);
-    const limit = 1048576;
-    let finalType = 'storage.fileUnknown';
-    let targetDc = 0;
-
-    const doCall = async (ofs: bigint): Promise<any> => {
-        const p = { precise: false, location, offset: ofs, limit };
-        const callDc = targetDc > 0 ? targetDc : ses!.dcId;
-        try {
-            return await callRpcOnDc(callDc, 'upload.getFile', p);
-        } catch (e: any) {
-            const m = e.message.match(/FILE_MIGRATE_(\d+)/);
-            if (m) {
-                targetDc = parseInt(m[1]);
-                return await doCall(ofs);
-            }
-            throw e;
-        }
-    };
-
-    while (true) {
-        let result: any;
-        let retries = 0;
-        while (true) {
-            try {
-                result = await doCall(offset);
-                break;
-            } catch (e: any) {
-                if (e.message?.includes('FILE_REFERENCE_EXPIRED')) throw e;
-                if (e.message?.includes('FLOOD_WAIT')) throw e;
-                retries++;
-                if (retries > 3) throw e;
-                await new Promise(r => setTimeout(r, Math.min(1000 * retries, 5000)));
-            }
+            if (result._ === 'upload.fileCdnRedirect') {
+                cdnDcId = result.dc_id;
+                serverType = 'cdn-server';
+            cdnFileToken = typeof result.file_token === 'string'
+                ? Buffer.from(result.file_token, 'hex')
+                : Buffer.from(result.file_token);
+            cdnKey = Buffer.from(result.encryption_key, 'hex');
+            cdnIv = Buffer.from(result.encryption_iv, 'hex');
+            continue; // retry same offset via CDN
         }
         if (result._ === 'upload.file') {
             const typeName = result.type?._ || 'storage.fileUnknown';
@@ -2633,15 +2855,24 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
             const isFinal = chunk.length < limit || typeName !== 'storage.filePartial';
             const ab = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength);
             onChunk(ab, isFinal, finalType);
+            cacheChunks.push(chunk);
             if (isFinal) break;
             offset = BigInt(Number(offset) + chunk.length);
             if (Number(offset) > 200 * 1024 * 1024) throw new Error('File too large (>200MB)');
-        } else if (result._ === 'upload.fileCdnRedirect') {
-            throw new Error('CDN redirect not supported');
         } else {
             throw new Error('Unknown response: ' + result._);
         }
     }
+    // Save to cache
+    if (cacheKey && cacheChunks.length > 0) {
+        const allBytes = Buffer.concat(cacheChunks);
+        const res = { type: finalType, bytes: allBytes.toString('base64'), cacheSource: serverType };
+        if (res.bytes.length <= 20 * 1024 * 1024) {
+            downloadCache.set(cacheKey, res);
+            persistDownloadCache(cacheKey, finalType, res.bytes);
+        }
+    }
+    return serverType;
 }
 
 function buildDownloadLocation(document?: any, photo?: any): Record<string, any> {
@@ -2807,7 +3038,55 @@ self.onerror = (e: string | Event) => {
     postMessage({ type: 'error', error: 'Worker unhandled: ' + msg });
 };
 
-export { callRpc, resolvePeer, sendCode, signIn, checkPassword, downloadFile_, downloadFileStream_, requestPeerAvatar, requestPhotoDownload, cancelPhotoDownloads };
+export async function batchCheckPhotoCache(requests: Array<{ photo: any; sizeType: string }>): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  for (const { photo, sizeType } of requests) {
+    const photoWithThumb = { ...photo, thumb_size: sizeType };
+    const location = buildDownloadLocation(undefined, photoWithThumb);
+    if (!location) continue;
+    const baseKey = photo?.id?.toString() || '';
+    const cacheKey = baseKey + '_' + sizeType;
+    if (!cacheKey) continue;
+    if (downloadCache.has(cacheKey)) {
+      const cached = downloadCache.get(cacheKey)!;
+      if (cached.type && cached.bytes) {
+        result[cacheKey] = 'data:image/jpeg;base64,' + cached.bytes;
+        continue;
+      }
+    }
+    const persisted = await loadPersistedDownloadCache(cacheKey);
+    if (persisted && persisted.type && persisted.bytes) {
+      downloadCache.set(cacheKey, persisted);
+      result[cacheKey] = 'data:image/jpeg;base64,' + persisted.bytes;
+    }
+  }
+  return result;
+}
+
+export async function batchCheckDocumentCache(documents: Array<{ id: string | number; thumb_size?: string }>): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  for (const doc of documents) {
+    const baseKey = doc?.id?.toString() || '';
+    const thumbSuffix = doc?.thumb_size ? `_thumb_${doc.thumb_size}` : '';
+    const cacheKey = baseKey + thumbSuffix;
+    if (!cacheKey) continue;
+    if (downloadCache.has(cacheKey)) {
+      const cached = downloadCache.get(cacheKey)!;
+      if (cached.type && cached.bytes) {
+        result[baseKey] = 'memory';
+        continue;
+      }
+    }
+    const persisted = await loadPersistedDownloadCache(cacheKey);
+    if (persisted && persisted.type && persisted.bytes) {
+      downloadCache.set(cacheKey, persisted);
+      result[baseKey] = 'persisted';
+    }
+  }
+  return result;
+}
+
+export { callRpc, resolvePeer, sendCode, signIn, checkPassword, downloadFile_, downloadFileStream_, requestPeerAvatar, requestPhotoDownload, cancelPhotoDownloads, enqueueDownload };
 export { handleConnectInternal as handleConnect };
 export { handleDisconnect as disconnect };
 export { handleLogout as logout };

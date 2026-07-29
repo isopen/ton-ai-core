@@ -128,23 +128,43 @@ export function getInitials(p: any): string {
   return (p.title || '?').slice(0, 2).toUpperCase();
 }
 
-export function buildDocumentThumb(doc: any): { url: string; width: number; height: number } | null {
-  if (!doc?.thumbs?.length) {
-    if (doc?.videoThumbs?.length) {
-      const vt = doc.videoThumbs[0];
-      return vt?.url || vt?.src ? { url: vt.url || vt.src, width: vt.w || 0, height: vt.h || 0 } : null;
+function thumbUrl(s: any): string {
+  let url = s.src || s.url || '';
+  if (!url && s._ === 'photoStrippedSize' && s.bytes?.length > 3) {
+    try { url = strippedToDataUrl(s.bytes); } catch {}
+    return url;
+  }
+  if (!url && s.bytes?.length > 40) {
+    const bytes = typeof s.bytes === 'string' ? s.bytes : Array.from(new Uint8Array(s.bytes as ArrayBufferLike), b => b.toString(16).padStart(2, '0')).join('');
+    try { url = hexToDataUrl(bytes); } catch {}
+  }
+  return url;
+}
+
+export function buildDocumentThumb(doc: any): { url: string; width: number; height: number; isDownloading?: boolean } | null {
+  // Try doc.thumbs first (photoCachedSize/photoStrippedSize with inline bytes)
+  if (doc?.thumbs?.length) {
+    let best: any = null;
+    const prio = ['m', 'x', 'y', 'w', 'v', 'u'];
+    for (const t of prio) {
+      const s = doc.thumbs.find((s: any) => s.type === t);
+      if (s) { best = s; break; }
     }
-    return null;
+    if (!best) best = doc.thumbs[0];
+    const u = thumbUrl(best);
+    if (u) return { url: u, width: best.w || 0, height: best.h || 0 };
   }
-  let best: any = null;
-  let bestType = '';
-  const prio = ['m', 'x', 'y', 'w', 'v', 'u'];
-  for (const t of prio) {
-    const s = doc.thumbs.find((s: any) => s.type === t);
-    if (s) { best = s; bestType = t; break; }
+
+  // Try video_thumbs (VideoSize entries, need separate download)
+  if (doc?.video_thumbs?.length) {
+    const vt = doc.video_thumbs[0];
+    const u = thumbUrl(vt);
+    if (u) return { url: u, width: vt.w || 0, height: vt.h || 0 };
+    // url/src not populated yet, signal that download is needed
+    return { url: '', width: vt.w || 0, height: vt.h || 0, isDownloading: false };
   }
-  if (!best) best = doc.thumbs[0];
-  return best ? { url: best.url || best.src || '', width: best.w || 0, height: best.h || 0 } : null;
+
+  return null;
 }
 
 export function isAnimatedMedia(media: any): boolean {
