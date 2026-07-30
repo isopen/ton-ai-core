@@ -1,7 +1,6 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
-import { Spinner } from './spinner.js';
 
 function imageLoad(url: string, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -149,11 +148,6 @@ export function TelegramImage(props: {
       ) : (
         <div class="TelegramImage__placeholder" />
       )}
-      {!loaded && !error ? (
-        <div class="TelegramImage__loading">
-          <Spinner />
-        </div>
-      ) : null}
     </div>
   );
 }

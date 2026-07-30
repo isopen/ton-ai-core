@@ -205,10 +205,8 @@ export function applyReadReceipt(s: GramState, peerKey: string, maxId: number) {
     d.readInboxMaxId = maxId;
     const cached = s.messagesCache.current.get(peerKey);
     if (Array.isArray(cached)) {
-      const newlyRead = cached.filter(m => !m.out && m.id > prevMax && m.id <= maxId).length;
-      if (newlyRead > 0) {
-        d.unreadCount = Math.max(0, (d.unreadCount || 0) - newlyRead);
-      }
+      const remaining = cached.filter(m => !m.out && m.id > maxId).length;
+      d.unreadCount = Math.max(0, remaining);
     }
     scheduleDialogsFlush(s);
   }
@@ -243,11 +241,6 @@ export function persistOrphanedDialogs(s: GramState) {
 
 export function addOrphanedDialog(s: GramState, key: string, dialog: Dialog) {
   s.orphanedDialogsRef.current.set(key, { ...dialog });
-  persistOrphanedDialogs(s);
-}
-
-export function removeOrphanedDialog(s: GramState, key: string) {
-  s.orphanedDialogsRef.current.delete(key);
   persistOrphanedDialogs(s);
 }
 

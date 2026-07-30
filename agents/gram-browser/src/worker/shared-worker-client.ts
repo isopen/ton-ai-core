@@ -16,11 +16,6 @@ export class SharedWorkerClient {
         this.statusListeners.forEach(cb => cb(s));
     }
 
-    onStatusChange(cb: (s: WorkerStatus) => void): void {
-        this.statusListeners.add(cb);
-        cb(this.status);
-    }
-
     onUpdate(handler: (msg: any) => void): void {
         this.updateHandler = handler;
     }
@@ -218,20 +213,9 @@ export class SharedWorkerClient {
         return r.state;
     }
 
-    async disconnect(): Promise<void> {
-        await this.send({ type: 'disconnect' });
-        this.setStatus('idle');
-    }
-
     async logout(): Promise<void> {
         await this.send({ type: 'logout' });
         this.setStatus('idle');
-    }
-
-    onMessages(handler: (updates: any[]) => void): void {
-        this.updateHandler = (msg) => {
-            if (msg.type === 'message') handler([msg]);
-        };
     }
 
     destroy(): void {

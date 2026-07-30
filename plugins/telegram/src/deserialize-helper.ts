@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer';
-import { SchemaDeserializer, type DeserializedObject } from '@ton-ai/tl-language';
+import type { DeserializedObject } from '@ton-ai/tl-language';
 
 function isDeserializedObject(v: unknown): v is DeserializedObject {
     return !!v && typeof v === 'object' && 'constructorId' in v && 'constructorName' in v && 'fields' in v;
@@ -22,10 +22,4 @@ export function deserializedToPlain(obj: DeserializedObject | null): Record<stri
         result[key] = convertValue(value);
     }
     return result;
-}
-
-export function schemaDecode(data: Buffer, registry: import('@ton-ai/tl-language').SchemaRegistry): Record<string, unknown> {
-    const d = new SchemaDeserializer(data, registry);
-    const obj = d.readBoxedObject();
-    return deserializedToPlain(obj);
 }

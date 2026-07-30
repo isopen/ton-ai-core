@@ -8,7 +8,6 @@ export function genId(): string {
 }
 
 export const TYPING_TIMEOUT = 10000;
-export const TYPING_SEND_INTERVAL = 5000;
 export const MESSAGE_CACHE_PREFIX = 'messages_';
 export const DIALOG_CACHE_KEY = 'dialogs';
 export const ORPHANED_KEY = 'tg_orphaned_dialogs';

@@ -13,7 +13,7 @@ export interface TypingDeps {
   userNameMap: Map<string, string>;
 }
 
-export function getActionLabel(actionName: string): string {
+function getActionLabel(actionName: string): string {
   const key = ACTION_KEYS[actionName];
   return key ? t(key) : t(S.ACTION_TYPING);
 }

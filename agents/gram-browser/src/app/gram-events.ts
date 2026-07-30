@@ -4,9 +4,9 @@ import { dbGet, dbSet, dbDel, dbKeys, dbClearCacheKeepSession, dbDeleteAvatarByO
 import type { GramState } from './gram-state';
 import type { Message } from '@ton-ai/gram-ui';
 
-export const photoUrlCache = new Map<string, string>();
+const photoUrlCache = new Map<string, string>();
 
-export const getPhotoCacheKey = (photo: any, sizeType: string): string => {
+const getPhotoCacheKey = (photo: any, sizeType: string): string => {
   return `${photo.id || ''}_${sizeType}`;
 };
 

@@ -164,11 +164,6 @@ export class WorkerTelegramService extends TelegramService {
         return this.workerClient.startPhotoDownload(photo, sizeType, messageId, onProgress);
     }
 
-    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
-        if (!this.workerClient) return { photoUrl: null };
-        return this.workerClient.requestPhotoDownload(photo, sizeType, messageId);
-    }
-
     async cancelPhotoDownloads(): Promise<void> {
         if (!this.workerClient) return;
         await this.workerClient.cancelPhotoDownloads();

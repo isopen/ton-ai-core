@@ -1,4 +1,4 @@
-import { createStandaloneGramDb, GramDbSkills, KeyManager, EncryptedStore } from '@ton-ai/gram-db';
+import { createStandaloneGramDb, GramDbSkills } from '@ton-ai/gram-db';
 
 let _gramDb: GramDbSkills | null = null;
 
@@ -8,5 +8,3 @@ export function getGramDb(): GramDbSkills {
     }
     return _gramDb;
 }
-
-export { KeyManager, EncryptedStore };

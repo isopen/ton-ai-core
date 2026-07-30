@@ -125,8 +125,10 @@ export function VideoMessage(props: VideoMessageProps) {
   const [uiState, setUiState] = useState<'ready' | 'loading' | 'playing' | 'error'>('ready');
   const [ct, setCt] = useState(0);
   const [lpct, setLpct] = useState(0);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(true);
+  const [videoMuted, setVideoMuted] = useState(true);
+  const [volume, setVolume] = useState(0);
+  const prevVolumeRef = useRef(0);
   const [forceAutoplay, setForceAutoplay] = useState(false);
 
   const doc = m.media?.document;
@@ -184,12 +186,14 @@ export function VideoMessage(props: VideoMessageProps) {
     if (isRealVideo) {
       const v = videoRef.current;
       if (v) {
+        v.muted = videoMuted;
+        v.volume = volume;
         v.play().catch(startRaf);
         return;
       }
     }
     startRaf();
-  }, [isRealVideo, duration, startRaf]);
+  }, [isRealVideo, duration, startRaf, videoMuted, volume]);
 
   const pause = useCallback(() => {
     playingRef.current = false;
@@ -210,7 +214,7 @@ export function VideoMessage(props: VideoMessageProps) {
     if (wasLoadingRef.current) {
       wasLoadingRef.current = false;
       autoPlayFlagRef.current = true;
-      setMuted(true);
+      setVideoMuted(true);
       setForceAutoplay(true);
       setUiState('playing');
       playingRef.current = true;
@@ -228,7 +232,8 @@ export function VideoMessage(props: VideoMessageProps) {
       setLoaded(true);
       if (playingRef.current) {
         if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-        videoRef.current?.play().catch(() => {});
+        const v = videoRef.current;
+        if (v) { v.muted = videoMuted; v.volume = volume; v.play().catch(() => {}); }
       } else {
         setUiState('ready');
       }
@@ -241,7 +246,6 @@ export function VideoMessage(props: VideoMessageProps) {
       if (autoPlayFlagRef.current) {
         autoPlayFlagRef.current = false;
         setForceAutoplay(false);
-        setMuted(false);
       }
     };
     v.addEventListener('error', onErr);
@@ -258,6 +262,12 @@ export function VideoMessage(props: VideoMessageProps) {
       v.removeEventListener('playing', onPlaying);
     };
   }, [isRealVideo]);
+
+  useEffect(() => {
+    if (!isRealVideo || !videoRef.current) return;
+    videoRef.current.muted = videoMuted;
+    videoRef.current.volume = volume;
+  }, [volume, videoMuted, isRealVideo]);
 
   const toggle = useCallback(() => {
     if (uiState === 'loading') return;
@@ -281,9 +291,30 @@ export function VideoMessage(props: VideoMessageProps) {
   const toggleMute = useCallback(() => {
     setMuted(v => {
       const nv = !v;
-      if (isRealVideo && videoRef.current) videoRef.current.muted = nv;
+      setVideoMuted(nv);
+      if (isRealVideo && videoRef.current) {
+        videoRef.current.muted = nv;
+        if (!nv) {
+          videoRef.current.volume = 1;
+          setVolume(1);
+          prevVolumeRef.current = 1;
+        }
+      }
       return nv;
     });
+  }, [isRealVideo]);
+
+  const handleVolumeChange = useCallback((e: any) => {
+    const v = parseFloat(e.target?.value ?? e);
+    prevVolumeRef.current = v;
+    setVolume(v);
+    if (isRealVideo && videoRef.current) {
+      videoRef.current.volume = v;
+      if (v > 0) {
+        videoRef.current.muted = false;
+        setMuted(false);
+      }
+    }
   }, [isRealVideo]);
 
   const seek = useCallback((clientX: number) => {
@@ -329,9 +360,12 @@ export function VideoMessage(props: VideoMessageProps) {
           onClick={frameClick}
         >
           {isRealVideo && url ? (
-            <video ref={videoRef} class="video-message__thumb" src={url}
+            <video ref={(el: any) => {
+              videoRef.current = el;
+              if (el) { el.muted = videoMuted; el.volume = volume; }
+            }} class="video-message__thumb" src={url}
               poster={thumb?.url || undefined}
-              muted={muted} autoplay={forceAutoplay} loop playsinline preload="auto"
+              autoplay={forceAutoplay} loop playsinline preload="auto"
               style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000"
               onTimeUpdate={onTimeUpdate}
               onCanPlay={() => setLoaded(true)} />
@@ -347,10 +381,17 @@ export function VideoMessage(props: VideoMessageProps) {
           <div class="video-message__top">
             <div class="video-message__top-left">
               <span class="badge badge--duration">{uiState === 'playing' ? fmt(ct) : durLabel}</span>
-              <button type="button" class="badge badge--icon" data-action="mute" onClick={(e: any) => { e.stopPropagation(); toggleMute(); }}>
-                <IconVolume />
-                <IconMute />
-              </button>
+              <div class="volume-control">
+                <button type="button" class="badge badge--icon" data-action="mute" onClick={(e: any) => { e.stopPropagation(); toggleMute(); }}>
+                  <IconVolume />
+                  <IconMute />
+                </button>
+                <div class="volume-slider-wrap" onClick={(e: any) => e.stopPropagation()}>
+                  <input type="range" class="volume-slider" min="0" max="1" step="0.05" value={muted ? 0 : volume}
+                    onInput={(e: any) => { e.stopPropagation(); handleVolumeChange(e); }}
+                    onChange={(e: any) => { e.stopPropagation(); handleVolumeChange(e); }} />
+                </div>
+              </div>
             </div>
             <div class="video-message__top-right">
               {documentSources?.[m.id] ? (
@@ -358,11 +399,19 @@ export function VideoMessage(props: VideoMessageProps) {
                   {documentSources[m.id] === 'memory' ? 'in-memory' : documentSources[m.id] === 'persisted' ? 'gram-db' : documentSources[m.id] === 'cdn-server' ? 'cdn-server' : documentSources[m.id] === 'migrate-server' ? 'migrate-server' : 'home-server'}
                 </span>
               ) : null}
-              <button type="button" class="badge badge--icon video-message__action" data-action="download" onClick={(e: any) => { e.stopPropagation(); toast('Демо-компонент: файл недоступен для скачивания'); }}>
+              <button type="button" class="badge badge--icon video-message__action" data-action="download" onClick={(e: any) => {
+                e.stopPropagation();
+                const doc = m.media?.document;
+                const fnAttr = Array.isArray(doc?.attributes) ? doc.attributes.find((a: any) => a._ === 'documentAttributeFilename') : null;
+                const fileName = fnAttr?.file_name || doc?.file_name || 'video.mp4';
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = fileName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+              }}>
                 <IconDownload />
-              </button>
-              <button type="button" class="badge badge--icon video-message__action" data-action="menu" onClick={(e: any) => { e.stopPropagation(); setMenuOpen(v => !v); }}>
-                <IconMore />
               </button>
             </div>
           </div>
@@ -404,12 +453,7 @@ export function VideoMessage(props: VideoMessageProps) {
             </button>
           </div>
 
-          {/* dropdown */}
-          <div class="dropdown-menu" hidden={!menuOpen}>
-            <button type="button" onClick={() => { setMenuOpen(false); toast('Демо-компонент: действие недоступно'); }}>Переслать</button>
-            <button type="button" onClick={() => { setMenuOpen(false); toast('Демо-компонент: действие недоступно'); }}>Сохранить в галерею</button>
-            <button type="button" class="dropdown-menu__danger" onClick={() => { setMenuOpen(false); toast('Демо-компонент: действие недоступно'); }}>Удалить</button>
-          </div>
+
         </div>
 
       </div>

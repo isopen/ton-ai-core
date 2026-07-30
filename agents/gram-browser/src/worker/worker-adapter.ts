@@ -100,18 +100,8 @@ export class TelegramWorkerClient {
         await this.client.readHistory(peer, maxId);
     }
 
-    async disconnect(): Promise<void> {
-        await this.client.disconnect();
-    }
-
     async logout(): Promise<void> {
         await this.client.logout();
-    }
-
-    onMessages(handler: (updates: any[]) => void): void {
-        this.updateHandler = (msg) => {
-            if (msg.type === 'message') handler([msg]);
-        };
     }
 
     destroy(): void {

@@ -11,14 +11,6 @@ export interface ObfuscationKeys {
     decryptCounter: number;
 }
 
-function isBlockedPrefix(firstByte: number, firstU32: number, secondU32: number): boolean {
-    if (firstByte === 0xef) return true;
-    const blocked = [0x44414548, 0x54534f50, 0x20544547, 0xeeeeeeee, 0xdddddddd, 0x02010316];
-    if (blocked.includes(firstU32)) return true;
-    if (secondU32 === 0x00000000) return true;
-    return false;
-}
-
 export function aes256CtrProcess(data: Buffer, key: Buffer, iv: Buffer, startCounter: number): Buffer {
     const result = Buffer.alloc(data.length);
     let offset = 0;
