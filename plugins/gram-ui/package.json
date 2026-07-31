@@ -32,7 +32,8 @@
   },
   "dependencies": {
     "@ton-ai/atom": "*",
-    "@ton-ai/core": "*"
+    "@ton-ai/core": "*",
+    "@ton-ai/tgs": "*"
   },
   "devDependencies": {
     "@types/node": "^20.19.33",

@@ -29,6 +29,7 @@ export interface Message {
     out: boolean;
     peerId: any;
     media?: any;
+    action?: any;
 }
 
 export interface Country {

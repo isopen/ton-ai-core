@@ -373,6 +373,31 @@ export function setupEventListeners(s: GramState): void {
     return URL.createObjectURL(new Blob([bytes], { type: mime }));
   };
 
+  const tgsToJsonUrl = async (base64: string): Promise<string> => {
+    const binaryStr = atob(base64);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+    console.log('[TGS_LOG] tgsToJsonUrl bytes', { len: bytes.length, isGzip: bytes[0] === 0x1f && bytes[1] === 0x8b, preview: Array.from(bytes.slice(0, 16)).map(b => b.toString(16)).join(' ') });
+    let jsonStr: string;
+    if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+      try {
+        const blob = new Blob([bytes]);
+        const stream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+        jsonStr = await new Response(stream).text();
+        console.log('[TGS_LOG] tgsToJsonUrl decompressed', { len: jsonStr.length });
+      } catch (e) {
+        console.log('[TGS_LOG] tgsToJsonUrl gzip error, fallback to raw', e);
+        jsonStr = new TextDecoder().decode(bytes);
+      }
+    } else {
+      jsonStr = new TextDecoder().decode(bytes);
+    }
+    const jsonBlob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(jsonBlob);
+    console.log('[TGS_LOG] tgsToJsonUrl done', { url: url.slice(0, 60), jsonLen: jsonStr.length, startsWithBrace: jsonStr.trim().startsWith('{') });
+    return url;
+  };
+
   let documentDownloadGen = 0;
   const documentPending = new Set<number>();
 
@@ -496,9 +521,11 @@ export function setupEventListeners(s: GramState): void {
         }
         if (gen !== documentDownloadGen) return;
         if (result?.bytes) {
-          const url = mime.startsWith('video/')
-            ? base64ToBlobUrl(result.bytes, mime)
-            : 'data:' + mime + ';base64,' + result.bytes;
+          const url = mime === 'application/x-tgsticker'
+            ? await tgsToJsonUrl(result.bytes)
+            : mime.startsWith('video/')
+              ? base64ToBlobUrl(result.bytes, mime)
+              : 'data:' + mime + ';base64,' + result.bytes;
           s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url, cacheSource: result.cacheSource });
         }
       } catch (err: any) {
@@ -511,9 +538,11 @@ export function setupEventListeners(s: GramState): void {
             if (gen !== documentDownloadGen) return;
             if (retry?.bytes) {
               const m = (freshMsg.media.document.mime_type || 'application/octet-stream').toLowerCase();
-              const url = m.startsWith('video/')
-                ? base64ToBlobUrl(retry.bytes, m)
-                : 'data:' + m + ';base64,' + retry.bytes;
+              const url = m === 'application/x-tgsticker'
+                ? await tgsToJsonUrl(retry.bytes)
+                : m.startsWith('video/')
+                  ? base64ToBlobUrl(retry.bytes, m)
+                  : 'data:' + m + ';base64,' + retry.bytes;
               s.tgui.current?.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url, cacheSource: retry.cacheSource });
             }
           }

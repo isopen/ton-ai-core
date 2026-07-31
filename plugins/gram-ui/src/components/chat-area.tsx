@@ -1,11 +1,12 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
-import { useEffect, useRef } from '@ton-ai/atom/hooks';
+import { useEffect, useRef, useState, useCallback } from '@ton-ai/atom/hooks';
 import { VirtualList } from '@ton-ai/atom';
 import { Spinner } from '../primitives/spinner.js';
 import { Avatar } from '../primitives/avatar.js';
 import { Flex } from '../primitives/flex.js';
 import { Button } from '../primitives/button.js';
 import { Text } from '../primitives/text.js';
+import { TgsPlayer } from './tgs-player.js';
 import { MessageBubble } from './message-bubble.js';
 import { Checkmark } from './checkmark.js';
 import { TypingIndicator } from './typing-indicator.js';
@@ -29,13 +30,87 @@ function toFileSize(bytes?: number): string {
   return (bytes / 1048576).toFixed(1) + ' MB';
 }
 
-function StickerBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {
+function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; documentUrls: Record<number, string>; documentProgress?: Record<number, number> }) {
   const doc = m.media?.document;
   const emoji = getStickerEmoji(doc);
+  const isTgs = (doc?.mime_type || '').toLowerCase() === 'application/x-tgsticker';
+  const url = documentUrls[m.id] || '';
+  const progress = documentProgress?.[m.id] ?? -1;
+  const isLoading = !url && progress >= 0 && progress < 100;
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [visible, setVisible] = useState(false);
+  const [attachTick, setAttachTick] = useState(0);
+
+  const handleRef = useCallback((el: HTMLDivElement | null) => {
+    rootRef.current = el;
+    setAttachTick(t => t + 1);
+  }, []);
+
+  useEffect(() => {
+    if (visible) return;
+    const el = rootRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: '100px' });
+    observer.observe(el);
+    return () => { observer.disconnect(); };
+  }, [visible, attachTick]);
+
+  useEffect(() => {
+    if (!visible) return;
+    if (url) return;
+    window.dispatchEvent(new CustomEvent('tg-download-document', {
+      detail: { document: doc, messageId: m.id, priority: 0 },
+    }));
+  }, [visible, url, doc, m.id]);
+
+  const [tgsData, setTgsData] = useState<string | null>(null);
+  const [tgsReady, setTgsReady] = useState(false);
+  useEffect(() => {
+    if (!url || !isTgs) {
+      if (url) console.log('[TGS_LOG] StickerBubble: not tgs, url=', url.slice(0, 50));
+      setTgsData(null); setTgsReady(false); return;
+    }
+    if (tgsReady) { console.log('[TGS_LOG] StickerBubble: already ready'); return; }
+    console.log('[TGS_LOG] StickerBubble: fetching tgs url', url.slice(0, 60), 'msgId=', m.id);
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch(url);
+        const text = await resp.text();
+        console.log('[TGS_LOG] StickerBubble: fetched', { len: text.length, preview: text.slice(0, 80) });
+        if (!cancelled) { setTgsData(text); setTgsReady(true); }
+      } catch (e) {
+        console.log('[TGS_LOG] StickerBubble: fetch error', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [url, isTgs, tgsReady, m.id]);
+
+  console.log('[TGS_LOG] StickerBubble render', { mid: m.id, url: url ? url.slice(0, 40) : 'none', isTgs, tgsReady: !!tgsData, visible, isLoading });
+
+  const showTgs = isTgs && tgsData;
+  const showImg = !isTgs && url;
+
   return (
-    <div class="tgui-sticker">
-      <div class="tgui-sticker-preview">
-        <span class="tgui-sticker-emoji">{emoji || t(S.STICKER_FALLBACK)}</span>
+    <div class="tgui-sticker" ref={handleRef}>
+      <div class="tgui-sticker-preview" style={{ width: '150px', height: '150px', position: 'relative' }}>
+        {showTgs
+          ? <TgsPlayer animationData={tgsData} width={150} height={150} loop autoplay />
+          : showImg
+            ? <img src={url} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            : isLoading
+              ? <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+                  <div style={`width:${progress}%;height:4px;background:#fff;border-radius:2px`} />
+                </div>
+              : isTgs && url
+                ? <div style="position:absolute;inset:0" />
+                : <span class="tgui-sticker-emoji">{emoji || t(S.STICKER_FALLBACK)}</span>
+        }
       </div>
       <div class="tgui-sticker-meta">
         <span class="MessageBubble__time">{timeStr}</span>
@@ -244,6 +319,118 @@ function isUrlMessage(m: any): boolean {
   return /^https?:\/\/\S+$/i.test(m.message.trim());
 }
 
+function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrls: Record<number, string>; documentProgress?: Record<number, number> }) {
+  const action = m.action;
+  if (!action) return null;
+
+  const stickerDoc = action.gift?.sticker;
+  const isTgs = stickerDoc && (stickerDoc.mime_type || '').toLowerCase() === 'application/x-tgsticker';
+
+  if (stickerDoc) {
+    const url = documentUrls[m.id] || '';
+    const progress = documentProgress?.[m.id] ?? -1;
+    const isLoading = !url && progress >= 0 && progress < 100;
+    const rootRef = useRef<HTMLDivElement | null>(null);
+    const [visible, setVisible] = useState(false);
+    const [attachTick, setAttachTick] = useState(0);
+
+    const handleRef = useCallback((el: HTMLDivElement | null) => {
+      rootRef.current = el;
+      setAttachTick(t => t + 1);
+    }, []);
+
+    useEffect(() => {
+      if (visible) return;
+      const el = rootRef.current;
+      if (!el) return;
+      const observer = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      }, { rootMargin: '100px' });
+      observer.observe(el);
+      return () => { observer.disconnect(); };
+    }, [visible, attachTick]);
+
+    useEffect(() => {
+      if (!visible) return;
+      if (url) return;
+      window.dispatchEvent(new CustomEvent('tg-download-document', {
+        detail: { document: stickerDoc, messageId: m.id, priority: 0 },
+      }));
+    }, [visible, url, stickerDoc, m.id]);
+
+    const [tgsData, setTgsData] = useState<string | null>(null);
+    const [tgsReady, setTgsReady] = useState(false);
+    useEffect(() => {
+      if (!url || !isTgs) {
+        if (url) console.log('[TGS_LOG] GiftBubble: not tgs');
+        setTgsData(null); setTgsReady(false); return;
+      }
+      if (tgsReady) return;
+      console.log('[TGS_LOG] GiftBubble: fetching tgs url', url.slice(0, 60));
+      let cancelled = false;
+      (async () => {
+        try {
+          const resp = await fetch(url);
+          const text = await resp.text();
+          console.log('[TGS_LOG] GiftBubble: fetched', { len: text.length, preview: text.slice(0, 80) });
+          if (!cancelled) { setTgsData(text); setTgsReady(true); }
+        } catch (e) { console.log('[TGS_LOG] GiftBubble: fetch error', e); }
+      })();
+      return () => { cancelled = true; };
+    }, [url, isTgs, tgsReady]);
+
+    const showTgsGift = isTgs && tgsData;
+
+    return (
+      <div class="tgui-service-msg" ref={handleRef}>
+        {showTgsGift
+          ? <TgsPlayer animationData={tgsData} width={100} height={100} loop autoplay />
+          : !isTgs && url
+            ? <img src={url} style={{ width: 100, height: 100, objectFit: 'contain' }} />
+            : url && isTgs
+              ? <div style="width:100px;height:100px" />
+              : <span>🎁 {isLoading ? t(S.GIFT_LOADING) : t(S.GIFT_DEFAULT)}</span>
+        }
+      </div>
+    );
+  }
+
+  let label = '';
+  switch (action._) {
+    case 'messageActionGiftPremium':
+      label = action.months ? `${action.months} ${t(S.GIFT_PREMIUM)}` : t(S.GIFT_PREMIUM);
+      break;
+    case 'messageActionGiftCode':
+      label = t(S.GIFT_CODE);
+      break;
+    case 'messageActionGiftStars':
+      label = t(S.GIFT_STARS);
+      break;
+    case 'messageActionGiftTon':
+      label = t(S.GIFT_TON);
+      break;
+    case 'messageActionStarGift':
+      label = t(S.GIFT_STAR);
+      break;
+    default:
+      label = t(S.GIFT_DEFAULT);
+  }
+  return (
+    <div class="tgui-service-msg">
+      <span>🎁 {label}</span>
+    </div>
+  );
+}
+
+function isGiftMessage(action: any): boolean {
+  if (!action || typeof action !== 'object') return false;
+  const t = action._ || '';
+  return t.startsWith('messageActionGift');
+}
+
 function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrls, documentProgress, documentSources, photoSources, selfPeer }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrls: Record<number, string>; documentProgress: Record<number, number>; documentSources?: Record<number, string>; photoSources?: Record<number, string>; selfPeer?: boolean }) {
   const timeStr = formatMessageTime(m.date);
   const out = selfPeer ? true : m.out;
@@ -254,6 +441,18 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
   const isLinkMsg = mediaType === 'webpage' || isUrlMessage(m);
 
   const marginBottom = sameSenderPrev ? 2 : 8;
+
+  if (isGiftMessage(m.action)) {
+    return (
+      <div
+        id={`msg-${m.id}`}
+        class="tgui-msg-row tgui-msg-row-service"
+        style={`margin-bottom:${marginBottom}px`}
+      >
+        <GiftBubble m={m} documentUrls={documentUrls} documentProgress={documentProgress} />
+      </div>
+    );
+  }
   return (
     <div
       id={`msg-${m.id}`}
@@ -264,7 +463,7 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
         ? <div class="tgui-msg-sender" style={`color:${color}`}>{m.sender}</div>
         : null}
       {mediaType === 'sticker'
-        ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} />
+        ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} documentUrls={documentUrls} documentProgress={documentProgress} />
         : mediaType === 'photo' || mediaType === 'image'
           ? <PhotoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} cacheSource={photoSources?.[m.id]} />
           : mediaType === 'video' && isAnimatedMedia(m.media)

@@ -1,0 +1,17 @@
+{
+    "name": "@ton-ai/tgs",
+    "version": "0.1.0",
+    "description": "TGS (Telegram Lottie) parser and renderer plugin",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc"
+    },
+    "dependencies": {
+        "@ton-ai/core": "*"
+    },
+    "devDependencies": {
+        "typescript": "^6.0.3"
+    },
+    "private": true
+}

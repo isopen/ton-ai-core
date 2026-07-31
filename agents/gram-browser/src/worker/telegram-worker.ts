@@ -565,6 +565,7 @@ function parseUpdatePayload(body: Buffer): any {
 
 interface DcConnection {
     dcId: number;
+    type: 'video' | 'download';
     conn: BrowserObfuscatedConnection;
     authKey: Buffer;
     authKeyId: bigint;
@@ -750,7 +751,7 @@ async function createDcConnection(dcId: number): Promise<DcConnection> {
 }
 
 /** Acquire an idle connection to the DC, or create a new one. */
-async function acquireDcConnection(dcId: number): Promise<DcConnection> {
+async function acquireDcConnection(dcId: number, type: 'video' | 'download'): Promise<DcConnection> {
     // Clean stale connections for this DC
     for (let i = dcConnectionPool.length - 1; i >= 0; i--) {
         const c = dcConnectionPool[i];
@@ -759,12 +760,13 @@ async function acquireDcConnection(dcId: number): Promise<DcConnection> {
             dcConnectionPool.splice(i, 1);
         }
     }
-    const free = dcConnectionPool.find(c => c.dcId === dcId && !c.busy && c.conn.isConnected());
+    const free = dcConnectionPool.find(c => c.dcId === dcId && c.type === type && !c.busy && c.conn.isConnected());
     if (free) {
         free.busy = true;
         return free;
     }
     const entry = await createDcConnection(dcId);
+    entry.type = type;
     entry.busy = true;
     return entry;
 }
@@ -774,8 +776,8 @@ function releaseDcConnection(entry: DcConnection): void {
 }
 
 /** Call an RPC on a download connection for the given DC. */
-async function callRpcOnDc(dcId: number, methodName: string, params: Record<string, any>): Promise<any> {
-    const dc = await acquireDcConnection(dcId);
+async function callRpcOnDc(dcId: number, methodName: string, params: Record<string, any>, type: 'video' | 'download' = 'download'): Promise<any> {
+    const dc = await acquireDcConnection(dcId, type);
     try {
         const result = await directRpcWith(
             dc.conn, dc.authKey, dc.authKeyId,
@@ -2786,12 +2788,12 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     const doCall = async (ofs: bigint): Promise<any> => {
         if (cdnDcId > 0 && cdnFileToken) {
             const p = { file_token: cdnFileToken, offset: ofs, limit };
-            const result = await callRpcOnDc(cdnDcId, 'upload.getCdnFile', p);
+            const result = await callRpcOnDc(cdnDcId, 'upload.getCdnFile', p, 'video');
             if (result._ === 'upload.cdnFileReuploadNeeded') {
                 const requestToken = Buffer.from(result.request_token, 'hex');
                 await callRpcOnDc(targetDc || ses!.dcId, 'upload.reuploadCdnFile', {
                     file_token: cdnFileToken, request_token: requestToken,
-                });
+                }, 'video');
                 return doCall(ofs);
             }
             if (result._ === 'upload.cdnFile') {
@@ -2806,7 +2808,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
         const p = { precise: false, location, offset: ofs, limit };
         const callDc = targetDc > 0 ? targetDc : ses!.dcId;
         try {
-            return await callRpcOnDc(callDc, 'upload.getFile', p);
+            return await callRpcOnDc(callDc, 'upload.getFile', p, 'video');
             } catch (e: any) {
                 const m = e.message.match(/FILE_MIGRATE_(\d+)/);
                 if (m) {

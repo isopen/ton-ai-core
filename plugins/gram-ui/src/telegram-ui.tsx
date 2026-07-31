@@ -18,7 +18,8 @@ import { ChatInput } from './components/chat-input.js';
 import { DebugView } from './components/debug-view.js';
 import { SettingsView } from './components/settings-view.js';
 import { CacheView } from './components/cache-view.js';
-import { S } from './strings.js';
+import { S, LANG_FALLBACKS } from './strings.js';
+import { setStrings } from './locale.js';
 export type { AppState, UIAction, PeerInfo, Dialog, Message };
 
 export interface TelegramUICallbacks {
@@ -56,6 +57,7 @@ export class TelegramUI {
 
   constructor(container: HTMLElement, callbacks: TelegramUICallbacks, initialState?: Partial<AppState>) {
     this.callbacks = callbacks;
+    setStrings(LANG_FALLBACKS.ru || {});
     injectStyles();
 
     const merged = { ...defaultState(), ...initialState };
@@ -186,6 +188,8 @@ export class TelegramUI {
     window.addEventListener('tg-auth-request-qr', this._onRequestQr);
     window.addEventListener('tg-auth-set-lang', (e: any) => {
       this.dispatch({ type: 'SET_LANG_CODE', langCode: e.detail.langCode });
+      const fallback = LANG_FALLBACKS[e.detail.langCode];
+      if (fallback) setStrings(fallback);
     });
 
   }

@@ -1684,6 +1684,26 @@ body {
   padding: 0 4px;
 }
 
+.tgui-msg-row-service {
+  justify-content: center;
+}
+
+.tgui-service-msg {
+  background: var(--bg-surface);
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+  max-width: 80%;
+}
+
+.tgui-service-msg span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* ===== Media Player (Video / GIF) ===== */
 .MessageBubble_media {
   max-width: none;

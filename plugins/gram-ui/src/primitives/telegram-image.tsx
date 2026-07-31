@@ -70,7 +70,8 @@ export function TelegramImage(props: {
     if (error) setError(false);
 
     if (image.thumbnail?.url && image.thumbnail.url !== srcs[0]) {
-      setCurrentSrc(image.thumbnail.url);
+      const isCurrentWorse = currentSrc === image.original?.url || currentSrc === image.medium?.url;
+      if (!isCurrentWorse) setCurrentSrc(image.thumbnail.url);
     }
 
     (async () => {

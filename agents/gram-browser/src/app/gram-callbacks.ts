@@ -155,7 +155,7 @@ export function createCallbacks(
             id: m.id || 0, fromId: m.from_id,
             sender: resolveSenderName(m.from_id, m.sender),
             date: m.date || 0, message: m.message || '',
-            out: !!m.out, peerId: null, media: m.media,
+            out: !!m.out, peerId: null, media: m.media, action: m.action,
           })).reverse();
           let result: Message[];
           if (msgs.length === 0 && maxId === 0) {
