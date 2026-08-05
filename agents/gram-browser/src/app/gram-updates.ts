@@ -77,7 +77,7 @@ export function createHandleUpdate(s: GramState) {
             id: msg.id || 0, fromId: msg.from_id,
             sender,
             date: msg.date || 0, message: msg.message || '',
-            out: !!msg.out, peerId: msg.peer_id, media: msg.media, action: msg.action,
+            out: !!msg.out, peerId: msg.peer_id, media: msg.media, action: msg.action, entities: msg.entities,
           };
           if (fromType === 'peerUser' && uid && !s.userNameMap.current.has(uid)) {
             fetchPeerInfo(s, 'user', uid);
@@ -183,8 +183,6 @@ export function createHandleUpdate(s: GramState) {
         };
         if (u._ === 'updateReadHistoryInbox') { handleReadHistoryInbox(u); }
         if (u._ === 'updateShort' && u.update?._ === 'updateReadHistoryInbox') { handleReadHistoryInbox(u.update); }
-        if (u._ === 'updateReadHistoryOutbox') { handleReadHistoryInbox(u); }
-        if (u._ === 'updateShort' && u.update?._ === 'updateReadHistoryOutbox') { handleReadHistoryInbox(u.update); }
         if ((u._ === 'updates' || u._ === 'updatesCombined') && Array.isArray(u.updates)) {
           for (const upd of u.updates) {
             if (upd._ === 'updateNewMessage' || upd._ === 'updateNewChannelMessage') processNewMsg(upd.message);

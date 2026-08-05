@@ -74,7 +74,6 @@ export class AES256IGE {
         enc.fill(0);
       }
     } else {
-      const _t3 = performance.now();
       const aesEcb = new AES256ECB(key);
       const tmp = Buffer.alloc(this.BLOCK_SIZE);
       try {
@@ -121,7 +120,6 @@ export class AES256IGE {
         aesEcb.destroy();
         tmp.fill(0);
       }
-      console.log('[timing] AES256IGE.encrypt dataLen=' + data.length + ' ms=' + (performance.now() - _t3).toFixed(1));
     }
 
     return result;
@@ -135,7 +133,6 @@ export class AES256IGE {
     const result = Buffer.alloc(data.length);
     let prevCipher = iv.subarray(0, this.BLOCK_SIZE);
     let prevPlain = iv.subarray(this.BLOCK_SIZE, this.BLOCK_SIZE * 2);
-    const _t4 = performance.now();
 
     if (isNode()) {
       const crypto = require('crypto');
@@ -237,7 +234,6 @@ export class AES256IGE {
       }
     }
 
-    console.log('[timing] AES256IGE.decrypt dataLen=' + data.length + ' ms=' + (performance.now() - _t4).toFixed(1));
     return result;
   }
 }

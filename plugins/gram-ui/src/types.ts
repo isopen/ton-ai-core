@@ -30,6 +30,7 @@ export interface Message {
     peerId: any;
     media?: any;
     action?: any;
+    entities?: any[];
 }
 
 export interface Country {
@@ -71,10 +72,17 @@ export interface AppState {
   pluginSkills: Array<{ id: string; label: string }>;
   activeSkill: string | null;
   langOptions: Array<{ code: string; label: string }>;
-  documentUrls: Record<number, string>;
-  documentProgress: Record<number, number>;
+  documentUrls: Record<number | string, string>;
+  documentProgress: Record<number | string, number>;
   photoSources: Record<number, string>;
-  documentSources: Record<number, string>;
+  documentSources: Record<number | string, string>;
+  reactions: Record<number, MessageReaction[]>;
+}
+
+export interface MessageReaction {
+  emoji: string;
+  count: number;
+  chosen: boolean;
 }
 
 export interface ImageSource {
@@ -138,9 +146,13 @@ export type UIAction =
     | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number; sizeType: string; url: string; cacheSource?: string }
     | { type: 'UPDATE_MESSAGE_PHOTO_PROGRESS'; messageId: number; progress: number }
     | { type: 'REFRESH_MESSAGE_PHOTO'; messageId: number; photo: any }
-    | { type: 'UPDATE_MESSAGE_DOCUMENT'; messageId: number; url: string; cacheSource?: string }
-    | { type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS'; messageId: number; progress: number }
-    | { type: 'UPDATE_MESSAGE_DOCUMENT_THUMB'; messageId: number; thumbType: string; url: string }
-    | { type: 'UPDATE_MESSAGE_DOCUMENT_SOURCE'; messageId: number; cacheSource: string }
+    | { type: 'UPDATE_MESSAGE_DOCUMENT'; messageId: number | string; url: string; cacheSource?: string }
+    | { type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS'; messageId: number | string; progress: number }
+    | { type: 'UPDATE_MESSAGE_DOCUMENT_THUMB'; messageId: number | string; thumbType: string; url: string }
+    | { type: 'UPDATE_MESSAGE_DOCUMENT_SOURCE'; messageId: number | string; cacheSource: string }
+    | { type: 'SET_MESSAGE_REACTIONS'; messageId: number; reactions: MessageReaction[] }
+    | { type: 'TOGGLE_REACTION'; messageId: number; emoji: string }
+    | { type: 'CLEAR_EMPTY_CHAT_DOCUMENT' }
+    | { type: 'CLEAR_EMOJI_DOCUMENTS'; keys?: string[] }
     | { type: 'LOGOUT' };
 

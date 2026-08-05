@@ -25,6 +25,22 @@ function generateItems(n: number): { id: number; label: string }[] {
   return Array.from({ length: n }, (_, i) => ({ id: i, label: `Item ${i}` }));
 }
 
+// Scroll-driven state is throttled to one setScrollTop per animation frame
+// (virtual-list rAF batching), so assertions after a scroll event must wait
+// for the rAF callback + the queued render microtask: two rAFs cover both.
+function afterScroll(assert: () => void, done: jest.DoneCallback): void {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      try {
+        assert();
+        done();
+      } catch (e) {
+        done(e as any);
+      }
+    });
+  });
+}
+
 describe('VirtualList', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
@@ -89,12 +105,11 @@ describe('VirtualList', () => {
         listEl.scrollTop = 20 * ITEM_HEIGHT;
         listEl.dispatchEvent(new Event('scroll'));
 
-        queueMicrotask(() => {
+        afterScroll(() => {
           const rendered = container.querySelectorAll('[data-testid="item"]');
           const firstId = rendered[0]?.getAttribute('data-id');
           expect(firstId).toBe('20');
-          done();
-        });
+        }, done);
       });
     });
 
@@ -279,13 +294,12 @@ describe('VirtualList', () => {
         listEl.scrollTop = 20 * 50;
         listEl.dispatchEvent(new Event('scroll'));
 
-        queueMicrotask(() => {
+        afterScroll(() => {
           const rendered = container.querySelectorAll('[data-testid="item"]');
           const firstId = rendered[0]?.getAttribute('data-id');
           expect(Number(firstId)).toBeGreaterThan(0);
           expect(Number(firstId)).toBeLessThan(20);
-          done();
-        });
+        }, done);
       });
     });
 
@@ -389,10 +403,9 @@ describe('VirtualList', () => {
         listEl.scrollTop = items.length * 50;
         listEl.dispatchEvent(new Event('scroll'));
 
-        queueMicrotask(() => {
+        afterScroll(() => {
           expect(endReached).toBe(true);
-          done();
-        });
+        }, done);
       });
     });
 

@@ -2,6 +2,8 @@ import { currentInstance, type ComponentInstance } from './vdom.js';
 
 let reroot: (() => void) | null = null;
 
+const pendingEffects: Array<{ inst: ComponentInstance; fn: () => (() => void) | void; oldCleanup?: (() => void); cleanupIdx: number }> = [];
+
 export function __setReroot(fn: () => void) {
   reroot = fn;
 }
@@ -44,14 +46,33 @@ export function useEffect(fn: () => (() => void) | void, deps?: any[]) {
   }
 
   if (changed) {
-    const oldCleanup = inst.hookStates[cleanupIdx] as (() => void) | undefined;
+    inst.hookStates[depsIdx] = deps;
+    pendingEffects.push({
+      inst,
+      fn,
+      oldCleanup: inst.hookStates[cleanupIdx] as (() => void) | undefined,
+      cleanupIdx,
+    });
+  }
+}
+
+// Runs all effects registered during the last render pass, in registration
+// order. Must be called after the DOM commit so that refs are already set.
+export function flushAllEffects() {
+  while (pendingEffects.length > 0) {
+    const { inst, fn, oldCleanup, cleanupIdx } = pendingEffects.shift()!;
     if (oldCleanup) {
       try { oldCleanup(); } catch (e) { console.error('useEffect cleanup error:', e); }
       const ci = inst.unmountCleanups.indexOf(oldCleanup);
       if (ci !== -1) inst.unmountCleanups.splice(ci, 1);
     }
-    inst.hookStates[depsIdx] = deps;
-    const cleanup = fn();
+    let cleanup: (() => void) | void;
+    try {
+      cleanup = fn();
+    } catch (e) {
+      console.error('useEffect error:', e);
+      cleanup = undefined;
+    }
     inst.hookStates[cleanupIdx] = typeof cleanup === 'function' ? cleanup : undefined;
     if (typeof cleanup === 'function') {
       inst.unmountCleanups.push(cleanup);

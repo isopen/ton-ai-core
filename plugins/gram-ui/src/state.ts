@@ -49,6 +49,7 @@ export function defaultState(): AppState {
     documentProgress: {},
     photoSources: {},
     documentSources: {},
+    reactions: {},
   };
 }
 
@@ -121,11 +122,14 @@ export function reducer(state: AppState, action: UIAction): AppState {
           : m
       ),
     };
-    case 'UPDATE_MESSAGE_DOCUMENT': return {
-      ...state,
-      documentUrls: { ...state.documentUrls, [action.messageId]: action.url },
-      documentSources: action.cacheSource ? { ...state.documentSources, [action.messageId]: action.cacheSource } : state.documentSources,
-    };
+    case 'UPDATE_MESSAGE_DOCUMENT': {
+      if ((state.documentUrls as any)[action.messageId] === action.url) return state;
+      return {
+        ...state,
+        documentUrls: { ...state.documentUrls, [action.messageId]: action.url },
+        documentSources: action.cacheSource ? { ...state.documentSources, [action.messageId]: action.cacheSource } : state.documentSources,
+      };
+    }
     case 'UPDATE_MESSAGE_DOCUMENT_THUMB': return {
       ...state,
       renderTick: state.renderTick + 1,
@@ -135,19 +139,72 @@ export function reducer(state: AppState, action: UIAction): AppState {
           : m
       ),
     };
-    case 'UPDATE_MESSAGE_DOCUMENT_PROGRESS': return {
-      ...state,
-      documentProgress: { ...state.documentProgress, [action.messageId]: action.progress },
-    };
-    case 'UPDATE_MESSAGE_DOCUMENT_SOURCE': return {
-      ...state,
-      documentSources: { ...state.documentSources, [action.messageId]: action.cacheSource },
-    };
+    case 'UPDATE_MESSAGE_DOCUMENT_PROGRESS': {
+      if (state.documentProgress[action.messageId] === action.progress) return state;
+      return {
+        ...state,
+        documentProgress: { ...state.documentProgress, [action.messageId]: action.progress },
+      };
+    }
+    case 'UPDATE_MESSAGE_DOCUMENT_SOURCE': {
+      if (state.documentSources[action.messageId] === action.cacheSource) return state;
+      return {
+        ...state,
+        documentSources: { ...state.documentSources, [action.messageId]: action.cacheSource },
+      };
+    }
+    case 'CLEAR_EMPTY_CHAT_DOCUMENT': {
+      const documentUrls = { ...state.documentUrls };
+      const documentSources = { ...state.documentSources };
+      delete (documentUrls as any)['empty-chat'];
+      delete (documentSources as any)['empty-chat'];
+      return { ...state, documentUrls, documentSources };
+    }
+    case 'CLEAR_EMOJI_DOCUMENTS': {
+      const keys = action.keys;
+      const documentUrls: Record<string, any> = { ...state.documentUrls };
+      let changed = false;
+      for (const k of Object.keys(documentUrls)) {
+        const isEmoji = k.startsWith('emojipack-') || k.startsWith('emoji-') || k === 'empty-chat';
+        if (!isEmoji) continue;
+        if (keys && !keys.includes(k)) continue;
+        delete documentUrls[k];
+        changed = true;
+      }
+      if (!changed) return state;
+      return { ...state, documentUrls };
+    }
+    case 'SET_MESSAGE_REACTIONS': {
+      if (JSON.stringify(state.reactions[action.messageId]) === JSON.stringify(action.reactions)) return state;
+      return { ...state, reactions: { ...state.reactions, [action.messageId]: action.reactions } };
+    }
+    case 'TOGGLE_REACTION': {
+      const prev = state.reactions[action.messageId] || [];
+      let found = false;
+      let countDelta = 0;
+      const reactions = prev.map((r) => {
+        if (r.emoji !== action.emoji) return r;
+        found = true;
+        if (r.chosen) {
+          countDelta = -1;
+          return { ...r, chosen: false, count: r.count - 1 };
+        }
+        countDelta = 1;
+        return { ...r, chosen: true, count: r.count + 1 };
+      }).filter((r) => r.count > 0);
+      if (!found) {
+        reactions.push({ emoji: action.emoji, count: 1, chosen: true });
+        countDelta = 1;
+      }
+      if (countDelta === 0 && !found) return state;
+      if (JSON.stringify(reactions) === JSON.stringify(prev)) return state;
+      return { ...state, reactions: { ...state.reactions, [action.messageId]: reactions } };
+    }
     case 'LOGOUT': return { ...state, page: 'auth', authStep: 'phone', dialogs: [], selectedPeer: null, messages: [], phone: '', code: '', password: '', error: '', signupFirstname: '', signupLastname: '', phoneCodeHash: '', qrToken: '', selfUserId: '', typingText: '', typingByPeer: {}, pluginSkills: [], activeSkill: null,     documentUrls: {},
 
     documentProgress: {},
 
-    documentSources: {}, photoSources: {} };
+    documentSources: {}, photoSources: {}, reactions: {} };
     case 'TICK': return { ...state, renderTick: state.renderTick + 1 };
     default: return state;
   }

@@ -310,14 +310,18 @@ function CodeView({ dispatch }: { dispatch: Dispatch }) {
 function PasswordView({ dispatch }: { dispatch: Dispatch }) {
   return (
     <div class="login-form">
-      <label class="login-field-label" for="tg-password-input">{t(S.AUTH_PASSWORD_LABEL)}</label>
-      <input
-        class="login-code-input"
-        type="password"
-        id="tg-password-input"
-        placeholder={t(S.AUTH_PASSWORD_PLACEHOLDER)}
-        onKeyDown={(e: any) => { if (e.key === 'Enter') handleCheckPassword(dispatch); }}
-      />
+      <div class="login-phone-field">
+        <div class="login-phone-row">
+          <input
+            class="login-phone-input"
+            type="password"
+            id="tg-password-input"
+            placeholder={t(S.AUTH_PASSWORD_LABEL)}
+            autocomplete="current-password"
+            onKeyDown={(e: any) => { if (e.key === 'Enter') handleCheckPassword(dispatch); }}
+          />
+        </div>
+      </div>
       <button class="login-btn login-btn-primary" type="button" onClick={() => handleCheckPassword(dispatch)}>{t(S.AUTH_SUBMIT)}</button>
     </div>
   );
@@ -402,7 +406,7 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
             </button>
 
             {state.authStep !== 'phone' ? (
-              <button class="login-btn-back" type="button" onClick={() => dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' })}>
+              <button class="login-btn-back" type="button" onClick={() => dispatch({ type: 'SET_AUTH_STEP', authStep: state.authStep === 'password' && state.qrToken ? 'qr_login' : 'phone' })}>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
               </button>
             ) : (

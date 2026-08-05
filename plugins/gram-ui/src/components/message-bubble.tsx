@@ -1,5 +1,7 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { Checkmark } from './checkmark.js';
+import { EmojiText } from './emoji-text.js';
+import { Reactions, type MessageReaction } from './reactions.js';
 
 interface MessageBubbleProps {
   text: string;
@@ -9,6 +11,11 @@ interface MessageBubbleProps {
   sameSenderPrev?: boolean;
   sameSenderNext?: boolean;
   className?: string;
+  entities?: any[];
+  documentUrls?: Record<number, string>;
+  reactions?: MessageReaction[];
+  onReact?: (emoji: string) => void;
+  reactionUrls?: Record<string, string>;
 }
 
 export function MessageBubble(props: MessageBubbleProps) {
@@ -20,6 +27,11 @@ export function MessageBubble(props: MessageBubbleProps) {
     sameSenderPrev = false,
     sameSenderNext = false,
     className = '',
+    entities,
+    documentUrls,
+    reactions,
+    onReact,
+    reactionUrls,
   } = props;
 
   let cls = 'MessageBubble';
@@ -30,11 +42,14 @@ export function MessageBubble(props: MessageBubbleProps) {
 
   return (
     <div class={cls}>
-      <div class="MessageBubble__text">{text}</div>
+      <div class="MessageBubble__text"><EmojiText text={text} entities={entities} documentUrls={documentUrls || {}} /></div>
       <div class="MessageBubble__meta">
         <span class="MessageBubble__time">{time}</span>
         {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
       </div>
+      {reactions && onReact ? (
+        <Reactions reactions={reactions} documentUrls={reactionUrls || {}} onToggle={onReact} />
+      ) : null}
     </div>
   );
 }

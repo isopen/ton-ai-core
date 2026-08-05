@@ -121,8 +121,13 @@ export class SharedWorkerClient {
         return this.send({ type: 'callRpc', methodName, params });
     }
 
-    async downloadFile(document: any, photo: any): Promise<{ fileType: string; bytes: string; error?: string }> {
+    async downloadFile(document: any, photo: any): Promise<{ fileType: string; bytes: string; error?: string; cacheSource?: string }> {
         return this.send({ type: 'downloadFile', document, photo }, 120_000);
+    }
+
+    async downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: string; error?: string; cacheSource?: string }>> {
+        const resp = await this.send({ type: 'downloadFiles', docs }, 300_000);
+        return resp && Array.isArray(resp.results) ? resp.results : [];
     }
 
     async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<{ cacheSource?: string }> {

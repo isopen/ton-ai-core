@@ -383,7 +383,7 @@ export class TelegramServerAgent {
     }
 
     async checkPassword(password: string): Promise<void> {
-        const pwdResult = await this.call(0x54863ef4, {});
+        const pwdResult = await this.call(0x548a30f5, {});
 
         const srpId = 0n;
         const currentSalt = Buffer.alloc(0);

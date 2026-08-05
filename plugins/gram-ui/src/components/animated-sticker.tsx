@@ -1,0 +1,113 @@
+import { h } from '@ton-ai/atom/jsx-runtime';
+import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
+import { initAnimatedRenderer } from '../utils/animated-renderer/index.js';
+import type { IAnimatedRenderer } from '../utils/animated-renderer/types.js';
+import { getIsHeavyAnimating, useHeavyAnimation } from '../utils/heavy-animation.js';
+import { useBackgroundMode } from '../utils/use-background-mode.js';
+
+let uidCounter = 0;
+
+export function useUniqueId(): string {
+  return useRef(`animated-view-${++uidCounter}`).current;
+}
+
+export interface AnimatedStickerProps {
+  tgsUrl: string;
+  renderId: string;
+  size: number;
+  sharedCanvas?: HTMLCanvasElement | null;
+  coords?: { x: number; y: number };
+  isLowPriority?: boolean;
+  quality?: number;
+  noPlay?: boolean;
+  forceAlways?: boolean;
+  loop?: boolean;
+  onLoad?: () => void;
+}
+
+export function AnimatedSticker({
+  tgsUrl,
+  renderId,
+  size,
+  sharedCanvas,
+  coords,
+  isLowPriority,
+  quality,
+  noPlay = false,
+  forceAlways = false,
+  loop = true,
+  onLoad,
+}: AnimatedStickerProps) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [canvasNode, setCanvasNode] = useState<HTMLCanvasElement | null>(null);
+  const viewId = useUniqueId();
+  const rendererRef = useRef<IAnimatedRenderer | null>(null);
+  const urlRef = useRef<string>('');
+  const [renderer, setRenderer] = useState<IAnimatedRenderer | null>(null);
+  const [isFrozen, setFrozen] = useState(getIsHeavyAnimating() && !forceAlways);
+  const [isBgMode, setBgMode] = useState(false);
+
+  useHeavyAnimation(
+    () => setFrozen(true),
+    () => setFrozen(false),
+    forceAlways,
+  );
+  useBackgroundMode(
+    () => setBgMode(true),
+    () => setBgMode(false),
+    forceAlways,
+  );
+
+  const isPaused = (noPlay || isFrozen || isBgMode) && !forceAlways;
+  const container = sharedCanvas || canvasNode;
+
+  useEffect(() => {
+    if (!tgsUrl || !container) return;
+    if (isPaused) return;
+    if (rendererRef.current) {
+      if (urlRef.current === tgsUrl) return;
+      const old = rendererRef.current;
+      rendererRef.current = null;
+      setRenderer(null);
+      old.removeView(viewId);
+    }
+    urlRef.current = tgsUrl;
+    const r = initAnimatedRenderer(tgsUrl, container, renderId, { size, noLoop: !loop, quality, isLowPriority, coords }, viewId, onLoad);
+    rendererRef.current = r;
+    setRenderer(r);
+  }, [tgsUrl, container, renderId, size, viewId, isPaused]);
+  useEffect(() => {
+    if (!coords) return;
+    rendererRef.current?.setSharedCanvasCoords(viewId, coords);
+  }, [coords?.x, coords?.y, viewId]);
+
+  useEffect(() => {
+    const r = renderer;
+    if (!r) return;
+    if (isPaused) r.pause(viewId);
+    else r.play(viewId);
+  }, [renderer, isPaused, viewId]);
+
+  useEffect(() => {
+    return () => {
+      const r = rendererRef.current;
+      rendererRef.current = null;
+      if (r) r.removeView(viewId);
+    };
+  }, [viewId]);
+
+  if (sharedCanvas) return <span class="tgui-emoji-shared-anim" data-vid={viewId} style="display:none" />;
+
+  return (
+    <canvas
+      ref={(el: HTMLCanvasElement | null) => {
+        if (canvasRef.current !== el) {
+          canvasRef.current = el;
+          setCanvasNode(el);
+        }
+      }}
+      class="tgui-animated-sticker"
+      style={`width:${size}px;height:${size}px;vertical-align:middle`}
+    />
+  );
+}

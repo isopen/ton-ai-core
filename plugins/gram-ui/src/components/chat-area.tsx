@@ -1,6 +1,6 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState, useCallback } from '@ton-ai/atom/hooks';
-import { VirtualList } from '@ton-ai/atom';
+import { VirtualList, memo } from '@ton-ai/atom';
 import { Spinner } from '../primitives/spinner.js';
 import { Avatar } from '../primitives/avatar.js';
 import { Flex } from '../primitives/flex.js';
@@ -10,24 +10,78 @@ import { TgsPlayer } from './tgs-player.js';
 import { MessageBubble } from './message-bubble.js';
 import { Checkmark } from './checkmark.js';
 import { TypingIndicator } from './typing-indicator.js';
-import type { AppState, Message } from '../types.js';
+import type { AppState, Message, MessageReaction } from '../types.js';
 import type { Dispatch } from '../state.js';
 import type { SkillDef } from '../plugin/types.js';
 import { TelegramImage } from '../primitives/telegram-image.js';
 import type { ImageSpec } from '../types.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
+import { flushEmojiBatch, getEmojiDocId, matchEmojiRuns } from './emoji-store.js';
+import { releaseEmojiCache } from './emoji-canvas.js';
+import { beginHeavyAnimation } from '../utils/heavy-animation.js';
 import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, hexToDataUrl, hexToBytes, strippedToDataUrl, isAnimatedMedia } from '../utils.js';
 import { MediaPlayer } from './media-player.js';
 import { VideoMessage } from './video-message.js';
 import { PhotoLoader } from './photo-loader.js';
 import { WebPageBubble } from './link-preview.js';
 
+const DEBUG = typeof window !== 'undefined' && (window as any).__GRAM_DEBUG__ === true;
+
 function toFileSize(bytes?: number): string {
   if (!bytes) return '';
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+const EMPTY_CHAT_MSG_ID = 'empty-chat';
+
+const EMOJI_MEMORY_LIMIT = 60;
+
+function isEmojiKey(k: string): boolean {
+  return k.startsWith('emojipack-') || k.startsWith('emoji-');
+}
+
+function scheduleEmojiRevoke(urls: Record<string, string>, keys: string[]) {
+  setTimeout(() => {
+    for (const k of keys) {
+      try { URL.revokeObjectURL(urls[k]); } catch {}
+    }
+  }, 3000);
+}
+
+function GreetingSticker({ documentUrls }: { documentUrls: Record<number, string> }) {
+  const [tgsData, setTgsData] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const url = (documentUrls as any)[EMPTY_CHAT_MSG_ID] || '';
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('tg-fetch-greeting-sticker'));
+  }, []);
+
+  useEffect(() => {
+    if (!url) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch(url);
+        const text = await resp.text();
+        console.log('[TGS_LOG] GreetingSticker: fetched', { len: text.length, preview: text.slice(0, 80) });
+        if (!cancelled) setTgsData(text);
+      } catch (e) {
+        console.log('[TGS_LOG] GreetingSticker: fetch error', e);
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [url]);
+
+  if (failed) return null;
+  if (!tgsData) {
+    return <div class="tgui-greeting-sticker-loading" />;
+  }
+  return <TgsPlayer animationData={tgsData} width={180} height={180} loop autoplay />;
 }
 
 function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; documentUrls: Record<number, string>; documentProgress?: Record<number, number> }) {
@@ -91,7 +145,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
     return () => { cancelled = true; };
   }, [url, isTgs, tgsReady, m.id]);
 
-  console.log('[TGS_LOG] StickerBubble render', { mid: m.id, url: url ? url.slice(0, 40) : 'none', isTgs, tgsReady: !!tgsData, visible, isLoading });
+  if (DEBUG) console.log('[TGS_LOG] StickerBubble render', { mid: m.id, url: url ? url.slice(0, 40) : 'none', isTgs, tgsReady: !!tgsData, visible, isLoading });
 
   const showTgs = isTgs && tgsData;
   const showImg = !isTgs && url;
@@ -171,10 +225,10 @@ function buildImageSpec(m: any): ImageSpec | null {
     const { w: sw, h: sh } = sizeDim(s);
     const src = sizeUrl(s);
     if (!src && !s.url && !s.src) {
-      console.log('[buildImageSpec] size needs download', m.id, type, s._);
+      if (DEBUG) console.log('[buildImageSpec] size needs download', m.id, type, s._);
     }
     if (src) {
-      console.log('[buildImageSpec] size HAS url', m.id, type, 'url len:', src.length);
+      if (DEBUG) console.log('[buildImageSpec] size HAS url', m.id, type, 'url len:', src.length);
     }
     if (!src || !sw || !sh) continue;
 
@@ -214,10 +268,12 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   if (sameSenderNext) cls += ' MessageBubble_group_next';
 
   const imgSpec = buildImageSpec(m);
-  if (imgSpec) {
-    console.log('[PhotoBubble] render', m.id, 'sizes:', m.media?.photo?.sizes?.length, 'hasUrls:', { thumb: !!imgSpec.thumbnail?.url, medium: !!imgSpec.medium?.url, original: !!imgSpec.original?.url });
-  } else {
-    console.log('[PhotoBubble] render', m.id, 'imgSpec: null');
+  if (DEBUG) {
+    if (imgSpec) {
+      console.log('[PhotoBubble] render', m.id, 'sizes:', m.media?.photo?.sizes?.length, 'hasUrls:', { thumb: !!imgSpec.thumbnail?.url, medium: !!imgSpec.medium?.url, original: !!imgSpec.original?.url });
+    } else {
+      console.log('[PhotoBubble] render', m.id, 'imgSpec: null');
+    }
   }
 
   const imgWidth = imgSpec ? Math.min(imgSpec.width || 320, 320) : 0;
@@ -324,15 +380,19 @@ function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrl
   if (!action) return null;
 
   const stickerDoc = action.gift?.sticker;
-  const isTgs = stickerDoc && (stickerDoc.mime_type || '').toLowerCase() === 'application/x-tgsticker';
+  const isPremiumGift = action._ === 'messageActionGiftPremium';
+  const premiumDays = isPremiumGift ? Number(action.days) || 0 : 0;
+  const isTgs = isPremiumGift || (stickerDoc && (stickerDoc.mime_type || '').toLowerCase() === 'application/x-tgsticker');
+  const hasGiftVisual = !!stickerDoc || isPremiumGift;
 
-  if (stickerDoc) {
+  if (hasGiftVisual) {
     const url = documentUrls[m.id] || '';
     const progress = documentProgress?.[m.id] ?? -1;
     const isLoading = !url && progress >= 0 && progress < 100;
     const rootRef = useRef<HTMLDivElement | null>(null);
     const [visible, setVisible] = useState(false);
     const [attachTick, setAttachTick] = useState(0);
+    const fetchRef = useRef(false);
 
     const handleRef = useCallback((el: HTMLDivElement | null) => {
       rootRef.current = el;
@@ -355,11 +415,19 @@ function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrl
 
     useEffect(() => {
       if (!visible) return;
+      if (isPremiumGift) {
+        if (fetchRef.current || url) return;
+        fetchRef.current = true;
+        window.dispatchEvent(new CustomEvent('tg-fetch-premium-gift', {
+          detail: { messageId: m.id, days: premiumDays },
+        }));
+        return;
+      }
       if (url) return;
       window.dispatchEvent(new CustomEvent('tg-download-document', {
         detail: { document: stickerDoc, messageId: m.id, priority: 0 },
       }));
-    }, [visible, url, stickerDoc, m.id]);
+    }, [visible, url, isPremiumGift, premiumDays, stickerDoc, m.id]);
 
     const [tgsData, setTgsData] = useState<string | null>(null);
     const [tgsReady, setTgsReady] = useState(false);
@@ -382,12 +450,15 @@ function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrl
       return () => { cancelled = true; };
     }, [url, isTgs, tgsReady]);
 
-    const showTgsGift = isTgs && tgsData;
+    const showTgsGift = (isTgs && tgsData) || (isPremiumGift && url && tgsData);
 
     return (
       <div class="tgui-service-msg" ref={handleRef}>
         {showTgsGift
-          ? <TgsPlayer animationData={tgsData} width={100} height={100} loop autoplay />
+          ? <>
+              <TgsPlayer animationData={tgsData} width={100} height={100} loop autoplay />
+              {isPremiumGift ? <span class="tgui-gift-label">🎁 {premiumMonthsLabel(action, t)}</span> : null}
+            </>
           : !isTgs && url
             ? <img src={url} style={{ width: 100, height: 100, objectFit: 'contain' }} />
             : url && isTgs
@@ -401,7 +472,7 @@ function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrl
   let label = '';
   switch (action._) {
     case 'messageActionGiftPremium':
-      label = action.months ? `${action.months} ${t(S.GIFT_PREMIUM)}` : t(S.GIFT_PREMIUM);
+      label = premiumMonthsLabel(action, t);
       break;
     case 'messageActionGiftCode':
       label = t(S.GIFT_CODE);
@@ -425,13 +496,19 @@ function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrl
   );
 }
 
+function premiumMonthsLabel(action: any, t: (key: string) => string): string {
+  const days = Number(action.days) || 0;
+  const months = Math.max(1, Math.round(days / 30));
+  return `${months} ${t(S.GIFT_PREMIUM)}`;
+}
+
 function isGiftMessage(action: any): boolean {
   if (!action || typeof action !== 'object') return false;
   const t = action._ || '';
   return t.startsWith('messageActionGift');
 }
 
-function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrls, documentProgress, documentSources, photoSources, selfPeer }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrls: Record<number, string>; documentProgress: Record<number, number>; documentSources?: Record<number, string>; photoSources?: Record<number, string>; selfPeer?: boolean }) {
+function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, selfPeer, reactions, onReact }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; selfPeer?: boolean; reactions?: MessageReaction[]; onReact?: (emoji: string, adding: boolean) => void }) {
   const timeStr = formatMessageTime(m.date);
   const out = selfPeer ? true : m.out;
   const status = msgStatus(m, readOutboxMaxId);
@@ -439,6 +516,10 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
   const senderStr = m.sender || 'U';
   const color = senderColor(senderStr);
   const isLinkMsg = mediaType === 'webpage' || isUrlMessage(m);
+
+  const rowUrls = documentUrl ? { [m.id]: documentUrl } : {};
+  const rowProgress = progress != null && progress >= 0 ? { [m.id]: progress } : {};
+  const rowSources = documentSource ? { [m.id]: documentSource } : {};
 
   const marginBottom = sameSenderPrev ? 2 : 8;
 
@@ -449,7 +530,7 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
         class="tgui-msg-row tgui-msg-row-service"
         style={`margin-bottom:${marginBottom}px`}
       >
-        <GiftBubble m={m} documentUrls={documentUrls} documentProgress={documentProgress} />
+        <GiftBubble m={m} documentUrls={rowUrls} documentProgress={rowProgress} />
       </div>
     );
   }
@@ -463,23 +544,101 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
         ? <div class="tgui-msg-sender" style={`color:${color}`}>{m.sender}</div>
         : null}
       {mediaType === 'sticker'
-        ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} documentUrls={documentUrls} documentProgress={documentProgress} />
+        ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} documentUrls={rowUrls} documentProgress={rowProgress} />
         : mediaType === 'photo' || mediaType === 'image'
-          ? <PhotoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} cacheSource={photoSources?.[m.id]} />
+          ? <PhotoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} cacheSource={photoSource} />
           : mediaType === 'video' && isAnimatedMedia(m.media)
-            ? <MediaPlayer m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={documentUrls} documentProgress={documentProgress} documentSources={documentSources} />
+            ? <MediaPlayer m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} />
           : mediaType === 'video'
-            ? <VideoMessage m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={documentUrls} documentProgress={documentProgress} documentSources={documentSources} />
+            ? <VideoMessage m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} />
           : isLinkMsg
             ? <WebPageBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
-            : <MessageBubble text={m.message || ''} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
+            : <MessageBubble text={m.message || ''} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} />
       }
     </div>
   );
 }
 
+const MessageItemMemo = memo(MessageItem as any);
+
 export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; dispatch: Dispatch; skills?: SkillDef[] }) {
   const peer = state.selectedPeer;
+  const [visRange, setVisRange] = useState<[number, number]>([0, 0]);
+
+  useEffect(() => {
+    setVisRange([0, 0]);
+  }, [peer?.id]);
+
+  // Pause emoji animations while the chat switch transition is running.
+  useEffect(() => {
+    if (!peer?.id) return undefined;
+    return beginHeavyAnimation(600);
+  }, [peer?.id]);
+
+  useEffect(() => {
+    const msgs = Array.isArray(state.messages) ? state.messages : [];
+    const customIds: string[] = [];
+    for (const m of msgs) {
+      if (!m || m.media) continue;
+      for (const e of (m.entities || [])) {
+        if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) customIds.push(String(e.document_id));
+      }
+    }
+    if (customIds.length > 0) {
+      window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...new Set(customIds)] } }));
+    }
+    return flushEmojiBatch;
+  }, [peer?.id, state.messages, visRange]);
+
+  useEffect(() => {
+    const urls: Record<string, string> = (state.documentUrls || {}) as any;
+    const drop: string[] = [];
+    for (const k of Object.keys(urls)) {
+      if (isEmojiKey(k) || k === 'empty-chat') drop.push(k);
+    }
+    if (drop.length === 0) return;
+    dispatch({ type: 'CLEAR_EMOJI_DOCUMENTS', keys: drop });
+    window.dispatchEvent(new CustomEvent('tg-release-emoji-urls', { detail: { all: true } }));
+    releaseEmojiCache(drop.map((k) => urls[k]));
+    scheduleEmojiRevoke(urls, drop);
+  }, [peer?.id]);
+
+  useEffect(() => {
+    const urls: Record<string, string> = (state.documentUrls || {}) as any;
+    const msgs = Array.isArray(state.messages) ? state.messages : [];
+    const [rs, re] = visRange;
+    const keep = new Set<string>();
+    for (let i = rs; i < re && i < msgs.length; i++) {
+      const m = msgs[i];
+      if (!m || m.media) continue;
+      for (const e of (m.entities || [])) {
+        if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) keep.add(String(e.document_id));
+      }
+      if (m.message) {
+        for (const r of matchEmojiRuns(m.message)) {
+          const docId = getEmojiDocId(r.emoji);
+          if (docId) keep.add(docId);
+        }
+      }
+    }
+    const emojiKeys = Object.keys(urls).filter(isEmojiKey);
+    if (emojiKeys.length <= EMOJI_MEMORY_LIMIT) return;
+    const drop: string[] = [];
+    let excess = emojiKeys.length - EMOJI_MEMORY_LIMIT;
+    for (const k of emojiKeys) {
+      if (excess <= 0) break;
+      const docId = k.slice(k.indexOf('-') + 1);
+      if (keep.has(docId)) continue;
+      drop.push(k);
+      excess--;
+    }
+    if (drop.length === 0) return;
+    const released = drop.map((k) => k.slice(k.indexOf('-') + 1));
+    dispatch({ type: 'CLEAR_EMOJI_DOCUMENTS', keys: drop });
+    window.dispatchEvent(new CustomEvent('tg-release-emoji-urls', { detail: { docIds: released } }));
+    releaseEmojiCache(drop.map((k) => urls[k]));
+    scheduleEmojiRevoke(urls, drop);
+  }, [visRange, state.messages, state.documentUrls]);
 
   if (state.activeSkill) {
     const skill = skills.find(s => s.id === state.activeSkill);
@@ -520,20 +679,23 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   const firstUnreadIdx = readInboxMaxId != null
     ? msgs.findIndex(m => !m.out && Number(m.id) > readInboxMaxId)
     : -1;
-  const hasUnread = firstUnreadIdx >= 0;
+  const hasUnread = firstUnreadIdx >= 0 && (currentDialog?.unreadCount ?? 0) > 0;
 
   const hasMessages = msgs.length > 0;
 
   if (!hasMessages) {
     if (state.loadingMessages) {
       msgListChildren.push(
-        <Flex key="loading" direction="row" justify="center" align="flex-end" className="tgui-loading-msgs">
+        <Flex key="loading" direction="row" justify="center" align="center" className="tgui-loading-msgs">
           <Spinner />
         </Flex>
       );
     } else {
       msgListChildren.push(
-        <div key="empty" class="tgui-empty-msgs">{t(S.CHAT_NO_MESSAGES)}</div>
+        <div key="empty" class="tgui-empty-msgs">
+          <GreetingSticker documentUrls={state.documentUrls || {}} />
+          <div class="tgui-empty-msgs-text">{t(S.CHAT_NO_MESSAGES)}</div>
+        </div>
       );
     }
   }
@@ -560,25 +722,27 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
           data={msgs}
           estimatedItemHeight={48}
           startAtBottom={!hasUnread}
+          keyExtractor={(m: any) => String(m.id)}
+          scrollToKey={hasUnread ? String(msgs[firstUnreadIdx]?.id) : undefined}
+          topLoader={state.loadingMessages && msgs.length > 0 ? <Spinner size="small" /> : null}
           renderItem={({ item: m, index: i }: { item: any; index: number }) => {
             const sameSenderPrev = i > 0 && msgs[i - 1].out === m.out && msgs[i - 1].sender === m.sender && msgs[i - 1].date - m.date < 300;
             const sameSenderNext = i < msgs.length - 1 && msgs[i + 1].out === m.out && msgs[i + 1].sender === m.sender && m.date - msgs[i + 1].date < 300;
             const showDaySep = !!m.date && (i === 0 || !msgs[i - 1].date || new Date(m.date * 1000).toDateString() !== new Date(msgs[i - 1].date * 1000).toDateString());
+            const emojiUrls = !m.media ? (state.documentUrls || {}) : undefined;
+            const msgReactions = state.reactions?.[m.id];
+            const onReact = (emoji: string, adding: boolean) => {
+              dispatch({ type: 'TOGGLE_REACTION', messageId: m.id, emoji });
+              window.dispatchEvent(new CustomEvent('tg-emoji-reaction', { detail: { messageId: m.id, emoji, adding } }));
+            };
             return (
               <div>
                 {showDaySep ? <div key={`day-${m.id}`} class="tgui-day-sep"><Text variant="caption" className="tgui-day-sep-text">{formatDaySeparator(m.date)}</Text></div> : null}
-                <MessageItem m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrls={state.documentUrls || {}} documentProgress={state.documentProgress || {}} documentSources={state.documentSources || {}} photoSources={state.photoSources || {}} selfPeer={selfPeer} />
+                <MessageItemMemo m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrl={state.documentUrls?.[m.id] || ''} progress={state.documentProgress?.[m.id]} documentSource={state.documentSources?.[m.id]} photoSource={state.photoSources?.[m.id]} emojiUrls={emojiUrls} selfPeer={selfPeer} reactions={msgReactions} onReact={onReact} />
               </div>
             );
           }}
-          onReadyContent={(el) => {
-            if (firstUnreadIdx >= 0) {
-              requestAnimationFrame(() => {
-                const msg = el.querySelector(`#msg-${msgs[firstUnreadIdx].id}`);
-                if (msg) msg.scrollIntoView({ block: 'start' });
-              });
-            }
-          }}
+          onVisibleRangeChange={(start, end) => setVisRange([start, end])}
           onNearTop={() => dispatch({ type: 'LOAD_MORE' })}
         />
       ) : msgListChildren}

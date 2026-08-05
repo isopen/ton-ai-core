@@ -23,9 +23,10 @@ export interface GramState {
   maxFetchedIdRef: { current: Map<string, number> };
   dialogsFlushRef: { current: number | null };
   messageFlushRef: { current: number | null };
-  readTimerRef: { current: ReturnType<typeof setTimeout> | null };
   scrollReadRef: { current: ReturnType<typeof setTimeout> | null };
-  scrollReadAttached: { current: boolean };
+  readRetryTimersRef: { current: ReturnType<typeof setTimeout>[] };
+  scrollReadElRef: { current: HTMLElement | null };
+  scrollReadHandlerRef: { current: (() => void) | null };
   selfUserIdFetchedRef: { current: boolean };
   orphanedDialogsRef: { current: Map<string, Dialog> };
   loadStringsSeq: number;
@@ -56,9 +57,10 @@ export function createGramState(): GramState {
     maxFetchedIdRef: { current: new Map() },
     dialogsFlushRef: { current: null },
     messageFlushRef: { current: null },
-    readTimerRef: { current: null },
     scrollReadRef: { current: null },
-    scrollReadAttached: { current: false },
+    readRetryTimersRef: { current: [] },
+    scrollReadElRef: { current: null },
+    scrollReadHandlerRef: { current: null },
     selfUserIdFetchedRef: { current: false },
     orphanedDialogsRef: { current: new Map() },
     loadStringsSeq: 0,

@@ -28,7 +28,7 @@ function getSlope(t: number, a1: number, a2: number): number {
  * Cubic bezier easing in time domain: P0=(0,0), P1=(x1,y1), P2=(x2,y2), P3=(1,1).
  * `value(t)` returns the eased progress for the given linear progress t.
  */
-export class CubicBezier implements CubicBezierEasing {
+export class CubicBezier {
     private readonly x1: number;
     private readonly y1: number;
     private readonly x2: number;
@@ -118,18 +118,28 @@ const interpolatorCache = new Map<string, CubicBezier>();
  * Tangent components are used as-is (rlottie does not normalize 0-100
  * values; parseInperpolatorPoint leaves missing x/y at 0).
  */
-export function buildEasing(o?: TgsEasing, i?: TgsEasing): CubicBezier | undefined {
+export function buildEasing(o?: TgsEasing, i?: TgsEasing): CubicBezierEasing | undefined {
     if (!o && !i) return undefined;
     const x1 = Number(o?.x?.[0] ?? 0);
     const y1 = Number(o?.y?.[0] ?? 0);
     const x2 = Number(i?.x?.[0] ?? 0);
     const y2 = Number(i?.y?.[0] ?? 0);
     if (![x1, y1, x2, y2].every(Number.isFinite)) return undefined;
+    return { x1, y1, x2, y2 };
+}
+
+/**
+ * Applies cubic bezier easing to linear progress `t`. `easing` is plain
+ * data (structured-clone safe); the interpolator is built and cached
+ * internally on first use.
+ */
+export function easingValue(easing: CubicBezierEasing, t: number): number {
+    const { x1, y1, x2, y2 } = easing;
     const key = [x1, y1, x2, y2].map((v) => v.toFixed(4)).join('_');
-    let easing = interpolatorCache.get(key);
-    if (!easing) {
-        easing = new CubicBezier(x1, y1, x2, y2);
-        interpolatorCache.set(key, easing);
+    let interp = interpolatorCache.get(key);
+    if (!interp) {
+        interp = new CubicBezier(x1, y1, x2, y2);
+        interpolatorCache.set(key, interp);
     }
-    return easing;
+    return interp.value(t);
 }

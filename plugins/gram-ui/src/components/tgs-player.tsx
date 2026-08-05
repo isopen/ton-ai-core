@@ -1,9 +1,35 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
-import { parseTgs, renderFrame } from '@ton-ai/tgs';
+import { renderFrame } from '@ton-ai/tgs';
 import type { ParsedAnimation } from '@ton-ai/tgs';
+import { parseTgsJson } from '../utils/tgs-parse.js';
 
 const TGS_DEBUG = false;
+
+let activePlayers = 0;
+const MAX_ACTIVE_PLAYERS = 24;
+const MAX_PLAYER_TIME = 3000;
+const playerWaiters = new Set<() => void>();
+
+function acquirePlayerSlot(): boolean {
+    if (activePlayers < MAX_ACTIVE_PLAYERS) {
+        activePlayers++;
+        return true;
+    }
+    return false;
+}
+
+function releasePlayerSlot(): void {
+    if (activePlayers > 0) activePlayers--;
+    for (const w of playerWaiters) {
+        if (activePlayers < MAX_ACTIVE_PLAYERS) {
+            activePlayers++;
+            playerWaiters.delete(w);
+            w();
+            return;
+        }
+    }
+}
 
 export interface TgsPlayerProps {
     animationData: string | object;
@@ -29,35 +55,71 @@ export function TgsPlayer(props: TgsPlayerProps) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [playing, setPlaying] = useState(autoplay);
+    const [inView, setInView] = useState(autoplay);
+    const [animVersion, setAnimVersion] = useState(0);
+    const rootRef = useRef<HTMLDivElement | null>(null);
     const animRef = useRef<ParsedAnimation | null>(null);
     const frameRef = useRef(0);
     const rafRef = useRef<number | null>(null);
     const lastTimeRef = useRef(0);
+    const lastDrawRef = useRef(0);
+    const yieldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const ioRef = useRef<IntersectionObserver | null>(null);
 
     useEffect(() => {
-        try {
-            const json = typeof animationData === 'string' ? animationData : JSON.stringify(animationData);
-            const parsed = parseTgs(json);
-            animRef.current = parsed;
-            setError(null);
-            frameRef.current = parsed.inFrame;
-            lastTimeRef.current = 0;
-            if (TGS_DEBUG) {
-                console.log('[TGS_LOG] parsed', { w: parsed.width, h: parsed.height, fps: parsed.fps, inFrame: parsed.inFrame, outFrame: parsed.outFrame, layers: parsed.layers.length });
+        const el = rootRef.current;
+        if (!el || typeof IntersectionObserver === 'undefined') return;
+        const io = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), { rootMargin: '80px' });
+        ioRef.current = io;
+        io.observe(el);
+        return () => {
+            if (ioRef.current) {
+                ioRef.current.disconnect();
+                ioRef.current = null;
             }
-        } catch (e: any) {
-            console.log('[TGS_LOG] parse error', e);
-            setError(e.message || 'Invalid TGS');
-            animRef.current = null;
-        }
-    }, [animationData]);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!inView) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const json = typeof animationData === 'string' ? animationData : JSON.stringify(animationData);
+                const parsed = await parseTgsJson(json);
+                if (cancelled) return;
+                animRef.current = parsed;
+                setError(null);
+                frameRef.current = parsed.inFrame;
+                lastTimeRef.current = 0;
+                setAnimVersion((v) => v + 1);
+                if (TGS_DEBUG) {
+                    console.log('[TGS_LOG] parsed', { w: parsed.width, h: parsed.height, fps: parsed.fps, inFrame: parsed.inFrame, outFrame: parsed.outFrame, layers: parsed.layers.length });
+                }
+            } catch (e: any) {
+                if (cancelled) return;
+                console.log('[TGS_LOG] parse error', e);
+                setError(e.message || 'Invalid TGS');
+                animRef.current = null;
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [animationData, inView]);
 
     const drawFrame = useCallback((frame: number) => {
         const canvas = canvasRef.current;
         const anim = animRef.current;
         if (!canvas || !anim) return;
-        renderFrame(canvas, anim, frame, window.devicePixelRatio || 1);
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        renderFrame(canvas, anim, frame, dpr);
     }, []);
+
+    useEffect(() => {
+        if (!inView) return;
+        const anim = animRef.current;
+        if (!anim) return;
+        drawFrame(anim.inFrame);
+    }, [animationData, inView, animVersion, drawFrame]);
 
     useEffect(() => {
         if (!autoplay) return;
@@ -65,7 +127,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
     }, [autoplay, animationData]);
 
     useEffect(() => {
-        if (!playing) {
+        if (!playing || !inView) {
             if (rafRef.current != null) {
                 cancelAnimationFrame(rafRef.current);
                 rafRef.current = null;
@@ -81,42 +143,84 @@ export function TgsPlayer(props: TgsPlayerProps) {
 
         const frameDuration = 1000 / anim.fps / speed;
 
-        function tick(timestamp: number) {
-            if (!animRef.current) return;
-
-            if (lastTimeRef.current === 0) {
-                lastTimeRef.current = timestamp;
+        let started = false;
+        const stopRaf = () => {
+            if (yieldTimerRef.current != null) {
+                clearTimeout(yieldTimerRef.current);
+                yieldTimerRef.current = null;
             }
-
-            const delta = timestamp - lastTimeRef.current;
-            lastTimeRef.current = timestamp;
-
-            let frame = frameRef.current + delta / frameDuration;
-
-            if (frame >= animRef.current.outFrame) {
-                if (loop) {
-                    frame = animRef.current.inFrame + ((frame - animRef.current.inFrame) % totalFrames);
-                } else {
-                    frame = animRef.current.outFrame - 1;
-                    setPlaying(false);
-                }
-            }
-
-            frameRef.current = frame;
-            drawFrame(frame);
-            rafRef.current = requestAnimationFrame(tick);
-        }
-
-        lastTimeRef.current = 0;
-        rafRef.current = requestAnimationFrame(tick);
-
-        return () => {
             if (rafRef.current != null) {
                 cancelAnimationFrame(rafRef.current);
                 rafRef.current = null;
             }
+            if (started) {
+                started = false;
+                releasePlayerSlot();
+            }
         };
-    }, [playing, loop, speed, drawFrame]);
+
+        let playStart = 0;
+        const start = () => {
+            if (started) return;
+            started = true;
+            lastTimeRef.current = 0;
+            playStart = performance.now();
+            function tick(timestamp: number) {
+                if (!animRef.current) {
+                    started = false;
+                    releasePlayerSlot();
+                    return;
+                }
+                if (lastTimeRef.current === 0) {
+                    lastTimeRef.current = timestamp;
+                }
+                const delta = timestamp - lastTimeRef.current;
+                lastTimeRef.current = timestamp;
+                let frame = frameRef.current + delta / frameDuration;
+                if (frame >= animRef.current.outFrame) {
+                    if (loop) {
+                        frame = animRef.current.inFrame + ((frame - animRef.current.inFrame) % totalFrames);
+                    } else {
+                        frame = animRef.current.outFrame - 1;
+                        setPlaying(false);
+                    }
+                }
+                frameRef.current = frame;
+                const el = canvasRef.current;
+                const small = !el || (el.clientWidth <= 48 && el.clientHeight <= 48);
+                if (!small || timestamp - lastDrawRef.current >= 33.33) {
+                    drawFrame(frame);
+                    lastDrawRef.current = timestamp;
+                }
+                if (timestamp - playStart > MAX_PLAYER_TIME) {
+                    started = false;
+                    releasePlayerSlot();
+                    yieldTimerRef.current = setTimeout(() => {
+                        yieldTimerRef.current = null;
+                        if (!acquirePlayerSlot()) {
+                            playerWaiters.add(start);
+                        } else {
+                            start();
+                        }
+                    }, 0);
+                    return;
+                }
+                rafRef.current = requestAnimationFrame(tick);
+            }
+            rafRef.current = requestAnimationFrame(tick);
+        };
+
+        if (!acquirePlayerSlot()) {
+            playerWaiters.add(start);
+        } else {
+            start();
+        }
+
+        return () => {
+            playerWaiters.delete(start);
+            stopRaf();
+        };
+    }, [playing, inView, loop, speed, animVersion, drawFrame]);
 
     const togglePlay = useCallback(() => {
         setPlaying(v => !v);
@@ -131,7 +235,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
         return (
             <div
                 class={'TgsPlayer TgsPlayer_error' + (className ? ' ' + className : '')}
-                style={{ width: width + 'px', height: height + 'px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f0f0f0', borderRadius: '8px', fontSize: '12px', color: '#999' }}>
+                style={{ width: width + 'px', height: height + 'px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', fontSize: '12px', color: '#999' }}>
                 <span>TGS Error</span>
             </div>
         );
@@ -139,6 +243,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
 
     return (
         <div
+            ref={rootRef}
             class={'TgsPlayer' + (className ? ' ' + className : '')}
             style={{ width: width + 'px', height: height + 'px' }}
             onClick={togglePlay}

@@ -139,17 +139,24 @@ export class WorkerTelegramService extends TelegramService {
         return this.sendTyping(peer, 'sendMessageCancelAction');
     }
 
-    async downloadFile(info: { document?: any; photo?: any }): Promise<{ bytes: string; type: string } | null> {
+    async downloadFile(info: { document?: any; photo?: any }): Promise<{ bytes: string; type: string; cacheSource?: string } | null> {
         this.onLog?.('→ downloadFile');
         if (!this.workerClient) throw new Error('not connected');
         const result = await this.workerClient.downloadFile(info.document, info.photo);
         if (result.error) throw new Error(result.error);
         if (!result.bytes) return null;
-        return { bytes: result.bytes, type: result.fileType };
+        return { bytes: result.bytes, type: result.fileType, cacheSource: result.cacheSource };
+    }
+
+    async downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: string; error?: string; cacheSource?: string }>> {
+        this.onLog?.('→ downloadFiles count=' + (docs?.length || 0));
+        if (!this.workerClient) throw new Error('not connected');
+        return this.workerClient.downloadFiles(docs || []);
     }
 
     async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<{ cacheSource?: string }> {
         this.onLog?.('→ startVideoStream');
+        if (!this.workerClient) throw new Error('not connected');
         this.onLog?.('  startVideoStream →');
         return this.workerClient.startVideoStream(document, onChunk);
     }
@@ -159,7 +166,7 @@ export class WorkerTelegramService extends TelegramService {
         return this.workerClient.requestPeerAvatar(peerType, peerId, accessHash, photo);
     }
 
-    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any }> {
+    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         if (!this.workerClient) return { photoUrl: null };
         return this.workerClient.startPhotoDownload(photo, sizeType, messageId, onProgress);
     }

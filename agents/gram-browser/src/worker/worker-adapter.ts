@@ -56,8 +56,12 @@ export class TelegramWorkerClient {
         return this.client.callRpc(methodName, params);
     }
 
-    async downloadFile(document: any, photo: any): Promise<{ fileType: string; bytes: string; error?: string }> {
+    async downloadFile(document: any, photo: any): Promise<{ fileType: string; bytes: string; error?: string; cacheSource?: string }> {
         return this.client.downloadFile(document, photo);
+    }
+
+    async downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: string; error?: string; cacheSource?: string }>> {
+        return this.client.downloadFiles(docs);
     }
 
     async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<{ cacheSource?: string }> {

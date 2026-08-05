@@ -10,6 +10,29 @@ export function createAuthCallbacks(
 ) {
   const svc = () => getService();
 
+  function formatAuthError(msg: string): string {
+    const m = msg.match(/FLOOD_WAIT_(\d+)/);
+    if (m) {
+      const sec = parseInt(m[1]);
+      if (sec >= 3600) {
+        return `Слишком много попыток. Попробуйте снова через ${Math.floor(sec / 3600)} ч ${Math.ceil((sec % 3600) / 60)} мин.`;
+      }
+      if (sec >= 60) {
+        return `Слишком много попыток. Попробуйте снова через ${Math.ceil(sec / 60)} мин.`;
+      }
+      return `Слишком много попыток. Попробуйте снова через ${sec} сек.`;
+    }
+    const hum = msg.match(/please try again in (?:(\d+) minutes?|(\d+) seconds?)/i);
+    if (hum) {
+      const sec = hum[1] ? parseInt(hum[1]) * 60 : parseInt(hum[2]);
+      if (sec >= 60) {
+        return `Слишком много попыток. Попробуйте снова через ${Math.ceil(sec / 60)} мин.`;
+      }
+      return `Слишком много попыток. Попробуйте снова через ${sec} сек.`;
+    }
+    return msg.replace(/^RPC Error \d+: /, '');
+  }
+
   return {
     sendCode: async (_phone: string) => {
       try {
@@ -21,7 +44,7 @@ export function createAuthCallbacks(
         addLog(s, tpl(S.LOG_CODE_SENT, { phone }));
         s.tgui.current!.setAuthStep('code');
       } catch (e: any) {
-        s.tgui.current!.setError(e.message);
+        s.tgui.current!.setError(formatAuthError(e.message));
         s.tgui.current!.setAuthStep('phone');
       }
     },
@@ -43,7 +66,7 @@ export function createAuthCallbacks(
         } else if (e.message.includes('AUTH_KEY_UNREGISTERED') || e.message.includes('auth.authorizationSignUpRequired')) {
           s.tgui.current!.setAuthStep('signup');
         } else {
-          s.tgui.current!.setError(e.message);
+          s.tgui.current!.setError(formatAuthError(e.message));
           s.tgui.current!.setAuthStep('phone');
         }
       }
@@ -61,7 +84,7 @@ export function createAuthCallbacks(
         }
         await fetchSelfUserId(s);
       } catch (e: any) {
-        s.tgui.current!.setError(e.message);
+        s.tgui.current!.setError(formatAuthError(e.message));
         s.tgui.current!.setAuthStep('password');
       }
     },
@@ -144,61 +167,76 @@ export function createAuthCallbacks(
           }));
         };
         dispatchQr(tokenHex);
-        const poll = async () => {
-          try {
-            const pollResult = await svc()!.callRpc('auth.exportLoginToken', {
-              api_id: apiId,
-              api_hash: apiHash,
-              except_ids: [],
-            });
-            if (pollResult?._ === 'auth.loginTokenSuccess') {
-              svc()!.authenticated = true;
-              s.tgui.current!.setAuthStep('loading');
-              const dialogsResult = await svc()!.fetchDialogs();
-              if (dialogsResult) {
-                setDialogsFromServer(s, dialogsResult);
-                for (const d of (dialogsResult.dialogs || dialogsResult)) {
-                  if (d.peer) {
-                    const pk = `${d.peer.type}_${d.peer.id}`;
-                    if (!s.peerInfoMap.current.has(pk)) {
-                      s.peerInfoMap.current.set(pk, {
-                        firstName: d.peer.firstName,
-                        lastName: d.peer.lastName,
-                        username: d.peer.username,
-                        title: d.peer.title,
-                      });
-                    }
-                    if (d.peer.type === 'user') {
-                      const name = [d.peer.firstName, d.peer.lastName].filter(Boolean).join(' ') || d.peer.username || '';
-                      if (name) s.userNameMap.current.set(d.peer.id, name);
-                    }
-                  }
-                }
-              }
-              await fetchSelfUserId(s);
-              await dbSet('authenticated', '1').catch(() => {});
-              await dbDel('authInvalidated').catch(() => {});
-              s.tgui.current!.setConnectionStatus('connected');
-              s.tgui.current!.setPage('dialogs');
-              return true;
-            }
-            if (pollResult?._ === 'auth.loginTokenMigrateTo') {
-              return false;
-            }
-            if (pollResult?.token && pollResult.token !== tokenHex) {
-              dispatchQr(pollResult.token);
-              tokenHex = pollResult.token;
-            }
-          } catch {}
-          return false;
+        let pollInterval: ReturnType<typeof setInterval> | null = null;
+        let pollTimeout: ReturnType<typeof setTimeout> | null = null;
+        const stopPolling = () => {
+            if (pollInterval) clearInterval(pollInterval);
+            if (pollTimeout) clearTimeout(pollTimeout);
+            pollInterval = null;
+            pollTimeout = null;
         };
-        const pollInterval = setInterval(async () => {
-          const done = await poll();
-          if (done) clearInterval(pollInterval);
+        const poll = async () => {
+            try {
+                const pollResult = await svc()!.callRpc('auth.exportLoginToken', {
+                    api_id: apiId,
+                    api_hash: apiHash,
+                    except_ids: [],
+                });
+                if (pollResult?._ === 'auth.loginTokenSuccess') {
+                    stopPolling();
+                    svc()!.authenticated = true;
+                    s.tgui.current!.setAuthStep('loading');
+                    const dialogsResult = await svc()!.fetchDialogs();
+                    if (dialogsResult) {
+                        setDialogsFromServer(s, dialogsResult);
+                        for (const d of (dialogsResult.dialogs || dialogsResult)) {
+                            if (d.peer) {
+                                const pk = `${d.peer.type}_${d.peer.id}`;
+                                if (!s.peerInfoMap.current.has(pk)) {
+                                    s.peerInfoMap.current.set(pk, {
+                                        firstName: d.peer.firstName,
+                                        lastName: d.peer.lastName,
+                                        username: d.peer.username,
+                                        title: d.peer.title,
+                                    });
+                                }
+                                if (d.peer.type === 'user') {
+                                    const name = [d.peer.firstName, d.peer.lastName].filter(Boolean).join(' ') || d.peer.username || '';
+                                    if (name) s.userNameMap.current.set(d.peer.id, name);
+                                }
+                            }
+                        }
+                    }
+                    await fetchSelfUserId(s);
+                    await dbSet('authenticated', '1').catch(() => {});
+                    await dbDel('authInvalidated').catch(() => {});
+                    s.tgui.current!.setConnectionStatus('connected');
+                    s.tgui.current!.setPage('dialogs');
+                    return true;
+                }
+                if (pollResult?._ === 'auth.loginTokenMigrateTo') {
+                    return false;
+                }
+                if (pollResult?.token && pollResult.token !== tokenHex) {
+                    dispatchQr(pollResult.token);
+                    tokenHex = pollResult.token;
+                }
+            } catch (e: any) {
+                if (e.message?.includes('SESSION_PASSWORD_NEEDED')) {
+                    stopPolling();
+                    s.tgui.current!.setAuthStep('password');
+                    return true;
+                }
+            }
+            return false;
+        };
+        pollInterval = setInterval(async () => {
+            const done = await poll();
+            if (done) stopPolling();
         }, 3000);
-        setTimeout(() => {
-          clearInterval(pollInterval);
-          window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
+        pollTimeout = setTimeout(() => {
+            stopPolling();
+            window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
         }, 120000);
       } catch (e: any) {
         s.tgui.current!.setError(e.message);

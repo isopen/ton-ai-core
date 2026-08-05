@@ -129,7 +129,11 @@ async function handleMessage(msg: Record<string, any>): Promise<any> {
         }
         case 'downloadFile': {
             const dfResult = await TW.enqueueDownload(msg.document, msg.photo, msg.priority || 0);
-            return { type: 'downloadFileResult', fileType: dfResult.type, bytes: dfResult.bytes, error: dfResult.error };
+            return { type: 'downloadFileResult', fileType: dfResult.type, bytes: dfResult.bytes, error: dfResult.error, cacheSource: dfResult.cacheSource };
+        }
+        case 'downloadFiles': {
+            const results = await TW.downloadFiles_(msg.docs || []);
+            return { type: 'downloadFilesResult', results };
         }
         case 'requestPeerAvatar': {
             const avatarUrl = await TW.requestPeerAvatar(msg.peerType, msg.peerId, msg.accessHash, msg.photo);

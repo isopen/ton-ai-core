@@ -22,6 +22,7 @@ export class ComponentInstance {
   cleanupFns: (() => void)[] = [];
   vnode: VNode | null = null;
   unmountCleanups: (() => void)[] = [];
+  pendingEffects: Array<{ fn: () => (() => void) | void; oldCleanup?: (() => void); cleanupIdx: number }> = [];
   displayName: string;
   _dirty: boolean = false;
 

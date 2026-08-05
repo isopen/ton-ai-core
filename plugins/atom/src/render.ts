@@ -1,5 +1,5 @@
 import { ComponentInstance, setCurrentInstance, type VNode, type ComponentType } from './vdom.js';
-import { __setReroot } from './hooks.js';
+import { __setReroot, flushAllEffects } from './hooks.js';
 import { createDOM, patch } from './reconciler.js';
 
 interface RootData {
@@ -32,9 +32,11 @@ function flushRender() {
   newVNode.componentInstance = instance;
 
   if (rootDom && oldVNode) {
-    patch(rootDom, oldVNode, newVNode);
+    rootData.rootDom = patch(rootDom, oldVNode, newVNode);
   }
   rootData.oldVNode = newVNode;
+
+  flushAllEffects();
 }
 
 function scheduleRender() {
@@ -60,6 +62,8 @@ export function render(component: ComponentType, container: HTMLElement): Node {
   rootData = { instance, oldVNode: vnode, container, rootDom: dom };
 
   __setReroot(() => scheduleRender());
+
+  flushAllEffects();
 
   if (typeof window !== 'undefined') {
     (window as any).__ATOM_DEVTOOLS__ = {

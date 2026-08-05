@@ -82,6 +82,17 @@ let authenticated = false;
 let readLoopRunning = false;
 let migratingDc = 0;
 const pendingCalls = new Map<string, PendingCall>();
+
+function findFloodWaitSeconds(msg: string): number | null {
+    const m = msg.match(/^(?:RPC Error (?:420|429): )?FLOOD_WAIT_(\d+)$/);
+    if (m) return parseInt(m[1]);
+    const human = msg.match(/please try again in (?:(\d+) minutes?|(\d+) seconds?)/i);
+    if (human) {
+        if (human[1]) return parseInt(human[1]) * 60;
+        if (human[2]) return parseInt(human[2]);
+    }
+    return null;
+}
 let msgIdCounter = 0;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 let connectionInitialized = false;
@@ -590,7 +601,7 @@ interface StoredAuthKey {
 const dcStoredAuthKeys = new Map<number, StoredAuthKey>();
 
 /** Create a brand new download connection to the DC (no caching, no busy check). */
-async function createDcConnection(dcId: number): Promise<DcConnection> {
+async function createDcConnection(dcId: number, type: 'video' | 'download' = 'download'): Promise<DcConnection> {
     const dcOpts = TELEGRAM_WS_DC_OPTIONS.find(d => d.id === dcId);
     if (!dcOpts) throw new Error('Unknown DC ' + dcId);
 
@@ -707,6 +718,7 @@ async function createDcConnection(dcId: number): Promise<DcConnection> {
 
     const entry: DcConnection = {
         dcId,
+        type,
         conn: newConn,
         authKey: session.authKey,
         authKeyId: session.authKeyId,
@@ -765,8 +777,7 @@ async function acquireDcConnection(dcId: number, type: 'video' | 'download'): Pr
         free.busy = true;
         return free;
     }
-    const entry = await createDcConnection(dcId);
-    entry.type = type;
+    const entry = await createDcConnection(dcId, type);
     entry.busy = true;
     return entry;
 }
@@ -1812,6 +1823,7 @@ function buildCallBody(constructorId: number, params: Record<string, any>): Buff
     }
     s.writeUint32(constructorId);
     const nameToId: Record<string, number> = {
+        inputCheckPasswordSRP: 0xd27ff082,
         codeSettings: 0xad253d78,
         inputPeerSelf: 0x7da07ec9,
         inputPeerEmpty: 0x7f3b18ea,
@@ -1895,19 +1907,18 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
                 await migrateDc(parseInt(migrateMatch[2]));
                 continue;
             }
-            const floodMatch = m.match(/^RPC Error 420: FLOOD_WAIT_(\d+)$/);
-            if (floodMatch) {
+            const floodSec = findFloodWaitSeconds(m);
+            if (floodSec !== null) {
                 pendingCalls.delete(key);
-                const waitSec = parseInt(floodMatch[1]);
-                if (waitSec > 60) {
-                    throw new Error('FLOOD_WAIT_' + waitSec);
+                if (floodSec > 60) {
+                    throw new Error('FLOOD_WAIT_' + floodSec);
                 }
                 if (floodWaitStart === 0) floodWaitStart = Date.now();
                 if (Date.now() - floodWaitStart > 90000) {
                     throw new Error('FLOOD_WAIT_totaltime');
                 }
-                console.log('[worker] flood wait ' + waitSec + 'с, повтор');
-                await new Promise(r => setTimeout(r, waitSec * 1000));
+                console.log('[worker] flood wait ' + floodSec + 'с, повтор');
+                await new Promise(r => setTimeout(r, floodSec * 1000));
                 continue;
             }
             if (m.includes('CONNECTION_NOT_INITED')) {
@@ -1994,17 +2005,58 @@ async function signIn(phoneNumber: string, code: string): Promise<void> {
 }
 
 async function checkPassword(password: string): Promise<void> {
-    await call(0x54863ef4, {});
-    const input = new TLSerializer();
-    input.writeInt32(0xd23a47f9);
-    input.writeInt64(0n);
-    input.writeBytes(Buffer.alloc(0));
-    input.writeBytes(Buffer.alloc(0));
-    input.writeInt32(0);
-    input.writeBytes(crypton.getRandomBytes(16));
-    input.writeBytes(crypton.getRandomBytes(16));
-    const checkBuf = input.toBuffer();
-    await call(0xd18b4d16, { password: checkBuf });
+    const pwdResult: any = await callRpc('account.getPassword', {});
+    if (pwdResult?._ !== 'account.password') {
+        throw new Error('Unexpected account.getPassword result: ' + pwdResult?._);
+    }
+    const algo = pwdResult.current_algo;
+    if (!algo || algo._ !== 'passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow') {
+        throw new Error('Unsupported 2FA password KDF: ' + algo?._);
+    }
+    const p = Buffer.from(algo.p, 'hex');
+    const salt1 = Buffer.from(algo.salt1, 'hex');
+    const salt2 = Buffer.from(algo.salt2, 'hex');
+    const g = BigInt(algo.g);
+    const srpId = BigInt(pwdResult.srp_id);
+    const srpB = Buffer.from(pwdResult.srp_B, 'hex');
+
+    const pwdBytes = Buffer.from(password, 'utf8');
+    const h1 = await crypton.sha256(Buffer.concat([salt1, pwdBytes, salt1]));
+    const h2 = await crypton.sha256(Buffer.concat([salt2, h1, salt2]));
+    const pbk = await crypton.pbkdf2_sha512(h2, salt1, 100000, 64);
+    const x = crypton.bufferToBigInt(await crypton.sha256(Buffer.concat([salt2, pbk, salt2])));
+
+    const pBig = crypton.bufferToBigInt(p);
+    const gBytes = crypton.bigIntToBuffer(g, 256);
+    const k = crypton.bufferToBigInt(await crypton.sha256(Buffer.concat([p, gBytes])));
+
+    let aBuf = crypton.getRandomBytes(256);
+    aBuf[0] |= 0x80;
+    let a = crypton.bufferToBigInt(aBuf);
+    if (a >= pBig) a %= pBig - 1n;
+    if (a === 0n) a = 1n;
+
+    const A = crypton.modPow(g, a, pBig);
+    const ABytes = crypton.bigIntToBuffer(A, 256);
+    const B = crypton.bufferToBigInt(srpB);
+    if (B <= 0n || B >= pBig) throw new Error('bad b in check');
+    const bForHash = srpB.length >= 256 ? srpB : Buffer.concat([Buffer.alloc(256 - srpB.length), srpB]);
+    const u = crypton.bufferToBigInt(await crypton.sha256(Buffer.concat([ABytes, bForHash])));
+    const v = crypton.modPow(g, x, pBig);
+    const kv = (k * v) % pBig;
+    const t = ((B - kv) % pBig + pBig) % pBig;
+    const sA = crypton.modPow(t, a + u * x, pBig);
+    const kA = await crypton.sha256(crypton.bigIntToBuffer(sA, 256));
+
+    const hp = await crypton.sha256(p);
+    const hg = await crypton.sha256(gBytes);
+    const hSalt1 = await crypton.sha256(salt1);
+    const hSalt2 = await crypton.sha256(salt2);
+    const m1 = await crypton.sha256(Buffer.concat([crypton.xor(hp, hg), hSalt1, hSalt2, ABytes, bForHash, kA]));
+
+    await call(0xd18b4d16, {
+        password: { _: 'inputCheckPasswordSRP', srp_id: srpId, A: ABytes, M1: m1 },
+    });
     passwordPending = false;
     authenticated = true;
     if (ses) homeSession = { ...ses };
@@ -2140,19 +2192,18 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
                 await migrateDc(parseInt(migrateMatch[2]));
                 continue;
             }
-            const floodMatch = m.match(/^RPC Error 420: FLOOD_WAIT_(\d+)$/);
-            if (floodMatch) {
+            const floodSec = findFloodWaitSeconds(m);
+            if (floodSec !== null) {
                 pendingCalls.delete(key);
-                const waitSec = parseInt(floodMatch[1]);
-                if (waitSec > 60) {
-                    throw new Error('FLOOD_WAIT_' + waitSec);
+                if (floodSec > 60) {
+                    throw new Error('FLOOD_WAIT_' + floodSec);
                 }
                 if (floodWaitStart === 0) floodWaitStart = Date.now();
                 if (Date.now() - floodWaitStart > 90000) {
                     throw new Error('FLOOD_WAIT_totaltime');
                 }
-                console.log('[worker] flood wait ' + waitSec + 'с, повтор');
-                await new Promise(r => setTimeout(r, waitSec * 1000));
+                console.log('[worker] flood wait ' + floodSec + 'с, повтор');
+                await new Promise(r => setTimeout(r, floodSec * 1000));
                 continue;
             }
             if (m.includes('CONNECTION_NOT_INITED')) {
@@ -2507,7 +2558,7 @@ const downloadQueue: Array<{
     reject: (e: any) => void;
 }> = [];
 let downloadInFlight = 0;
-const MAX_PARALLEL_DOWNLOADS = 3;
+const MAX_PARALLEL_DOWNLOADS = 6;
 
 const uploadSemMax = 3;
 let uploadSemActive = 0;
@@ -2958,7 +3009,17 @@ export async function batchCheckDocumentCache(documents: Array<{ id: string | nu
   return result;
 }
 
-export { callRpc, resolvePeer, sendCode, signIn, checkPassword, downloadFile_, downloadFileStream_, requestPeerAvatar, requestPhotoDownload, cancelPhotoDownloads, enqueueDownload };
+async function downloadFiles_(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: string; error?: string; cacheSource?: string }>> {
+    const tasks = (docs || []).map((item, index) =>
+        enqueueDownload(item?.document, undefined, item?.priority || 0).then(
+            (r) => ({ index, type: r.type, bytes: r.bytes, cacheSource: r.cacheSource }),
+            (err) => ({ index, type: '', bytes: '', error: String((err as Error)?.message || err) }),
+        ),
+    );
+    return Promise.all(tasks);
+}
+
+export { callRpc, resolvePeer, sendCode, signIn, checkPassword, downloadFile_, downloadFileStream_, requestPeerAvatar, requestPhotoDownload, cancelPhotoDownloads, enqueueDownload, downloadFiles_ };
 export { handleConnectInternal as handleConnect };
 export { handleDisconnect as disconnect };
 export { handleLogout as logout };

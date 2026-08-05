@@ -2,8 +2,8 @@ import type { PeerInfo, Message, TelegramUICallbacks } from '@ton-ai/gram-ui';
 import { t, tpl, S } from '@ton-ai/gram-ui';
 import type { GramState } from './gram-state';
 import {
-  addLog, setMessageCache, getLastVisibleMsgId,
-  applyReadReceipt, scrollReadHandler, addOrphanedDialog,
+  addLog, setMessageCache, getMaxLoadedMsgId,
+  applyReadReceipt, attachScrollRead, addOrphanedDialog,
 } from './gram-utils';
 import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
 
@@ -38,19 +38,20 @@ export function createCallbacks(
         let sentId = optimisticId;
         let sentDate = Math.floor(Date.now() / 1000);
         let sentMedia: any = undefined;
+        let newMsgUpdate: any = null;
         if (updates?._ === 'updateShortSentMessage') {
           sentId = updates.id || optimisticId;
           sentDate = updates.date || sentDate;
           sentMedia = updates.media;
         } else if (updates?._ === 'updates' && Array.isArray(updates.updates)) {
-          const newMsgUpdate = updates.updates.find((u: any) => u._ === 'updateNewMessage' || u._ === 'updateNewChannelMessage');
+          newMsgUpdate = updates.updates.find((u: any) => u._ === 'updateNewMessage' || u._ === 'updateNewChannelMessage');
           if (newMsgUpdate?.message) {
             sentId = newMsgUpdate.message.id || optimisticId;
             sentDate = newMsgUpdate.message.date || sentDate;
             sentMedia = newMsgUpdate.message.media;
           }
         }
-        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null, media: sentMedia };
+        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null, media: sentMedia, entities: newMsgUpdate.message?.entities };
         const wasNearBottom = (() => {
           const el = document.getElementById('tg-msg-list-content');
           return el && el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
@@ -155,7 +156,7 @@ export function createCallbacks(
             id: m.id || 0, fromId: m.from_id,
             sender: resolveSenderName(m.from_id, m.sender),
             date: m.date || 0, message: m.message || '',
-            out: !!m.out, peerId: null, media: m.media, action: m.action,
+            out: !!m.out, peerId: null, media: m.media, action: m.action, entities: m.entities,
           })).reverse();
           let result: Message[];
           if (msgs.length === 0 && maxId === 0) {
@@ -192,12 +193,6 @@ export function createCallbacks(
         }
         if (!s.historyInitRef.current.has(peerKey)) {
           s.historyInitRef.current.add(peerKey);
-          if (s.selectedPeerRef.current?.id === p.id && s.selectedPeerRef.current?.type === p.type) {
-            requestAnimationFrame(() => {
-              const el = document.getElementById('tg-msg-list-content');
-              if (el) el.scrollTop = el.scrollHeight;
-            });
-          }
         }
       } catch (e: any) {
         addLog(s, tpl(S.LOG_HISTORY_FAILED, { error: e.message, peerKey }));
@@ -205,8 +200,9 @@ export function createCallbacks(
         s.loadingHistoryRef.current.delete(peerKey);
         if (s.selectedPeerRef.current?.id === p.id && s.selectedPeerRef.current?.type === p.type) {
           s.tgui.current!.setLoadingMessages(false);
+          attachScrollRead(s);
           requestAnimationFrame(() => {
-            const maxId = getLastVisibleMsgId();
+            const maxId = getMaxLoadedMsgId(s);
             if (maxId > 0) {
               applyReadReceipt(s, peerKey, maxId);
               s.tgService.current?.readHistory(p, maxId).catch(() => {});
@@ -235,35 +231,25 @@ export function createCallbacks(
         getCallbacks().loadHistory();
       } else {
         s.tgui.current!.setLoadingMessages(false);
-        requestAnimationFrame(() => {
-          const el = document.getElementById('tg-msg-list-content');
-          if (el) el.scrollTop = el.scrollHeight;
-        });
       }
       if (peer.id !== '_debug_' && peer.id !== '_settings_') {
         requestAnimationFrame(() => {
-          if (!s.scrollReadAttached.current) {
-            const el = document.getElementById('tg-msg-list-content');
-            if (el) {
-              el.addEventListener('scroll', () => scrollReadHandler(s), { passive: true });
-              s.scrollReadAttached.current = true;
+          attachScrollRead(s);
+          const tryApplyRead = () => {
+            const cur = s.selectedPeerRef.current;
+            if (!cur || cur.id !== peer.id || cur.type !== peer.type) return;
+            const maxId = getMaxLoadedMsgId(s);
+            if (maxId > 0) {
+              applyReadReceipt(s, peerKey, maxId);
+              s.tgService.current?.readHistory(cur, maxId).catch(() => {});
             }
-          }
-          const maxId = getLastVisibleMsgId();
-          if (maxId > 0) {
-            applyReadReceipt(s, peerKey, maxId);
-            s.tgService.current?.readHistory(peer, maxId).catch(() => {});
-          } else if (s.selectedPeerRef.current?.id === peer.id && s.selectedPeerRef.current?.type === peer.type) {
-            s.readTimerRef.current = setTimeout(() => {
-              if (s.selectedPeerRef.current?.id === peer.id && s.selectedPeerRef.current?.type === peer.type) {
-                const maxId2 = getLastVisibleMsgId();
-                if (maxId2 > 0) {
-                  applyReadReceipt(s, peerKey, maxId2);
-                  s.tgService.current?.readHistory(peer, maxId2).catch(() => {});
-                }
-              }
-            }, 1200);
-          }
+          };
+          tryApplyRead();
+          for (const t of s.readRetryTimersRef.current) clearTimeout(t);
+          s.readRetryTimersRef.current = [
+            setTimeout(tryApplyRead, 350),
+            setTimeout(tryApplyRead, 1200),
+          ];
         });
       }
     },

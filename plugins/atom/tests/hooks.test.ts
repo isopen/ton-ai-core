@@ -1,5 +1,5 @@
 import {
-  useState, useEffect, useRef, useMemo, useCallback, __setReroot,
+  useState, useEffect, useRef, useMemo, useCallback, __setReroot, flushAllEffects,
 } from '../src/hooks.js';
 import {
   ComponentInstance, setCurrentInstance, currentInstance,
@@ -210,6 +210,7 @@ describe('useEffect', () => {
     runWithInstance(() => {
       useEffect(fn, []);
     });
+    flushAllEffects();
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
@@ -218,6 +219,7 @@ describe('useEffect', () => {
     runWithInstance(() => {
       useEffect(fn);
     });
+    flushAllEffects();
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
@@ -228,9 +230,11 @@ describe('useEffect', () => {
 
     inst.hookIndex = 0;
     useEffect(fn, [1, 2]);
+    flushAllEffects();
 
     inst.hookIndex = 0;
     useEffect(fn, [1, 2]);
+    flushAllEffects();
 
     expect(fn).toHaveBeenCalledTimes(1);
     setCurrentInstance(null);
@@ -243,9 +247,11 @@ describe('useEffect', () => {
 
     inst.hookIndex = 0;
     useEffect(fn, [1]);
+    flushAllEffects();
 
     inst.hookIndex = 0;
     useEffect(fn, [2]);
+    flushAllEffects();
 
     expect(fn).toHaveBeenCalledTimes(2);
     setCurrentInstance(null);
@@ -258,9 +264,11 @@ describe('useEffect', () => {
 
     inst.hookIndex = 0;
     useEffect(() => cleanup, [1]);
+    flushAllEffects();
 
     inst.hookIndex = 0;
     useEffect(() => jest.fn(), [2]);
+    flushAllEffects();
 
     expect(cleanup).toHaveBeenCalledTimes(1);
     setCurrentInstance(null);
@@ -273,6 +281,7 @@ describe('useEffect', () => {
 
     inst.hookIndex = 0;
     useEffect(() => cleanup, []);
+    flushAllEffects();
 
     expect(inst.unmountCleanups).toHaveLength(1);
     expect(inst.unmountCleanups[0]).toBe(cleanup);
@@ -287,9 +296,11 @@ describe('useEffect', () => {
 
     inst.hookIndex = 0;
     useEffect(() => cleanup1, [1]);
+    flushAllEffects();
 
     inst.hookIndex = 0;
     useEffect(() => cleanup2, [2]);
+    flushAllEffects();
 
     expect(inst.unmountCleanups).toHaveLength(1);
     expect(inst.unmountCleanups[0]).toBe(cleanup2);
@@ -304,9 +315,11 @@ describe('useEffect', () => {
 
     inst.hookIndex = 0;
     useEffect(fn, [1, 2]);
+    flushAllEffects();
 
     inst.hookIndex = 0;
     useEffect(fn, [1]);
+    flushAllEffects();
 
     expect(fn).toHaveBeenCalledTimes(2);
     setCurrentInstance(null);
@@ -317,6 +330,7 @@ describe('useEffect', () => {
     runWithInstance(() => {
       useEffect(fn);
     });
+    flushAllEffects();
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
@@ -327,6 +341,7 @@ describe('useEffect', () => {
       useEffect(fn1, []);
       useEffect(fn2, []);
     });
+    flushAllEffects();
     expect(fn1).toHaveBeenCalledTimes(1);
     expect(fn2).toHaveBeenCalledTimes(1);
   });
@@ -338,10 +353,12 @@ describe('useEffect', () => {
 
     inst.hookIndex = 0;
     useEffect(fn);
+    flushAllEffects();
     expect(fn).toHaveBeenCalledTimes(1);
 
     inst.hookIndex = 0;
     useEffect(fn);
+    flushAllEffects();
     expect(fn).toHaveBeenCalledTimes(2);
 
     setCurrentInstance(null);
@@ -355,9 +372,11 @@ describe('useEffect', () => {
     useEffect(() => {
       return () => { throw new Error('cleanup error'); };
     }, [1]);
+    flushAllEffects();
 
     inst.hookIndex = 0;
     useEffect(() => jest.fn(), [2]);
+    flushAllEffects();
 
     // should not throw, just console.error
     setCurrentInstance(null);
@@ -371,8 +390,10 @@ describe('useEffect', () => {
 
     inst.hookIndex = 0;
     useEffect(() => cleanup1, []);
+    flushAllEffects();
     inst.hookIndex = 2;
     useEffect(() => cleanup2, []);
+    flushAllEffects();
 
     expect(inst.unmountCleanups).toHaveLength(2);
     expect(inst.unmountCleanups[0]).toBe(cleanup1);
@@ -610,6 +631,8 @@ describe('hook ordering and errors', () => {
     useState(1);
     useEffect(() => {}, []);
     useRef(null);
+
+    flushAllEffects();
 
     // no error
     setCurrentInstance(null);

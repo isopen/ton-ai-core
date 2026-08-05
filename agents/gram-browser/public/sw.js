@@ -1,4 +1,4 @@
-const CACHE = 'gram-v3';
+const CACHE = 'gram-v4';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -16,6 +16,19 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+  // Navigations are always fetched from the network so the app always gets the
+  // fresh index.html (which references the current hashed bundles); the cached
+  // copy is only a fallback for offline use.
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).then((response) => {
+        const cloned = response.clone();
+        caches.open(CACHE).then((cache) => cache.put(event.request, cloned).catch(() => {}));
+        return response;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
   if (url.pathname.startsWith('/static/')) {
     event.respondWith(
       caches.open(CACHE).then((cache) => {

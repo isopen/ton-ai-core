@@ -370,6 +370,39 @@ describe('renderFrame', () => {
         expect(c.ctx.calls).toContain('createRadialGradient(0,0,0,100,100,141.421)');
     });
 
+    it('walks gradient stops with the 4-channel stride', () => {
+        const GF = {
+            ty: 'gf',
+            g: { p: 4, k: { a: 0, k: [0, 1, 0, 0, 0.5, 0, 1, 0, 1, 0, 0, 1] } },
+            s: { a: 0, k: [0, 0] },
+            e: { a: 0, k: [100, 0] },
+            o: { a: 0, k: 100 },
+            t: 1,
+        };
+        const c = render({ layers: [shapeLayer(0, [RECT, GF])] });
+        expect(c.ctx.gradients[0].stops).toEqual([
+            [0, 'rgba(255,0,0,1)'],
+            [0.5, 'rgba(0,255,0,1)'],
+            [1, 'rgba(0,0,255,1)'],
+        ]);
+    });
+
+    it('uses the 5th channel as gradient stop alpha', () => {
+        const GF = {
+            ty: 'gf',
+            g: { p: 5, k: { a: 0, k: [0, 1, 0, 0, 1, 0.5, 0, 0, 1, 0.5] } },
+            s: { a: 0, k: [0, 0] },
+            e: { a: 0, k: [100, 0] },
+            o: { a: 0, k: 100 },
+            t: 1,
+        };
+        const c = render({ layers: [shapeLayer(0, [RECT, GF])] });
+        expect(c.ctx.gradients[0].stops).toEqual([
+            [0, 'rgba(255,0,0,1)'],
+            [0.5, 'rgba(0,0,255,0.5)'],
+        ]);
+    });
+
     it('renders precomp children inline when there is a single child', () => {
         const c = render({
             assets: [{ id: 'p1', w: 100, h: 100, layers: [shapeLayer(0, [RECT, FILL_RED])] }],

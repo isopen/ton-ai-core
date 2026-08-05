@@ -819,15 +819,22 @@ function paintGradient(ctx: CanvasRenderingContext2D, paint: PaintRec, frame: nu
     const alpha = paint.alpha;
     if (Array.isArray(stops)) {
         const flat = Array.isArray(stops[0]);
-        for (let i = 0; i < stops.length; i++) {
-            const entry = stops[i];
-            if (flat) {
+        if (flat) {
+            for (const entry of stops) {
                 const off = toNumber(entry[0]);
                 grad.addColorStop(Math.max(0, Math.min(1, off)), `rgba(${Math.round(entry[1] * 255)},${Math.round(entry[2] * 255)},${Math.round(entry[3] * 255)},${alpha})`);
-            } else {
-                const off = toNumber(entry);
-                grad.addColorStop(Math.max(0, Math.min(1, off)), `rgba(${Math.round(stops[i + 1] * 255)},${Math.round(stops[i + 2] * 255)},${Math.round(stops[i + 3] * 255)},${alpha})`);
-                i += 3;
+            }
+        } else {
+            // flat [offset, r, g, b(, a)] groups; channel count comes from g.p
+            const channels = g.colorPoints === 5 || g.colorPoints === 4 ? g.colorPoints : 4;
+            const hasAlpha = channels >= 5;
+            for (let i = 0; i + 3 < stops.length; i += channels) {
+                const off = toNumber(stops[i]);
+                const r = Math.round(toNumber(stops[i + 1]) * 255);
+                const g2 = Math.round(toNumber(stops[i + 2]) * 255);
+                const b = Math.round(toNumber(stops[i + 3]) * 255);
+                const a = hasAlpha ? toNumber(stops[i + 4]) * alpha : alpha;
+                grad.addColorStop(Math.max(0, Math.min(1, off)), `rgba(${r},${g2},${b},${a})`);
             }
         }
     }
@@ -918,15 +925,20 @@ function layerCombinedMatrix(layer: ParsedLayer, frame: number, layerById: Map<n
 
 // Buffers are pooled per (tag, size): each call site uses a distinct tag so
 // same-size buffers (e.g. the two matte buffers) never alias each other.
+// In a Web Worker (no `document`) OffscreenCanvas is used instead; the 2D
+// context API surface used below is identical on both.
 const bufferPool = new Map<string, HTMLCanvasElement>();
 
 function getBuffer(w: number, h: number, tag: string): HTMLCanvasElement {
     const key = tag + ':' + w + 'x' + h;
     let c = bufferPool.get(key);
     if (!c) {
-        c = document.createElement('canvas');
-        c.width = w;
-        c.height = h;
+        const el: HTMLCanvasElement | OffscreenCanvas = typeof document !== 'undefined'
+            ? document.createElement('canvas')
+            : new OffscreenCanvas(w, h);
+        el.width = w;
+        el.height = h;
+        c = el as unknown as HTMLCanvasElement;
         bufferPool.set(key, c);
     }
     return c;
@@ -1187,16 +1199,20 @@ export function renderFrame(
     anim: ParsedAnimation,
     frame: number,
     dpr: number,
+    displayW?: number,
+    displayH?: number,
 ) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const displayW = canvas.clientWidth || anim.width;
-    const displayH = canvas.clientHeight || anim.height;
-    if (displayW === 0 || displayH === 0) return;
+    const dispW = displayW ?? (canvas.clientWidth || anim.width);
+    const dispH = displayH ?? (canvas.clientHeight || anim.height);
+    if (dispW === 0 || dispH === 0) return;
 
-    canvas.width = Math.round(displayW * dpr);
-    canvas.height = Math.round(displayH * dpr);
+    const w = Math.round(dispW * dpr);
+    const h = Math.round(dispH * dpr);
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);

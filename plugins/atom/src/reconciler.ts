@@ -374,7 +374,16 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
         newVNode.dom = dom;
         return dom;
       }
+      // The component previously rendered a real element and now returns
+      // null: drop the old subtree from the DOM. Otherwise the stale element
+      // (e.g. an emoji canvas with "shown open" classes) keeps its state and
+      // stays visible forever next to the new empty text node.
       const empty = document.createTextNode('');
+      if (dom && dom.parentNode) {
+        for (const node of findAllDomNodes(oldResult)) {
+          if (node.parentNode) node.parentNode.removeChild(node);
+        }
+      }
       newVNode.dom = empty;
       return empty;
     }

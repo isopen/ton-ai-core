@@ -14,7 +14,10 @@ export interface VirtualListProps<T> {
   onEndReachedThreshold?: number;
   onNearTop?: () => void;
   onReadyContent?: (el: HTMLDivElement) => void;
+  onVisibleRangeChange?: (start: number, end: number) => void;
   startAtBottom?: boolean;
+  scrollToKey?: string | number;
+  topLoader?: VNode;
   className?: string;
   style?: Record<string, any>;
   id?: string;
@@ -34,7 +37,10 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     onEndReachedThreshold = 0.5,
     onNearTop,
     onReadyContent,
+    onVisibleRangeChange,
     startAtBottom,
+    scrollToKey,
+    topLoader,
     className,
     style,
     id,
@@ -45,10 +51,19 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
+  const pendingScrollRef = useRef(-1);
+  const scrollRafRef = useRef(0);
   const [measuredH, setMeasuredH] = useState(ch ?? 600);
+  const measuredHRef = useRef(ch ?? 600);
   const endReachedRef = useRef(false);
   const nearTopFiredRef = useRef(false);
   const readyFired = useRef(false);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const userScrolledRef = useRef(false);
+  const suppressScrollRef = useRef(false);
+  const thumbRef = useRef<HTMLDivElement | null>(null);
+  const scrollToFiredRef = useRef(false);
+  const dragRef = useRef({ dragging: false, dragY: 0, dragTop: 0 });
 
   const st = useRef<{
     heights: number[];
@@ -56,15 +71,82 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     lastST: number;
     lastSH: number;
     prevST: number;
+    anchor?: { key: string; top: number };
   }>({
     heights: [],
     prevLen: 0,
     lastST: 0,
     lastSH: 0,
     prevST: -1,
+    anchor: undefined,
   });
 
   const containerHeight = ch ?? measuredH;
+
+  // Telegram-Web style scroll anchor: remember the first item intersecting the
+  // viewport top, then restore its position after items are prepended.
+  function updateAnchor(el: HTMLElement) {
+    const er = el.getBoundingClientRect();
+    const children = el.children;
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i] as HTMLElement;
+      if (!child.getAttribute) continue;
+      const key = child.getAttribute('data-vl-key');
+      if (!key) continue;
+      const r = child.getBoundingClientRect();
+      if (r.bottom > er.top + 2) {
+        st.current.anchor = { key, top: r.top };
+        return;
+      }
+    }
+    st.current.anchor = undefined;
+  }
+
+  function updateThumb() {
+    const el = containerRef.current;
+    const t = thumbRef.current;
+    if (!el || !t) return;
+    const ch = el.clientHeight;
+    if (ch === 0) return;
+    const sh = el.scrollHeight;
+    if (sh <= ch) {
+      t.style.display = 'none';
+      return;
+    }
+    t.style.display = 'block';
+    const thumbH = Math.max(ch * 0.12, (ch / sh) * ch);
+    const maxT = ch - thumbH;
+    t.style.height = thumbH + 'px';
+    t.style.top = Math.round((el.scrollTop / (sh - ch)) * maxT) + 'px';
+  }
+
+  function onThumbMove(e: MouseEvent) {
+    const el = containerRef.current;
+    const t = thumbRef.current;
+    if (!el || !t) return;
+    const dy = e.clientY - dragRef.current.dragY;
+    const ch = el.clientHeight;
+    const hh = t.clientHeight;
+    const maxT = ch - hh;
+    const newTop = Math.max(0, Math.min(maxT, dragRef.current.dragTop + dy));
+    t.style.top = newTop + 'px';
+    if (maxT > 0) el.scrollTop = (newTop / maxT) * (el.scrollHeight - el.clientHeight);
+  }
+
+  function onThumbUp() {
+    dragRef.current.dragging = false;
+    document.removeEventListener('mousemove', onThumbMove);
+    document.removeEventListener('mouseup', onThumbUp);
+  }
+
+  function onThumbDown(e: MouseEvent) {
+    e.preventDefault();
+    dragRef.current.dragging = true;
+    dragRef.current.dragY = e.clientY;
+    dragRef.current.dragTop = parseInt((thumbRef.current?.style.top || '0'), 10);
+    document.addEventListener('mousemove', onThumbMove);
+    document.addEventListener('mouseup', onThumbUp);
+  }
 
   if (dynamicMode) {
     const len = data.length;
@@ -75,12 +157,30 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         const shifted = new Array(len).fill(0);
         for (let i = 0; i < st.current.prevLen; i++) shifted[i + added] = st.current.heights[i] || 0;
         st.current.heights = shifted;
+        const anchor = st.current.anchor;
         const oldSH = st.current.lastSH;
         const oldST = st.current.lastST;
         queueMicrotask(() => {
           const el = containerRef.current;
-          if (el && oldSH > 0) {
+          if (!el) return;
+          if (anchor && anchor.key && el.scrollTop === oldST) {
+            const node = el.querySelector<HTMLElement>('[data-vl-key="' + anchor.key + '"]');
+            if (node) {
+              const r = node.getBoundingClientRect();
+              const diff = r.top - anchor.top;
+              if (diff !== 0) {
+                suppressScrollRef.current = true;
+                el.scrollTop = el.scrollTop + diff;
+                st.current.lastST = el.scrollTop;
+                st.current.lastSH = el.scrollHeight;
+              }
+              updateAnchor(el);
+              return;
+            }
+          }
+          if (oldSH > 0 && el.scrollTop === oldST) {
             const diff = el.scrollHeight - oldSH;
+            suppressScrollRef.current = true;
             el.scrollTop = oldST + diff;
             st.current.lastST = el.scrollTop;
             st.current.lastSH = el.scrollHeight;
@@ -107,63 +207,93 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     return h;
   }
 
-  const vh = totalHeight();
-
-  let visibleStartIndex = 0;
-  let visibleEndIndex = data.length;
-  let topHeight = 0;
-  let bottomHeight = 0;
-
-  if (data.length > 0 && containerHeight > 0) {
+  function computeVisibleRange(): { start: number; end: number } {
+    const len = data.length;
+    if (len === 0 || containerHeight <= 0) return { start: 0, end: len };
     const stPos = Math.max(0, Math.min(scrollTop, vh - containerHeight));
-
     if (dynamicMode) {
       const minBuffer = overscan;
       const fillBuffer = Math.ceil(containerHeight / estH);
-      const buffer = Math.max(minBuffer, fillBuffer);
+      const buffer = Math.max(minBuffer, Math.min(fillBuffer, 4));
       const visibleTop = Math.max(0, stPos - buffer * estH);
 
+      let start = 0;
       let acc = 0;
-      visibleStartIndex = 0;
-      for (let i = 0; i < data.length; i++) {
+      for (let i = 0; i < len; i++) {
         const hi = getHeight(i);
         if (acc + hi > visibleTop) {
-          visibleStartIndex = Math.max(0, i - buffer);
+          start = Math.max(0, i - buffer);
           break;
         }
         acc += hi;
       }
 
-      visibleEndIndex = visibleStartIndex;
+      let end = start;
       acc = 0;
-      for (let i = 0; i < visibleStartIndex; i++) acc += getHeight(i);
-      while (visibleEndIndex < data.length && acc < stPos + containerHeight + buffer * estH) {
-        acc += getHeight(visibleEndIndex);
-        visibleEndIndex++;
+      for (let i = 0; i < start; i++) acc += getHeight(i);
+      while (end < len && acc < stPos + containerHeight + buffer * estH) {
+        acc += getHeight(end);
+        end++;
       }
-      visibleEndIndex = Math.min(data.length, visibleEndIndex + buffer);
-
-      topHeight = 0;
-      for (let i = 0; i < visibleStartIndex; i++) topHeight += getHeight(i);
-      bottomHeight = 0;
-      for (let i = visibleEndIndex; i < data.length; i++) bottomHeight += getHeight(i);
-    } else {
-      visibleStartIndex = Math.max(0, Math.floor(stPos / itemHeight!) - overscan);
-      visibleEndIndex = Math.min(data.length, Math.ceil((stPos + containerHeight) / itemHeight!) + overscan);
-
-      const visibleCount = visibleEndIndex - visibleStartIndex;
-      if (visibleCount < initialNumToRender && data.length > 0) {
-        visibleEndIndex = Math.min(data.length, visibleStartIndex + initialNumToRender);
-      }
-
-      topHeight = visibleStartIndex * itemHeight!;
-      bottomHeight = (data.length - visibleEndIndex) * itemHeight!;
+      end = Math.min(len, end + buffer);
+      return { start, end };
     }
+    let start = Math.max(0, Math.floor(stPos / itemHeight!) - overscan);
+    let end = Math.min(len, Math.ceil((stPos + containerHeight) / itemHeight!) + overscan);
+    if (end - start < initialNumToRender && len > 0) {
+      end = Math.min(len, start + initialNumToRender);
+    }
+    return { start, end };
   }
+
+  const vh = totalHeight();
+
+  const visibleRange = computeVisibleRange();
+  const visibleStartIndex = visibleRange.start;
+  const visibleEndIndex = visibleRange.end;
+  let topHeight = 0;
+  let bottomHeight = 0;
+  if (dynamicMode) {
+    for (let i = 0; i < visibleStartIndex; i++) topHeight += getHeight(i);
+    for (let i = visibleEndIndex; i < data.length; i++) bottomHeight += getHeight(i);
+  } else {
+    topHeight = visibleStartIndex * itemHeight!;
+    bottomHeight = (data.length - visibleEndIndex) * itemHeight!;
+  }
+
+  const lastRangeRef = useRef('0,0');
+  useEffect(() => {
+    const { start, end } = computeVisibleRange();
+    const k = start + ',' + end;
+    if (k !== lastRangeRef.current) {
+      lastRangeRef.current = k;
+      onVisibleRangeChange?.(start, end);
+    }
+  }, [scrollTop, containerHeight, data.length, vh, estH, overscan, initialNumToRender, dynamicMode, itemHeight, onVisibleRangeChange]);
 
   const handleScroll = useCallback((e: Event) => {
     const el = e.target as HTMLElement;
     const newSH = el.scrollHeight;
+
+    // Throttle scroll-driven state to one update per frame: a re-render on
+    // every scroll event floods the main thread and starves rAF, which freezes
+    // every rAF-driven animation (emoji) during scrolling.
+    const scheduleScrollTop = (v: number) => {
+      pendingScrollRef.current = v;
+      if (scrollRafRef.current) return;
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = 0;
+        const v2 = pendingScrollRef.current;
+        pendingScrollRef.current = -1;
+        if (v2 >= 0) setScrollTop(v2);
+      });
+    };
+
+    if (suppressScrollRef.current) {
+      suppressScrollRef.current = false;
+    } else {
+      userScrolledRef.current = true;
+    }
 
     if (newSH !== st.current.lastSH && st.current.lastSH > 0) {
       const diff = newSH - st.current.lastSH;
@@ -182,10 +312,10 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       const d = Math.abs(el.scrollTop - st.current.prevST);
       if (d > estH / 2 || st.current.prevST < 0) {
         st.current.prevST = el.scrollTop;
-        setScrollTop(el.scrollTop);
+        scheduleScrollTop(el.scrollTop);
       }
     } else {
-      setScrollTop(el.scrollTop);
+      scheduleScrollTop(el.scrollTop);
     }
 
     if (el.scrollTop < 80) {
@@ -196,6 +326,9 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     } else if (el.scrollTop > 200) {
       nearTopFiredRef.current = false;
     }
+
+    updateAnchor(el);
+    updateThumb();
   }, [dynamicMode, estH, onNearTop]);
 
   useEffect(() => {
@@ -212,28 +345,109 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     }
   }, [scrollTop, containerHeight, data.length, vh, onEndReached, onEndReachedThreshold]);
 
+  useEffect(() => {
+    if (!startAtBottom || data.length === 0) return;
+    const el = containerRef.current;
+    if (!el || userScrolledRef.current) return;
+    if (el.scrollTop !== 0) return;
+    const maxTop = el.scrollHeight - el.clientHeight;
+    if (maxTop <= 0) return;
+    suppressScrollRef.current = true;
+    el.scrollTop = maxTop;
+    st.current.lastST = maxTop;
+    st.current.lastSH = el.scrollHeight;
+    setScrollTop(maxTop);
+    updateThumb();
+  }, [data.length, startAtBottom]);
+
+  useEffect(() => {
+    if (scrollToKey == null || scrollToFiredRef.current) return;
+    const el = containerRef.current;
+    if (!el || data.length === 0 || el.clientHeight <= 0) return;
+    const k = String(scrollToKey);
+    let idx = -1;
+    if (keyExtractor) {
+      for (let i = 0; i < data.length; i++) {
+        if (String(keyExtractor(data[i], i)) === k) {
+          idx = i;
+          break;
+        }
+      }
+    } else {
+      const ki = parseInt(k, 10);
+      if (!isNaN(ki) && ki >= 0 && ki < data.length) idx = ki;
+    }
+    if (idx < 0) return;
+    scrollToFiredRef.current = true;
+    let pos = 0;
+    for (let i = 0; i < idx; i++) pos += getHeight(i);
+    const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    const target = Math.max(0, Math.min(pos, maxTop));
+    suppressScrollRef.current = true;
+    el.scrollTop = target;
+    st.current.lastST = el.scrollTop;
+    st.current.lastSH = el.scrollHeight;
+    setScrollTop(el.scrollTop);
+    updateThumb();
+    requestAnimationFrame(() => {
+      const node = el.querySelector<HTMLElement>('[data-vl-key="' + k + '"]');
+      if (node) node.scrollIntoView({ block: 'start' });
+      updateThumb();
+    });
+  }, [scrollToKey, data.length, keyExtractor, containerHeight]);
+
+  useEffect(() => {
+    if (!dynamicMode) return;
+    updateThumb();
+  }, [data.length, vh, containerHeight, scrollTop]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = 0;
+      }
+      if (resizeObserverRef.current) {
+        resizeObserverRef.current.disconnect();
+        resizeObserverRef.current = null;
+      }
+    };
+  }, []);
+
   const items: VNode[] = [];
 
   function makeItemVNode(item: T, i: number, withRef: boolean): VNode {
     const vnode = renderItem({ item, index: i });
     const k = keyExtractor ? keyExtractor(item, i) : (vnode.key ?? i);
     vnode.key = k;
+    const prev = vnode.props;
+    const extraProps: Record<string, any> = { 'data-vl-key': String(k) };
     if (withRef && dynamicMode) {
       const idx = i;
-      const prev = vnode.props;
-      vnode.props = {
-        ...prev,
-        ref: (el2: HTMLDivElement | null) => {
-          if (el2 && el2.offsetHeight > 0 && st.current.heights[idx] !== el2.offsetHeight) {
-            st.current.heights[idx] = el2.offsetHeight;
-          }
-        },
+      extraProps.ref = (el2: HTMLDivElement | null) => {
+        if (el2 && el2.offsetHeight > 0 && st.current.heights[idx] !== el2.offsetHeight) {
+          st.current.heights[idx] = el2.offsetHeight;
+        }
       };
     }
+    vnode.props = { ...prev, ...extraProps };
     return vnode;
   }
 
+  const loaderNode: VNode | null = topLoader
+    ? {
+        type: 'div',
+        props: {
+          key: 'loader-top',
+          style: 'position:sticky;top:0;z-index:3;height:48px;display:flex;align-items:center;justify-content:center;flex-shrink:0;pointer-events:none',
+        },
+        children: [topLoader],
+        key: 'loader-top',
+      }
+    : null;
+
   if (dynamicMode && data.length > 0) {
+    if (loaderNode) items.push(loaderNode);
     if (topHeight > 0) {
       items.push({
         type: 'div',
@@ -257,6 +471,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       });
     }
   } else if (!dynamicMode) {
+    if (loaderNode) items.push(loaderNode);
     if (topHeight > 0) {
       items.push({
         type: 'div',
@@ -281,7 +496,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   const containerStyle: Record<string, any> = {
     overflowY: 'auto',
     overflowX: 'hidden',
-    ...style,
+    scrollbarWidth: 'none',
   };
   if (ch != null) {
     containerStyle.height = ch + 'px';
@@ -291,28 +506,78 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     containerStyle.minHeight = 0;
   }
 
+  const wrapperStyle: Record<string, any> = {
+    position: 'relative',
+    flex: 1,
+    display: 'flex',
+    minHeight: 0,
+    alignSelf: 'stretch',
+    ...(style || {}),
+  };
+
   function onContainerRef(el: HTMLDivElement | null) {
     containerRef.current = el;
     if (el && !readyFired.current) {
       readyFired.current = true;
+      if (ch == null && typeof ResizeObserver !== 'undefined') {
+        resizeObserverRef.current = new ResizeObserver(() => {
+          const h = el.clientHeight;
+          if (h > 0 && h !== measuredHRef.current) {
+            measuredHRef.current = h;
+            setMeasuredH(h);
+          }
+          updateThumb();
+        });
+        resizeObserverRef.current.observe(el);
+        if (el.clientHeight > 0) {
+          measuredHRef.current = el.clientHeight;
+          setMeasuredH(el.clientHeight);
+        }
+      }
       queueMicrotask(() => {
         st.current.lastST = el.scrollTop;
         st.current.lastSH = el.scrollHeight;
         if (startAtBottom && data.length > 0 && el.scrollTop === 0 && el.scrollHeight > 0) {
           el.scrollTop = el.scrollHeight;
         }
+        updateThumb();
+        updateAnchor(el);
         onReadyContent?.(el);
       });
     }
   }
 
-  const props: Record<string, any> = {
+  function onThumbRef(el: HTMLDivElement | null) {
+    thumbRef.current = el;
+    if (el && !(el as any).__thumbBound) {
+      (el as any).__thumbBound = true;
+      el.addEventListener('mousedown', onThumbDown);
+    }
+  }
+
+  const scrollProps: Record<string, any> = {
     ref: onContainerRef,
     style: containerStyle,
     onScroll: handleScroll,
   };
-  if (id) props.id = id;
-  if (className) props.className = className;
+  if (id) scrollProps.id = id;
+  if (className) scrollProps.className = className;
 
-  return { type: 'div', props, children: items, key: null };
+  const thumbNode: VNode = {
+    type: 'div',
+    props: {
+      ref: onThumbRef,
+      class: 'CustomScrollbar-thumb',
+      style: 'display:none;opacity:1',
+    },
+    children: [],
+    key: 'custom-thumb',
+  };
+
+  return {
+    type: 'div',
+    props: { class: 'CustomScrollbar', style: wrapperStyle },
+    children: [{ type: 'div', props: scrollProps, children: items, key: 'list' }, thumbNode],
+    key: null,
+  };
 }

@@ -1,5 +1,5 @@
 import type { ParsedKeyframe, ParsedProperty } from './types.js';
-import { buildEasing } from './easing.js';
+import { buildEasing, easingValue } from './easing.js';
 import { bezierLength, bezierPointAt, bezierTAtLength, type CubicBezierSeg } from './bezier.js';
 import { getOverride } from './keypath.js';
 
@@ -203,12 +203,19 @@ export function interpolateKeyframes(property: ParsedProperty, frame: number): a
     const lastEnd = last.endFrame ?? last.t;
     if (frame >= lastEnd) return last.e !== undefined ? last.e : last.s;
 
-    for (let i = 0; i < kfs.length; i++) {
-        const kf = kfs[i];
-        const next = kfs[i + 1];
-        const hold = kf.hold || kf.h === 1;
+    let lo = 0;
+    let hi = kfs.length - 1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const kf = kfs[mid];
+        const next = kfs[mid + 1];
         const end = kf.endFrame ?? (next ? next.t : kf.t);
-        if (frame >= kf.t && frame < end) {
+        if (frame < kf.t) {
+            hi = mid - 1;
+        } else if (frame >= end) {
+            lo = mid + 1;
+        } else {
+            const hold = kf.hold || kf.h === 1;
             if (hold) return kf.s;
             const startVal = kf.s;
             // rlottie noEndValue fixup, applied defensively for hand-built
@@ -223,7 +230,7 @@ export function interpolateKeyframes(property: ParsedProperty, frame: number): a
             // hand-built keyframes (e.g. in tests) may carry raw o/i tangents
             let easing = kf.easing;
             if (!easing && (kf.o || kf.i)) easing = buildEasing(kf.o, kf.i);
-            if (easing) progress = easing.value(progress);
+            if (easing) progress = easingValue(easing, progress);
 
             let result: any;
             if (kf.to && kf.ti && isNumericArray(startVal) && isNumericArray(endVal)) {

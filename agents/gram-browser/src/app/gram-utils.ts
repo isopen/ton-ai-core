@@ -193,6 +193,17 @@ export function getLastVisibleMsgId(): number {
   return lastId;
 }
 
+export function getMaxLoadedMsgId(s: GramState): number {
+  const msgs = s.tgui.current?.state.messages;
+  if (!Array.isArray(msgs)) return 0;
+  let maxId = 0;
+  for (const m of msgs) {
+    const id = Number(m.id) || 0;
+    if (id > maxId) maxId = id;
+  }
+  return maxId;
+}
+
 export function applyReadReceipt(s: GramState, peerKey: string, maxId: number) {
   const prevMax = s.readInboxMap.current.get(peerKey) || 0;
   if (maxId <= prevMax) return;
@@ -224,6 +235,17 @@ export function scrollReadHandler(s: GramState) {
       s.tgService.current?.readHistory(peer, maxId).catch(() => {});
     }
   }, 600);
+}
+
+export function attachScrollRead(s: GramState) {
+  const el = document.getElementById('tg-msg-list-content');
+  if (!el || s.scrollReadElRef.current === el) return;
+  if (s.scrollReadElRef.current && s.scrollReadHandlerRef.current) {
+    s.scrollReadElRef.current.removeEventListener('scroll', s.scrollReadHandlerRef.current);
+  }
+  s.scrollReadHandlerRef.current = () => scrollReadHandler(s);
+  s.scrollReadElRef.current = el;
+  el.addEventListener('scroll', s.scrollReadHandlerRef.current, { passive: true });
 }
 
 export async function loadOrphanedDialogs(s: GramState) {
