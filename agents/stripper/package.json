@@ -1,0 +1,22 @@
+{
+  "name": "@ton-ai/stripper",
+  "version": "0.1.0",
+  "description": "Stripper demo agent: strips comments from any programming language after every edit (CLI + watch mode)",
+  "main": "index.ts",
+  "scripts": {
+    "start": "npx ts-node index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "TON AI Core Team",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "@ton-ai/comment-stripper": "*",
+    "@ton-ai/core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

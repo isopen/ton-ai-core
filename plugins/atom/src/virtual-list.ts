@@ -55,12 +55,15 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   const scrollRafRef = useRef(0);
   const [measuredH, setMeasuredH] = useState(ch ?? 600);
   const measuredHRef = useRef(ch ?? 600);
+
+  const [measTick, setMeasTick] = useState(0);
   const endReachedRef = useRef(false);
   const nearTopFiredRef = useRef(false);
   const readyFired = useRef(false);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const userScrolledRef = useRef(false);
   const suppressScrollRef = useRef(false);
+  const atBottomRef = useRef(false);
   const thumbRef = useRef<HTMLDivElement | null>(null);
   const scrollToFiredRef = useRef(false);
   const dragRef = useRef({ dragging: false, dragY: 0, dragTop: 0 });
@@ -71,6 +74,10 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     lastST: number;
     lastSH: number;
     prevST: number;
+    heightsVersion: number;
+    prefix: Float64Array | null;
+    prefixLen: number;
+    prefixVersion: number;
     anchor?: { key: string; top: number };
   }>({
     heights: [],
@@ -78,13 +85,15 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     lastST: 0,
     lastSH: 0,
     prevST: -1,
+    heightsVersion: 0,
+    prefix: null,
+    prefixLen: -1,
+    prefixVersion: -1,
     anchor: undefined,
   });
 
   const containerHeight = ch ?? measuredH;
 
-  // Telegram-Web style scroll anchor: remember the first item intersecting the
-  // viewport top, then restore its position after items are prepended.
   function updateAnchor(el: HTMLElement) {
     const er = el.getBoundingClientRect();
     const children = el.children;
@@ -157,6 +166,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         const shifted = new Array(len).fill(0);
         for (let i = 0; i < st.current.prevLen; i++) shifted[i + added] = st.current.heights[i] || 0;
         st.current.heights = shifted;
+        st.current.heightsVersion++;
         const anchor = st.current.anchor;
         const oldSH = st.current.lastSH;
         const oldST = st.current.lastST;
@@ -171,8 +181,9 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
               if (diff !== 0) {
                 suppressScrollRef.current = true;
                 el.scrollTop = el.scrollTop + diff;
-                st.current.lastST = el.scrollTop;
-                st.current.lastSH = el.scrollHeight;
+    st.current.lastST = el.scrollTop;
+    st.current.lastSH = el.scrollHeight;
+    atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
               }
               updateAnchor(el);
               return;
@@ -188,6 +199,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         });
       } else {
         st.current.heights = new Array(len).fill(0);
+        st.current.heightsVersion++;
       }
       st.current.prevLen = len;
     }
@@ -200,11 +212,21 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       : estH;
   }
 
+  function ensurePrefix(): Float64Array {
+    const s = st.current;
+    const len = data.length;
+    if (s.prefix && s.prefixLen === len && s.prefixVersion === s.heightsVersion) return s.prefix;
+    const prefix = new Float64Array(len + 1);
+    for (let i = 0; i < len; i++) prefix[i + 1] = prefix[i] + getHeight(i);
+    s.prefix = prefix;
+    s.prefixLen = len;
+    s.prefixVersion = s.heightsVersion;
+    return prefix;
+  }
+
   function totalHeight(): number {
     if (!dynamicMode) return data.length * itemHeight!;
-    let h = 0;
-    for (let i = 0; i < data.length; i++) h += getHeight(i);
-    return h;
+    return ensurePrefix()[data.length];
   }
 
   function computeVisibleRange(): { start: number; end: number } {
@@ -212,30 +234,30 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     if (len === 0 || containerHeight <= 0) return { start: 0, end: len };
     const stPos = Math.max(0, Math.min(scrollTop, vh - containerHeight));
     if (dynamicMode) {
+      const prefix = ensurePrefix();
       const minBuffer = overscan;
       const fillBuffer = Math.ceil(containerHeight / estH);
       const buffer = Math.max(minBuffer, Math.min(fillBuffer, 4));
       const visibleTop = Math.max(0, stPos - buffer * estH);
 
-      let start = 0;
-      let acc = 0;
-      for (let i = 0; i < len; i++) {
-        const hi = getHeight(i);
-        if (acc + hi > visibleTop) {
-          start = Math.max(0, i - buffer);
-          break;
-        }
-        acc += hi;
+      let lo = 0;
+      let hi = len;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (prefix[mid] <= visibleTop) lo = mid;
+        else hi = mid - 1;
       }
+      const start = Math.max(0, lo - buffer);
 
-      let end = start;
-      acc = 0;
-      for (let i = 0; i < start; i++) acc += getHeight(i);
-      while (end < len && acc < stPos + containerHeight + buffer * estH) {
-        acc += getHeight(end);
-        end++;
+      const target = stPos + containerHeight + buffer * estH;
+      let lo2 = start;
+      let hi2 = len;
+      while (lo2 < hi2) {
+        const mid = (lo2 + hi2) >> 1;
+        if (prefix[mid] < target) lo2 = mid + 1;
+        else hi2 = mid;
       }
-      end = Math.min(len, end + buffer);
+      const end = Math.min(len, lo2 + buffer);
       return { start, end };
     }
     let start = Math.max(0, Math.floor(stPos / itemHeight!) - overscan);
@@ -254,8 +276,9 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   let topHeight = 0;
   let bottomHeight = 0;
   if (dynamicMode) {
-    for (let i = 0; i < visibleStartIndex; i++) topHeight += getHeight(i);
-    for (let i = visibleEndIndex; i < data.length; i++) bottomHeight += getHeight(i);
+    const prefix = ensurePrefix();
+    topHeight = prefix[visibleStartIndex];
+    bottomHeight = prefix[data.length] - prefix[visibleEndIndex];
   } else {
     topHeight = visibleStartIndex * itemHeight!;
     bottomHeight = (data.length - visibleEndIndex) * itemHeight!;
@@ -269,25 +292,11 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       lastRangeRef.current = k;
       onVisibleRangeChange?.(start, end);
     }
-  }, [scrollTop, containerHeight, data.length, vh, estH, overscan, initialNumToRender, dynamicMode, itemHeight, onVisibleRangeChange]);
+  }, [scrollTop, containerHeight, data.length, vh, estH, overscan, initialNumToRender, dynamicMode, itemHeight, measTick, onVisibleRangeChange]);
 
   const handleScroll = useCallback((e: Event) => {
     const el = e.target as HTMLElement;
     const newSH = el.scrollHeight;
-
-    // Throttle scroll-driven state to one update per frame: a re-render on
-    // every scroll event floods the main thread and starves rAF, which freezes
-    // every rAF-driven animation (emoji) during scrolling.
-    const scheduleScrollTop = (v: number) => {
-      pendingScrollRef.current = v;
-      if (scrollRafRef.current) return;
-      scrollRafRef.current = requestAnimationFrame(() => {
-        scrollRafRef.current = 0;
-        const v2 = pendingScrollRef.current;
-        pendingScrollRef.current = -1;
-        if (v2 >= 0) setScrollTop(v2);
-      });
-    };
 
     if (suppressScrollRef.current) {
       suppressScrollRef.current = false;
@@ -312,10 +321,10 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       const d = Math.abs(el.scrollTop - st.current.prevST);
       if (d > estH / 2 || st.current.prevST < 0) {
         st.current.prevST = el.scrollTop;
-        scheduleScrollTop(el.scrollTop);
+        pendingScrollRef.current = el.scrollTop;
       }
     } else {
-      scheduleScrollTop(el.scrollTop);
+      pendingScrollRef.current = el.scrollTop;
     }
 
     if (el.scrollTop < 80) {
@@ -327,8 +336,17 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       nearTopFiredRef.current = false;
     }
 
-    updateAnchor(el);
-    updateThumb();
+    if (scrollRafRef.current) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = 0;
+      const v = pendingScrollRef.current;
+      pendingScrollRef.current = -1;
+      if (v >= 0) setScrollTop(v);
+      if (el.isConnected) {
+        if (dynamicMode) updateAnchor(el);
+        updateThumb();
+      }
+    });
   }, [dynamicMode, estH, onNearTop]);
 
   useEffect(() => {
@@ -349,7 +367,8 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     if (!startAtBottom || data.length === 0) return;
     const el = containerRef.current;
     if (!el || userScrolledRef.current) return;
-    if (el.scrollTop !== 0) return;
+
+    if (el.scrollTop !== 0 && !atBottomRef.current) return;
     const maxTop = el.scrollHeight - el.clientHeight;
     if (maxTop <= 0) return;
     suppressScrollRef.current = true;
@@ -378,9 +397,9 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       if (!isNaN(ki) && ki >= 0 && ki < data.length) idx = ki;
     }
     if (idx < 0) return;
+
     scrollToFiredRef.current = true;
-    let pos = 0;
-    for (let i = 0; i < idx; i++) pos += getHeight(i);
+    const pos = dynamicMode ? ensurePrefix()[idx] : idx * itemHeight!;
     const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
     const target = Math.max(0, Math.min(pos, maxTop));
     suppressScrollRef.current = true;
@@ -391,7 +410,11 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     updateThumb();
     requestAnimationFrame(() => {
       const node = el.querySelector<HTMLElement>('[data-vl-key="' + k + '"]');
-      if (node) node.scrollIntoView({ block: 'start' });
+      if (node) {
+        node.scrollIntoView({ block: 'start' });
+      } else {
+        scrollToFiredRef.current = false;
+      }
       updateThumb();
     });
   }, [scrollToKey, data.length, keyExtractor, containerHeight]);
@@ -425,8 +448,12 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     if (withRef && dynamicMode) {
       const idx = i;
       extraProps.ref = (el2: HTMLDivElement | null) => {
-        if (el2 && el2.offsetHeight > 0 && st.current.heights[idx] !== el2.offsetHeight) {
-          st.current.heights[idx] = el2.offsetHeight;
+        if (!el2) return;
+        const h = el2.offsetHeight;
+        if (h > 0 && st.current.heights[idx] !== h) {
+          st.current.heights[idx] = h;
+          st.current.heightsVersion++;
+          setMeasTick((t) => t + 1);
         }
       };
     }
@@ -539,6 +566,8 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         st.current.lastSH = el.scrollHeight;
         if (startAtBottom && data.length > 0 && el.scrollTop === 0 && el.scrollHeight > 0) {
           el.scrollTop = el.scrollHeight;
+
+          setScrollTop(el.scrollTop);
         }
         updateThumb();
         updateAnchor(el);

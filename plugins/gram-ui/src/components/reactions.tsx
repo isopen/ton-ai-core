@@ -5,8 +5,6 @@ import { EmojiPicker } from './emoji-picker.js';
 
 export type { MessageReaction };
 
-// Reaction pills row under a message bubble. "+" opens the emoji picker as a
-// popover; selecting a reaction bubbles it up through onToggle.
 export function Reactions({ reactions, documentUrls, onToggle }: {
   reactions: MessageReaction[];
   documentUrls: Record<string, string>;
@@ -21,9 +19,9 @@ export function Reactions({ reactions, documentUrls, onToggle }: {
 
   return (
     <div class="tgui-reactions">
-      {reactions.map((r, i) => (
+      {reactions.map((r) => (
         <span
-          key={i}
+          key={r.emoji}
           class={'tgui-reaction' + (r.chosen ? ' tgui-reaction_chosen' : '')}
           onClick={() => onToggle(r.emoji)}
         >

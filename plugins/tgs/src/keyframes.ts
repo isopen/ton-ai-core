@@ -3,26 +3,6 @@ import { buildEasing, easingValue } from './easing.js';
 import { bezierLength, bezierPointAt, bezierTAtLength, type CubicBezierSeg } from './bezier.js';
 import { getOverride } from './keypath.js';
 
-/**
- * Port of rlottie's parseKeyFrame() + model::KeyFrames::Frame
- * (src/lottie/lottieparser.cpp / lottiemodel.h).
- *
- * rlottie semantics (verified against lottieparser.cpp parseKeyFrame):
- *  - `endFrame` = the start frame of the NEXT parsed keyframe
- *    (`list.back().end_ = keyframe.start_`), even when that keyframe is
- *    discarded;
- *  - noEndValue fixup: when the new keyframe has a start value and no end
- *    value, the previous frame's end value is copied from it
- *    (`if (parsed.value && parsed.noEndValue) list.back().value_.end_ = ...`);
- *  - a keyframe is pushed only when it is a hold keyframe (`h: 1`) or has an
- *    `i` tangent; all other keyframes are DISCARDED ("its the last frame
- *    discard") — real bodymovin exports mark the animation tail this way
- *    (verified: rlottie example/resource/like.json, joypixels files);
- *  - hold keyframes get `e = s` (value_.end_ = value_.start_);
- *  - path values are wrapped in a single-element array inside keyframes
- *    (`"s": [{"v":...,"i":...,"o":...,"c":...}]`, parsePathInfo handles
- *    both forms) — unwrapped here.
- */
 function unwrapValue(v: any): any {
     if (Array.isArray(v) && v.length === 1 && typeof v[0] === 'object' && !Array.isArray(v[0])) {
         return v[0];
@@ -97,12 +77,6 @@ function lerpNumber(a: number, b: number, t: number): number {
     return a + (b - a) * t;
 }
 
-/**
- * Port of model::Value<T, Position>::at() (lottiemodel.h).
- * Spatial keyframes are interpolated along a cubic bezier
- * (start, start+to, end+ti, end) with arc-length reparameterization
- * ("rove across time"): point at t*bezLen of the bezier.
- */
 function lerpPosition(
     start: number[],
     end: number[],
@@ -123,10 +97,6 @@ function lerpPosition(
     return [pt[0], pt[1]];
 }
 
-/**
- * Port of model::Value<T>::at() + PathData::lerp (lottiemodel.h).
- * Handles scalars, numeric arrays, colors and path data {c,i,o,v}.
- */
 export function lerpValue(start: any, end: any, t: number): any {
     if (typeof start === 'number' && typeof end === 'number') {
         return lerpNumber(start, end, t);
@@ -178,15 +148,6 @@ function resolveSplitDimensions(prop: ParsedProperty, value: any, frame: number)
     return out;
 }
 
-/**
- * Port of model::KeyFrames<T>::value(frameNo) (lottiemodel.h).
- * Returns the property value at the given frame, honoring bezier easing,
- * hold keyframes and spatial (to/ti) tangents.
- *
- * Note: for frames at/after the last pushed keyframe, rlottie returns the
- * last keyframe's END value (`frames_.back().value_.end_`), which for a
- * discarded tail keyframe is the fixup'd start value of that tail.
- */
 export function interpolateKeyframes(property: ParsedProperty, frame: number): any {
     const override = getOverride(property, frame);
     if (override !== undefined) return override;
@@ -218,16 +179,13 @@ export function interpolateKeyframes(property: ParsedProperty, frame: number): a
             const hold = kf.hold || kf.h === 1;
             if (hold) return kf.s;
             const startVal = kf.s;
-            // rlottie noEndValue fixup, applied defensively for hand-built
-            // keyframes (buildKeyframes already precomputes kf.e):
-            // if the next keyframe has a start value and no end value, the
-            // segment ends at that start value.
+
             const endVal = kf.e !== undefined && next?.e !== undefined
                 ? kf.e
                 : next?.s !== undefined ? next.s : (kf.e ?? kf.s);
             const duration = Math.max(end - kf.t, 1e-6);
             let progress = clamp01((frame - kf.t) / duration);
-            // hand-built keyframes (e.g. in tests) may carry raw o/i tangents
+
             let easing = kf.easing;
             if (!easing && (kf.o || kf.i)) easing = buildEasing(kf.o, kf.i);
             if (easing) progress = easingValue(easing, progress);

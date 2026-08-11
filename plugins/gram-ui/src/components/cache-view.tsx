@@ -16,8 +16,6 @@ interface BinlogEventItem {
   flags?: number;
 }
 
-
-
 interface CacheInspectData {
   dbKeys: Array<{ key: string; value: string }>;
   opfsRoot: Array<{ name: string; size: number }>;
@@ -65,7 +63,6 @@ function KeyValueRow({ k, v, onDelete }: { k: string; v: string; onDelete: (key:
     </div>
   );
 }
-
 
 function SectionHeader({ title, count, expanded, onToggle }: {
   title: string; count?: number; expanded: boolean; onToggle: () => void;
@@ -362,7 +359,6 @@ export function CacheView({ }: { state: AppState }) {
                   <div class="tgui-cache-loading">Loading raw data...</div>
                 )}
 
-                
               </div>
             )}
           </div>

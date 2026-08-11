@@ -7,8 +7,8 @@ import { parseTgsJson } from '../utils/tgs-parse.js';
 const TGS_DEBUG = false;
 
 let activePlayers = 0;
-const MAX_ACTIVE_PLAYERS = 24;
-const MAX_PLAYER_TIME = 3000;
+const MAX_ACTIVE_PLAYERS = 64;
+const MAX_PLAYER_TIME = 12000;
 const playerWaiters = new Set<() => void>();
 
 function acquirePlayerSlot(): boolean {
@@ -39,6 +39,7 @@ export interface TgsPlayerProps {
     autoplay?: boolean;
     speed?: number;
     className?: string;
+    cacheKey?: string;
 }
 
 export function TgsPlayer(props: TgsPlayerProps) {
@@ -50,6 +51,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
         autoplay = true,
         speed = 1,
         className,
+        cacheKey,
     } = props;
 
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -86,7 +88,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
         (async () => {
             try {
                 const json = typeof animationData === 'string' ? animationData : JSON.stringify(animationData);
-                const parsed = await parseTgsJson(json);
+                const parsed = await parseTgsJson(json, cacheKey);
                 if (cancelled) return;
                 animRef.current = parsed;
                 setError(null);
@@ -98,7 +100,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 }
             } catch (e: any) {
                 if (cancelled) return;
-                console.log('[TGS_LOG] parse error', e);
+                if (TGS_DEBUG) console.log('[TGS_LOG] parse error', e);
                 setError(e.message || 'Invalid TGS');
                 animRef.current = null;
             }

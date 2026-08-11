@@ -50,7 +50,8 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
                     });
                     try { port.postMessage({ type: 'photoProgress', streamId: msg.id, progress: 100 }); } catch {}
                     if (result) {
-                        try { port.postMessage({ type: 'response', id: msg.id, result: { photoUrl: result.photoUrl, sizeType: msg.sizeType, messageId: msg.messageId, cacheSource: result.cacheSource } }); } catch {}
+                        const payload = { bytes: result.bytes.slice(0), mime: result.mime, sizeType: msg.sizeType, messageId: msg.messageId, cacheSource: result.cacheSource };
+                        try { port.postMessage({ type: 'response', id: msg.id, result: payload }, [result.bytes]); } catch {}
                     } else {
                         try { port.postMessage({ type: 'response', id: msg.id, result: { photoUrl: null, sizeType: msg.sizeType, messageId: msg.messageId } }); } catch {}
                     }
@@ -63,7 +64,7 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
                 }
             } else {
                 const result = await handleMessage(msg);
-                port.postMessage({ type: 'response', id: msg.id, result });
+                port.postMessage({ type: 'response', id: msg.id, result }, collectTransferables(result));
             }
         } catch (e: any) {
             port.postMessage({ type: 'response', id: msg.id, error: e.message });
@@ -77,6 +78,22 @@ async function ensureConnected(): Promise<void> {
     if (!TW.isConnected() && lastSessionId) {
         await TW.handleConnect(lastSessionId, lastDcId);
     }
+}
+
+function collectTransferables(result: any): ArrayBuffer[] {
+    const out: ArrayBuffer[] = [];
+    const seen = new Set<ArrayBuffer>();
+    const push = (b: any) => {
+        if (b instanceof ArrayBuffer && b.byteLength > 0 && !seen.has(b)) {
+            seen.add(b);
+            out.push(b);
+        }
+    };
+    if (result) push(result.bytes);
+    if (result && Array.isArray(result.results)) {
+        for (const item of result.results) push(item && item.bytes);
+    }
+    return out;
 }
 
 async function handleMessage(msg: Record<string, any>): Promise<any> {
@@ -129,7 +146,7 @@ async function handleMessage(msg: Record<string, any>): Promise<any> {
         }
         case 'downloadFile': {
             const dfResult = await TW.enqueueDownload(msg.document, msg.photo, msg.priority || 0);
-            return { type: 'downloadFileResult', fileType: dfResult.type, bytes: dfResult.bytes, error: dfResult.error, cacheSource: dfResult.cacheSource };
+            return { type: 'downloadFileResult', fileType: dfResult.type, bytes: dfResult.bytes.slice(0), error: dfResult.error, cacheSource: dfResult.cacheSource };
         }
         case 'downloadFiles': {
             const results = await TW.downloadFiles_(msg.docs || []);
@@ -142,7 +159,10 @@ async function handleMessage(msg: Record<string, any>): Promise<any> {
         case 'requestPhotoDownload': {
             try {
                 const result = await TW.requestPhotoDownload(msg.photo, msg.sizeType);
-                return { type: 'photoDownloadResult', photoUrl: result?.photoUrl, sizeType: msg.sizeType, messageId: msg.messageId, cacheSource: result?.cacheSource };
+                if (result) {
+                    return { type: 'photoDownloadResult', bytes: result.bytes.slice(0), mime: result.mime, sizeType: msg.sizeType, messageId: msg.messageId, cacheSource: result.cacheSource };
+                }
+                return { type: 'photoDownloadResult', photoUrl: null, sizeType: msg.sizeType, messageId: msg.messageId };
             } catch (e: any) {
                 if (e.message?.includes('FILE_REFERENCE_EXPIRED')) {
                     return { type: 'photoDownloadResult', photoUrl: null, sizeType: msg.sizeType, messageId: msg.messageId, fileRefExpired: true, photo: msg.photo };

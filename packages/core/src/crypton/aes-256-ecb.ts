@@ -39,13 +39,12 @@ const Si = new Uint8Array([
   0x17,0x2b,0x04,0x7e,0xba,0x77,0xd6,0x26,0xe1,0x69,0x14,0x63,0x55,0x21,0x0c,0x7d
 ]);
 
-// Pre-computed MixColumns tables (each is gmul(a, x) for x = 0..255)
-const M0 = new Uint8Array(256); // ×2
-const M1 = new Uint8Array(256); // ×3
-const M2 = new Uint8Array(256); // ×9
-const M3 = new Uint8Array(256); // ×11(0xb)
-const M4 = new Uint8Array(256); // ×13(0xd)
-const M5 = new Uint8Array(256); // ×14(0xe)
+const M0 = new Uint8Array(256);
+const M1 = new Uint8Array(256);
+const M2 = new Uint8Array(256);
+const M3 = new Uint8Array(256);
+const M4 = new Uint8Array(256);
+const M5 = new Uint8Array(256);
 {
   for (let i = 0; i < 256; i++) {
     let a = i;
@@ -55,12 +54,12 @@ const M5 = new Uint8Array(256); // ×14(0xe)
   }
   M2[0] = 0; M3[0] = 0; M4[0] = 0; M5[0] = 0;
   for (let i = 1; i < 256; i++) {
-    const a4 = M0[M0[i]]; // ×4
-    const a8 = M0[a4];     // ×8
-    M2[i] = a8 ^ i;        // ×9 = ×8 + 1
-    M3[i] = a8 ^ M0[i] ^ i;// ×11 = ×8 + ×2 + 1
-    M4[i] = a8 ^ a4 ^ i;   // ×13 = ×8 + ×4 + 1
-    M5[i] = a8 ^ a4 ^ M0[i]; // ×14 = ×8 + ×4 + ×2
+    const a4 = M0[M0[i]];
+    const a8 = M0[a4];
+    M2[i] = a8 ^ i;
+    M3[i] = a8 ^ M0[i] ^ i;
+    M4[i] = a8 ^ a4 ^ i;
+    M5[i] = a8 ^ a4 ^ M0[i];
   }
 }
 

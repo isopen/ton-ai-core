@@ -1,5 +1,7 @@
 export const MAX_WORKERS = Math.min(typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4, 4);
-const MAX_INITS = 8;
+const MAX_INITS = 16;
+
+const REQUEST_TIMEOUT_MS = 12_000;
 
 interface Pending {
   resolve: (data: any) => void;
@@ -16,6 +18,28 @@ let nextWorkerId = 0;
 let activeInits = 0;
 const initWaiters: Array<() => void> = [];
 let respawnsLeft = 3;
+
+function failAllPending(w: Worker, pending: Map<number, Pending>, err: Error) {
+  for (const [, p] of pending) p.reject(err);
+  pending.clear();
+  try { w.terminate(); } catch {}
+}
+
+const RESPAWN_THROTTLE_MS = 20_000;
+let lastRespawnAt = 0;
+
+export function respawnWorker(worker: MediaWorker): void {
+  const now = Date.now();
+  if (now - lastRespawnAt < RESPAWN_THROTTLE_MS) return;
+  lastRespawnAt = now;
+  const idx = workers.indexOf(worker);
+  if (idx < 0) return;
+  workers.splice(idx, 1);
+  console.warn('[AnimatedRenderer] respawning poisoned media worker #' + idx);
+  const w2 = makeWorker();
+  if (w2) workers.push(w2);
+  else workersBroken = true;
+}
 
 function acquireInitSlot(): Promise<void> {
   if (activeInits < MAX_INITS) {
@@ -58,11 +82,9 @@ function makeWorker(): MediaWorker | null {
     if (crashed) return;
     crashed = true;
     console.warn('[AnimatedRenderer] worker #' + id + ' crashed:', err?.message || err);
-    for (const [, p] of pending) p.reject(new Error('worker crashed'));
-    pending.clear();
+    failAllPending(w, pending, new Error('worker crashed'));
     const idx = workers.indexOf(worker);
     if (idx >= 0) workers.splice(idx, 1);
-    try { w.terminate(); } catch {}
     if (respawnsLeft > 0) {
       respawnsLeft--;
       const w2 = makeWorker();
@@ -77,7 +99,21 @@ function makeWorker(): MediaWorker | null {
       const msgId = nextMsgId++;
       const run = () =>
         new Promise((resolve, reject) => {
-          pending.set(msgId, { resolve, reject });
+          const timer = window.setTimeout(() => {
+            if (pending.delete(msgId)) {
+              reject(new Error('worker request timeout: ' + name));
+            }
+          }, REQUEST_TIMEOUT_MS);
+          pending.set(msgId, {
+            resolve: (d) => {
+              window.clearTimeout(timer);
+              resolve(d);
+            },
+            reject: (e) => {
+              window.clearTimeout(timer);
+              reject(e);
+            },
+          });
           w.postMessage({ type: name, msgId, ...msg });
         });
       if (name === 'tgs:init') {

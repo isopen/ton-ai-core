@@ -8,7 +8,7 @@ import { SkillPlugin } from './plugin/skill-plugin.js';
 import { PluginManager } from '@ton-ai/core';
 import { defaultState, reducer } from './state.js';
 import { injectStyles } from './styles.js';
-import { render } from '@ton-ai/atom/render';
+import { render, setUseRafBatching } from '@ton-ai/atom/render';
 import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
 import { Header } from './components/header.js';
 import { AuthScreen } from './components/auth-screen.js';
@@ -18,6 +18,7 @@ import { ChatInput } from './components/chat-input.js';
 import { DebugView } from './components/debug-view.js';
 import { SettingsView } from './components/settings-view.js';
 import { CacheView } from './components/cache-view.js';
+import { FpsMeter } from './components/fps-meter.js';
 import { S, LANG_FALLBACKS } from './strings.js';
 import { setStrings } from './locale.js';
 export type { AppState, UIAction, PeerInfo, Dialog, Message };
@@ -158,10 +159,12 @@ export class TelegramUI {
                 </Flex>
               </Flex>
           }
+          <FpsMeter />
         </Panel>
       );
     }
 
+    setUseRafBatching(true);
     this._rootDom = render(App, container);
     this.registerBuiltinSkills();
     this.setupListeners();
@@ -191,7 +194,6 @@ export class TelegramUI {
       const fallback = LANG_FALLBACKS[e.detail.langCode];
       if (fallback) setStrings(fallback);
     });
-
   }
 
   dispatch(action: UIAction) {

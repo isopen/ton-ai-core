@@ -1,0 +1,28 @@
+{
+  "name": "ton-ai-stripper",
+  "version": "0.1.0",
+  "description": "Stripper demo agent: strips comments from any programming language after every edit (CLI + watch mode)",
+  "scripts": {
+    "clean": "npm run clean:core && npm run clean:comment-stripper && npm run clean:agent",
+    "clean:core": "cd packages/core && npm run clean",
+    "clean:comment-stripper": "cd plugins/comment-stripper && npm run clean",
+    "clean:agent": "cd agents/stripper && rm -rf dist node_modules package-lock.json",
+    "build:core": "cd packages/core && npm install && npm run build && npm pack",
+    "build:comment-stripper": "cd plugins/comment-stripper && npm install && npm run build && npm pack",
+    "build:agent": "cd agents/stripper && npm install",
+    "copy-packages": "mkdir -p agents/stripper/node_modules/@ton-ai && cp packages/core/ton-ai-core-0.2.0.tgz agents/stripper/node_modules/@ton-ai/ 2>/dev/null && cp plugins/comment-stripper/ton-ai-comment-stripper-0.1.0.tgz agents/stripper/node_modules/@ton-ai/ 2>/dev/null || echo 'Package copy completed'",
+    "rebuild": "npm run clean && npm run build:core && npm run build:comment-stripper && npm run build:agent && npm run copy-packages",
+    "rebuild:quick": "npm run build:core && npm run build:comment-stripper && npm run copy-packages && cd agents/stripper && npm install",
+    "start:agent": "cd agents/stripper && npm start",
+    "dev": "npm run rebuild && npm run start:agent"
+  },
+  "keywords": [
+    "ton",
+    "ai",
+    "stripper",
+    "comments",
+    "code-cleaner"
+  ],
+  "author": "TON AI Core Team",
+  "license": "MIT"
+}

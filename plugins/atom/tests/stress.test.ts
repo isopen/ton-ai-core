@@ -383,6 +383,45 @@ describe('stress: memo', () => {
       done();
     });
   });
+
+  test('memo re-renders when a nested child updates its own state', (done) => {
+    // Regression: the memoized row caches its vnode and the reconciler bails
+    // out on the identical object, so a child that updates its own state
+    // (e.g. an EmojiCanvas fed by window events) must force the memo cache to
+    // bust — otherwise its state is lost forever.
+    let childRenders = 0;
+    let setChild: any;
+
+    const Child: ComponentType = () => {
+      const [count, setCount] = useState(0);
+      childRenders++;
+      setChild = setCount;
+      return h('span', { 'data-state': 'child' }, String(count));
+    };
+
+    const Inner: ComponentType = memo(() => {
+      return h('div', {},
+        h(Child as any),
+      );
+    });
+
+    const Outer: ComponentType = () => {
+      return h('div', {},
+        h(Inner as any, { label: 'fixed' }),
+      );
+    };
+
+    render(Outer, container);
+    childRenders = 0;
+
+    setChild(42);
+
+    queueMicrotask(() => {
+      expect(childRenders).toBe(1);
+      expect(container.querySelector('span[data-state="child"]')!.textContent).toBe('42');
+      done();
+    });
+  });
 });
 
 describe('stress: RAF batching', () => {

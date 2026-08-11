@@ -1,4 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
+import { useEffect, useRef } from '@ton-ai/atom/hooks';
 
 function siteColor(site: string): string {
   let hash = 0;
@@ -39,6 +40,31 @@ export function WebPageBubble({ m, timeStr, out, status, sameSenderPrev, sameSen
   const imageUrl = pickPhotoUrl(wp?.photo);
   const hasImage = !!imageUrl;
 
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const wpPhoto = wp?.photo;
+  useEffect(() => {
+    if (hasImage) return;
+    const el = rootRef.current;
+    if (!el || !wpPhoto?.sizes?.length) return;
+    const prio = ['m', 'x', 'y'];
+    const obs = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return;
+      let best: any;
+      for (const t of prio) {
+        best = wpPhoto.sizes.find((sz: any) => sz.type === t && !sz.url && !sz.src);
+        if (best) break;
+      }
+      if (best) {
+        window.dispatchEvent(new CustomEvent('tg-download-photo', {
+          detail: { photo: wpPhoto, sizeType: best.type, messageId: m.id },
+        }));
+      }
+      obs.disconnect();
+    }, { rootMargin: '200px' });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [m.id, hasImage, wpPhoto]);
+
   const wpType = wp?.type || '';
   const isVideo = wpType === 'video' || wp?.embed_type === 'video' || wp?.embed_type === 'iframe';
   const duration = wp?.duration ? (() => { const m = Math.floor(wp.duration / 60); const s = wp.duration % 60; return m + ':' + (s < 10 ? '0' : '') + s; })() : '';
@@ -72,7 +98,7 @@ export function WebPageBubble({ m, timeStr, out, status, sameSenderPrev, sameSen
   const showCard = previewState !== 'no-preview';
 
   return (
-    <div class="link-msg" data-msg-id={m.id}>
+    <div ref={rootRef} class="link-msg" data-msg-id={m.id}>
       <div class={bubbleCls}>
         <a class="link-msg__url" href={url} target="_blank" rel="noopener noreferrer">{url}</a>
 

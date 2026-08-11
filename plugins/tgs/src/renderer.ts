@@ -1,7 +1,7 @@
 import { interpolateKeyframes } from './keyframes.js';
 import { bezierLength, bezierSplit, bezierTAtLength } from './bezier.js';
 import type {
-    ParsedAnimation, ParsedLayer, ParsedShape, ParsedAsset,
+    ParsedAnimation, ParsedLayer, ParsedShape, ParsedAsset, ParsedTransform, ParsedProperty, ParsedText, TextKeyframe,
 } from './types.js';
 import { MatteType, LayerType } from './types.js';
 
@@ -45,8 +45,6 @@ function colorToStyle(color: any, alpha = 1): string {
     return color || '#000';
 }
 
-// ---------- affine matrices (canvas DOMMatrix layout: a,b,c,d,e,f) ----------
-
 type Mat3 = [number, number, number, number, number, number];
 
 function matTranslate(x: number, y: number): Mat3 {
@@ -64,11 +62,6 @@ function matRotate(deg: number): Mat3 {
     return [c, s, -s, c, 0, 0];
 }
 
-// rlottie VMatrix::operator* (row-vector convention) in DOMMatrix field layout
-// [a,b,c,d,e,f]: result maps a point by m2 first, then m1.
-//   a' = a1*a2 + c1*b2   b' = b1*a2 + d1*b2
-//   c' = a1*c2 + c1*d2   d' = b1*c2 + d1*d2
-//   e' = a1*e2 + c1*f2 + e1   f' = b1*e2 + d1*f2 + f1
 function matMul(m1: Mat3, m2: Mat3): Mat3 {
     return [
         m1[0] * m2[0] + m1[2] * m2[1],
@@ -84,7 +77,6 @@ function matApply(m: Mat3, x: number, y: number): [number, number] {
     return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
 }
 
-// VMatrix::scale() port: |map(sqrt2, sqrt2) - map(0, 0)| / 2
 function matScaleOf(m: Mat3): number {
     const p1 = matApply(m, 0, 0);
     const p2 = matApply(m, SQRT_2, SQRT_2);
@@ -93,7 +85,6 @@ function matScaleOf(m: Mat3): number {
     return Math.sqrt(dx * dx + dy * dy) / 2;
 }
 
-// rlottie Transform::matrix(): translate(position) rotate(rotation) scale(scale/100) translate(-anchor)
 function matFromTransform(tr: any, frame: number): Mat3 {
     const pos = resolveProp(tr?.position, frame, [0, 0]);
     const rot = toNumber(resolveProp(tr?.rotation, frame, 0));
@@ -128,8 +119,6 @@ function intersectRect(a: Rect, b: Rect): Rect | null {
     if (w <= 0 || h <= 0) return null;
     return { x, y, w, h };
 }
-
-// ---------- path commands ----------
 
 interface PathCmd {
     type: 'M' | 'L' | 'C' | 'Z';
@@ -172,7 +161,6 @@ function vertsToCmds(verts: any[], closed: boolean): PathCmd[] {
     return cmds;
 }
 
-// rlottie VPath::addRect / addRoundRect CW: starts at (right, top) and goes clockwise.
 function rectToVerts(p: number[], s: number[], r: number): any[] {
     const cx = p[0], cy = p[1];
     const w = s[0] / 2, h = s[1] / 2;
@@ -211,10 +199,6 @@ function ellipseToVerts(p: number[], s: number[]): any[] {
     ];
 }
 
-// rlottie VPath::addPolystar / addPolygon port. Matches the wasm-era build:
-// the shape is built with cx=cy=0 and then transformed by
-// T(pos) * R(rotation) * R(rotation) (renderer::Polystar::updatePath rotates
-// twice), and the polygon keeps the historical double (-90) angle offset.
 function starToVerts(shape: ParsedShape, frame: number): any[] {
     const points = toNumber(resolveProp(shape.points, frame, 5));
     const innerR = toNumber(resolveProp(shape.innerRadius, frame, 0));
@@ -225,11 +209,10 @@ function starToVerts(shape: ParsedShape, frame: number): any[] {
     const pos = resolveProp(shape.position, frame, [0, 0]);
     const cx = toNumber(pos && pos[0]);
     const cy = toNumber(pos && pos[1]);
-    const angleDir = 1; // CW (parser does not expose the d field)
+    const angleDir = 1;
 
     const verts: any[] = [];
     if (shape.starType === 2) {
-        // VPathData::addPolygon
         const POLYGON_MAGIC_NUMBER = 0.25;
         let currentAngle = ((0 - 90) * Math.PI) / 180;
         const anglePerPoint = (2 * Math.PI) / Math.floor(points);
@@ -265,7 +248,6 @@ function starToVerts(shape: ParsedShape, frame: number): any[] {
             currentAngle += anglePerPoint * angleDir;
         }
     } else {
-        // VPathData::addPolystar
         const POLYSTAR_MAGIC_NUMBER = 0.47829 / 0.28;
         let currentAngle = ((0 - 90) * Math.PI) / 180;
         let x = 0;
@@ -337,7 +319,6 @@ function starToVerts(shape: ParsedShape, frame: number): any[] {
         }
     }
 
-    // renderer::Polystar::updatePath: path.transform(T(pos) * R(rotation) * R(rotation))
     const b = (2 * rotation * Math.PI) / 180;
     const s = Math.sin(b);
     const c = Math.cos(b);
@@ -451,8 +432,6 @@ function shapeCmds(shape: ParsedShape, frame: number): PathCmd[] | null {
     return null;
 }
 
-// ---------- trim (port of rlottie Trim::segment / Trim::update / VPathMesure / VDasher) ----------
-
 function resolveProp(prop: any, frame: number, def?: any): any {
     if (prop && typeof prop === 'object' && 'animated' in prop) {
         const v = interpolateKeyframes(prop, frame);
@@ -467,7 +446,6 @@ function toNumber(v: any): number {
     return Number(v) || 0;
 }
 
-// VLine::length() port: alpha max plus beta min approximation
 function lineLength(x1: number, y1: number, x2: number, y2: number): number {
     let x = x2 - x1;
     let y = y2 - y1;
@@ -476,7 +454,6 @@ function lineLength(x1: number, y1: number, x2: number, y2: number): number {
     return x > y ? x + 0.375 * y : y + 0.375 * x;
 }
 
-// VPath::length() port (line segments use the approximate length).
 function pathLength(cmds: PathCmd[]): number {
     let len = 0;
     let prevX = 0, prevY = 0;
@@ -506,7 +483,6 @@ function loop(start: number, end: number): [number, number] {
     return [Math.max(start, end), Math.min(start, end)];
 }
 
-// rlottie model::Trim::segment(frameNo) port.
 function trimSegment(rawStart: number, rawEnd: number, rawOffset: number): [number, number] {
     let start = rawStart / 100;
     let end = rawEnd / 100;
@@ -529,7 +505,6 @@ function trimSegment(rawStart: number, rawEnd: number, rawOffset: number): [numb
     }
 }
 
-// VDasher port (used by VPathMesure::trim). dashArray = [len0, gap0, len1, gap1].
 function dasher(cmds: PathCmd[], dash: number[]): PathCmd[] {
     const result: PathCmd[] = [];
     const size = 2;
@@ -651,7 +626,6 @@ function dasher(cmds: PathCmd[], dash: number[]): PathCmd[] {
     return result;
 }
 
-// VPathMesure::trim port.
 function trimPath(cmds: PathCmd[], start: number, end: number): PathCmd[] {
     if (vCompare(start, end)) return [];
     if ((vCompare(start, 0) && vCompare(end, 1)) || (vCompare(start, 1) && vCompare(end, 0))) {
@@ -665,8 +639,6 @@ function trimPath(cmds: PathCmd[], start: number, end: number): PathCmd[] {
         : [length * end, (start - end) * length, (1 - start) * length, MAX];
     return dasher(cmds, dash);
 }
-
-// ---------- shape group walk (rlottie Group::processPaintItems / processTrimItems / applyTrim) ----------
 
 interface CapturedPath {
     original: PathCmd[];
@@ -690,13 +662,74 @@ interface WalkState {
     paths: CapturedPath[];
     paints: PaintRec[];
     trims: TrimRec[];
+    repeatCopies: RepeatCopyRec[];
 }
 
-// rlottie Group::processPaintItems / processTrimItems: each paint/trim captures
-// the shapes collected since ITS OWN group's walk started (curOpCount = list
-// size at group entry), and nested groups' shapes are added to the shared list
-// at the group's position.
+interface RepeatCopyRec {
+    shape: ParsedShape;
+    content: ParsedShape[];
+    mat: Mat3;
+    alpha: number;
+}
+
+function repeaterMatrix(tr: ParsedTransform | undefined, frame: number, n: number): Mat3 {
+    const pos = tr ? resolveProp(tr.position, frame, [0, 0]) : [0, 0];
+    const anchor = tr ? resolveProp(tr.anchor, frame, [0, 0]) : [0, 0];
+    const rot = tr ? toNumber(resolveProp(tr.rotation, frame, 0)) : 0;
+    const scale = tr ? resolveProp(tr.scale, frame, [100, 100]) : [100, 100];
+    const sx = Math.pow(toNumber(scale[0]) / 100, n);
+    const sy = Math.pow(toNumber(scale[1]) / 100, n);
+    let m = matTranslate(toNumber(pos[0]) * n + toNumber(anchor[0]), toNumber(pos[1]) * n + toNumber(anchor[1]));
+    m = matMul(m, matScale(sx, sy));
+    m = matMul(m, matRotate(rot * n));
+    m = matMul(m, matTranslate(-toNumber(anchor[0]), -toNumber(anchor[1])));
+    return m;
+}
+
+function maxPropertyNumber(prop: ParsedProperty | undefined, fallback: number): number {
+    if (!prop) return fallback;
+    let m = fallback;
+    const consider = (v: any) => { if (typeof v === 'number' && Number.isFinite(v) && v > m) m = v; };
+    consider(prop.value);
+    for (const k of prop.keyframes || []) {
+        consider(k.s);
+        if (k.e !== undefined) consider(k.e);
+    }
+    return m;
+}
+
+function renderRepeatCopies(ctx: CanvasRenderingContext2D, rec: RepeatCopyRec, frame: number) {
+    const r = rec.shape;
+    const copiesFloat = toNumber(resolveProp(r.copies, frame, 0));
+    if (!Number.isFinite(copiesFloat) || copiesFloat <= 0) return;
+    const maxCopies = Math.min(256, Math.ceil(maxPropertyNumber(r.copies, 0)));
+    const offset = toNumber(resolveProp(r.copiesOffset, frame, 0));
+    const tr = r.transform;
+    const so = tr ? toNumber(resolveProp(tr.startOpacity, frame, 100)) / 100 : 1;
+    const eo = tr ? toNumber(resolveProp(tr.endOpacity, frame, 100)) / 100 : 1;
+    const visible = Math.trunc(copiesFloat);
+    for (let i = 0; i < maxCopies; i++) {
+        let alpha = rec.alpha * (so + (eo - so) * (i / copiesFloat));
+        if (i >= visible) alpha = 0;
+        if (alpha <= 0) continue;
+        const copyMat = matMul(rec.mat, repeaterMatrix(tr, frame, i + offset));
+        const w: WalkState = { paths: [], paints: [], trims: [], repeatCopies: [] };
+        walkShapeGroup(rec.content, frame, copyMat, alpha, w, 0);
+        for (const t of w.trims) applyTrim(t, frame);
+        for (const c of w.repeatCopies) renderRepeatCopies(ctx, c, frame);
+        drawPaints(ctx, w.paints, frame);
+    }
+}
+
 function walkShapeGroup(shapes: ParsedShape[], frame: number, mat: Mat3, alpha: number, walk: WalkState, start: number) {
+    for (let i = shapes.length - 1; i >= 0; i--) {
+        if (shapes[i].type !== 'repeater') continue;
+        walk.repeatCopies.push({ shape: shapes[i], content: shapes.slice(0, i), mat, alpha });
+        const after = shapes.slice(i + 1);
+        if (after.length > 0) walkShapeGroup(after, frame, mat, alpha, walk, walk.paths.length);
+        return;
+    }
+
     for (const shape of shapes) {
         const type = shape.type;
 
@@ -729,14 +762,13 @@ function walkShapeGroup(shapes: ParsedShape[], frame: number, mat: Mat3, alpha: 
             continue;
         }
 
-        if (type === 'merge' || type === 'repeater') continue;
+        if (type === 'merge') continue;
 
         const cmds = shapeCmds(shape, frame);
         if (cmds) walk.paths.push({ original: cmds, current: cmds, matrix: mat });
     }
 }
 
-// rlottie renderer::Trim::update() port.
 function applyTrim(trim: TrimRec, frame: number) {
     const sRaw = toNumber(resolveProp(trim.shape.start, frame, 0));
     const eRaw = toNumber(resolveProp(trim.shape.end, frame, 100));
@@ -793,8 +825,6 @@ function applyTrim(trim: TrimRec, frame: number) {
     }
 }
 
-// ---------- paint drawing (rlottie Paint::updateRenderNode / Fill::updateContent / Stroke::updateContent) ----------
-
 function paintColorStyle(paint: PaintRec, frame: number): string {
     const alpha = paint.alpha;
     return colorToStyle(resolveProp(paint.shape.color, frame, [0, 0, 0]), alpha);
@@ -825,7 +855,6 @@ function paintGradient(ctx: CanvasRenderingContext2D, paint: PaintRec, frame: nu
                 grad.addColorStop(Math.max(0, Math.min(1, off)), `rgba(${Math.round(entry[1] * 255)},${Math.round(entry[2] * 255)},${Math.round(entry[3] * 255)},${alpha})`);
             }
         } else {
-            // flat [offset, r, g, b(, a)] groups; channel count comes from g.p
             const channels = g.colorPoints === 5 || g.colorPoints === 4 ? g.colorPoints : 4;
             const hasAlpha = channels >= 5;
             for (let i = 0; i + 3 < stops.length; i += channels) {
@@ -893,13 +922,12 @@ function drawPaints(ctx: CanvasRenderingContext2D, paints: PaintRec[], frame: nu
 }
 
 function renderShapes(ctx: CanvasRenderingContext2D, shapes: ParsedShape[], frame: number, mat: Mat3) {
-    const walk: WalkState = { paths: [], paints: [], trims: [] };
+    const walk: WalkState = { paths: [], paints: [], trims: [], repeatCopies: [] };
     walkShapeGroup(shapes, frame, mat, 1, walk, 0);
     for (const trim of walk.trims) applyTrim(trim, frame);
+    for (const copy of walk.repeatCopies) renderRepeatCopies(ctx, copy, frame);
     drawPaints(ctx, walk.paints, frame);
 }
-
-// ---------- layers ----------
 
 function layerVisible(layer: ParsedLayer, frame: number): boolean {
     if (layer.inFrame != null && frame < layer.inFrame) return false;
@@ -907,7 +935,6 @@ function layerVisible(layer: ParsedLayer, frame: number): boolean {
     return true;
 }
 
-// rlottie Layer::matrix(frameNo, depth): own x parentChain (recursive, depth guard 64).
 function layerCombinedMatrix(layer: ParsedLayer, frame: number, layerById: Map<number, ParsedLayer>, base: Mat3): Mat3 {
     const chain: Mat3[] = [];
     let parent = layer.parentIndex != null ? layerById.get(layer.parentIndex) : undefined;
@@ -923,10 +950,6 @@ function layerCombinedMatrix(layer: ParsedLayer, frame: number, layerById: Map<n
     return m;
 }
 
-// Buffers are pooled per (tag, size): each call site uses a distinct tag so
-// same-size buffers (e.g. the two matte buffers) never alias each other.
-// In a Web Worker (no `document`) OffscreenCanvas is used instead; the 2D
-// context API surface used below is identical on both.
 const bufferPool = new Map<string, HTMLCanvasElement>();
 
 function getBuffer(w: number, h: number, tag: string): HTMLCanvasElement {
@@ -948,7 +971,6 @@ function rectOf(x: number, y: number, w: number, h: number): Rect {
     return { x, y, w, h };
 }
 
-// VBitmap::updateLuma() port: alpha = int(0.299r + 0.587g + 0.114b), rgb = 0.
 function applyLuma(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -966,8 +988,6 @@ function applyLuma(canvas: HTMLCanvasElement) {
     ctx.putImageData(image, 0, 0);
 }
 
-// Each composition builds its own parent map (parentIndex is per-comp):
-// the root comp maps anim.layers, each precomp maps its asset's layers.
 function renderCompLayers(
     ctx: CanvasRenderingContext2D,
     layers: ParsedLayer[],
@@ -1016,7 +1036,6 @@ function renderMattePair(
     const localClip = rectOf(0, 0, w, h);
     const shifted = matMul(matTranslate(-clipRect.x, -clipRect.y), base);
 
-    // 1. draw src layer into the matte buffer
     const srcCanvas = getBuffer(w, h, 'matte-src');
     const srcCtx = srcCanvas.getContext('2d')!;
     srcCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1028,7 +1047,6 @@ function renderMattePair(
     renderLayer(srcCtx, src, frame, shifted, parentAlpha, localClip, assets, layerById);
     srcCtx.restore();
 
-    // 2. draw the matte layer into its own buffer
     const matteCanvas = getBuffer(w, h, 'matte-layer');
     const matteCtx = matteCanvas.getContext('2d')!;
     matteCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1040,20 +1058,17 @@ function renderMattePair(
     renderLayer(matteCtx, matte, frame, shifted, parentAlpha, localClip, assets, layerById);
     matteCtx.restore();
 
-    // 3. luma mattes use the src buffer's luminosity as alpha
     const type = matte.matteType ?? MatteType.None;
     if (type === MatteType.Luma || type === MatteType.LumaInv) {
         applyLuma(srcCanvas);
     }
 
-    // 4. blend src into the matte buffer (DestIn / DestOut)
     matteCtx.globalCompositeOperation = (type === MatteType.Alpha || type === MatteType.Luma)
         ? 'destination-in'
         : 'destination-out';
     matteCtx.drawImage(srcCanvas, 0, 0);
     matteCtx.globalCompositeOperation = 'source-over';
 
-    // 5. composite onto the main surface (buffers are in canvas space)
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(matteCanvas, clipRect.x, clipRect.y);
@@ -1081,17 +1096,18 @@ function renderPrecomp(
     const children = precompChildren(layer, assets);
     const mappedFrame = layer.timeRemap ? toNumber(interpolateKeyframes(layer.timeRemap, frame)) : frame;
 
-    const sw = layer.layerWidth ?? 0;
-    const sh = layer.layerHeight ?? 0;
-    const [bx, by, bw, bh] = transformRectBounds(m, 0, 0, sw, sh);
-    const layerClip = intersectRect(clipRect, rectOf(bx, by, bw, bh));
+    const hasSize = (layer.layerWidth ?? 0) > 0 && (layer.layerHeight ?? 0) > 0;
+    let layerClip: Rect | null = clipRect;
+    if (hasSize) {
+        const [bx, by, bw, bh] = transformRectBounds(m, 0, 0, layer.layerWidth!, layer.layerHeight!);
+        layerClip = intersectRect(clipRect, rectOf(bx, by, bw, bh));
+    }
     if (!layerClip) return;
 
     const complexContent = children.length > 1;
     const childAlpha = complexContent ? 1 : opacity;
 
     if (!vCompare(opacity, 1) && complexContent) {
-        // offscreen render, composite with layer opacity
         const w = Math.max(1, Math.ceil(layerClip.w));
         const h = Math.max(1, Math.ceil(layerClip.h));
         const buf = getBuffer(w, h, 'precomp');
@@ -1125,6 +1141,69 @@ function renderPrecomp(
     ctx.restore();
 }
 
+const imageBitmaps = new Map<string, ImageBitmap | null>();
+const imageDecodes = new Map<string, Promise<ImageBitmap | null>>();
+
+function decodeImageAsset(a: ParsedAsset): ImageBitmap | null {
+    if (!a.p) return null;
+    if (imageBitmaps.has(a.id)) return imageBitmaps.get(a.id) || null;
+    if (imageDecodes.has(a.id)) return null;
+    const raw = a.p;
+    const b64 = raw.startsWith('data:') ? raw.slice(raw.indexOf(',') + 1) : raw;
+    const p = (async () => {
+        try {
+            if (typeof createImageBitmap !== 'function' || typeof atob !== 'function') return null;
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return await createImageBitmap(new Blob([bytes]));
+        } catch {
+            return null;
+        } finally {
+            imageDecodes.delete(a.id);
+        }
+    })();
+    imageDecodes.set(a.id, p);
+    void p.then((b) => { imageBitmaps.set(a.id, b); });
+    return null;
+}
+
+function renderImage(ctx: CanvasRenderingContext2D, layer: ParsedLayer, m: Mat3, opacity: number, clipRect: Rect, assets: ParsedAsset[]) {
+    if (!layer.refId) return;
+    const asset = assets.find((a) => a.id === layer.refId);
+    if (!asset || !asset.p) return;
+    const bmp = decodeImageAsset(asset);
+    if (!bmp) return;
+    const w = asset.w || bmp.width || 1;
+    const h = asset.h || bmp.height || 1;
+    if (vCompare(opacity, 1)) {
+        ctx.save();
+        ctx.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]);
+        ctx.drawImage(bmp, 0, 0, w, h);
+        ctx.restore();
+        return;
+    }
+    const bw = Math.max(1, Math.ceil(clipRect.w));
+    const bh = Math.max(1, Math.ceil(clipRect.h));
+    const buf = getBuffer(bw, bh, 'image');
+    const bctx = buf.getContext('2d')!;
+    bctx.setTransform(1, 0, 0, 1, 0, 0);
+    bctx.clearRect(0, 0, bw, bh);
+    bctx.save();
+    bctx.beginPath();
+    bctx.rect(0, 0, bw, bh);
+    bctx.clip();
+    const m2 = matMul(matTranslate(-clipRect.x, -clipRect.y), m);
+    bctx.setTransform(m2[0], m2[1], m2[2], m2[3], m2[4], m2[5]);
+    bctx.drawImage(bmp, 0, 0, w, h);
+    bctx.restore();
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = opacity;
+    ctx.drawImage(buf, clipRect.x, clipRect.y);
+    ctx.restore();
+}
+
 function renderSolid(ctx: CanvasRenderingContext2D, layer: ParsedLayer, m: Mat3, opacity: number) {
     const sw = layer.solidWidth ?? 0;
     const sh = layer.solidHeight ?? 0;
@@ -1139,6 +1218,83 @@ function renderSolid(ctx: CanvasRenderingContext2D, layer: ParsedLayer, m: Mat3,
     drawCmds(ctx, transformCmds(cmds, m));
     ctx.fillStyle = colorToStyle(layer.solidColor, opacity);
     ctx.fill();
+}
+
+interface TextDoc {
+    text: string;
+    fontSize?: number;
+    fontFamily?: string;
+    fillColor?: number[];
+    justify?: number;
+    lineHeight?: number;
+    tracking?: number;
+    strokeColor?: number[];
+    strokeWidth?: number;
+}
+
+function textDocAt(text: ParsedText, frame: number): TextDoc {
+    const base: TextDoc = {
+        text: text.text,
+        fontSize: text.fontSize,
+        fontFamily: text.fontFamily,
+        fillColor: text.fillColor,
+        justify: text.justify,
+        lineHeight: text.lineHeight,
+        tracking: text.tracking,
+        strokeColor: text.strokeColor,
+        strokeWidth: text.strokeWidth,
+    };
+    let cur: TextKeyframe | undefined;
+    for (const k of text.keyframes ?? []) {
+        if (k.at <= frame) cur = k;
+        else break;
+    }
+    if (!cur) return base;
+    return {
+        text: cur.text != null ? cur.text : base.text,
+        fontSize: cur.fontSize ?? base.fontSize,
+        fontFamily: cur.fontFamily ?? base.fontFamily,
+        fillColor: cur.fillColor ?? base.fillColor,
+        justify: cur.justify ?? base.justify,
+        lineHeight: cur.lineHeight ?? base.lineHeight,
+        tracking: cur.tracking ?? base.tracking,
+        strokeColor: cur.strokeColor ?? base.strokeColor,
+        strokeWidth: cur.strokeWidth ?? base.strokeWidth,
+    };
+}
+
+function renderText(ctx: CanvasRenderingContext2D, layer: ParsedLayer, m: Mat3, opacity: number, frame: number) {
+    const t = layer.text;
+    if (!t || !t.text) return;
+    const doc = textDocAt(t, frame);
+    const size = doc.fontSize && doc.fontSize > 0 ? doc.fontSize : 24;
+    const rawFamily = (doc.fontFamily || '').split(',')[0]?.trim() || '';
+    const keep = ['Arial', 'Helvetica', 'Verdana', 'Tahoma', 'Trebuchet MS', 'Times New Roman', 'Georgia', 'Garamond', 'Courier New', 'sans-serif', 'serif', 'monospace'];
+    const font = keep.some((f) => f.toLowerCase() === rawFamily.toLowerCase()) ? rawFamily : 'sans-serif';
+    ctx.save();
+    const base = ctx.getTransform();
+    const cm = matMul([base.a, base.b, base.c, base.d, base.e, base.f], m);
+    ctx.setTransform(cm[0], cm[1], cm[2], cm[3], cm[4], cm[5]);
+    ctx.font = `${size}px ${font}`;
+    const justify = doc.justify ?? 0;
+    ctx.textAlign = justify === 1 ? 'right' : justify === 2 ? 'center' : 'left';
+    ctx.textBaseline = 'middle';
+    const lh = doc.lineHeight && doc.lineHeight > 0 ? doc.lineHeight : Math.round(size * 1.2);
+    const lines = String(doc.text).split('\n');
+    const y0 = -((lines.length - 1) * lh) / 2;
+    const strokeW = doc.strokeWidth || 0;
+    const hasStroke = strokeW > 0 && !!doc.strokeColor;
+    for (let i = 0; i < lines.length; i++) {
+        const y = y0 + i * lh;
+        if (hasStroke) {
+            ctx.strokeStyle = colorToStyle(doc.strokeColor, opacity);
+            ctx.lineWidth = strokeW;
+            ctx.strokeText(lines[i], 0, y);
+        }
+        ctx.fillStyle = colorToStyle(doc.fillColor || [1, 1, 1, 1], opacity);
+        ctx.fillText(lines[i], 0, y);
+    }
+    ctx.restore();
 }
 
 function renderLayer(
@@ -1157,11 +1313,6 @@ function renderLayer(
 
     const opacity = parentAlpha * (toNumber(resolveProp(layer.transform.opacity, frame, 100)) / 100);
     if (vIsZero(opacity)) return;
-
-    // NOTE: no ctx transform is set here — all path geometry carries its full
-    // matrix (transformCmds bakes the layer/group matrix into each point),
-    // matching rlottie where matrices are applied per-path at finalPath time.
-    // The canvas clip set by the enclosing precomp stays active in device space.
 
     if (layer.type === LayerType.Shape) {
         if (vCompare(opacity, 1)) {
@@ -1189,11 +1340,13 @@ function renderLayer(
         renderPrecomp(ctx, layer, frame, m, opacity, clipRect, assets, layerById);
     } else if (layer.type === LayerType.Solid) {
         renderSolid(ctx, layer, m, opacity);
+    } else if (layer.type === LayerType.Text) {
+        renderText(ctx, layer, m, opacity, frame);
+    } else if (layer.type === LayerType.Image) {
+        renderImage(ctx, layer, m, opacity, clipRect, assets);
     }
 }
 
-// Standalone entry point used by the component (and available for tests):
-// renders one frame into a sized canvas. dpr maps animation space to device px.
 export function renderFrame(
     canvas: HTMLCanvasElement,
     anim: ParsedAnimation,

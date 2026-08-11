@@ -1,7 +1,7 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedSticker } from './animated-sticker.js';
-import { requestEmojiDownload } from './emoji-store.js';
+import { getEmojiAlt, matchEmojiRuns, requestEmojiDownload } from './emoji-store.js';
 
 export interface EmojiData {
   kind: 'tgs' | 'img' | 'video';
@@ -75,6 +75,52 @@ export interface EmojiSegment {
   custom?: boolean;
 }
 
+export function StaticEmojiText({ value, size }: { value: string; size: number }) {
+  const runs = matchEmojiRuns(value);
+  if (runs.length === 0) return <>{value}</>;
+  const parts: any[] = [];
+  let pos = 0;
+  let key = 0;
+  for (const r of runs) {
+    if (r.start > pos) parts.push(<span key={'t' + key++}>{value.slice(pos, r.start)}</span>);
+    parts.push(<span key={'e' + key++} style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`}>
+      <FallbackGlyph value={value.slice(r.start, r.end)} size={size} />
+    </span>);
+    pos = r.end;
+  }
+  if (pos < value.length) parts.push(<span key={'t' + key++}>{value.slice(pos)}</span>);
+  return <>{parts}</>;
+}
+
+function isKeycapEmoji(value: string): boolean {
+  return /^[#*0-9]\u20E3$/.test(value.replace(/\uFE0F/g, ''));
+}
+
+function keycapDigit(value: string): string {
+  return /^[#*0-9]/.exec(value.replace(/\uFE0F/g, ''))?.[0] || '#';
+}
+
+function KeycapGlyph({ digit, size }: { digit: string; size: number }) {
+  return (
+    <span style="display:inline-flex;align-items:center;justify-content:center;width:100%;height:100%">
+      <span
+        style={`display:inline-flex;align-items:center;justify-content:center;width:${Math.round(size * 0.88)}px;height:${Math.round(size * 0.88)}px;border-radius:${Math.round(size * 0.16)}px;background:#fff;box-shadow:0 0 0 ${Math.max(1, Math.round(size * 0.045))}px rgba(0,0,0,0.4);color:#000;font-size:${Math.round(size * 0.5)}px;font-weight:700;font-family:'DejaVu Sans','Arial',sans-serif;line-height:1`}
+      >
+        {digit}
+      </span>
+    </span>
+  );
+}
+
+function FallbackGlyph({ value, size }: { value: string; size: number }) {
+  if (isKeycapEmoji(value)) return <KeycapGlyph digit={keycapDigit(value)} size={size} />;
+  return (
+    <span style={`display:block;width:100%;height:100%;line-height:${Math.round(size * 1.1)}px;text-align:center;font-size:${Math.round(size * 0.72)}px`}>
+      {value}
+    </span>
+  );
+}
+
 interface SlotPos {
   x: number;
   y: number;
@@ -83,10 +129,6 @@ interface SlotPos {
 }
 
 const SHARED_MIN = 3;
-
-// --- Shared IntersectionObserver pool: ONE observer per rootMargin, many targets.
-// Two visibility levels (like telegram-tt): "showing" (mount with buffer) and
-// "playing" (strict viewport, real animation).
 
 const observersByMargin = new Map<number, IntersectionObserver>();
 const ioTargets = new Map<IntersectionObserver, Map<Element, (isIntersecting: boolean) => void>>();
@@ -118,15 +160,74 @@ export function observeVisibility(el: Element, margin: number, cb: (isIntersecti
   };
 }
 
-// --- URL kind registry: gram-events announces the real kind (video/tgs) when a
-// blob URL is produced, so we never need HEAD on blob: (which Chrome rejects).
-
 const urlKinds = new Map<string, 'video' | 'tgs' | 'img'>();
 
 window.addEventListener('tg-emoji-url-kind', (e) => {
   const { url, kind } = (e as CustomEvent).detail || {};
   if (url && (kind === 'video' || kind === 'tgs' || kind === 'img')) urlKinds.set(url, kind);
 });
+
+const resolvedKinds = new Map<string, 'video' | 'tgs' | 'img'>();
+const RESOLVED_KINDS_MAX = 512;
+
+window.addEventListener('tg-emoji-url', (e) => {
+  const { docId, url, kind } = (e as CustomEvent).detail || {};
+  if (!docId || !url) return;
+  const did = String(docId);
+  const k = (kind === 'video' || kind === 'img' || kind === 'tgs') ? kind : 'tgs';
+  urlKinds.set(url, k);
+  if (!resolvedKinds.has(did)) {
+    resolvedKinds.set(did, k);
+    while (resolvedKinds.size > RESOLVED_KINDS_MAX) {
+      const oldest = resolvedKinds.keys().next().value;
+      if (oldest === undefined) break;
+      resolvedKinds.delete(oldest);
+    }
+  }
+  trackLastUrl(did, url);
+});
+
+window.addEventListener('tg-emoji-kind', (e) => {
+  const { docId, kind } = (e as CustomEvent).detail || {};
+  if (!docId) return;
+  const did = String(docId);
+  if (!(kind === 'video' || kind === 'tgs' || kind === 'img')) return;
+  if (resolvedKinds.has(did)) return;
+  resolvedKinds.set(did, kind);
+  while (resolvedKinds.size > RESOLVED_KINDS_MAX) {
+    const oldest = resolvedKinds.keys().next().value;
+    if (oldest === undefined) break;
+    resolvedKinds.delete(oldest);
+  }
+});
+
+const revokedUrls = new Set<string>();
+const REVOKED_URLS_MAX = 2048;
+
+window.addEventListener('tg-emoji-url-revoked', (e) => {
+  const { url } = (e as CustomEvent).detail || {};
+  if (!url || !url.startsWith('blob:')) return;
+  revokedUrls.add(url);
+  while (revokedUrls.size > REVOKED_URLS_MAX) {
+    const oldest = revokedUrls.values().next().value;
+    if (oldest === undefined) break;
+    revokedUrls.delete(oldest);
+  }
+});
+
+const everShownCache = new Set<string>();
+
+const lastUrlByDoc = new Map<string, string>();
+const LAST_URL_BY_DOC_MAX = 2048;
+
+const trackLastUrl = (docId: string, url: string) => {
+  lastUrlByDoc.set(docId, url);
+  while (lastUrlByDoc.size > LAST_URL_BY_DOC_MAX) {
+    const oldest = lastUrlByDoc.keys().next().value;
+    if (oldest === undefined) break;
+    lastUrlByDoc.delete(oldest);
+  }
+};
 
 const kindInFlight = new Map<string, Promise<'video' | 'tgs' | 'img' | null>>();
 
@@ -157,9 +258,6 @@ function renderIdFor(docId: string, size: number): string {
   return 'emojipack-' + docId + ':' + size;
 }
 
-// One shared <canvas> per message (like telegram-tt's shared-canvas): all emoji
-// of the message are drawn onto it by a single TgsRenderer (one animation
-// instance per renderId, decoded in the media workers, ImageBitmap cached).
 export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: EmojiSegment[]; documentUrls: Record<string, string>; size?: number }) {
   const emojiSegs: Array<{ docId: string; value?: string; custom?: boolean }> = [];
   for (const s of segments) {
@@ -167,32 +265,138 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
   }
   const hasEmoji = emojiSegs.length > 0;
   const shared = hasEmoji && emojiSegs.length >= SHARED_MIN;
+
+  const [live, setLive] = useState<Record<string, { url: string; kind: 'video' | 'tgs' | 'img' }>>({});
+  useEffect(() => {
+    const on = (e: Event) => {
+      const { docId, url, kind } = (e as CustomEvent).detail || {};
+      if (!docId || !url) return;
+      const did = String(docId);
+      const k = (kind === 'video' || kind === 'img' || kind === 'tgs') ? kind : 'tgs';
+      urlKinds.set(url, k);
+      resolvedKinds.set(did, k);
+      trackLastUrl(did, url);
+      setKinds((prev) => (prev[did] === k ? prev : { ...prev, [did]: k }));
+      setLive((prev) => {
+        const cur = prev[did];
+        if (cur && cur.url === url) return prev;
+        return { ...prev, [did]: { url, kind: k } };
+      });
+    };
+    window.addEventListener('tg-emoji-url', on);
+    return () => window.removeEventListener('tg-emoji-url', on);
+  }, []);
+
+  const urlFor = (docId: string) => {
+    const url = live[docId]?.url || documentUrls['emojipack-' + docId] || lastUrlByDoc.get(docId) || '';
+    return url && !revokedUrls.has(url) ? url : '';
+  };
+
   const slotsKey = emojiSegs.map((s) => s.docId + ':' + (s.value || '')).join(',');
-  const urlsKey = emojiSegs.map((s) => documentUrls['emojipack-' + s.docId] || '').join(',');
+  const urlsKey = emojiSegs.map((s) => urlFor(s.docId)).join(',');
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const sharedCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [sharedCanvasNode, setSharedCanvasNode] = useState<HTMLCanvasElement | null>(null);
   const [inView, setInView] = useState(false);
+  const [everShown, setEverShown] = useState(() => everShownCache.has(slotsKey));
   const [playing, setPlaying] = useState(false);
   const [positions, setPositions] = useState<Record<number, SlotPos>>({});
-  const [kinds, setKinds] = useState<Record<string, 'video' | 'tgs' | 'img'>>({});
+  const [failedDocs, setFailedDocs] = useState<Record<string, boolean>>({});
+  const [kinds, setKinds] = useState<Record<string, 'video' | 'tgs' | 'img'>>(() => {
+    const init: Record<string, 'video' | 'tgs' | 'img'> = {};
+    for (const s of emojiSegs) {
+      const cached = resolvedKinds.get(s.docId);
+      if (cached) init[s.docId] = cached;
+    }
+    return init;
+  });
+
   const positionsRef = useRef<Record<number, SlotPos>>({});
   positionsRef.current = positions;
+  useEffect(() => {
+    if (inView) {
+      setEverShown(true);
+      everShownCache.add(slotsKey);
+    }
+  }, [inView]);
 
-  // 1. All emoji of the message are requested at once (single batch event).
+  useEffect(() => {
+    setFailedDocs({});
+  }, [urlsKey]);
+
+  const [loadedDocs, setLoadedDocs] = useState<Record<string, boolean>>({});
+  const [stuckDocs, setStuckDocs] = useState<Record<string, boolean>>({});
+  const firstPaintAt = useRef<Record<string, number>>({});
+  useEffect(() => {
+    setLoadedDocs({});
+    setStuckDocs({});
+    firstPaintAt.current = {};
+  }, [urlsKey]);
   useEffect(() => {
     if (!hasEmoji) return;
-    for (const s of emojiSegs) {
-      requestEmojiDownload(s.docId, s.value, 1);
-    }
-    const customIds = emojiSegs.filter((s) => s.custom).map((s) => s.docId);
-    if (customIds.length > 0) {
-      window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...new Set(customIds)] } }));
-    }
-  }, [slotsKey]);
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      const toStuck: string[] = [];
+      for (const s of emojiSegs) {
+        if (kinds[s.docId] !== 'tgs') continue;
+        if (!urlFor(s.docId) || failedDocs[s.docId] || loadedDocs[s.docId] || stuckDocs[s.docId]) continue;
+        const at = firstPaintAt.current[s.docId];
+        if (at === undefined) {
+          firstPaintAt.current[s.docId] = now;
+        } else if (now - at > 2500) {
+          toStuck.push(s.docId);
+        }
+      }
+      if (toStuck.length === 0) return;
+      setStuckDocs((prev) => {
+        let next = prev;
+        for (const d of toStuck) {
+          if (prev[d]) continue;
+          if (next === prev) next = { ...prev };
+          next[d] = true;
+        }
+        return next;
+      });
+    }, 700);
+    return () => window.clearInterval(timer);
+  }, [slotsKey, urlsKey, kinds, failedDocs, loadedDocs, stuckDocs, inView]);
+  const onSlotLoaded = (docId: string) => {
+    setLoadedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
+    setStuckDocs((prev) => (prev[docId] ? { ...prev, [docId]: false } : prev));
+  };
+  const tgsPaintable = (docId: string) => loadedDocs[docId] || !stuckDocs[docId];
 
-  // 2. Resolve video/tgs kind for every unique document (no HEAD on blob:).
+  useEffect(() => {
+    if (!hasEmoji || !inView) return;
+    let timer = 0;
+    const requestMissing = () => {
+      const missing = emojiSegs.filter((s) => !urlFor(s.docId));
+      if (missing.length === 0) return;
+      for (const s of missing) {
+        requestEmojiDownload(s.docId, s.value, 1);
+      }
+      const customIds = missing.filter((s) => s.custom).map((s) => s.docId);
+      if (customIds.length > 0) {
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...new Set(customIds)] } }));
+      }
+    };
+    requestMissing();
+    timer = window.setInterval(requestMissing, 3000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [slotsKey, urlsKey, inView]);
+
+  useEffect(() => {
+    if (!hasEmoji || !playing) return;
+    const missing = emojiSegs.filter((s) => !urlFor(s.docId));
+    if (missing.length === 0) return;
+    for (const s of missing) {
+      requestEmojiDownload(s.docId, s.value, 2);
+    }
+  }, [playing, slotsKey, urlsKey]);
+
   useEffect(() => {
     if (!hasEmoji) return;
     let cancelled = false;
@@ -200,32 +404,46 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
     for (const s of emojiSegs) {
       if (seen.has(s.docId)) continue;
       seen.add(s.docId);
-      const url = documentUrls['emojipack-' + s.docId];
+      const url = urlFor(s.docId);
       if (!url) continue;
+      const cachedKind = resolvedKinds.get(s.docId);
+      if (cachedKind) {
+        setKinds((prev) => (prev[s.docId] === cachedKind ? prev : { ...prev, [s.docId]: cachedKind }));
+        continue;
+      }
       (async () => {
         const kind = await checkEmojiKind(url);
-        if (cancelled || !kind) return;
+        if (!kind) return;
+        resolvedKinds.set(s.docId, kind);
+        while (resolvedKinds.size > RESOLVED_KINDS_MAX) {
+          const oldest = resolvedKinds.keys().next().value;
+          if (oldest === undefined) break;
+          resolvedKinds.delete(oldest);
+        }
+
+        if (cancelled) return;
         setKinds((prev) => (prev[s.docId] === kind ? prev : { ...prev, [s.docId]: kind }));
       })();
     }
     return () => { cancelled = true; };
   }, [slotsKey, urlsKey]);
 
-  // 3. "showing" level: mount the heavy nodes slightly before they enter view.
   useEffect(() => {
+    if (!hasEmoji) return;
     const el = wrapRef.current;
-    if (!el || typeof IntersectionObserver === 'undefined') return;
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setInView(true);
+      return;
+    }
     return observeVisibility(el, 80, (v) => setInView(v));
   }, [slotsKey]);
 
-  // 4. "playing" level: strict viewport — animations run only here.
   useEffect(() => {
     const el = wrapRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
     return observeVisibility(el, 0, (v) => setPlaying(v));
   }, [slotsKey]);
 
-  // 5. Measure slot coordinates relative to the shared canvas (shared path).
   useEffect(() => {
     if (!shared) {
       setPositions({});
@@ -234,10 +452,18 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
     const wrap = wrapRef.current;
     const canvas = sharedCanvasRef.current;
     if (!wrap || !canvas) return;
+    const cache = { cw: 0, ch: 0, count: -1 };
     const measure = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const cw = Math.max(1, wrap.clientWidth);
       const ch = Math.max(1, wrap.clientHeight);
+      const count = wrap.querySelectorAll('.tgui-emoji-slot').length;
+
+      if (cache.cw === cw && cache.ch === ch && cache.count === count
+        && Object.keys(positionsRef.current).length === count) return;
+      cache.cw = cw;
+      cache.ch = ch;
+      cache.count = count;
       const bw = Math.round(cw * dpr);
       const bh = Math.round(ch * dpr);
       if (canvas.width !== bw) canvas.width = bw;
@@ -266,15 +492,17 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
       }
     };
     measure();
-    const ro = new ResizeObserver((entries) => {
+    const ro = new ResizeObserver(() => {
       measure();
     });
     ro.observe(wrap);
     return () => ro.disconnect();
-  }, [slotsKey, urlsKey, shared]);
+  }, [slotsKey, shared, sharedCanvasNode]);
 
   if (!hasEmoji) {
-    return <>{segments.map((s: EmojiSegment, i: number) => <span key={i}>{s.value}</span>)}</>;
+    return <>{segments.map((s: EmojiSegment, i: number) => s.type === 'emoji'
+      ? <span key={s.type + ':' + (s.docId || s.value) + ':' + i}>{s.value}</span>
+      : <StaticEmojiText key={s.type + ':' + (s.docId || s.value) + ':' + i} value={s.value || ''} size={size} />)}</>;
   }
 
   const slotStyle = `display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`;
@@ -283,17 +511,20 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
   return (
     <div ref={wrapRef} class="tgui-emoji-canvas-wrap" style="position:relative;display:inline-block;max-width:100%;vertical-align:top">
       {segments.map((s: EmojiSegment, i: number) => {
-        if (s.type === 'text') return <span key={i}>{s.value}</span>;
+        if (s.type === 'text') return <StaticEmojiText key={s.type + ':' + s.value + ':' + i} value={s.value || ''} size={size} />;
         emojiIdx++;
         const idx = emojiIdx;
         const docId = s.docId!;
-        const url = documentUrls['emojipack-' + docId] || '';
+        const url = urlFor(docId);
         const kind = kinds[docId];
         const pos = positions[idx];
         const renderId = renderIdFor(docId, size);
+        const fallbackGlyph = s.value || getEmojiAlt(docId) || '';
+        const failed = !!failedDocs[docId];
+        const onError = () => setFailedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
         return (
-          <span key={i} class="tgui-emoji-slot" data-doc={docId} style={slotStyle}>
-            {kind === 'video' ? (
+          <span key={s.type + ':' + (s.docId || s.value) + ':' + i} class="tgui-emoji-slot" data-doc={docId} style={slotStyle}>
+            {kind === 'video' && url ? (
               <video
                 src={url}
                 width={size}
@@ -313,34 +544,44 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
                 loading="eager"
                 decoding="async"
               />
-            ) : kind === 'tgs' && url ? (
+            ) : kind === 'tgs' && url && !failed && tgsPaintable(docId) ? (
               shared ? (
-                inView && pos ? (
+                (inView || everShown) && pos ? (
+                  <span style="position:relative;display:block;width:100%;height:100%">
+                    <AnimatedSticker
+                      tgsUrl={url}
+                      renderId={renderId}
+                      size={size}
+                      sharedCanvas={sharedCanvasNode}
+                      coords={{ x: pos.x, y: pos.y }}
+                      isLowPriority
+                      noPlay={!playing}
+                      onLoad={() => onSlotLoaded(docId)}
+                      onError={onError}
+                    />
+                  </span>
+                ) : (
+                  <span style={`display:block;width:100%;height:100%;line-height:${Math.round(size * 1.1)}px;text-align:center;font-size:${Math.round(size * 0.72)}px`}>
+                    <FallbackGlyph value={fallbackGlyph} size={size} />
+                  </span>
+                )
+              ) : (inView || everShown) ? (
+                <span style="position:relative;display:block;width:100%;height:100%">
                   <AnimatedSticker
                     tgsUrl={url}
                     renderId={renderId}
                     size={size}
-                    sharedCanvas={sharedCanvasNode}
-                    coords={{ x: pos.x, y: pos.y }}
                     isLowPriority
                     noPlay={!playing}
+                    onLoad={() => onSlotLoaded(docId)}
+                    onError={onError}
                   />
-                ) : (
-                  <span style={`display:block;width:100%;height:100%;line-height:${Math.round(size * 1.1)}px;text-align:center;font-size:${Math.round(size * 0.72)}px`}>
-                    {s.value || ''}
-                  </span>
-                )
-              ) : inView ? (
-                <AnimatedSticker tgsUrl={url} renderId={renderId} size={size} isLowPriority noPlay={!playing} />
-              ) : (
-                <span style={`display:block;width:100%;height:100%;line-height:${Math.round(size * 1.1)}px;text-align:center;font-size:${Math.round(size * 0.72)}px`}>
-                  {s.value || ''}
                 </span>
+              ) : (
+                <FallbackGlyph value={fallbackGlyph} size={size} />
               )
             ) : (
-              <span style={`display:block;width:100%;height:100%;line-height:${Math.round(size * 1.1)}px;text-align:center;font-size:${Math.round(size * 0.72)}px`}>
-                {s.value || ''}
-              </span>
+              <FallbackGlyph value={fallbackGlyph} size={size} />
             )}
           </span>
         );

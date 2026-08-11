@@ -57,6 +57,9 @@ const TELEGRAM_API_HASH =
     (typeof process !== 'undefined' && (process as any).env?.TELEGRAM_API_HASH) ||
     '';
 
+const WORKER_DEBUG = true;
+const wlog = (...args: any[]) => { if (WORKER_DEBUG) console.log(...args); };
+
 let conn: BrowserObfuscatedConnection | null = null;
 let authKey: Buffer | null = null;
 let authKeyId: bigint = 0n;
@@ -128,7 +131,7 @@ export function setOnAuthInvalidated(cb: (() => void) | null): void {
 
 async function decompressGzip(compressed: Buffer): Promise<Buffer> {
     const magic = compressed.subarray(0, Math.min(4, compressed.length));
-    console.log('[worker] decompressGzip: len=' + compressed.length + ' magic=' + Array.from(magic).map(b => b.toString(16).padStart(2,'0')).join(' '));
+    wlog('[worker] decompressGzip: len=' + compressed.length + ' magic=' + Array.from(magic).map(b => b.toString(16).padStart(2,'0')).join(' '));
     const source = new ReadableStream({
         start(controller) {
             controller.enqueue(new Uint8Array(compressed));
@@ -142,11 +145,11 @@ async function decompressGzip(compressed: Buffer): Promise<Buffer> {
     while (true) {
         const { done, value } = await reader.read();
         readIter++;
-        console.log('[worker] decompressGzip: read iteration ' + readIter + ' done=' + done + ' valueLen=' + (value ? value.length : 'null'));
+        wlog('[worker] decompressGzip: read iteration ' + readIter + ' done=' + done + ' valueLen=' + (value ? value.length : 'null'));
         if (done) break;
         chunks.push(value);
     }
-    console.log('[worker] decompressGzip: read complete, chunks=' + chunks.length);
+    wlog('[worker] decompressGzip: read complete, chunks=' + chunks.length);
     const totalLen = chunks.reduce((a, c) => a + c.length, 0);
     const result = Buffer.alloc(totalLen);
     let off = 0;
@@ -173,10 +176,10 @@ function processAvatarQueue(): void {
         const task = avatarQueue.shift();
         if (!task) continue;
         avatarInFlight++;
-        console.log('[avatar] start, inFlight:', avatarInFlight, 'queued:', avatarQueue.length);
+        wlog('[avatar] start, inFlight:', avatarInFlight, 'queued:', avatarQueue.length);
         task().finally(() => {
             avatarInFlight--;
-            console.log('[avatar] done, inFlight:', avatarInFlight, 'queued:', avatarQueue.length);
+            wlog('[avatar] done, inFlight:', avatarInFlight, 'queued:', avatarQueue.length);
             processAvatarQueue();
         }).catch(() => {});
     }
@@ -207,7 +210,7 @@ async function enqueueAvatarDownload(peerType: string, peerId: string, accessHas
     if (avatarFetchPromises.has(cacheKey)) return;
     const need = await needAvatar(cacheKey);
     if (!need) {
-        console.log('[avatar] HIT cache:', cacheKey);
+        wlog('[avatar] HIT cache:', cacheKey);
         const url = await getAvatarFromCache(cacheKey);
         if (url) {
             const payload = JSON.stringify({ _: 'avatarUpdated', peerId, peerType, avatarUrl: url });
@@ -215,14 +218,14 @@ async function enqueueAvatarDownload(peerType: string, peerId: string, accessHas
         }
         return;
     }
-    console.log('[avatar] MISS cache, downloading:', cacheKey);
+    wlog('[avatar] MISS cache, downloading:', cacheKey);
     if (avatarFetchPromises.has(cacheKey)) return;
     const cb = onUpdateCb;
 
     const promise = downloadAvatar(peerType, peerId, accessHash, photo).then(async (url) => {
         if (url) {
             await saveAvatarToCache(cacheKey, url).catch(() => {});
-            console.log('[avatar] cache verify after save:', cacheKey, url ? 'OK' : 'FAIL');
+            wlog('[avatar] cache verify after save:', cacheKey, url ? 'OK' : 'FAIL');
             const payload = JSON.stringify({ _: 'avatarUpdated', peerId, peerType, avatarUrl: url });
             cb(0x41564154, payload);
         }
@@ -321,45 +324,43 @@ async function encryptMessage(body: Buffer): Promise<{ encrypted: Buffer; msgKey
 }
 
 async function decryptMessage(data: Buffer): Promise<{ msgId: bigint; body: Buffer } | null> {
-    if (!authKey || !ses) { console.log('[worker] decryptMessage: no authKey/ses'); return null; }
-    if (data.length < 32) { console.log('[worker] decryptMessage: data too short ' + data.length); return null; }
+    if (!authKey || !ses) { wlog('[worker] decryptMessage: no authKey/ses'); return null; }
+    if (data.length < 32) { wlog('[worker] decryptMessage: data too short ' + data.length); return null; }
     const msgKey = Buffer.from(data.subarray(8, 24));
     const encryptedData = Buffer.from(data.subarray(24));
 
     const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(authKey, msgKey, false);
     const decrypted = await crypton.AES256IGE.decrypt(encryptedData, aesKey, aesIv);
 
-    if (decrypted.length < 32) { console.log('[worker] decryptMessage: decrypted too short ' + decrypted.length); return null; }
+    if (decrypted.length < 32) { wlog('[worker] decryptMessage: decrypted too short ' + decrypted.length); return null; }
     const salt = decrypted.readBigUInt64LE(0);
     serverSalt = salt;
     const dSessionId = decrypted.readBigUInt64LE(8);
     if (dSessionId !== ses.sessionId) {
-        // Server echoes our original sessionId in responses, but NEW_SESSION_CREATED
-        // assigned us a new one. Accept either — msgKey proves correct auth key.
-        console.log('[worker] decryptMessage: sessionId mismatch d=' + dSessionId + ' expected=' + ses.sessionId + ' — accepting anyway');
+        wlog('[worker] decryptMessage: sessionId mismatch d=' + dSessionId + ' expected=' + ses.sessionId + ' — accepting anyway');
     }
     const msgId = decrypted.readBigUInt64LE(16);
     const seqNo = decrypted.readInt32LE(24);
     const bodyLen = decrypted.readInt32LE(28);
-    if (bodyLen < 0 || 32 + bodyLen > decrypted.length) { console.log('[worker] decryptMessage: invalid bodyLen ' + bodyLen + ' decLen=' + decrypted.length); return null; }
+    if (bodyLen < 0 || 32 + bodyLen > decrypted.length) { wlog('[worker] decryptMessage: invalid bodyLen ' + bodyLen + ' decLen=' + decrypted.length); return null; }
 
     const padLen = decrypted.length - 32 - bodyLen;
-    if (padLen < 12 || padLen > 1024) { console.log('[worker] decryptMessage: bad padLen ' + padLen + ' bodyLen=' + bodyLen + ' decLen=' + decrypted.length); return null; }
+    if (padLen < 12 || padLen > 1024) { wlog('[worker] decryptMessage: bad padLen ' + padLen + ' bodyLen=' + bodyLen + ' decLen=' + decrypted.length); return null; }
 
     const body = Buffer.from(decrypted.subarray(32, 32 + bodyLen));
-    console.log('[worker] decryptMessage OK bodyLen=' + bodyLen + ' cid=0x' + body.readUInt32LE(0).toString(16));
+    wlog('[worker] decryptMessage OK bodyLen=' + bodyLen + ' cid=0x' + body.readUInt32LE(0).toString(16));
     return { msgId, body };
 }
 
 function dispatchMessage(_msgId: bigint, body: Buffer): void {
     if (body.length < 4) return;
     const constructorId = body.readUInt32LE(0);
-    console.log('[worker] dispatchMessage: constructorId=0x' + constructorId.toString(16) + ' bodyLen=' + body.length + ' msgId=' + _msgId);
+    wlog('[worker] dispatchMessage: constructorId=0x' + constructorId.toString(16) + ' bodyLen=' + body.length + ' msgId=' + _msgId);
     const d = new TLDeserializer(body.subarray(4));
 
     if (constructorId === TL_CONSTRUCTORS.RPC_RESULT) {
         const reqMsgId = d.readInt64();
-        console.log('[worker] RPC_RESULT reqMsgId=' + reqMsgId + ' pendingKeys=' + Array.from(pendingCalls.keys()).join(','));
+        wlog('[worker] RPC_RESULT reqMsgId=' + reqMsgId + ' pendingKeys=' + Array.from(pendingCalls.keys()).join(','));
         const key = reqMsgId.toString();
         const innerBody = body.subarray(12);
         const pending = pendingCalls.get(key);
@@ -374,13 +375,13 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
                 const msg = reader.readString();
                 pending.reject(new Error(`RPC Error ${code}: ${msg}`));
             } else if (ic === 0x3072cfa1) {
-                console.log('[worker] RPC_RESULT gzip detected, innerBody len=' + innerBody.length);
+                wlog('[worker] RPC_RESULT gzip detected, innerBody len=' + innerBody.length);
                 const reader = new TLDeserializer(innerBody.subarray(4));
                 const compressed = Buffer.from(reader.readBytes());
-                console.log('[worker] RPC_RESULT gzip compressed len=' + compressed.length);
-                console.log('[worker] >>> GZIP_START calling decompressGzip <<<');
+                wlog('[worker] RPC_RESULT gzip compressed len=' + compressed.length);
+                wlog('[worker] >>> GZIP_START calling decompressGzip <<<');
                 decompressGzip(compressed).then(decompressed => {
-                    console.warn('[worker] RPC_RESULT gzip decompressed len=' + decompressed.length + ' firstCid=0x' + decompressed.readUInt32LE(0).toString(16) + ' hex=' + decompressed.subarray(0, 96).toString('hex'));
+                    wlog('[worker] RPC_RESULT gzip decompressed len=' + decompressed.length + ' firstCid=0x' + decompressed.readUInt32LE(0).toString(16) + ' hex=' + decompressed.subarray(0, 96).toString('hex'));
                     pending.resolve(decompressed);
                 }).catch(err => {
                     console.warn('[worker] RPC_RESULT gzip decompression error: ' + err.message);
@@ -412,6 +413,16 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
         d.readInt32();
         const errorCode = d.readInt32();
         const key = badMsgId.toString();
+
+        if (errorCode === 16 || errorCode === 17 || errorCode === 18 || errorCode === 48) {
+            const serverSec = Number(_msgId >> 32n);
+            if (serverSec > 0 && Math.abs(serverSec - Math.floor(Date.now() / 1000)) > 2) {
+                serverTimeOffset = serverSec - Math.floor(Date.now() / 1000);
+                wlog('[worker] bad_msg code ' + errorCode + ' — syncing serverTimeOffset to ' + serverTimeOffset + 's');
+                if (curSessionId) persistSession().catch(() => {});
+            }
+        }
+        wlog('[worker] BAD_MSG_NOTIFICATION badMsgId=' + badMsgId + ' errorCode=' + errorCode + ' syncedOffset=' + serverTimeOffset);
         const pending = pendingCalls.get(key);
         if (pending) {
             clearTimeout(pending.timer);
@@ -434,11 +445,11 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
         d.readInt32();
         const errorCode = d.readInt32();
         const newSalt = d.readInt64();
-        console.log('[worker] BAD_SERVER_SALT errorCode=' + errorCode + ' newSalt=' + newSalt);
+        wlog('[worker] BAD_SERVER_SALT errorCode=' + errorCode + ' newSalt=' + newSalt);
         ses!.serverSalt = newSalt;
         updateMtprotoSalt(newSalt);
         if (authenticated && curSessionId) persistSession().catch(() => {});
-        // The message was ignored — retries must include invokeWithLayer + initConnection again.
+
         connectionInitialized = false;
         for (const [key, pending] of pendingCalls) {
             clearTimeout(pending.timer);
@@ -452,18 +463,14 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
         d.readInt64();
         const newSessionId = d.readInt64();
         const newSalt = d.readInt64();
-        console.log('[worker] NEW_SESSION_CREATED newSalt=' + newSalt + ' newSessionId=' + newSessionId);
+        wlog('[worker] NEW_SESSION_CREATED newSalt=' + newSalt + ' newSessionId=' + newSessionId);
             ses!.serverSalt = newSalt;
             updateMtprotoSalt(newSalt);
             if (authenticated && curSessionId) persistSession().catch(() => {});
-            // The first encrypted message in a new session triggers NEW_SESSION_CREATED.
-            // The message itself IS processed by the server (RPC inside initConnection works).
-            // Don't reset seqNo if there are pending RPCs — they've already advanced the
-            // server's counter. Only reset when no RPCs are in flight.
+
             const hasPendingRpc = Array.from(pendingCalls.keys()).some(k => !k.startsWith('ping_'));
             if (!hasPendingRpc) ses!.seqNo = 0;
-            // Don't reject pending RPCs — their results will arrive separately.
-            // Only resolve any pending ping (keep-alive).
+
         let resolvedPing = false;
         for (const [key, pending] of pendingCalls) {
             if (!resolvedPing && key.startsWith('ping_')) {
@@ -476,7 +483,7 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
         return;
     }
 
-    if (constructorId === TL_CONSTRUCTORS.MSGS_ACK) { console.log('[worker] MSGS_ACK'); return; }
+    if (constructorId === TL_CONSTRUCTORS.MSGS_ACK) { wlog('[worker] MSGS_ACK'); return; }
 
     if (constructorId === TL_CONSTRUCTORS.PONG) {
         d.readInt64();
@@ -493,16 +500,16 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
 
     if (constructorId === TL_CONSTRUCTORS.MSG_CONTAINER) {
         const hexDump = body.subarray(4, 36).toString('hex').match(/.{1,2}/g)?.join(' ') || '';
-        console.log('[worker] MSG_CONTAINER hex=' + hexDump + ' bodyLen=' + body.length);
+        wlog('[worker] MSG_CONTAINER hex=' + hexDump + ' bodyLen=' + body.length);
         const count = d.readInt32();
-        console.log('[worker] MSG_CONTAINER count=' + count);
+        wlog('[worker] MSG_CONTAINER count=' + count);
         for (let i = 0; i < count; i++) {
             d.readInt64();
             d.readInt32();
             const len = d.readInt32();
             const innerBody = d.readRawBytes(len);
             const innerCid = innerBody.readUInt32LE(0);
-            console.log('[worker] MSG_CONTAINER[' + i + '] innerCid=0x' + innerCid.toString(16) + ' len=' + len);
+            wlog('[worker] MSG_CONTAINER[' + i + '] innerCid=0x' + innerCid.toString(16) + ' len=' + len);
             const padding = (4 - (len % 4)) % 4;
             if (padding) d.readRawBytes(padding);
             dispatchMessage(0n, innerBody);
@@ -522,25 +529,25 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
         const parsed = parseUpdatePayload(body);
         if (parsed) {
             if (parsed._ === 'updateReadHistoryOutbox') {
-                console.log('[worker] >>> updateReadHistoryOutbox peer=' + JSON.stringify(parsed.peer) + ' max_id=' + parsed.max_id);
+                wlog('[worker] >>> updateReadHistoryOutbox peer=' + JSON.stringify(parsed.peer) + ' max_id=' + parsed.max_id);
             }
-            // Handle updates that signal session termination
+
             if (parsed._ === 'updateServiceNotification') {
                 const type = parsed.type || '';
-                console.log('[worker] updateServiceNotification type=' + type + ' popup=' + !!parsed.popup + ' message=' + (parsed.message || '').slice(0, 100));
+                wlog('[worker] updateServiceNotification type=' + type + ' popup=' + !!parsed.popup + ' message=' + (parsed.message || '').slice(0, 100));
                 if (authenticated && (type === 'auth_key_deleted' || type === 'session_revoked' || type === 'account_authorization_changed')) {
-                    console.log('[worker] session terminated via updateServiceNotification, invalidating');
+                    wlog('[worker] session terminated via updateServiceNotification, invalidating');
                     notifyAuthInvalidated();
                 }
             }
             emitUpdate(constructorId, JSON.stringify(parsed));
             handleUpdateAvatars(parsed);
         } else {
-            console.log('[worker] parseUpdatePayload returned null for cid=0x' + constructorId.toString(16));
+            wlog('[worker] parseUpdatePayload returned null for cid=0x' + constructorId.toString(16));
             emitUpdate(constructorId, body.toString('base64'));
         }
     } catch (e) {
-        console.log('[worker] parseUpdatePayload threw for cid=0x' + constructorId.toString(16) + ' err=' + (e as Error).message);
+        wlog('[worker] parseUpdatePayload threw for cid=0x' + constructorId.toString(16) + ' err=' + (e as Error).message);
         emitUpdate(constructorId, body.toString('base64'));
     }
 }
@@ -571,9 +578,6 @@ function parseUpdatePayload(body: Buffer): any {
     }
 }
 
-
-// ─── Connection pool per DC (TDLib-style) ─────────────────────────────────
-
 interface DcConnection {
     dcId: number;
     type: 'video' | 'download';
@@ -589,8 +593,32 @@ interface DcConnection {
 
 const dcConnectionPool: DcConnection[] = [];
 
-/** Gates only the DH handshake per DC — concurrent WebSocket creation is allowed without blocking. */
 let dcDhInFlight = Promise.resolve();
+
+const MAX_DC_PARALLEL_RPC = 6;
+const dcRpcSlots = new Map<number, number>();
+const dcRpcWaiters: Array<{ dcId: number; enter: () => void }> = [];
+
+function acquireDcRpcSlot(dcId: number): Promise<void> {
+    const used = dcRpcSlots.get(dcId) || 0;
+    if (used < MAX_DC_PARALLEL_RPC) {
+        dcRpcSlots.set(dcId, used + 1);
+        return Promise.resolve();
+    }
+    return new Promise<void>((enter) => { dcRpcWaiters.push({ dcId, enter }); });
+}
+function releaseDcRpcSlot(dcId: number): void {
+    const used = Math.max(0, (dcRpcSlots.get(dcId) || 1) - 1);
+    dcRpcSlots.set(dcId, used);
+    for (let i = 0; i < dcRpcWaiters.length; i++) {
+        if (dcRpcWaiters[i].dcId === dcId) {
+            const w = dcRpcWaiters.splice(i, 1)[0];
+            dcRpcSlots.set(dcId, used + 1);
+            w.enter();
+            return;
+        }
+    }
+}
 
 interface StoredAuthKey {
     authKey: Buffer;
@@ -600,7 +628,6 @@ interface StoredAuthKey {
 }
 const dcStoredAuthKeys = new Map<number, StoredAuthKey>();
 
-/** Create a brand new download connection to the DC (no caching, no busy check). */
 async function createDcConnection(dcId: number, type: 'video' | 'download' = 'download'): Promise<DcConnection> {
     const dcOpts = TELEGRAM_WS_DC_OPTIONS.find(d => d.id === dcId);
     if (!dcOpts) throw new Error('Unknown DC ' + dcId);
@@ -662,12 +689,11 @@ async function createDcConnection(dcId: number, type: 'video' | 'download' = 'do
         };
         dcStoredAuthKeys.set(dcId, { authKey: homeSession.authKey, authKeyId: homeSession.authKeyId, serverSalt: homeSession.serverSalt, serverTime: homeSession.serverTime });
     } else {
-        // DH handshake — gate concurrent DH to the same DC
         const prevDh = dcDhInFlight;
         let dhDone = false;
         dcDhInFlight = (async () => {
             await prevDh;
-            if (dcStoredAuthKeys.has(dcId)) return; // another caller already did DH for this DC
+            if (dcStoredAuthKeys.has(dcId)) return;
             const rsaKey = new DefaultPublicRsaKey([TELEGRAM_PUBLIC_KEY]);
             const creator = new AuthKeyCreator({ host: '', port: 0, dcId, publicRsaKey: rsaKey, mode: 'telegram' });
             const authResult = await creator.createAuthKey(async (tlPayload: Buffer) => {
@@ -682,7 +708,6 @@ async function createDcConnection(dcId: number, type: 'video' | 'download' = 'do
         })();
         await dcDhInFlight;
         if (!dhDone) {
-            // DH was done by another caller — stored auth key now exists
             const stored = dcStoredAuthKeys.get(dcId)!;
             const akBuf = Buffer.alloc(8);
             akBuf.writeBigUInt64LE(stored.authKeyId, 0);
@@ -700,7 +725,6 @@ async function createDcConnection(dcId: number, type: 'video' | 'download' = 'do
     }
 
     if (!session) {
-        // session was set inside the DH closure
         const stored = dcStoredAuthKeys.get(dcId)!;
         const akBuf = Buffer.alloc(8);
         akBuf.writeBigUInt64LE(stored.authKeyId, 0);
@@ -731,30 +755,54 @@ async function createDcConnection(dcId: number, type: 'video' | 'download' = 'do
 
     if (needsAuthImport) {
         let exportedAuth: { id: bigint; bytes: Buffer } | null = null;
-        try {
-            if (homeSession && ses!.dcId !== homeSession.dcId) {
-                exportedAuth = await exportAuthFromDc(homeSession.dcId, dcId);
-            } else {
-                const expResult = await callRpc('auth.exportAuthorization', { dc_id: dcId }, { noMigrate: true });
-                if (expResult && expResult.id != null && expResult.bytes != null) {
-                    exportedAuth = {
-                        id: typeof expResult.id === 'bigint' ? expResult.id : BigInt(expResult.id),
-                        bytes: typeof expResult.bytes === 'string' ? Buffer.from(expResult.bytes, 'hex') : Buffer.from(expResult.bytes),
-                    };
+        let exportError: string | null = null;
+        for (let attempt = 0; attempt < 3 && !exportedAuth; attempt++) {
+            if (attempt > 0) {
+                wlog('[worker] retry auth export for DC ' + dcId + ' attempt ' + (attempt + 1));
+                await new Promise(r => setTimeout(r, 400 * attempt));
+            }
+            try {
+                if (homeSession && ses!.dcId !== homeSession.dcId) {
+                    exportedAuth = await exportAuthFromDc(homeSession.dcId, dcId);
+                } else {
+                    const expResult = await callRpc('auth.exportAuthorization', { dc_id: dcId }, { noMigrate: true });
+                    if (expResult && expResult.id != null && expResult.bytes != null) {
+                        exportedAuth = {
+                            id: typeof expResult.id === 'bigint' ? expResult.id : BigInt(expResult.id),
+                            bytes: typeof expResult.bytes === 'string' ? Buffer.from(expResult.bytes, 'hex') : Buffer.from(expResult.bytes),
+                        };
+                    }
+                }
+            } catch (e: any) {
+                exportError = e?.message || String(e);
+                wlog('[worker] export auth error for DC ' + dcId + ': ' + exportError);
+                const fs = exportError ? findFloodWaitSeconds(exportError) : null;
+                if (fs != null) {
+                    await new Promise(r => setTimeout(r, Math.min(5000, (fs + 1) * 1000)));
                 }
             }
-        } catch (e: any) {
-            console.log('[worker] export auth error for DC ' + dcId + ': ' + e.message);
         }
         if (exportedAuth) {
             if (entry.counter.value < msgIdCounter) entry.counter.value = msgIdCounter;
-            await directRpcWith(
-                entry.conn, entry.authKey, entry.authKeyId,
-                entry.serverSalt, entry.session, entry.counter, entry.initialized,
-                'auth.importAuthorization', { id: exportedAuth.id, bytes: exportedAuth.bytes }
-            );
-            entry.initialized = true;
-            if (entry.counter.value > msgIdCounter) msgIdCounter = entry.counter.value;
+            try {
+                await directRpcWith(
+                    entry.conn, entry.authKey, entry.authKeyId,
+                    entry.serverSalt, entry.session, entry.counter, entry.initialized,
+                    'auth.importAuthorization', { id: exportedAuth.id, bytes: exportedAuth.bytes }
+                );
+                entry.initialized = true;
+                if (entry.counter.value > msgIdCounter) msgIdCounter = entry.counter.value;
+            } catch (e: any) {
+                wlog('[worker] auth.importAuthorization error for DC ' + dcId + ': ' + e.message);
+                dcStoredAuthKeys.delete(dcId);
+                try { newConn.close(); } catch {}
+                throw new Error('auth import failed for DC ' + dcId + ': ' + e.message);
+            }
+        } else {
+            wlog('[worker] auth export FAILED for DC ' + dcId + ' (need import): ' + exportError);
+            dcStoredAuthKeys.delete(dcId);
+            try { newConn.close(); } catch {}
+            throw new Error('auth export failed for DC ' + dcId + ': ' + exportError);
         }
     }
 
@@ -762,9 +810,7 @@ async function createDcConnection(dcId: number, type: 'video' | 'download' = 'do
     return entry;
 }
 
-/** Acquire an idle connection to the DC, or create a new one. */
 async function acquireDcConnection(dcId: number, type: 'video' | 'download'): Promise<DcConnection> {
-    // Clean stale connections for this DC
     for (let i = dcConnectionPool.length - 1; i >= 0; i--) {
         const c = dcConnectionPool[i];
         if (c.dcId === dcId && !c.conn.isConnected()) {
@@ -786,26 +832,97 @@ function releaseDcConnection(entry: DcConnection): void {
     entry.busy = false;
 }
 
-/** Call an RPC on a download connection for the given DC. */
-async function callRpcOnDc(dcId: number, methodName: string, params: Record<string, any>, type: 'video' | 'download' = 'download'): Promise<any> {
-    const dc = await acquireDcConnection(dcId, type);
-    try {
-        const result = await directRpcWith(
-            dc.conn, dc.authKey, dc.authKeyId,
-            dc.serverSalt, dc.session, dc.counter, dc.initialized,
-            methodName, params
-        );
-        dc.initialized = true;
-        return result;
-    } catch (e: any) {
-        if (e.message?.includes('AUTH_BYTES_INVALID')) {
-            const idx = dcConnectionPool.indexOf(dc);
-            if (idx >= 0) dcConnectionPool.splice(idx, 1);
-            try { dc.conn.close(); } catch {}
+function invalidateDcKey(dcId: number): void {
+    dcStoredAuthKeys.delete(dcId);
+    for (let i = dcConnectionPool.length - 1; i >= 0; i--) {
+        const c = dcConnectionPool[i];
+        if (c.dcId === dcId) {
+            try { c.conn.close(); } catch {}
+            dcConnectionPool.splice(i, 1);
         }
-        throw e;
+    }
+}
+
+async function callRpcOnDcInner(dcId: number, methodName: string, params: Record<string, any>, type: 'video' | 'download' = 'download'): Promise<any> {
+    let dc: DcConnection | null = null;
+    let connRebuilds = 0;
+    let authRebuilds = 0;
+    let floodRetries = 0;
+    try {
+        const acquire = async (): Promise<DcConnection> => {
+            for (let f = 0; ; f++) {
+                try {
+                    return await acquireDcConnection(dcId, type);
+                } catch (e2: any) {
+                    const fs = findFloodWaitSeconds(e2?.message || '');
+                    if (fs != null && f < 2) {
+                        await new Promise(r => setTimeout(r, Math.min(5000, (fs + 1) * 1000)));
+                        continue;
+                    }
+                    throw e2;
+                }
+            }
+        };
+        const call = async (conn: DcConnection): Promise<any> => {
+            const result = await directRpcWith(
+                conn.conn, conn.authKey, conn.authKeyId,
+                conn.serverSalt, conn.session, conn.counter, conn.initialized,
+                methodName, params
+            );
+            conn.initialized = true;
+            return result;
+        };
+        for (;;) {
+            try {
+                if (!dc) dc = await acquire();
+                return await call(dc);
+            } catch (e: any) {
+                const msg = (e as Error)?.message || '';
+
+                const floodSec = findFloodWaitSeconds(msg);
+                if (floodSec != null && floodRetries < 3) {
+                    floodRetries++;
+                    wlog('[worker] DC ' + dcId + ' ' + methodName + ' FLOOD_WAIT_' + floodSec + ' — waiting and retrying');
+                    await new Promise(r => setTimeout(r, Math.min(6000, (floodSec + 1) * 1000)));
+                    continue;
+                }
+                const isAuthUnregistered = msg.includes('AUTH_KEY_UNREGISTERED');
+                const isAuthBytesInvalid = msg.includes('AUTH_BYTES_INVALID') || msg.includes('Connection closed') || msg.includes('Failed to connect') || msg.includes('auth export failed') || msg.includes('auth import failed');
+                if (isAuthUnregistered && authRebuilds < 2) {
+                    authRebuilds++;
+                    wlog('[worker] DC ' + dcId + ' AUTH_KEY_UNREGISTERED on ' + methodName + ' — dropping key and reconnecting (' + authRebuilds + '/2)');
+                    invalidateDcKey(dcId);
+                    dc = null;
+                    continue;
+                }
+                if (isAuthBytesInvalid) {
+                    if (dc) {
+                        const idx = dcConnectionPool.indexOf(dc);
+                        if (idx >= 0) dcConnectionPool.splice(idx, 1);
+                        try { dc.conn.close(); } catch {}
+                    }
+                    dc = null;
+                    if (connRebuilds < 2) {
+                        connRebuilds++;
+                        continue;
+                    }
+                    throw e;
+                }
+                throw e;
+            }
+        }
     } finally {
-        dc.busy = false;
+        if (dc) dc.busy = false;
+    }
+}
+
+async function callRpcOnDc(dcId: number, methodName: string, params: Record<string, any>, type: 'video' | 'download' = 'download'): Promise<any> {
+    const slot = methodName === 'upload.getFile' || methodName === 'upload.getCdnFile' || methodName === 'upload.reuploadCdnFile';
+    if (slot) await acquireDcRpcSlot(dcId);
+    try {
+        return await callRpcOnDcInner(dcId, methodName, params, type);
+    } finally {
+        if (slot) releaseDcRpcSlot(dcId);
     }
 }
 
@@ -816,10 +933,6 @@ function closeAllDcConnections(): void {
     dcConnectionPool.length = 0;
 }
 
-/**
- * Self-contained RPC call that uses explicit connection and key parameters
- * instead of global state. Reads responses inline — no global read loop involvement.
- */
 async function directRpcWith(
     connection: BrowserObfuscatedConnection,
     authKeyLocal: Buffer,
@@ -835,7 +948,6 @@ async function directRpcWith(
     const comb = registry.findFunctionByName(methodName);
     if (!comb) throw new Error('Unknown method: ' + methodName);
 
-    // Build params with flags
     let effectiveParams = { ...params };
     let flags = effectiveParams['flags'] ?? 0;
     for (const field of comb.fields) {
@@ -852,7 +964,6 @@ async function directRpcWith(
 
     const methodBody = new SchemaSerializer(registry).serializeCombinator(comb, effectiveParams);
 
-    // Build body (with initConnection if first call) — fixed for all retries.
     let body: Buffer;
     if (!initialized) {
         const header = new SchemaSerializer(registry);
@@ -872,7 +983,6 @@ async function directRpcWith(
         body = methodBody;
     }
 
-    // Retry loop for BAD_SERVER_SALT: update salt, generate new msgId/seqNo, resend.
     let retriesLeft = 3;
     let resultBuffer: Buffer | null = null;
     let rpcError: Error | null = null;
@@ -913,7 +1023,6 @@ async function directRpcWith(
 
         await connection.sendEncrypted(encrypted);
 
-        // Inline read loop — no global pendingCalls or dispatchMessage.
         let needRetry = false;
         const processInlineResponse = async (cb: Buffer): Promise<void> => {
             if (resultBuffer || rpcError || needRetry) return;
@@ -1095,13 +1204,19 @@ async function downloadAvatar(peerType: string, peerId: string, accessHash: any,
     let lastError: any = null;
     for (let attempt = 0; attempt < 3; attempt++) {
         if (attempt > 0) {
-            console.log('[worker] downloadAvatar retry', attempt, 'key:', cacheKey);
+            wlog('[worker] downloadAvatar retry', attempt, 'key:', cacheKey);
             await new Promise(r => setTimeout(r, 1000));
         }
         try {
-            const result = await runWithSem(() =>
-                knownDc > 0 ? callRpcOnDc(knownDc, 'upload.getFile', params) : callRpc('upload.getFile', params, { noMigrate: true })
-            );
+            await acquirePool(knownDc || UNKNOWN_DC, false, 1048576, cacheKey, TDLIB_PRIORITY_MAX);
+            let result: any;
+            try {
+                result = await runWithSem(() =>
+                    knownDc > 0 ? callRpcOnDc(knownDc, 'upload.getFile', params) : callRpc('upload.getFile', params, { noMigrate: true })
+                );
+            } finally {
+                releasePool(knownDc || UNKNOWN_DC, false, 1048576);
+            }
             if (result && result._ === 'upload.file') {
                 const chunk = Buffer.from(result.bytes || '', 'hex');
                 if (chunk.length >= 100) {
@@ -1117,7 +1232,13 @@ async function downloadAvatar(peerType: string, peerId: string, accessHash: any,
             if (m) {
                 const targetDc = parseInt(m[1]);
                 try {
-                    const result = await runWithSem(() => callRpcOnDc(targetDc, 'upload.getFile', params));
+                    await acquirePool(targetDc || UNKNOWN_DC, false, 1048576, cacheKey, TDLIB_PRIORITY_MAX);
+                    let result: any;
+                    try {
+                        result = await runWithSem(() => callRpcOnDc(targetDc, 'upload.getFile', params));
+                    } finally {
+                        releasePool(targetDc || UNKNOWN_DC, false, 1048576);
+                    }
                     if (result && result._ === 'upload.file') {
                         const chunk = Buffer.from(result.bytes || '', 'hex');
                         if (chunk.length >= 100) {
@@ -1127,7 +1248,7 @@ async function downloadAvatar(peerType: string, peerId: string, accessHash: any,
                         }
                     }
                 } catch (e2: any) {
-                    console.log('[worker] downloadAvatar migrate error:', e2.message);
+                    wlog('[worker] downloadAvatar migrate error:', e2.message);
                 }
             }
             console.error('[worker] downloadAvatar error (attempt', attempt, '):', e.message, 'key:', cacheKey);
@@ -1164,12 +1285,12 @@ async function requestPeerAvatar(peerType: string, peerId: string, accessHash?: 
     return url;
 }
 
-async function requestPhotoDownload(photo: any, sizeType: string, onProgress?: (pct: number) => void): Promise<{ photoUrl: string; cacheSource: string } | null> {
-    console.log('[worker] requestPhotoDownload CALLED', { sizeType, photoId: photo?.id?.toString(), hasId: !!photo?.id, hasAccessHash: !!photo?.access_hash, hasFileRef: !!photo?.file_reference, fileRefType: typeof photo?.file_reference, fileRefLen: photo?.file_reference?.length });
-    if (!photo) { console.log('[worker] requestPhotoDownload: photo is null'); return null; }
+async function requestPhotoDownload(photo: any, sizeType: string, onProgress?: (pct: number) => void): Promise<{ bytes: ArrayBuffer; mime: string; cacheSource: string } | null> {
+    wlog('[worker] requestPhotoDownload CALLED', { sizeType, photoId: photo?.id?.toString(), hasId: !!photo?.id, hasAccessHash: !!photo?.access_hash, hasFileRef: !!photo?.file_reference, fileRefType: typeof photo?.file_reference, fileRefLen: photo?.file_reference?.length });
+    if (!photo) { wlog('[worker] requestPhotoDownload: photo is null'); return null; }
     const photoWithThumb = { ...photo, thumb_size: sizeType };
     if (!buildDownloadLocation(undefined, photoWithThumb)) {
-        console.log('[worker] requestPhotoDownload: buildDownloadLocation returned null', { id: photo?.id, access_hash: photo?.access_hash, file_reference: !!photo?.file_reference, sizeType });
+        wlog('[worker] requestPhotoDownload: buildDownloadLocation returned null', { id: photo?.id, access_hash: photo?.access_hash, file_reference: !!photo?.file_reference, sizeType });
         return null;
     }
     const genRef = { value: photoDownloadGen };
@@ -1183,7 +1304,7 @@ async function requestPhotoDownload(photo: any, sizeType: string, onProgress?: (
     }
     const result = await downloadFile_(undefined, photoWithThumb, genRef, onProgress, totalSize);
     if (result.error === 'ABORTED') {
-        console.log('[worker] requestPhotoDownload: ABORTED', 'sizeType:', sizeType);
+        wlog('[worker] requestPhotoDownload: ABORTED', 'sizeType:', sizeType);
         return null;
     }
     if (result.error) {
@@ -1191,11 +1312,19 @@ async function requestPhotoDownload(photo: any, sizeType: string, onProgress?: (
         if (result.error.includes('FILE_REFERENCE_EXPIRED')) throw new Error('FILE_REFERENCE_EXPIRED');
         return null;
     }
-    if (!result.bytes || result.bytes.length < 200) {
-        console.log('[worker] requestPhotoDownload: downloaded too small', result.bytes?.length, 'sizeType:', sizeType);
+    if (!result.bytes || result.bytes.byteLength < 200) {
+        wlog('[worker] requestPhotoDownload: downloaded too small', result.bytes?.byteLength, 'sizeType:', sizeType);
         return null;
     }
-    return { photoUrl: 'data:image/jpeg;base64,' + result.bytes, cacheSource: result.cacheSource || 'server' };
+    const mime = photoStorageMime(result.type);
+    return { bytes: result.bytes, mime, cacheSource: result.cacheSource || 'server' };
+}
+
+function photoStorageMime(fileType: string): string {
+    if (fileType === 'storage.filePng') return 'image/png';
+    if (fileType === 'storage.fileWebp') return 'image/webp';
+    if (fileType === 'storage.fileGif') return 'image/gif';
+    return 'image/jpeg';
 }
 
 export async function processDialogsResult(dialogsResult: any): Promise<{ dialogs: any[] }> {
@@ -1284,7 +1413,7 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
 }
 
 async function processAvatarBatch(tasks: Array<{ peer: any; photo: any; cacheKey: string }>): Promise<void> {
-    console.log('[avatar] processAvatarBatch called with', tasks.length, 'tasks');
+    wlog('[avatar] processAvatarBatch called with', tasks.length, 'tasks');
     const cb = onUpdateCb;
     const homeDc = ses?.dcId || homeSession?.dcId || 2;
 
@@ -1306,7 +1435,6 @@ async function processAvatarBatch(tasks: Array<{ peer: any; photo: any; cacheKey
         }
     }
 
-    // Home DC: 5 concurrent workers via normal callRpc
     const runConcurrent = async (batch: Array<{ peer: any; photo: any; cacheKey: string }>): Promise<void> => {
         const it = batch[Symbol.iterator]();
         const workers = Array.from({ length: Math.min(10, batch.length) }, async () => {
@@ -1323,20 +1451,19 @@ async function processAvatarBatch(tasks: Array<{ peer: any; photo: any; cacheKey
                     const url = await downloadAvatar(t.peer.type, t.peer.id, t.peer.accessHash, t.photo);
                     if (url && cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: url }));
                 } catch (e: any) {
-                    console.log('[avatar] error for', t.peer.type, t.peer.id, ':', e.message);
+                    wlog('[avatar] error for', t.peer.type, t.peer.id, ':', e.message);
                 }
             }
         });
         await Promise.all(workers);
     };
 
-    // Run home DC in parallel with remote DC setup + sequential download per DC
     const dcIds = Array.from(remoteByDc.keys());
     await Promise.all([
         runConcurrent(homeTasks),
         ...dcIds.map(async (dcId) => {
             const dcTasks = remoteByDc.get(dcId)!;
-            console.log('[avatar] downloading', dcTasks.length, 'avatars on DC', dcId);
+            wlog('[avatar] downloading', dcTasks.length, 'avatars on DC', dcId);
             for (const t of dcTasks) {
                 try {
                     const cached = await needAvatar(t.cacheKey);
@@ -1373,7 +1500,7 @@ async function processAvatarBatch(tasks: Array<{ peer: any; photo: any; cacheKey
                         }
                     }
                 } catch (e: any) {
-                    console.log('[avatar] error on DC', dcId, 'for', t.peer.type, t.peer.id, ':', e.message);
+                    wlog('[avatar] error on DC', dcId, 'for', t.peer.type, t.peer.id, ':', e.message);
                 }
             }
         }),
@@ -1391,25 +1518,25 @@ function startReadLoop(): void {
             try {
                 const data = await thisConn.readPacket();
                 if (!connected) break;
-                // Handle unencrypted responses (auth_key_id == 0), e.g. AUTH_KEY_UNREGISTERED
+
                 if (data.length >= 8 && data.readBigUInt64LE(0) === 0n) {
-                    console.log('[worker] unencrypted msg, auth_key_id=0, len=' + data.length);
+                    wlog('[worker] unencrypted msg, auth_key_id=0, len=' + data.length);
                     if (data.length >= 20) {
                         const msgId = data.readBigUInt64LE(8);
                         const msgLen = data.readUint32LE(16);
                         if (msgLen > 0 && data.length >= 20 + msgLen) {
                             const body = Buffer.from(data.subarray(20, 20 + msgLen));
                             const cid = body.readUint32LE(0);
-                            console.log('[worker] unencrypted body cid=0x' + cid.toString(16) + ' len=' + msgLen);
-                            // Check for direct RPC_ERROR in unencrypted responses
+                            wlog('[worker] unencrypted body cid=0x' + cid.toString(16) + ' len=' + msgLen);
+
                             if (cid === TL_CONSTRUCTORS.RPC_ERROR) {
                                 const reader = new TLDeserializer(body.subarray(4));
                                 const rpcReqMsgId = reader.readInt64();
                                 const errCode = reader.readInt32();
                                 const errMsg = reader.readString();
-                                console.log('[worker] unencrypted RPC_ERROR: code=' + errCode + ' msg=' + errMsg);
+                                wlog('[worker] unencrypted RPC_ERROR: code=' + errCode + ' msg=' + errMsg);
                                 if (errMsg.includes('AUTH_KEY_UNREGISTERED')) {
-                                    console.log('[worker] auth key unregistered detected in unencrypted response');
+                                    wlog('[worker] auth key unregistered detected in unencrypted response');
                                     notifyAuthInvalidated();
                                     break;
                                 }
@@ -1429,20 +1556,20 @@ function startReadLoop(): void {
                     rejectAllPending(new Error('Connection closed'));
                     if (authenticated) {
                         reconnectQuickFail++;
-                        console.log('[worker] Quick reconnect #' + reconnectQuickFail + ' while authenticated');
+                        wlog('[worker] Quick reconnect #' + reconnectQuickFail + ' while authenticated');
                         if (reconnectQuickFail >= 3) {
-                            console.log('[worker] too many quick reconnects, session likely invalidated');
+                            wlog('[worker] too many quick reconnects, session likely invalidated');
                             notifyAuthInvalidated();
                             break;
                         }
                     }
-                    // Schedule reconnect if we have a valid session
+
                     if (ses && curSessionId) {
                         scheduleReconnect();
                     }
                     break;
                 }
-                console.log('[worker] read loop error: ' + e.message + ' — breaking to avoid infinite loop');
+                wlog('[worker] read loop error: ' + e.message + ' — breaking to avoid infinite loop');
                 connected = false;
                 conn?.close();
                 rejectAllPending(new Error('Read error: ' + e.message));
@@ -1471,21 +1598,21 @@ let reconnectTimer: any = null;
 let reconnectAttempts = 0;
 
 async function scheduleReconnect(): Promise<void> {
-    if (reconnectTimer) return; // already scheduled
-    // Don't reconnect if we're already connected or migrating
+    if (reconnectTimer) return;
+
     if (connected || migratingDc !== 0) return;
     if (!curSessionId || !ses) return;
     reconnectAttempts++;
     const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
-    console.log('[worker] scheduling reconnect in ' + delay + 'ms (attempt ' + reconnectAttempts + ')');
+    wlog('[worker] scheduling reconnect in ' + delay + 'ms (attempt ' + reconnectAttempts + ')');
     reconnectTimer = setTimeout(async () => {
         reconnectTimer = null;
         try {
             await handleConnectInternal(curSessionId!, ses!.dcId);
             reconnectAttempts = 0;
         } catch (e: any) {
-            console.log('[worker] reconnect attempt ' + reconnectAttempts + ' failed: ' + e.message);
-            scheduleReconnect(); // retry with backoff
+            wlog('[worker] reconnect attempt ' + reconnectAttempts + ' failed: ' + e.message);
+            scheduleReconnect();
         }
     }, delay);
 }
@@ -1529,7 +1656,7 @@ async function sendPing(): Promise<void> {
         pendingCalls.delete(pingKey);
         pendingCalls.delete(msgIdKey);
         if (m.includes('AUTH_KEY_UNREGISTERED')) {
-            console.log('[worker] ping detected AUTH_KEY_UNREGISTERED, invalidating session');
+            wlog('[worker] ping detected AUTH_KEY_UNREGISTERED, invalidating session');
             notifyAuthInvalidated();
         }
         throw e;
@@ -1554,7 +1681,7 @@ function startHealthCheck(): void {
         if (!authenticated || !connected) return;
         try {
             await call(TL_CONSTRUCTORS.UPDATES_GET_STATE, {});
-            // If this succeeded, we're still authenticated
+
             reconnectQuickFail = 0;
         } catch {}
     }, 60000);
@@ -1585,8 +1712,6 @@ async function exportAuthFromDc(fromDcId: number, targetDcId: number): Promise<{
 
         await tempConn.connect(dcOpts.host, dcOpts.port, undefined, fromDcId, false);
 
-        // Use directRpcWith on the temp connection — no read loop needed,
-        // avoiding readResolve conflicts with the main connection's read loop.
         const tempSession = {
             ...homeSession,
             sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
@@ -1606,7 +1731,7 @@ async function exportAuthFromDc(fromDcId: number, targetDcId: number): Promise<{
             msgIdCounter = counter.value;
         }
     } catch (e) {
-        console.log('[worker] exportAuthFromDc failed: ' + (e as Error).message);
+        wlog('[worker] exportAuthFromDc failed: ' + (e as Error).message);
         throw e;
     } finally {
         if (tempConn) {
@@ -1627,15 +1752,13 @@ async function migrateDc(targetDcId: number): Promise<void> {
     if (!ses) throw new Error('No session');
     const origDcId = ses.dcId;
     if (origDcId === targetDcId) return;
-    console.log('[worker] миграция на DC ' + targetDcId);
+    wlog('[worker] миграция на DC ' + targetDcId);
 
-    // Prevent concurrent migrations
     while (migratingDc !== 0 && migratingDc !== targetDcId) {
-        console.log('[worker] миграция на DC ' + targetDcId + ' ожидает завершения миграции на DC ' + migratingDc);
+        wlog('[worker] миграция на DC ' + targetDcId + ' ожидает завершения миграции на DC ' + migratingDc);
         await new Promise(r => setTimeout(r, 100));
     }
     if (migratingDc === targetDcId) {
-        // Другой caller уже мигрирует на этот DC — ждём завершения
         while (migratingDc !== 0) {
             await new Promise(r => setTimeout(r, 100));
         }
@@ -1653,40 +1776,37 @@ async function migrateDc(targetDcId: number): Promise<void> {
             ...fallbacks,
         ];
 
-        // Step 1: Export auth BEFORE closing the connection (callRpc needs conn alive)
         let exportedAuth: { id?: bigint; bytes?: Buffer } | null = null;
         const isHomeDc = !!(homeSession && targetDcId === homeSession.dcId);
         if (!isHomeDc && authenticated && conn?.isConnected()) {
             try {
                 if (homeSession && ses.dcId !== homeSession.dcId) {
-                    // On non-home DC, target is another non-home — export from home via HTTP
-                    console.log('[worker] migrateDc: exporting auth from home DC ' + homeSession.dcId + ' to ' + targetDcId + ' via HTTP');
+                    wlog('[worker] migrateDc: exporting auth from home DC ' + homeSession.dcId + ' to ' + targetDcId + ' via HTTP');
                     exportedAuth = await exportAuthFromDc(homeSession.dcId, targetDcId);
                 } else {
-                    console.log('[worker] migrateDc: exporting auth from current DC ' + ses?.dcId + ' to ' + targetDcId + ' via callRpc');
+                    wlog('[worker] migrateDc: exporting auth from current DC ' + ses?.dcId + ' to ' + targetDcId + ' via callRpc');
                     const result = await callRpc('auth.exportAuthorization', { dc_id: targetDcId });
-                    console.log('[worker] migrateDc: auth.exportAuthorization result:', result ? Object.keys(result).join(',') : 'null');
+                    wlog('[worker] migrateDc: auth.exportAuthorization result:', result ? Object.keys(result).join(',') : 'null');
                     if (result && result.id != null && result.bytes != null) {
                         const eaId = typeof result.id === 'bigint' ? result.id : BigInt(result.id);
                         const eaBytes = typeof result.bytes === 'string' ? Buffer.from(result.bytes, 'hex') : Buffer.from(result.bytes);
                         exportedAuth = { id: eaId, bytes: eaBytes };
-                        console.log('[worker] экспортирована авторизация id=' + eaId + ' bytes.len=' + eaBytes.length);
+                        wlog('[worker] экспортирована авторизация id=' + eaId + ' bytes.len=' + eaBytes.length);
                     } else {
-                        console.log('[worker] migrateDc: exportedAuth FAILED — result.id=' + (result?.id ?? 'null') + ' result.bytes=' + (result?.bytes ? 'present' : 'null'));
+                        wlog('[worker] migrateDc: exportedAuth FAILED — result.id=' + (result?.id ?? 'null') + ' result.bytes=' + (result?.bytes ? 'present' : 'null'));
                     }
                 }
             } catch (e: any) {
-                console.log('[worker] не удалось экспортировать авторизацию: ' + e.message + ' stack=' + (e.stack || '').split('\n').slice(0,3).join('|'));
+                wlog('[worker] не удалось экспортировать авторизацию: ' + e.message + ' stack=' + (e.stack || '').split('\n').slice(0,3).join('|'));
             }
             if (!exportedAuth) {
                 const msg = 'Cannot migrate to DC ' + targetDcId + ': no exported auth (authenticated=' + authenticated + ' isHomeDc=' + isHomeDc + ')';
-                console.log('[worker] ' + msg);
+                wlog('[worker] ' + msg);
                 throw new Error(msg);
             }
         }
 
-        // Step 2: Close old connection (export is done, conn no longer needed)
-        console.log('[worker] migrateDc: step2 closing old connection');
+        wlog('[worker] migrateDc: step2 closing old connection');
         stopPing();
         rejectAllPending(new Error('Not connected'));
         connected = false;
@@ -1695,7 +1815,7 @@ async function migrateDc(targetDcId: number): Promise<void> {
         conn?.close();
         await waitReadLoopEnd();
         conn = null;
-        console.log('[worker] migrateDc: old connection closed');
+        wlog('[worker] migrateDc: old connection closed');
 
         for (const entry of hosts) {
             let c: BrowserObfuscatedConnection | null = null;
@@ -1703,7 +1823,6 @@ async function migrateDc(targetDcId: number): Promise<void> {
                 c = new BrowserObfuscatedConnection();
 
                 if (isHomeDc) {
-                    // Migrating to HOME DC — reuse existing home auth key, no DH/import needed
                     await c.connect(entry.host, dcOpts.port, undefined, targetDcId, !!entry.noObfuscation);
                     const akBuf = Buffer.alloc(8);
                     akBuf.writeBigUInt64LE(homeSession!.authKeyId, 0);
@@ -1718,10 +1837,9 @@ async function migrateDc(targetDcId: number): Promise<void> {
                     ses.sessionId = crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn;
                     ses.seqNo = 0;
                 } else {
-                    // Non-home DC: do DH exchange + import auth
-                    console.log('[worker] migrateDc: connecting to DC ' + targetDcId + ' via ' + entry.host);
+                    wlog('[worker] migrateDc: connecting to DC ' + targetDcId + ' via ' + entry.host);
                     await c.connect(entry.host, dcOpts.port, undefined, targetDcId, !!entry.noObfuscation);
-                    console.log('[worker] migrateDc: connected to DC ' + targetDcId + ', starting DH exchange');
+                    wlog('[worker] migrateDc: connected to DC ' + targetDcId + ', starting DH exchange');
 
                     const rsaKey = new DefaultPublicRsaKey([TELEGRAM_PUBLIC_KEY]);
                     const creator = new AuthKeyCreator({ host: '', port: 0, dcId: targetDcId, publicRsaKey: rsaKey, mode: 'telegram' });
@@ -1731,7 +1849,7 @@ async function migrateDc(targetDcId: number): Promise<void> {
                         const response = await c!.readPacket();
                         return parseNoCryptoResponse(response);
                     });
-                    console.log('[worker] migrateDc: DH exchange complete, serverTime=' + authResult.serverTime);
+                    wlog('[worker] migrateDc: DH exchange complete, serverTime=' + authResult.serverTime);
 
                     serverTimeOffset = authResult.serverTime - Math.floor(Date.now() / 1000);
                     setAuthKeys(authResult.authKey, authResult.authKeyId, authResult.serverSalt);
@@ -1754,26 +1872,24 @@ async function migrateDc(targetDcId: number): Promise<void> {
                 startReadLoop();
                 pingTimer = setInterval(() => sendPing().catch(() => {}), 30000);
 
-                // Import auth for non-home DC (new connection + new session just set up)
                 if (!isHomeDc && exportedAuth && exportedAuth.id != null && exportedAuth.bytes != null) {
                     try {
                         await callRpc('auth.importAuthorization', { id: exportedAuth.id, bytes: exportedAuth.bytes });
-                        console.log('[worker] импортирована авторизация на DC ' + targetDcId);
+                        wlog('[worker] импортирована авторизация на DC ' + targetDcId);
                     } catch (e: any) {
-                        console.log('[worker] не удалось импортировать авторизацию: ' + e.message);
+                        wlog('[worker] не удалось импортировать авторизацию: ' + e.message);
                     }
                 }
 
-                console.log('[worker] мигрирован на DC ' + targetDcId + ' через ' + entry.host);
+                wlog('[worker] мигрирован на DC ' + targetDcId + ' через ' + entry.host);
                 return;
             } catch (e: any) {
-                console.log('[worker] миграция на DC ' + targetDcId + ' через ' + entry.host + ' не удалась: ' + e.message);
+                wlog('[worker] миграция на DC ' + targetDcId + ' через ' + entry.host + ' не удалась: ' + e.message);
                 if (c) { try { c.close(); } catch {} }
             }
         }
 
-    // All hosts failed — restore original DC
-    console.log('[worker] все хосты миграции не удались, восстанавливаю исходный DC ' + origDcId);
+    wlog('[worker] все хосты миграции не удались, восстанавливаю исходный DC ' + origDcId);
     const origOpts = TELEGRAM_WS_DC_OPTIONS.find(d => d.id === origDcId);
     if (origOpts && ses) {
         try {
@@ -1794,7 +1910,7 @@ async function migrateDc(targetDcId: number): Promise<void> {
             ses.sessionId = crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn;
             ses.seqNo = 0;
         } catch (restoreErr: any) {
-            console.log('[worker] не удалось восстановить исходный DC: ' + restoreErr.message);
+            wlog('[worker] не удалось восстановить исходный DC: ' + restoreErr.message);
         }
     }
     throw new Error('Failed to migrate to DC ' + targetDcId);
@@ -1867,10 +1983,10 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
             if (!conn?.isConnected()) throw new Error('Not connected');
             const body = buildCallBody(constructorId, params);
             const { encrypted, msgId } = await synchronizedEncrypt(body);
-            console.log('[worker] call sending constructorId=0x' + constructorId.toString(16) + ' msgId=' + msgId + ' attempt=' + (nonFloodRetries + 1));
+            wlog('[worker] call sending constructorId=0x' + constructorId.toString(16) + ' msgId=' + msgId + ' attempt=' + (nonFloodRetries + 1));
             key = msgId.toString();
             const promise = new Promise<Buffer>((resolve, reject) => {
-                const timer = setTimeout(() => { console.log('[worker] Таймаут RPC msgId=' + msgId); pendingCalls.delete(key); reject(new Error('RPC timeout')); }, 30000);
+                const timer = setTimeout(() => { wlog('[worker] Таймаут RPC msgId=' + msgId); pendingCalls.delete(key); reject(new Error('RPC timeout')); }, 30000);
                 pendingCalls.set(key, { msgId, constructorId, resolve, reject, timer });
             });
             try {
@@ -1883,7 +1999,7 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
             return await promise;
         } catch (e: any) {
             const m = (e as Error).message || '';
-            console.log('[worker] вызов отклонён: ' + m + ' для constructorId=0x' + constructorId.toString(16) + ' попытка=' + (nonFloodRetries + 1));
+            wlog('[worker] вызов отклонён: ' + m + ' для constructorId=0x' + constructorId.toString(16) + ' попытка=' + (nonFloodRetries + 1));
             if (m === 'NEW_SESSION_CREATED' ||
                 m.startsWith('Bad msg error code: 48') ||
                 m.startsWith('Bad msg error code: 64') ||
@@ -1917,7 +2033,7 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
                 if (Date.now() - floodWaitStart > 90000) {
                     throw new Error('FLOOD_WAIT_totaltime');
                 }
-                console.log('[worker] flood wait ' + floodSec + 'с, повтор');
+                wlog('[worker] flood wait ' + floodSec + 'с, повтор');
                 await new Promise(r => setTimeout(r, floodSec * 1000));
                 continue;
             }
@@ -1925,13 +2041,13 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
                 pendingCalls.delete(key);
                 nonFloodRetries++;
                 connectionInitialized = false;
-                console.log('[worker] CONNECTION_NOT_INITED, сбрасываю флаг и повтор');
+                wlog('[worker] CONNECTION_NOT_INITED, сбрасываю флаг и повтор');
                 continue;
             }
             if (m === 'Not connected') {
                 pendingCalls.delete(key);
                 nonFloodRetries++;
-                console.log('[worker] Нет соединения, повтор');
+                wlog('[worker] Нет соединения, повтор');
                 while (migratingDc !== 0) {
                     await new Promise(r => setTimeout(r, 100));
                 }
@@ -1949,14 +2065,14 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
 }
 
 async function sendCode(phoneNumber: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean }> {
-    console.log('[worker] sendCode called phone=' + phoneNumber);
+    wlog('[worker] sendCode called phone=' + phoneNumber);
     const result = await call(TL_CONSTRUCTORS.AUTH_SEND_CODE, {
         phoneNumber,
         apiId: getApiId(),
         apiHash: getApiHash(),
         settings: { _: 'codeSettings', flags: 0 },
     });
-    console.log('[worker] sendCode call returned, result.len=' + result.length);
+    wlog('[worker] sendCode call returned, result.len=' + result.length);
     const d = new TLDeserializer(result);
     const id = d.readUint32();
     if (id !== 0x5e002502) throw new Error('Expected auth.sentCode');
@@ -2202,7 +2318,7 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
                 if (Date.now() - floodWaitStart > 90000) {
                     throw new Error('FLOOD_WAIT_totaltime');
                 }
-                console.log('[worker] flood wait ' + floodSec + 'с, повтор');
+                wlog('[worker] flood wait ' + floodSec + 'с, повтор');
                 await new Promise(r => setTimeout(r, floodSec * 1000));
                 continue;
             }
@@ -2210,13 +2326,13 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
                 pendingCalls.delete(key);
                 nonFloodRetries++;
                 connectionInitialized = false;
-                console.log('[worker] CONNECTION_NOT_INITED, сбрасываю флаг и повтор');
+                wlog('[worker] CONNECTION_NOT_INITED, сбрасываю флаг и повтор');
                 continue;
             }
             if (m === 'Not connected') {
                 pendingCalls.delete(key);
                 nonFloodRetries++;
-                console.log('[worker] Нет соединения, повтор');
+                wlog('[worker] Нет соединения, повтор');
                 while (migratingDc !== 0) {
                     await new Promise(r => setTimeout(r, 100));
                 }
@@ -2237,26 +2353,23 @@ async function initUpdates(): Promise<void> {
     try { await call(TL_CONSTRUCTORS.UPDATES_GET_STATE, {}); } catch {}
 }
 
-
 async function persistSession(): Promise<void> {
-    if (!ses || !curSessionId || !tdBinlog) { console.log('[worker] persistSession: skipped (ses=' + !!ses + ' curSessionId=' + !!curSessionId + ' tdBinlog=' + !!tdBinlog + ')'); return; }
-    console.log('[worker] persistSession: dcId=' + ses.dcId + ' authenticated=' + authenticated + ' flags=' + (authenticated ? 1 : 0));
+    if (!ses || !curSessionId || !tdBinlog) { wlog('[worker] persistSession: skipped (ses=' + !!ses + ' curSessionId=' + !!curSessionId + ' tdBinlog=' + !!tdBinlog + ')'); return; }
+    wlog('[worker] persistSession: dcId=' + ses.dcId + ' authenticated=' + authenticated + ' flags=' + (authenticated ? 1 : 0));
     try {
+      const flags = (authenticated ? 1 : 0) | (passwordPending ? 2 : 0);
       await tdBinlog.append(EventType.AuthKey, ses.dcId, ses.authKey, ses.authKeyId, ses.serverSalt);
       if (homeSession) {
           await tdBinlog.append(EventType.HomeAuthKey, homeSession.dcId, homeSession.authKey, homeSession.authKeyId, homeSession.serverSalt);
       }
-      let flags = 0;
-      if (authenticated) flags |= 1;
-      if (passwordPending) flags |= 2;
       await tdBinlog.append(EventType.SessionFlags, flags);
       await tdBinlog.append(EventType.ServerTimeOffset, serverTimeOffset);
       if (pendingAuth?.phoneCodeHash) {
           await tdBinlog.append(EventType.PendingCodeHash, pendingAuth.phoneCodeHash);
       }
-      console.log('[worker] persistSession: completed successfully');
+      wlog('[worker] persistSession: completed successfully');
     } catch (e: any) {
-      console.log('[worker] persistSession: FAILED ' + e.message);
+      wlog('[worker] persistSession: FAILED ' + e.message);
     }
 }
 
@@ -2318,10 +2431,10 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
       tdBinlog = new TdBinlog();
       await tdBinlog.init(reqSessionId);
     }
-    console.log('[worker] handleConnectInternal: tdBinlog initialized, getting state');
+    wlog('[worker] handleConnectInternal: tdBinlog initialized, getting state');
     const state = tdBinlog.getState();
     const saved = state.authKey ? state : null;
-    console.log('[worker] handleConnectInternal: saved=' + !!saved + ' authenticated=' + state.authenticated + ' dcId=' + state.dcId + ' authKey=' + (state.authKey ? state.authKey.length + 'bytes' : 'null'));
+    wlog('[worker] handleConnectInternal: saved=' + !!saved + ' authenticated=' + state.authenticated + ' dcId=' + state.dcId + ' authKey=' + (state.authKey ? state.authKey.length + 'bytes' : 'null'));
     if (saved) {
         serverTimeOffset = saved.serverTimeOffset;
         const authKey = saved.authKey!;
@@ -2336,7 +2449,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
             seqNo: 0,
         };
         authenticated = state.authenticated || (!saved.pendingCodeHash && !saved.passwordPending);
-        console.log('[worker] handleConnectInternal: session restored, authenticated=' + authenticated);
+        wlog('[worker] handleConnectInternal: session restored, authenticated=' + authenticated);
         if (saved.pendingCodeHash) {
             pendingAuth = { phoneCodeHash: saved.pendingCodeHash };
         }
@@ -2367,7 +2480,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     ];
     let c: BrowserObfuscatedConnection | null = null;
     for (const entry of hosts) {
-        console.log('[worker] connecting to ' + entry.host + ':' + dcOpts.port + ' noObfuscation=' + !!entry.noObfuscation);
+        wlog('[worker] connecting to ' + entry.host + ':' + dcOpts.port + ' noObfuscation=' + !!entry.noObfuscation);
         try {
             c = new BrowserObfuscatedConnection();
             if (saved) {
@@ -2377,10 +2490,10 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
                 c.expectedAuthKeyBuf = akBuf;
             }
             await c.connect(entry.host, dcOpts.port, undefined, effectiveDcId, !!entry.noObfuscation);
-            console.log('[worker] connected via ' + entry.host);
+            wlog('[worker] connected via ' + entry.host);
             break;
         } catch (e: any) {
-            console.log('[worker] connect to ' + entry.host + ' failed: ' + e.message);
+            wlog('[worker] connect to ' + entry.host + ' failed: ' + e.message);
             if (c) { try { c.close(); } catch {} }
             c = null;
         }
@@ -2390,14 +2503,14 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     reconnectAttempts = 0;
 
     if (saved) {
-        console.log('[worker] saved session, starting read loop');
+        wlog('[worker] saved session, starting read loop');
         connected = true;
         startReadLoop();
         stopPing();
         pingTimer = setInterval(() => {
             sendPing().catch(() => {});
         }, 30000);
-        // authKey existence implies authenticated
+
         if (authenticated) {
             setTimeout(() => initUpdates().catch(() => {}), 100);
             createDcConnection(ses!.dcId).catch(() => {});
@@ -2406,7 +2519,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
         return;
     }
 
-    console.log('[worker] no saved session, starting handshake');
+    wlog('[worker] no saved session, starting handshake');
     const rsaKey = new DefaultPublicRsaKey([TELEGRAM_PUBLIC_KEY]);
     const creator = new AuthKeyCreator({ host: '', port: 0, dcId: effectiveDcId, publicRsaKey: rsaKey, mode: 'telegram' });
     const authResult = await creator.createAuthKey(async (tlPayload: Buffer) => {
@@ -2415,7 +2528,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
         const response = await c.readPacket();
         return parseNoCryptoResponse(response);
     });
-    console.log('[worker] handshake complete, serverTime=' + authResult.serverTime);
+    wlog('[worker] handshake complete, serverTime=' + authResult.serverTime);
 
     serverTimeOffset = authResult.serverTime - Math.floor(Date.now() / 1000);
     setAuthKeys(authResult.authKey, authResult.authKeyId, authResult.serverSalt);
@@ -2436,10 +2549,6 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     connected = true;
     startReadLoop();
 
-    // Don't send a ping here — the first encrypted message must include
-    // invokeWithLayer + initConnection to set up the API transport.
-    // The first call() will include it automatically via buildCallBody.
-    // Just set up periodic keep-alive pings.
     pingTimer = setInterval(() => {
         sendPing().catch(() => {});
     }, 30000);
@@ -2484,7 +2593,7 @@ async function handleLogout(): Promise<void> {
 async function resolvePeer(peer: any): Promise<any> {
     if (!peer || typeof peer !== 'object') return peer;
     if (peer._ === 'inputPeerChannel' && (!peer.access_hash || peer.access_hash === 0n || peer.access_hash === 0)) {
-        console.log('[worker] resolvePeer: resolving channel ' + peer.channel_id);
+        wlog('[worker] resolvePeer: resolving channel ' + peer.channel_id);
         try {
             const result = await callRpc('channels.getChannels', {
                 id: [{ _: 'inputChannel', channel_id: peer.channel_id, access_hash: 0n }]
@@ -2492,7 +2601,7 @@ async function resolvePeer(peer: any): Promise<any> {
             const chats = result?.chats || [];
             const channel = chats.find((c: any) => String(c.id) === String(peer.channel_id));
             if (channel && channel.access_hash) {
-                console.log('[worker] resolvePeer: resolved channel access_hash=' + channel.access_hash);
+                wlog('[worker] resolvePeer: resolved channel access_hash=' + channel.access_hash);
                 return { ...peer, access_hash: BigInt(channel.access_hash) };
             }
         } catch (e: any) {
@@ -2500,14 +2609,14 @@ async function resolvePeer(peer: any): Promise<any> {
         }
     }
     if (peer._ === 'inputPeerUser' && (!peer.access_hash || peer.access_hash === 0n || peer.access_hash === 0)) {
-        console.log('[worker] resolvePeer: resolving user ' + peer.user_id);
+        wlog('[worker] resolvePeer: resolving user ' + peer.user_id);
         try {
             const users = await callRpc('users.getUsers', {
                 id: [{ _: 'inputUser', user_id: peer.user_id, access_hash: 0n }]
             });
             const user = (users || []).find((u: any) => String(u.id) === String(peer.user_id));
             if (user && user.access_hash) {
-                console.log('[worker] resolvePeer: resolved user access_hash=' + user.access_hash);
+                wlog('[worker] resolvePeer: resolved user access_hash=' + user.access_hash);
                 return { ...peer, access_hash: BigInt(user.access_hash) };
             }
         } catch (e: any) {
@@ -2517,20 +2626,93 @@ async function resolvePeer(peer: any): Promise<any> {
     return peer;
 }
 
+const DOWNLOAD_CACHE_MAX_BYTES = 100 * 1024 * 1024;
+const CACHE_MAX_AGE_MS = 23 * 60 * 60 * 1000;
+const CACHE_IMMUNITY_MS = 60 * 60 * 1000;
+const CACHE_MAX_ITEMS = 40000;
 
+function isDownloadCacheImmune(mime?: string, key?: string): boolean {
+    const m = (mime || '').toLowerCase();
+    const sticker = m === 'application/x-tgsticker' || m === 'image/webp' || m === 'image/svg+xml';
+    const thumb = !!key && key.includes('_thumb_');
+    return sticker || thumb;
+}
+const downloadCache = new Map<string, { type: string; bytes: string; storedAt: number; immune: boolean }>();
+let downloadCacheBytes = 0;
 
-// Limit parallel file downloads to avoid connection storms
-const downloadCache = new Map<string, { type: string; bytes: string }>();
+function downloadCacheSet(key: string, val: { type: string; bytes: string }, mime?: string): void {
+    const entry = { type: val.type, bytes: val.bytes, storedAt: Date.now(), immune: isDownloadCacheImmune(mime, key) };
+    if (downloadCache.has(key)) {
+        downloadCacheBytes -= downloadCache.get(key)!.bytes.length;
+        downloadCache.delete(key);
+    }
+    downloadCache.set(key, entry);
+    downloadCacheBytes += entry.bytes.length;
+    if (downloadCacheBytes <= DOWNLOAD_CACHE_MAX_BYTES && downloadCache.size <= CACHE_MAX_ITEMS) return;
 
-// Persistent download cache via gram-db (encrypted KV store)
+    const now = Date.now();
+    for (const [k, v] of [...downloadCache]) {
+        if (v.immune) continue;
+        if (now - v.storedAt < CACHE_MAX_AGE_MS) continue;
+        downloadCache.delete(k);
+        downloadCacheBytes -= v.bytes.length;
+    }
+    while ((downloadCacheBytes > DOWNLOAD_CACHE_MAX_BYTES || downloadCache.size > CACHE_MAX_ITEMS) && downloadCache.size > 1) {
+        let oldestKey = '';
+        let oldestAt = Infinity;
+        for (const [k, v] of downloadCache) {
+            if (v.immune) continue;
+            if (now - v.storedAt < CACHE_IMMUNITY_MS) continue;
+            if (v.storedAt < oldestAt) { oldestAt = v.storedAt; oldestKey = k; }
+        }
+        if (!oldestKey) break;
+        const oldest = downloadCache.get(oldestKey)!;
+        downloadCache.delete(oldestKey);
+        downloadCacheBytes -= oldest.bytes.length;
+    }
+}
+
+function downloadCacheGet(key: string): { type: string; bytes: string } | undefined {
+    const v = downloadCache.get(key);
+    if (v) {
+        v.storedAt = Date.now();
+        downloadCache.delete(key);
+        downloadCache.set(key, v);
+    }
+    return v;
+}
+
+interface DownloadResult { type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }
+
+const bufToAb = (buf: Uint8Array): ArrayBuffer =>
+    buf.byteOffset === 0 && buf.byteLength === buf.buffer.byteLength
+        ? buf.buffer as ArrayBuffer
+        : buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+const b64ToAb = (b64: string): ArrayBuffer => bufToAb(Buffer.from(b64, 'base64'));
+
+const inflightDownloads = new Map<string, Promise<DownloadResult>>();
+
+function downloadCacheKeyFor(document?: any, photo?: any): string {
+    const baseKey = document?.id?.toString() || photo?.id?.toString() || '';
+    if (!baseKey) return '';
+    const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : photo?.thumb_size ? `_thumb_${photo.thumb_size}` : '';
+    return baseKey + thumbSuffix;
+}
+
 const DLCACHE_PREFIX = 'dlcache:';
-async function persistDownloadCache(key: string, type: string, bytesBase64: string): Promise<void> {
+const SESSION_PARTS_PREFIX = 'dlc:p:';
+interface DLCacheEntry { type: string; bytes: string; updatedAt?: number; partIndexes?: number[]; partSize?: number; immune?: boolean }
+let dlcLastGcAt = 0;
+
+async function persistDownloadCache(key: string, type: string, bytesBase64: string, mime?: string): Promise<void> {
     if (!key) return;
     try {
         const db = getGramDb();
-        if (!db.isReady()) { console.log('[dlc] gram-db not ready, skipping persist', key); return; }
-        await db.set(DLCACHE_PREFIX + key, { type, bytes: bytesBase64 });
-        console.log('[dlc] saved key=' + key + ' type=' + type + ' bytesLen=' + bytesBase64.length);
+        if (!db.isReady()) { wlog('[dlc] gram-db not ready, skipping persist', key); return; }
+        const immune = isDownloadCacheImmune(mime, key);
+        await db.set(DLCACHE_PREFIX + key, { type, bytes: bytesBase64, updatedAt: Date.now(), immune } satisfies DLCacheEntry);
+        wlog('[dlc] saved key=' + key + ' type=' + type + ' bytesLen=' + bytesBase64.length + ' immune=' + immune);
+        await maybeGcPersistedCache();
     } catch (e) {
         console.error('[dlc] persist error key=' + key, e);
     }
@@ -2539,128 +2721,455 @@ async function loadPersistedDownloadCache(key: string): Promise<{ type: string; 
     if (!key) return null;
     try {
         const db = getGramDb();
-        if (!db.isReady()) { console.log('[dlc] gram-db not ready, skipping load', key); return null; }
-        const val = await db.get<{ type: string; bytes: string }>(DLCACHE_PREFIX + key);
+        if (!db.isReady()) { wlog('[dlc] gram-db not ready, skipping load', key); return null; }
+        const val = await db.get<DLCacheEntry>(DLCACHE_PREFIX + key);
         if (val && val.type && val.bytes) {
-            console.log('[dlc] loaded key=' + key + ' type=' + val.type + ' bytesLen=' + val.bytes.length);
+            wlog('[dlc] loaded key=' + key + ' type=' + val.type + ' bytesLen=' + val.bytes.length);
+            if (val.updatedAt) {
+                await db.set(DLCACHE_PREFIX + key, { ...val, updatedAt: Date.now() });
+            }
             return val;
         }
-        console.log('[dlc] not found key=' + key);
+        wlog('[dlc] not found key=' + key);
     } catch (e) {
         console.error('[dlc] load error key=' + key, e);
     }
     return null;
 }
 
+async function maybeGcPersistedCache(): Promise<void> {
+    const now = Date.now();
+    if (now - dlcLastGcAt < 60 * 60 * 1000) return;
+    dlcLastGcAt = now;
+    try {
+        const db = getGramDb();
+        if (!db.isReady()) return;
+        const keys = await db.keys(DLCACHE_PREFIX);
+        const entries: Array<{ key: string; type: string; bytes: string; updatedAt: number; immune: boolean }> = [];
+        for (const k of keys) {
+            const v = await db.get<DLCacheEntry>(k);
+            if (!v || !v.bytes) continue;
+            entries.push({ key: k, type: v.type, bytes: v.bytes, updatedAt: v.updatedAt || 0, immune: v.immune === true || isDownloadCacheImmune(v.type, k) });
+        }
+
+        const stale = entries.filter(e => !e.immune && e.updatedAt > 0 && now - e.updatedAt > CACHE_MAX_AGE_MS);
+        if (stale.length > 0) await db.delMany(stale.map(e => e.key));
+        const kept = entries.filter(e => !stale.includes(e));
+        let total = kept.reduce((s, e) => s + e.bytes.length, 0);
+
+        const sorted = kept.filter(e => !e.immune && e.updatedAt > 0 && now - e.updatedAt > CACHE_IMMUNITY_MS)
+            .sort((a, b) => a.updatedAt - b.updatedAt);
+        const toDel: string[] = [];
+        for (const e of sorted) {
+            const overSize = total > DOWNLOAD_CACHE_MAX_BYTES;
+            const overCount = kept.length - toDel.length > CACHE_MAX_ITEMS;
+            if (!overSize && !overCount) break;
+            total -= e.bytes.length;
+            toDel.push(e.key);
+        }
+        if (toDel.length > 0) await db.delMany(toDel);
+        if (stale.length + toDel.length > 0) wlog('[dlc] gc removed=' + (stale.length + toDel.length));
+    } catch (e) {
+        console.warn('[dlc] gc error', (e as Error)?.message);
+    }
+}
+
+async function persistDownloadParts(cacheKey: string, parts: Map<number, Buffer>, partSize: number, type: string): Promise<void> {
+    if (!cacheKey || parts.size === 0) return;
+    try {
+        const db = getGramDb();
+        if (!db.isReady()) return;
+        const indexes: number[] = [];
+        for (const [idx, buf] of parts) {
+            if (buf.length === partSize) { // only full parts survive resume
+                await db.set(SESSION_PARTS_PREFIX + cacheKey + ':' + idx, { bytes: buf.toString('base64'), updatedAt: Date.now() });
+                indexes.push(idx);
+            }
+        }
+        await db.set(DLCACHE_PREFIX + cacheKey, { type, bytes: '', partIndexes: indexes, partSize, updatedAt: Date.now() } satisfies DLCacheEntry);
+        wlog('[dlc] parts saved key=' + cacheKey + ' parts=' + indexes.length + ' partSize=' + partSize);
+    } catch {}
+}
+
+async function loadPersistedParts(cacheKey: string): Promise<{ type: string; partSize: number; parts: Map<number, Buffer> } | null> {
+    if (!cacheKey) return null;
+    try {
+        const db = getGramDb();
+        if (!db.isReady()) return null;
+        const entry = await db.get<DLCacheEntry>(DLCACHE_PREFIX + cacheKey);
+        if (!entry || !entry.partIndexes || !entry.partSize) return null;
+        const parts = new Map<number, Buffer>();
+        for (const idx of entry.partIndexes) {
+            const p = await db.get<{ bytes: string }>(SESSION_PARTS_PREFIX + cacheKey + ':' + idx);
+            if (p?.bytes) parts.set(idx, Buffer.from(p.bytes, 'base64'));
+        }
+        if (parts.size === 0) { await db.del(DLCACHE_PREFIX + cacheKey); return null; }
+        return { type: entry.type, partSize: entry.partSize, parts };
+    } catch { return null; }
+}
+
+async function clearPersistedParts(cacheKey: string): Promise<void> {
+    if (!cacheKey) return;
+    try {
+        const db = getGramDb();
+        if (!db.isReady()) return;
+        const entry = await db.get<DLCacheEntry>(DLCACHE_PREFIX + cacheKey);
+        const indexes = entry?.partIndexes || [];
+        if (indexes.length > 0) {
+            await db.delMany(indexes.map(i => SESSION_PARTS_PREFIX + cacheKey + ':' + i));
+        }
+        await db.del(DLCACHE_PREFIX + cacheKey);
+    } catch {}
+}
+
 const downloadQueue: Array<{
-    document: any; photo: any; priority: number;
-    resolve: (v: { type: string; bytes: string; error?: string }) => void;
+    document: any; photo: any; priority: number; cacheKey: string;
+    resolve: (v: DownloadResult) => void;
     reject: (e: any) => void;
 }> = [];
 let downloadInFlight = 0;
-const MAX_PARALLEL_DOWNLOADS = 6;
+const MAX_PARALLEL_DOWNLOADS = 48;
 
-const uploadSemMax = 3;
+const IS_PREMIUM = false;
+const POOL_BUDGET = (IS_PREMIUM ? 16 : 2) << 20;
+const UNKNOWN_DC = 0;
+const poolInFlight = new Map<string, number>();
+const poolWaiters = new Map<string, PoolWaiter[]>();
+
+const activeDownloadPriority = new Map<string, number>();
+
+const poolWaiterByFile = new Map<string, { key: string; waiter: PoolWaiter }>();
+let poolSeq = 0;
+
+interface PoolWaiter {
+    priority: number;
+    seq: number;
+    size: number;
+    cacheKey: string;
+    resolve: () => void;
+}
+
+function poolKey(dc: number, small: boolean): string {
+    return (dc || UNKNOWN_DC) + (small ? ':s' : ':b');
+}
+function poolFree(key: string): number {
+    return POOL_BUDGET - (poolInFlight.get(key) || 0);
+}
+
+function satisfyPool(key: string): void {
+    const arr = poolWaiters.get(key);
+    if (!arr || arr.length === 0) return;
+    arr.sort((a, b) => b.priority - a.priority || a.seq - b.seq);
+    let free = poolFree(key);
+    for (let i = 0; i < arr.length; i++) {
+        if (arr[i].size > free) continue;
+        const w = arr.splice(i, 1)[0];
+        i--;
+        poolInFlight.set(key, (poolInFlight.get(key) || 0) + w.size);
+        free -= w.size;
+        if (w.cacheKey && poolWaiterByFile.get(w.cacheKey)?.waiter === w) poolWaiterByFile.delete(w.cacheKey);
+        w.resolve();
+    }
+}
+function acquirePool(dc: number, small: boolean, size: number, cacheKey: string, priority: number): Promise<void> {
+    const key = poolKey(dc, small);
+    if (poolFree(key) >= size) {
+        poolInFlight.set(key, (poolInFlight.get(key) || 0) + size);
+        return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+        const waiter: PoolWaiter = { priority, seq: poolSeq++, size, cacheKey, resolve };
+        const arr = poolWaiters.get(key) || [];
+        arr.push(waiter);
+        poolWaiters.set(key, arr);
+        if (cacheKey) poolWaiterByFile.set(cacheKey, { key, waiter });
+    });
+}
+function releasePool(dc: number, small: boolean, size: number): void {
+    const key = poolKey(dc, small);
+    poolInFlight.set(key, Math.max(0, (poolInFlight.get(key) || 0) - size));
+    satisfyPool(key);
+
+    processDownloadQueue();
+}
+
+function bumpDownloadPriority(cacheKey: string, priority: number): void {
+    const prev = activeDownloadPriority.get(cacheKey);
+    if (prev !== undefined && priority <= prev) return;
+    activeDownloadPriority.set(cacheKey, priority);
+    const rec = poolWaiterByFile.get(cacheKey);
+    if (rec) {
+        rec.waiter.priority = priority;
+        satisfyPool(rec.key);
+    }
+}
+
+function dcAndSize(document?: any, photo?: any): { dc: number; size: number } {
+    const raw = photo?.dc_id ?? document?.dc_id ?? 0;
+    let dc = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isFinite(dc) || dc <= 0) dc = UNKNOWN_DC;
+    const size = Number(document?.size ?? photo?.size ?? 0);
+    return { dc, size: Number.isFinite(size) && size > 0 ? size : 0 };
+}
+
+const MAX_PART_COUNT = IS_PREMIUM ? 8000 : 4000;
+const MAX_FILE_SIZE = (512 << 10) * MAX_PART_COUNT;
+function selectPartSize(size: number): number {
+    if (!(size > 0)) return 32 << 10;
+    let part = 64 << 10;
+    while (part < (512 << 10) && size / part > MAX_PART_COUNT) part *= 2;
+    return part;
+}
+
+const SMALL_FILE_LIMIT = 20 << 10;
+
+const SMALL_UPLOAD_MAX = 36;
+let smallUploadActive = 0;
+const smallUploadQueue: Array<() => void> = [];
+
+const TDLIB_PRIORITY_MIN = 1;
+const TDLIB_PRIORITY_MAX = 32;
+function normalizePriority(p: number): number {
+    if (!Number.isFinite(p)) return TDLIB_PRIORITY_MIN;
+    return Math.min(TDLIB_PRIORITY_MAX, Math.max(TDLIB_PRIORITY_MIN, Math.round(p)));
+}
+
+const uploadSemMax = 6;
 let uploadSemActive = 0;
 const uploadSemQueue: Array<() => void> = [];
 
+const UPLOAD_GAP_START_MS = 50;
+const UPLOAD_GAP_DECAY = 0.8;
+const UPLOAD_GAP_MIN_MS = 3;
+
+const PACED_MIME_PREFIXES = ['video/', 'audio/', 'image/gif', 'application/javascript', 'application/json', 'application/octet-stream', 'application/pdf', 'application/zip'];
+function isPacedMime(mime?: string): boolean {
+    const m = (mime || '').toLowerCase();
+    return PACED_MIME_PREFIXES.some(p => m.startsWith(p)) || m.includes('document');
+}
+function createDelayDispatcher(): { pace: () => Promise<void> } {
+    let gapMs = UPLOAD_GAP_START_MS;
+    let nextAt = Date.now() + UPLOAD_GAP_START_MS;
+    return {
+        pace: async () => {
+            const now = Date.now();
+            const wait = nextAt - now;
+            if (wait > 0) await new Promise<void>(r => setTimeout(r, wait));
+            nextAt = Date.now() + gapMs;
+            gapMs = Math.max(UPLOAD_GAP_MIN_MS, gapMs * UPLOAD_GAP_DECAY);
+        },
+    };
+}
+
 function acquireUploadSem(): Promise<void> {
-    if (uploadSemActive < uploadSemMax) { uploadSemActive++; return Promise.resolve(); }
+    if (uploadSemActive < uploadSemMax) {
+        uploadSemActive++;
+        return Promise.resolve();
+    }
     return new Promise<void>(r => { uploadSemQueue.push(r); });
 }
 function releaseUploadSem(): void {
-    if (uploadSemQueue.length > 0) { const next = uploadSemQueue.shift()!; next(); }
+    if (uploadSemQueue.length > 0) uploadSemQueue.shift()!();
     else { uploadSemActive--; }
 }
-async function runWithSem<T>(fn: () => Promise<T>): Promise<T> {
-    await acquireUploadSem();
-    try { return await fn(); }
-    finally { releaseUploadSem(); }
+
+function acquireSmallUploadSem(): void {
+    smallUploadActive++;
+}
+function releaseSmallUploadSem(): void {
+    if (smallUploadQueue.length > 0) {
+        smallUploadQueue.shift()!();
+    }
+    else { smallUploadActive--; }
 }
 
+async function runWithSem<T>(fn: () => Promise<T>, small = false): Promise<T> {
+    if (!small) {
+        await acquireUploadSem();
+        try { return await fn(); }
+        finally { releaseUploadSem(); }
+    }
+    if (smallUploadActive >= SMALL_UPLOAD_MAX) {
+        await new Promise<void>(r => smallUploadQueue.push(r));
+    }
+    acquireSmallUploadSem();
+    try { return await fn(); }
+    finally { releaseSmallUploadSem(); }
+}
+
+let queueProcessing = false;
 async function processDownloadQueue(): Promise<void> {
-    while (downloadQueue.length > 0 && downloadInFlight < MAX_PARALLEL_DOWNLOADS) {
-        // Pick highest priority item
-        let bestIdx = 0;
-        for (let i = 1; i < downloadQueue.length; i++) {
-            if (downloadQueue[i].priority > downloadQueue[bestIdx].priority) bestIdx = i;
+    if (queueProcessing) return;
+    queueProcessing = true;
+    try {
+        while (downloadQueue.length > 0 && downloadInFlight < MAX_PARALLEL_DOWNLOADS) {
+        let bestIdx = -1;
+        let bestPriority = -Infinity;
+        for (let i = 0; i < downloadQueue.length; i++) {
+            const { dc, size } = dcAndSize(downloadQueue[i].document, downloadQueue[i].photo);
+            const small = size < SMALL_FILE_LIMIT;
+            const partSize = selectPartSize(size);
+            if (poolFree(poolKey(dc, small)) < partSize) continue;
+            if (downloadQueue[i].priority > bestPriority) {
+                bestPriority = downloadQueue[i].priority;
+                bestIdx = i;
+            }
         }
+        if (bestIdx < 0) break;
         const item = downloadQueue.splice(bestIdx, 1)[0];
         downloadInFlight++;
         const label = item.photo ? 'photo' : item.document?.thumb_size ? `thumb:${item.document.thumb_size}` : 'document';
         const id = item.document?.id?.toString() || item.photo?.id?.toString() || '?';
-        console.log('[dlq] dequeue id=' + id + ' label=' + label + ' priority=' + item.priority + ' inflight=' + downloadInFlight + ' queued=' + downloadQueue.length);
-        downloadFile_(item.document, item.photo).then(item.resolve, item.reject).finally(() => {
+        wlog('[dlq] dequeue id=' + id + ' label=' + label + ' priority=' + item.priority + ' inflight=' + downloadInFlight + ' queued=' + downloadQueue.length);
+        downloadFile_(item.document, item.photo, undefined, undefined, undefined, item.priority).then(item.resolve, item.reject).finally(() => {
             downloadInFlight--;
-            console.log('[dlq] done id=' + id + ' label=' + label + ' inflight=' + downloadInFlight);
+            wlog('[dlq] done id=' + id + ' label=' + label + ' inflight=' + downloadInFlight);
             processDownloadQueue();
         });
     }
+    } finally {
+        queueProcessing = false;
+    }
 }
 
-function enqueueDownload(document?: any, photo?: any, priority = 0): Promise<{ type: string; bytes: string; error?: string; cacheSource?: string }> {
+function enqueueDownload(document?: any, photo?: any, priority = 0): Promise<DownloadResult> {
+    const norm = normalizePriority(priority < 1 ? 30 : 31);
     const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
     const id = document?.id?.toString() || photo?.id?.toString() || '?';
-    console.log('[dlq] enqueue id=' + id + ' label=' + label + ' priority=' + priority + ' queued_before=' + downloadQueue.length);
-    return new Promise((resolve, reject) => {
-        downloadQueue.push({ document, photo, priority, resolve, reject });
+    wlog('[dlq] enqueue id=' + id + ' label=' + label + ' priority=' + priority + ' norm=' + norm + ' queued_before=' + downloadQueue.length);
+    const cacheKey = downloadCacheKeyFor(document, photo);
+    const inflight = cacheKey ? inflightDownloads.get(cacheKey) : undefined;
+    if (inflight) {
+        const queued = downloadQueue.find(q => q.cacheKey === cacheKey);
+        if (queued && norm > queued.priority) {
+            queued.priority = norm;
+            wlog('[dlq] priority bump id=' + id + ' label=' + label + ' norm=' + norm);
+        }
+        if (cacheKey) bumpDownloadPriority(cacheKey, norm);
+        wlog('[dlq] dedupe id=' + id + ' label=' + label + ' cacheKey=' + cacheKey);
+        return inflight;
+    }
+    const p = new Promise<DownloadResult>((resolve, reject) => {
+        downloadQueue.push({ document, photo, priority: norm, cacheKey, resolve, reject });
         processDownloadQueue();
     });
+    if (cacheKey) inflightDownloads.set(cacheKey, p);
+    p.finally(() => {
+        if (cacheKey && inflightDownloads.get(cacheKey) === p) inflightDownloads.delete(cacheKey);
+        if (cacheKey) activeDownloadPriority.delete(cacheKey);
+    });
+    return p;
 }
 
-async function downloadFile_(document?: any, photo?: any, genRef?: { value: number }, onProgress?: (pct: number) => void, totalSize?: number): Promise<{ type: string; bytes: string; error?: string; cacheSource?: string }> {
+async function downloadFile_(document?: any, photo?: any, genRef?: { value: number }, onProgress?: (pct: number) => void, totalSize?: number, priority = TDLIB_PRIORITY_MAX): Promise<DownloadResult> {
     const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
     const id = document?.id?.toString() || photo?.id?.toString() || '?';
-    console.log('[dl] start id=' + id + ' label=' + label + ' thumbSuffix=' + (document?.thumb_size || photo?.thumb_size || '') + ' totalSize=' + (totalSize || 0));
+    wlog('[dl] start id=' + id + ' label=' + label + ' thumbSuffix=' + (document?.thumb_size || photo?.thumb_size || '') + ' totalSize=' + (totalSize || 0));
     try {
-        const location = buildDownloadLocation(document, photo);
-        if (!location) return { type: '', bytes: '', error: 'No document or photo provided' };
+        let location = buildDownloadLocation(document, photo);
+        if (!location) return { type: '', bytes: new ArrayBuffer(0), error: 'No document or photo provided' };
 
-        // Check in-memory cache (include thumb_size in key to avoid document↔thumb collision)
+        let refRefreshed = false;
+        const refreshDocumentRef = async (): Promise<boolean> => {
+            if (!document?.id || refRefreshed) return false;
+            try {
+                const res = await callRpc('messages.getCustomEmojiDocuments', {
+                    document_id: [BigInt(String(document.id))],
+                });
+                const docs = Array.isArray(res) ? res : [];
+                const fresh = docs.find((d: any) => d?.id && String(d.id) === String(document.id));
+                if (!fresh) return false;
+                refRefreshed = true;
+                document = fresh;
+                location = buildDownloadLocation(document, photo);
+                wlog('[dl] refreshed file_reference id=' + id);
+                return !!location;
+            } catch (e2: any) {
+                wlog('[dl] ref refresh error id=' + id + ' ' + e2.message);
+                return false;
+            }
+        };
+
         const baseKey = document?.id?.toString() || photo?.id?.toString() || '';
         const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : photo?.thumb_size ? `_thumb_${photo.thumb_size}` : '';
         const cacheKey = baseKey + thumbSuffix;
         if (cacheKey) {
             if (downloadCache.has(cacheKey)) {
-                const cached = downloadCache.get(cacheKey)!;
-                console.log('[dl] cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey);
-                if (cached.type && cached.bytes) return { type: cached.type, bytes: cached.bytes, cacheSource: 'memory' };
+                const cached = downloadCacheGet(cacheKey)!;
+                wlog('[dl] cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey);
+                if (cached.type && cached.bytes && cached.bytes.length > 0) return { type: cached.type, bytes: b64ToAb(cached.bytes), cacheSource: 'memory' };
             }
-            // Check persistent cache (gram-db)
+
             const persisted = await loadPersistedDownloadCache(cacheKey);
-            if (persisted && persisted.type && persisted.bytes) {
-                console.log('[dl] gram-db cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey + ' bytesLen=' + persisted.bytes.length);
-                downloadCache.set(cacheKey, persisted);
-                return { ...persisted, cacheSource: 'persisted' };
+            if (persisted && persisted.type && persisted.bytes && persisted.bytes.length > 0) {
+                wlog('[dl] gram-db cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey + ' bytesLen=' + persisted.bytes.length);
+                downloadCacheSet(cacheKey, persisted, document?.mime_type);
+                return { type: persisted.type, bytes: b64ToAb(persisted.bytes), cacheSource: 'persisted' };
             }
         }
-        console.log('[dl] cache MISS id=' + id + ' label=' + label + ' cacheKey=' + cacheKey);
+        wlog('[dl] cache MISS id=' + id + ' label=' + label + ' cacheKey=' + cacheKey);
 
-        const PART_SIZE = 1048576;
-        const MAX_CONCURRENT = 3;
         let finalType = 'storage.fileUnknown';
         let targetDc = photo?.dc_id || document?.dc_id || 0;
         let serverType: 'home-server' | 'cdn-server' | 'migrate-server' = 'home-server';
         if (typeof targetDc !== 'number') targetDc = Number(targetDc);
         const knownSize = totalSize || Number(document?.size || photo?.size || 0);
 
-        // CDN state
+        const PART_SIZE = selectPartSize(knownSize);
+
+        const MAX_CONCURRENT = Math.max(1, Math.floor(POOL_BUDGET / PART_SIZE));
+
+        const fileSmall = knownSize < SMALL_FILE_LIMIT;
+
+        const paced = !fileSmall && isPacedMime(document?.mime_type);
+        const dispatcher = paced ? createDelayDispatcher() : null;
+        const effPriority = (): number => activeDownloadPriority.get(cacheKey) ?? priority;
+
+        const poolDc = targetDc || UNKNOWN_DC;
+        const poolCall = async <T>(fn: () => Promise<T>): Promise<T> => {
+            if (dispatcher) await dispatcher.pace();
+            await acquirePool(poolDc, fileSmall, PART_SIZE, cacheKey, effPriority());
+            try { return await fn(); }
+            finally { releasePool(poolDc, fileSmall, PART_SIZE); }
+        };
+
         let cdnDcId = 0;
         let cdnFileToken: Buffer | null = null;
         let cdnKey: Buffer | null = null;
         let cdnIv: Buffer | null = null;
+        const applyCdnRedirect = (res: any): boolean => {
+            if (res._ !== 'upload.fileCdnRedirect') return false;
+            cdnDcId = res.dc_id;
+            serverType = 'cdn-server';
+            cdnFileToken = typeof res.file_token === 'string'
+                ? Buffer.from(res.file_token, 'hex')
+                : Buffer.from(res.file_token);
+            cdnKey = Buffer.from(res.encryption_key, 'hex');
+            cdnIv = Buffer.from(res.encryption_iv, 'hex');
+            return true;
+        };
 
-        const doCall = async (ofs: bigint, lim: number): Promise<any> => {
+        const doCall = async (ofs: bigint, lim: number, precise = false): Promise<any> => {
             if (genRef && genRef.value !== photoDownloadGen) throw new Error('ABORTED');
             if (cdnDcId > 0 && cdnFileToken) {
                 const p = { file_token: cdnFileToken, offset: ofs, limit: lim };
-                const result = await callRpcOnDc(cdnDcId, 'upload.getCdnFile', p);
+                let result: any;
+                try {
+                    result = await runWithSem(() => callRpcOnDc(cdnDcId, 'upload.getCdnFile', p), fileSmall);
+                } catch (e: any) {
+                    if (String((e as Error)?.message || e).includes('FILE_TOKEN_INVALID')) {
+                        wlog('[dl] CDN token invalid id=' + id + ' — falling back to origin DC');
+                        cdnDcId = 0; cdnFileToken = null; cdnKey = null; cdnIv = null;
+                        return doCall(ofs, lim, precise);
+                    }
+                    throw e;
+                }
                 if (result._ === 'upload.cdnFileReuploadNeeded') {
                     const requestToken = Buffer.from(result.request_token, 'hex');
-                    await callRpcOnDc(targetDc, 'upload.reuploadCdnFile', {
+                    await runWithSem(() => callRpcOnDc(targetDc, 'upload.reuploadCdnFile', {
                         file_token: cdnFileToken, request_token: requestToken,
-                    });
-                    return doCall(ofs, lim);
+                    }), fileSmall);
+                    return doCall(ofs, lim, precise);
                 }
                 if (result._ === 'upload.cdnFile') {
                     const encrypted = Buffer.from(result.bytes || '', 'hex');
@@ -2670,95 +3179,90 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 }
                 return result;
             }
-            const p = { precise: false, location, offset: ofs, limit: lim };
-            if (targetDc > 0) return await callRpcOnDc(targetDc, 'upload.getFile', p);
+            const p = { precise, location, offset: ofs, limit: lim };
+            if (targetDc > 0) return await runWithSem(() => callRpcOnDc(targetDc, 'upload.getFile', p), fileSmall);
             try {
-                return await callRpc('upload.getFile', p, { noMigrate: true });
+                return await runWithSem(() => callRpc('upload.getFile', p, { noMigrate: true }), fileSmall);
             } catch (e: any) {
                 const m = e.message.match(/^FILE_MIGRATE_(\d+)$/);
-                if (m) { targetDc = parseInt(m[1]); serverType = 'migrate-server'; return await callRpcOnDc(targetDc, 'upload.getFile', p); }
+                if (m) { targetDc = parseInt(m[1]); serverType = 'migrate-server'; return await runWithSem(() => callRpcOnDc(targetDc, 'upload.getFile', p), fileSmall); }
                 throw e;
             }
         };
 
-        // First call
-        const firstResult = await doCall(BigInt(0), PART_SIZE);
-        if (genRef && genRef.value !== photoDownloadGen) return { type: '', bytes: '', error: 'ABORTED' };
-
-        // Handle CDN redirect
-        let result: any = firstResult;
-        if (firstResult._ === 'upload.fileCdnRedirect') {
-            cdnDcId = firstResult.dc_id;
-            serverType = 'cdn-server';
-            cdnFileToken = typeof firstResult.file_token === 'string'
-                ? Buffer.from(firstResult.file_token, 'hex')
-                : Buffer.from(firstResult.file_token);
-            cdnKey = Buffer.from(firstResult.encryption_key, 'hex');
-            cdnIv = Buffer.from(firstResult.encryption_iv, 'hex');
-            console.log('[dl] CDN redirect id=' + id + ' label=' + label + ' cdnDc=' + cdnDcId);
-            // Re-run through CDN
-            const p = { file_token: cdnFileToken, offset: BigInt(0), limit: PART_SIZE };
-            const cdnResult = await callRpcOnDc(cdnDcId, 'upload.getCdnFile', p);
-            if (cdnResult._ === 'upload.cdnFileReuploadNeeded') {
-                console.log('[dl] CDN reupload needed id=' + id);
-                const requestToken = Buffer.from(cdnResult.request_token, 'hex');
-                await callRpcOnDc(targetDc, 'upload.reuploadCdnFile', {
-                    file_token: cdnFileToken, request_token: requestToken,
-                });
-                // retry
-                const p2 = { file_token: cdnFileToken, offset: BigInt(0), limit: PART_SIZE };
-                const cdnResult2 = await callRpcOnDc(cdnDcId, 'upload.getCdnFile', p2);
-                if (cdnResult2._ === 'upload.cdnFile') {
-                    console.log('[dl] CDN reupload success, decrypting id=' + id);
-                    const encrypted = Buffer.from(cdnResult2.bytes || '', 'hex');
-                    const decrypted = crypton.AES256CTR.process(encrypted, cdnKey, cdnIv, 0);
-                    result = { _: 'upload.file', type: { _: 'storage.filePartial' }, bytes: decrypted.toString('hex') };
-                } else {
-                    return { type: '', bytes: '', error: 'CDN download failed after reupload' };
-                }
-            } else if (cdnResult._ === 'upload.cdnFile') {
-                console.log('[dl] CDN got encrypted chunk, decrypting id=' + id + ' len=' + (cdnResult.bytes?.length || 0));
-                const encrypted = Buffer.from(cdnResult.bytes || '', 'hex');
-                const decrypted = crypton.AES256CTR.process(encrypted, cdnKey, cdnIv, 0);
-                result = { _: 'upload.file', type: { _: 'storage.filePartial' }, bytes: decrypted.toString('hex') };
-            } else {
-                return { type: '', bytes: '', error: 'Unexpected CDN response: ' + cdnResult._ };
-            }
+        let firstResult: any;
+        try {
+            firstResult = await poolCall(() => doCall(BigInt(0), PART_SIZE));
+        } catch (e: any) {
+            if (!e.message?.includes('FILE_REFERENCE_EXPIRED') || !(await refreshDocumentRef())) throw e;
+            firstResult = await poolCall(() => doCall(BigInt(0), PART_SIZE));
         }
+        if (genRef && genRef.value !== photoDownloadGen) return { type: '', bytes: new ArrayBuffer(0), error: 'ABORTED' };
 
-        if (result._ !== 'upload.file') return { type: '', bytes: '', error: 'Unexpected response: ' + result._ };
+        if (firstResult._ === 'upload.fileCdnRedirect') {
+            applyCdnRedirect(firstResult);
+            wlog('[dl] CDN redirect id=' + id + ' label=' + label + ' cdnDc=' + cdnDcId);
+            firstResult = await poolCall(() => doCall(BigInt(0), PART_SIZE));
+        }
+        if (firstResult._ !== 'upload.file') return { type: '', bytes: new ArrayBuffer(0), error: 'Unexpected response: ' + firstResult._ };
 
-        const typeName = result.type?._ || 'storage.fileUnknown';
-        const firstChunk = Buffer.from(result.bytes || '', 'hex');
+        const typeName = firstResult.type?._ || 'storage.fileUnknown';
+        const firstChunk = Buffer.from(firstResult.bytes || '', 'hex');
         const chunks: Buffer[] = [firstChunk];
         finalType = typeName;
 
         if (firstChunk.length < PART_SIZE || typeName !== 'storage.filePartial') {
-            console.log('[dl] single chunk id=' + id + ' label=' + label + ' chunkLen=' + firstChunk.length + ' type=' + typeName);
+            wlog('[dl] single chunk id=' + id + ' label=' + label + ' chunkLen=' + firstChunk.length + ' type=' + typeName);
             const allBytes = Buffer.concat(chunks);
-        const res = { type: finalType, bytes: allBytes.toString('base64') };
+        if (allBytes.length === 0) {
+            console.warn('[dl] empty chunk id=' + id + ' label=' + label + ' type=' + typeName + ' size=' + knownSize + ' dc=' + targetDc + ' — retrying precise');
+            try {
+                const r2 = await poolCall(() => doCall(BigInt(0), PART_SIZE, true));
+                const t2 = r2.type?._ || 'storage.fileUnknown';
+                const c2 = Buffer.from(r2.bytes || '', 'hex');
+                if (r2._ === 'upload.file' && c2.length > 0) {
+                    const res2: DownloadResult = { type: t2, bytes: bufToAb(c2) };
+                    if (cacheKey) {
+                        downloadCacheSet(cacheKey, { type: t2, bytes: c2.toString('base64') }, document?.mime_type);
+                        persistDownloadCache(cacheKey, t2, c2.toString('base64'), document?.mime_type);
+                    }
+                    return res2;
+                }
+            } catch (e2: any) {
+                console.warn('[dl] precise retry error id=' + id + ' ' + e2.message);
+            }
+            return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
+        }
+        const res: DownloadResult = { type: finalType, bytes: bufToAb(allBytes) };
             if (cacheKey) {
-                downloadCache.set(cacheKey, res);
-                persistDownloadCache(cacheKey, finalType, res.bytes);
+                downloadCacheSet(cacheKey, { type: finalType, bytes: allBytes.toString('base64') }, document?.mime_type);
+                persistDownloadCache(cacheKey, finalType, allBytes.toString('base64'), document?.mime_type);
             }
             return res;
         }
 
-        // Parallel download remaining parts
-        let maxTotal = Math.min(knownSize || 200 * 1024 * 1024, 200 * 1024 * 1024);
+        let maxTotal = knownSize > 0 ? knownSize : MAX_FILE_SIZE;
         let nextPart = 1;
+        const usePartsResume = !!cacheKey && knownSize > 0 && knownSize > PART_SIZE;
+        const resumed = usePartsResume ? await loadPersistedParts(cacheKey) : null;
+        if (resumed && resumed.partSize !== PART_SIZE) {
+            await clearPersistedParts(cacheKey);
+            resumed.parts.clear();
+        }
         let totalParts = 0;
 
         while (nextPart * PART_SIZE < maxTotal) {
-            if (genRef && genRef.value !== photoDownloadGen) return { type: '', bytes: '', error: 'ABORTED' };
+            if (genRef && genRef.value !== photoDownloadGen) return { type: '', bytes: new ArrayBuffer(0), error: 'ABORTED' };
             const batch: Promise<{ idx: number; chunk: Buffer | null }>[] = [];
             for (let i = 0; i < MAX_CONCURRENT; i++) {
                 const partIdx = nextPart + i;
                 const partOffset = BigInt(partIdx * PART_SIZE);
                 batch.push(
                     (async () => {
+                        const cachedChunk = resumed?.parts.get(partIdx);
+                        if (cachedChunk) return { idx: partIdx, chunk: cachedChunk };
                         try {
-                            const r = await doCall(partOffset, PART_SIZE);
+                            const r = await poolCall(() => doCall(partOffset, PART_SIZE));
                             if (r._ === 'upload.file') {
                                 const c = Buffer.from(r.bytes || '', 'hex');
                                 return { idx: partIdx, chunk: c };
@@ -2771,8 +3275,9 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             const batchResults = await Promise.all(batch);
             batchResults.sort((a, b) => a.idx - b.idx);
             for (const { idx, chunk } of batchResults) {
-                if (!chunk) { console.log('[dl] part fail at idx=' + idx + ' id=' + id + ' — truncating'); maxTotal = idx * PART_SIZE; break; }
+                if (!chunk) { wlog('[dl] part fail at idx=' + idx + ' id=' + id + ' — keeping partial'); await persistDownloadParts(cacheKey!, resumed?.parts || new Map(), PART_SIZE, finalType); maxTotal = idx * PART_SIZE; break; }
                 chunks.push(chunk);
+                if (resumed) resumed.parts.set(idx, chunk);
                 totalParts++;
                 nextPart = idx + 1;
                 if (onProgress) {
@@ -2782,18 +3287,22 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 if (chunk.length < PART_SIZE) { maxTotal = (idx + 1) * PART_SIZE; break; }
             }
         }
-        console.log('[dl] done id=' + id + ' label=' + label + ' totalChunks=' + chunks.length + ' totalParts=' + totalParts + ' totalBytes=' + chunks.reduce((s,c)=>s+c.length,0));
+        wlog('[dl] done id=' + id + ' label=' + label + ' totalChunks=' + chunks.length + ' totalParts=' + totalParts + ' totalBytes=' + chunks.reduce((s,c)=>s+c.length,0));
 
         const allBytes = Buffer.concat(chunks);
-        const res = { type: finalType, bytes: allBytes.toString('base64'), cacheSource: serverType };
+        if (allBytes.length === 0) {
+            return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
+        }
+        const res: DownloadResult = { type: finalType, bytes: bufToAb(allBytes), cacheSource: serverType };
         if (cacheKey) {
-            downloadCache.set(cacheKey, res);
-            persistDownloadCache(cacheKey, finalType, res.bytes);
+            if (resumed && resumed.parts.size > 0) await clearPersistedParts(cacheKey);
+            downloadCacheSet(cacheKey, { type: finalType, bytes: allBytes.toString('base64') }, document?.mime_type);
+            persistDownloadCache(cacheKey, finalType, allBytes.toString('base64'), document?.mime_type);
         }
         return res;
     } catch (e: any) {
-        console.log('[dl] error id=' + id + ' label=' + label + ' ' + e.message);
-        return { type: '', bytes: '', error: e.message };
+        wlog('[dl] error id=' + id + ' label=' + label + ' ' + e.message);
+        return { type: '', bytes: new ArrayBuffer(0), error: e.message };
     }
 }
 
@@ -2801,14 +3310,13 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     const location = buildDownloadLocation(document, null);
     if (!location) throw new Error('No document provided');
 
-    // Check in-memory cache
     const baseKey = document?.id?.toString() || '';
     const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : '';
     const cacheKey = baseKey + thumbSuffix;
     if (cacheKey) {
         if (downloadCache.has(cacheKey)) {
-            const cached = downloadCache.get(cacheKey)!;
-            if (cached.type && cached.bytes) {
+            const cached = downloadCacheGet(cacheKey)!;
+            if (cached.type && cached.bytes && cached.bytes.length > 0) {
                 const buf = Buffer.from(cached.bytes, 'base64');
                 const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
                 onChunk(ab, true, cached.type);
@@ -2816,8 +3324,8 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
             }
         }
         const persisted = await loadPersistedDownloadCache(cacheKey);
-        if (persisted && persisted.type && persisted.bytes) {
-            downloadCache.set(cacheKey, persisted);
+        if (persisted && persisted.type && persisted.bytes && persisted.bytes.length > 0) {
+            downloadCacheSet(cacheKey, persisted, document?.mime_type);
             const buf = Buffer.from(persisted.bytes, 'base64');
             const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
             onChunk(ab, true, persisted.type);
@@ -2836,15 +3344,45 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     let cdnKey: Buffer | null = null;
     let cdnIv: Buffer | null = null;
 
+    const dispatcher = createDelayDispatcher();
+    const streamDc = (): number => targetDc > 0 ? targetDc : ses!.dcId;
+    const streamPoolCall = async <T>(fn: () => Promise<T>): Promise<T> => {
+        await dispatcher.pace();
+        await acquirePool(streamDc(), false, limit, cacheKey, TDLIB_PRIORITY_MAX);
+        try { return await fn(); }
+        finally { releasePool(streamDc(), false, limit); }
+    };
+    const applyStreamCdnRedirect = (res: any): boolean => {
+        if (res._ !== 'upload.fileCdnRedirect') return false;
+        cdnDcId = res.dc_id;
+        serverType = 'cdn-server';
+        cdnFileToken = typeof res.file_token === 'string'
+            ? Buffer.from(res.file_token, 'hex')
+            : Buffer.from(res.file_token);
+        cdnKey = Buffer.from(res.encryption_key, 'hex');
+        cdnIv = Buffer.from(res.encryption_iv, 'hex');
+        return true;
+    };
+
     const doCall = async (ofs: bigint): Promise<any> => {
         if (cdnDcId > 0 && cdnFileToken) {
             const p = { file_token: cdnFileToken, offset: ofs, limit };
-            const result = await callRpcOnDc(cdnDcId, 'upload.getCdnFile', p, 'video');
+            let result: any;
+            try {
+                result = await runWithSem(() => callRpcOnDc(cdnDcId, 'upload.getCdnFile', p, 'video'), false);
+            } catch (e: any) {
+                if (String((e as Error)?.message || e).includes('FILE_TOKEN_INVALID')) {
+                    wlog('[dl-stream] CDN token invalid — falling back to origin DC');
+                    cdnDcId = 0; cdnFileToken = null; cdnKey = null; cdnIv = null;
+                    return doCall(ofs);
+                }
+                throw e;
+            }
             if (result._ === 'upload.cdnFileReuploadNeeded') {
                 const requestToken = Buffer.from(result.request_token, 'hex');
-                await callRpcOnDc(targetDc || ses!.dcId, 'upload.reuploadCdnFile', {
+                await runWithSem(() => callRpcOnDc(streamDc(), 'upload.reuploadCdnFile', {
                     file_token: cdnFileToken, request_token: requestToken,
-                }, 'video');
+                }, 'video'), false);
                 return doCall(ofs);
             }
             if (result._ === 'upload.cdnFile') {
@@ -2857,9 +3395,9 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
             return result;
         }
         const p = { precise: false, location, offset: ofs, limit };
-        const callDc = targetDc > 0 ? targetDc : ses!.dcId;
+        const callDc = streamDc();
         try {
-            return await callRpcOnDc(callDc, 'upload.getFile', p, 'video');
+            return await runWithSem(() => callRpcOnDc(callDc, 'upload.getFile', p, 'video'), false);
             } catch (e: any) {
                 const m = e.message.match(/FILE_MIGRATE_(\d+)/);
                 if (m) {
@@ -2876,7 +3414,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
             let retries = 0;
             while (true) {
                 try {
-                    result = await doCall(offset);
+                    result = await streamPoolCall(() => doCall(offset));
                     break;
                 } catch (e: any) {
                     if (e.message?.includes('FILE_REFERENCE_EXPIRED')) throw e;
@@ -2887,38 +3425,32 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
                 }
             }
             if (result._ === 'upload.fileCdnRedirect') {
-                cdnDcId = result.dc_id;
-                serverType = 'cdn-server';
-            cdnFileToken = typeof result.file_token === 'string'
-                ? Buffer.from(result.file_token, 'hex')
-                : Buffer.from(result.file_token);
-            cdnKey = Buffer.from(result.encryption_key, 'hex');
-            cdnIv = Buffer.from(result.encryption_iv, 'hex');
-            continue; // retry same offset via CDN
-        }
-        if (result._ === 'upload.file') {
-            const typeName = result.type?._ || 'storage.fileUnknown';
-            const bytesHex = result.bytes || '';
-            const chunk = Buffer.from(bytesHex, 'hex');
-            if (typeName !== 'storage.filePartial') finalType = typeName;
-            const isFinal = chunk.length < limit || typeName !== 'storage.filePartial';
-            const ab = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength);
-            onChunk(ab, isFinal, finalType);
-            cacheChunks.push(chunk);
-            if (isFinal) break;
-            offset = BigInt(Number(offset) + chunk.length);
-            if (Number(offset) > 200 * 1024 * 1024) throw new Error('File too large (>200MB)');
+                applyStreamCdnRedirect(result);
+                continue;
+            }
+            if (result._ === 'upload.file') {
+                const typeName = result.type?._ || 'storage.fileUnknown';
+                const bytesHex = result.bytes || '';
+                const chunk = Buffer.from(bytesHex, 'hex');
+                if (typeName !== 'storage.filePartial') finalType = typeName;
+                const isFinal = chunk.length < limit || typeName !== 'storage.filePartial';
+                const ab = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength);
+                onChunk(ab, isFinal, finalType);
+                cacheChunks.push(chunk);
+                if (isFinal) break;
+                offset = BigInt(Number(offset) + chunk.length);
+                if (Number(offset) > MAX_FILE_SIZE) throw new Error('File too large (TDLib MAX_FILE_SIZE)');
         } else {
             throw new Error('Unknown response: ' + result._);
         }
     }
-    // Save to cache
+
     if (cacheKey && cacheChunks.length > 0) {
         const allBytes = Buffer.concat(cacheChunks);
         const res = { type: finalType, bytes: allBytes.toString('base64'), cacheSource: serverType };
         if (res.bytes.length <= 20 * 1024 * 1024) {
-            downloadCache.set(cacheKey, res);
-            persistDownloadCache(cacheKey, finalType, res.bytes);
+            downloadCacheSet(cacheKey, res, document?.mime_type);
+            persistDownloadCache(cacheKey, finalType, res.bytes, document?.mime_type);
         }
     }
     return serverType;
@@ -2968,10 +3500,11 @@ export async function batchCheckPhotoCache(requests: Array<{ photo: any; sizeTyp
     const location = buildDownloadLocation(undefined, photoWithThumb);
     if (!location) continue;
     const baseKey = photo?.id?.toString() || '';
-    const cacheKey = baseKey + '_' + sizeType;
+
+    const cacheKey = baseKey + '_thumb_' + sizeType;
     if (!cacheKey) continue;
     if (downloadCache.has(cacheKey)) {
-      const cached = downloadCache.get(cacheKey)!;
+      const cached = downloadCacheGet(cacheKey)!;
       if (cached.type && cached.bytes) {
         result[cacheKey] = 'data:image/jpeg;base64,' + cached.bytes;
         continue;
@@ -2979,7 +3512,7 @@ export async function batchCheckPhotoCache(requests: Array<{ photo: any; sizeTyp
     }
     const persisted = await loadPersistedDownloadCache(cacheKey);
     if (persisted && persisted.type && persisted.bytes) {
-      downloadCache.set(cacheKey, persisted);
+      downloadCacheSet(cacheKey, persisted);
       result[cacheKey] = 'data:image/jpeg;base64,' + persisted.bytes;
     }
   }
@@ -2994,7 +3527,7 @@ export async function batchCheckDocumentCache(documents: Array<{ id: string | nu
     const cacheKey = baseKey + thumbSuffix;
     if (!cacheKey) continue;
     if (downloadCache.has(cacheKey)) {
-      const cached = downloadCache.get(cacheKey)!;
+      const cached = downloadCacheGet(cacheKey)!;
       if (cached.type && cached.bytes) {
         result[baseKey] = 'memory';
         continue;
@@ -3002,18 +3535,18 @@ export async function batchCheckDocumentCache(documents: Array<{ id: string | nu
     }
     const persisted = await loadPersistedDownloadCache(cacheKey);
     if (persisted && persisted.type && persisted.bytes) {
-      downloadCache.set(cacheKey, persisted);
+      downloadCacheSet(cacheKey, persisted);
       result[baseKey] = 'persisted';
     }
   }
   return result;
 }
 
-async function downloadFiles_(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: string; error?: string; cacheSource?: string }>> {
+async function downloadFiles_(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
     const tasks = (docs || []).map((item, index) =>
         enqueueDownload(item?.document, undefined, item?.priority || 0).then(
-            (r) => ({ index, type: r.type, bytes: r.bytes, cacheSource: r.cacheSource }),
-            (err) => ({ index, type: '', bytes: '', error: String((err as Error)?.message || err) }),
+            (r) => ({ index, type: r.type, bytes: r.bytes.slice(0), error: r.error, cacheSource: r.cacheSource }),
+            (err) => ({ index, type: '', bytes: new ArrayBuffer(0), error: String((err as Error)?.message || err) }),
         ),
     );
     return Promise.all(tasks);
@@ -3033,9 +3566,7 @@ export function getAuthState(): 'none' | 'code_sent' | 'password_needed' | 'auth
     return 'none';
 }
 
-
 try {
-    // Notify owner when loaded as a dedicated worker (SharedWorker handles this via onconnect)
     if (typeof postMessage !== 'undefined') {
         postMessage({ type: 'ready' });
     }

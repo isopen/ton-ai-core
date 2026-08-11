@@ -38,11 +38,12 @@ export function initAnimatedRenderer(
   params: AnimatedRendererParams,
   viewId: string,
   onLoad?: () => void,
+  onError?: () => void,
   onFrame?: (index: number) => void,
 ): IAnimatedRenderer {
   if (getAnimatedRendererBackend() === 'worker') {
     try {
-      return TgsRenderer.init(tgsUrl, container, renderId, params, viewId, onLoad, onFrame);
+      return TgsRenderer.init(tgsUrl, container, renderId, params, viewId, onLoad, onError, onFrame);
     } catch (err: any) {
       workerBroken = true;
       console.warn('[AnimatedRenderer] worker init threw for', renderId, ':', err?.message || err);
@@ -52,7 +53,7 @@ export function initAnimatedRenderer(
   if (fallbackCount <= 3) {
     console.warn('[AnimatedRenderer] MAIN-THREAD fallback used (#' + fallbackCount + '), renderId=' + renderId);
   }
-  return MainThreadRenderer.init(tgsUrl, container, renderId, params, viewId, onLoad, onFrame);
+  return MainThreadRenderer.init(tgsUrl, container, renderId, params, viewId, onLoad, onError, onFrame);
 }
 
 export function markWorkerBroken(): void {
@@ -68,3 +69,5 @@ export function getWorkerPoolInfo(): { count: number; broken: boolean } {
 }
 
 (window as unknown as Record<string, unknown>).__tgRenderDebug = () => getRenderDebug();
+
+(window as unknown as Record<string, unknown>).__tgDiag = () => TgsRenderer.diag();

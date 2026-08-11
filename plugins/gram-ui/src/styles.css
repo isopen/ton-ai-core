@@ -96,7 +96,6 @@ body {
   transition: background-color 0.25s ease, color 0.25s ease;
 }
 
-
 @font-face {
   font-family: 'Roboto';
   font-style: normal;
@@ -246,7 +245,6 @@ body {
   background: var(--scrollbar-thumb-hover);
 }
 
-/* ===== Scrollbar ===== */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -283,7 +281,6 @@ body {
   background: var(--scrollbar-thumb-hover);
 }
 
-/* Chat messages: always visible */
 .tgui-msg-list .CustomScrollbar-thumb {
   opacity: 1;
 }
@@ -291,20 +288,17 @@ body {
   background: var(--scrollbar-thumb-hover);
 }
 
-/* ===== MUI Elevation Shadows ===== */
 .mui-elevation-1 { box-shadow: 0 2px 1px -1px rgba(0,0,0,0.2), 0 1px 1px 0 rgba(0,0,0,0.14), 0 1px 3px 0 rgba(0,0,0,0.12); }
 .mui-elevation-2 { box-shadow: 0 3px 1px -2px rgba(0,0,0,0.2), 0 2px 2px 0 rgba(0,0,0,0.14), 0 1px 5px 0 rgba(0,0,0,0.12); }
 .mui-elevation-4 { box-shadow: 0 2px 4px -1px rgba(0,0,0,0.2), 0 4px 5px 0 rgba(0,0,0,0.14), 0 1px 10px 0 rgba(0,0,0,0.12); }
 .mui-elevation-8 { box-shadow: 0 5px 5px -3px rgba(0,0,0,0.2), 0 8px 10px 1px rgba(0,0,0,0.14), 0 3px 14px 2px rgba(0,0,0,0.12); }
 
-/* ===== Typography ===== */
 .mui-subtitle1 { font-size: 16px; font-weight: 400; line-height: 1.5; letter-spacing: 0.15px; }
 .mui-subtitle2 { font-size: 14px; font-weight: 500; line-height: 1.5; letter-spacing: 0.1px; }
 .mui-body2 { font-size: 14px; font-weight: 400; line-height: 1.5; letter-spacing: 0.17px; }
 .mui-caption { font-size: 12px; font-weight: 400; line-height: 1.5; letter-spacing: 0.4px; color: var(--text-secondary); }
 .mui-overline { font-size: 10px; font-weight: 400; line-height: 2; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-secondary); }
 
-/* ===== Panel ===== */
 .Panel {
   height: 100%;
   display: flex;
@@ -324,12 +318,10 @@ body {
   background: var(--bg-surface);
 }
 
-/* ===== Flex clickable ===== */
 .Flex {
   cursor: pointer;
 }
 
-/* ===== MAX-style Button (BEM) ===== */
 .Button {
   font-family: var(--font);
   display: inline-flex;
@@ -464,7 +456,6 @@ body {
   box-shadow: none !important;
 }
 
-/* ===== Layout ===== */
 .tgui-header-wrapper {
   flex-shrink: 0;
 }
@@ -479,7 +470,6 @@ body {
   overflow: hidden;
 }
 
-/* ===== MUI App Bar (Header) ===== */
 .tgui-header {
   display: flex;
   justify-content: space-between;
@@ -534,14 +524,11 @@ body {
   background: var(--bg-active);
 }
 
-/* ===== Language Selector ===== */
 .tgui-lang-selector {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
-
-/* ===== MUI Card (Auth) ===== */
 
 .tgui-auth-card {
   width: 100%;
@@ -577,7 +564,6 @@ body {
   color: var(--text-secondary);
 }
 
-/* ===== MAX-style Text Field (BEM) ===== */
 .tgui-auth-label {
   font-size: 13px;
   font-weight: 500;
@@ -883,7 +869,6 @@ body {
   transform: scale(0.98);
 }
 
-/* ===== Auth Error ===== */
 .tgui-auth-error {
   background: rgba(255,48,60,0.1);
   border: 1px solid rgba(255,48,60,0.3);
@@ -895,7 +880,6 @@ body {
   text-align: center;
 }
 
-/* ===== QR Code Auth ===== */
 .tgui-qr-container {
   width: 256px;
   height: 256px;
@@ -950,7 +934,6 @@ body {
   line-height: 1.5;
 }
 
-/* ===== Signup ===== */
 .tgui-auth-terms {
   display: flex;
   align-items: flex-start;
@@ -976,7 +959,6 @@ body {
   text-decoration: underline;
 }
 
-/* ===== Loading ===== */
 .Spinner {
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -1019,7 +1001,6 @@ body {
   to { opacity: 1; }
 }
 
-/* ===== MUI Drawer (Sidebar) ===== */
 .tgui-sidebar {
   display: flex;
   flex-direction: column;
@@ -1076,17 +1057,15 @@ body {
 }
 
 .tgui-sidebar-loader {
-  padding: 0; /* spinner at top */
+  padding: 0;
 }
 
-/* ===== Sidebar header actions ===== */
 .tgui-sidebar-header-actions {
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-/* ===== Action Menu Dropdown ===== */
 .ActionMenuDropdown {
   position: relative;
 }
@@ -1169,7 +1148,6 @@ body {
   white-space: nowrap;
 }
 
-/* ===== MUI List Item (Dialog) ===== */
 .ListItem {
   cursor: pointer;
   display: flex;
@@ -1410,7 +1388,6 @@ body {
   flex-shrink: 0;
 }
 
-/* ===== MUI Chat Area ===== */
 .tgui-empty-chat {
   flex: 1;
   display: flex;
@@ -1499,8 +1476,6 @@ body {
   margin-right: 4px;
 }
 
-
-
 .tgui-msg-row-out {
   align-items: flex-end;
   padding-left: 72px;
@@ -1522,7 +1497,6 @@ body {
   letter-spacing: -0.1px;
 }
 
-/* ===== MessageBubble (BEM) ===== */
 .MessageBubble {
   max-width: 75%;
   padding: 8px 11px 7px;
@@ -1618,6 +1592,12 @@ body {
   align-items: center;
 }
 
+.MessageBubble_emojiOnly {
+  background: transparent;
+  box-shadow: none;
+  padding: 2px 6px 4px;
+}
+
 .Checkmark {
   font-size: 14px;
   line-height: 1;
@@ -1679,7 +1659,6 @@ body {
   padding: 4px 0;
 }
 
-/* ===== Sticker ===== */
 .tgui-sticker {
   max-width: 200px;
 }
@@ -1733,7 +1712,6 @@ body {
   justify-content: center;
 }
 
-/* ===== Media Player (Video / GIF) ===== */
 .MessageBubble_media {
   max-width: none;
   padding: 0;
@@ -1982,7 +1960,6 @@ body {
   pointer-events: auto;
 }
 
-/* icon visibility: universal rules matching demo */
 .icon-play, .icon-pause, .icon-warning, .icon-volume, .icon-mute { display: none; }
 [data-state="ready"] .icon-play,
 [data-state="loading"] .icon-play,
@@ -1993,7 +1970,6 @@ body {
 [data-muted="false"] .icon-volume { display: block; }
 [data-muted="true"] .icon-mute { display: block; }
 
-/* center button */
 .video-message__center-btn {
   position: absolute;
   top: 50%;
@@ -2021,7 +1997,6 @@ body {
 .video-message__center-btn .icon { width: 24px; height: 24px; }
 .video-message__center-btn .icon-play { margin-left: 2px; }
 
-/* loading ring */
 .video-message__loading-ring {
   position: absolute;
   top: 50%;
@@ -2053,7 +2028,6 @@ body {
   text-shadow: 0 1px 4px rgba(0,0,0,0.5);
 }
 
-/* meta overlay (time + read status) */
 .video-message__meta-overlay {
   position: absolute;
   right: 10px;
@@ -2074,7 +2048,6 @@ body {
 .video-message__frame[data-loaded="true"]:hover + .MessageBubble__meta_overlay,
 .video-message__frame[data-loaded="true"].is-active + .MessageBubble__meta_overlay { opacity: 0; }
 
-/* mini progress (visible during play, hidden on hover) */
 .video-message__mini-progress {
   position: absolute;
   left: 0;
@@ -2113,7 +2086,6 @@ body {
   border-radius: 3px;
 }
 
-/* bottom control bar (hover) */
 .video-message__controls {
   position: absolute;
   left: 0;
@@ -2193,7 +2165,6 @@ body {
   box-shadow: 0 0 0 3px rgba(0,0,0,0.12);
 }
 
-/* dropdown */
 .dropdown-menu {
   position: absolute;
   top: 42px;
@@ -2222,7 +2193,6 @@ body {
 .dropdown-menu button:hover { background: #eef1f6; }
 .dropdown-menu__danger { color: #d64545 !important; }
 
-/* toast (matches demo exactly) */
 .toast {
   position: fixed;
   left: 50%;
@@ -2244,7 +2214,6 @@ body {
 }
 .toast.is-visible { opacity: 1; transform: translate(-50%, 0); }
 
-/* ===== Photo ===== */
 .tgui-photo {
   max-width: 320px;
 }
@@ -2270,6 +2239,13 @@ body {
 .MessageBubble_photo .tgui-photo-preview {
   margin: 0;
   border-radius: inherit;
+}
+
+.MessageBubble_album {
+  max-width: none;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .tgui-photo-preview_loading {
@@ -2305,11 +2281,11 @@ body {
   unicode-bidi: plaintext;
   white-space: pre-wrap;
 }
+.MessageBubble_photo .MessageBubble__meta,
 .MessageBubble_media .MessageBubble__meta {
   padding: 0 11px 7px;
 }
 
-/* ===== TelegramImage ===== */
 .TelegramImage {
   position: relative;
   overflow: hidden;
@@ -2388,7 +2364,6 @@ body {
   opacity: 0.5;
 }
 
-/* ===== PhotoLoader ===== */
 .PhotoLoader {
   position: absolute;
   inset: 0;
@@ -2476,7 +2451,250 @@ body {
   100% { stroke-dashoffset: -120; }
 }
 
-/* ===== Debug ===== */
+.MediaCollage {
+  position: relative;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: #0b0d12;
+}
+
+.MediaCollage__cell {
+  position: absolute;
+  overflow: hidden;
+  background: #0b0d12;
+  cursor: pointer;
+  min-width: 0;
+  min-height: 0;
+}
+
+.MediaCollage__cell > .tgui-photo-preview {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border-radius: inherit;
+}
+
+.MediaCollage__placeholder {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-surface);
+}
+
+.MediaCollage__more-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,.55);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.MediaCollage__src {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+  z-index: 2;
+}
+
+.MediaCollage__meta {
+  bottom: 8px;
+  right: 8px;
+}
+
+.MediaCollage__video {
+  position: absolute;
+  inset: 0;
+  background: #0b0d12;
+}
+
+.MediaCollage__video-poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #0b0d12;
+}
+
+.MediaCollage__video-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .45);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.MediaCollage__video-duration {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 600;
+  letter-spacing: .2px;
+}
+
+.MediaViewer {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(6, 8, 12, 0.94);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: pan-y;
+}
+
+.MediaViewer__close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.MediaViewer__close:hover {
+  background: rgba(255,255,255,0.2);
+}
+
+.MediaViewer__counter {
+  position: absolute;
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  color: rgba(255,255,255,0.7);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.MediaViewer__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.MediaViewer__nav:hover {
+  background: rgba(255,255,255,0.2);
+}
+
+.MediaViewer__nav_prev { left: 14px; }
+.MediaViewer__nav_next { right: 14px; }
+
+.MediaViewer__nav_disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.MediaViewer__container {
+  position: relative;
+  max-width: 92vw;
+  max-height: 92vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.MediaViewer__container_grab { cursor: grab; }
+.MediaViewer__container_grabbing { cursor: grabbing; }
+
+.MediaViewer__img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  display: block;
+  opacity: 0;
+  transition: opacity .25s ease;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.MediaViewer__img_loaded {
+  opacity: 1;
+}
+
+.MediaViewer__video {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  display: block;
+  background: #000;
+  border-radius: 4px;
+  box-shadow: 0 12px 48px rgba(0,0,0,.6);
+}
+
+.MediaViewer__thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(12px);
+  transform: scale(1.05);
+  opacity: 0.85;
+}
+
+.MediaViewer__spinner {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 3px solid rgba(255,255,255,0.15);
+  border-top-color: #fff;
+  animation: MediaViewer-spin 0.9s linear infinite;
+}
+
+@keyframes MediaViewer-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 640px) {
+  .MediaViewer__nav_prev { left: 8px; }
+  .MediaViewer__nav_next { right: 8px; }
+}
+
 .tgui-debug {
   flex: 1;
   overflow-y: auto;
@@ -2513,7 +2731,6 @@ body {
   word-break: break-all;
 }
 
-/* ===== Settings (MUI-style) ===== */
 .tgui-settings {
   flex: 1;
   overflow-y: auto;
@@ -2585,8 +2802,6 @@ body {
   gap: var(--spacing-sm);
 }
 
-
-
 .tgui-settings-hint {
   font-size: 12px;
   color: var(--text-tertiary);
@@ -2631,7 +2846,6 @@ body {
   line-height: 1.6;
 }
 
-/* ===== MUI Chat Input ===== */
 .tgui-chat-input-area {
   position: relative;
   padding: var(--spacing-sm) var(--spacing-lg);
@@ -2740,6 +2954,7 @@ body {
   min-height: 0;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  scroll-behavior: smooth;
 }
 
 .tgui-emoji-cat-header {
@@ -2807,7 +3022,6 @@ body {
   vertical-align: middle;
 }
 
-/* ===== Message Reactions ===== */
 .tgui-reactions {
   display: flex;
   flex-wrap: wrap;
@@ -2870,7 +3084,6 @@ body {
   z-index: 40;
 }
 
-/* ===== MUI Chip (Status Bar) ===== */
 .tgui-status-bar {
   display: inline-flex;
   align-items: center;
@@ -2906,7 +3119,6 @@ body {
   white-space: nowrap;
 }
 
-/* ===== Connection Indicator ===== */
 .tgui-connection-indicator {
   display: inline-flex;
   align-items: center;
@@ -2936,7 +3148,6 @@ body {
   white-space: nowrap;
 }
 
-/* ===== Typing Indicator ===== */
 .typing-indicator {
   display: inline-flex;
   align-items: flex-end;
@@ -2976,14 +3187,11 @@ body {
   30% { transform: translateY(-3px); opacity: 1; }
 }
 
-/* ===== Sidebar Backdrop (hidden on desktop) ===== */
 .tgui-sidebar-backdrop {
   display: none;
 }
 
-/* ===== Responsive: ≤ 768px ===== */
 @media (max-width: 768px) {
-  /* Sidebar — overlay when expanded */
   .tgui-sidebar-expanded {
     position: fixed;
     top: 56px;
@@ -2994,12 +3202,10 @@ body {
     box-shadow: var(--shadow-md);
   }
 
-  /* Sidebar collapsed = hidden on mobile */
   .tgui-sidebar-collapsed {
     display: none;
   }
 
-  /* Backdrop overlay when sidebar expanded */
   .tgui-sidebar-backdrop--visible {
     display: block;
     position: fixed;
@@ -3011,7 +3217,6 @@ body {
     z-index: 999;
   }
 
-  /* Auth card — tighter padding */
   .tgui-auth-card {
     padding: var(--spacing-lg) var(--spacing-lg) var(--spacing-lg);
   }
@@ -3024,12 +3229,10 @@ body {
     font-size: 14px;
   }
 
-  /* Header — reduced padding */
   .tgui-header {
     padding: 0 var(--spacing-md);
   }
 
-  /* Chat input — reduced padding */
   .tgui-chat-input-area {
     padding: var(--spacing-sm) var(--spacing-md);
   }
@@ -3038,13 +3241,11 @@ body {
     padding: 8px var(--spacing-md);
   }
 
-  /* Sidebar list items */
   .tgui-sidebar {
     z-index: 1000;
   }
 }
 
-/* ===== Responsive: ≤ 480px ===== */
 @media (max-width: 480px) {
   .tgui-sidebar-expanded {
     width: 100%;
@@ -3063,7 +3264,6 @@ body {
   }
 }
 
-/* ===== Cache Inspector ===== */
 .tgui-cache {
   flex: 1;
   overflow-y: auto;
@@ -3505,10 +3705,6 @@ body {
   font-family: 'Consolas', monospace;
 }
 
-/* ==========================================================================
-   Login Page — Telegram Web Auth Screen
-   ========================================================================== */
-
 .login-page {
   flex: 1;
   display: flex;
@@ -3542,8 +3738,6 @@ body {
     0 12px 30px -8px rgba(52, 110, 165, 0.18);
   text-align: center;
 }
-
-/* Language Selector */
 
 .login-lang-wrap {
   position: absolute;
@@ -3635,8 +3829,6 @@ body {
   font-weight: 500;
 }
 
-/* Logo */
-
 .login-logo-wrap {
   position: relative;
   width: 100px;
@@ -3648,8 +3840,6 @@ body {
   width: 100px;
   height: 100px;
 }
-
-/* Back button (for code/password/signup steps) */
 
 .login-btn-back {
   position: absolute;
@@ -3697,8 +3887,6 @@ body {
   color: #369CE8;
 }
 
-/* Title */
-
 .login-title {
   font-size: 28px;
   font-weight: 700;
@@ -3719,8 +3907,6 @@ body {
   margin-bottom: 28px;
 }
 
-/* Form */
-
 .login-form {
   text-align: left;
   animation: loginFadeIn 0.25s ease-out;
@@ -3730,8 +3916,6 @@ body {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
-
-/* Phone Field */
 
 .login-phone-field {
   position: relative;
@@ -3811,8 +3995,6 @@ body {
 .login-phone-input::placeholder {
   color: #AEB8C2;
 }
-
-/* Country Dropdown */
 
 .login-country-dropdown {
   position: absolute;
@@ -3906,8 +4088,6 @@ body {
   flex-shrink: 0;
 }
 
-/* Buttons */
-
 .login-btn {
   width: 100%;
   height: 54px;
@@ -3987,8 +4167,6 @@ body {
   color: #E8544A;
 }
 
-/* Divider */
-
 .login-divider {
   display: flex;
   align-items: center;
@@ -4006,8 +4184,6 @@ body {
   font-size: 13px;
   color: #8A97A3;
 }
-
-/* Bottom text */
 
 .login-terms {
   font-size: 13px;
@@ -4043,8 +4219,6 @@ body {
   text-decoration: underline;
 }
 
-/* Code/Pwd Input */
-
 .login-code-input {
   width: 100%;
   height: 54px;
@@ -4068,8 +4242,6 @@ body {
   color: #AEB8C2;
 }
 
-/* Resend Timer */
-
 .login-resend-timer {
   display: block;
   text-align: center;
@@ -4077,8 +4249,6 @@ body {
   color: #AEB8C2;
   margin-bottom: 14px;
 }
-
-/* Error */
 
 .tgui-auth-error-new {
   background: #FFF0EE;
@@ -4090,8 +4260,6 @@ body {
   margin-bottom: 16px;
   text-align: center;
 }
-
-/* Loading */
 
 .login-loading {
   display: flex;
@@ -4111,8 +4279,6 @@ body {
 @keyframes login-spin {
   to { transform: rotate(360deg); }
 }
-
-/* Language Suggestion */
 
 .tgui-lang-suggestion {
   margin-bottom: 12px;
@@ -4135,8 +4301,6 @@ body {
 .tgui-lang-suggestion-btn:hover {
   background: #D0E4F4;
 }
-
-/* QR Code View */
 
 .login-qr-title {
   font-size: 20px;
@@ -4202,8 +4366,6 @@ body {
   margin-bottom: 12px;
 }
 
-/* Signup */
-
 .login-signup-desc {
   font-size: 14px;
   color: #8A97A3;
@@ -4235,8 +4397,6 @@ body {
 .login-terms-check a:hover {
   text-decoration: underline;
 }
-
-/* Responsive */
 
 [data-theme="dark"] .login-page {
   background: linear-gradient(160deg, #0F1B2E 0%, #162033 100%);
@@ -4424,7 +4584,6 @@ body {
   color: #FF6B75;
 }
 
-/* ===== LinkPreview / WebPageBubble (согласно оригинальной вёрстке) ===== */
 .link-msg {
   max-width: 40%;
 }
@@ -4603,7 +4762,6 @@ body {
   pointer-events: none;
 }
 
-/* skeleton */
 .link-preview__skeleton {
   flex: 1;
   align-items: center;
@@ -4645,7 +4803,6 @@ body {
   100% { background-position: -100% 0; }
 }
 
-/* error */
 .link-preview__error-body {
   flex: 1;
   align-items: center;
@@ -4683,7 +4840,6 @@ body {
 }
 .link-preview__error-retry-hint .icon { width: 13px; height: 13px; }
 
-/* hover actions */
 .link-preview__actions {
   position: absolute;
   top: 8px;

@@ -180,7 +180,6 @@ function tlBytes(data: Buffer): Buffer {
   return result;
 }
 
-
 export function rsaEncryptRaw(data: Buffer, modulus: bigint, exponent: bigint): Buffer {
   if (data.length !== 256) {
     throw new Error(`RSA input must be 256 bytes, got ${data.length}`);

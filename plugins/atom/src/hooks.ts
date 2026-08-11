@@ -13,7 +13,7 @@ function getInstance(): ComponentInstance {
   return currentInstance;
 }
 
-export function useState<T>(initial: T): [T, (v: T | ((prev: T) => T)) => void] {
+export function useState<T>(initial: T | (() => T)): [T, (v: T | ((prev: T) => T)) => void] {
   const inst = getInstance();
   const idx = inst.hookIndex++;
 
@@ -56,8 +56,6 @@ export function useEffect(fn: () => (() => void) | void, deps?: any[]) {
   }
 }
 
-// Runs all effects registered during the last render pass, in registration
-// order. Must be called after the DOM commit so that refs are already set.
 export function flushAllEffects() {
   while (pendingEffects.length > 0) {
     const { inst, fn, oldCleanup, cleanupIdx } = pendingEffects.shift()!;

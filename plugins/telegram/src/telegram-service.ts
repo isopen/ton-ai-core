@@ -164,7 +164,7 @@ export class TelegramService {
         return this.sendTyping(peer, 'sendMessageCancelAction');
     }
 
-    async downloadFile(info: { document?: any; photo?: any }): Promise<{ bytes: string; type: string } | null> {
+    async downloadFile(info: { document?: any; photo?: any }): Promise<{ bytes: string | ArrayBuffer; type: string } | null> {
         this.config.onLog?.('→ downloadFile ' + logJson({ hasDoc: !!info.document, hasPhoto: !!info.photo }));
         const r = await fetch(this.config.baseUrl + '/api/telegram/downloadFile', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },

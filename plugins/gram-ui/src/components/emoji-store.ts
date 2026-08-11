@@ -2,18 +2,32 @@ let emojiMap: Record<string, string> | null = null;
 let docAltIndex: Record<string, string> | null = null;
 const customAltMap: Record<string, string> = {};
 let loading = false;
-const listeners = new Set<() => void>();
+
+type EmojiChange = { alt: string; docId: string };
+const listeners = new Set<(changed?: EmojiChange[]) => void>();
+
+function emit(changed?: EmojiChange[]): void {
+  for (const l of listeners) l(changed);
+}
 
 function rebuildDocAltIndex(): void {
   if (!emojiMap) {
     docAltIndex = null;
     return;
   }
-  const index: Record<string, string> = {};
+  const altIndex: Record<string, string> = {};
   for (const [alt, docId] of Object.entries(emojiMap)) {
-    if (!index[docId]) index[docId] = alt;
+    if (!altIndex[docId]) altIndex[docId] = alt;
   }
-  docAltIndex = index;
+  docAltIndex = altIndex;
+}
+
+function indexEntry(alt: string, docId: string): void {
+  if (!docAltIndex) {
+    rebuildDocAltIndex();
+    return;
+  }
+  if (!docAltIndex[docId]) docAltIndex[docId] = alt;
 }
 
 export function getEmojiAlt(docId: string): string | undefined {
@@ -48,10 +62,12 @@ export function ensureEmojiStickers(): void {
 window.addEventListener('tg-emoji-doc-ready', (e) => {
   const { alt, docId } = (e as CustomEvent).detail || {};
   if (!alt || !docId) return;
-  if (emojiMap && emojiMap[alt] === String(docId)) return;
-  emojiMap = { ...(emojiMap || {}), [alt]: String(docId) };
-  rebuildDocAltIndex();
-  listeners.forEach((l) => l());
+  const id = String(docId);
+  if (!emojiMap) emojiMap = {};
+  if (emojiMap[alt] === id) return;
+  emojiMap[alt] = id;
+  indexEntry(alt, id);
+  emit([{ alt, docId: id }]);
 });
 
 window.addEventListener('tg-custom-emoji-alt', (e) => {
@@ -60,42 +76,28 @@ window.addEventListener('tg-custom-emoji-alt', (e) => {
   const id = String(docId);
   if (customAltMap[id] === alt) return;
   customAltMap[id] = alt;
-  listeners.forEach((l) => l());
+  emit([{ alt, docId: id }]);
 });
 
 window.addEventListener('tg-emoji-docs-ready', (e) => {
   const entries = (e as CustomEvent).detail?.entries;
   if (!Array.isArray(entries) || entries.length === 0) return;
-  let changed = false;
+  if (!emojiMap) emojiMap = {};
+  const changed: EmojiChange[] = [];
   for (const { alt, docId } of entries) {
     if (!alt || !docId) continue;
-    if (emojiMap && emojiMap[alt] === String(docId)) continue;
-    emojiMap = { ...(emojiMap || {}), [alt]: String(docId) };
-    changed = true;
+    const id = String(docId);
+    if (emojiMap[alt] === id) continue;
+    emojiMap[alt] = id;
+    indexEntry(alt, id);
+    changed.push({ alt, docId: id });
   }
-  if (changed) {
-    rebuildDocAltIndex();
-    listeners.forEach((l) => l());
-  }
+  if (changed.length > 0) emit(changed);
 });
-
-const STRIP_SEX = /[\u2642\u2640]/g;
-const SKIN_MOD = /\p{Emoji_Modifier}/gu;
 
 export function getEmojiDocId(alt: string): string | undefined {
   if (!emojiMap) return undefined;
-  const n = normalizeEmoji(alt);
-  if (emojiMap[n]) return emojiMap[n];
-  const isZWJ = alt.includes('\u200D') || n.includes('\u200D');
-  const base = Array.from(n.replace(STRIP_SEX, '').replace(SKIN_MOD, ''))[0];
-  if (!base) return undefined;
-  if (emojiMap[base]) return emojiMap[base];
-  if (!isZWJ) {
-    for (const k of Object.keys(emojiMap)) {
-      if (normalizeEmoji(k).startsWith(base)) return emojiMap[k];
-    }
-  }
-  return undefined;
+  return emojiMap[normalizeEmoji(alt)];
 }
 
 export function getEmojiList(): string[] {
@@ -106,14 +108,93 @@ export function getEmojiMapRef(): Record<string, string> | null {
   return emojiMap;
 }
 
-export function subscribeEmojiMap(cb: () => void): () => void {
+export function subscribeEmojiMap(cb: (changed?: EmojiChange[]) => void): () => void {
   if (emojiMap && Object.keys(emojiMap).length > 0) cb();
   listeners.add(cb);
   return () => listeners.delete(cb);
 }
 
+export function subscribeEmojiChanges(cb: (changed?: EmojiChange[]) => void): () => void {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+
+export interface EmojiPickerCategory {
+  name: string;
+  emojis: string[];
+}
+
+let pickerCategories: EmojiPickerCategory[] | null = null;
+let pickerKeywords: Array<{ keyword: string; emoticons: string[] }> = [];
+let pickerLoading = false;
+const pickerListeners = new Set<() => void>();
+
+export function ensureEmojiPicker(): void {
+  if (pickerCategories || pickerLoading) return;
+  pickerLoading = true;
+  const onReady = (e: Event) => {
+    pickerLoading = false;
+    const detail = (e as CustomEvent).detail || {};
+    const cats = detail.categories;
+    if (Array.isArray(detail.keywords)) pickerKeywords = detail.keywords;
+    if (Array.isArray(cats) && cats.length > 0) {
+      pickerCategories = cats;
+      pickerListeners.forEach((l) => l());
+    } else {
+      setTimeout(ensureEmojiPicker, 1500);
+    }
+  };
+  window.addEventListener('tg-emoji-picker-ready', onReady, { once: true });
+  window.dispatchEvent(new CustomEvent('tg-fetch-emoji-picker'));
+}
+
+export function getPickerCategories(): EmojiPickerCategory[] | null {
+  return pickerCategories;
+}
+
+export function subscribeEmojiPicker(cb: () => void): () => void {
+  if (pickerCategories) cb();
+  pickerListeners.add(cb);
+  return () => pickerListeners.delete(cb);
+}
+
+export function searchServerEmojis(query: string): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  if (q.length <= 2) {
+    const prefix = pickerKeywords.filter((k) => k.keyword.startsWith(q));
+    const out: string[] = [];
+    for (const k of prefix) {
+      for (const em of k.emoticons) {
+        if (!out.includes(em)) out.push(em);
+        if (out.length >= 40) return out;
+      }
+    }
+    return out;
+  }
+  const hits: string[] = [];
+  for (const k of pickerKeywords) {
+    if (!k.keyword.includes(q)) continue;
+    for (const em of k.emoticons) {
+      if (!hits.includes(em)) hits.push(em);
+      if (hits.length >= 40) return hits;
+    }
+  }
+
+  if (hits.length === 0 && pickerCategories) {
+    for (const c of pickerCategories) {
+      for (const em of c.emojis) {
+        if (!em.includes(q) && !q.includes(em)) continue;
+        if (!hits.includes(em)) hits.push(em);
+        if (hits.length >= 40) return hits;
+      }
+    }
+  }
+  return hits;
+}
+
 const BATCH_WINDOW_MS = 50;
-const BATCH_MAX_ITEMS = 50;
+const BATCH_MAX_ITEMS = 200;
 const pendingEmojiRequests = new Map<string, { docId?: string; alt?: string; priority: number }>();
 let emojiBatchTimer: ReturnType<typeof setTimeout> | null = null;
 

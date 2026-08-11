@@ -6,7 +6,7 @@ import { Avatar } from '../primitives/avatar.js';
 import { Flex } from '../primitives/flex.js';
 import { Button } from '../primitives/button.js';
 import { Text } from '../primitives/text.js';
-import { TgsPlayer } from './tgs-player.js';
+import { AnimatedSticker } from './animated-sticker.js';
 import { MessageBubble } from './message-bubble.js';
 import { Checkmark } from './checkmark.js';
 import { TypingIndicator } from './typing-indicator.js';
@@ -19,14 +19,19 @@ import { t } from '../locale.js';
 import { S } from '../strings.js';
 import { flushEmojiBatch, getEmojiDocId, matchEmojiRuns } from './emoji-store.js';
 import { releaseEmojiCache } from './emoji-canvas.js';
+import { observeVisibility } from './emoji-canvas.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
-import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, hexToDataUrl, hexToBytes, strippedToDataUrl, isAnimatedMedia } from '../utils.js';
+import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb } from '../utils.js';
 import { MediaPlayer } from './media-player.js';
 import { VideoMessage } from './video-message.js';
 import { PhotoLoader } from './photo-loader.js';
 import { WebPageBubble } from './link-preview.js';
+import { MediaCollage, type MediaCollageItem } from './media-collage.js';
+import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
+import { EmojiText } from './emoji-text.js';
+import { buildImageSpec, firstMissingSizeType, CHAT_PHOTO_PRIO } from './photo-spec.js';
 
-const DEBUG = typeof window !== 'undefined' && (window as any).__GRAM_DEBUG__ === true;
+const DEBUG = false;
 
 function toFileSize(bytes?: number): string {
   if (!bytes) return '';
@@ -37,51 +42,67 @@ function toFileSize(bytes?: number): string {
 
 const EMPTY_CHAT_MSG_ID = 'empty-chat';
 
-const EMOJI_MEMORY_LIMIT = 60;
+const EMOJI_MEMORY_LIMIT = 200;
+
+const EMOJI_KEEP_MARGIN = 2;
 
 function isEmojiKey(k: string): boolean {
   return k.startsWith('emojipack-') || k.startsWith('emoji-');
 }
 
-function scheduleEmojiRevoke(urls: Record<string, string>, keys: string[]) {
-  setTimeout(() => {
-    for (const k of keys) {
-      try { URL.revokeObjectURL(urls[k]); } catch {}
+function getAlbumGroupId(m: any): number | string | null {
+  if (m == null) return null;
+  const id = (m.groupedId ?? m.grouped_id) as number | string | undefined;
+  return id != null ? String(id) : null;
+}
+
+interface AlbumRow {
+  msgs: any[];
+  key: string;
+}
+
+function isAlbumMedia(m: any): boolean {
+  const t = getMediaType(m.media);
+  return t === 'photo' || t === 'video';
+}
+
+function buildAlbumRows(msgs: any[]): AlbumRow[] {
+  const rows: AlbumRow[] = [];
+  let i = 0;
+  while (i < msgs.length) {
+    const m = msgs[i];
+    const gid = getAlbumGroupId(m);
+    if (gid == null || !isAlbumMedia(m)) {
+      rows.push({ msgs: [m], key: String(m.id) });
+      i++;
+      continue;
     }
-  }, 3000);
+    const list = [m];
+    let j = i + 1;
+    while (j < msgs.length) {
+      const next = msgs[j];
+      if (getAlbumGroupId(next) === gid && isAlbumMedia(next)) {
+        list.push(next);
+        j++;
+      } else break;
+    }
+    rows.push({ msgs: list, key: String(m.id) });
+    i = j;
+  }
+  return rows;
 }
 
 function GreetingSticker({ documentUrls }: { documentUrls: Record<number, string> }) {
-  const [tgsData, setTgsData] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
   const url = (documentUrls as any)[EMPTY_CHAT_MSG_ID] || '';
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('tg-fetch-greeting-sticker'));
   }, []);
 
-  useEffect(() => {
-    if (!url) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const resp = await fetch(url);
-        const text = await resp.text();
-        console.log('[TGS_LOG] GreetingSticker: fetched', { len: text.length, preview: text.slice(0, 80) });
-        if (!cancelled) setTgsData(text);
-      } catch (e) {
-        console.log('[TGS_LOG] GreetingSticker: fetch error', e);
-        if (!cancelled) setFailed(true);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [url]);
-
-  if (failed) return null;
-  if (!tgsData) {
+  if (!url) {
     return <div class="tgui-greeting-sticker-loading" />;
   }
-  return <TgsPlayer animationData={tgsData} width={180} height={180} loop autoplay />;
+  return <AnimatedSticker tgsUrl={url} renderId="greeting-sticker" size={180} />;
 }
 
 function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; documentUrls: Record<number, string>; documentProgress?: Record<number, number> }) {
@@ -93,12 +114,20 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
   const isLoading = !url && progress >= 0 && progress < 100;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [visible, setVisible] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [animFailed, setAnimFailed] = useState(false);
   const [attachTick, setAttachTick] = useState(0);
 
   const handleRef = useCallback((el: HTMLDivElement | null) => {
     rootRef.current = el;
     setAttachTick(t => t + 1);
   }, []);
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    return observeVisibility(el, 80, (v) => setPlaying(v));
+  }, [attachTick]);
 
   useEffect(() => {
     if (visible) return;
@@ -118,51 +147,32 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
     if (!visible) return;
     if (url) return;
     window.dispatchEvent(new CustomEvent('tg-download-document', {
-      detail: { document: doc, messageId: m.id, priority: 0 },
+      detail: { document: doc, messageId: m.id, priority: 1 },
     }));
   }, [visible, url, doc, m.id]);
 
-  const [tgsData, setTgsData] = useState<string | null>(null);
-  const [tgsReady, setTgsReady] = useState(false);
   useEffect(() => {
-    if (!url || !isTgs) {
-      if (url) console.log('[TGS_LOG] StickerBubble: not tgs, url=', url.slice(0, 50));
-      setTgsData(null); setTgsReady(false); return;
-    }
-    if (tgsReady) { console.log('[TGS_LOG] StickerBubble: already ready'); return; }
-    console.log('[TGS_LOG] StickerBubble: fetching tgs url', url.slice(0, 60), 'msgId=', m.id);
-    let cancelled = false;
-    (async () => {
-      try {
-        const resp = await fetch(url);
-        const text = await resp.text();
-        console.log('[TGS_LOG] StickerBubble: fetched', { len: text.length, preview: text.slice(0, 80) });
-        if (!cancelled) { setTgsData(text); setTgsReady(true); }
-      } catch (e) {
-        console.log('[TGS_LOG] StickerBubble: fetch error', e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [url, isTgs, tgsReady, m.id]);
+    setAnimFailed(false);
+  }, [url]);
 
-  if (DEBUG) console.log('[TGS_LOG] StickerBubble render', { mid: m.id, url: url ? url.slice(0, 40) : 'none', isTgs, tgsReady: !!tgsData, visible, isLoading });
-
-  const showTgs = isTgs && tgsData;
+  const renderId = 'sticker-' + String(doc?.id || m.id);
+  const showTgs = isTgs && !!url && !animFailed;
   const showImg = !isTgs && url;
+  const staticThumb = !showTgs ? buildDocumentThumb(doc) : null;
 
   return (
     <div class="tgui-sticker" ref={handleRef}>
       <div class="tgui-sticker-preview" style={{ width: '150px', height: '150px', position: 'relative' }}>
         {showTgs
-          ? <TgsPlayer animationData={tgsData} width={150} height={150} loop autoplay />
+          ? <AnimatedSticker tgsUrl={url} renderId={renderId} size={150} noPlay={!playing} onError={() => setAnimFailed(true)} />
           : showImg
             ? <img src={url} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             : isLoading
               ? <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
                   <div style={`width:${progress}%;height:4px;background:#fff;border-radius:2px`} />
                 </div>
-              : isTgs && url
-                ? <div style="position:absolute;inset:0" />
+              : staticThumb?.url
+                ? <img src={staticThumb.url} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                 : <span class="tgui-sticker-emoji">{emoji || t(S.STICKER_FALLBACK)}</span>
         }
       </div>
@@ -174,94 +184,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
   );
 }
 
-function sizeUrl(s: any): string {
-  let url = s.src || s.url || '';
-  if (!url && s._ === 'photoStrippedSize' && s.bytes?.length > 3) {
-    try { url = strippedToDataUrl(s.bytes); } catch {}
-    return url;
-  }
-  if (!url && s.bytes?.length > 40) {
-    const bytes = typeof s.bytes === 'string' ? s.bytes : Array.from(new Uint8Array(s.bytes as ArrayBufferLike), b => b.toString(16).padStart(2, '0')).join('');
-    try { url = hexToDataUrl(bytes); } catch {}
-  }
-  return url;
-}
-
-function sizeDim(s: any): { w: number; h: number } {
-  let w = s.w || s.width || 0;
-  let h = s.h || s.height || 0;
-  if (!w && !h && s._ === 'photoStrippedSize' && s.bytes?.length > 2) {
-    const b = s.bytes;
-    const bytes = typeof b === 'string' ? hexToBytes(b) : new Uint8Array(b as ArrayBufferLike);
-    if (bytes[0] === 0x01) { w = bytes[2]; h = bytes[1]; }
-  }
-  return { w, h };
-}
-
-function buildImageSpec(m: any): ImageSpec | null {
-  const media = m.media;
-  if (!media) return null;
-  const photo = media.photo;
-  if (!photo) { console.debug('[buildImageSpec] no photo in message', m.id); return null; }
-
-  const sizes = photo.sizes || [];
-  if (sizes.length === 0) { console.debug('[buildImageSpec] no sizes', m.id, photo._); return null; }
-
-  let maxW = 0, maxH = 0;
-  for (const s of sizes) {
-    const { w, h } = sizeDim(s);
-    if (w > maxW) { maxW = w; maxH = h; }
-  }
-  let w = photo.w || photo.width || maxW || 0;
-  let h = photo.h || photo.height || maxH || 0;
-  if (!w || !h) return null;
-
-  let thumb: ImageSpec['thumbnail'];
-  let medium: ImageSpec['medium'];
-  let original: ImageSpec['original'];
-
-  for (const s of sizes) {
-    const type = s.type || '';
-    const { w: sw, h: sh } = sizeDim(s);
-    const src = sizeUrl(s);
-    if (!src && !s.url && !s.src) {
-      if (DEBUG) console.log('[buildImageSpec] size needs download', m.id, type, s._);
-    }
-    if (src) {
-      if (DEBUG) console.log('[buildImageSpec] size HAS url', m.id, type, 'url len:', src.length);
-    }
-    if (!src || !sw || !sh) continue;
-
-    const srcData: ImageSpec['thumbnail'] = { url: src, width: sw, height: sh };
-
-    if (type === 'm') {
-      if (!medium) medium = srcData;
-    } else if (type === 'x' || type === 'y' || type === 'w' || type === 'v' || type === 'u') {
-      original = srcData;
-    } else if (!thumb) {
-      thumb = srcData;
-    }
-  }
-
-  if (!thumb && sizes.length > 0) {
-    const s = sizes[0];
-    const src = sizeUrl(s);
-    const { w: sw, h: sh } = sizeDim(s);
-    if (src && sw && sh) thumb = { url: src, width: sw, height: sh };
-  }
-  if (!original && medium) original = medium;
-
-  return {
-    id: String(photo.id || m.id),
-    thumbnail: thumb,
-    medium,
-    original,
-    width: w,
-    height: h,
-  };
-}
-
-function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, cacheSource }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; sameSenderPrev?: boolean; sameSenderNext?: boolean; cacheSource?: string }) {
+function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, cacheSource, entities, documentUrls, onOpenPhoto }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; sameSenderPrev?: boolean; sameSenderNext?: boolean; cacheSource?: string; entities?: any[]; documentUrls?: Record<number, string>; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
   let cls = 'MessageBubble MessageBubble_photo';
   cls += out ? ' MessageBubble_out' : ' MessageBubble_in';
   if (sameSenderPrev) cls += ' MessageBubble_group_prev';
@@ -278,54 +201,40 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
 
   const imgWidth = imgSpec ? Math.min(imgSpec.width || 320, 320) : 0;
 
+  const photoSizes = m.media?.photo?.sizes;
+  const hasAnyUrl = Array.isArray(photoSizes) && photoSizes.some((s: any) => !!(s.url || s.src));
+  if (DEBUG) {
+    console.log('[PhotoBubble] render', m.id, 'photoSizes:', Array.isArray(photoSizes) ? photoSizes.length : photoSizes, 'hasAnyUrl:', hasAnyUrl, 'imgSpec urls:', imgSpec ? { t: !!imgSpec.thumbnail?.url, m: !!imgSpec.medium?.url, o: !!imgSpec.original?.url } : 'null');
+  }
+
   const obsRef = useRef<IntersectionObserver | null>(null);
-  const visibleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const timer = setTimeout(() => {
       const el = document.getElementById(`msg-${m.id}`);
-      if (!el) return;
+      if (!el) { if (DEBUG) console.log('[PhotoBubble] NO ELEMENT msg-' + m.id); return; }
       const obs = new IntersectionObserver(([entry]) => {
         if (entry.isIntersecting) {
-          if (visibleTimerRef.current) return;
-          visibleTimerRef.current = setTimeout(() => {
-            visibleTimerRef.current = null;
-            obs.disconnect();
-            if (!m.media?.photo?.sizes) return;
-            const prio = ['x', 'y', 'w', 'v', 'u', 'm'];
-            let best: any;
-            for (const t of prio) {
-              best = m.media.photo.sizes.find((s: any) => s.type === t && !s.url && !s.src);
-              if (best) break;
-            }
-            if (best) {
-              window.dispatchEvent(new CustomEvent('tg-download-photo', {
-                detail: { photo: m.media.photo, sizeType: best.type, messageId: m.id },
-              }));
-            }
-          }, 200);
-        } else if (visibleTimerRef.current) {
-          clearTimeout(visibleTimerRef.current);
-          visibleTimerRef.current = null;
+          const need = firstMissingSizeType(m.media?.photo, CHAT_PHOTO_PRIO);
+          if (DEBUG) console.log('[PhotoBubble] obs intersect', m.id, 'need:', need?.sizeType || null);
+          if (need) {
+            window.dispatchEvent(new CustomEvent('tg-download-photo', {
+              detail: { photo: m.media.photo, sizeType: need.sizeType, messageId: m.id },
+            }));
+          }
         }
-      }, { rootMargin: '0px' });
+      }, { rootMargin: '200px' });
       obsRef.current = obs;
       obs.observe(el);
     }, 0);
     return () => {
       clearTimeout(timer);
-      if (visibleTimerRef.current) {
-        clearTimeout(visibleTimerRef.current);
-        visibleTimerRef.current = null;
-      }
       if (obsRef.current) {
         obsRef.current.disconnect();
         obsRef.current = null;
       }
     };
-  }, [m.id]);
+  }, [m.id, hasAnyUrl]);
 
-  const photoSizes = m.media?.photo?.sizes;
-  const hasAnyUrl = Array.isArray(photoSizes) && photoSizes.some((s: any) => !!(s.url || s.src));
   const progress = m.media?.photo?.progress;
   const pct = progress !== undefined ? progress : 0;
   const fileSize = toFileSize(m.media?.photo?.size);
@@ -338,7 +247,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
     <div class={cls} style={imgWidth ? `width:${imgWidth}px` : ''}>
       <div class={mediaCls}>
         {imgSpec ? (
-          <TelegramImage image={imgSpec} maxWidth={320} lazy={false} />
+          <TelegramImage image={imgSpec} maxWidth={320} lazy={false} onOpenViewer={onOpenPhoto ? () => onOpenPhoto(imgSpec, 0) : undefined} />
         ) : (
           t(S.PHOTO_PLACEHOLDER)
         )}
@@ -353,11 +262,18 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
             {cacheSource === 'memory' ? 'in-memory' : cacheSource === 'persisted' ? 'gram-db' : cacheSource === 'cdn-server' ? 'cdn-server' : cacheSource === 'migrate-server' ? 'migrate-server' : 'home-server'}
           </span>
         ) : null}
-        <div class="MessageBubble__meta MessageBubble__meta_overlay">
-          <span class="MessageBubble__time">{timeStr}</span>
-          {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
-        </div>
+        {!m.message ? (
+          <div class="MessageBubble__meta MessageBubble__meta_overlay">
+            <span class="MessageBubble__time">{timeStr}</span>
+            {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
+          </div>
+        ) : null}
       </div>
+      {m.message ? <div class="MessageBubble__text"><EmojiText text={m.message} entities={entities} documentUrls={documentUrls || {}} /></div> : null}
+      {m.message ? <div class="MessageBubble__meta">
+        <span class="MessageBubble__time">{timeStr}</span>
+        {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
+      </div> : null}
     </div>
   );
 }
@@ -391,6 +307,7 @@ function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrl
     const isLoading = !url && progress >= 0 && progress < 100;
     const rootRef = useRef<HTMLDivElement | null>(null);
     const [visible, setVisible] = useState(false);
+    const [playing, setPlaying] = useState(false);
     const [attachTick, setAttachTick] = useState(0);
     const fetchRef = useRef(false);
 
@@ -398,6 +315,12 @@ function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrl
       rootRef.current = el;
       setAttachTick(t => t + 1);
     }, []);
+
+    useEffect(() => {
+      const el = rootRef.current;
+      if (!el || typeof IntersectionObserver === 'undefined') return;
+      return observeVisibility(el, 80, (v) => setPlaying(v));
+    }, [attachTick]);
 
     useEffect(() => {
       if (visible) return;
@@ -429,42 +352,20 @@ function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrl
       }));
     }, [visible, url, isPremiumGift, premiumDays, stickerDoc, m.id]);
 
-    const [tgsData, setTgsData] = useState<string | null>(null);
-    const [tgsReady, setTgsReady] = useState(false);
-    useEffect(() => {
-      if (!url || !isTgs) {
-        if (url) console.log('[TGS_LOG] GiftBubble: not tgs');
-        setTgsData(null); setTgsReady(false); return;
-      }
-      if (tgsReady) return;
-      console.log('[TGS_LOG] GiftBubble: fetching tgs url', url.slice(0, 60));
-      let cancelled = false;
-      (async () => {
-        try {
-          const resp = await fetch(url);
-          const text = await resp.text();
-          console.log('[TGS_LOG] GiftBubble: fetched', { len: text.length, preview: text.slice(0, 80) });
-          if (!cancelled) { setTgsData(text); setTgsReady(true); }
-        } catch (e) { console.log('[TGS_LOG] GiftBubble: fetch error', e); }
-      })();
-      return () => { cancelled = true; };
-    }, [url, isTgs, tgsReady]);
-
-    const showTgsGift = (isTgs && tgsData) || (isPremiumGift && url && tgsData);
+    const giftRenderId = 'gift-' + String(stickerDoc?.id || m.id);
+    const showTgsGift = isTgs && url;
 
     return (
       <div class="tgui-service-msg" ref={handleRef}>
         {showTgsGift
-          ? <>
-              <TgsPlayer animationData={tgsData} width={100} height={100} loop autoplay />
-              {isPremiumGift ? <span class="tgui-gift-label">🎁 {premiumMonthsLabel(action, t)}</span> : null}
-            </>
+          ? <AnimatedSticker tgsUrl={url} renderId={giftRenderId} size={100} noPlay={!playing} />
           : !isTgs && url
             ? <img src={url} style={{ width: 100, height: 100, objectFit: 'contain' }} />
             : url && isTgs
               ? <div style="width:100px;height:100px" />
               : <span>🎁 {isLoading ? t(S.GIFT_LOADING) : t(S.GIFT_DEFAULT)}</span>
         }
+        {isPremiumGift && showTgsGift ? <span class="tgui-gift-label">🎁 {premiumMonthsLabel(action, t)}</span> : null}
       </div>
     );
   }
@@ -508,7 +409,7 @@ function isGiftMessage(action: any): boolean {
   return t.startsWith('messageActionGift');
 }
 
-function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, selfPeer, reactions, onReact }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; selfPeer?: boolean; reactions?: MessageReaction[]; onReact?: (emoji: string, adding: boolean) => void }) {
+function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, selfPeer, reactions, onReact, onOpenPhoto }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; selfPeer?: boolean; reactions?: MessageReaction[]; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
   const timeStr = formatMessageTime(m.date);
   const out = selfPeer ? true : m.out;
   const status = msgStatus(m, readOutboxMaxId);
@@ -546,7 +447,7 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
       {mediaType === 'sticker'
         ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} documentUrls={rowUrls} documentProgress={rowProgress} />
         : mediaType === 'photo' || mediaType === 'image'
-          ? <PhotoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} cacheSource={photoSource} />
+          ? <PhotoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} cacheSource={photoSource} entities={m.entities} documentUrls={rowUrls} onOpenPhoto={onOpenPhoto} />
           : mediaType === 'video' && isAnimatedMedia(m.media)
             ? <MediaPlayer m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} />
           : mediaType === 'video'
@@ -564,12 +465,41 @@ const MessageItemMemo = memo(MessageItem as any);
 export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; dispatch: Dispatch; skills?: SkillDef[] }) {
   const peer = state.selectedPeer;
   const [visRange, setVisRange] = useState<[number, number]>([0, 0]);
+  const [viewer, setViewer] = useState<{ items: MediaViewerItem[]; index: number } | null>(null);
+
+  const handlerCacheRef = useRef(new Map<string, { onReact: (emoji: string, adding: boolean) => void; onOpenPhoto: (image: ImageSpec) => void }>());
+  const handlerPeerKey = peer?.id != null ? String(peer.id) : '';
+  useEffect(() => {
+    handlerCacheRef.current = new Map();
+  }, [handlerPeerKey]);
+  const getRowHandlers = (msgId: number): { onReact: (emoji: string, adding: boolean) => void; onOpenPhoto: (image: ImageSpec) => void } => {
+    const key = handlerPeerKey + ':' + msgId;
+    let h = handlerCacheRef.current.get(key);
+    if (!h) {
+      h = {
+        onReact: (emoji, adding) => {
+          dispatch({ type: 'TOGGLE_REACTION', messageId: msgId, emoji });
+          window.dispatchEvent(new CustomEvent('tg-emoji-reaction', { detail: { messageId: msgId, emoji, adding } }));
+        },
+        onOpenPhoto: (image) => setViewer({ items: [{ kind: 'photo', m: null, image }], index: 0 }),
+      };
+      handlerCacheRef.current.set(key, h);
+    }
+    return h;
+  };
+
+  const handleVisibleRangeChange = useCallback((start: number, end: number) => {
+    setVisRange([start, end]);
+  }, []);
+  const handleNearTop = useCallback(() => {
+    dispatch({ type: 'LOAD_MORE' });
+  }, [dispatch]);
 
   useEffect(() => {
     setVisRange([0, 0]);
+    setViewer(null);
   }, [peer?.id]);
 
-  // Pause emoji animations while the chat switch transition is running.
   useEffect(() => {
     if (!peer?.id) return undefined;
     return beginHeavyAnimation(600);
@@ -577,11 +507,17 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
 
   useEffect(() => {
     const msgs = Array.isArray(state.messages) ? state.messages : [];
+    const rows = buildAlbumRows(msgs);
+    const [rs, re] = visRange;
+    const from = Math.max(0, rs - EMOJI_KEEP_MARGIN);
+    const to = Math.min(rows.length, re + EMOJI_KEEP_MARGIN);
     const customIds: string[] = [];
-    for (const m of msgs) {
-      if (!m || m.media) continue;
-      for (const e of (m.entities || [])) {
-        if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) customIds.push(String(e.document_id));
+    for (let i = from; i < to; i++) {
+      for (const m of rows[i].msgs) {
+        if (!m) continue;
+        for (const e of (m.entities || [])) {
+          if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) customIds.push(String(e.document_id));
+        }
       }
     }
     if (customIds.length > 0) {
@@ -591,33 +527,34 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   }, [peer?.id, state.messages, visRange]);
 
   useEffect(() => {
-    const urls: Record<string, string> = (state.documentUrls || {}) as any;
-    const drop: string[] = [];
-    for (const k of Object.keys(urls)) {
-      if (isEmojiKey(k) || k === 'empty-chat') drop.push(k);
-    }
-    if (drop.length === 0) return;
-    dispatch({ type: 'CLEAR_EMOJI_DOCUMENTS', keys: drop });
-    window.dispatchEvent(new CustomEvent('tg-release-emoji-urls', { detail: { all: true } }));
-    releaseEmojiCache(drop.map((k) => urls[k]));
-    scheduleEmojiRevoke(urls, drop);
+    const urls = (state.documentUrls || {}) as Record<string, string>;
+    const url = urls['empty-chat'];
+    if (!url) return;
+    dispatch({ type: 'CLEAR_EMOJI_DOCUMENTS', keys: ['empty-chat'] });
+    releaseEmojiCache([url]);
+    window.dispatchEvent(new CustomEvent('tg-emoji-url-revoked', { detail: { url } }));
+    try { URL.revokeObjectURL(url); } catch {}
   }, [peer?.id]);
 
   useEffect(() => {
     const urls: Record<string, string> = (state.documentUrls || {}) as any;
     const msgs = Array.isArray(state.messages) ? state.messages : [];
+    const rows = buildAlbumRows(msgs);
     const [rs, re] = visRange;
     const keep = new Set<string>();
-    for (let i = rs; i < re && i < msgs.length; i++) {
-      const m = msgs[i];
-      if (!m || m.media) continue;
-      for (const e of (m.entities || [])) {
-        if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) keep.add(String(e.document_id));
-      }
-      if (m.message) {
-        for (const r of matchEmojiRuns(m.message)) {
-          const docId = getEmojiDocId(r.emoji);
-          if (docId) keep.add(docId);
+    const from = Math.max(0, rs - EMOJI_KEEP_MARGIN);
+    const to = Math.min(rows.length, re + EMOJI_KEEP_MARGIN);
+    for (let i = from; i < to; i++) {
+      for (const m of rows[i].msgs) {
+        if (!m) continue;
+        for (const e of (m.entities || [])) {
+          if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) keep.add(String(e.document_id));
+        }
+        if (m.message) {
+          for (const r of matchEmojiRuns(m.message)) {
+            const docId = getEmojiDocId(r.emoji);
+            if (docId) keep.add(docId);
+          }
         }
       }
     }
@@ -633,11 +570,14 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
       excess--;
     }
     if (drop.length === 0) return;
-    const released = drop.map((k) => k.slice(k.indexOf('-') + 1));
     dispatch({ type: 'CLEAR_EMOJI_DOCUMENTS', keys: drop });
-    window.dispatchEvent(new CustomEvent('tg-release-emoji-urls', { detail: { docIds: released } }));
-    releaseEmojiCache(drop.map((k) => urls[k]));
-    scheduleEmojiRevoke(urls, drop);
+    for (const k of drop) {
+      const u = urls[k];
+      if (!u) continue;
+      releaseEmojiCache([u]);
+      window.dispatchEvent(new CustomEvent('tg-emoji-url-revoked', { detail: { url: u } }));
+      try { URL.revokeObjectURL(u); } catch {}
+    }
   }, [visRange, state.messages, state.documentUrls]);
 
   if (state.activeSkill) {
@@ -674,12 +614,13 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   const msgListChildren: any[] = [];
   const msgs = Array.isArray(state.messages) ? state.messages : [];
   const isGroup = (state.selectedPeer as any)?.type === 'chat';
+  const rows = buildAlbumRows(msgs);
 
   const readInboxMaxId = currentDialog?.readInboxMaxId;
-  const firstUnreadIdx = readInboxMaxId != null
-    ? msgs.findIndex(m => !m.out && Number(m.id) > readInboxMaxId)
+  const firstUnreadRowIdx = readInboxMaxId != null
+    ? rows.findIndex(row => row.msgs.some(m => !m.out && Number(m.id) > readInboxMaxId))
     : -1;
-  const hasUnread = firstUnreadIdx >= 0 && (currentDialog?.unreadCount ?? 0) > 0;
+  const hasUnread = firstUnreadRowIdx >= 0 && (currentDialog?.unreadCount ?? 0) > 0;
 
   const hasMessages = msgs.length > 0;
 
@@ -719,33 +660,95 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
           key={`msg-list-${peer.id}`}
           id="tg-msg-list-content"
           className="tgui-msg-list"
-          data={msgs}
+          data={rows}
           estimatedItemHeight={48}
           startAtBottom={!hasUnread}
-          keyExtractor={(m: any) => String(m.id)}
-          scrollToKey={hasUnread ? String(msgs[firstUnreadIdx]?.id) : undefined}
-          topLoader={state.loadingMessages && msgs.length > 0 ? <Spinner size="small" /> : null}
-          renderItem={({ item: m, index: i }: { item: any; index: number }) => {
-            const sameSenderPrev = i > 0 && msgs[i - 1].out === m.out && msgs[i - 1].sender === m.sender && msgs[i - 1].date - m.date < 300;
-            const sameSenderNext = i < msgs.length - 1 && msgs[i + 1].out === m.out && msgs[i + 1].sender === m.sender && m.date - msgs[i + 1].date < 300;
-            const showDaySep = !!m.date && (i === 0 || !msgs[i - 1].date || new Date(m.date * 1000).toDateString() !== new Date(msgs[i - 1].date * 1000).toDateString());
-            const emojiUrls = !m.media ? (state.documentUrls || {}) : undefined;
+          keyExtractor={(row: AlbumRow) => row.key}
+          scrollToKey={hasUnread ? rows[firstUnreadRowIdx]?.key : undefined}
+          topLoader={state.loadingMessages && rows.length > 0 ? <Spinner size="small" /> : null}
+          renderItem={({ item: row, index: i }: { item: AlbumRow; index: number }) => {
+            const m = row.msgs[0];
+            const isAlbum = row.msgs.length > 1;
+            const prevRow = rows[i - 1];
+            const nextRow = rows[i + 1];
+            const prevM = prevRow ? prevRow.msgs[prevRow.msgs.length - 1] : undefined;
+            const nextM = nextRow ? nextRow.msgs[0] : undefined;
+            const sameSenderPrev = prevM && prevM.out === m.out && prevM.sender === m.sender && prevM.date - m.date < 300;
+            const sameSenderNext = nextM && nextM.out === m.out && nextM.sender === m.sender && m.date - nextM.date < 300;
+            const showDaySep = !!m.date && (i === 0 || !prevM?.date || new Date(m.date * 1000).toDateString() !== new Date(prevM.date * 1000).toDateString());
+            const emojiUrls = state.documentUrls || {};
             const msgReactions = state.reactions?.[m.id];
-            const onReact = (emoji: string, adding: boolean) => {
-              dispatch({ type: 'TOGGLE_REACTION', messageId: m.id, emoji });
-              window.dispatchEvent(new CustomEvent('tg-emoji-reaction', { detail: { messageId: m.id, emoji, adding } }));
-            };
+            const { onReact, onOpenPhoto } = getRowHandlers(m.id);
+            const daySep = showDaySep ? <div key={`day-${m.id}`} class="tgui-day-sep"><Text variant="caption" className="tgui-day-sep-text">{formatDaySeparator(m.date)}</Text></div> : null;
+            if (isAlbum) {
+              const items: MediaCollageItem[] = row.msgs.map(mm => {
+                if (getMediaType(mm.media) === 'video') {
+                  const doc = mm.media?.document;
+                  const vattr = Array.isArray(doc?.attributes) ? doc.attributes.find((a: any) => a._ === 'documentAttributeVideo') : null;
+                  const thumb = buildDocumentThumb(doc);
+                  return {
+                    m: mm,
+                    image: null,
+                    video: {
+                      duration: vattr?.duration || 0,
+                      w: vattr?.w || 0,
+                      h: vattr?.h || 0,
+                      thumbUrl: thumb?.url || '',
+                    },
+                  };
+                }
+                return { m: mm, image: buildImageSpec(mm), cacheSource: state.photoSources?.[mm.id] };
+              });
+              const viewerItems: MediaViewerItem[] = row.msgs.map(mm => {
+                if (getMediaType(mm.media) === 'video') {
+                  const thumb = buildDocumentThumb(mm.media?.document);
+                  return { kind: 'video', m: mm, thumbUrl: thumb?.url || '' };
+                }
+                const img = buildImageSpec(mm);
+                return img ? { kind: 'photo', m: mm, image: img } : null;
+              }).filter((x): x is MediaViewerItem => !!x);
+              const last = row.msgs[row.msgs.length - 1];
+              const out = m.out;
+              const status = msgStatus(last, readOutboxMaxId);
+              const timeStr = formatMessageTime(last.date || m.date);
+              const openAlbum = (at: number) => {
+                if (viewerItems.length > 0) setViewer({ items: viewerItems, index: Math.min(at, viewerItems.length - 1) });
+              };
+              return (
+                <div>
+                  {daySep}
+                  <div id={`msg-${m.id}`} class={`tgui-msg-row ${out ? 'tgui-msg-row-out' : 'tgui-msg-row-in'}`} style="margin-bottom:8px">
+                    {isGroup && !out && !sameSenderPrev
+                      ? <div class="tgui-msg-sender" style={`color:${senderColor(m.sender || 'U')}`}>{m.sender}</div>
+                      : null}
+                    <div class="MessageBubble MessageBubble_photo MessageBubble_album">
+                      <MediaCollage items={items} timeStr={timeStr} status={status} caption={last.message || ''} captionEntities={last.entities} captionDocumentUrls={emojiUrls} onOpenAt={openAlbum} />
+                    </div>
+                  </div>
+                </div>
+              );
+            }
             return (
               <div>
-                {showDaySep ? <div key={`day-${m.id}`} class="tgui-day-sep"><Text variant="caption" className="tgui-day-sep-text">{formatDaySeparator(m.date)}</Text></div> : null}
-                <MessageItemMemo m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrl={state.documentUrls?.[m.id] || ''} progress={state.documentProgress?.[m.id]} documentSource={state.documentSources?.[m.id]} photoSource={state.photoSources?.[m.id]} emojiUrls={emojiUrls} selfPeer={selfPeer} reactions={msgReactions} onReact={onReact} />
+                {daySep}
+                <MessageItemMemo m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrl={state.documentUrls?.[m.id] || ''} progress={state.documentProgress?.[m.id]} documentSource={state.documentSources?.[m.id]} photoSource={state.photoSources?.[m.id]} emojiUrls={emojiUrls} selfPeer={selfPeer} reactions={msgReactions} onReact={onReact} onOpenPhoto={onOpenPhoto} />
               </div>
             );
           }}
-          onVisibleRangeChange={(start, end) => setVisRange([start, end])}
-          onNearTop={() => dispatch({ type: 'LOAD_MORE' })}
+          onVisibleRangeChange={handleVisibleRangeChange}
+          onNearTop={handleNearTop}
         />
       ) : msgListChildren}
+      {viewer ? (
+        <MediaViewer
+          items={viewer.items}
+          index={viewer.index}
+          documentUrls={state.documentUrls || {}}
+          getMessage={(id) => state.messages.find(mm => mm.id === id) || null}
+          onClose={() => setViewer(null)}
+          onNavigate={(idx) => setViewer(v => v ? { ...v, index: idx } : v)}
+        />
+      ) : null}
     </div>
   );
 }

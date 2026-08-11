@@ -1,6 +1,5 @@
 import type { CubicBezierEasing, TgsEasing } from './types.js';
 
-// rlottie vinterpolator.h: enum { kSplineTableSize = 11 }
 const SAMPLE_TABLE_SIZE = 11;
 const NEWTON_ITERATIONS = 4;
 const NEWTON_MIN_SLOPE = 0.02;
@@ -23,11 +22,6 @@ function getSlope(t: number, a1: number, a2: number): number {
     return (3 * a * t + 2 * b) * t + c;
 }
 
-/**
- * Port of rlottie's VInterpolator (src/vector/vinterpolator.cpp).
- * Cubic bezier easing in time domain: P0=(0,0), P1=(x1,y1), P2=(x2,y2), P3=(1,1).
- * `value(t)` returns the eased progress for the given linear progress t.
- */
 export class CubicBezier {
     private readonly x1: number;
     private readonly y1: number;
@@ -112,12 +106,6 @@ export class CubicBezier {
 
 const interpolatorCache = new Map<string, CubicBezier>();
 
-/**
- * rlottie caches VInterpolator instances keyed by tangent values
- * (lottieparser.cpp: mInterpolatorCache). Same here.
- * Tangent components are used as-is (rlottie does not normalize 0-100
- * values; parseInperpolatorPoint leaves missing x/y at 0).
- */
 export function buildEasing(o?: TgsEasing, i?: TgsEasing): CubicBezierEasing | undefined {
     if (!o && !i) return undefined;
     const x1 = Number(o?.x?.[0] ?? 0);
@@ -128,11 +116,6 @@ export function buildEasing(o?: TgsEasing, i?: TgsEasing): CubicBezierEasing | u
     return { x1, y1, x2, y2 };
 }
 
-/**
- * Applies cubic bezier easing to linear progress `t`. `easing` is plain
- * data (structured-clone safe); the interpolator is built and cached
- * internally on first use.
- */
 export function easingValue(easing: CubicBezierEasing, t: number): number {
     const { x1, y1, x2, y2 } = easing;
     const key = [x1, y1, x2, y2].map((v) => v.toFixed(4)).join('_');

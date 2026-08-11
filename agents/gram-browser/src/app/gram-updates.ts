@@ -78,6 +78,7 @@ export function createHandleUpdate(s: GramState) {
             sender,
             date: msg.date || 0, message: msg.message || '',
             out: !!msg.out, peerId: msg.peer_id, media: msg.media, action: msg.action, entities: msg.entities,
+            groupedId: msg.grouped_id,
           };
           if (fromType === 'peerUser' && uid && !s.userNameMap.current.has(uid)) {
             fetchPeerInfo(s, 'user', uid);

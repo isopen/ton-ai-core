@@ -1,9 +1,11 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
-import { EmojiCanvas, fetchEmojiData } from './emoji-canvas.js';
+import { EmojiCanvas, StaticEmojiText, fetchEmojiData } from './emoji-canvas.js';
 import type { EmojiSegment } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
-import { ensureEmojiStickers, getEmojiAlt, getEmojiDocId, matchEmojiRuns, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
+import { ensureEmojiStickers, getEmojiAlt, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
+
+const TGS_DEBUG = false;
 
 export { releaseEmojiCache } from './emoji-canvas.js';
 
@@ -43,7 +45,7 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true }: { 
         const next = await fetchEmojiData(url);
         if (!cancelled) setData(next);
       } catch (e) {
-        console.log('[TGS_LOG] EmojiInline fetch error', e);
+        if (TGS_DEBUG) console.log('[TGS_LOG] EmojiInline fetch error', e);
         if (!cancelled && failRef.current < 2) {
           failRef.current++;
           requestEmojiDownload(docId, alt, 2);
@@ -54,7 +56,7 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true }: { 
   }, [url, docId, alt]);
 
   if (data?.kind === 'tgs') {
-    return <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={size} height={size} loop={loop} autoplay={autoplay} />;
+    return <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={size} height={size} loop={loop} autoplay={autoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} />;
   }
   if (data?.kind === 'video') {
     return (
@@ -104,18 +106,14 @@ export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loo
 }
 
 function buildSegments(text: string, emojiEntities: any[]): EmojiSegment[] {
-  const cuts: Array<{ start: number; end: number; kind: 'custom' | 'plain'; docId?: string; alt?: string }> = [];
+  const cuts: Array<{ start: number; end: number; docId: string; alt: string }> = [];
   for (const e of emojiEntities) {
     cuts.push({
       start: e.offset,
       end: e.offset + e.length,
-      kind: 'custom',
       docId: String(e.document_id),
-      alt: getEmojiAlt(String(e.document_id)) || undefined,
+      alt: getEmojiAlt(String(e.document_id)) || text.slice(e.offset, e.offset + e.length),
     });
-  }
-  for (const r of matchEmojiRuns(text)) {
-    cuts.push({ start: r.start, end: r.end, kind: 'plain', docId: getEmojiDocId(r.emoji), alt: r.emoji });
   }
   cuts.sort((a, b) => a.start - b.start || a.end - b.end);
 
@@ -124,11 +122,7 @@ function buildSegments(text: string, emojiEntities: any[]): EmojiSegment[] {
   for (const c of cuts) {
     if (c.start < pos) continue;
     if (c.start > pos) segments.push({ type: 'text', value: text.slice(pos, c.start) });
-    if (c.docId) {
-      segments.push({ type: 'emoji', docId: c.docId, value: c.alt, custom: c.kind === 'custom' });
-    } else if (c.alt) {
-      segments.push({ type: 'text', value: c.alt });
-    }
+    segments.push({ type: 'emoji', docId: c.docId, value: c.alt, custom: true });
     pos = c.end;
   }
   if (pos < text.length) segments.push({ type: 'text', value: text.slice(pos) });
@@ -144,8 +138,16 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
   const [mapVersion, setMapVersion] = useState(0);
   useEffect(() => {
     ensureEmojiStickers();
-    return subscribeEmojiMap(() => setMapVersion((v) => v + 1));
-  }, []);
+    const customIds = new Set(emojiEntities.map((e: any) => String(e.document_id)));
+
+    return subscribeEmojiMap((changed) => {
+      if (!changed) {
+        setMapVersion((v) => v + 1);
+        return;
+      }
+      if (changed.some((c) => customIds.has(c.docId))) setMapVersion((v) => v + 1);
+    });
+  }, [emojiIdsKey]);
 
   const segsKey = text + '\u0001' + emojiIdsKey + '\u0001' + mapVersion;
   const segsRef = useRef<{ key: string; segments: EmojiSegment[] } | null>(null);
@@ -154,10 +156,11 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
   }
   const segments = segsRef.current.segments;
 
+  const EMOJI_SIZE = 30;
   const hasEmoji = segments.some((s) => s.type === 'emoji');
   if (!hasEmoji) {
-    return <>{text}</>;
+    return <StaticEmojiText value={text} size={EMOJI_SIZE} />;
   }
 
-  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} size={30} />;
+  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} size={EMOJI_SIZE} />;
 }

@@ -1,0 +1,17 @@
+{
+    "name": "@ton-ai/gram-media",
+    "version": "0.1.0",
+    "description": "Media routing for Telegram clients: photo/document/emoji downloads, LRU caches, blob-URL lifecycle",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc"
+    },
+    "dependencies": {
+        "@ton-ai/core": "*"
+    },
+    "devDependencies": {
+        "typescript": "^6.0.3"
+    },
+    "private": true
+}

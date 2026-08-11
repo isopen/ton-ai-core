@@ -48,13 +48,27 @@ export function setCurrentInstance(inst: ComponentInstance | null) {
 
 const MEMO_CACHE = new WeakMap<ComponentInstance, { props: Record<string, any>; vnode: VNode }>();
 
+function hasDirtySubtree(vnode: VNode | null): boolean {
+  if (!vnode) return false;
+  if (typeof vnode.type === 'function') {
+    const child = vnode.componentInstance;
+    if (!child) return false;
+    if (child._dirty) return true;
+    return hasDirtySubtree(child.vnode);
+  }
+  for (const child of vnode.children) {
+    if (hasDirtySubtree(child)) return true;
+  }
+  return false;
+}
+
 export function memo(component: ComponentType): ComponentType {
   const wrapped: ComponentType = (props) => {
     const inst = currentInstance;
     if (!inst) return component(props);
 
     const cached = MEMO_CACHE.get(inst);
-    if (cached && !inst._dirty && shallowEqual(cached.props, props)) {
+    if (cached && !inst._dirty && shallowEqual(cached.props, props) && !hasDirtySubtree(cached.vnode)) {
       return cached.vnode;
     }
     const vnode = component(props);

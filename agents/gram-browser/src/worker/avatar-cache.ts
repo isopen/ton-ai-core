@@ -1,5 +1,8 @@
 import { getGramDb } from '../utils/gram-db';
 
+const AVATAR_DEBUG = true;
+const wlog = (...args: any[]) => { if (AVATAR_DEBUG) console.log(...args); };
+
 export async function setAvatarEncryptionKey(sessionId: string | null): Promise<void> {
     const db = getGramDb();
     await db.getSessionId();
@@ -21,7 +24,7 @@ export async function needAvatar(key: string): Promise<boolean> {
     if (!db) return true;
     const cached = await db.getAvatar(key);
     if (cached) {
-        console.log('[avatar] HIT cache:', key);
+        wlog('[avatar] HIT cache:', key);
         return false;
     }
     return true;

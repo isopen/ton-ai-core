@@ -5,8 +5,6 @@ export function isNode(): boolean {
   return typeof process !== 'undefined' && process.versions?.node !== undefined;
 }
 
-
-
 export function getRandomBytes(length: number): Buffer {
   if (isNode()) {
     const crypto = require('crypto');
@@ -237,7 +235,7 @@ export async function pbkdf2Sha256(
     );
     return Buffer.from(new Uint8Array(bits));
   }
-  // Node.js fallback
+
   const { pbkdf2Sync } = require('crypto');
   return pbkdf2Sync(password, salt, iterations, keyLen, 'sha256') as Buffer;
 }

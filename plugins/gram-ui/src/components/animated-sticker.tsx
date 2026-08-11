@@ -23,6 +23,7 @@ export interface AnimatedStickerProps {
   forceAlways?: boolean;
   loop?: boolean;
   onLoad?: () => void;
+  onError?: () => void;
 }
 
 export function AnimatedSticker({
@@ -37,6 +38,7 @@ export function AnimatedSticker({
   forceAlways = false,
   loop = true,
   onLoad,
+  onError,
 }: AnimatedStickerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [canvasNode, setCanvasNode] = useState<HTMLCanvasElement | null>(null);
@@ -63,7 +65,6 @@ export function AnimatedSticker({
 
   useEffect(() => {
     if (!tgsUrl || !container) return;
-    if (isPaused) return;
     if (rendererRef.current) {
       if (urlRef.current === tgsUrl) return;
       const old = rendererRef.current;
@@ -72,10 +73,10 @@ export function AnimatedSticker({
       old.removeView(viewId);
     }
     urlRef.current = tgsUrl;
-    const r = initAnimatedRenderer(tgsUrl, container, renderId, { size, noLoop: !loop, quality, isLowPriority, coords }, viewId, onLoad);
+    const r = initAnimatedRenderer(tgsUrl, container, renderId, { size, noLoop: !loop, quality, isLowPriority, coords }, viewId, onLoad, onError);
     rendererRef.current = r;
     setRenderer(r);
-  }, [tgsUrl, container, renderId, size, viewId, isPaused]);
+  }, [tgsUrl, container, renderId, size, viewId]);
   useEffect(() => {
     if (!coords) return;
     rendererRef.current?.setSharedCanvasCoords(viewId, coords);

@@ -2476,7 +2476,6 @@ export const TL_CONSTRUCTORS = {
     PING_DELAY_DISCONNECT: 0xf3427b8c,
 };
 
-
 export interface TelegramClientConfig {
     apiId: number;
     apiHash: string;
@@ -2494,7 +2493,6 @@ export interface TelegramClientConfig {
     connectTimeout?: number;
     readTimeout?: number;
 }
-
 
 export interface IConnection {
     sendNoCrypto(msgId: bigint, msgData: Buffer): Promise<void>;

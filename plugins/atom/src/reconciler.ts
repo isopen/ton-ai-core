@@ -323,6 +323,7 @@ function getKey(vnode: VNode, index: number): string | number {
 }
 
 export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
+  if (oldVNode === newVNode) return dom;
   if (!isSameNodeType(oldVNode, newVNode)) {
     runUnmountCleanups(oldVNode);
     const newDom = createDOM(newVNode);
@@ -374,10 +375,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
         newVNode.dom = dom;
         return dom;
       }
-      // The component previously rendered a real element and now returns
-      // null: drop the old subtree from the DOM. Otherwise the stale element
-      // (e.g. an emoji canvas with "shown open" classes) keeps its state and
-      // stays visible forever next to the new empty text node.
+
       const empty = document.createTextNode('');
       if (dom && dom.parentNode) {
         for (const node of findAllDomNodes(oldResult)) {
@@ -411,6 +409,8 @@ function reconcileChildren(
 ) {
   const oldLen = oldChildren.length;
   const newLen = newChildren.length;
+
+  if (oldChildren === newChildren) return;
 
   const oldKeyed = new Map<string | number, { vnode: VNode; nodes: Node[]; origKey: string | number }>();
   for (let i = 0; i < oldLen; i++) {

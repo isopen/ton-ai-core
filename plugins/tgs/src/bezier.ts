@@ -11,11 +11,6 @@ function dist(x1: number, y1: number, x2: number, y2: number): number {
     return Math.hypot(x2 - x1, y2 - y1);
 }
 
-/**
- * Port of rlottie's VBezier::length() (src/vector/vbezier.cpp).
- * Recursive subdivision: split until the control polygon length is
- * within 0.01 of the chord, then sum.
- */
 export function bezierLength(seg: CubicBezierSeg): number {
     const { p0, p1, p2, p3 } = seg;
     const len =
@@ -62,10 +57,6 @@ export function bezierSplit(seg: CubicBezierSeg, t: number): [CubicBezierSeg, Cu
 const T_AT_LENGTH_ERROR = 0.01;
 const T_AT_LENGTH_MAX_ITERATIONS = 1000;
 
-/**
- * Port of rlottie's VBezier::tAtLength() — binary search for the parameter
- * t at a given arc length (used for spatial keyframe interpolation).
- */
 export function bezierTAtLength(seg: CubicBezierSeg, l: number, totalLength: number): number {
     let t = 1;
     if (l > totalLength || Math.abs(l - totalLength) < 1e-6) return t;

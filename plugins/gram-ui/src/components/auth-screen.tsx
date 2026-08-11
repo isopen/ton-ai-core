@@ -46,7 +46,6 @@ function TelegramCrystal({ size = 100 }: { size?: number }) {
   );
 }
 
-
 function iso2ToFlag(iso2: string): string {
   return iso2.toUpperCase().replace(/./g, c => String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65));
 }
@@ -98,7 +97,6 @@ function renderError(err: string) {
     </div>
   );
 }
-
 
 function handleSendCode(state: AppState, dispatch: Dispatch) {
   const country = state.countries.find(c => c.iso2 === state.countryIso2);
@@ -247,7 +245,6 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
           <path d="M1 7H17M17 7L11 1M17 7L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
-
 
       <div class="login-divider">
         <span class="login-divider-line"></span>

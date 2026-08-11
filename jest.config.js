@@ -14,7 +14,8 @@ module.exports = {
     '<rootDir>/plugins/telegram/tests',
     '<rootDir>/plugins/gram-db/tests',
     '<rootDir>/plugins/atom/tests',
-    '<rootDir>/plugins/tgs/tests'
+    '<rootDir>/plugins/tgs/tests',
+    '<rootDir>/plugins/comment-stripper/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
@@ -49,6 +50,7 @@ module.exports = {
     '^@ton-ai/atom$': '<rootDir>/plugins/atom/src/index.ts',
     '^@ton-ai/atom/(.*)$': '<rootDir>/plugins/atom/src/$1',
     '^@ton-ai/tgs$': '<rootDir>/plugins/tgs/src/index.ts',
+    '^@ton-ai/comment-stripper$': '<rootDir>/plugins/comment-stripper/src/index.ts',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
 };

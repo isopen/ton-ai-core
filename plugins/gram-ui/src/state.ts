@@ -95,25 +95,53 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_PLUGIN_SKILLS': return { ...state, pluginSkills: action.skills };
     case 'SET_ACTIVE_SKILL': return { ...state, activeSkill: action.id, ...(action.id ? { selectedPeer: null } : {}) };
     case 'SET_LANG_OPTIONS': return { ...state, langOptions: action.options };
-    case 'UPDATE_MESSAGE_PHOTO': return {
-      ...state,
-      renderTick: state.renderTick + 1,
-      photoSources: action.cacheSource && !state.photoSources[action.messageId] ? { ...state.photoSources, [action.messageId]: action.cacheSource } : state.photoSources,
-      messages: state.messages.map(m =>
-        m.id === action.messageId && m.media?.photo?.sizes
-          ? { ...m, media: { ...m.media, photo: { ...m.media.photo, sizes: m.media.photo.sizes.map((s: any) => s.type === action.sizeType ? { ...s, url: action.url } : s) } } }
-          : m
-      ),
-    };
-    case 'UPDATE_MESSAGE_PHOTO_PROGRESS': return {
-      ...state,
-      renderTick: state.renderTick + 1,
-      messages: state.messages.map(m =>
-        m.id === action.messageId && m.media?.photo
-          ? { ...m, media: { ...m.media, photo: { ...m.media.photo, progress: action.progress } } }
-          : m
-      ),
-    };
+    case 'UPDATE_MESSAGE_PHOTO': {
+      let targetFound = false;
+      let changed = false;
+      const messages = state.messages.map(m => {
+        if (m.id !== action.messageId) return m;
+        const media = m.media;
+        if (!media) return m;
+        targetFound = true;
+        const updPhoto = (photo: any): any => {
+          if (!photo || !Array.isArray(photo.sizes)) return photo;
+          let sizeChanged = false;
+          const sizes = photo.sizes.map((s: any) => {
+            if (s.type !== action.sizeType || s.url === action.url) return s;
+            sizeChanged = true;
+            return { ...s, url: action.url };
+          });
+          if (!sizeChanged) return photo;
+          changed = true;
+          return { ...photo, sizes };
+        };
+        const photo = updPhoto(media.photo);
+        const webpage = media.webpage ? { ...media.webpage, photo: updPhoto(media.webpage.photo) } : media.webpage;
+        return { ...m, media: { ...media, photo, webpage } };
+      });
+      if (!targetFound || !changed) return state;
+      return {
+        ...state,
+        renderTick: state.renderTick + 1,
+        photoSources: action.cacheSource && !state.photoSources[action.messageId] ? { ...state.photoSources, [action.messageId]: action.cacheSource } : state.photoSources,
+        messages,
+      };
+    }
+    case 'UPDATE_MESSAGE_PHOTO_PROGRESS': {
+      let mutated = false;
+      const messages = state.messages.map(m => {
+        if (m.id !== action.messageId || !m.media?.photo) return m;
+        if (m.media.photo.progress === action.progress) return m;
+        mutated = true;
+        return { ...m, media: { ...m.media, photo: { ...m.media.photo, progress: action.progress } } };
+      });
+      if (!mutated) return state;
+      return {
+        ...state,
+        renderTick: state.renderTick + 1,
+        messages,
+      };
+    }
     case 'REFRESH_MESSAGE_PHOTO': return {
       ...state,
       messages: state.messages.map(m =>

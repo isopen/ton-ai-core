@@ -13,7 +13,6 @@ import {
     GradientType,
 } from '@ton-ai/tgs';
 import type { ParsedProperty, ParsedShape } from '@ton-ai/tgs';
-
 function tgs(body: object): string {
     return JSON.stringify({
         tgs: 1,
@@ -27,7 +26,6 @@ function tgs(body: object): string {
         ...body,
     });
 }
-
 describe('parseTgs', () => {
     it('parses the composition header', () => {
         const anim = parseTgs(tgs({ layers: [] }));
@@ -41,15 +39,12 @@ describe('parseTgs', () => {
         expect(anim.version).toBe('5.5.2');
         expect(anim.tgs).toBe(true);
     });
-
     it('throws on invalid JSON', () => {
         expect(() => parseTgs('not json')).toThrow('Invalid TGS JSON');
     });
-
     it('throws when no layers', () => {
         expect(() => parseTgs('{"w":512,"h":512}')).toThrow('TGS has no layers');
     });
-
     it('parses layer types and timing', () => {
         const anim = parseTgs(tgs({
             layers: [
@@ -64,7 +59,6 @@ describe('parseTgs', () => {
         expect(anim.layers[0].name).toBe('ShapeLayer');
         expect(anim.layers[1].type).toBe(LayerType.Null);
     });
-
     it('parses solid and precomp layers with assets', () => {
         const anim = parseTgs(tgs({
             assets: [{ id: 'pre1', w: 100, h: 100, layers: [{ ind: 0, ty: 4, ks: {} }] }],
@@ -80,7 +74,6 @@ describe('parseTgs', () => {
         expect(anim.layers[1].refId).toBe('pre1');
         expect(anim.assets[0].layers).toHaveLength(1);
     });
-
     it('parses transform properties as ParsedProperty', () => {
         const anim = parseTgs(tgs({
             layers: [{ ind: 0, ty: 4, ks: { o: { a: 0, k: 100 }, r: { a: 0, k: 0 }, p: { a: 0, k: [10, 20] }, a: { a: 0, k: [0, 0] }, s: { a: 0, k: [100, 100] } } }],
@@ -91,7 +84,6 @@ describe('parseTgs', () => {
         expect(tr.scale.value).toEqual([100, 100]);
         expect(tr.opacity.animated).toBe(false);
     });
-
     it('parses shape groups, rects, ellipses, fills and strokes', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -128,7 +120,6 @@ describe('parseTgs', () => {
         expect(transform.type).toBe('transform');
         expect(transform.position!.value).toEqual([10, 10]);
     });
-
     it('parses path vertices from ks', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -147,7 +138,6 @@ describe('parseTgs', () => {
         expect(path.vertices!.value).toMatchObject({ c: true });
         expect(path.vertices!.value.v).toHaveLength(2);
     });
-
     it('parses trim paths with animated start/end/offset', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -170,13 +160,10 @@ describe('parseTgs', () => {
         expect(trim.start!.keyframes).toHaveLength(1);
         expect(trim.end!.value).toBe(100);
         expect(trim.trimMode).toBe('simultaneously');
-        // rlottie noEndValue: the tail keyframe (t=60, no tangents) is
-        // discarded, the segment runs to its start frame with its start value.
         expect(interpolateKeyframes(trim.start!, 30)).toEqual([50]);
         expect(interpolateKeyframes(trim.start!, 60)).toEqual([100]);
         expect(interpolateKeyframes(trim.start!, 180)).toEqual([100]);
     });
-
     it('parses gradient fill with stops and radial type', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -200,7 +187,6 @@ describe('parseTgs', () => {
         expect(grad.endPoint.value).toEqual([100, 100]);
         expect(grad.stops.value).toEqual([0, 1, 0, 0, 1, 0, 0, 1]);
     });
-
     it('parses gradient stroke type (gs -> gradientStroke)', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -221,7 +207,6 @@ describe('parseTgs', () => {
         expect(shape.strokeWidth!.value).toBe(3);
         expect(shape.gradient).toBeDefined();
     });
-
     it('parses stroke dashes', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -246,7 +231,6 @@ describe('parseTgs', () => {
         expect(dashes[0].value.value).toBe(10);
         expect(dashes[1].value.value).toBe(5);
     });
-
     it('parses star with point count, radii and roundness', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -275,7 +259,6 @@ describe('parseTgs', () => {
         expect(star.innerRoundness!.value).toBe(0.1);
         expect(star.starType).toBe(1);
     });
-
     it('parses repeater with copies and transform', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -306,7 +289,6 @@ describe('parseTgs', () => {
         expect(repeater.transform!.startOpacity!.value).toBe(100);
         expect(repeater.transform!.endOpacity!.value).toBe(0);
     });
-
     it('parses masks and matte', () => {
         const anim = parseTgs(tgs({
             layers: [
@@ -335,7 +317,6 @@ describe('parseTgs', () => {
         expect(layer.masks![0].opacity.value).toBe(100);
         expect(anim.layers[1].matteTarget).toBe(true);
     });
-
     it('parses markers', () => {
         const anim = parseTgs(tgs({
             markers: [{ cm: 'loop', dr: 30, tm: 0 }],
@@ -343,7 +324,6 @@ describe('parseTgs', () => {
         }));
         expect(anim.markers).toEqual([{ name: 'loop', startFrame: 0, endFrame: 30 }]);
     });
-
     it('parses text layers', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -359,7 +339,6 @@ describe('parseTgs', () => {
         expect(text.fontSize).toBe(24);
         expect(text.fillColor).toEqual([1, 0, 0]);
     });
-
     it('keeps the previous end value when the tail keyframe has no start value (v4 exports)', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -384,7 +363,6 @@ describe('parseTgs', () => {
         expect(interpolateKeyframes(start, 60)).toEqual([100]);
         expect(interpolateKeyframes(start, 120)).toEqual([100]);
     });
-
     it('discards intermediate keyframes without i/o tangents (rlottie)', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -406,13 +384,10 @@ describe('parseTgs', () => {
         }));
         const start = anim.layers[0].shapes![0].start!;
         expect(start.keyframes).toHaveLength(2);
-        // the middle keyframe is discarded; its start value (and its own
-        // frame) are absorbed by the first keyframe via the noEndValue fixup
         expect(interpolateKeyframes(start, 30)).toEqual([50]);
         expect(interpolateKeyframes(start, 45)).toEqual([75]);
         expect(interpolateKeyframes(start, 60)).toEqual([100]);
     });
-
     it('unwraps array-wrapped path keyframe values', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -441,7 +416,6 @@ describe('parseTgs', () => {
         expect(mid.c).toBe(true);
         expect(mid.v).toEqual([[50, 0], [60, 0]]);
     });
-
     it('maps trim m:2 to individually', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -453,7 +427,6 @@ describe('parseTgs', () => {
         }));
         expect(anim.layers[0].shapes![0].trimMode).toBe('individually');
     });
-
     it('parses gradient highlight length/angle and colorPoints', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -477,7 +450,6 @@ describe('parseTgs', () => {
         expect(grad.highlightAngle!.value).toBe(90);
         expect(grad.colorPoints).toBe(2);
     });
-
     it('maps mask mode f to difference', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -493,7 +465,6 @@ describe('parseTgs', () => {
         }));
         expect(anim.layers[0].masks![0].mode).toBe(MaskMode.Difference);
     });
-
     it('drops hidden shapes (rlottie parseObject)', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -513,7 +484,6 @@ describe('parseTgs', () => {
         expect(children).toHaveLength(1);
         expect(children[0].type).toBe('ellipse');
     });
-
     it('forces hidden layers to null and drops their content', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -530,7 +500,6 @@ describe('parseTgs', () => {
         expect(anim.layers[0].shapes).toBeUndefined();
         expect(anim.layers[0].transform).toBeDefined();
     });
-
     it('drops layers without a transform and self-parented layers', () => {
         const anim = parseTgs(tgs({
             layers: [
@@ -542,7 +511,6 @@ describe('parseTgs', () => {
         expect(anim.layers).toHaveLength(1);
         expect(anim.layers[0].index).toBe(2);
     });
-
     it('parses precomp layer size (w/h)', () => {
         const anim = parseTgs(tgs({
             layers: [{ ind: 0, ty: 0, w: 300, h: 200, ks: {} }],
@@ -550,7 +518,6 @@ describe('parseTgs', () => {
         expect(anim.layers[0].layerWidth).toBe(300);
         expect(anim.layers[0].layerHeight).toBe(200);
     });
-
     it('layerInfo returns name/in/out for each layer', () => {
         const anim = parseTgs(tgs({
             layers: [
@@ -565,16 +532,13 @@ describe('parseTgs', () => {
         ]);
     });
 });
-
 describe('interpolateKeyframes', () => {
     function prop(keyframes: any[]): ParsedProperty {
         return { animated: true, value: keyframes[0].s, keyframes: keyframes as any };
     }
-
     it('returns the static value for non-animated properties', () => {
         expect(interpolateKeyframes({ animated: false, value: 42 }, 10)).toBe(42);
     });
-
     it('interpolates linearly without easing', () => {
         const p = prop([
             { t: 0, s: [0, 0] },
@@ -584,7 +548,6 @@ describe('interpolateKeyframes', () => {
         expect(interpolateKeyframes(p, 5)).toEqual([50, 100]);
         expect(interpolateKeyframes(p, 10)).toEqual([100, 200]);
     });
-
     it('clamps frames before first and after last keyframe', () => {
         const p = prop([
             { t: 10, s: [0] },
@@ -593,7 +556,6 @@ describe('interpolateKeyframes', () => {
         expect(interpolateKeyframes(p, 0)).toEqual([0]);
         expect(interpolateKeyframes(p, 99)).toEqual([100]);
     });
-
     it('uses end value of the last keyframe beyond its frame', () => {
         const p = prop([
             { t: 0, s: [0], e: [50] },
@@ -603,7 +565,6 @@ describe('interpolateKeyframes', () => {
         expect(interpolateKeyframes(p, 10)).toEqual([140]);
         expect(interpolateKeyframes(p, 15)).toEqual([140]);
     });
-
     it('fills missing end values from the next keyframe (rlottie noEndValue)', () => {
         const p = prop([
             { t: 0, s: [0], e: [50] },
@@ -611,7 +572,6 @@ describe('interpolateKeyframes', () => {
         ]);
         expect(interpolateKeyframes(p, 5)).toEqual([50]);
     });
-
     it('holds value for hold keyframes', () => {
         const p = prop([
             { t: 0, s: [10] },
@@ -624,7 +584,6 @@ describe('interpolateKeyframes', () => {
         expect(interpolateKeyframes(p, 19)).toEqual([20]);
         expect(interpolateKeyframes(p, 20)).toEqual([30]);
     });
-
     it('applies cubic bezier easing like rlottie VInterpolator', () => {
         const p = prop([
             {
@@ -642,9 +601,7 @@ describe('interpolateKeyframes', () => {
         expect(q).toBeGreaterThan(10);
         expect(q).toBeCloseTo(15.625, 1);
     });
-
     it('uses tangent values as-is (rlottie does not normalize 0-100 tangents)', () => {
-        // identity tangents o=(0,0), i=(1,1) produce a linear curve
         const p = prop([
             {
                 t: 0,
@@ -657,7 +614,6 @@ describe('interpolateKeyframes', () => {
         expect(interpolateKeyframes(p, 25)[0]).toBeCloseTo(25, 6);
         expect(interpolateKeyframes(p, 50)[0]).toBeCloseTo(50, 6);
     });
-
     it('interpolates scalars', () => {
         const p = prop([
             { t: 0, s: 0 },
@@ -665,7 +621,6 @@ describe('interpolateKeyframes', () => {
         ]);
         expect(interpolateKeyframes(p, 5)).toBe(50);
     });
-
     it('interpolates colors', () => {
         const p = prop([
             { t: 0, s: [1, 0, 0] },
@@ -673,7 +628,6 @@ describe('interpolateKeyframes', () => {
         ]);
         expect(interpolateKeyframes(p, 5)).toEqual([0.5, 0, 0.5]);
     });
-
     it('interpolates path vertex data', () => {
         const p = prop([
             { t: 0, s: { c: true, v: [[0, 0], [10, 0]], i: [[0, 0], [0, 0]], o: [[0, 0], [0, 0]] } },
@@ -682,7 +636,6 @@ describe('interpolateKeyframes', () => {
         const mid = interpolateKeyframes(p, 5);
         expect(mid.v).toEqual([[50, 0], [60, 0]]);
     });
-
     it('interpolates along the spatial bezier with to/ti tangents', () => {
         const p = prop([
             { t: 0, s: [0, 0], to: [100, 80], ti: [-100, 20] },
@@ -694,7 +647,6 @@ describe('interpolateKeyframes', () => {
         expect(mid[1]).toBeGreaterThan(20);
         expect(mid[1]).toBeLessThan(50);
     });
-
     it('uses split dimension keyframes for x', () => {
         const p: any = {
             animated: true,
@@ -715,17 +667,14 @@ describe('interpolateKeyframes', () => {
         expect(interpolateKeyframes(p, 5)).toEqual([500, 50]);
     });
 });
-
 describe('model cache', () => {
     afterEach(() => configureModelCacheSize(10));
-
     it('returns the same model for the same key', () => {
         const json = tgs({ layers: [{ ind: 0, ty: 4, ks: {} }] });
         const a = parseTgs(json, { key: 'sticker-1' });
         const b = parseTgs(json, { key: 'sticker-1' });
         expect(a).toBe(b);
     });
-
     it('evicts oldest entries beyond the cache size', () => {
         configureModelCacheSize(1);
         const json = tgs({ layers: [] });
@@ -734,7 +683,6 @@ describe('model cache', () => {
         const again = parseTgs(json, { key: 'k1' });
         expect(again).not.toBe(a);
     });
-
     it('cache size 0 disables caching', () => {
         configureModelCacheSize(0);
         const json = tgs({ layers: [] });
@@ -743,7 +691,6 @@ describe('model cache', () => {
         expect(a).not.toBe(b);
     });
 });
-
 describe('setValue / keypath', () => {
     function animWithFill() {
         return parseTgs(tgs({
@@ -764,14 +711,12 @@ describe('setValue / keypath', () => {
             }],
         }));
     }
-
     it('overrides a fill color by exact keypath', () => {
         const anim = animWithFill();
         setValue(anim, 'Layer 1.Group 1.Fill 1', Property.FillColor, [0, 0, 1]);
         const fill = anim.layers[0].shapes![0].children![0];
         expect(interpolateKeyframes(fill.color!, 0)).toEqual([0, 0, 1]);
     });
-
     it('overrides with a per-frame function', () => {
         const anim = animWithFill();
         setValue(anim, '**', Property.FillColor, (info) => (info.curFrame < 30 ? [0, 0, 1] : [1, 1, 0]));
@@ -779,20 +724,17 @@ describe('setValue / keypath', () => {
         expect(interpolateKeyframes(fill.color!, 0)).toEqual([0, 0, 1]);
         expect(interpolateKeyframes(fill.color!, 60)).toEqual([1, 1, 0]);
     });
-
     it('overrides layer transform via **.Transform', () => {
         const anim = animWithFill();
         setValue(anim, '**.Transform', Property.TrPosition, [50, 60]);
         expect(interpolateKeyframes(anim.layers[0].transform.position, 0)).toEqual([50, 60]);
     });
-
     it('overrides stroke width', () => {
         const anim = animWithFill();
         setValue(anim, 'Layer 1.**.Stroke 1', Property.StrokeWidth, 9);
         const stroke = anim.layers[0].shapes![0].children![1];
         expect(interpolateKeyframes(stroke.strokeWidth!, 0)).toBe(9);
     });
-
     it('overrides animated properties too', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -814,24 +756,20 @@ describe('setValue / keypath', () => {
         const trim = anim.layers[0].shapes![0];
         expect(interpolateKeyframes(trim.start!, 30)).toEqual([40]);
     });
-
     it('throws when keypath matches nothing', () => {
         const anim = animWithFill();
         expect(() => setValue(anim, 'Nope.Nothing', Property.FillColor, [0, 0, 0])).toThrow(/no property matched/);
     });
 });
-
 describe('matchKeyPath', () => {
     it('matches exact paths', () => {
         expect(matchKeyPath('A.B.C', ['A', 'B', 'C'])).toBe(true);
         expect(matchKeyPath('A.B.C', ['A', 'B'])).toBe(false);
     });
-
     it('matches * wildcard', () => {
         expect(matchKeyPath('A.*.C', ['A', 'B', 'C'])).toBe(true);
         expect(matchKeyPath('A.*.C', ['A', 'B', 'D'])).toBe(false);
     });
-
     it('matches ** globstar', () => {
         expect(matchKeyPath('**.Fill', ['Layer 1', 'Group 1', 'Fill'])).toBe(true);
         expect(matchKeyPath('Layer 1.**', ['Layer 1', 'Group 1', 'Fill'])).toBe(true);
@@ -839,7 +777,6 @@ describe('matchKeyPath', () => {
         expect(matchKeyPath('**', ['anything', 'at', 'all'])).toBe(true);
     });
 });
-
 describe('frameAtPos', () => {
     it('maps position in [0,1] to a frame', () => {
         const anim = parseTgs(tgs({ layers: [] }));

@@ -204,8 +204,8 @@ export class TdBinlog {
           while (decOff + EVENT_MIN_SIZE <= dec.length) {
             const decHdr = parseEventHeader(dec, decOff);
             if (!decHdr || !validateEventCrc(dec, decOff, decHdr.size)) {
-              console.log('[td-binlog] replay: decrypted CRC fail at decOff=' + decOff + ' truncating file to badOffset=' + (this.encDataOffset + decOff) + ' but keeping ' + this.entries.length + ' valid entries');
-              const badOffset = this.encDataOffset + decOff;
+              const badOffset = this.encDataOffset + ((decOff + 15) & ~15);
+              console.log('[td-binlog] replay: decrypted CRC fail at decOff=' + decOff + ' truncating file to badOffset=' + badOffset + ' but keeping ' + this.entries.length + ' valid entries');
               try {
                 const w = await this.fileHandle!.createWritable({ keepExistingData: true });
                 await w.truncate(badOffset);
@@ -217,8 +217,8 @@ export class TdBinlog {
             }
             const decPayload = dec.subarray(decOff + EVENT_HEADER_SIZE, decOff + decHdr.size - EVENT_TAIL_SIZE);
             if (!this.commitEvent(decHdr, decPayload)) {
-              console.log('[td-binlog] replay: commitEvent failed for decrypted event type=' + decHdr.type + ' truncating to badOffset=' + (this.encDataOffset + decOff) + ' keeping ' + this.entries.length + ' entries');
-              const badOffset = this.encDataOffset + decOff;
+              const badOffset = this.encDataOffset + ((decOff + 15) & ~15);
+              console.log('[td-binlog] replay: commitEvent failed for decrypted event type=' + decHdr.type + ' truncating to badOffset=' + badOffset + ' keeping ' + this.entries.length + ' entries');
               try {
                 const w = await this.fileHandle!.createWritable({ keepExistingData: true });
                 await w.truncate(badOffset);
@@ -229,7 +229,7 @@ export class TdBinlog {
               return;
             }
             decEventCount++;
-            decOff += decHdr.size;
+            decOff = (decOff + decHdr.size + 15) & ~15;
           }
           console.log('[td-binlog] replay: processed ' + decEventCount + ' decrypted events');
           return;
@@ -262,7 +262,9 @@ export class TdBinlog {
     ));
 
     const encPayload = buildEncryptionPayload(salt, iv, keyHash);
-    const encEvent = buildEvent(0n, SERVICE_TYPE_AES_CTR, 0, 0n, encPayload);
+    let encEvent = buildEvent(0n, SERVICE_TYPE_AES_CTR, 0, 0n, encPayload);
+    const padLen = (16 - (encEvent.length % 16)) % 16;
+    if (padLen) encEvent = Buffer.concat([encEvent, Buffer.alloc(padLen)]);
 
     const w = await this.fileHandle!.createWritable({ keepExistingData: true });
     await w.write({ type: 'write', position: this.fileSize, data: encEvent as any });
@@ -285,7 +287,9 @@ export class TdBinlog {
     await this.ensureEncryptionEvent();
 
     const event = buildEvent(id, type, 0, 0n, payload);
-    const eventBuf = Buffer.from(event);
+    let eventBuf = Buffer.from(event);
+    const padLen = (16 - (eventBuf.length % 16)) % 16;
+    if (padLen) eventBuf = Buffer.concat([eventBuf, Buffer.alloc(padLen)]);
     const encrypted = this.streamCipher!.process(eventBuf);
 
     const w = await this.fileHandle!.createWritable({ keepExistingData: true });
@@ -480,7 +484,9 @@ export class TdBinlog {
       encKey, new TextEncoder().encode(KEY_HASH_LABEL),
     ));
     const encPayload = buildEncryptionPayload(salt, iv, keyHash);
-    const encEvent = buildEvent(0n, SERVICE_TYPE_AES_CTR, 0, 0n, encPayload);
+    let encEvent = buildEvent(0n, SERVICE_TYPE_AES_CTR, 0, 0n, encPayload);
+    const encPad = (16 - (encEvent.length % 16)) % 16;
+    if (encPad) encEvent = Buffer.concat([encEvent, Buffer.alloc(encPad)]);
 
     const newCipher = new AesCtrCipher(encKey, iv, 0);
 
@@ -493,7 +499,9 @@ export class TdBinlog {
     let newTotalEventsSize = 0;
     for (const e of this.entries) {
       if ((e.id & 1n) !== 0n) continue;
-      const event = buildEvent(runningId++, e.type, 0, 0n, e.buf);
+      let event = buildEvent(runningId++, e.type, 0, 0n, e.buf);
+      const evPad = (16 - (event.length % 16)) % 16;
+      if (evPad) event = Buffer.concat([event, Buffer.alloc(evPad)]);
       const encrypted = newCipher.process(new Uint8Array(Buffer.from(event)));
       await w.write({ type: 'write', data: encrypted as any });
       totalSize += encrypted.length;

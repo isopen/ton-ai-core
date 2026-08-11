@@ -65,8 +65,6 @@ export function generateObfuscationInit(_dcId?: number): { init: Buffer; obf: Bu
     const encryptKey = Buffer.from(random.subarray(8, 40));
     const encryptIv = Buffer.from(random.subarray(40, 56));
 
-    // Encrypt the full 64 bytes with CTR starting at 0 to match telegram-tt's ObfuscatedIO
-    // (bytes 56-63 are at offset 8 within AES block 3, counter value 3)
     const fullEncrypted = aes256CtrProcess(withTag, encryptKey, encryptIv, 0);
     const encryptedTail = Buffer.from(fullEncrypted.subarray(56, 64));
 

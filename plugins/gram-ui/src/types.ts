@@ -31,6 +31,7 @@ export interface Message {
     media?: any;
     action?: any;
     entities?: any[];
+    groupedId?: number | string;
 }
 
 export interface Country {
@@ -155,4 +156,3 @@ export type UIAction =
     | { type: 'CLEAR_EMPTY_CHAT_DOCUMENT' }
     | { type: 'CLEAR_EMOJI_DOCUMENTS'; keys?: string[] }
     | { type: 'LOGOUT' };
-

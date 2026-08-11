@@ -1,9 +1,9 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
-import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
+import { memo, type ComponentType } from '@ton-ai/atom';
+import { useEffect, useRef, useState, useCallback } from '@ton-ai/atom/hooks';
 import { checkEmojiKind, observeVisibility } from './emoji-canvas.js';
 import { AnimatedSticker } from './animated-sticker.js';
-import { ensureEmojiStickers, getEmojiDocId, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
-import { searchEmojis } from './emoji-dataset.js';
+import { ensureEmojiStickers, getEmojiDocId, requestEmojiDownload, subscribeEmojiMap, ensureEmojiPicker, subscribeEmojiPicker, getPickerCategories, searchServerEmojis } from './emoji-store.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
 import type { Dispatch } from '../state.js';
 
@@ -16,30 +16,12 @@ const RECENT_MAX = 40;
 const RECENT_KEY = 'tg-recent-emoji';
 
 const TAB_GLYPHS: Record<string, string> = {
-  'Smileys & Emotion': '\u{1F600}',
-  'People & Body': '\u{1F44D}',
-  'Animals & Nature': '\u{1F436}',
-  'Food & Drink': '\u{1F354}',
-  'Travel & Places': '\u2708\uFE0F',
-  Activities: '\u26BD',
-  Objects: '\u{1F4A1}',
-  Symbols: '\u2764\uFE0F',
-  Flags: '\u{1F3F3}\uFE0F',
   Recent: '\u{1F552}',
 };
 
 export interface EmojiCategory {
   name: string;
   emojis: string[];
-}
-
-let datasetPromise: Promise<{ EMOJI_CATEGORIES: EmojiCategory[] }> | null = null;
-
-function ensureDataset(): Promise<{ EMOJI_CATEGORIES: EmojiCategory[] }> {
-  if (!datasetPromise) {
-    datasetPromise = import('./emoji-dataset.js');
-  }
-  return datasetPromise;
 }
 
 function loadRecents(): string[] {
@@ -64,7 +46,7 @@ interface SlotPos {
   h: number;
 }
 
-function PickerCell({ emoji, docId, size, url, coords, sharedCanvas, onPlayingChange, onPick }: {
+function PickerCellImpl({ emoji, docId, size, url, coords, sharedCanvas, onPlayingChange, onPick }: {
   emoji: string;
   docId?: string;
   size: number;
@@ -76,6 +58,7 @@ function PickerCell({ emoji, docId, size, url, coords, sharedCanvas, onPlayingCh
 }) {
   const ref = useRef<HTMLSpanElement | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [shown, setShown] = useState(false);
   const [kind, setKind] = useState<'video' | 'tgs' | 'img' | null>(null);
   const playingRef = useRef(false);
   playingRef.current = playing;
@@ -83,21 +66,31 @@ function PickerCell({ emoji, docId, size, url, coords, sharedCanvas, onPlayingCh
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
+    return observeVisibility(el, 110, (v) => setShown(v));
+  }, []);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
     return observeVisibility(el, 0, (v) => setPlaying(v));
   }, []);
 
-  // Static preview is always mounted; the real animation starts only when the
-  // cell is in the strict viewport AND the URL is ready.
   useEffect(() => {
-    if (!playing) return;
+    if (!shown) return;
     if (docId) requestEmojiDownload(docId, emoji, 1);
-    if (docId && url) {
-      let cancelled = false;
-      checkEmojiKind(url).then((k) => { if (!cancelled && k) setKind(k); });
-      return () => { cancelled = true; };
-    }
-    return undefined;
-  }, [playing, docId, url, emoji]);
+  }, [shown, docId, emoji]);
+
+  useEffect(() => {
+    if (!playing || !docId || url) return;
+    requestEmojiDownload(docId, emoji, 2);
+  }, [playing, shown, docId, url, emoji]);
+
+  useEffect(() => {
+    if (!shown || !docId || !url) return;
+    let cancelled = false;
+    checkEmojiKind(url).then((k) => { if (!cancelled && k) setKind(k); });
+    return () => { cancelled = true; };
+  }, [shown, docId, url]);
 
   useEffect(() => {
     onPlayingChange(playing && !!url);
@@ -131,6 +124,8 @@ function PickerCell({ emoji, docId, size, url, coords, sharedCanvas, onPlayingCh
   );
 }
 
+const PickerCell = memo(PickerCellImpl as unknown as ComponentType);
+
 function CategorySection({ cat, index, mounted, expanded, columns, documentUrls, onPick, onExpand }: {
   cat: EmojiCategory;
   index: number;
@@ -155,9 +150,9 @@ function CategorySection({ cat, index, mounted, expanded, columns, documentUrls,
   const rows = Math.max(1, Math.ceil(visibleCount / columns));
   const reservedH = HEADER_H + rows * (ITEM_SIZE + GAP) + (clipped ? ITEM_SIZE + GAP : 0) - GAP;
 
-  const setCellPlaying = (i: number) => (p: boolean) => {
+  const setCellPlaying = useCallback((i: number) => (p: boolean) => {
     setPlayingMap((prev) => (prev[i] === p ? prev : { ...prev, [i]: p }));
-  };
+  }, []);
 
   useEffect(() => {
     if (!mounted) {
@@ -167,10 +162,18 @@ function CategorySection({ cat, index, mounted, expanded, columns, documentUrls,
     const grid = gridRef.current;
     const canvas = canvasRef.current;
     if (!grid || !canvas) return;
+    const cache = { cw: 0, ch: 0, count: -1 };
     const measure = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const cw = Math.max(1, grid.clientWidth);
       const ch = Math.max(1, grid.clientHeight);
+      const count = grid.querySelectorAll('.tgui-emoji-cell').length;
+
+      if (cache.cw === cw && cache.ch === ch && cache.count === count
+        && Object.keys(coordsRef.current).length === count) return;
+      cache.cw = cw;
+      cache.ch = ch;
+      cache.count = count;
       const bw = Math.round(cw * dpr);
       const bh = Math.round(ch * dpr);
       if (canvas.width !== bw) canvas.width = bw;
@@ -202,7 +205,7 @@ function CategorySection({ cat, index, mounted, expanded, columns, documentUrls,
     const ro = new ResizeObserver(measure);
     ro.observe(grid);
     return () => ro.disconnect();
-  }, [mounted, playingMap, columns]);
+  }, [mounted, columns]);
 
   const cells: any[] = [];
   for (let i = 0; i < visibleCount; i++) {
@@ -211,7 +214,7 @@ function CategorySection({ cat, index, mounted, expanded, columns, documentUrls,
     const url = docId ? (documentUrls['emojipack-' + docId] || '') : '';
     cells.push(
       <PickerCell
-        key={i}
+        key={docId || e}
         emoji={e}
         docId={docId}
         size={ITEM_SIZE}
@@ -254,16 +257,18 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
   const recentRef = useRef<string[]>(recent);
   recentRef.current = recent;
 
-  const searchResults = query.trim() ? searchEmojis(query) : null;
+  const searchResults = query.trim() ? searchServerEmojis(query) : null;
 
   useEffect(() => {
     const stopHeavy = beginHeavyAnimation(350);
     ensureEmojiStickers();
-    ensureDataset().then((m) => setCats(m.EMOJI_CATEGORIES)).catch(() => setCats([]));
-    const unsub = subscribeEmojiMap(() => setMapVersion((v) => v + 1));
+    ensureEmojiPicker();
+    const unsubMap = subscribeEmojiMap(() => setMapVersion((v) => v + 1));
+    const unsubPicker = subscribeEmojiPicker(() => setCats(getPickerCategories()));
     return () => {
       stopHeavy();
-      unsub();
+      unsubMap();
+      unsubPicker();
       saveRecents(recentRef.current);
     };
   }, []);
@@ -289,8 +294,6 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
     };
   }, []);
 
-  // One shared IntersectionObserver over all category wrappers; the active
-  // category is the smallest index that still intersects (throttled).
   useEffect(() => {
     if (!cats) return;
     const intersecting = new Set<number>();
@@ -312,7 +315,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
     return () => unsubs.forEach((u) => u());
   }, [cats]);
 
-  const onPickEmoji = (e: string) => {
+  const onPickEmoji = useCallback((e: string) => {
     recentRef.current = [e, ...recentRef.current.filter((x) => x !== e)].slice(0, RECENT_MAX);
     setRecent(recentRef.current);
     if (onPick) {
@@ -325,8 +328,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
       input.value += e;
       input.focus();
     }
-    dispatch?.({ type: 'SET_EMOJI_PICKER', v: false });
-  };
+  }, [onPick, onClose]);
 
   const allCats: EmojiCategory[] = [
     { name: 'Recent', emojis: recent },
@@ -354,8 +356,8 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
       {searchResults === null && (
         <div class="tgui-emoji-tabs">
           {allCats.map((c, i) => (
-            <span key={i} class={'tgui-emoji-tab' + (i === active ? ' active' : '')} onClick={() => scrollToCat(i)}>
-              {TAB_GLYPHS[c.name] || '\u{1F600}'}
+            <span key={c.name || c.emojis[0] || i} class={'tgui-emoji-tab' + (i === active ? ' active' : '')} onClick={() => scrollToCat(i)}>
+              {c.emojis[0] || TAB_GLYPHS[c.name] || '\u{1F600}'}
             </span>
           ))}
         </div>
@@ -377,11 +379,13 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
               onExpand={() => {}}
             />
           )
+        ) : !cats ? (
+          <div class="tgui-emoji-empty">{'\u2026'}</div>
         ) : allCats.length === 0 ? (
           <div class="tgui-emoji-empty">{'\u2026'}</div>
         ) : (
           allCats.map((c, i) => (
-            <div key={i} data-ecat={String(i)}>
+            <div key={c.name || c.emojis?.[0] || i} data-ecat={String(i)}>
               <CategorySection
                 cat={c}
                 index={i}

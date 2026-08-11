@@ -286,6 +286,20 @@ export interface ParsedText {
     tracking?: number;
     strokeColor?: number[];
     strokeWidth?: number;
+    keyframes?: TextKeyframe[];
+}
+
+export interface TextKeyframe {
+    at: number;
+    text: string;
+    fontSize?: number;
+    fontFamily?: string;
+    fillColor?: number[];
+    justify?: number;
+    lineHeight?: number;
+    tracking?: number;
+    strokeColor?: number[];
+    strokeWidth?: number;
 }
 
 export interface ParsedTransform {
@@ -325,7 +339,7 @@ export interface ParsedGradient {
     type: GradientType;
     startPoint: ParsedProperty;
     endPoint: ParsedProperty;
-    // rlottie: "h" -> mHighlightLength, "a" -> mHighlightAngle
+
     highlightLength?: ParsedProperty;
     highlightAngle?: ParsedProperty;
     colorPoints?: number;
@@ -359,7 +373,7 @@ export interface ParsedShape {
     start?: ParsedProperty;
     end?: ParsedProperty;
     offset?: ParsedProperty;
-    // rlottie TrimType: 1 -> Simultaneously, 2 -> Individually
+
     trimMode?: 'simultaneously' | 'individually';
     vertices?: ParsedProperty;
     outerRadius?: ParsedProperty;

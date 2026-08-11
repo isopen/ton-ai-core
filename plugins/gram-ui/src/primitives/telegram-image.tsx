@@ -2,6 +2,8 @@ import { h } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
 
+const DEBUG = false;
+
 function imageLoad(url: string, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) return reject(new DOMException('Aborted'));
@@ -20,6 +22,7 @@ function imageLoad(url: string, signal: AbortSignal): Promise<string> {
 export function TelegramImage(props: {
   image: ImageSpec;
   width?: number;
+  height?: number;
   maxWidth?: number;
   maxHeight?: number;
   lazy?: boolean;
@@ -27,7 +30,7 @@ export function TelegramImage(props: {
   onOpenViewer?: (id: string) => void;
   onLoad?: () => void;
 }) {
-  const { image, width, maxWidth, maxHeight, lazy = true, rounded = false, onOpenViewer, onLoad } = props;
+  const { image, width, height, maxWidth, maxHeight, lazy = true, rounded = false, onOpenViewer, onLoad } = props;
 
   const [visible, setVisible] = useState(!lazy);
   const [loaded, setLoaded] = useState(false);
@@ -59,9 +62,11 @@ export function TelegramImage(props: {
     if (!visible) return;
     const ac = new AbortController();
     const srcs: string[] = [];
-    if (image.original?.url) srcs.push(image.original.url);
+
     if (image.medium?.url) srcs.push(image.medium.url);
+    if (image.original?.url) srcs.push(image.original.url);
     if (image.thumbnail?.url) srcs.push(image.thumbnail.url);
+    if (DEBUG) console.log('[TelegramImage] load start', image.id, 'srcs:', srcs.length, 'visible:', visible, 'thumb:', !!image.thumbnail?.url, 'medium:', !!image.medium?.url, 'original:', !!image.original?.url);
 
     if (srcs.length === 0) {
       return;
@@ -69,10 +74,7 @@ export function TelegramImage(props: {
 
     if (error) setError(false);
 
-    if (image.thumbnail?.url && image.thumbnail.url !== srcs[0]) {
-      const isCurrentWorse = currentSrc === image.original?.url || currentSrc === image.medium?.url;
-      if (!isCurrentWorse) setCurrentSrc(image.thumbnail.url);
-    }
+    if (!currentSrc && image.thumbnail?.url) setCurrentSrc(image.thumbnail.url);
 
     (async () => {
       for (const url of srcs) {
@@ -80,6 +82,7 @@ export function TelegramImage(props: {
         try {
           await imageLoad(url, ac.signal);
           if (!ac.signal.aborted) {
+            if (DEBUG) console.log('[TelegramImage] loaded', image.id, 'len:', url.length);
             setCurrentSrc(url);
             setLoaded(true);
             setError(false);
@@ -87,10 +90,12 @@ export function TelegramImage(props: {
             return;
           }
         } catch {
+          if (DEBUG) console.log('[TelegramImage] load FAIL', image.id, 'len:', url.length);
           continue;
         }
       }
       if (!ac.signal.aborted) {
+        if (DEBUG) console.log('[TelegramImage] all srcs failed', image.id);
         setError(true);
       }
     })();
@@ -110,9 +115,11 @@ export function TelegramImage(props: {
   const aspect = imgW0 / imgH0;
   let imgW = width || Math.min(imgW0, maxWidth || 320);
   let imgH = imgW / aspect;
+  if (height != null && imgH > height) { imgH = height; imgW = imgH * aspect; }
   if (maxWidth && imgW > maxWidth) { imgW = maxWidth; imgH = imgW / aspect; }
   if (maxHeight && imgH > maxHeight) { imgH = maxHeight; imgW = imgH * aspect; }
-  const dimStyle = 'width:' + Math.round(Math.max(imgW, 1)) + 'px;height:' + Math.round(Math.max(imgH, 1)) + 'px';
+  const exactFill = width != null && height != null ? `width:${Math.round(width)}px;height:${Math.round(height)}px` : '';
+  const dimStyle = exactFill || 'width:' + Math.round(Math.max(imgW, 1)) + 'px;height:' + Math.round(Math.max(imgH, 1)) + 'px';
 
   if (!visible) {
     return (
@@ -132,19 +139,30 @@ export function TelegramImage(props: {
 
   const showThumb = image.thumbnail?.url && currentSrc !== image.original?.url && currentSrc !== image.medium?.url;
 
+  if (DEBUG && currentSrc) {
+    console.log('[TelegramImage] render', image.id, 'currentSrc len:', currentSrc.length, 'loaded:', loaded, 'visible:', visible, 'src == original:', currentSrc === image.original?.url);
+  }
+
+  const handleClick = () => {
+    if (loaded && onOpenViewer) onOpenViewer(image.id);
+  };
+
   return (
     <div
       ref={handleRef}
       class={'TelegramImage' + (loaded ? ' TelegramImage_loaded' : '') + (rounded ? ' TelegramImage_rounded' : '')}
       style={dimStyle}
+      onClick={handleClick}
     >
       {showThumb ? (
-        <img class="TelegramImage__thumb" src={image.thumbnail!.url} />
+        <img class="TelegramImage__thumb" src={image.thumbnail!.url} decoding="async" alt="" />
       ) : null}
       {currentSrc ? (
         <img
           class={'TelegramImage__img' + (loaded ? ' TelegramImage__img_loaded' : '')}
           src={currentSrc}
+          decoding="async"
+          alt=""
         />
       ) : (
         <div class="TelegramImage__placeholder" />

@@ -56,11 +56,11 @@ export class TelegramWorkerClient {
         return this.client.callRpc(methodName, params);
     }
 
-    async downloadFile(document: any, photo: any): Promise<{ fileType: string; bytes: string; error?: string; cacheSource?: string }> {
+    async downloadFile(document: any, photo: any): Promise<{ fileType: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }> {
         return this.client.downloadFile(document, photo);
     }
 
-    async downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: string; error?: string; cacheSource?: string }>> {
+    async downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
         return this.client.downloadFiles(docs);
     }
 
@@ -72,11 +72,11 @@ export class TelegramWorkerClient {
         return this.client.requestPeerAvatar(peerType, peerId, accessHash, photo);
     }
 
-    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
+    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return this.client.startPhotoDownload(photo, sizeType, messageId, onProgress);
     }
 
-    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
+    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return this.client.requestPhotoDownload(photo, sizeType, messageId);
     }
 

@@ -23,7 +23,7 @@ export class SharedWorkerClient {
     async start(apiId: number, apiHash: string): Promise<void> {
         if (this.worker) return;
         try {
-            this.worker = new SharedWorker(new URL('./shared-worker.ts', import.meta.url), { name: 'gram-browser' });
+            this.worker = new SharedWorker(new URL('./shared-worker.ts', import.meta.url), { name: 'gram-browser-v2' });
         } catch (e: any) {
             throw new Error('Failed to create SharedWorker: ' + e.message);
         }
@@ -121,11 +121,11 @@ export class SharedWorkerClient {
         return this.send({ type: 'callRpc', methodName, params });
     }
 
-    async downloadFile(document: any, photo: any): Promise<{ fileType: string; bytes: string; error?: string; cacheSource?: string }> {
+    async downloadFile(document: any, photo: any): Promise<{ fileType: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }> {
         return this.send({ type: 'downloadFile', document, photo }, 120_000);
     }
 
-    async downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: string; error?: string; cacheSource?: string }>> {
+    async downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
         const resp = await this.send({ type: 'downloadFiles', docs }, 300_000);
         return resp && Array.isArray(resp.results) ? resp.results : [];
     }
@@ -161,7 +161,7 @@ export class SharedWorkerClient {
         return r.avatarUrl;
     }
 
-    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
+    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return new Promise((resolve, reject) => {
             if (!this.port) { reject(new Error('Not started')); return; }
             const id = ++this.msgId;
@@ -183,7 +183,7 @@ export class SharedWorkerClient {
         });
     }
 
-    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ photoUrl: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
+    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return this.send({ type: 'requestPhotoDownload', photo, sizeType, messageId }, 120_000);
     }
 

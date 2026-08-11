@@ -161,7 +161,6 @@ export class MCPClient extends EventEmitter {
 
       this.isReady = true;
       this.emit(MCP_EVENTS.READY);
-
     } catch (error) {
       this.logger.error('Failed to initialize stdio mode:', error);
       this.emit(MCP_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
@@ -254,7 +253,6 @@ export class MCPClient extends EventEmitter {
       }
 
       return data.result;
-
     } catch (error: unknown) {
       if (error instanceof Error) {
         if (error.name === 'AbortError') {

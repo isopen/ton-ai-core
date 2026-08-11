@@ -2,6 +2,7 @@ import { loadTgs, renderFrame } from '@ton-ai/tgs';
 import type { ParsedAnimation } from '@ton-ai/tgs';
 import type { AnimatedRendererParams, AnimatedRendererView, IAnimatedRenderer } from './types.js';
 import { isPageFocused } from './page-focus.js';
+import { resetDrawBudgetIfExpired, tryAcquireDrawCall } from './draw-budget.js';
 
 const RENDER_BUDGET = 6;
 const MAX_MAIN_LOADS = 2;
@@ -28,6 +29,15 @@ function releaseMainLoad(): void {
 
 const instancesByRenderId = new Map<string, MainThreadRenderer>();
 
+const PARK_TTL_MS = 30_000;
+const MAX_PARKED = 48;
+const parkOrder: string[] = [];
+
+function unpark(renderId: string) {
+  const i = parkOrder.indexOf(renderId);
+  if (i >= 0) parkOrder.splice(i, 1);
+}
+
 export class MainThreadRenderer implements IAnimatedRenderer {
   private views = new Map<string, AnimatedRendererView>();
 
@@ -41,6 +51,8 @@ export class MainThreadRenderer implements IAnimatedRenderer {
 
   private isDestroyed = false;
 
+  private loadFailed = false;
+
   private raf = 0;
 
   private lastDraw = 0;
@@ -51,6 +63,50 @@ export class MainThreadRenderer implements IAnimatedRenderer {
 
   private startTimes = new Map<string, number>();
 
+  private destroyTimer = 0;
+
+  private heartbeatTimer = 0;
+  private lastPaintAt = 0;
+  private heartbeatFrozenStalls = 0;
+
+  private startHeartbeat() {
+    if (this.heartbeatTimer) return;
+    this.heartbeatTimer = window.setInterval(() => this.checkHeartbeat(), 2500);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      window.clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = 0;
+    }
+  }
+
+  private checkHeartbeat() {
+    if (this.isDestroyed || this.views.size === 0) return;
+    const wantsPaint = Array.from(this.views.values()).some((v) => !v.isPaused);
+    if (!wantsPaint) return;
+    const now = performance.now();
+    if (!this.lastPaintAt) {
+      this.lastPaintAt = now;
+      return;
+    }
+    if (now - this.lastPaintAt < 4000) return;
+    console.warn(
+      '[AnimatedRenderer] main-thread anim frozen (no paint for ' + Math.round((now - this.lastPaintAt) / 1000) + 's):',
+      this.renderId,
+      { framesCount: this.framesCount, views: this.views.size, url: this.tgsUrl.slice(0, 48) },
+    );
+    this.heartbeatFrozenStalls++;
+    if (this.heartbeatFrozenStalls >= 2) {
+      this.loadFailed = true;
+      for (const view of this.views.values()) view.onError?.();
+      return;
+    }
+    this.anim = undefined;
+    this.loadFailed = false;
+    this.load();
+  }
+
   static init(
     tgsUrl: string,
     container: HTMLElement | HTMLCanvasElement,
@@ -58,6 +114,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     params: AnimatedRendererParams,
     viewId: string,
     onLoad?: () => void,
+    onError?: () => void,
     onFrame?: (index: number) => void,
   ): MainThreadRenderer {
     let instance = instancesByRenderId.get(renderId);
@@ -65,19 +122,11 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       instance = new MainThreadRenderer(tgsUrl, renderId, params);
       instancesByRenderId.set(renderId, instance);
     } else if (instance.tgsUrl !== tgsUrl) {
-      instance.reinitWithUrl(tgsUrl);
+      instance.tgsUrl = tgsUrl;
+      if (!instance.anim) instance.load();
     }
-    instance.addView(viewId, container, onLoad, onFrame, params.coords);
+    instance.addView(viewId, container, onLoad, onError, onFrame, params.coords);
     return instance;
-  }
-
-  private reinitWithUrl(tgsUrl: string) {
-    if (this.isDestroyed) return;
-    this.tgsUrl = tgsUrl;
-    this.anim = undefined;
-    this.framesCount = 1;
-    for (const view of this.views.values()) view.isLoaded = false;
-    this.load();
   }
 
   private constructor(
@@ -86,6 +135,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     private params: AnimatedRendererParams,
   ) {
     this.imgSize = Math.round(params.size * Math.max((window.devicePixelRatio || 1) * (params.quality ?? 1), 1));
+    this.startHeartbeat();
     this.load();
   }
 
@@ -100,8 +150,26 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     }
     this.views.delete(viewId);
     if (!this.views.size) {
-      this.destroy();
+      this.park();
     }
+  }
+
+  private park() {
+    this.isPlayingFlag = false;
+    cancelAnimationFrame(this.raf);
+    if (this.destroyTimer) return;
+    if (!parkOrder.includes(this.renderId)) parkOrder.push(this.renderId);
+    while (parkOrder.length > MAX_PARKED) {
+      const id = parkOrder.shift()!;
+      const instance = instancesByRenderId.get(id);
+      if (instance && instance.views.size === 0 && !instance.destroyTimer) {
+        instance.destroy();
+      }
+    }
+    this.destroyTimer = window.setTimeout(() => {
+      unpark(this.renderId);
+      if (instancesByRenderId.get(this.renderId) === this) this.destroy();
+    }, PARK_TTL_MS);
   }
 
   isPlaying() {
@@ -153,9 +221,15 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     viewId: string,
     container: HTMLElement | HTMLCanvasElement,
     onLoad?: () => void,
+    onError?: () => void,
     onFrame?: (index: number) => void,
     coords?: { x: number; y: number },
   ) {
+    if (this.destroyTimer) {
+      window.clearTimeout(this.destroyTimer);
+      this.destroyTimer = 0;
+    }
+    unpark(this.renderId);
     if (container instanceof HTMLDivElement) {
       const canvas = document.createElement('canvas');
       canvas.className = 'tgui-animated-sticker-canvas';
@@ -164,7 +238,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       canvas.width = this.imgSize;
       canvas.height = this.imgSize;
       container.appendChild(canvas);
-      this.views.set(viewId, { canvas, ctx: canvas.getContext('2d')!, onLoad, onFrame });
+      this.views.set(viewId, { canvas, ctx: canvas.getContext('2d')!, onLoad, onError, onFrame });
     } else {
       const canvas = container as HTMLCanvasElement;
       const ctx = canvas.getContext('2d')!;
@@ -175,23 +249,36 @@ export class MainThreadRenderer implements IAnimatedRenderer {
           isSharedCanvas: true,
           coords: { x: coords?.x || 0, y: coords?.y || 0 },
           onLoad,
+          onError,
           onFrame,
         });
       } else {
         if (canvas.width < this.imgSize) canvas.width = this.imgSize;
         if (canvas.height < this.imgSize) canvas.height = this.imgSize;
-        this.views.set(viewId, { canvas, ctx, onLoad, onFrame });
+        this.views.set(viewId, { canvas, ctx, onLoad, onError, onFrame });
       }
     }
     if (this.anim && this.isPlayingFlag) {
       this.startLoop();
+    } else if (this.isDestroyed) {
+      onError?.();
+    } else if (this.loadFailed) {
+      onError?.();
+    } else if (!this.anim) {
+      this.load();
     }
   }
 
   destroy() {
+    unpark(this.renderId);
+    if (this.destroyTimer) {
+      window.clearTimeout(this.destroyTimer);
+      this.destroyTimer = 0;
+    }
     this.isDestroyed = true;
+    this.stopHeartbeat();
     cancelAnimationFrame(this.raf);
-    instancesByRenderId.delete(this.renderId);
+    if (instancesByRenderId.get(this.renderId) === this) instancesByRenderId.delete(this.renderId);
   }
 
   private async load() {
@@ -215,6 +302,12 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       }
     } catch (err: any) {
       console.error('[AnimatedRenderer] main-thread init error:', this.renderId, err?.message || err);
+      if (!this.isDestroyed) {
+        this.loadFailed = true;
+        for (const view of this.views.values()) {
+          view.onError?.();
+        }
+      }
     } finally {
       releaseMainLoad();
     }
@@ -240,11 +333,13 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     const total = views.length;
     if (total === 0) return;
     const dpr = Math.max((window.devicePixelRatio || 1) * (this.params.quality ?? 1), 1);
+    resetDrawBudgetIfExpired(now);
     let rendered = 0;
     for (let k = 0; k < total && rendered < RENDER_BUDGET; k++) {
       const idx = (this.cursor + k) % total;
       const [viewId, view] = views[idx];
       if (view.isPaused) continue;
+      if (!tryAcquireDrawCall()) break;
       let startT = this.startTimes.get(viewId) || 0;
       if (!startT) {
         startT = now;
@@ -275,6 +370,8 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     if (rendered > 0) {
       this.cursor = (this.cursor + rendered) % total;
       this.lastDraw = now;
+      this.lastPaintAt = now;
+      this.heartbeatFrozenStalls = 0;
     }
   }
 }

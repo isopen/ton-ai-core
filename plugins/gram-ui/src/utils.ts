@@ -140,7 +140,6 @@ function thumbUrl(s: any): string {
 }
 
 export function buildDocumentThumb(doc: any): { url: string; width: number; height: number; isDownloading?: boolean } | null {
-  // Try doc.thumbs first (photoCachedSize/photoStrippedSize with inline bytes)
   if (doc?.thumbs?.length) {
     let best: any = null;
     const prio = ['m', 'x', 'y', 'w', 'v', 'u'];
@@ -153,12 +152,11 @@ export function buildDocumentThumb(doc: any): { url: string; width: number; heig
     if (u) return { url: u, width: best.w || 0, height: best.h || 0 };
   }
 
-  // Try video_thumbs (VideoSize entries, need separate download)
   if (doc?.video_thumbs?.length) {
     const vt = doc.video_thumbs[0];
     const u = thumbUrl(vt);
     if (u) return { url: u, width: vt.w || 0, height: vt.h || 0 };
-    // url/src not populated yet, signal that download is needed
+
     return { url: '', width: vt.w || 0, height: vt.h || 0, isDownloading: false };
   }
 

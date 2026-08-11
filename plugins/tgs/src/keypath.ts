@@ -26,10 +26,6 @@ export type PropertyValue =
 
 const overrides = new WeakMap<object, PropertyValue>();
 
-/**
- * rlottie keypath matching (lottiekeypath.cpp): segments separated by '.',
- * `*` matches a single segment, `**` matches any number of segments.
- */
 export function matchKeyPath(pattern: string, path: string[]): boolean {
     const p = pattern.split('.').filter((s) => s.length > 0);
     const s = path;
@@ -155,11 +151,6 @@ function walkShapes(shapes: ParsedShape[], path: string[], keypath: string, prop
     return matched;
 }
 
-/**
- * Port of rlottie's Animation::setValue(): override a property by keypath.
- * `value` can be a constant (color [r,g,b] in 0..1, point [x,y], size or
- * number) or a function of FrameInfo evaluated per frame.
- */
 export function setValue(
     animation: ParsedAnimation,
     keypath: string,

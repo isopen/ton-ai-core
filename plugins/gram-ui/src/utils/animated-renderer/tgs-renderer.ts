@@ -1,7 +1,9 @@
 import type { AnimatedRendererParams, AnimatedRendererView, IAnimatedRenderer } from './types.js';
-import { getMediaWorkers, MAX_WORKERS } from './media-workers.js';
+import { getMediaWorkers, MAX_WORKERS, respawnWorker } from './media-workers.js';
 import type { MediaWorker } from './media-workers.js';
 import { isPageFocused } from './page-focus.js';
+import { inflateTgs } from '@ton-ai/tgs';
+import { resetDrawBudgetIfExpired, tryAcquireDrawCall } from './draw-budget.js';
 
 const HIGH_PRIORITY_QUALITY = 1;
 const LOW_PRIORITY_QUALITY = 0.75;
@@ -9,6 +11,7 @@ const LOW_PRIORITY_QUALITY_SIZE_THRESHOLD = 24;
 const HIGH_PRIORITY_CACHE_MODULO = 4;
 const LOW_PRIORITY_CACHE_MODULO = 0;
 const CANVAS_CLASS = 'tgui-animated-sticker-canvas';
+const TGS_DEBUG = false;
 
 const WAITING = Symbol('WAITING') as unknown as undefined;
 type Frame = undefined | typeof WAITING | ImageBitmap;
@@ -20,12 +23,84 @@ function cycleRestrict(max: number, i: number): number {
 const instancesByRenderId = new Map<string, TgsRenderer>();
 let lastWorkerIndex = -1;
 
+const PARK_TTL_MS = 30_000;
+const MAX_PARKED = 48;
+const TGS_JSON_CACHE_MAX = 256;
+
+const tgsJsonCache = new Map<string, string>();
+const tgsJsonCacheTs = new Map<string, number>();
+let tgsJsonSweepAt = 0;
+const TGS_JSON_TTL_MS = 30 * 60 * 1000;
+const sweepTgsJsonCache = (now: number) => {
+  if (tgsJsonCache.size < 64 || now < tgsJsonSweepAt) return;
+  tgsJsonSweepAt = now + 120_000;
+  const cutoff = now - TGS_JSON_TTL_MS;
+  for (const [url, ts] of tgsJsonCacheTs) {
+    if (ts < cutoff) {
+      tgsJsonCache.delete(url);
+      tgsJsonCacheTs.delete(url);
+    }
+  }
+};
+const setTgsJsonCached = (url: string, text: string) => {
+  if (tgsJsonCache.size >= TGS_JSON_CACHE_MAX) {
+    const oldest = tgsJsonCache.keys().next().value;
+    if (oldest !== undefined) {
+      tgsJsonCache.delete(oldest);
+      tgsJsonCacheTs.delete(oldest);
+    }
+  }
+  const now = Date.now();
+  tgsJsonCache.set(url, text);
+  tgsJsonCacheTs.set(url, now);
+  sweepTgsJsonCache(now);
+};
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('tg-emoji-url', (e: Event) => {
+    const { url, json } = (e as CustomEvent).detail || {};
+    if (typeof url !== 'string' || typeof json !== 'string' || !json) return;
+    if (tgsJsonCache.has(url)) return;
+    setTgsJsonCached(url, json);
+  });
+}
+
+async function getTgsJson(url: string): Promise<string | undefined> {
+  if (!url) return undefined;
+  const cached = tgsJsonCache.get(url);
+  if (cached) {
+    tgsJsonCacheTs.set(url, Date.now());
+    return cached;
+  }
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return undefined;
+    const ct = (resp.headers.get('content-type') || '').toLowerCase();
+    const text = ct.startsWith('text/') || ct.includes('json')
+      ? await resp.text()
+      : await inflateTgs(new Uint8Array(await resp.arrayBuffer()));
+    if (!text) return undefined;
+    setTgsJsonCached(url, text);
+    return text;
+  } catch {
+    return undefined;
+  }
+}
+const parkOrder: string[] = [];
+
+function unpark(renderId: string) {
+  const i = parkOrder.indexOf(renderId);
+  if (i >= 0) parkOrder.splice(i, 1);
+}
+
 export class TgsRenderer implements IAnimatedRenderer {
   private views = new Map<string, AnimatedRendererView>();
 
   private imgSize = 0;
 
   private msPerFrame = 1000 / 60;
+
+  private destroyTimer = 0;
 
   private reduceFactor = 1;
 
@@ -50,6 +125,68 @@ export class TgsRenderer implements IAnimatedRenderer {
   private isRendererInited = false;
 
   private loggedFrameError = false;
+
+  private heartbeatTimer = 0;
+  private lastPaintAt = 0;
+  private heartbeatFrozenReinit = false;
+  private heartbeatFrozenStalls = 0;
+
+  private startHeartbeat() {
+    if (this.heartbeatTimer) return;
+    this.heartbeatTimer = window.setInterval(() => this.checkHeartbeat(), 2500);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      window.clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = 0;
+    }
+  }
+
+  private checkHeartbeat() {
+    if (this.isDestroyed || this.views.size === 0) return;
+    const wantsPaint = Array.from(this.views.values()).some((v) => !v.isPaused);
+    if (!wantsPaint || !isPageFocused()) return;
+    if (this.framesCount === 1) {
+      return;
+    }
+    const now = Date.now();
+    if (!this.lastPaintAt) {
+      this.lastPaintAt = now;
+      return;
+    }
+    if (now - this.lastPaintAt < 4000) return;
+    const loadedFrames = this.frames.filter((f) => f && f !== WAITING).length;
+    console.warn(
+      '[AnimatedRenderer] anim frozen (no paint for ' + Math.round((now - this.lastPaintAt) / 1000) + 's):',
+      this.renderId,
+      {
+        isRendererInited: this.isRendererInited,
+        isAnimating: this.isAnimating,
+        isWaiting: this.isWaiting,
+        framesCount: this.framesCount,
+        framesLoaded: loadedFrames,
+        prevFrameIndex: this.prevFrameIndex,
+        approxFrameIndex: this.approxFrameIndex,
+        views: this.views.size,
+        url: this.tgsUrl.slice(0, 48),
+      },
+    );
+    if (!this.heartbeatFrozenReinit) {
+      this.heartbeatFrozenReinit = true;
+      this.isAnimating = false;
+      this.isWaiting = true;
+      this.initRenderer();
+      return;
+    }
+    this.heartbeatFrozenStalls++;
+    if (this.heartbeatFrozenStalls >= 2) {
+      respawnWorker(this.worker);
+      this.failViews();
+      return;
+    }
+    this.lastPaintAt = now;
+  }
 
   private consecutiveFrameErrors = 0;
 
@@ -78,6 +215,7 @@ export class TgsRenderer implements IAnimatedRenderer {
     params: AnimatedRendererParams,
     viewId: string,
     onLoad?: () => void,
+    onError?: () => void,
     onFrame?: (index: number) => void,
   ): TgsRenderer {
     let instance = instancesByRenderId.get(renderId);
@@ -85,27 +223,16 @@ export class TgsRenderer implements IAnimatedRenderer {
       instance = new TgsRenderer(tgsUrl, renderId, params);
       instancesByRenderId.set(renderId, instance);
     } else if (instance.tgsUrl !== tgsUrl) {
-      // The URL changed (e.g. the old blob URL was revoked and re-downloaded).
-      // Reuse the container pool but force a fresh worker init with the new URL.
-      instance.reinitWithUrl(tgsUrl);
+      instance.tgsUrl = tgsUrl;
+      instance.initFailed = false;
+      instance.initAttempts = 0;
+      instance.tgsJsonMisses = 0;
+      if (!instance.isRendererInited && !instance.isDestroyed) {
+        instance.initRenderer();
+      }
     }
-    instance.addView(viewId, container, onLoad, onFrame, params.coords);
+    instance.addView(viewId, container, onLoad, onError, onFrame, params.coords);
     return instance;
-  }
-
-  private reinitWithUrl(tgsUrl: string) {
-    if (this.isDestroyed) return;
-    this.tgsUrl = tgsUrl;
-    this.isRendererInited = false;
-    this.framesCount = undefined;
-    this.isWaiting = true;
-    this.isAnimating = false;
-    this.reinitAttempted = false;
-    this.loggedFrameError = false;
-    this.consecutiveFrameErrors = 0;
-    this.clearCache();
-    this.destroyRenderer();
-    this.initRenderer();
   }
 
   static get(renderId: string): TgsRenderer | undefined {
@@ -140,6 +267,30 @@ export class TgsRenderer implements IAnimatedRenderer {
     return out;
   }
 
+  static diag(): string[] {
+    const now = Date.now();
+    const out: string[] = [];
+    for (const [renderId, r] of instancesByRenderId) {
+      const loaded = r.frames.filter((f) => f && f !== WAITING).length;
+      const fps = r.framesCount ? Math.round((r.framesCount || 0) * 1000 / r.msPerFrame) : 0;
+      out.push(
+        renderId
+        + ' fps~' + fps
+        + ' frames=' + (r.framesCount ?? '?')
+        + ' loaded=' + loaded
+        + ' anim=' + (r.isAnimating ? 'y' : 'n')
+        + ' wait=' + (r.isWaiting ? 'y' : 'n')
+        + ' inited=' + (r.isRendererInited ? 'y' : 'n')
+        + ' failed=' + (r.initFailed ? 'y' : 'n')
+        + ' attempts=' + r.initAttempts
+        + ' lastPaint=' + (r.lastPaintAt ? Math.round((now - r.lastPaintAt) / 1000) + 's' : 'never')
+        + ' views=' + r.views.size
+        + ' url=' + (r.tgsUrl || '').slice(0, 40),
+      );
+    }
+    return out;
+  }
+
   get framesCountValue(): number {
     return this.framesCount || 0;
   }
@@ -151,6 +302,7 @@ export class TgsRenderer implements IAnimatedRenderer {
   ) {
     this.initConfig();
     this.imgSize = Math.round(params.size * this.calcSizeFactor());
+    this.startHeartbeat();
     this.initRenderer();
   }
 
@@ -166,8 +318,41 @@ export class TgsRenderer implements IAnimatedRenderer {
     }
     this.views.delete(viewId);
     if (!this.views.size) {
-      this.destroy();
+      this.park();
     }
+  }
+
+  private failViews() {
+    this.initFailed = true;
+
+    const colon = this.renderId.lastIndexOf(':');
+    const docPart = colon > 0 ? this.renderId.slice(0, colon) : this.renderId;
+    const docId = docPart.startsWith('emojipack-') ? docPart.slice('emojipack-'.length) : docPart;
+    if (typeof window !== 'undefined' && docId) {
+      window.dispatchEvent(new CustomEvent('tg-emoji-bad', { detail: { docId, url: this.tgsUrl } }));
+    }
+    for (const view of this.views.values()) {
+      view.onError?.();
+    }
+  }
+
+  private park() {
+    this.isAnimating = false;
+    cancelAnimationFrame(this.raf);
+    if (this.destroyTimer) return;
+    if (!parkOrder.includes(this.renderId)) parkOrder.push(this.renderId);
+
+    while (parkOrder.length > MAX_PARKED) {
+      const id = parkOrder.shift()!;
+      const instance = instancesByRenderId.get(id);
+      if (instance && instance.views.size === 0 && !instance.destroyTimer) {
+        instance.destroy();
+      }
+    }
+    this.destroyTimer = window.setTimeout(() => {
+      unpark(this.renderId);
+      if (instancesByRenderId.get(this.renderId) === this) this.destroy();
+    }, PARK_TTL_MS);
   }
 
   isPlaying() {
@@ -240,9 +425,15 @@ export class TgsRenderer implements IAnimatedRenderer {
     viewId: string,
     container: HTMLElement | HTMLCanvasElement,
     onLoad?: () => void,
+    onError?: () => void,
     onFrame?: (index: number) => void,
     coords?: { x: number; y: number },
   ) {
+    if (this.destroyTimer) {
+      window.clearTimeout(this.destroyTimer);
+      this.destroyTimer = 0;
+    }
+    unpark(this.renderId);
     const sizeFactor = this.calcSizeFactor();
     const imgSize = Math.round(this.params.size * sizeFactor);
     if (!this.imgSize) this.imgSize = imgSize;
@@ -259,6 +450,7 @@ export class TgsRenderer implements IAnimatedRenderer {
         canvas,
         ctx: canvas.getContext('2d')!,
         onLoad,
+        onError,
         onFrame,
       });
     } else {
@@ -271,17 +463,24 @@ export class TgsRenderer implements IAnimatedRenderer {
           isSharedCanvas: true,
           coords: { x: coords?.x || 0, y: coords?.y || 0 },
           onLoad,
+          onError,
           onFrame,
         });
       } else {
         if (canvas.width !== imgSize) canvas.width = imgSize;
         if (canvas.height !== imgSize) canvas.height = imgSize;
-        this.views.set(viewId, { canvas, ctx, onLoad, onFrame });
+        this.views.set(viewId, { canvas, ctx, onLoad, onError, onFrame });
       }
     }
 
     if (this.isRendererInited) {
       this.doPlay();
+    } else if (this.isDestroyed) {
+      onError?.();
+    } else if (this.initFailed) {
+      onError?.();
+    } else if (!this.initInFlight) {
+      this.initRenderer();
     }
   }
 
@@ -294,12 +493,28 @@ export class TgsRenderer implements IAnimatedRenderer {
   }
 
   destroy() {
+    unpark(this.renderId);
+    this.initRetryQueued = false;
+    this.initGeneration++;
+    if (this.initRetryTimer) {
+      window.clearTimeout(this.initRetryTimer);
+      this.initRetryTimer = 0;
+    }
+    if (this.destroyTimer) {
+      window.clearTimeout(this.destroyTimer);
+      this.destroyTimer = 0;
+    }
     this.isDestroyed = true;
+    this.stopHeartbeat();
+    if (this.frameStallTimer) {
+      clearTimeout(this.frameStallTimer);
+      this.frameStallTimer = 0;
+    }
     this.pause();
     this.clearCache();
     this.destroyRenderer();
     cancelAnimationFrame(this.raf);
-    instancesByRenderId.delete(this.renderId);
+    if (instancesByRenderId.get(this.renderId) === this) instancesByRenderId.delete(this.renderId);
   }
 
   private clearCache() {
@@ -315,19 +530,69 @@ export class TgsRenderer implements IAnimatedRenderer {
 
   private initAttempts = 0;
 
-  private initRenderer() {
-    this.workerIndex = cycleRestrict(MAX_WORKERS, ++lastWorkerIndex);
-    this.worker = getMediaWorkers()[this.workerIndex];
-    if (!this.worker) throw new Error('No media workers available');
-    this.initAttempts++;
-    this.worker.request('tgs:init', { renderId: this.renderId, tgsUrl: this.tgsUrl, imgSize: this.imgSize, isLowPriority: this.params.isLowPriority || false })
-      .then((res: any) => this.onRendererInit(res.reduceFactor, res.msPerFrame, res.framesCount))
-      .catch((err: Error) => {
-        console.error('[AnimatedRenderer] worker init error:', this.renderId, err?.message || err);
-        if (this.initAttempts <= 2 && !this.isDestroyed) {
-          this.initRenderer();
+  private initFailed = false;
+
+  private initInFlight = false;
+
+  private initGeneration = 0;
+
+  private initRetryQueued = false;
+
+  private tgsJsonMisses = 0;
+  private initRetryTimer = 0;
+
+  private async initRenderer() {
+    if (this.initInFlight) return;
+    this.initInFlight = true;
+    const gen = ++this.initGeneration;
+    this.initFailed = false;
+    try {
+      this.workerIndex = cycleRestrict(MAX_WORKERS, ++lastWorkerIndex);
+      this.worker = getMediaWorkers()[this.workerIndex];
+      if (!this.worker) throw new Error('No media workers available');
+      this.initAttempts++;
+      const tgsJson = await getTgsJson(this.tgsUrl);
+      if (gen !== this.initGeneration || this.isDestroyed) return;
+      if (tgsJson === undefined) {
+        if (this.tgsJsonMisses < 3) {
+          this.tgsJsonMisses++;
+          this.initRetryTimer = window.setTimeout(() => {
+            if (!this.isDestroyed && gen === this.initGeneration) this.initRenderer();
+          }, this.tgsJsonMisses * 1000);
+        } else {
+          if (!this.loggedFrameError) {
+            this.loggedFrameError = true;
+            console.warn('[tgs] init failed: no JSON for', this.renderId, 'url=' + this.tgsUrl.slice(0, 40));
+          }
+          this.failViews();
         }
-      });
+        return;
+      }
+      this.tgsJsonMisses = 0;
+      if (TGS_DEBUG) console.log('[tgs] init attempt #' + this.initAttempts, this.renderId, 'json=' + (tgsJson ? tgsJson.length + 'B' : 'NONE'));
+      const res: any = await this.worker.request('tgs:init', { renderId: this.renderId, tgsUrl: this.tgsUrl, tgsJson, imgSize: this.imgSize, isLowPriority: this.params.isLowPriority || false, debug: !!(window as any).__TG_DEBUG_EMOJI });
+      if (gen !== this.initGeneration || this.isDestroyed) return;
+      if (res?.animDebug) {
+        const w = window as any;
+        w.__tgDebugAnims = w.__tgDebugAnims || {};
+        w.__tgDebugAnims[this.renderId] = res.animDebug;
+      }
+      this.onRendererInit(res.reduceFactor, res.msPerFrame, res.framesCount);
+    } catch (err: any) {
+      if (gen !== this.initGeneration || this.isDestroyed) return;
+      console.error('[AnimatedRenderer] worker init error:', this.renderId, err?.message || err);
+      if (this.initAttempts <= 2) {
+        this.initRetryQueued = true;
+      } else {
+        this.failViews();
+      }
+    } finally {
+      this.initInFlight = false;
+      if (this.initRetryQueued && !this.isDestroyed) {
+        this.initRetryQueued = false;
+        this.initRenderer();
+      }
+    }
   }
 
   private destroyRenderer() {
@@ -339,11 +604,17 @@ export class TgsRenderer implements IAnimatedRenderer {
   private onRendererInit(reduceFactor: number, msPerFrame: number, framesCount: number) {
     if (this.isDestroyed) return;
     this.isRendererInited = true;
+    this.initFailed = false;
+    this.initAttempts = 0;
     this.reinitAttempted = false;
     this.consecutiveFrameErrors = 0;
     this.reduceFactor = reduceFactor;
     this.msPerFrame = msPerFrame;
     this.framesCount = framesCount;
+
+    this.prevFrameIndex = -1;
+    this.heartbeatFrozenReinit = false;
+    this.heartbeatFrozenStalls = 0;
     if (this.isWaiting) {
       this.doPlay();
     }
@@ -395,25 +666,39 @@ export class TgsRenderer implements IAnimatedRenderer {
       this.cleanupPrevFrame(frameIndex);
     }
 
-    if (frameIndex !== this.prevFrameIndex) {
-      this.views.forEach((view) => {
-        const { ctx, isLoaded, isPaused, onLoad, onFrame } = view;
-        if (!isLoaded || !isPaused) {
-          if (view.isSharedCanvas) {
-            const c = this.getScaledCoords(view);
-            ctx.clearRect(c.x, c.y, this.imgSize, this.imgSize);
-            ctx.drawImage(frame, c.x, c.y);
-          } else {
-            ctx.clearRect(0, 0, this.imgSize, this.imgSize);
-            ctx.drawImage(frame, 0, 0);
-          }
-          onFrame?.(frameIndex);
-        }
-        if (!isLoaded) {
-          view.isLoaded = true;
-          onLoad?.();
-        }
-      });
+    const frameChanged = frameIndex !== this.prevFrameIndex;
+
+    resetDrawBudgetIfExpired(performance.now());
+
+    this.views.forEach((view) => {
+      const { ctx, isLoaded, isPaused, onLoad, onFrame } = view;
+      if (isLoaded && isPaused) return;
+      if (!frameChanged && !view.isDirty) return;
+      if (!tryAcquireDrawCall()) {
+        view.isDirty = true;
+        return;
+      }
+      view.isDirty = false;
+      if (view.isSharedCanvas) {
+        const c = this.getScaledCoords(view);
+        ctx.clearRect(c.x, c.y, this.imgSize, this.imgSize);
+        ctx.drawImage(frame, c.x, c.y);
+      } else {
+        ctx.clearRect(0, 0, this.imgSize, this.imgSize);
+        ctx.drawImage(frame, 0, 0);
+      }
+      onFrame?.(frameIndex);
+      this.lastPaintAt = Date.now();
+      this.heartbeatFrozenReinit = false;
+      this.heartbeatFrozenStalls = 0;
+      if (!isLoaded) {
+        view.isLoaded = true;
+        if (TGS_DEBUG) console.log('[tgs] first frame drawn', this.renderId, 'fr=' + frameIndex, 'shared=' + !!view.isSharedCanvas, 'pos=' + (view.coords ? view.coords.x.toFixed(3) + ',' + view.coords.y.toFixed(3) : '-'));
+        onLoad?.();
+      }
+    });
+
+    if (frameChanged) {
       this.prevFrameIndex = frameIndex;
     }
 
@@ -452,6 +737,9 @@ export class TgsRenderer implements IAnimatedRenderer {
     }
 
     const nextFrameIndex = Math.round(this.approxFrameIndex);
+    if (this.framesCount === 1) {
+      return false;
+    }
     if (!this.getFrame(nextFrameIndex)) {
       this.requestFrame(nextFrameIndex);
       this.isWaiting = true;
@@ -470,21 +758,40 @@ export class TgsRenderer implements IAnimatedRenderer {
     this.frames[frameIndex] = WAITING;
     this.worker.request('tgs:renderFrames', { renderId: this.renderId, frameIndex })
       .then((res: any) => {
+        if (this.frameStallTimer) {
+          clearTimeout(this.frameStallTimer);
+          this.frameStallTimer = 0;
+        }
         this.consecutiveFrameErrors = 0;
         this.onFrameLoad(res.frameIndex, res.imageBitmap);
       })
       .catch((err: Error) => {
+        if (this.frameStallTimer) {
+          clearTimeout(this.frameStallTimer);
+          this.frameStallTimer = 0;
+        }
         this.frames[frameIndex] = undefined;
+        if (String(err?.message || err).includes('TGS anim not found')) {
+          this.isAnimating = false;
+          cancelAnimationFrame(this.raf);
+          if (!this.reinitAttempted) {
+            this.reinitAttempted = true;
+            if (!this.loggedFrameError) {
+              this.loggedFrameError = true;
+              console.warn('[AnimatedRenderer] anim dropped, reinitializing:', this.renderId);
+            }
+
+            this.isWaiting = true;
+            this.initRenderer();
+          }
+          return;
+        }
         this.consecutiveFrameErrors++;
         if (!this.loggedFrameError) {
           this.loggedFrameError = true;
           console.error('[AnimatedRenderer] renderFrames error:', this.renderId, frameIndex, err?.message || err);
         }
         if (this.consecutiveFrameErrors >= 5) {
-          // Worker is stuck for this renderId (e.g. revoked blob URL or an
-          // anim dropped by a destroy/init race). Stop the retry loop, attempt
-          // a single reinit, and otherwise stay quiet until play() is called
-          // again with a healthy URL.
           this.consecutiveFrameErrors = 0;
           if (!this.reinitAttempted) {
             this.reinitAttempted = true;
@@ -496,6 +803,42 @@ export class TgsRenderer implements IAnimatedRenderer {
           this.doPlay();
         }
       });
+
+    this.scheduleFrameStallWatchdog(frameIndex);
+  }
+
+  private frameStallTimer = 0;
+  private frameStallCount = 0;
+  private frameStallReinit = false;
+
+  private scheduleFrameStallWatchdog(frameIndex: number) {
+    if (this.frameStallTimer) return;
+    this.frameStallTimer = window.setTimeout(() => {
+      this.frameStallTimer = 0;
+      if (this.isDestroyed) return;
+
+      if (!this.isWaiting || this.frames[frameIndex] !== WAITING) return;
+      this.frameStallCount++;
+      if (!this.frameStallReinit && this.reinitAttemptsLeft()) {
+        this.frameStallReinit = true;
+        console.warn('[AnimatedRenderer] renderFrames stall, reinitializing:', this.renderId, 'frame=' + frameIndex);
+        this.isAnimating = false;
+        this.frames[frameIndex] = undefined;
+        this.isWaiting = true;
+        this.initRenderer();
+        return;
+      }
+      if (this.frameStallCount >= 2) {
+        console.warn('[AnimatedRenderer] renderFrames stalled, falling back:', this.renderId, 'frame=' + frameIndex);
+        this.frames[frameIndex] = undefined;
+        respawnWorker(this.worker);
+        this.failViews();
+      }
+    }, 5000);
+  }
+
+  private reinitAttemptsLeft(): boolean {
+    return !this.reinitAttempted;
   }
 
   private cleanupPrevFrame(frameIndex: number) {
@@ -512,6 +855,10 @@ export class TgsRenderer implements IAnimatedRenderer {
       return;
     }
     this.frames[frameIndex] = imageBitmap;
+    this.frameStallCount = 0;
+    this.frameStallReinit = false;
+    this.heartbeatFrozenReinit = false;
+    this.heartbeatFrozenStalls = 0;
     if (this.isWaiting) {
       this.doPlay();
     }

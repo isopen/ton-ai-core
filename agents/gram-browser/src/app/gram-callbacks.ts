@@ -51,7 +51,7 @@ export function createCallbacks(
             sentMedia = newMsgUpdate.message.media;
           }
         }
-        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null, media: sentMedia, entities: newMsgUpdate.message?.entities };
+        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null, media: sentMedia, entities: newMsgUpdate.message?.entities, groupedId: newMsgUpdate.message?.grouped_id };
         const wasNearBottom = (() => {
           const el = document.getElementById('tg-msg-list-content');
           return el && el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
@@ -157,6 +157,7 @@ export function createCallbacks(
             sender: resolveSenderName(m.from_id, m.sender),
             date: m.date || 0, message: m.message || '',
             out: !!m.out, peerId: null, media: m.media, action: m.action, entities: m.entities,
+            groupedId: m.grouped_id,
           })).reverse();
           let result: Message[];
           if (msgs.length === 0 && maxId === 0) {

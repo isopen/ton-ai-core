@@ -1,7 +1,7 @@
 import type {
     TgsAnimation, TgsLayer, TgsShape, TgsAsset, TgsMask, TgsTransform, TgsText,
     ParsedAnimation, ParsedLayer, ParsedTransform, ParsedProperty, ParsedShape,
-    ParsedAsset, ParsedMask, ParsedGradient, ParsedText, LayerInfo, TgsMarker,
+    ParsedAsset, ParsedMask, ParsedGradient, ParsedText, TextKeyframe, LayerInfo, TgsMarker,
 } from './types.js';
 import {
     LayerType, MatteType, MaskMode, GradientType,
@@ -46,7 +46,7 @@ function parseGradientShape(s: TgsShape): ParsedGradient {
         type: s.t === 2 ? GradientType.Radial : GradientType.Linear,
         startPoint: parseValue(s.s),
         endPoint: parseValue(s.e),
-        // rlottie parseGradientProperty: "h" -> mHighlightLength, "a" -> mHighlightAngle
+
         highlightLength: s.h ? parseValue(s.h) : undefined,
         highlightAngle: s.a ? parseValue(s.a) : undefined,
         colorPoints: s.g?.p,
@@ -55,7 +55,6 @@ function parseGradientShape(s: TgsShape): ParsedGradient {
 }
 
 function parseShape(s: TgsShape): ParsedShape | undefined {
-    // rlottie parseObject(): hidden (hd) objects are not added to the group
     if (s.hd) return undefined;
     const type = SHAPE_TYPE_MAP[s.ty] || s.ty;
     const result: ParsedShape = { type };
@@ -64,7 +63,6 @@ function parseShape(s: TgsShape): ParsedShape | undefined {
     if (s.mn) result.matchName = s.mn;
     if (s.ix != null) result.index = s.ix;
     if (s.it) {
-        // rlottie parseObject(): hidden children are not added to the group
         result.children = s.it.map(parseShape).filter((c): c is ParsedShape => !!c);
     }
 
@@ -72,7 +70,7 @@ function parseShape(s: TgsShape): ParsedShape | undefined {
         if (s.s) result.start = parseValue(s.s);
         if (s.e) result.end = parseValue(s.e);
         if (s.o) result.offset = parseValue(s.o);
-        // rlottie getTrimType(): 1 -> Simultaneously, 2 -> Individually, default Simultaneously
+
         if (s.m != null) result.trimMode = Number(s.m) === 2 ? 'individually' : 'simultaneously';
         return result;
     }
@@ -140,7 +138,7 @@ function parseShape(s: TgsShape): ParsedShape | undefined {
         if (s.r) result.rotation = parseValue(s.r);
         if (s.or) result.outerRadius = parseValue(s.or);
         if (s.ir) result.innerRadius = parseValue(s.ir);
-        // rlottie parses is/os via parseProperty (they can be animated)
+
         if (s.os != null) result.outerRoundness = parseValue(s.os);
         if (s.is != null) result.innerRoundness = parseValue(s.is);
         return result;
@@ -155,7 +153,6 @@ function parseShape(s: TgsShape): ParsedShape | undefined {
     }
 
     if (type === 'merge') {
-        // rlottie: "Merge Path is not supported yet" (parseObjectTypeAttr)
         if (s.mm != null) result.mergeMode = s.mm;
         return result;
     }
@@ -172,7 +169,6 @@ function parseShape(s: TgsShape): ParsedShape | undefined {
 }
 
 function parseMask(m: TgsMask): ParsedMask {
-    // rlottie parseMaskObject(): n/a/s/i/f (f -> Difference), default None
     const modeMap: Record<string, MaskMode> = {
         a: MaskMode.Add,
         s: MaskMode.Subtract,
@@ -203,12 +199,29 @@ function parseText(t: TgsText): ParsedText | undefined {
     if (s.ls != null) text.tracking = s.ls;
     if (s.sc) text.strokeColor = s.sc;
     if (s.sw != null) text.strokeWidth = s.sw;
+    const list = t?.d?.k;
+    if (Array.isArray(list) && list.length > 1) {
+        const kfs: TextKeyframe[] = [];
+        for (const k of list) {
+            if (!k || k.t == null || !k.s) continue;
+            const doc: TextKeyframe = { at: k.t, text: k.s.t ?? '' };
+            if (k.s.s != null) doc.fontSize = k.s.s;
+            if (k.s.f) doc.fontFamily = k.s.f;
+            if (k.s.fc) doc.fillColor = k.s.fc;
+            if (k.s.j != null) doc.justify = k.s.j;
+            if (k.s.lh != null) doc.lineHeight = k.s.lh;
+            if (k.s.ls != null) doc.tracking = k.s.ls;
+            if (k.s.sc) doc.strokeColor = k.s.sc;
+            if (k.s.sw != null) doc.strokeWidth = k.s.sw;
+            kfs.push(doc);
+        }
+        kfs.sort((a, b) => a.at - b.at);
+        if (kfs.length > 1) text.keyframes = kfs;
+    }
     return text;
 }
 
 function parseLayer(l: TgsLayer): ParsedLayer | undefined {
-    // rlottie parseLayer(): a layer without a transform is invalid (nullptr);
-    // a self-parented layer is dropped too.
     if (!l.ks || (l.parent != null && l.parent === l.ind)) return undefined;
 
     const typeMap: Record<number, LayerType> = {
@@ -235,7 +248,7 @@ function parseLayer(l: TgsLayer): ParsedLayer | undefined {
     if (l.sc) result.solidColor = l.sc;
     if (l.sw != null) result.solidWidth = l.sw;
     if (l.sh != null) result.solidHeight = l.sh;
-    // precomp layer size (w/h)
+
     if (l.w != null) result.layerWidth = l.w;
     if (l.h != null) result.layerHeight = l.h;
     if (l.tt != null) {
@@ -254,8 +267,6 @@ function parseLayer(l: TgsLayer): ParsedLayer | undefined {
         result.shapes = l.shapes.map(parseShape).filter((s): s is ParsedShape => !!s);
     }
 
-    // rlottie: hidden layers are forced to Null layers and lose their content
-    // (only the transform is kept, for parenting)
     if (l.hd) {
         result.type = LayerType.Null;
         result.hidden = true;
@@ -288,10 +299,6 @@ const DEFAULT_CACHE_SIZE = 10;
 let modelCacheSize = DEFAULT_CACHE_SIZE;
 const modelCache = new Map<string, ParsedAnimation>();
 
-/**
- * Port of rlottie's ModelCache (lottieloader.cpp).
- * Size 0 disables the cache and flushes it.
- */
 export function configureModelCacheSize(size: number): void {
     modelCacheSize = size;
     if (size === 0) modelCache.clear();
@@ -344,11 +351,6 @@ function parseAnimation(data: TgsAnimation): ParsedAnimation {
     };
 }
 
-/**
- * Parse a TGS (gzip-compressed bodymovin) JSON string into a
- * ParsedAnimation model. Mirrors rlottie's loadFromData(): pass a `key` to
- * use the model cache.
- */
 export function parseTgs(json: string, options?: ParseOptions): ParsedAnimation {
     let data: TgsAnimation;
     try {

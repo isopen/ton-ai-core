@@ -28,11 +28,6 @@ export {
 
 const GZIP_MAGIC: [number, number] = [0x1f, 0x8b];
 
-/**
- * Decompress a .tgs binary buffer (gzip) into the raw bodymovin JSON string.
- * Plain (non-gzip) input is returned as-is. Uses the standard
- * DecompressionStream API available in browsers and Node 18+.
- */
 export async function inflateTgs(data: Uint8Array): Promise<string> {
     if (data.length < 2 || data[0] !== GZIP_MAGIC[0] || data[1] !== GZIP_MAGIC[1]) {
         return new TextDecoder().decode(data);
@@ -58,18 +53,11 @@ export async function inflateTgs(data: Uint8Array): Promise<string> {
     return out;
 }
 
-/**
- * rlottie's lottie_animation_from_data() equivalent: accepts either the raw
- * JSON string or a gzipped .tgs binary buffer.
- */
 export async function loadTgs(data: string | Uint8Array, options?: ParseOptions): Promise<ParsedAnimation> {
     const json = typeof data === 'string' ? data : await inflateTgs(data);
     return parseTgs(json, options);
 }
 
-/**
- * rlottie's AnimationImpl::frameAtPos() equivalent.
- */
 export function frameAtPos(animation: ParsedAnimation, pos: number): number {
     const total = animation.outFrame - animation.inFrame;
     let frame = animation.inFrame + Math.floor(pos * total);
