@@ -543,7 +543,7 @@ export class GramMediaRouter {
         while (queue.length > 0 && this.downloadInProgress[queueKey] < QUEUE_CONCURRENCY[queueKey]) {
             let bestIdx = 0;
             for (let i = 1; i < queue.length; i++) {
-                if (queue[i].priority > queue[bestIdx].priority) bestIdx = i;
+                if (queue[i].priority >= queue[bestIdx].priority) bestIdx = i;
             }
             const item = queue.splice(bestIdx, 1)[0];
             this.downloadInProgress[queueKey]++;

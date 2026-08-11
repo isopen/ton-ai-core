@@ -1,5 +1,5 @@
 import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
-import { CommentStripperPlugin, CommentStripperConfig, StripBatchResult } from '@ton-ai/comment-stripper';
+import { CommentStripperPlugin, CommentStripperConfig, StripBatchResult, StripOptions } from '@ton-ai/comment-stripper';
 import * as fs from 'fs';
 
 export interface StripperAgentConfig extends SimpleAgentConfig {
@@ -38,8 +38,8 @@ export class StripperAgent extends BaseAgentSimple {
         return plugin;
     }
 
-    async strip(targets: string[]): Promise<StripBatchResult> {
-        const result = this.plugin().stripPaths(targets);
+    async strip(targets: string[], opts?: StripOptions): Promise<StripBatchResult> {
+        const result = this.plugin().stripPaths(targets, opts);
         this.report(result);
         return result;
     }

@@ -3010,7 +3010,7 @@ async function processDownloadQueue(): Promise<void> {
             const small = size < SMALL_FILE_LIMIT;
             const partSize = selectPartSize(size);
             if (poolFree(poolKey(dc, small)) < partSize) continue;
-            if (downloadQueue[i].priority > bestPriority) {
+            if (downloadQueue[i].priority >= bestPriority) {
                 bestPriority = downloadQueue[i].priority;
                 bestIdx = i;
             }

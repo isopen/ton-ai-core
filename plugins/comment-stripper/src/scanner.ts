@@ -5,7 +5,11 @@ export interface ScanRange {
     end: number;
 }
 
-function findStringOpen(text: string, i: number, specs: StringSpec[]): { spec: StringSpec; len: number } | null {
+const identChar = (ch: string): boolean => /[A-Za-z0-9_]/.test(ch);
+
+const CPP_RAW_PREFIXES = new Set(['R', 'uR', 'UR', 'LR', 'u8R']);
+
+function findStringOpen(text: string, i: number, specs: StringSpec[]): { spec: StringSpec; len: number; whole?: boolean } | null {
     for (const spec of specs) {
         const ch = text[i];
         if (spec.kind === 'single' && ch === "'") return { spec, len: 1 };
@@ -19,6 +23,19 @@ function findStringOpen(text: string, i: number, specs: StringSpec[]): { spec: S
             let j = i + 1;
             while (text[j] === '#') { hashes++; j++; }
             if (hashes <= 8 && text[j] === '"') return { spec, len: 1 + hashes + 1 };
+        }
+        if (spec.kind === 'cpp-raw' && ch === 'R' && text[i + 1] === '"') {
+            let j = i - 1;
+            while (j >= 0 && identChar(text[j])) j--;
+            if (!CPP_RAW_PREFIXES.has(text.slice(j + 1, i + 1))) continue;
+            let k = i + 2;
+            const dStart = k;
+            while (k < text.length && text[k] !== '(' && text[k] !== ')' && text[k] !== '\\' && text[k] !== ' ' && text[k] !== '\t' && text[k] !== '\r' && text[k] !== '\n' && text.charCodeAt(k) < 128) k++;
+            if (text[k] !== '(') continue;
+            const close = ')' + text.slice(dStart, k) + '"';
+            const end = text.indexOf(close, k + 1);
+            if (end < 0) continue;
+            return { spec, len: end + close.length - i, whole: true };
         }
     }
     return null;
@@ -47,6 +64,8 @@ function stringCloseLen(text: string, i: number, spec: StringSpec, openLen: numb
             const close = '"' + '#'.repeat(hashes);
             return text.startsWith(close, i) ? close.length : null;
         }
+        case 'cpp-raw':
+            return null;
     }
 }
 
@@ -77,10 +96,11 @@ export function scanComments(text: string, cfg: LanguageConfig): ScanRange[] {
         const ch = text[i];
         if (ch === '\n') { i++; continue; }
         if (ch === ' ' || ch === '\t' || ch === '\r') { i++; continue; }
-        if (ch === "'" || ch === '"' || ch === '`' || ch === '@' || ch === 'r') {
+        if (ch === "'" || ch === '"' || ch === '`' || ch === '@' || ch === 'r' || ch === 'R') {
             const open = findStringOpen(text, i, stringSpecs);
             if (open) {
                 i += open.len;
+                if (open.whole) continue;
                 let esc = false;
                 while (i < n) {
                     const len = stringCloseLen(text, i, open.spec, open.len);

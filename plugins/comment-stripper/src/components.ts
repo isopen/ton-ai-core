@@ -62,13 +62,25 @@ function collectTsComments(text: string, kind: 'TS' | 'JS'): ScanRange[] {
     return dedupe(ranges);
 }
 
-function stripTextOnce(text: string, lang: string): { text: string; count: number } {
+function stripTextOnce(text: string, lang: string, preserveHeader = false): { text: string; count: number } {
     const cfg: LanguageConfig | undefined = LANGUAGES[lang];
     if (!cfg) return { text, count: 0 };
-    const ranges = TS_LIKE.has(lang)
+    let ranges = TS_LIKE.has(lang)
         ? collectTsComments(text, lang === 'typescript' ? 'TS' : 'JS')
         : scanComments(text, cfg);
     if (ranges.length === 0) return { text, count: 0 };
+    let kept = 0;
+    if (preserveHeader) {
+        let gapStart = 0;
+        while (kept < ranges.length) {
+            const r = ranges[kept];
+            const gap = text.slice(gapStart, r.start);
+            if (!/^[\uFEFF\s]*$/.test(gap)) break;
+            gapStart = r.end;
+            kept++;
+        }
+        if (kept > 0) ranges = ranges.slice(kept);
+    }
     let out = '';
     let prev = 0;
     for (const r of ranges) {
@@ -93,14 +105,15 @@ export class CommentStripperEngine {
 
     stripText(text: string, lang: string, opts?: StripOptions): StripTextResult {
         const keepSingleBlank = opts?.keepSingleBlank ?? this.options.keepSingleBlank ?? true;
+        const preserveHeader = opts?.preserveHeader ?? this.options.preserveHeader ?? false;
         const bom = text.charCodeAt(0) === 0xfeff ? '\uFEFF' : '';
         const body = bom ? text.slice(1) : text;
         const crlf = body.includes('\r\n');
         const normalized = body.replace(/\r\n/g, '\n');
-        const first = stripTextOnce(normalized, lang);
-        const verify = stripTextOnce(first.text, lang);
-        if (verify.count > 0) {
-            throw new Error('leftover comments after strip for ' + lang + ' (' + verify.count + ' ranges)');
+        const first = stripTextOnce(normalized, lang, preserveHeader);
+        const verify = stripTextOnce(first.text, lang, preserveHeader);
+        if (verify.text !== first.text) {
+            throw new Error('leftover comments after strip for ' + lang);
         }
         const cleaned = keepSingleBlank ? cleanBlanks(first.text) : first.text;
         const final = crlf ? cleaned.replace(/\n/g, '\r\n') : cleaned;

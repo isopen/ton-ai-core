@@ -4,6 +4,7 @@ const USAGE = `usage: npx ts-node agents/stripper/index.ts <command> [args]
 
 commands:
   strip <paths...>     strip comments in files/dirs (any language)
+                       --preserve-header, -H  keep the leading license/header comment block
   git-dirty            strip comments in all files changed since HEAD
   watch <dir>          watch dir and strip comments on every file save
   help                 show this help
@@ -25,13 +26,14 @@ async function main(): Promise<void> {
     try {
         switch (command) {
             case 'strip': {
-                const paths = args.slice(1);
+                const preserveHeader = args.includes('--preserve-header') || args.includes('-H');
+                const paths = args.slice(1).filter((a) => a !== '--preserve-header' && a !== '-H');
                 if (paths.length === 0) {
                     console.error('usage: strip <paths...>');
                     process.exitCode = 1;
                     return;
                 }
-                await agent.strip(paths);
+                await agent.strip(paths, preserveHeader ? { preserveHeader: true } : undefined);
                 break;
             }
             case 'git-dirty':

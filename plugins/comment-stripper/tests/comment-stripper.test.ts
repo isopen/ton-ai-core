@@ -59,6 +59,13 @@ describe('string safety — no comment markers stripped inside strings', () => {
         ['yaml', `key: "a#b" # real`, `key: "a#b"`],
         ['css', `.a { content: "/*x*/"; } /* real */`, `.a { content: "/*x*/"; }`],
         ['markup', `<a title="<!--">x</a><!-- real -->`, `<a title="<!--">x</a>`],
+        ['cpp', `auto s = R"(// not a comment /* nor this */)"; /* real */`, `auto s = R"(// not a comment /* nor this */)";`],
+        ['cpp', `auto s = R"delim(x//y)delim"; // real`, `auto s = R"delim(x//y)delim";`],
+        ['cpp', `auto s = u8R"(a//b)"; /* real */`, `auto s = u8R"(a//b)";`],
+        ['cpp', `auto s = LR"(/*x*/)"; // real`, `auto s = LR"(/*x*/)";`],
+        ['cpp', `auto s = R"(line1\n// inside\nline3)"; // real`, `auto s = R"(line1\n// inside\nline3)";`],
+        ['cpp', `auto s = fooR"(x//y)"; // real`, `auto s = fooR"(x//y)";`],
+        ['objc', `NSString *s = R"(x//y)"; // real`, `NSString *s = R"(x//y)";`],
     ];
     for (const [lang, input, expected] of cases) {
         it(lang + ': ' + input.slice(0, 40), () => {
@@ -124,5 +131,53 @@ describe('comment removal', () => {
     });
     it('throws on leftover comments (self-verification)', () => {
         expect(() => stripCommentsText('const a = 1; // x', 'typescript')).not.toThrow();
+    });
+});
+
+describe('cpp raw strings', () => {
+    it('keeps raw string bodies with comment markers intact', () => {
+        const src = `int main() {\n  auto a = R"(http://x // keep\n/* keep too */)";\n  // real comment\n  return 0;\n}\n`;
+        const out = stripCommentsText(src, 'cpp').text;
+        expect(out).toContain('R"(http://x // keep');
+        expect(out).toContain('/* keep too */)";');
+        expect(out).not.toContain('// real comment');
+        expect(out).toContain('return 0;');
+    });
+    it('handles custom delimiters with parens inside body', () => {
+        const src = `auto s = R"xx( (a) // keep )xx"; // real\n`;
+        const out = stripCommentsText(src, 'cpp').text;
+        expect(out).toBe(`auto s = R"xx( (a) // keep )xx";\n`);
+    });
+    it('handles unterminated raw string safely (no crash)', () => {
+        const src = `auto s = R"( // no close;\nreturn 1; // real\n`;
+        expect(() => stripCommentsText(src, 'cpp')).not.toThrow();
+    });
+});
+
+describe('preserve-header mode', () => {
+    it('keeps the leading license block, strips the rest', () => {
+        const src = `/*\n * Copyright (c) 2026\n * License text here\n */\n#include <x>\n// regular comment\nint main() { return 0; }\n`;
+        const out = stripCommentsText(src, 'cpp', { preserveHeader: true }).text;
+        expect(out).toContain('License text here');
+        expect(out).toContain('#include <x>');
+        expect(out).not.toContain('// regular comment');
+    });
+    it('keeps leading line-comment header', () => {
+        const src = `// Copyright 2026 me\n// SPDX-License-Identifier: MIT\nconst a = 1; // c\n`;
+        const out = stripCommentsText(src, 'typescript', { preserveHeader: true }).text;
+        expect(out).toContain('SPDX-License-Identifier: MIT');
+        expect(out).not.toContain('// c');
+    });
+    it('strips everything when preserveHeader is off', () => {
+        const src = `/* license */\nconst a = 1; // c\n`;
+        const out = stripCommentsText(src, 'typescript').text;
+        expect(out).not.toContain('license');
+        expect(out).not.toContain('// c');
+    });
+    it('preserve-header + leftover verification stays consistent', () => {
+        const src = `/* header */\nint x = 1; // c\n`;
+        const first = stripCommentsText(src, 'cpp', { preserveHeader: true }).text;
+        const again = stripCommentsText(first, 'cpp', { preserveHeader: true }).text;
+        expect(again).toBe(first);
     });
 });

@@ -5,7 +5,8 @@ export type StringSpec =
     | { kind: 'triple-single' }
     | { kind: 'triple-double' }
     | { kind: 'verbatim-double' }
-    | { kind: 'rust-raw' };
+    | { kind: 'rust-raw' }
+    | { kind: 'cpp-raw' };
 
 export interface BlockSpec {
     open: string;
@@ -44,7 +45,7 @@ export const LANGUAGES: Record<string, LanguageConfig> = {
     ruby: { id: 'ruby', extensions: ['.rb'], line: ['#'], block: [{ open: '=begin', close: '=end', lineStartOnly: true }], strings: [{ kind: 'single' }, { kind: 'double' }] },
     php: { id: 'php', extensions: ['.php', '.phtml'], line: ['//', '#'], block: [{ open: '/*', close: '*/' }], strings: [{ kind: 'single' }, { kind: 'double' }], hashNotBracket: true },
     c: { id: 'c', extensions: ['.c', '.h'], line: ['//'], block: [{ open: '/*', close: '*/' }], strings: [{ kind: 'single' }, { kind: 'double' }] },
-    cpp: { id: 'cpp', extensions: ['.cpp', '.hpp', '.cc', '.cxx', '.hxx'], line: ['//'], block: [{ open: '/*', close: '*/' }], strings: [{ kind: 'single' }, { kind: 'double' }] },
+    cpp: { id: 'cpp', extensions: ['.cpp', '.hpp', '.cc', '.cxx', '.hxx'], line: ['//'], block: [{ open: '/*', close: '*/' }], strings: [{ kind: 'single' }, { kind: 'double' }, { kind: 'cpp-raw' }] },
     java: { id: 'java', extensions: ['.java'], line: ['//'], block: [{ open: '/*', close: '*/' }], strings: [{ kind: 'single' }, { kind: 'double' }] },
     kotlin: { id: 'kotlin', extensions: ['.kt', '.kts'], line: ['//'], block: [{ open: '/*', close: '*/' }], strings: [{ kind: 'single' }, { kind: 'double' }] },
     scala: { id: 'scala', extensions: ['.scala'], line: ['//'], block: [{ open: '/*', close: '*/' }], strings: [{ kind: 'single' }, { kind: 'double' }] },
@@ -52,7 +53,7 @@ export const LANGUAGES: Record<string, LanguageConfig> = {
     go: { id: 'go', extensions: ['.go'], line: ['//'], block: [{ open: '/*', close: '*/' }], strings: [{ kind: 'single' }, { kind: 'double' }, { kind: 'backtick' }] },
     rust: { id: 'rust', extensions: ['.rs'], line: ['//'], block: [{ open: '/*', close: '*/', nested: true }], strings: [{ kind: 'single' }, { kind: 'double' }, { kind: 'rust-raw' }] },
     swift: { id: 'swift', extensions: ['.swift'], line: ['//'], block: [{ open: '/*', close: '*/', nested: true }], strings: [{ kind: 'single' }, { kind: 'double' }] },
-    objc: { id: 'objc', extensions: ['.m', '.mm'], line: ['//'], block: [{ open: '/*', close: '*/' }], strings: [{ kind: 'single' }, { kind: 'double' }] },
+    objc: { id: 'objc', extensions: ['.m', '.mm'], line: ['//'], block: [{ open: '/*', close: '*/' }], strings: [{ kind: 'single' }, { kind: 'double' }, { kind: 'cpp-raw' }] },
     lua: { id: 'lua', extensions: ['.lua'], line: ['--'], block: [{ open: '--[[', close: ']]', nested: true }], strings: [{ kind: 'single' }, { kind: 'double' }] },
     haskell: { id: 'haskell', extensions: ['.hs', '.lhs'], line: ['--'], block: [{ open: '{-', close: '-}', nested: true }], strings: [{ kind: 'single' }, { kind: 'double' }] },
     elixir: { id: 'elixir', extensions: ['.ex', '.exs'], line: ['#'], block: [], strings: [{ kind: 'single' }, { kind: 'double' }] },
