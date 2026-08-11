@@ -48,6 +48,10 @@ export class SharedWorkerClient {
                 if (handler) handler(msg);
                 return;
             }
+            if (msg.type === 'streamLog') {
+                console.warn('[stream-worker]', msg.text);
+                return;
+            }
             if (msg.type === 'response') {
                 const pending = this.pending.get(msg.id);
                 if (pending) {

@@ -18,6 +18,11 @@ TW.setOnUpdate((constructorId, data) => {
         try { port.postMessage({ type: 'update', constructorId, data }); } catch { ports.delete(port); }
     }
 });
+TW.setVideoStreamLogHandler((text) => {
+    for (const port of ports) {
+        try { port.postMessage({ type: 'streamLog', text }); } catch { ports.delete(port); }
+    }
+});
 TW.setOnAuthInvalidated(() => {
     for (const port of ports) {
         try { port.postMessage({ type: 'authInvalidated' }); } catch { ports.delete(port); }

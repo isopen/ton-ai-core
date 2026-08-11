@@ -887,7 +887,7 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
                     continue;
                 }
                 const isAuthUnregistered = msg.includes('AUTH_KEY_UNREGISTERED');
-                const isAuthBytesInvalid = msg.includes('AUTH_BYTES_INVALID') || msg.includes('Connection closed') || msg.includes('Failed to connect') || msg.includes('auth export failed') || msg.includes('auth import failed');
+                const isAuthBytesInvalid = msg.includes('AUTH_BYTES_INVALID') || msg.includes('Connection closed') || msg.includes('Connection lost') || msg.includes('Failed to connect') || msg.includes('auth export failed') || msg.includes('auth import failed');
                 if (isAuthUnregistered && authRebuilds < 2) {
                     authRebuilds++;
                     wlog('[worker] DC ' + dcId + ' AUTH_KEY_UNREGISTERED on ' + methodName + ' — dropping key and reconnecting (' + authRebuilds + '/2)');
@@ -2699,7 +2699,7 @@ function downloadCacheKeyFor(document?: any, photo?: any): string {
     return baseKey + thumbSuffix;
 }
 
-const DLCACHE_PREFIX = 'dlcache:';
+const DLCACHE_PREFIX = 'dlcache:v2:';
 const SESSION_PARTS_PREFIX = 'dlc:p:';
 interface DLCacheEntry { type: string; bytes: string; updatedAt?: number; partIndexes?: number[]; partSize?: number; immune?: boolean }
 let dlcLastGcAt = 0;
@@ -2831,15 +2831,27 @@ let downloadInFlight = 0;
 const MAX_PARALLEL_DOWNLOADS = 48;
 
 const IS_PREMIUM = false;
-const POOL_BUDGET = (IS_PREMIUM ? 16 : 2) << 20;
+const POOL_BUDGET = (IS_PREMIUM ? 16 : 4) << 20;
+const STREAM_POOL_BUDGET = (IS_PREMIUM ? 16 : 4) << 20;
 const UNKNOWN_DC = 0;
 const poolInFlight = new Map<string, number>();
 const poolWaiters = new Map<string, PoolWaiter[]>();
+
+function streamPoolKey(dc: number): string {
+    return 'stream:' + dc;
+}
+function poolBudgetOf(key: string): number {
+    return key.startsWith('stream:') ? STREAM_POOL_BUDGET : POOL_BUDGET;
+}
 
 const activeDownloadPriority = new Map<string, number>();
 
 const poolWaiterByFile = new Map<string, { key: string; waiter: PoolWaiter }>();
 let poolSeq = 0;
+let videoStreamLogHandler: ((text: string) => void) | null = null;
+export function setVideoStreamLogHandler(h: ((text: string) => void) | null): void {
+    videoStreamLogHandler = h;
+}
 
 interface PoolWaiter {
     priority: number;
@@ -2853,7 +2865,7 @@ function poolKey(dc: number, small: boolean): string {
     return (dc || UNKNOWN_DC) + (small ? ':s' : ':b');
 }
 function poolFree(key: string): number {
-    return POOL_BUDGET - (poolInFlight.get(key) || 0);
+    return poolBudgetOf(key) - (poolInFlight.get(key) || 0);
 }
 
 function satisfyPool(key: string): void {
@@ -2871,22 +2883,35 @@ function satisfyPool(key: string): void {
         w.resolve();
     }
 }
-function acquirePool(dc: number, small: boolean, size: number, cacheKey: string, priority: number): Promise<void> {
-    const key = poolKey(dc, small);
+function acquirePool(dc: number, small: boolean, size: number, cacheKey: string, priority: number, bucket?: string): Promise<void> {
+    const key = bucket || poolKey(dc, small);
     if (poolFree(key) >= size) {
         poolInFlight.set(key, (poolInFlight.get(key) || 0) + size);
         return Promise.resolve();
     }
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
         const waiter: PoolWaiter = { priority, seq: poolSeq++, size, cacheKey, resolve };
         const arr = poolWaiters.get(key) || [];
         arr.push(waiter);
         poolWaiters.set(key, arr);
-        if (cacheKey) poolWaiterByFile.set(cacheKey, { key, waiter });
+        if (cacheKey && !bucket) poolWaiterByFile.set(cacheKey, { key, waiter });
+        if (key.startsWith('stream:')) {
+            const timer = setTimeout(() => {
+                const a = poolWaiters.get(key) || [];
+                const i = a.indexOf(waiter);
+                if (i >= 0) {
+                    a.splice(i, 1);
+                    try { videoStreamLogHandler?.('[stream] POOL-WAIT-TIMEOUT ' + key + ' size=' + size + ' inFlight=' + (poolInFlight.get(key) || 0)); } catch {}
+                    reject(new Error('Stream pool wait timeout on ' + key));
+                }
+            }, 60000);
+            waiter.resolve = () => { clearTimeout(timer); resolve(); };
+        }
+        try { if (key.startsWith('stream:')) videoStreamLogHandler?.('[stream] POOL-WAIT ' + key + ' size=' + size + ' inFlight=' + (poolInFlight.get(key) || 0) + ' waiters=' + arr.length); } catch {}
     });
 }
-function releasePool(dc: number, small: boolean, size: number): void {
-    const key = poolKey(dc, small);
+function releasePool(dc: number, small: boolean, size: number, bucket?: string): void {
+    const key = bucket || poolKey(dc, small);
     poolInFlight.set(key, Math.max(0, (poolInFlight.get(key) || 0) - size));
     satisfyPool(key);
 
@@ -3033,7 +3058,7 @@ async function processDownloadQueue(): Promise<void> {
 }
 
 function enqueueDownload(document?: any, photo?: any, priority = 0): Promise<DownloadResult> {
-    const norm = normalizePriority(priority < 1 ? 30 : 31);
+    const norm = normalizePriority(priority < 1 ? 31 : 32);
     const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
     const id = document?.id?.toString() || photo?.id?.toString() || '?';
     wlog('[dlq] enqueue id=' + id + ' label=' + label + ' priority=' + priority + ' norm=' + norm + ' queued_before=' + downloadQueue.length);
@@ -3251,31 +3276,48 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         }
         let totalParts = 0;
 
+        const fetchPart = async (partIdx: number): Promise<Buffer> => {
+            const cachedChunk = resumed?.parts.get(partIdx);
+            if (cachedChunk) return cachedChunk;
+            let lastErr: any = new Error('Part download failed idx=' + partIdx);
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    const r = await poolCall(() => doCall(BigInt(partIdx * PART_SIZE), PART_SIZE));
+                    if (r._ === 'upload.file') {
+                        const c = Buffer.from(r.bytes || '', 'hex');
+                        if (partIdx === 1 && c.length === 0) {
+                            lastErr = new Error('Empty first part');
+                        } else {
+                            return c;
+                        }
+                    } else if (r._ === 'upload.fileCdnRedirect') {
+                        applyCdnRedirect(r);
+                        wlog('[dl] CDN redirect mid-file id=' + id + ' label=' + label + ' cdnDc=' + cdnDcId);
+                    } else {
+                        lastErr = new Error('Unexpected part response: ' + r._);
+                    }
+                } catch (e: any) {
+                    if (e.message?.includes('FILE_REFERENCE_EXPIRED')) throw e;
+                    lastErr = e;
+                }
+                if (genRef && genRef.value !== photoDownloadGen) throw new Error('ABORTED');
+                wlog('[dl] part retry id=' + id + ' label=' + label + ' idx=' + partIdx + ' attempt=' + (attempt + 1) + ' err=' + ((lastErr as Error)?.message || lastErr));
+                await new Promise(r => setTimeout(r, Math.min(1000 * (attempt + 1), 3000)));
+            }
+            throw lastErr;
+        };
+
         while (nextPart * PART_SIZE < maxTotal) {
             if (genRef && genRef.value !== photoDownloadGen) return { type: '', bytes: new ArrayBuffer(0), error: 'ABORTED' };
-            const batch: Promise<{ idx: number; chunk: Buffer | null }>[] = [];
+            const batch: Promise<{ idx: number; chunk: Buffer }>[] = [];
             for (let i = 0; i < MAX_CONCURRENT; i++) {
                 const partIdx = nextPart + i;
-                const partOffset = BigInt(partIdx * PART_SIZE);
-                batch.push(
-                    (async () => {
-                        const cachedChunk = resumed?.parts.get(partIdx);
-                        if (cachedChunk) return { idx: partIdx, chunk: cachedChunk };
-                        try {
-                            const r = await poolCall(() => doCall(partOffset, PART_SIZE));
-                            if (r._ === 'upload.file') {
-                                const c = Buffer.from(r.bytes || '', 'hex');
-                                return { idx: partIdx, chunk: c };
-                            }
-                            return { idx: partIdx, chunk: null };
-                        } catch { return { idx: partIdx, chunk: null }; }
-                    })()
-                );
+                batch.push(fetchPart(partIdx).then(chunk => ({ idx: partIdx, chunk })));
             }
             const batchResults = await Promise.all(batch);
             batchResults.sort((a, b) => a.idx - b.idx);
+            let batchEndedEarly = false;
             for (const { idx, chunk } of batchResults) {
-                if (!chunk) { wlog('[dl] part fail at idx=' + idx + ' id=' + id + ' — keeping partial'); await persistDownloadParts(cacheKey!, resumed?.parts || new Map(), PART_SIZE, finalType); maxTotal = idx * PART_SIZE; break; }
                 chunks.push(chunk);
                 if (resumed) resumed.parts.set(idx, chunk);
                 totalParts++;
@@ -3284,7 +3326,10 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                     const received = chunks.reduce((s, c) => s + c.length, 0);
                     onProgress(Math.min(99, Math.round((received / (knownSize || maxTotal)) * 100)));
                 }
-                if (chunk.length < PART_SIZE) { maxTotal = (idx + 1) * PART_SIZE; break; }
+                if (chunk.length < PART_SIZE) { maxTotal = (idx + 1) * PART_SIZE; batchEndedEarly = true; break; }
+            }
+            if (resumed && !batchEndedEarly) {
+                void persistDownloadParts(cacheKey!, resumed.parts, PART_SIZE, finalType).catch(() => {});
             }
         }
         wlog('[dl] done id=' + id + ' label=' + label + ' totalChunks=' + chunks.length + ' totalParts=' + totalParts + ' totalBytes=' + chunks.reduce((s,c)=>s+c.length,0));
@@ -3309,6 +3354,9 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
 async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, final: boolean, fileType: string) => void): Promise<string | undefined> {
     const location = buildDownloadLocation(document, null);
     if (!location) throw new Error('No document provided');
+    const vlog = (text: string): void => { try { videoStreamLogHandler?.('[stream] ' + text); } catch {} };
+    const t0 = Date.now();
+    vlog('START key=' + (document?.id?.toString() || '?') + ' size=' + (Number(document?.size) || 0) + ' sesDc=' + ses?.dcId);
 
     const baseKey = document?.id?.toString() || '';
     const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : '';
@@ -3317,6 +3365,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
         if (downloadCache.has(cacheKey)) {
             const cached = downloadCacheGet(cacheKey)!;
             if (cached.type && cached.bytes && cached.bytes.length > 0) {
+                vlog('CACHE-HIT memory');
                 const buf = Buffer.from(cached.bytes, 'base64');
                 const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
                 onChunk(ab, true, cached.type);
@@ -3325,16 +3374,17 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
         }
         const persisted = await loadPersistedDownloadCache(cacheKey);
         if (persisted && persisted.type && persisted.bytes && persisted.bytes.length > 0) {
+            vlog('CACHE-HIT persisted');
             downloadCacheSet(cacheKey, persisted, document?.mime_type);
             const buf = Buffer.from(persisted.bytes, 'base64');
             const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
             onChunk(ab, true, persisted.type);
             return 'persisted';
         }
+        vlog('CACHE miss');
     }
 
     const cacheChunks: Buffer[] = [];
-    let offset = BigInt(0);
     const limit = 1048576;
     let finalType = 'storage.fileUnknown';
     let targetDc = 0;
@@ -3344,13 +3394,13 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     let cdnKey: Buffer | null = null;
     let cdnIv: Buffer | null = null;
 
-    const dispatcher = createDelayDispatcher();
     const streamDc = (): number => targetDc > 0 ? targetDc : ses!.dcId;
+    const streamBucket = (): string => streamPoolKey(streamDc());
     const streamPoolCall = async <T>(fn: () => Promise<T>): Promise<T> => {
-        await dispatcher.pace();
-        await acquirePool(streamDc(), false, limit, cacheKey, TDLIB_PRIORITY_MAX);
+        const pkey = streamBucket();
+        await acquirePool(streamDc(), false, limit, cacheKey, TDLIB_PRIORITY_MAX, pkey);
         try { return await fn(); }
-        finally { releasePool(streamDc(), false, limit); }
+        finally { releasePool(streamDc(), false, limit, pkey); }
     };
     const applyStreamCdnRedirect = (res: any): boolean => {
         if (res._ !== 'upload.fileCdnRedirect') return false;
@@ -3409,41 +3459,56 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
             }
         };
 
+    const fetchPart = async (ofs: bigint): Promise<{ chunk: Buffer; final: boolean }> => {
+        let result: any;
+        let retries = 0;
+        const pt0 = Date.now();
         while (true) {
-            let result: any;
-            let retries = 0;
-            while (true) {
-                try {
-                    result = await streamPoolCall(() => doCall(offset));
-                    break;
-                } catch (e: any) {
-                    if (e.message?.includes('FILE_REFERENCE_EXPIRED')) throw e;
-                    if (e.message?.includes('FLOOD_WAIT')) throw e;
-                    retries++;
-                    if (retries > 3) throw e;
-                    await new Promise(r => setTimeout(r, Math.min(1000 * retries, 5000)));
-                }
+            try {
+                result = await streamPoolCall(() => doCall(ofs));
+                break;
+            } catch (e: any) {
+                if (e.message?.includes('FILE_REFERENCE_EXPIRED')) throw e;
+                if (e.message?.includes('FLOOD_WAIT')) throw e;
+                retries++;
+                vlog('PART ofs=' + ofs + ' RETRY ' + retries + ': ' + String(e.message || e).slice(0, 120));
+                if (retries > 3) throw e;
+                await new Promise(r => setTimeout(r, Math.min(1000 * retries, 5000)));
             }
-            if (result._ === 'upload.fileCdnRedirect') {
-                applyStreamCdnRedirect(result);
-                continue;
-            }
-            if (result._ === 'upload.file') {
-                const typeName = result.type?._ || 'storage.fileUnknown';
-                const bytesHex = result.bytes || '';
-                const chunk = Buffer.from(bytesHex, 'hex');
-                if (typeName !== 'storage.filePartial') finalType = typeName;
-                const isFinal = chunk.length < limit || typeName !== 'storage.filePartial';
-                const ab = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength);
-                onChunk(ab, isFinal, finalType);
-                cacheChunks.push(chunk);
-                if (isFinal) break;
-                offset = BigInt(Number(offset) + chunk.length);
-                if (Number(offset) > MAX_FILE_SIZE) throw new Error('File too large (TDLib MAX_FILE_SIZE)');
-        } else {
-            throw new Error('Unknown response: ' + result._);
         }
+        if (retries > 0) vlog('PART ofs=' + ofs + ' OK after ' + retries + ' retries, ' + (Date.now() - pt0) + 'ms');
+        if (result._ === 'upload.fileCdnRedirect') {
+            applyStreamCdnRedirect(result);
+            return fetchPart(ofs);
+        }
+        if (result._ !== 'upload.file') throw new Error('Unknown response: ' + result._);
+        const typeName = result.type?._ || 'storage.fileUnknown';
+        const chunk = Buffer.from(result.bytes || '', 'hex');
+        if (typeName !== 'storage.filePartial') finalType = typeName;
+        return { chunk, final: chunk.length < limit };
+    };
+
+    let nextPart = 0;
+    const CONCURRENCY = Math.max(2, Math.min(4, Math.floor(POOL_BUDGET / limit)));
+    vlog('BATCHES concurrency=' + CONCURRENCY + ' bucket=stream:' + streamDc());
+    while (true) {
+        if (BigInt(nextPart) * BigInt(limit) > BigInt(MAX_FILE_SIZE)) throw new Error('File too large (TDLib MAX_FILE_SIZE)');
+        const b0 = Date.now();
+        const batch = await Promise.all(
+            Array.from({ length: CONCURRENCY }, (_, i) => fetchPart(BigInt(nextPart + i) * BigInt(limit)))
+        );
+        vlog('BATCH nextPart=' + nextPart + ' done in ' + (Date.now() - b0) + 'ms');
+        let finished = false;
+        for (const { chunk, final } of batch) {
+            const ab = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
+            onChunk(ab, final, finalType);
+            cacheChunks.push(chunk);
+            nextPart++;
+            if (final) { finished = true; break; }
+        }
+        if (finished) break;
     }
+    vlog('DONE chunks=' + cacheChunks.length + ' total=' + (cacheChunks.reduce((s, c) => s + c.byteLength, 0)) + ' in ' + (Date.now() - t0) + 'ms');
 
     if (cacheKey && cacheChunks.length > 0) {
         const allBytes = Buffer.concat(cacheChunks);

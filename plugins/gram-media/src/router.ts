@@ -527,6 +527,12 @@ export class GramMediaRouter {
             }
         }
         if (this.documentPending.has(messageId)) return;
+        const retryTimer = this.documentRetryTimers.get(messageId);
+        if (retryTimer) {
+            clearTimeout(retryTimer);
+            this.documentRetryTimers.delete(messageId);
+        }
+        if (priority > 0) this.documentRetryCounts.delete(messageId);
         this.documentPending.add(messageId);
         if (this.debug) console.log('[gram-media] tg-download-document messageId=' + messageId + ' priority=' + priority + ' docId=' + document.id);
         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
@@ -597,7 +603,7 @@ export class GramMediaRouter {
                     });
                     const streamCacheSource = (streamResult as any)?.cacheSource;
 
-                    if (chunks.length === 0) throw new Error('No data received');
+                    if (chunkCount === 0) throw new Error('No data received');
 
                     this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
 
@@ -626,13 +632,29 @@ export class GramMediaRouter {
                         continue;
                     }
                     console.error('[gram-media] video stream error:', err.message, messageId);
+                    const fbDoc = doc;
                     try {
-                        const fb = await this.transport?.downloadFile({ document: doc });
+                        const fb = await this.transport?.downloadFile({ document: fbDoc });
                         if (gen !== this.documentDownloadGen) return;
                         if (fb?.bytes) this.dispatchDocumentUrl(messageId, this.bytesToBlobUrl(this.toArrayBuffer(fb.bytes), mime), fb.cacheSource);
                     } catch (e2: any) {
                         if (gen !== this.documentDownloadGen) return;
                         console.error('[gram-media] video stream fallback error:', e2.message, messageId);
+                        if (e2.message?.includes('FILE_REFERENCE_EXPIRED')) {
+                            try {
+                                const fresh = await this.refreshMessage(Number(messageId));
+                                if (gen !== this.documentDownloadGen) return;
+                                if (fresh?.media?.document) {
+                                    const fb2 = await this.transport?.downloadFile({ document: fresh.media.document });
+                                    if (gen !== this.documentDownloadGen) return;
+                                    if (fb2?.bytes) this.dispatchDocumentUrl(messageId, this.bytesToBlobUrl(this.toArrayBuffer(fb2.bytes), mime), fb2.cacheSource);
+                                }
+                            } catch (e3: any) {
+                                if (gen !== this.documentDownloadGen) return;
+                                console.error('[gram-media] video fallback refresh error:', e3.message, messageId);
+                            }
+                        }
+                        if (typeof messageId === 'number') this.scheduleDocumentRetry(messageId, fbDoc);
                     }
                     break;
                 }
@@ -713,12 +735,14 @@ export class GramMediaRouter {
 
     private scheduleDocumentRetry(messageId: number, document: any): void {
         if (this.documentRetryTimers.has(messageId)) return;
-        if ((this.documentRetryCounts.get(messageId) || 0) >= 3) {
+        if ((this.documentRetryCounts.get(messageId) || 0) >= 5) {
             if (this.debug) console.log('[gram-media] document give up retries messageId=' + messageId);
+            this.documentRetryCounts.delete(messageId);
+            window.dispatchEvent(new CustomEvent('tg-document-download-failed', { detail: { messageId } }));
             return;
         }
         const attempts = this.documentRetryCounts.get(messageId) || 0;
-        const delay = Math.min(8000, 600 * Math.pow(2, attempts));
+        const delay = Math.min(10000, 600 * Math.pow(2, attempts));
         this.documentRetryTimers.set(messageId, setTimeout(() => {
             this.documentRetryTimers.delete(messageId);
             this.documentRetryCounts.set(messageId, attempts + 1);

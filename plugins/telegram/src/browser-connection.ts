@@ -132,7 +132,13 @@ export class BrowserObfuscatedConnection implements IConnection {
     };
 
     async sendData(data: Buffer): Promise<void> {
-        this.ws!.send(new Uint8Array(data));
+        const sock = this.ws;
+        if (!sock || sock.readyState !== (typeof WebSocket !== 'undefined' ? WebSocket.OPEN : 1)) {
+            this.connected = false;
+            try { sock?.close(); } catch {}
+            throw new Error('Connection lost');
+        }
+        sock.send(new Uint8Array(data));
     }
 
     private generateMsgId(timeOffset = 0): bigint {

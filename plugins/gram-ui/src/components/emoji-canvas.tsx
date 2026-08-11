@@ -328,39 +328,59 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
   const [loadedDocs, setLoadedDocs] = useState<Record<string, boolean>>({});
   const [stuckDocs, setStuckDocs] = useState<Record<string, boolean>>({});
   const firstPaintAt = useRef<Record<string, number>>({});
+  const stuckAt = useRef<Record<string, number>>({});
   useEffect(() => {
     setLoadedDocs({});
     setStuckDocs({});
     firstPaintAt.current = {};
+    stuckAt.current = {};
   }, [urlsKey]);
   useEffect(() => {
     if (!hasEmoji) return;
     const timer = window.setInterval(() => {
       const now = Date.now();
-      const toStuck: string[] = [];
-      for (const s of emojiSegs) {
-        if (kinds[s.docId] !== 'tgs') continue;
-        if (!urlFor(s.docId) || failedDocs[s.docId] || loadedDocs[s.docId] || stuckDocs[s.docId]) continue;
-        const at = firstPaintAt.current[s.docId];
+      let next: Record<string, boolean> | undefined;
+      const markStuck = (docId: string) => {
+        if (next === undefined) next = { ...stuckDocs };
+        next[docId] = true;
+        stuckAt.current[docId] = now;
+      };
+      const unstick = (docId: string) => {
+        if (stuckDocs[docId]) {
+          if (next === undefined) next = { ...stuckDocs };
+          delete next[docId];
+        }
+        delete firstPaintAt.current[docId];
+        delete stuckAt.current[docId];
+      };
+      for (let i = 0; i < emojiSegs.length; i++) {
+        const docId = emojiSegs[i].docId;
+        if (kinds[docId] !== 'tgs' || failedDocs[docId] || loadedDocs[docId]) {
+          delete firstPaintAt.current[docId];
+          continue;
+        }
+        if (!urlFor(docId)) continue;
+        const armed = (inView || everShown) && (shared ? positions[i] !== undefined : true);
+        if (!armed) {
+          delete firstPaintAt.current[docId];
+          continue;
+        }
+        const at = firstPaintAt.current[docId];
         if (at === undefined) {
-          firstPaintAt.current[s.docId] = now;
-        } else if (now - at > 2500) {
-          toStuck.push(s.docId);
+          firstPaintAt.current[docId] = now;
+          continue;
+        }
+        if (stuckDocs[docId]) {
+          const since = stuckAt.current[docId] ?? at;
+          if (now - since > 4000) unstick(docId);
+        } else if (now - at > 8000) {
+          markStuck(docId);
         }
       }
-      if (toStuck.length === 0) return;
-      setStuckDocs((prev) => {
-        let next = prev;
-        for (const d of toStuck) {
-          if (prev[d]) continue;
-          if (next === prev) next = { ...prev };
-          next[d] = true;
-        }
-        return next;
-      });
+      if (next) setStuckDocs(next);
     }, 700);
     return () => window.clearInterval(timer);
-  }, [slotsKey, urlsKey, kinds, failedDocs, loadedDocs, stuckDocs, inView]);
+  }, [slotsKey, urlsKey, kinds, failedDocs, loadedDocs, stuckDocs, inView, everShown, positions, shared]);
   const onSlotLoaded = (docId: string) => {
     setLoadedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
     setStuckDocs((prev) => (prev[docId] ? { ...prev, [docId]: false } : prev));
@@ -521,7 +541,10 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
         const renderId = renderIdFor(docId, size);
         const fallbackGlyph = s.value || getEmojiAlt(docId) || '';
         const failed = !!failedDocs[docId];
-        const onError = () => setFailedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
+        const onError = () => {
+          setFailedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
+          requestEmojiDownload(docId, s.value, 2);
+        };
         return (
           <span key={s.type + ':' + (s.docId || s.value) + ':' + i} class="tgui-emoji-slot" data-doc={docId} style={slotStyle}>
             {kind === 'video' && url ? (

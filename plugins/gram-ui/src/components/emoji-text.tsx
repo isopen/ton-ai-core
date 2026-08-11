@@ -40,6 +40,7 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true }: { 
   useEffect(() => {
     if (!url) return;
     let cancelled = false;
+    failRef.current = 0;
     (async () => {
       try {
         const next = await fetchEmojiData(url);
