@@ -168,6 +168,109 @@ function useSlotSetReady(specs: SlotLayerSpec[] | undefined): boolean {
 
 const LOCAL_PARTS = [SLOT_LOCAL_IDS.reel0, SLOT_LOCAL_IDS.reel1, SLOT_LOCAL_IDS.reel2];
 
+// Screen-space windows of the slot machine (512x512 back canvas): left/middle/right.
+const WINDOW_RECTS = [
+  { x: 84, y: 150, w: 79, h: 45 }, // slot_0 (left)
+  { x: 193, y: 150, w: 79, h: 80 }, // slot_1 (middle)
+  { x: 300, y: 150, w: 81, h: 45 }, // slot_2 (right)
+];
+
+type Mat3 = [number, number, number, number, number, number];
+
+function matMul(m1: Mat3, m2: Mat3): Mat3 {
+  return [
+    m1[0] * m2[0] + m1[2] * m2[1],
+    m1[1] * m2[0] + m1[3] * m2[1],
+    m1[0] * m2[2] + m1[2] * m2[3],
+    m1[1] * m2[2] + m1[3] * m2[3],
+    m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+    m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+  ];
+}
+
+function matTranslate(x: number, y: number): Mat3 {
+  return [1, 0, 0, 1, x, y];
+}
+
+function matScale(sx: number, sy: number): Mat3 {
+  return [sx, 0, 0, sy, 0, 0];
+}
+
+function matRotate(deg: number): Mat3 {
+  const r = (deg * Math.PI) / 180;
+  return [Math.cos(r), Math.sin(r), -Math.sin(r), Math.cos(r), 0, 0];
+}
+
+function matApply(m: Mat3, x: number, y: number): [number, number] {
+  return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+}
+
+function matInvert(m: Mat3): Mat3 | null {
+  const a = m[0], b = m[1], c = m[2], d = m[3], e = m[4], f = m[5];
+  const det = a * d - b * c;
+  if (Math.abs(det) < 1e-12) return null;
+  return [d / det, -b / det, -c / det, a / det, (c * f - d * e) / det, (b * e - a * f) / det];
+}
+
+function layerMatrix(ks: any): Mat3 {
+  const p = ks && ks.p;
+  const r = ks && ks.r;
+  const s = ks && ks.s;
+  const a = ks && ks.a;
+  const pos = p && p.k && Array.isArray(p.k) ? p.k : (p && p.k && p.k.s ? p.k.s : [0, 0, 0]);
+  let rot = 0;
+  if (r && r.k != null && typeof r.k === 'number') rot = r.k;
+  else if (r && r.k && r.k.s != null) rot = r.k.s;
+  const sc = s && s.k && Array.isArray(s.k) ? s.k : (s && s.k && s.k.s ? s.k.s : [100, 100, 100]);
+  const anc = a && a.k && Array.isArray(a.k) ? a.k : [0, 0, 0];
+  let m = matTranslate(pos[0], pos[1]);
+  m = matMul(m, matRotate(rot));
+  m = matMul(m, matScale(sc[0] / 100, sc[1] / 100));
+  m = matMul(m, matTranslate(-anc[0], -anc[1]));
+  return m;
+}
+
+function makeCoverLayer(rect: { x: number; y: number; w: number; h: number }, i: number): any {
+  return {
+    ddd: 0, ind: 900 + i, ty: 4, nm: 'notch-cover-' + i, sr: 1,
+    ks: { o: { a: 0, k: 100 }, r: { a: 0, k: 0 }, p: { a: 0, k: [0, 0, 0] }, a: { a: 0, k: [0, 0, 0] }, s: { a: 0, k: [100, 100, 100] } },
+    ao: 0,
+    shapes: [{
+      ty: 'gr', nm: 'cover', it: [
+        { ty: 'rc', d: 1, s: { a: 0, k: [rect.w, rect.h] }, p: { a: 0, k: [rect.x + rect.w / 2, rect.y + rect.h / 2] }, r: { a: 0, k: 0 }, nm: 'rect' },
+        { ty: 'fl', c: { a: 0, k: [200 / 255, 199 / 255, 179 / 255, 1] }, o: { a: 0, k: 100 }, nm: 'fill' },
+        { ty: 'tr', p: { a: 0, k: [0, 0] }, a: { a: 0, k: [0, 0] }, s: { a: 0, k: [100, 100] }, r: { a: 0, k: 0 }, o: { a: 0, k: 100 }, sk: { a: 0, k: 0 }, sa: { a: 0, k: 0 }, nm: 't' },
+      ],
+    }],
+    ip: 0, op: 999, st: 0, bm: 0,
+  };
+}
+
+// Injects an opaque cover (frame color) into the frame-only spin JSON so the
+// dark band / gradient behind the frame notches (visible at frame 0) is hidden.
+// The cover rect is computed in the comp space by inverting the top-level
+// layer transform (which may flip, e.g. slot_0 has ks.s.x = -100).
+function injectNotchCover(json: any, screenRect: { x: number; y: number; w: number; h: number }, i: number): boolean {
+  const assets = json && Array.isArray(json.assets) ? json.assets : [];
+  const layers = json && Array.isArray(json.layers) ? json.layers : [];
+  const comp = assets.find((a: any) => a && a.layers && a.layers.some((l: any) => l && l.nm === 'mb-front'));
+  if (!comp) return false;
+  const top = layers.find((l: any) => l && l.refId === comp.id);
+  if (!top || !top.ks) return false;
+  const inv = matInvert(layerMatrix(top.ks));
+  if (!inv) return false;
+  const x0 = screenRect.x, y0 = screenRect.y;
+  const x1 = screenRect.x + screenRect.w, y1 = screenRect.y + screenRect.h;
+  const pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([x, y]) => matApply(inv, x, y));
+  const minX = Math.min(...pts.map((p) => p[0])), maxX = Math.max(...pts.map((p) => p[0]));
+  const minY = Math.min(...pts.map((p) => p[1])), maxY = Math.max(...pts.map((p) => p[1]));
+  const rect = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+  const idx = comp.layers.findIndex((l: any) => l && l.nm === 'mb-front');
+  if (idx < 0) return false;
+  comp.layers.splice(idx, 0, makeCoverLayer(rect, i));
+  return true;
+}
+
 function localFallbackId(role: SlotLayerRole, partIndex: number): string | undefined {
   switch (role) {
     case 'bg':
@@ -211,8 +314,10 @@ function SlotLayer({ docId, role, partIndex, size, autoplay, spinsOver, loop, pl
     if (stripHidden && typeof data.value === 'string') {
       try {
         const j = JSON.parse(data.value);
+        const win = WINDOW_RECTS[partIndex % WINDOW_RECTS.length];
+        const covered = injectNotchCover(j, win, partIndex);
         animData = { ...j, layers: j.layers.filter((l: any) => !String(l.nm || '').startsWith('spinloop')) };
-        layerCacheKey += ':frame';
+        layerCacheKey += ':frame' + (covered ? ':cover' + partIndex : '');
       } catch {
         animData = data.value;
       }
