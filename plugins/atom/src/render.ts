@@ -18,7 +18,7 @@ export function setUseRafBatching(v: boolean) {
   useRafBatching = v;
 }
 
-function flushRender() {
+export function flushRender() {
   renderScheduled = false;
   rafId = null;
   if (!rootData) return;

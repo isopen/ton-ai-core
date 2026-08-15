@@ -954,3 +954,345 @@ describe('patch - edge paths', () => {
     expect(parentEl.textContent).toBe('A2');
   });
 });
+
+describe('patch - maximum coverage branches', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  test('runUnmountCleanups recurses through plain element vnodes', () => {
+    const cleanup = jest.fn();
+    const Child: ComponentType = () => {
+      const inst = currentInstance!;
+      inst.unmountCleanups.push(cleanup);
+      return h('span', {}, 'child');
+    };
+
+    const oldParent = h('div', {}, { type: Child, props: {}, children: [], key: null } as any);
+    const parentEl = createDOM(oldParent) as HTMLElement;
+    document.body.appendChild(parentEl);
+
+    const newParent = h('span', {}, 'replaced');
+    patch(parentEl, oldParent, newParent);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  test('ref with a non-function, non-object value is ignored', () => {
+    const vnode = h('div', { ref: 42 as any });
+    const el = createDOM(vnode) as HTMLElement;
+    expect(el.tagName).toBe('DIV');
+  });
+
+  test('dangerouslySetInnerHTML without __html does nothing', () => {
+    const vnode = h('div', { dangerouslySetInnerHTML: {} as any });
+    const el = createDOM(vnode) as HTMLElement;
+    expect(el.innerHTML).toBe('');
+  });
+
+  test('value prop on a non-input element is ignored', () => {
+    const vnode = h('div', { value: 'x' } as any);
+    const el = createDOM(vnode) as HTMLElement;
+    expect(el.getAttribute('value')).toBeNull();
+  });
+
+  test('removing a ref prop is a no-op in removeProp', () => {
+    const oldVNode = h('div', { ref: () => {} });
+    const el = createDOM(oldVNode) as HTMLElement;
+
+    const newVNode = h('div', {});
+    expect(() => patch(el, oldVNode, newVNode)).not.toThrow();
+  });
+
+  test('removing dangerouslySetInnerHTML prop is a no-op in removeProp', () => {
+    const oldVNode = h('div', { dangerouslySetInnerHTML: { __html: '<b>keep</b>' } });
+    const el = createDOM(oldVNode) as HTMLElement;
+
+    const newVNode = h('div', {});
+    patch(el, oldVNode, newVNode);
+    expect(el.innerHTML).toBe('<b>keep</b>');
+  });
+
+  test('updateProps skips removal when old value is nullish', () => {
+    const oldVNode = h('div', { 'data-x': null });
+    const el = createDOM(oldVNode) as HTMLElement;
+
+    const newVNode = h('div', {});
+    expect(() => patch(el, oldVNode, newVNode)).not.toThrow();
+  });
+
+  test('SLOT merge skips key and children props', () => {
+    const child: VNode = h('div', { class: 'c' });
+    const slotVNode: VNode = {
+      type: SLOT,
+      props: { key: 'k', class: 'p', children: ['x'] },
+      children: [child],
+      key: null,
+    };
+    const dom = createDOM(slotVNode) as HTMLElement;
+    expect(dom.getAttribute('class')).toBe('c p');
+  });
+
+  test('SLOT class merge uses fallback when child has no class', () => {
+    const child: VNode = h('div');
+    const slotVNode: VNode = {
+      type: SLOT,
+      props: { class: 'p' },
+      children: [child],
+      key: null,
+    };
+    const dom = createDOM(slotVNode) as HTMLElement;
+    expect(dom.getAttribute('class')).toBe('p');
+  });
+
+  test('SLOT class merge drops the class when both are empty', () => {
+    const child: VNode = h('div', { class: '' });
+    const slotVNode: VNode = {
+      type: SLOT,
+      props: { class: '' },
+      children: [child],
+      key: null,
+    };
+    const dom = createDOM(slotVNode) as HTMLElement;
+    expect(dom.hasAttribute('class')).toBe(false);
+  });
+
+  test('SLOT style merge uses fallbacks for missing styles', () => {
+    const child: VNode = h('div');
+    const slotVNode: VNode = {
+      type: SLOT,
+      props: { style: { background: 'blue' } },
+      children: [child],
+      key: null,
+    };
+    const dom = createDOM(slotVNode) as HTMLElement;
+    expect(dom.style.background).toBe('blue');
+  });
+
+  test('SLOT merge skips nullish slot and child values', () => {
+    const child: VNode = h('div', { 'data-y': null });
+    const slotVNode: VNode = {
+      type: SLOT,
+      props: { 'data-x': null },
+      children: [child],
+      key: null,
+    };
+    const dom = createDOM(slotVNode) as HTMLElement;
+    expect(dom.hasAttribute('data-x')).toBe(false);
+    expect(dom.hasAttribute('data-y')).toBe(false);
+  });
+
+  test('SLOT with no child renders an empty text node', () => {
+    const slotVNode: VNode = {
+      type: SLOT,
+      props: {},
+      children: [],
+      key: null,
+    };
+    const dom = createDOM(slotVNode);
+    expect(dom.nodeType).toBe(Node.TEXT_NODE);
+    expect(dom.textContent).toBe('');
+  });
+
+  test('SLOT patch to an empty slot removes the old child dom', () => {
+    const child: VNode = h('span', {}, 'old');
+    const oldSlot: VNode = { type: SLOT, props: {}, children: [child], key: null };
+    const dom = createDOM(oldSlot);
+    const parent = document.createElement('div');
+    parent.appendChild(dom);
+    document.body.appendChild(parent);
+
+    const newSlot: VNode = { type: SLOT, props: {}, children: [], key: null };
+    const result = patch(dom, oldSlot, newSlot);
+    expect(result.nodeType).toBe(Node.TEXT_NODE);
+    expect(parent.children.length).toBe(0);
+  });
+
+  test('SLOT patch between two empty slots keeps the text node', () => {
+    const oldSlot: VNode = { type: SLOT, props: {}, children: [], key: null };
+    const dom = createDOM(oldSlot);
+    expect(dom.nodeType).toBe(Node.TEXT_NODE);
+
+    const newSlot: VNode = { type: SLOT, props: {}, children: [], key: null };
+    const result = patch(dom, oldSlot, newSlot);
+    expect(result).toBe(dom);
+  });
+
+  test('patch with the identical vnode returns the same dom', () => {
+    const vnode = h('div', { id: 'same' });
+    const dom = createDOM(vnode);
+    expect(patch(dom, vnode, vnode)).toBe(dom);
+  });
+
+  test('component rendering null twice reuses the text node', () => {
+    const Comp: ComponentType = () => null as any;
+    const vnode1 = { type: Comp, props: {}, children: [], key: null };
+    const dom = createDOM(vnode1);
+    expect(dom.nodeType).toBe(Node.TEXT_NODE);
+
+    const vnode2 = { type: Comp, props: {}, children: [], key: null };
+    const result = patch(dom, vnode1, vnode2);
+    expect(result).toBe(dom);
+  });
+
+  test('component returning element then null removes its dom from the parent', () => {
+    let returnEl = true;
+    const Comp: ComponentType = () => (returnEl ? h('span', {}, 'hi') : null as any);
+
+    const vnode = { type: Comp, props: {}, children: [], key: null };
+    const dom = createDOM(vnode);
+    const parent = document.createElement('div');
+    parent.appendChild(dom);
+    document.body.appendChild(parent);
+    expect(parent.children.length).toBe(1);
+
+    returnEl = false;
+    const newVnode = { type: Comp, props: {}, children: [], key: null };
+    const result = patch(dom, vnode, newVnode);
+    expect(result.nodeType).toBe(Node.TEXT_NODE);
+    expect(parent.children.length).toBe(0);
+  });
+
+  test('patch bails out early when children arrays are identical', () => {
+    const children = [h('span', {}, 'x')];
+    const v1 = { type: 'div', props: {}, children, key: null } as VNode;
+    const v2 = { type: 'div', props: {}, children, key: null } as VNode;
+    const dom = createDOM(v1);
+    expect(() => patch(dom, v1, v2)).not.toThrow();
+    expect((dom as HTMLElement).textContent).toBe('x');
+  });
+
+  test('keyed child rendering null is skipped during placement', () => {
+    const NullComp: ComponentType = () => null as any;
+
+    const parent = h('div', {},
+      { type: NullComp, props: { key: 'n' }, children: [], key: 'n' } as any,
+    );
+    const parentEl = createDOM(parent) as HTMLElement;
+    document.body.appendChild(parentEl);
+
+    const newParent = h('div', {},
+      { type: NullComp, props: { key: 'n' }, children: [], key: 'n' } as any,
+      { type: 'div', props: { key: 's' }, children: [h(TEXT as any, { nodeValue: 'S' })], key: 's' } as any,
+    );
+
+    patch(parentEl, parent, newParent);
+    expect(parentEl.textContent).toBe('S');
+  });
+
+  test('keyed removal with a detached node skips the removeChild', () => {
+    const parent = h('div', {},
+      { type: 'div', props: { key: 'a' }, children: [h(TEXT as any, { nodeValue: 'A' })], key: 'a' } as any,
+      { type: 'div', props: { key: 'b' }, children: [h(TEXT as any, { nodeValue: 'B' })], key: 'b' } as any,
+    );
+    const parentEl = createDOM(parent) as HTMLElement;
+    document.body.appendChild(parentEl);
+    parentEl.children[1].remove();
+
+    const newParent = h('div', {},
+      { type: 'div', props: { key: 'a' }, children: [h(TEXT as any, { nodeValue: 'A' })], key: 'a' } as any,
+    );
+
+    expect(() => patch(parentEl, parent, newParent)).not.toThrow();
+    expect(parentEl.children.length).toBe(1);
+  });
+
+  test('component null to element transition preserves instance state', () => {
+    let show = false;
+    let instanceRef: any = null;
+    const Comp: ComponentType = () => {
+      const inst = currentInstance!;
+      instanceRef = inst;
+      return show ? h('span', { 'data-state': String(inst.props.preserve ?? 'yes') }, 'shown') : null as any;
+    };
+
+    const vnode = { type: Comp, props: {}, children: [], key: null };
+    const dom = createDOM(vnode);
+    expect(dom.nodeType).toBe(Node.TEXT_NODE);
+    const instBefore = vnode.componentInstance;
+
+    show = true;
+    const newVnode = { type: Comp, props: {}, children: [], key: null };
+    const newDom = patch(dom, vnode, newVnode);
+    expect((newDom as HTMLElement).tagName).toBe('SPAN');
+    expect(newVnode.componentInstance).toBe(instBefore);
+    expect(instanceRef).toBe(instBefore);
+  });
+
+  test('style object with nullish values is skipped by styleObjToCss', () => {
+    const vnode = h('div', { style: { width: null, height: '', color: 'red' } as any });
+    const el = createDOM(vnode) as HTMLElement;
+    expect(el.style.cssText).toBe('color: red;');
+  });
+
+  test('style with a non-string non-object value is ignored', () => {
+    const vnode = h('div', { style: 42 as any });
+    const el = createDOM(vnode) as HTMLElement;
+    expect(el.getAttribute('style')).toBeNull();
+  });
+
+  test('removing the className prop removes the class attribute', () => {
+    const oldVnode = h('div', { className: 'a b' });
+    const el = createDOM(oldVnode) as HTMLElement;
+    const newVnode = h('div', {});
+    patch(el, oldVnode, newVnode);
+    expect(el.getAttribute('class')).toBeNull();
+  });
+
+  test('SLOT style merge falls back when the child has no style prop', () => {
+    const oldSlot: VNode = { type: SLOT, props: { style: { color: 'red' } }, children: [h('span', {}, 'x')], key: null };
+    const el = createDOM(oldSlot) as HTMLElement;
+    expect((el as HTMLElement).style.color).toBe('red');
+  });
+
+  test('SLOT merge combines the same event prop from child and slot', () => {
+    const childFn = jest.fn();
+    const slotFn = jest.fn();
+    const slot: VNode = {
+      type: SLOT,
+      props: { onClick: slotFn },
+      children: [h('button', { onClick: childFn }, 'go')],
+      key: null,
+    };
+    const el = createDOM(slot) as HTMLElement;
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(childFn).toHaveBeenCalledTimes(1);
+    expect(slotFn).toHaveBeenCalledTimes(1);
+  });
+
+  test('SLOT merge copies plain data props from slot props', () => {
+    const slot: VNode = {
+      type: SLOT,
+      props: { 'data-x': 'y' },
+      children: [h('span', {}, 'x')],
+      key: null,
+    };
+    const el = createDOM(slot) as HTMLElement;
+    expect(el.getAttribute('data-x')).toBe('y');
+  });
+
+  test('createDOM reuses the passed component instance', () => {
+    const renderFn = jest.fn(() => h('div', { id: 'res' }, 'x'));
+    const mockInstance = { props: {}, _mounted: false, render: renderFn } as any;
+    const vnode = { type: (() => null) as any, props: { seed: 7 }, children: [], key: null };
+    const dom = createDOM(vnode, mockInstance) as HTMLElement;
+    expect(dom.id).toBe('res');
+    expect(renderFn).toHaveBeenCalledTimes(1);
+    expect(mockInstance.props.seed).toBe(7);
+    expect(mockInstance._mounted).toBe(true);
+    expect(vnode.componentInstance).toBe(mockInstance);
+  });
+
+  test('SLOT merge falls back when the slot has no style prop', () => {
+    const oldSlot: VNode = { type: SLOT, props: {}, children: [h('span', { style: { color: 'blue' } }, 'x')], key: null };
+    const el = createDOM(oldSlot) as HTMLElement;
+    expect(el.style.color).toBe('blue');
+  });
+
+  test('SLOT patch to an empty slot with a detached dom skips removeChild', () => {
+    const oldSlot: VNode = { type: SLOT, props: {}, children: [h('span', {}, 'old')], key: null };
+    const dom = createDOM(oldSlot);
+    const newSlot: VNode = { type: SLOT, props: {}, children: [], key: null };
+    const result = patch(dom, oldSlot, newSlot);
+    expect(result.nodeType).toBe(Node.TEXT_NODE);
+  });
+});

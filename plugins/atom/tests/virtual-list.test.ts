@@ -1306,6 +1306,9 @@ describe('VirtualList edge branches', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
     jest.restoreAllMocks();
+    delete (HTMLElement.prototype as any).clientHeight;
+    delete (HTMLElement.prototype as any).scrollHeight;
+    delete (HTMLElement.prototype as any).offsetHeight;
   });
 
   test('falls back to default estimated height when none provided', (done) => {
@@ -1530,6 +1533,549 @@ describe('VirtualList edge branches', () => {
       const listEl = listElOf(container);
       expect(listEl.id).toBe('my-list');
       expect(listEl.classList.contains('my-class')).toBe(true);
+      done();
+    });
+  });
+
+  test('thumb drag does not scroll when the thumb fills the container', (done) => {
+    const items = generateItems(100);
+    const App: ComponentType = () =>
+      h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data: items,
+          itemHeight: 50,
+          containerHeight: 200,
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item' }, item.label),
+        })
+      );
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      const listEl = listElOf(container);
+      const thumb = container.querySelector('.CustomScrollbar-thumb') as HTMLElement;
+      defineListMetrics(listEl, { client: 200, scroll: 2000 });
+      Object.defineProperty(thumb, 'clientHeight', { value: 300, configurable: true });
+      listEl.scrollTop = 100;
+      listEl.dispatchEvent(new Event('scroll'));
+
+      afterScroll(() => {
+        listEl.scrollTop = 0;
+        thumb.dispatchEvent(new MouseEvent('mousedown', { clientY: 0, bubbles: true }));
+        document.dispatchEvent(new MouseEvent('mousemove', { clientY: 60 }));
+        document.dispatchEvent(new MouseEvent('mouseup'));
+        expect(listEl.scrollTop).toBe(0);
+        done();
+      });
+    });
+  });
+
+  test('anchor scroll adjustment is skipped when the item did not move', (done) => {
+    let setData: ((v: { id: number; label: string }[]) => void) | null = null;
+    const App: ComponentType = () => {
+      const [data, setState] = useState(generateItems(10));
+      setData = setState;
+      return h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data,
+          estimatedItemHeight: 50,
+          containerHeight: 200,
+          overscan: 0,
+          keyExtractor: (item: { id: number }) => item.id,
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item', 'data-id': String(item.id) }, item.label),
+        })
+      );
+    };
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      const listEl = listElOf(container);
+      defineListMetrics(listEl, { client: 200, scroll: 2000 });
+      listEl.getBoundingClientRect = () => ({ top: 0, bottom: 200, left: 0, right: 0, width: 0, height: 200, x: 0, y: 0, toJSON: () => ({}) } as DOMRect);
+      for (const item of Array.from(listEl.children)) {
+        const el = item as HTMLElement;
+        if (el.getAttribute('data-testid') === 'item') {
+          el.getBoundingClientRect = () => ({ top: 60, bottom: 110, left: 0, right: 0, width: 0, height: 50, x: 0, y: 60, toJSON: () => ({}) } as DOMRect);
+        }
+      }
+      listEl.scrollTop = 100;
+      listEl.dispatchEvent(new Event('scroll'));
+
+      afterScroll(() => {
+        setData!(generateItems(12));
+        queueMicrotask(() => {
+          queueMicrotask(() => {
+            expect(listEl.scrollTop).toBe(100);
+            done();
+          });
+        });
+      });
+    });
+  });
+
+  test('prepend skips the anchor when its item scrolled out of the render window', (done) => {
+    let setData: ((v: { id: number; label: string }[]) => void) | null = null;
+    const App: ComponentType = () => {
+      const [data, setState] = useState(generateItems(10));
+      setData = setState;
+      return h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data,
+          estimatedItemHeight: 50,
+          containerHeight: 200,
+          overscan: 0,
+          keyExtractor: (item: { id: number }) => item.id,
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item', 'data-id': String(item.id) }, item.label),
+        })
+      );
+    };
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      const listEl = listElOf(container);
+      defineListMetrics(listEl, { client: 200, scroll: 2000 });
+      listEl.getBoundingClientRect = () => ({ top: 0, bottom: 200, left: 0, right: 0, width: 0, height: 200, x: 0, y: 0, toJSON: () => ({}) } as DOMRect);
+      for (const item of Array.from(listEl.children)) {
+        const el = item as HTMLElement;
+        if (el.getAttribute('data-testid') === 'item') {
+          el.getBoundingClientRect = () => ({ top: 60, bottom: 110, left: 0, right: 0, width: 0, height: 50, x: 0, y: 60, toJSON: () => ({}) } as DOMRect);
+        }
+      }
+      listEl.scrollTop = 100;
+      listEl.dispatchEvent(new Event('scroll'));
+
+      afterScroll(() => {
+        listEl.scrollTop = 300;
+        const grown = [...generateItems(10).map((i) => ({ id: i.id + 10, label: i.label })), ...generateItems(10)];
+        setData!(grown);
+        queueMicrotask(() => {
+          queueMicrotask(() => {
+            expect(listEl.scrollTop).toBe(300);
+            done();
+          });
+        });
+      });
+    });
+  });
+
+  test('onNearTop fires once per approach to the top', (done) => {
+    const items = generateItems(100);
+    let nearTop = 0;
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 200 });
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 2500 });
+
+    const App: ComponentType = () =>
+      h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data: items,
+          itemHeight: 50,
+          containerHeight: 200,
+          onNearTop: () => { nearTop++; },
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item' }, item.label),
+        })
+      );
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      const listEl = listElOf(container);
+      listEl.scrollTop = 50;
+      listEl.dispatchEvent(new Event('scroll'));
+      afterScroll(() => {
+        listEl.scrollTop = 300;
+        listEl.dispatchEvent(new Event('scroll'));
+        afterScroll(() => {
+          listEl.scrollTop = 40;
+          listEl.dispatchEvent(new Event('scroll'));
+          afterScroll(() => {
+            listEl.scrollTop = 60;
+            listEl.dispatchEvent(new Event('scroll'));
+            afterScroll(() => {
+              expect(nearTop).toBe(2);
+              done();
+            });
+          });
+        });
+      });
+    });
+  });
+
+  test('onEndReached fires only once while staying near the bottom', (done) => {
+    const items = generateItems(50);
+    let endReached = 0;
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 200 });
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 2500 });
+
+    const App: ComponentType = () =>
+      h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data: items,
+          itemHeight: 50,
+          containerHeight: 200,
+          overscan: 0,
+          onEndReached: () => { endReached++; },
+          onEndReachedThreshold: 0.5,
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item' }, item.label),
+        })
+      );
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      const listEl = listElOf(container);
+      listEl.scrollTop = 2300;
+      listEl.dispatchEvent(new Event('scroll'));
+      afterScroll(() => {
+        expect(endReached).toBe(1);
+        listEl.scrollTop = 2200;
+        listEl.dispatchEvent(new Event('scroll'));
+        afterScroll(() => {
+          expect(endReached).toBe(1);
+          done();
+        });
+      });
+    });
+  });
+
+  test('startAtBottom effect returns early after the user scrolls', (done) => {
+    let setData: ((v: { id: number; label: string }[]) => void) | null = null;
+    const items = generateItems(20);
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 200 });
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 1000 });
+
+    const App: ComponentType = () => {
+      const [data, setState] = useState(items);
+      setData = setState;
+      return h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data,
+          itemHeight: 50,
+          startAtBottom: true,
+          onReadyContent: () => {},
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item' }, item.label),
+        })
+      );
+    };
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      const listEl = listElOf(container);
+      listEl.scrollTop = 100;
+      listEl.dispatchEvent(new Event('scroll'));
+      afterScroll(() => {
+        listEl.dispatchEvent(new Event('scroll'));
+        afterScroll(() => {
+          setData!(generateItems(25));
+          queueMicrotask(() => {
+            expect(listEl.scrollTop).toBe(100);
+            done();
+          });
+        });
+      });
+    });
+  });
+
+  test('startAtBottom effect bails when the list is already anchored at the bottom', (done) => {
+    let setData: ((v: { id: number; label: string }[]) => void) | null = null;
+    const items = generateItems(20);
+    let sh = 1000;
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 200 });
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => sh });
+
+    const App: ComponentType = () => {
+      const [data, setState] = useState(items);
+      setData = setState;
+      return h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data,
+          itemHeight: 50,
+          startAtBottom: true,
+          onReadyContent: () => {},
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item' }, item.label),
+        })
+      );
+    };
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      const listEl = listElOf(container);
+      expect(listEl.scrollTop).toBe(800);
+      sh = 1500;
+      setData!(generateItems(30));
+      queueMicrotask(() => {
+        expect(listEl.scrollTop).toBe(800);
+        done();
+      });
+    });
+  });
+
+  test('startAtBottom effect bails out when there is nothing to scroll to', (done) => {
+    const items = generateItems(20);
+    const App: ComponentType = () =>
+      h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data: items,
+          itemHeight: 50,
+          containerHeight: 200,
+          startAtBottom: true,
+          onReadyContent: () => {},
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item' }, item.label),
+        })
+      );
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      expect((listElOf(container) as HTMLElement).scrollTop).toBe(0);
+      done();
+    });
+  });
+
+  test('dynamic mode with empty data renders nothing', (done) => {
+    const App: ComponentType = () =>
+      h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data: [],
+          estimatedItemHeight: 50,
+          containerHeight: 200,
+          renderItem: ({ item }: { item: any }) =>
+            h('div', { key: item.id, 'data-testid': 'item' }, String(item)),
+        })
+      );
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      expect(container.querySelectorAll('[data-testid="item"]').length).toBe(0);
+      done();
+    });
+  });
+
+  test('prepended items fall back to the height diff when the anchor item left the render window', (done) => {
+    let setData: ((v: { id: number; label: string }[]) => void) | null = null;
+    const App: ComponentType = () => {
+      const [data, setState] = useState(generateItems(10));
+      setData = setState;
+      return h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data,
+          estimatedItemHeight: 50,
+          containerHeight: 200,
+          overscan: 0,
+          keyExtractor: (item: { id: number }) => item.id,
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item', 'data-id': String(item.id) }, item.label),
+        })
+      );
+    };
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      const listEl = listElOf(container);
+      defineListMetrics(listEl, { client: 200, scroll: 2000 });
+      listEl.getBoundingClientRect = () => ({ top: 0, bottom: 200, left: 0, right: 0, width: 0, height: 200, x: 0, y: 0, toJSON: () => ({}) } as DOMRect);
+      for (const item of Array.from(listEl.children)) {
+        const el = item as HTMLElement;
+        if (el.getAttribute('data-testid') === 'item') {
+          el.getBoundingClientRect = () => ({ top: 60, bottom: 110, left: 0, right: 0, width: 0, height: 50, x: 0, y: 60, toJSON: () => ({}) } as DOMRect);
+        }
+      }
+      listEl.scrollTop = 100;
+      listEl.dispatchEvent(new Event('scroll'));
+
+      afterScroll(() => {
+        const grown = generateItems(30).map((i) => ({ id: i.id + 30, label: i.label }));
+        setData!(grown);
+        queueMicrotask(() => {
+          queueMicrotask(() => {
+            expect(listEl.scrollTop).toBe(100);
+            done();
+          });
+        });
+      });
+    });
+  });
+
+  test('small scroll deltas do not re-anchor the scroll position', (done) => {
+    const ranges: string[] = [];
+    const items = generateItems(100);
+    const App: ComponentType = () =>
+      h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data: items,
+          estimatedItemHeight: 50,
+          containerHeight: 200,
+          overscan: 0,
+          onEndReached: () => {},
+          onVisibleRangeChange: (s: number, e: number) => { ranges.push(s + ',' + e); },
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item' }, item.label),
+        })
+      );
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      const listEl = listElOf(container);
+      defineListMetrics(listEl, { client: 200, scroll: 2000 });
+      listEl.scrollTop = 100;
+      listEl.dispatchEvent(new Event('scroll'));
+
+      afterScroll(() => {
+        const before = ranges.slice();
+        listEl.scrollTop = 110;
+        listEl.dispatchEvent(new Event('scroll'));
+
+        afterScroll(() => {
+          expect(ranges).toEqual(before);
+          done();
+        });
+      });
+    });
+  });
+});
+
+describe('VirtualList unmount without scroll activity', () => {
+  let origRO: any;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    origRO = (global as any).ResizeObserver;
+    (global as any).ResizeObserver = class MockResizeObserver {
+      cb: (entries: any[]) => void;
+      el: Element | null = null;
+      static last: MockResizeObserver | null = null;
+      constructor(cb: (entries: any[]) => void) { this.cb = cb; MockResizeObserver.last = this; }
+      observe(el: Element) { this.el = el; }
+      disconnect() { this.el = null; }
+      unobserve() {}
+    };
+  });
+
+  afterEach(() => {
+    (global as any).ResizeObserver = origRO;
+  });
+
+  test('unmount with containerHeight and no scroll has nothing to cancel', (done) => {
+    let setShow: ((v: boolean) => void) | null = null;
+    const items = generateItems(10);
+
+    const App: ComponentType = () => {
+      const [show, setShowState] = useState(true);
+      setShow = setShowState;
+      return h('div', { style: { height: '200px' } },
+        show
+          ? h(VirtualList as any, {
+              data: items,
+              itemHeight: 50,
+              containerHeight: 200,
+              renderItem: ({ item }: { item: { id: number; label: string } }) =>
+                h('div', { key: item.id, 'data-testid': 'item' }, item.label),
+            })
+          : h('div', { 'data-testid': 'gone' }, 'gone'));
+    };
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      setShow!(false);
+      queueMicrotask(() => {
+        expect(container.querySelector('[style*="overflow-y"]')).toBeNull();
+        expect((global as any).ResizeObserver.last).toBeNull();
+        done();
+      });
+    });
+  });
+
+  test('ResizeObserver callback with an unchanged height is ignored', (done) => {
+    const items = generateItems(30);
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 200 });
+
+    const App: ComponentType = () =>
+      h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data: items,
+          itemHeight: 50,
+          overscan: 0,
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item' }, item.label),
+        })
+      );
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      const before = container.querySelectorAll('[data-testid="item"]').length;
+      (global as any).ResizeObserver.last.cb();
+      queueMicrotask(() => {
+        expect(container.querySelectorAll('[data-testid="item"]').length).toBe(before);
+        done();
+      });
+    });
+  });
+
+  test('mounting without a measurable clientHeight keeps the default measured height', (done) => {
+    const items = generateItems(30);
+    const proto = HTMLElement.prototype as any;
+    delete proto.clientHeight;
+    delete proto.scrollHeight;
+    const App: ComponentType = () =>
+      h('div', { style: { height: '200px' } },
+        h(VirtualList as any, {
+          data: items,
+          itemHeight: 50,
+          overscan: 0,
+          renderItem: ({ item }: { item: { id: number; label: string } }) =>
+            h('div', { key: item.id, 'data-testid': 'item' }, item.label),
+        })
+      );
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(App, container);
+
+    queueMicrotask(() => {
+      expect((global as any).ResizeObserver.last.el).not.toBeNull();
+      expect(container.querySelectorAll('[data-testid="item"]').length).toBeGreaterThan(0);
       done();
     });
   });

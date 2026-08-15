@@ -237,7 +237,9 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
   }
 
   if (vnode.type === SLOT) {
-    return createDOM(resolveSlotVNode(vnode));
+    const resolved = resolveSlotVNode(vnode);
+    if (resolved === vnode) return document.createTextNode('');
+    return createDOM(resolved);
   }
 
     if (typeof vnode.type === 'function') {
@@ -353,8 +355,17 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   }
 
   if (newVNode.type === SLOT) {
+    const oldResolved = resolveSlotVNode(oldVNode);
     const resolved = resolveSlotVNode(newVNode);
-    return patch(dom, resolveSlotVNode(oldVNode), resolved);
+    if (resolved === newVNode) {
+      if (oldResolved !== oldVNode) {
+        runUnmountCleanups(oldResolved);
+        if (dom && dom.parentNode) dom.parentNode.removeChild(dom);
+        return document.createTextNode('');
+      }
+      return dom;
+    }
+    return patch(dom, oldResolved, resolved);
   }
 
   if (typeof newVNode.type === 'function') {
@@ -373,6 +384,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
     instance._dirty = false;
 
     const oldResult = oldVNode.componentInstance?.vnode || oldVNode;
+    const hadNullResult = oldVNode.componentInstance != null && oldVNode.componentInstance.vnode == null;
     instance.vnode = result;
 
     if (!result) {
@@ -389,7 +401,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
 
     result.componentInstance = instance;
 
-    if (oldVNode.componentInstance && oldVNode.componentInstance.vnode == null) {
+    if (hadNullResult) {
       const freshDom = createDOM(result, instance);
       if (dom && dom.parentNode) dom.parentNode.replaceChild(freshDom, dom);
       newVNode.dom = freshDom;

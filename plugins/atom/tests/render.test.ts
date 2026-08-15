@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render } from '../src/render.js';
+import { render, flushRender, setUseRafBatching } from '../src/render.js';
 import { useState, useRef, useEffect } from '../src/hooks.js';
 import type { ComponentType } from '../src/vdom.js';
 
@@ -19,6 +19,26 @@ function h(type: any, props: Record<string, any> = {}, ...children: any[]): any 
   }
   return { type, props: { ...props }, children: flatChildren, key: (props as any)?.key ?? null };
 }
+
+describe('flushRender', () => {
+  test('no-ops when nothing has been rendered yet', () => {
+    expect(() => flushRender()).not.toThrow();
+    expect(() => flushRender()).not.toThrow();
+  });
+
+  test('setUseRafBatching toggles rAF-based rendering', (done) => {
+    const Comp: ComponentType = () => h('div', { id: 'raf-root' }, 'raf');
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    setUseRafBatching(true);
+    render(Comp, container);
+    requestAnimationFrame(() => {
+      expect(container.querySelector('#raf-root')).not.toBeNull();
+      setUseRafBatching(false);
+      done();
+    });
+  });
+});
 
 describe('render', () => {
   beforeEach(() => {
@@ -287,5 +307,17 @@ describe('render', () => {
         done();
       });
     });
+  });
+
+  test('inspectTree handles a child component that rendered null', () => {
+    const NullComp: ComponentType = () => null as any;
+    const Comp: ComponentType = () =>
+      h('div', {}, h(NullComp, {}), h('span', { 'data-t': 's' }, 'kept'));
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(Comp, container);
+    const tree = (window as any).__ATOM_DEVTOOLS__.inspect();
+    expect(tree.children.length).toBeGreaterThan(0);
+    expect(container.querySelector('span')!.getAttribute('data-t')).toBe('s');
   });
 });

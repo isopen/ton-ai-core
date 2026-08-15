@@ -308,6 +308,26 @@ describe('useEffect', () => {
     setCurrentInstance(null);
   });
 
+  test('runs old cleanup even when it was already removed from unmountCleanups', () => {
+    const cleanup = jest.fn();
+    const inst = createTestInstance();
+    setCurrentInstance(inst);
+
+    inst.hookIndex = 0;
+    useEffect(() => cleanup, [1]);
+    flushAllEffects();
+    expect(inst.unmountCleanups).toHaveLength(1);
+
+    inst.unmountCleanups.length = 0;
+
+    inst.hookIndex = 0;
+    useEffect(() => jest.fn(), [2]);
+    flushAllEffects();
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    setCurrentInstance(null);
+  });
+
   test('re-runs if deps length changes', () => {
     const fn = jest.fn();
     const inst = createTestInstance();
