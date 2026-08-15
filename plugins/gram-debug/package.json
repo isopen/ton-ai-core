@@ -1,0 +1,25 @@
+{
+    "name": "@ton-ai/gram-debug",
+    "version": "0.1.0",
+    "description": "Centralized debug logging for the TON AI stack — per-scope flags and levels from a single global config file",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        }
+    },
+    "author": "TON AI Core Team",
+    "license": "MIT",
+    "private": true,
+    "scripts": {
+        "build": "node scripts/sync-config.mjs && tsc && node scripts/copy-config.mjs",
+        "clean": "rm -rf dist"
+    },
+    "devDependencies": {
+        "@ton-ai/core": "*",
+        "@types/node": "^20.19.33",
+        "typescript": "^5.3.3"
+    }
+}

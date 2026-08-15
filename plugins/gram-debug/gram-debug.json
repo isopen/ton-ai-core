@@ -1,0 +1,74 @@
+{
+    "enabled": true,
+    "level": "info",
+    "scopes": {
+        "gram-db": {
+            "enabled": true,
+            "level": "info"
+        },
+        "tl-language": {
+            "enabled": true,
+            "level": "info"
+        },
+        "telegram": {
+            "enabled": true,
+            "level": "info"
+        },
+        "tgs": {
+            "enabled": true,
+            "level": "info"
+        },
+        "atom": {
+            "enabled": true,
+            "level": "info"
+        },
+        "gram-media": {
+            "enabled": true,
+            "level": "info"
+        },
+        "gram-browser": {
+            "enabled": true,
+            "level": "info"
+        },
+        "gram-ui": {
+            "enabled": true,
+            "level": "info"
+        },
+        "gram-ui:slot": {
+            "enabled": true,
+            "level": "debug"
+        },
+        "gram-ui:slot-layer": {
+            "enabled": true,
+            "level": "debug"
+        },
+        "gram-ui:tgs": {
+            "enabled": false,
+            "level": "debug"
+        },
+        "gram-ui:tgs-renderer": {
+            "enabled": false,
+            "level": "debug"
+        },
+        "gram-ui:ani-sticker": {
+            "enabled": false,
+            "level": "debug"
+        },
+        "gram-ui:emoji-text": {
+            "enabled": false,
+            "level": "debug"
+        },
+        "gram-ui:photo": {
+            "enabled": false,
+            "level": "debug"
+        },
+        "gram-ui:media-collage": {
+            "enabled": false,
+            "level": "debug"
+        },
+        "gram-ui:telegram-image": {
+            "enabled": false,
+            "level": "debug"
+        }
+    }
+}
