@@ -553,6 +553,10 @@ export class GramMediaRouter {
         }
         if (!document || messageId == null) return;
         const isEmoji = typeof messageId === 'string' && this.isEmojiKey(messageId);
+        if (isEmoji && document && (document._ === 'documentEmpty' || (!document.file_reference && !document.mime_type && !document.size && !document.dc_id))) {
+            if (document.id != null) this.emoji.onEmojiDownloadFailed(String(document.id));
+            return;
+        }
         if (isEmoji) {
             const cachedUrl = this.emojiUrlCache.get(messageId);
             if (cachedUrl) {

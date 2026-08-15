@@ -64,7 +64,7 @@ describe('GramMediaRouter emoji pipeline', () => {
         expect(map['👍']).toBe('1002');
     });
 
-    test('loads dice sticker sets via inputStickerSetDice', async () => {
+    test('loads dice sticker sets from appConfig emojies_send_dice', async () => {
         const diceCalls: Array<{ _: string; emoticon: string }> = [];
         const genericSet = {
             _: 'messages.stickerSet',
@@ -80,6 +80,152 @@ describe('GramMediaRouter emoji pipeline', () => {
         };
         const transport = makeTransport({
             callRpc: async (method, params) => {
+                if (method === 'help.getAppConfig') {
+                    return { _: 'help.appConfig', hash: 1, config: { emojies_send_dice: ['🎲', '⚽', '🎯', '🎲'] } };
+                }
+                if (method === 'messages.getStickerSet') {
+                    const set = params?.stickerset?._ || '';
+                    if (set === 'inputStickerSetDice') {
+                        diceCalls.push({ _: set, emoticon: params.stickerset.emoticon });
+                        return makeStickerSet('dice-' + params.stickerset.emoticon, params.stickerset.emoticon, '7' + params.stickerset.emoticon.codePointAt(0));
+                    }
+                    if (set === 'inputStickerSetAnimatedEmoji') return makeStickerSet('1', '❤', '1001');
+                    if (set === 'inputStickerSetEmojiGenericAnimations') return genericSet;
+                    if (set === 'inputStickerSetAnimatedEmojiAnimations') return makeStickerSet('3', '🔥', '1003');
+                    return { _: 'messages.stickerSet', set: {}, documents: [] };
+                }
+                if (method === 'messages.getEmojiStickers') return { sets: [], hash: 0 };
+                return {};
+            },
+        });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        const readyEvents: any[] = [];
+        const diceSetEvents: any[] = [];
+        window.addEventListener('tg-emoji-stickers-ready', (e) => readyEvents.push((e as CustomEvent).detail));
+        window.addEventListener('tg-dice-sets-ready', (e) => diceSetEvents.push((e as CustomEvent).detail));
+
+        window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
+        await flushTicks(6);
+
+        const calledSet = new Set(diceCalls.map((c) => c.emoticon));
+        expect(calledSet).toEqual(new Set(['🎲', '⚽', '🎯']));
+        expect(calledSet.size).toBe(3);
+        expect(diceCalls.every((c) => c._ === 'inputStickerSetDice')).toBe(true);
+        const map = readyEvents[readyEvents.length - 1]!.map as Record<string, string>;
+        expect(map['🎯']).toBe('7' + '🎯'.codePointAt(0));
+        expect(map['⚽']).toBe('7' + '⚽'.codePointAt(0));
+        expect(map['⚽']).not.toBe('6001');
+        expect(map['🏏']).toBeUndefined();
+
+        expect(diceSetEvents.length).toBeGreaterThanOrEqual(1);
+        const sets = diceSetEvents[0]!.sets as Record<string, { p: string; d: string[] }>;
+        expect(sets['🎲'].p).toBeTruthy();
+        expect(sets['🎲'].d).toContain(sets['🎲'].p);
+    });
+
+    test('indexes all dice set documents and downloads a result value directly without custom emoji RPC', async () => {
+        const customEmojiCalls: string[] = [];
+        let downloadFiles = jest.fn(async () => []);
+        const makeDiceSet = (alt: string) => {
+            const docs = [0, 1, 2, 3, 4, 5, 6].map((i) => makeDocument({
+                id: '7' + alt.codePointAt(0) + i,
+                mime_type: 'application/x-tgsticker',
+                attributes: [{ _: 'documentAttributeSticker', alt }],
+            }));
+            return {
+                _: 'messages.stickerSet',
+                set: { id: 'dice-' + alt, access_hash: '1' },
+                packs: [{ emoticon: alt, documents: docs.map((d) => d.id) }],
+                documents: docs,
+            };
+        };
+        const transport = makeTransport({
+            callRpc: async (method, params) => {
+                if (method === 'help.getAppConfig') {
+                    return { _: 'help.appConfig', hash: 1, config: { emojies_send_dice: ['🎲'] } };
+                }
+                if (method === 'messages.getCustomEmojiDocuments') {
+                    customEmojiCalls.push(String(params?.document_id?.[0]));
+                    return [];
+                }
+                if (method === 'messages.getStickerSet') {
+                    const set = params?.stickerset?._ || '';
+                    if (set === 'inputStickerSetDice') return makeDiceSet(params.stickerset.emoticon);
+                    if (set === 'inputStickerSetAnimatedEmoji') return makeStickerSet('1', '❤', '1001');
+                    if (set === 'inputStickerSetEmojiGenericAnimations') return makeStickerSet('2', '👍', '1002');
+                    if (set === 'inputStickerSetAnimatedEmojiAnimations') return makeStickerSet('3', '🔥', '1003');
+                    return { _: 'messages.stickerSet', set: {}, documents: [] };
+                }
+                if (method === 'messages.getEmojiStickers') return { sets: [], hash: 0 };
+                return {};
+            },
+            downloadFiles,
+        });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        const diceSetEvents: any[] = [];
+        window.addEventListener('tg-dice-sets-ready', (e) => diceSetEvents.push((e as CustomEvent).detail));
+        window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
+        await flushTicks(8);
+
+        // All 7 documents of the 🎲 set are indexed by id.
+        const base = '7' + '🎲'.codePointAt(0);
+        for (let i = 0; i < 7; i++) {
+            expect(router.emoji.findEmojiDoc(base + i)).toBeTruthy();
+        }
+        const sets = diceSetEvents[0]!.sets as Record<string, { p: string; d: string[] }>;
+        expect(sets['🎲'].d).toHaveLength(7);
+
+        // Requesting the result doc for value=4 must download directly — no
+        // messages.getCustomEmojiDocuments fallback, which returned stubs before.
+        downloadFiles = jest.fn(async () => [{ index: 0, type: 'document', bytes: makeGzipMagicBytes() }]);
+        (transport as any).downloadFiles = downloadFiles;
+
+        window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
+            detail: { items: [{ docId: base + 4, priority: 1 }] },
+        }));
+        await flushTicks();
+        await flushTicks();
+        await flushTicks();
+        expect(downloadFiles).toHaveBeenCalledTimes(1);
+        expect(customEmojiCalls).toEqual([]);
+        const urlEvents: any[] = [];
+        window.addEventListener('tg-emoji-url', (e) => urlEvents.push((e as CustomEvent).detail));
+        window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
+            detail: { items: [{ docId: base + 5, priority: 1 }] },
+        }));
+        await flushTicks();
+        await flushTicks();
+        await flushTicks();
+        expect(downloadFiles).toHaveBeenCalledTimes(2);
+        expect(customEmojiCalls).toEqual([]);
+        expect(urlEvents.some((d) => String(d.docId) === base + 5 && d.url)).toBe(true);
+    });
+
+    test('falls back to DICE_SETS when appConfig is unavailable', async () => {
+        const diceCalls: Array<{ _: string; emoticon: string }> = [];
+        const genericSet = {
+            _: 'messages.stickerSet',
+            set: { id: '2', access_hash: '1' },
+            packs: [
+                { emoticon: '👍', documents: ['1002'] },
+                { emoticon: '⚽', documents: ['6001'] },
+            ],
+            documents: [
+                makeDocument({ id: '1002', mime_type: 'application/x-tgsticker', attributes: [{ _: 'documentAttributeSticker', alt: '👍' }] }),
+                makeDocument({ id: '6001', mime_type: 'application/x-tgsticker', attributes: [{ _: 'documentAttributeSticker', alt: '⚽' }] }),
+            ],
+        };
+        const transport = makeTransport({
+            callRpc: async (method, params) => {
+                if (method === 'help.getAppConfig') {
+                    return {};
+                }
                 if (method === 'messages.getStickerSet') {
                     const set = params?.stickerset?._ || '';
                     if (set === 'inputStickerSetDice') {
@@ -103,11 +249,9 @@ describe('GramMediaRouter emoji pipeline', () => {
         window.addEventListener('tg-emoji-stickers-ready', (e) => readyEvents.push((e as CustomEvent).detail));
 
         window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
-        await flushTicks();
-        await flushTicks();
+        await flushTicks(6);
 
         expect(diceCalls.length).toBeGreaterThanOrEqual(11);
-        expect(diceCalls[0]).toEqual({ _: 'inputStickerSetDice', emoticon: '🎲' });
         for (const c of diceCalls) {
             expect(c.emoticon).toMatch(/^[\p{Extended_Pictographic}]+$/u);
         }
@@ -140,6 +284,78 @@ describe('GramMediaRouter emoji pipeline', () => {
         await flushTicks();
 
         expect(router.emoji.findEmojiDoc('2001')).toBeTruthy();
+    });
+
+    test('marks documentEmpty stub docs as banned without downloading them', async () => {
+        const stubDoc = { _: 'documentEmpty', id: '1258816259754060' };
+        const downloadFiles = jest.fn(async () => []);
+        const transport = makeTransport({
+            callRpc: async (method) => {
+                if (method === 'messages.getCustomEmojiDocuments') return [stubDoc];
+                return {};
+            },
+            downloadFiles,
+        });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: ['1258816259754060'] } }));
+        await flushTicks();
+        await flushTicks();
+
+        expect(router.emoji.findEmojiDoc('1258816259754060')).toBeUndefined();
+        expect(downloadFiles).not.toHaveBeenCalled();
+
+        window.dispatchEvent(new CustomEvent('tg-download-emoji', { detail: { docId: '1258816259754060', priority: 1 } }));
+        await flushTicks();
+        await flushTicks();
+        expect(downloadFiles).not.toHaveBeenCalled();
+    });
+
+    test('retries a stub doc only after the stub ban expires', async () => {
+        jest.useFakeTimers();
+        const stubDoc = { _: 'documentEmpty', id: '1258816259754115' };
+        const transport = makeTransport({
+            callRpc: async (method) => {
+                if (method === 'messages.getCustomEmojiDocuments') return [stubDoc];
+                return {};
+            },
+            downloadFiles: async () => [],
+        });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: ['1258816259754115'] } }));
+        await flushMicrotasks();
+
+        let resolveCallsRpc = 0;
+        setTransport(makeTransport({
+            callRpc: async (method) => {
+                if (method === 'messages.getCustomEmojiDocuments') {
+                    resolveCallsRpc++;
+                    return [makeDocument({ id: '1258816259754115', mime_type: 'video/mp4' })];
+                }
+                return {};
+            },
+            downloadFiles: async () => [],
+        }));
+
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: ['1258816259754115'] } }));
+        await flushMicrotasks();
+        expect(router.emoji.findEmojiDoc('1258816259754115')).toBeUndefined();
+        expect(resolveCallsRpc).toBe(0);
+
+        jest.advanceTimersByTime(10 * 60_000 + 1000);
+        await flushMicrotasks();
+
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: ['1258816259754115'] } }));
+        await flushMicrotasks();
+        expect(resolveCallsRpc).toBeGreaterThanOrEqual(1);
+        expect(router.emoji.findEmojiDoc('1258816259754115')).toBeTruthy();
+
+        jest.useRealTimers();
     });
 
     test('downloads known emoji via tg-download-document event and caches url', async () => {

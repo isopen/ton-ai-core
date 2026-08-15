@@ -207,7 +207,6 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
   const SINGLE_EMOJI_SIZE = 96;
   const size = singleEmoji ? SINGLE_EMOJI_SIZE : EMOJI_SIZE;
   const hasEmoji = segments.some((s) => s.type === 'emoji');
-  console.log('[emoji-text]', JSON.stringify({ text, singleEmoji, size, mapV: mapVersion, segs: segments.map((s) => s.type + ':' + (s.docId || s.value || '')) }));
   if (!hasEmoji) {
     return <StaticEmojiText value={text} size={size} />;
   }

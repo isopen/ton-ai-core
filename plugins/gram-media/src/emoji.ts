@@ -17,6 +17,7 @@ const EMOJI_ATTEMPT_TTL = 120_000;
 
 const UNRESOLVED_EMOJI_RETRY_MS = 25_000;
 const EMOJI_BAD_REDOWNLOAD_MS = 30_000;
+const EMOJI_STUB_BAN_MS = 10 * 60_000;
 
 const EMOJI_RELEASE_GRACE_MS = 60_000;
 const CUSTOM_EMOJI_RPC_CHUNK = 200;
@@ -25,6 +26,16 @@ const ALT_RESOLVE_CONCURRENCY = 6;
 
 const normalizeEmoji = (e: string): string => e.replace(/[\uFE00-\uFE0F\u200D]/g, '');
 
+// documentEmpty or stripped stubs carry only an id — no file_reference,
+// mime_type, size or dc_id. Such docs are not actually downloadable.
+const isStubEmojiDoc = (d: any): boolean => {
+    if (!d || d.id == null) return true;
+    if (d._ === 'documentEmpty') return true;
+    return d.file_reference == null && d.mime_type == null && d.size == null && d.dc_id == null;
+};
+
+// Fallback list: official dice emoticons come from help.getAppConfig
+// (emojies_send_dice); used only when appConfig is unavailable.
 const DICE_SETS: string[] = ['🎲', '🎯', '🎳', '🎰', '🏀', '⚽', '🎱', '🏈', '⚾', '🎾', '🏏'];
 
 const isEmojiKey = (s: string): boolean => s.startsWith('emoji-') || s.startsWith('emojipack-');
@@ -32,6 +43,7 @@ const isEmojiKey = (s: string): boolean => s.startsWith('emoji-') || s.startsWit
 export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiStickerDocs: Record<string, any> | null = null;
     private emojiKeycapDocs: Array<any> = [];
+    private diceSetsByEmoji = new Map<string, any[]>();
     private emojiCustomDocsById = new Map<string, any>();
     private emojiDocsById = new Map<string, any>();
     private emojiStickersLoading = false;
@@ -54,6 +66,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private altSemaActive = 0;
     private altSemaQueue: Array<() => void> = [];
     private emojiBadDocIds = new Map<string, number>();
+    private emojiStubDocIds = new Map<string, number>();
     private emojiReleaseGraceTimer: ReturnType<typeof setTimeout> | null = null;
     private handlers: Array<{ event: string; fn: (e: Event) => void }> = [];
 
@@ -64,7 +77,23 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     }
 
     private canRequestEmojiDoc(id: string): boolean {
-        return !this.requestedEmojiDocIds.has(id) && (this.emojiDocAttempts.get(id) || 0) < EMOJI_MAX_ATTEMPTS;
+        if (this.requestedEmojiDocIds.has(id)) return false;
+        if ((this.emojiDocAttempts.get(id) || 0) >= EMOJI_MAX_ATTEMPTS) return false;
+        const bannedAt = this.emojiStubDocIds.get(id);
+        if (bannedAt != null) return Date.now() - bannedAt > EMOJI_STUB_BAN_MS;
+        return true;
+    }
+
+    private markEmojiDocStub(id: string): void {
+        this.emojiStubDocIds.set(id, Date.now());
+        this.emojiDocAttempts.set(id, EMOJI_MAX_ATTEMPTS);
+        this.emojiStaleDocs.delete(id);
+        if (this.emojiStubDocIds.size > 1024) {
+            for (const k of this.emojiStubDocIds.keys()) {
+                this.emojiStubDocIds.delete(k);
+                if (this.emojiStubDocIds.size < 800) break;
+            }
+        }
     }
 
     private markEmojiDocAttempt(id: string): void {
@@ -106,6 +135,8 @@ export class EmojiPipelineImpl implements EmojiPipeline {
 
     private canResolveEmojiId(id: string): boolean {
         if (this.fetchedEmojiIds.has(id)) return false;
+        const bannedAt = this.emojiStubDocIds.get(id);
+        if (bannedAt != null) return Date.now() - bannedAt > EMOJI_STUB_BAN_MS;
         const failedAt = this.unresolvedEmojiIds.get(id);
         if (!failedAt) return true;
         return Date.now() - failedAt > UNRESOLVED_EMOJI_RETRY_MS;
@@ -156,6 +187,11 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     if (!d?.id) continue;
                     const id = String(d.id);
                     returned.add(id);
+                    if (isStubEmojiDoc(d)) {
+                        this.markEmojiDocStub(id);
+                        if (this.debug) console.log('[gram-media] custom emoji STUB (no file_reference)', id);
+                        continue;
+                    }
                     docs.push(d);
                 }
                 for (const id of chunk) {
@@ -207,6 +243,12 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             const docs = Array.isArray(res) ? res : (res?.items && Array.isArray(res.items) ? res.items : []);
             const fresh = docs.find((d: any) => d?.id && String(d.id) === docId);
             if (!fresh) return undefined;
+            if (isStubEmojiDoc(fresh)) {
+                this.markEmojiDocStub(docId);
+                this.emojiCustomDocsById.delete(docId);
+                this.indexEmojiDocs();
+                return undefined;
+            }
             this.emojiCustomDocsById.set(docId, fresh);
             this.indexEmojiDocs();
             return fresh;
@@ -228,10 +270,18 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     }
 
     findEmojiDoc(docId: string): any {
+        const stub = this.emojiStubDocIds.get(docId);
+        if (stub != null && Date.now() - stub < EMOJI_STUB_BAN_MS) return undefined;
         return this.emojiDocsById.get(docId) || undefined;
     }
 
     private downloadEmojiDoc(doc: any, docId: string, priority: number): void {
+        if (isStubEmojiDoc(doc)) {
+            this.markEmojiDocStub(docId);
+            this.requestedEmojiDocIds.delete(docId);
+            if (this.debug) console.log('[gram-media] skip download of stub emoji doc', docId);
+            return;
+        }
         this.requestedEmojiDocIds.add(docId);
         this.notifyCustomEmojiAlt(doc);
         this.indexEmojiDocs();
@@ -395,17 +445,62 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         await Promise.all(workers);
     }
 
+    private async diceEmoticonList(): Promise<string[]> {
+        const seen = new Set<string>();
+        const out: string[] = [];
+        const push = (e: any) => {
+            if (typeof e !== 'string' || !e) return;
+            const k = normalizeEmoji(e);
+            if (!k || seen.has(k)) return;
+            seen.add(k);
+            out.push(e);
+        };
+        try {
+            const cfg = await this.router.transport?.callRpc('help.getAppConfig', {});
+            const raw = cfg?.config;
+            const list = Array.isArray(raw?.emojies_send_dice)
+                ? raw.emojies_send_dice
+                : Array.isArray(raw?.value?.emojies_send_dice)
+                    ? raw.value.emojies_send_dice
+                    : undefined;
+            if (Array.isArray(list) && list.length > 0) {
+                for (const e of list) push(e);
+                if (out.length > 0) return out;
+            }
+        } catch (e: any) {
+            if (this.debug) console.log('[gram-media] dice appConfig error:', e?.message);
+        }
+        for (const e of DICE_SETS) push(e);
+        return out;
+    }
+
     private async loadDiceSets(map: Record<string, any>): Promise<void> {
-        for (const emoji of DICE_SETS) {
+        const emojis = await this.diceEmoticonList();
+        await Promise.all(emojis.map(async (emoji) => {
             const key = normalizeEmoji(emoji);
             const prevId = map[key]?.id != null ? String(map[key].id) : null;
             try {
-                const fs = await this.router.fetchStickerSet('dice-' + emoji, { _: 'inputStickerSetDice', emoticon: emoji });
-                if (!fs) continue;
+                const fs = await this.router.fetchStickerSet('dice-' + key, { _: 'inputStickerSetDice', emoticon: emoji });
+                if (!fs) return;
+                const docs = Array.isArray(fs.documents) ? fs.documents : [];
+                if (docs.length > 0) this.diceSetsByEmoji.set(key, docs);
+                for (const d of docs) {
+                    if (d?.id == null) continue;
+                    if (isStubEmojiDoc(d)) {
+                        this.markEmojiDocStub(String(d.id));
+                        continue;
+                    }
+                    const id = String(d.id);
+                    if (!this.emojiCustomDocsById.has(id)) {
+                        this.emojiCustomDocsById.set(id, d);
+                        this.fetchedEmojiIds.add(id);
+                    }
+                }
                 const added = this.buildEmojiMapFromSet(fs, map);
+                this.indexEmojiDocs();
                 let diceDoc: any = null;
-                if (Array.isArray(fs.documents)) {
-                    diceDoc = fs.documents.find((d: any) => {
+                if (docs.length > 0) {
+                    diceDoc = docs.find((d: any) => {
                         if (!d?.id) return false;
                         const attrs = Array.isArray(d.attributes) ? d.attributes : [];
                         const a = attrs.find((x: any) => x?._ === 'documentAttributeSticker' && typeof x.alt === 'string');
@@ -417,11 +512,27 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     const newId = String(diceDoc.id);
                     if (this.debug && prevId !== newId) console.log('[gram-media] dice set', emoji, 'override', prevId, '->', newId);
                 }
-                if (this.debug) console.log('[gram-media] dice set', emoji, 'docs =', Array.isArray(fs?.documents) ? fs.documents.length : 0, 'added =', added);
+                if (this.debug) console.log('[gram-media] dice set', emoji, 'docs =', docs.length, 'added =', added);
             } catch (e: any) {
                 if (this.debug) console.log('[gram-media] dice set error:', e?.message, emoji);
             }
+        }));
+        this.emitDiceSetsReady();
+    }
+
+    private emitDiceSetsReady(): void {
+        if (this.diceSetsByEmoji.size === 0) return;
+        const sets: Record<string, { p: string; d: string[] }> = {};
+        for (const [key, docs] of this.diceSetsByEmoji) {
+            const ids: string[] = [];
+            for (const d of docs) {
+                if (d?.id != null) ids.push(String(d.id));
+            }
+            if (ids.length === 0) continue;
+            sets[key] = { p: ids[0], d: ids };
         }
+        if (Object.keys(sets).length === 0) return;
+        this.router.emitWindow('tg-dice-sets-ready', { sets });
     }
 
     private onFetchEmojiStickers = async () => {
@@ -777,6 +888,12 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private async downloadEmojiList(resolved: Array<{ id: string; doc: any; priority: number }>): Promise<void> {
         const stillNeeded: Array<{ id: string; doc: any; priority: number }> = [];
         for (const r of resolved) {
+            if (isStubEmojiDoc(r.doc)) {
+                this.markEmojiDocStub(r.id);
+                this.requestedEmojiDocIds.delete(r.id);
+                if (this.debug) console.log('[gram-media] emoji batch SKIP stub', r.id);
+                continue;
+            }
             const cachedUrl = this.router.getCachedEmojiUrl('emojipack-' + r.id);
             if (cachedUrl) {
                 const kind = this.emojiDocKindsById.get(r.id) ?? this.router.emojiKindFor((r.doc.mime_type || '').toLowerCase());

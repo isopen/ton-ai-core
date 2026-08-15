@@ -446,7 +446,6 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
         shared,
       };
     });
-    console.log('[emoji-slot] size=' + size, JSON.stringify(rows));
   }, [slotsKey, urlsKey, kinds, failedDocs, stuckDocs, loadedDocs, inView, everShown, shared, size, hasEmoji]);
 
   useEffect(() => {

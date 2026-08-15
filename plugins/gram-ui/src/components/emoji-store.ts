@@ -119,6 +119,34 @@ export function subscribeEmojiChanges(cb: (changed?: EmojiChange[]) => void): ()
   return () => listeners.delete(cb);
 }
 
+let diceSets: Record<string, { p: string; d: string[] }> | null = null;
+const diceSetListeners = new Set<(changed?: string[]) => void>();
+
+window.addEventListener('tg-dice-sets-ready', (e) => {
+  const sets = (e as CustomEvent).detail?.sets;
+  if (!sets || typeof sets !== 'object') return;
+  diceSets = sets;
+  const keys = Object.keys(sets);
+  diceSetListeners.forEach((l) => l(keys.length > 0 ? keys : undefined));
+});
+
+export function subscribeDiceSets(cb: (changed?: string[]) => void): () => void {
+  if (diceSets && Object.keys(diceSets).length > 0) cb(Object.keys(diceSets));
+  diceSetListeners.add(cb);
+  return () => diceSetListeners.delete(cb);
+}
+
+export function getDiceDocId(emoticon: string, value?: number | null): string | undefined {
+  if (!diceSets) return undefined;
+  const key = normalizeEmoji(emoticon);
+  const set = diceSets[key];
+  if (!set) return undefined;
+  const v = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  if (v <= 0) return set.p;
+  if (key === '🎰') return set.p;
+  return set.d[v] || set.p;
+}
+
 export interface EmojiPickerCategory {
   name: string;
   emojis: string[];

@@ -17,7 +17,7 @@ import { TelegramImage } from '../primitives/telegram-image.js';
 import type { ImageSpec } from '../types.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
-import { flushEmojiBatch, getEmojiDocId, matchEmojiRuns } from './emoji-store.js';
+import { flushEmojiBatch, getEmojiDocId, getDiceDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeDiceSets } from './emoji-store.js';
 import { releaseEmojiCache } from './emoji-canvas.js';
 import { observeVisibility } from './emoji-canvas.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
@@ -28,7 +28,7 @@ import { PhotoLoader } from './photo-loader.js';
 import { WebPageBubble } from './link-preview.js';
 import { MediaCollage, type MediaCollageItem } from './media-collage.js';
 import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
-import { EmojiText } from './emoji-text.js';
+import { EmojiText, AnimatedEmoji } from './emoji-text.js';
 import { buildImageSpec, firstMissingSizeType, CHAT_PHOTO_PRIO } from './photo-spec.js';
 
 const DEBUG = false;
@@ -430,16 +430,44 @@ function isGiftMessage(action: any): boolean {
   return t.startsWith('messageActionGift');
 }
 
+const DICE_SIZE = 96;
+
+function DiceSticker({ emoticon, value }: { emoticon: string; value: number | null }) {
+  const [docId, setDocId] = useState<string | undefined>(undefined);
+  const [url, setUrl] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    setDocId(getDiceDocId(emoticon, value));
+    return subscribeDiceSets(() => setDocId(getDiceDocId(emoticon, value)));
+  }, [emoticon, value]);
+
+  useEffect(() => {
+    if (!docId) return;
+    const onUrl = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (d && d.docId != null && String(d.docId) === docId && d.url) setUrl(String(d.url));
+    };
+    window.addEventListener('tg-emoji-url', onUrl);
+    requestEmojiDownload(docId);
+    return () => window.removeEventListener('tg-emoji-url', onUrl);
+  }, [docId]);
+
+  if (!docId || !url) {
+    return <EmojiText text={emoticon} entities={undefined} documentUrls={{}} />;
+  }
+  const isSlot = normalizeEmoji(emoticon) === '🎰';
+  return <AnimatedEmoji docId={docId} url={url} alt={emoticon} size={DICE_SIZE} autoplay loop={!isSlot} />;
+}
+
 function DiceBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {
   const diceEmoji = m.media?.emoticon || m.media?.emoji || '🎲';
   const diceValue = typeof m.media?.value === 'number' ? m.media.value : null;
   return (
     <div class="MessageBubble MessageBubble_emojiOnly">
       <div class="MessageBubble__text">
-        <EmojiText text={diceEmoji} entities={undefined} documentUrls={{}} />
+        <DiceSticker emoticon={diceEmoji} value={diceValue} />
       </div>
       <div class="MessageBubble__meta">
-        {diceValue != null ? <span class="MessageBubble__dice-value">{diceValue}</span> : null}
         <span class="MessageBubble__time">{timeStr}</span>
         {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
       </div>
