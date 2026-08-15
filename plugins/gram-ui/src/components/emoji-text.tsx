@@ -195,7 +195,9 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
   const [mapVersion, setMapVersion] = useState(0);
   const [settledVersion, setSettledVersion] = useState(0);
   const settleTimer = useRef(0);
+  const hasPotentialEmoji = emojiEntities.length > 0 || matchEmojiRuns(text).length > 0;
   useEffect(() => {
+    if (!hasPotentialEmoji) return;
     ensureEmojiStickers();
     const customIds = new Set(emojiEntities.map((e: any) => String(e.document_id)));
     const runAlts = new Set<string>();
@@ -211,7 +213,7 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
       }
       if (changed.some((c) => customIds.has(c.docId) || runAlts.has(c.alt) || runAlts.has(normalizeEmoji(c.alt)))) setMapVersion((v) => v + 1);
     });
-  }, [emojiIdsKey]);
+  }, [emojiIdsKey, hasPotentialEmoji]);
 
   useEffect(() => {
     if (mapVersion === 0 || mapVersion === settledVersion) return;
