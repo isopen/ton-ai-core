@@ -619,18 +619,23 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
         const tgsActive = kind === 'tgs' && url && !failed && tgsPaintable(docId);
         return (
           <span key={s.type + ':' + (s.docId || s.value) + ':' + i} class="tgui-emoji-slot" data-doc={docId} style={slotStyle}>
-            {kind === 'video' && url ? (
-              <video
-                src={url}
-                width={size}
-                height={size}
-                style="display:block;width:100%;height:100%"
-                loop
-                muted
-                playsinline
-                autoplay
-              />
-            ) : kind === 'img' && url ? (
+            {kind === 'video' && url && !failed ? (
+              playing ? (
+                <video
+                  src={url}
+                  width={size}
+                  height={size}
+                  style="display:block;width:100%;height:100%"
+                  loop
+                  muted
+                  playsinline
+                  autoplay
+                  onError={onError}
+                />
+              ) : (
+                <span style="display:block;width:100%;height:100%" />
+              )
+            ) : kind === 'img' && url && !failed ? (
               <img
                 src={url}
                 width={size}
@@ -638,6 +643,7 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
                 style="display:block;width:100%;height:100%;object-fit:contain"
                 loading="eager"
                 decoding="async"
+                onError={onError}
               />
             ) : tgsActive ? (
               shared ? (
