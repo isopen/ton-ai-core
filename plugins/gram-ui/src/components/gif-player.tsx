@@ -32,8 +32,6 @@ export function GifPlayer(props: GifPlayerProps) {
   const obsRef = useRef<IntersectionObserver | null>(null);
   const visibleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isLoading = !url && progress >= 0;
-
   const triggerDownload = () => {
     if (url) return;
     window.dispatchEvent(new CustomEvent('tg-download-document', {

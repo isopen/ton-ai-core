@@ -92,9 +92,7 @@ export function WebPageBubble({ m, timeStr, out, status, sameSenderPrev, sameSen
   if (out) bubbleCls += ' link-msg__bubble--mine';
   else bubbleCls += ' link-msg__bubble--theirs';
 
-  const loaded = previewState === 'loaded';
   const loading = previewState === 'loading';
-  const error = previewState === 'error';
   const showCard = previewState !== 'no-preview';
 
   return (
