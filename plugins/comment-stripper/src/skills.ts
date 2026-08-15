@@ -27,11 +27,12 @@ export class CommentStripperSkills {
         return this.engine.stripText(text, lang, {
             keepSingleBlank: this.config.keepSingleBlank ?? opts?.keepSingleBlank,
             preserveHeader: this.config.preserveHeader ?? opts?.preserveHeader,
+            preserveDocblocks: this.config.preserveDocblocks ?? opts?.preserveDocblocks,
         });
     }
 
     stripFile(file: string, opts?: StripOptions): StripFileResult {
-        const result = this.engine.stripFile(file, { ...opts, preserveHeader: this.config.preserveHeader ?? opts?.preserveHeader });
+        const result = this.engine.stripFile(file, { ...opts, preserveHeader: this.config.preserveHeader ?? opts?.preserveHeader, preserveDocblocks: this.config.preserveDocblocks ?? opts?.preserveDocblocks });
         if (this.config.verbose && result.changed) {
             this.context.logger.info(`stripped ${result.comments} comments from ${file} (${result.lang})`);
         }
@@ -39,7 +40,7 @@ export class CommentStripperSkills {
     }
 
     stripPaths(paths: string[], opts?: StripOptions): StripBatchResult {
-        const result = this.engine.stripPaths(paths, { ...opts, preserveHeader: this.config.preserveHeader ?? opts?.preserveHeader });
+        const result = this.engine.stripPaths(paths, { ...opts, preserveHeader: this.config.preserveHeader ?? opts?.preserveHeader, preserveDocblocks: this.config.preserveDocblocks ?? opts?.preserveDocblocks });
         if (this.config.verbose) {
             this.context.logger.info(`files: ${result.files.length}, comments removed: ${result.totalComments}`);
         }

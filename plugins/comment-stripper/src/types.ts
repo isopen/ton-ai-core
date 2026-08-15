@@ -1,12 +1,14 @@
 export interface CommentStripperConfig {
     keepSingleBlank?: boolean;
     preserveHeader?: boolean;
+    preserveDocblocks?: boolean;
     verbose?: boolean;
 }
 
 export interface StripOptions {
     keepSingleBlank?: boolean;
     preserveHeader?: boolean;
+    preserveDocblocks?: boolean;
 }
 
 export interface StripTextResult {

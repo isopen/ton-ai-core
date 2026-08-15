@@ -46,7 +46,7 @@ export class CommentStripperPlugin extends BasePlugin<CommentStripperConfig> {
         if (this.config.verbose) {
             this.logger.info('comment-stripper plugin initialized (ts/js via AST, all others via tokenizer)');
         }
-        this.components = new CommentStripperEngine({ keepSingleBlank: this.config.keepSingleBlank });
+        this.components = new CommentStripperEngine({ keepSingleBlank: this.config.keepSingleBlank, preserveDocblocks: this.config.preserveDocblocks });
         this.skills = new CommentStripperSkills(this.context, this.components, this.config);
     }
 
@@ -61,7 +61,7 @@ export class CommentStripperPlugin extends BasePlugin<CommentStripperConfig> {
     async onConfigChange(newConfig: Record<string, any>): Promise<void> {
         this.config = { ...this.config, ...newConfig };
         this.skills?.updateConfig(newConfig);
-        this.components = new CommentStripperEngine({ keepSingleBlank: this.config.keepSingleBlank });
+        this.components = new CommentStripperEngine({ keepSingleBlank: this.config.keepSingleBlank, preserveDocblocks: this.config.preserveDocblocks });
     }
 
     isReady(): boolean {

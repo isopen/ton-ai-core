@@ -62,12 +62,104 @@ function collectTsComments(text: string, kind: 'TS' | 'JS'): ScanRange[] {
     return dedupe(ranges);
 }
 
-function stripTextOnce(text: string, lang: string, preserveHeader = false): { text: string; count: number } {
+function nextContentLine(text: string, from: number): { line: string; hasBlank: boolean } {
+    let idx = from;
+    let sawBlank = false;
+    while (idx < text.length) {
+        const nl = text.indexOf('\n', idx);
+        const end = nl < 0 ? text.length : nl;
+        const line = text.slice(idx, end);
+        if (line.trim() === '') {
+            sawBlank = true;
+            idx = end + 1;
+            continue;
+        }
+        return { line, hasBlank: sawBlank };
+    }
+    return { line: '', hasBlank: true };
+}
+
+function commentRunEnd(text: string, rangeEnd: number, marker: string): number {
+    let pos = rangeEnd;
+    if (text[pos] === '\r') pos++;
+    if (text[pos] === '\n') pos++;
+    for (;;) {
+        const le = text.indexOf('\n', pos);
+        const end = le < 0 ? text.length : le;
+        if (!text.slice(pos, end).trimStart().startsWith(marker)) return pos;
+        pos = end;
+        if (text[pos] === '\r') pos++;
+        if (text[pos] === '\n') pos++;
+    }
+}
+
+function isGoDoc(text: string, r: ScanRange): boolean {
+    const runEnd = commentRunEnd(text, r.end, '//');
+    const next = nextContentLine(text, runEnd);
+    if (next.hasBlank) return false;
+    return /^(package|func|type|var|const|import)\b/.test(next.line.trimStart());
+}
+
+function isRubyDoc(text: string, r: ScanRange): boolean {
+    const content = text.slice(r.start + 1, r.end).trimStart();
+    if (/^(frozen_string_literal|encoding|coding|typed|warn_indent)\s*:/.test(content)) return true;
+    const runEnd = commentRunEnd(text, r.end, '#');
+    const next = nextContentLine(text, runEnd);
+    if (next.hasBlank) return false;
+    return /^(class|module|def)\b/.test(next.line.trimStart());
+}
+
+function isMatlabDoc(text: string, r: ScanRange): boolean {
+    const own = text.lastIndexOf('\n', r.start - 1) + 1;
+    let onlyHeader = true;
+    let k = 0;
+    while (k < own) {
+        const nl = text.indexOf('\n', k);
+        const end = nl < 0 ? own : nl;
+        const line = text.slice(k, end).trim();
+        if (line !== '' && !line.startsWith('%')) { onlyHeader = false; break; }
+        k = end + 1;
+    }
+    if (onlyHeader) return true;
+    const prev = prevContentLine(text, own);
+    return /^function\b/.test(prev.line.trimStart());
+}
+
+function prevContentLine(text: string, before: number): { line: string; hasBlank: boolean } {
+    let idx = before - 1;
+    let sawBlank = false;
+    while (idx >= 0) {
+        const ls = text.lastIndexOf('\n', idx - 1) + 1;
+        const line = text.slice(ls, idx + 1);
+        if (line.trim() === '') { sawBlank = true; idx = ls - 1; continue; }
+        return { line, hasBlank: sawBlank };
+    }
+    return { line: '', hasBlank: true };
+}
+
+function isDocblock(text: string, r: ScanRange, cfg?: LanguageConfig, lang?: string): boolean {
+    const head = text.slice(r.start, r.start + 4);
+    if (head.startsWith('/**') && !head.startsWith('/**/')) return true;
+    if (head.startsWith('/*!')) return true;
+    if (lang === 'go' && isGoDoc(text, r)) return true;
+    if (lang === 'ruby' && isRubyDoc(text, r)) return true;
+    if (lang === 'matlab' && isMatlabDoc(text, r)) return true;
+    if (!cfg?.docMarkers) return false;
+    for (const m of cfg.docMarkers) {
+        if (text.startsWith(m, r.start)) return true;
+    }
+    return false;
+}
+
+function stripTextOnce(text: string, lang: string, preserveHeader = false, preserveDocblocks = true): { text: string; count: number } {
     const cfg: LanguageConfig | undefined = LANGUAGES[lang];
     if (!cfg) return { text, count: 0 };
     let ranges = TS_LIKE.has(lang)
         ? collectTsComments(text, lang === 'typescript' ? 'TS' : 'JS')
         : scanComments(text, cfg);
+    if (preserveDocblocks) {
+        ranges = ranges.filter((r) => !isDocblock(text, r, cfg, lang));
+    }
     if (ranges.length === 0) return { text, count: 0 };
     let kept = 0;
     if (preserveHeader) {
@@ -106,12 +198,13 @@ export class CommentStripperEngine {
     stripText(text: string, lang: string, opts?: StripOptions): StripTextResult {
         const keepSingleBlank = opts?.keepSingleBlank ?? this.options.keepSingleBlank ?? true;
         const preserveHeader = opts?.preserveHeader ?? this.options.preserveHeader ?? false;
+        const preserveDocblocks = opts?.preserveDocblocks ?? this.options.preserveDocblocks ?? true;
         const bom = text.charCodeAt(0) === 0xfeff ? '\uFEFF' : '';
         const body = bom ? text.slice(1) : text;
         const crlf = body.includes('\r\n');
         const normalized = body.replace(/\r\n/g, '\n');
-        const first = stripTextOnce(normalized, lang, preserveHeader);
-        const verify = stripTextOnce(first.text, lang, preserveHeader);
+        const first = stripTextOnce(normalized, lang, preserveHeader, preserveDocblocks);
+        const verify = stripTextOnce(first.text, lang, preserveHeader, preserveDocblocks);
         if (verify.text !== first.text) {
             throw new Error('leftover comments after strip for ' + lang);
         }

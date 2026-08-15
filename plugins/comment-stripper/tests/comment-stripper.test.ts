@@ -78,10 +78,26 @@ describe('comment removal', () => {
     it('removes ts block and line comments via AST', () => {
         const src = `// header\nexport const x = 1; /* inline */\n/** doc */\nfunction f() {\n  // inner\n  return 2; // trail\n}\n`;
         const out = stripCommentsText(src, 'typescript').text;
-        expect(out).not.toContain('//');
-        expect(out).not.toContain('/*');
+        expect(out).not.toContain('// header');
+        expect(out).not.toContain('/* inline */');
+        expect(out).toContain('/** doc */');
         expect(out).toContain('export const x = 1;');
         expect(out).toContain('return 2;');
+    });
+    it('preserves docblocks (may carry language directives)', () => {
+        const src = `/**\n * @jest-environment jsdom\n */\nimport { render } from './x.js';\n// plain comment\n/** @param {number} a */\nfunction f(a) {}\n`;
+        const out = stripCommentsText(src, 'typescript').text;
+        expect(out).toContain('/**');
+        expect(out).toContain('@jest-environment jsdom');
+        expect(out).toContain('@param {number} a');
+        expect(out).not.toContain('plain comment');
+        expect(out).toContain("import { render } from './x.js';");
+    });
+    it('strips docblocks when preserveDocblocks is disabled', () => {
+        const src = `/** @jest-environment jsdom */\nimport { render } from './x.js';\n`;
+        const out = stripCommentsText(src, 'typescript', { preserveDocblocks: false }).text;
+        expect(out).not.toContain('@jest-environment');
+        expect(out).toContain("import { render } from './x.js';");
     });
     it('removes python comments and keeps blocks readable', () => {
         const out = stripCommentsText('#!/usr/bin/env python3\n# header\ndef f():\n    # inner\n    x = 1\n\n\n    return x\n', 'python').text;
@@ -94,9 +110,27 @@ describe('comment removal', () => {
         expect(out).not.toContain('# comment');
         expect(out).not.toContain('// c');
     });
-    it('removes ruby =begin/=end blocks', () => {
+    it('preserves ruby =begin/=end doc blocks', () => {
         const src = `# c\n=begin\nmulti\nline\n=end\nx = 1\n`;
-        expect(stripCommentsText(src, 'ruby').text).toBe('x = 1\n');
+        expect(stripCommentsText(src, 'ruby').text).toBe('=begin\nmulti\nline\n=end\nx = 1\n');
+    });
+    it('preserves language-specific doc markers', () => {
+        expect(stripCommentsText('/// <reference path="x.d.ts" />\n// plain\nconst a = 1;\n', 'typescript').text).toBe('/// <reference path="x.d.ts" />\n\nconst a = 1;\n');
+        expect(stripCommentsText('/// <summary>docs</summary>\n// plain\nclass C {}\n', 'csharp').text).toBe('/// <summary>docs</summary>\n\nclass C {}\n');
+        expect(stripCommentsText('//! inner docs\n// plain\nfn main() {}\n', 'rust').text).toBe('//! inner docs\n\nfn main() {}\n');
+        expect(stripCommentsText('-- | haddock line\n-- plain\nx = 1\n', 'haskell').text).toBe('-- | haddock line\n\nx = 1\n');
+        expect(stripCommentsText('{- | haddock block -}\n-- plain\nx = 1\n', 'haskell').text).toBe('{- | haddock block -}\n\nx = 1\n');
+        expect(stripCommentsText('--- lua doc\n-- plain\nx = 1\n', 'lua').text).toBe('--- lua doc\n\nx = 1\n');
+    });
+    it('preserves positional doc comments (go/ruby/matlab)', () => {
+        expect(stripCommentsText('// pkg docs\npackage main\nvar x = 1 // plain\n', 'go').text).toBe('// pkg docs\npackage main\nvar x = 1\n');
+        expect(stripCommentsText('// Docs for F.\n// Second line.\nfunc F() {}\nvar x = 1 // plain\n', 'go').text).toBe('// Docs for F.\n// Second line.\nfunc F() {}\nvar x = 1\n');
+        expect(stripCommentsText('// detached\n\nfunc G() {}\n', 'go').text).toBe('func G() {}\n');
+        expect(stripCommentsText('# frozen_string_literal: true\n# Docs for C.\nclass C; end\n# plain\nx = 1\n', 'ruby').text).toBe('# frozen_string_literal: true\n# Docs for C.\nclass C; end\n\nx = 1\n');
+        expect(stripCommentsText('def a; end\n# plain\n', 'ruby').text).toBe('def a; end\n');
+        expect(stripCommentsText('% Help text.\n% More help.\nfunction y = f(x)\nend\n', 'matlab').text).toBe('% Help text.\n% More help.\nfunction y = f(x)\nend\n');
+        expect(stripCommentsText('function y = f(x)\n% inline help\nend\n', 'matlab').text).toBe('function y = f(x)\n% inline help\nend\n');
+        expect(stripCommentsText('x = 1;\n% not help\n', 'matlab').text).toBe('x = 1;\n');
     });
     it('removes haskell nested block comments', () => {
         const src = `-- c\nx = 1 {- outer {- inner -} still -}\n`;
