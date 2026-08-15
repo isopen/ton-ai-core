@@ -152,8 +152,6 @@ export function createCallbacks(
           return t(S.SENDER_USER);
         };
         if (data?.messages) {
-          console.log('[hist] peer=' + peerKey + ' rawCount=' + (data.messages?.length || 0)
-            + ' sample=' + JSON.stringify((data.messages || []).slice(0, 3).map((mm: any) => ({ id: mm.id, msg: (mm.message || '').slice(0, 40), media: mm.media?._, ent: (mm.entities || []).length }))));
           const msgs = data.messages.map((m: any) => ({
             id: m.id || 0, fromId: m.from_id,
             sender: resolveSenderName(m.from_id, m.sender),
@@ -223,8 +221,6 @@ export function createCallbacks(
       const peerKey = `${peer.type}_${peer.id}`;
       const cached = s.messagesCache.current.get(peerKey);
       const rawMsgs = Array.isArray(cached) ? cached : [];
-      console.log('[cached] peer=' + peerKey + ' count=' + rawMsgs.length
-        + ' sample=' + JSON.stringify(rawMsgs.slice(0, 5).map((cm: any) => ({ id: cm.id, msg: (cm.message || '').slice(0, 40), media: cm.media?._, ent: (cm.entities || []).length }))));
       prefetchPhotoCaches(s, rawMsgs).catch(() => {});
       injectCachedDocumentSources(s, rawMsgs);
       const { messages: cachedMsgs, cachedIds } = injectCachedPhotoUrls(rawMsgs);

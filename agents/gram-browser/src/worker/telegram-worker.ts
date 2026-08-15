@@ -3091,10 +3091,8 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
     const id = document?.id?.toString() || photo?.id?.toString() || '?';
     wlog('[dl] start id=' + id + ' label=' + label + ' thumbSuffix=' + (document?.thumb_size || photo?.thumb_size || '') + ' totalSize=' + (totalSize || 0));
     try {
-        let location = buildDownloadLocation(document, photo);
-        if (!location) return { type: '', bytes: new ArrayBuffer(0), error: 'No document or photo provided' };
-
         let refRefreshed = false;
+        let location: Record<string, any> | null = null;
         const refreshDocumentRef = async (): Promise<boolean> => {
             if (!document?.id || refRefreshed) return false;
             try {
@@ -3103,7 +3101,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 });
                 const docs = Array.isArray(res) ? res : [];
                 const fresh = docs.find((d: any) => d?.id && String(d.id) === String(document.id));
-                if (!fresh) return false;
+                if (!fresh || !fresh.file_reference) return false;
                 refRefreshed = true;
                 document = fresh;
                 location = buildDownloadLocation(document, photo);
@@ -3114,6 +3112,12 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 return false;
             }
         };
+
+        location = buildDownloadLocation(document, photo);
+        if (!location && document?.id && !photo?.id) {
+            if (await refreshDocumentRef()) location = buildDownloadLocation(document, photo);
+        }
+        if (!location) return { type: '', bytes: new ArrayBuffer(0), error: 'No file_reference for document (stub or empty)' };
 
         const baseKey = document?.id?.toString() || photo?.id?.toString() || '';
         const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : photo?.thumb_size ? `_thumb_${photo.thumb_size}` : '';
@@ -3521,8 +3525,9 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     return serverType;
 }
 
-function buildDownloadLocation(document?: any, photo?: any): Record<string, any> {
+function buildDownloadLocation(document?: any, photo?: any): Record<string, any> | null {
     if (document) {
+        if (document.id == null || document.file_reference == null) return null;
         const id = typeof document.id === 'string' ? BigInt(document.id) : document.id;
         const accessHash = typeof document.access_hash === 'string' ? BigInt(document.access_hash) : document.access_hash;
         const buf = typeof document.file_reference === 'string'
@@ -3537,6 +3542,7 @@ function buildDownloadLocation(document?: any, photo?: any): Record<string, any>
         };
     }
     if (photo) {
+        if (photo.id == null || photo.file_reference == null) return null;
         const id = typeof photo.id === 'string' ? BigInt(photo.id) : photo.id;
         const accessHash = typeof photo.access_hash === 'string' ? BigInt(photo.access_hash) : photo.access_hash;
         const buf = typeof photo.file_reference === 'string'
