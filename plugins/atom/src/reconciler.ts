@@ -3,6 +3,7 @@ import { TEXT, FRAGMENT, SLOT, SLOTTABLE, ComponentInstance, setCurrentInstance,
 function runUnmountCleanups(vnode: VNode) {
   if (vnode.componentInstance) {
     const inst = vnode.componentInstance;
+    inst._mounted = false;
     const cleanups = inst.unmountCleanups;
     for (const fn of cleanups) {
       try { fn(); } catch (e) { console.error('useEffect unmount cleanup error:', e); }
@@ -218,7 +219,7 @@ function resolveSlotVNode(vnode: VNode): VNode {
   return merged;
 }
 
-export function createDOM(vnode: VNode): Node {
+export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node {
   if (!vnode) return document.createTextNode('');
 
   if (vnode.type === TEXT) {
@@ -241,7 +242,10 @@ export function createDOM(vnode: VNode): Node {
 
     if (typeof vnode.type === 'function') {
       const component = vnode.type as ComponentType;
-      const instance = new ComponentInstance(component, vnode.props);
+      const instance = reuseInstance ?? new ComponentInstance(component, vnode.props);
+      if (reuseInstance) {
+        reuseInstance.props = vnode.props;
+      }
       setCurrentInstance(instance);
       const result = instance.render();
       instance.vnode = result;
@@ -355,7 +359,6 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   if (typeof newVNode.type === 'function') {
     const component = newVNode.type as ComponentType;
     let instance = oldVNode.componentInstance;
-    const fnName = component.name || (typeof component === 'function' ? '(anonymous)' : String(component));
     if (!instance) {
       instance = new ComponentInstance(component, newVNode.props);
     } else {
@@ -371,22 +374,26 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
     instance.vnode = result;
 
     if (!result) {
-      if (dom && dom.nodeType === 3) {
-        newVNode.dom = dom;
-        return dom;
-      }
-
-      const empty = document.createTextNode('');
-      if (dom && dom.parentNode) {
+      if (dom && dom.nodeType !== 3) {
+        runUnmountCleanups(oldResult);
         for (const node of findAllDomNodes(oldResult)) {
           if (node.parentNode) node.parentNode.removeChild(node);
         }
       }
+      const empty = dom && dom.nodeType === 3 ? dom : document.createTextNode('');
       newVNode.dom = empty;
       return empty;
     }
 
     result.componentInstance = instance;
+
+    if (oldVNode.componentInstance && oldVNode.componentInstance.vnode == null) {
+      const freshDom = createDOM(result, instance);
+      if (dom && dom.parentNode) dom.parentNode.replaceChild(freshDom, dom);
+      newVNode.dom = freshDom;
+      return freshDom;
+    }
+
     const newDom = patch(dom, oldResult, result);
     newVNode.dom = newDom;
     return newDom;

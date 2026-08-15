@@ -25,6 +25,7 @@ export class ComponentInstance {
   pendingEffects: Array<{ fn: () => (() => void) | void; oldCleanup?: (() => void); cleanupIdx: number }> = [];
   displayName: string;
   _dirty: boolean = false;
+  _mounted: boolean = true;
 
   constructor(component: ComponentType, props: Record<string, any>) {
     this.component = component;

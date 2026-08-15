@@ -59,6 +59,7 @@ export function useEffect(fn: () => (() => void) | void, deps?: any[]) {
 export function flushAllEffects() {
   while (pendingEffects.length > 0) {
     const { inst, fn, oldCleanup, cleanupIdx } = pendingEffects.shift()!;
+    if (!inst._mounted) continue;
     if (oldCleanup) {
       try { oldCleanup(); } catch (e) { console.error('useEffect cleanup error:', e); }
       const ci = inst.unmountCleanups.indexOf(oldCleanup);
