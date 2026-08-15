@@ -314,7 +314,9 @@ function findAllDomNodes(vnode: VNode): Node[] {
     return nodes;
   }
   if (typeof vnode.type === 'function') {
-    return vnode.componentInstance?.vnode ? findAllDomNodes(vnode.componentInstance.vnode) : [];
+    if (vnode.componentInstance?.vnode) return findAllDomNodes(vnode.componentInstance.vnode);
+    if (vnode.dom && vnode.dom.nodeType === 3) return [vnode.dom];
+    return [];
   }
   if (vnode.dom) return [vnode.dom];
   return [];
@@ -339,6 +341,10 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
     const newDom = createDOM(newVNode);
     if (dom.parentNode) {
       dom.parentNode.replaceChild(newDom, dom);
+      const oldNodes = findAllDomNodes(oldVNode);
+      for (const node of oldNodes) {
+        if (node !== dom && node.parentNode) node.parentNode.removeChild(node);
+      }
     }
     return newDom;
   }
@@ -460,10 +466,16 @@ function reconcileChildren(
         const nodes = newDom === oldDom ? oldEntry.nodes : findAllDomNodes(newChild);
         patches.push({ nodes });
       } else {
+        log.warn('[recon] DUPLICATE-MOUNT key=' + String(key) + ' parent=' + (parentEl as HTMLElement).className + ' oldNodes=' + oldEntry.nodes.length);
         const newDom = createDOM(newChild);
         newChild.dom = newDom;
         patches.push({ nodes: findAllDomNodes(newChild) });
       }
+    } else if (oldEntry) {
+      log.warn('[recon] DUP-KEY key=' + String(key) + ' parent=' + (parentEl as HTMLElement).className + ' oldNodes=' + oldEntry.nodes.length);
+      const newDom = createDOM(newChild);
+      newChild.dom = newDom;
+      patches.push({ nodes: findAllDomNodes(newChild) });
     } else {
       const newDom = createDOM(newChild);
       newChild.dom = newDom;
@@ -473,6 +485,7 @@ function reconcileChildren(
 
   for (const [, entry] of oldKeyed) {
     if (!usedKeys.has(entry.origKey)) {
+      log.debug('[recon] remove key=' + String(entry.origKey) + ' parent=' + (parentEl as HTMLElement).className);
       runUnmountCleanups(entry.vnode);
       for (const node of entry.nodes) {
         if (node.parentNode) node.parentNode.removeChild(node);
