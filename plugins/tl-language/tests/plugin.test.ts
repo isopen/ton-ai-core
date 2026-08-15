@@ -1,8 +1,6 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 import { TLLanguagePlugin } from '../src/index';
-import { SchemaRegistry } from '../src/registry';
-import { VECTOR_ID } from '../src/types';
 
 function createTestContext() {
     return {

@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer';
-import { TLCombinator, TLField } from './types';
+import { TLCombinator } from './types';
 import { SchemaRegistry } from './registry';
 import { crc32 } from './crc32';
 import { normalizeForCRC32 } from './schema-normalizer';

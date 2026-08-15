@@ -8,10 +8,6 @@ import {
     intermediateDecodeLength,
     ObfuscationKeys,
 } from './obfuscation-utils';
-import {
-    AuthKeyResult,
-    NoCryptoMessage,
-} from './types';
 
 const ABRIDGED_MAGIC = 0xefefefef;
 

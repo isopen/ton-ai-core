@@ -1,5 +1,4 @@
 import { Buffer } from 'buffer';
-import { TLCombinator, TLField } from './types';
 import { SchemaRegistry } from './registry';
 
 const VECTOR_ID = 0x1cb5c415;

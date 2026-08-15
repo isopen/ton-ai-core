@@ -1,6 +1,5 @@
 import { strict as assert } from 'assert';
 import { SchemaRegistry } from '../src/registry';
-import { VECTOR_ID } from '../src/types';
 
 const TEST_SCHEMA = `
 int#a8509bda ? = Int;

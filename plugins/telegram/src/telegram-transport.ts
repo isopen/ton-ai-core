@@ -1,6 +1,5 @@
 import WebSocket from 'ws';
 import net from 'net';
-import { crypton } from '@ton-ai/core';
 import { aes256CtrProcess, generateObfuscationInit, abridgedEncode, abridgedDecodeLength } from './obfuscation-utils';
 import type { ObfuscationKeys } from './obfuscation-utils';
 import type { IConnection } from './types';

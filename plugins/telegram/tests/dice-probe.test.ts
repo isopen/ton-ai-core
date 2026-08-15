@@ -1,5 +1,4 @@
 import { getSchemaRegistry, SchemaSerializer, SchemaDeserializer } from '../src/schema-setup';
-import { convertJsonSchemaToTL } from '../src/json-schema-to-tl';
 
 function deepConvert(v: any): any {
     if (v && typeof v === 'object' && 'constructorId' in v && 'constructorName' in v && 'fields' in v) {

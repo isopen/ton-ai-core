@@ -5,7 +5,6 @@ import { crc32, encodeTlString, readTlString, encodeKvPayload, decodeKvPayload, 
 import {
   buildEvent, parseEventHeader, validateEventCrc,
   buildEncryptionPayload, parseEncryptionEvent,
-  EventType,
   TYPE_AES_CTR_ENCRYPTION,
 } from '../src/td-binlog';
 
@@ -16,8 +15,6 @@ const SERVICE_TYPE_HEADER = -1;
 const SERVICE_TYPE_NO_ENCRYPTION = -4;
 const FLAG_REWRITE = 1;
 const FLAG_PARTIAL = 2;
-const EVENT_HEADER_SIZE = 28;
-const EVENT_TAIL_SIZE = 4;
 
 describe('crc32', () => {
   test('known values', () => {

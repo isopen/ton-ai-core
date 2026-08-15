@@ -1,4 +1,3 @@
-import { crypton } from '@ton-ai/core';
 import { AuthKeyCreator, PublicRsaKeyInterface, DefaultPublicRsaKey } from '@ton-ai/mtproto';
 import { IConnection, AuthKeyResult } from './types';
 

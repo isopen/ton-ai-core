@@ -1,8 +1,7 @@
-import { EventEmitter } from 'events';
 import { IConnection, TL_CONSTRUCTORS, TELEGRAM_DC_OPTIONS, TELEGRAM_WS_DC_OPTIONS } from './types';
 import { MtprotoClient } from './mtproto-client';
 import { TelegramWsConnection, TelegramTcpConnection } from './telegram-transport';
-import { MTProtoCryptoPlugin, AuthKey, AuthKeyCreator, DefaultPublicRsaKey } from '@ton-ai/mtproto';
+import { AuthKeyCreator, DefaultPublicRsaKey } from '@ton-ai/mtproto';
 import { doObfuscatedWsRequest, parseNoCryptoResponse } from './ws-request';
 import { TLSerializer, TLDeserializer } from '@ton-ai/tl-language';
 import { crypton } from '@ton-ai/core';

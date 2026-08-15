@@ -2,7 +2,7 @@ import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 import { parseTLSchema, parseFieldToken, splitTopLevel, tokenizeFields } from '../src/parser';
 import { SchemaDeserializer, deserializeWithSchema } from '../src/deserializer';
-import { SchemaSerializer, computeConstructorIdFromSchema, computeConstructorIdFromName } from '../src/serializer';
+import { SchemaSerializer } from '../src/serializer';
 import { SchemaRegistry } from '../src/registry';
 import { validateTLSchema } from '../src/validator';
 import { crc32, crc32Hex } from '../src/crc32';

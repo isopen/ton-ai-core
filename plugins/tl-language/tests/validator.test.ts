@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import { parseTLSchema } from '../src/parser';
-import { validateTLSchema, TLValidationError } from '../src/validator';
+import { validateTLSchema } from '../src/validator';
 
 describe('Validator', () => {
     test('valid schema returns no errors', () => {

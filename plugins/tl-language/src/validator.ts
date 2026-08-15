@@ -1,4 +1,4 @@
-import { TLSchema, TLCombinator, TLField } from './types';
+import { TLSchema } from './types';
 
 export interface TLValidationError {
     line: number;
