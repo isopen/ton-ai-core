@@ -96,6 +96,8 @@ function buildAlbumRows(msgs: any[]): AlbumRow[] {
     rows.push({ msgs: list, key: String(m.id) });
     i = j;
   }
+  const log = getLogger('gram-ui');
+  log.debug(`[rows] n=${rows.length} stateN=${msgs.length} keys=[${rows.map(r => r.key).join(',')}]`);
   return rows;
 }
 

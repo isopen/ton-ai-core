@@ -6,6 +6,7 @@ import {
   applyReadReceipt, attachScrollRead, addOrphanedDialog,
 } from './gram-utils';
 import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
+import { getLogger } from '@ton-ai/gram-debug';
 
 export function createCallbacks(
   s: GramState,
@@ -178,6 +179,10 @@ export function createCallbacks(
               s.maxFetchedIdRef.current.set(peerKey, Math.min(...positiveIds));
             }
             result = merged;
+            const uniqIds = new Set(merged.map(m => Number(m.id))).size;
+            const log = getLogger('gram-browser');
+            log.debug(`[msgs] merged ${peerKey} n=${merged.length} uniq=${uniqIds} ids=[${merged.map(m => m.id).join(',')}]`);
+            log.debug(`[msgs] texts ${peerKey} ` + merged.map(m => `${m.id}:len=${m.message?.length ?? 0}:${JSON.stringify(String(m.message || '').slice(0, 24))}`).join(' | '));
           }
           if (s.selectedPeerRef.current?.id === p.id && s.selectedPeerRef.current?.type === p.type) {
             await prefetchPhotoCaches(s, result);

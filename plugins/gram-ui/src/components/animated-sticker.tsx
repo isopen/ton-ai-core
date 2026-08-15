@@ -69,7 +69,7 @@ export function AnimatedSticker({
       old.removeView(viewId);
     }
     urlRef.current = tgsUrl;
-    aniLog.info('[ani-sticker] init', renderId, 'size=' + size, 'shared=' + !!sharedCanvas, 'coords=' + (coords ? coords.x + ',' + coords.y : 'n'), 'url=' + tgsUrl.slice(0, 60));
+    aniLog.info('[ani-sticker] init', renderId, 'size=' + size, 'shared=' + !!sharedCanvas, 'coords=' + (coords ? coords.x + ',' + coords.y : 'n'), 'vid=' + viewId, 'url=' + tgsUrl.slice(0, 60));
     const r = initAnimatedRenderer(tgsUrl, container, renderId, { size, noLoop: !loop, quality, isLowPriority, coords }, viewId, (() => {
       aniLog.info('[ani-sticker] onLoad', renderId);
       onLoad?.();
@@ -96,6 +96,7 @@ export function AnimatedSticker({
     return () => {
       const r = rendererRef.current;
       rendererRef.current = null;
+      aniLog.info('[ani-sticker] unmount', renderId, 'vid=' + viewId);
       if (r) r.removeView(viewId);
     };
   }, [viewId]);

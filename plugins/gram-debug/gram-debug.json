@@ -11,28 +11,28 @@
             "level": "info"
         },
         "telegram": {
-            "enabled": false,
-            "level": "info"
+            "enabled": true,
+            "level": "debug"
         },
         "tgs": {
             "enabled": false,
             "level": "info"
         },
         "atom": {
-            "enabled": false,
-            "level": "info"
+            "enabled": true,
+            "level": "debug"
         },
         "gram-media": {
             "enabled": false,
             "level": "info"
         },
         "gram-browser": {
-            "enabled": false,
-            "level": "info"
+            "enabled": true,
+            "level": "debug"
         },
         "gram-ui": {
-            "enabled": false,
-            "level": "info"
+            "enabled": true,
+            "level": "debug"
         },
         "gram-ui:slot": {
             "enabled": false,
@@ -51,11 +51,11 @@
             "level": "debug"
         },
         "gram-ui:ani-sticker": {
-            "enabled": false,
+            "enabled": true,
             "level": "debug"
         },
         "gram-ui:emoji-text": {
-            "enabled": false,
+            "enabled": true,
             "level": "debug"
         },
         "gram-ui:photo": {

@@ -9,6 +9,7 @@ import {
   fetchPeerInfo,
 } from './gram-utils';
 import { isTypingUpdate, handleTypingUpdate } from './gram-typing';
+import { getLogger } from '@ton-ai/gram-debug';
 
 export function createHandleUpdate(s: GramState) {
   return (constructorId: number, data: string) => {
@@ -92,6 +93,8 @@ export function createHandleUpdate(s: GramState) {
             } else {
               updated.push(m);
             }
+            const log = getLogger('gram-browser');
+            log.debug(`[msgs] new ${cacheKey} id=${m.id} out=${m.out} text=${(m.message || '').slice(0, 20)} cacheN=${updated.length} ${existingIdx >= 0 ? 'REPLACED' : 'APPEND'}`);
             setMessageCache(s, cacheKey, updated);
             if (s.selectedPeerRef.current && `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` === cacheKey) {
               scheduleMessagesFlush(s);
