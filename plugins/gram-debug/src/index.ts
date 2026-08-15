@@ -21,6 +21,10 @@ export function setScope(scope: string, patch: ScopeConfig): void {
     components.setScope(scope, patch);
 }
 
+export function subscribeScope(scope: string, cb: () => void): () => void {
+    return components.subscribeScope(scope, cb);
+}
+
 export function getConfig(): GramDebugConfig {
     return components.getConfig();
 }

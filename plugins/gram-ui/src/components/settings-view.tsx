@@ -1,11 +1,23 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
+import { useEffect, useState } from '@ton-ai/atom/hooks';
 import { Scrollable } from '../primitives/scrollable.js';
+import { isEnabled, setScope, subscribeScope } from '@ton-ai/gram-debug';
 import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
 
+const MEDIA_SOURCE_BADGE_SCOPE = 'gram-ui:media-source-badge';
+
+function useScopeFlag(scope: string): [boolean, (v: boolean) => void] {
+  const [on, setOn] = useState(() => isEnabled(scope));
+  useEffect(() => subscribeScope(scope, () => setOn(isEnabled(scope))), [scope]);
+  const toggle = (v: boolean) => setScope(scope, { enabled: v });
+  return [on, toggle];
+}
+
 export function SettingsView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
+  const [badgeOn, setBadgeOn] = useScopeFlag(MEDIA_SOURCE_BADGE_SCOPE);
   return (
     <Scrollable className="tgui-settings">
       <div class="tgui-settings-title">{t(S.SETTINGS_TITLE)}</div>
@@ -53,6 +65,21 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
               <path d="M20 3H9c-1.1 0-2 .9-2 2v4h2V5h11v14H9v-4H7v4c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" fill="#e74c3c" />
             </svg>
             <span class="tgui-settings-action-text" style="color:#e74c3c">{t(S.SETTINGS_LOGOUT)}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="tgui-settings-section">
+        <div class="tgui-settings-section-label">Разработка</div>
+        <div class="tgui-settings-card">
+          <div class="tgui-settings-row tgui-settings-row_toggle">
+            <span class="tgui-settings-label">Индикатор источника медиа</span>
+            <input
+              type="checkbox"
+              class="tgui-settings-checkbox"
+              checked={badgeOn}
+              onChange={(e: Event) => setBadgeOn((e.target as HTMLInputElement).checked)}
+            />
           </div>
         </div>
       </div>

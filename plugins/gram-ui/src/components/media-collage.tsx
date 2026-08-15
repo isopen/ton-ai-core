@@ -4,10 +4,10 @@ import { TelegramImage } from '../primitives/telegram-image.js';
 import { PhotoLoader } from './photo-loader.js';
 import { Checkmark } from './checkmark.js';
 import { EmojiText } from './emoji-text.js';
+import { MediaSourceBadge } from './media-source-badge.js';
 import type { ImageSpec } from '../types.js';
 import { calculateAlbumLayout } from './photo-album-layout.js';
 import { firstMissingSizeType, CHAT_PHOTO_PRIO } from './photo-spec.js';
-import { isEnabled } from '@ton-ai/gram-debug';
 
 export interface MediaCollageItem {
   m: any;
@@ -185,11 +185,7 @@ export function MediaCollage({
             {isMoreCell ? (
               <div class="MediaCollage__more-overlay">+{moreCount}</div>
             ) : null}
-            {isEnabled('gram-ui:media-collage') && item.cacheSource ? (
-              <span class="MediaCollage__src" style={`background:${item.cacheSource === 'memory' ? '#22c55e' : item.cacheSource === 'persisted' ? '#3b82f6' : '#ef4444'}`}>
-                {item.cacheSource === 'memory' ? 'in-memory' : item.cacheSource === 'persisted' ? 'gram-db' : 'cdn'}
-              </span>
-            ) : null}
+            {item.cacheSource ? <MediaSourceBadge source={item.cacheSource} className="MediaCollage__src" absolute={false} /> : null}
           </div>
         );
       })}

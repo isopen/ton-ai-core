@@ -112,6 +112,27 @@ export class DebugComponents {
         const scopes = { ...(this.config.scopes || {}) };
         scopes[scope] = { ...(scopes[scope] || {}), ...patch };
         this.config = { ...this.config, scopes };
+        this.notify(scope);
+    }
+
+    private listeners = new Map<string, Set<() => void>>();
+
+    subscribeScope(scope: string, cb: () => void): () => void {
+        let set = this.listeners.get(scope);
+        if (!set) {
+            set = new Set();
+            this.listeners.set(scope, set);
+        }
+        set.add(cb);
+        return () => {
+            set!.delete(cb);
+        };
+    }
+
+    private notify(scope: string): void {
+        const set = this.listeners.get(scope);
+        if (!set) return;
+        for (const cb of [...set]) cb();
     }
 
     getConfig(): GramDebugConfig {

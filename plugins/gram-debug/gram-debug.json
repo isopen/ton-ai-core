@@ -62,6 +62,10 @@
             "enabled": false,
             "level": "debug"
         },
+        "gram-ui:media-source-badge": {
+            "enabled": false,
+            "level": "debug"
+        },
         "gram-ui:media-collage": {
             "enabled": false,
             "level": "debug"

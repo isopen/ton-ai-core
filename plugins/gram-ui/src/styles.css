@@ -2503,6 +2503,28 @@ body {
   cursor: pointer;
 }
 
+.tgui-media-source-badge {
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.tgui-settings-row_toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tgui-settings-checkbox {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--tgui-accent, #3390ec);
+  cursor: pointer;
+}
+
 .MediaCollage__src {
   position: absolute;
   top: 4px;

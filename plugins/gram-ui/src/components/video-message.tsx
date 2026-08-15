@@ -2,6 +2,7 @@ import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import { Checkmark } from './checkmark.js';
 import { buildDocumentThumb } from '../utils.js';
+import { MediaSourceBadge } from './media-source-badge.js';
 
 const RING_CIRC = 2 * Math.PI * 28;
 
@@ -394,11 +395,7 @@ export function VideoMessage(props: VideoMessageProps) {
               </div>
             </div>
             <div class="video-message__top-right">
-              {documentSources?.[m.id] ? (
-                <span style={`padding:1px 5px;border-radius:4px;background:${documentSources[m.id] === 'memory' ? '#22c55e' : documentSources[m.id] === 'persisted' ? '#3b82f6' : '#ef4444'};color:#fff;font-size:10px;line-height:14px;white-space:nowrap`}>
-                  {documentSources[m.id] === 'memory' ? 'in-memory' : documentSources[m.id] === 'persisted' ? 'gram-db' : documentSources[m.id] === 'cdn-server' ? 'cdn-server' : documentSources[m.id] === 'migrate-server' ? 'migrate-server' : 'home-server'}
-                </span>
-              ) : null}
+              {documentSources?.[m.id] ? <MediaSourceBadge source={documentSources[m.id]} absolute={false} /> : null}
               <button type="button" class="badge badge--icon video-message__action" data-action="download" onClick={(e: any) => {
                 e.stopPropagation();
                 const doc = m.media?.document;

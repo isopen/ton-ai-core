@@ -4,6 +4,7 @@ import { useRef } from '@ton-ai/atom/hooks';
 import { Checkmark } from './checkmark.js';
 import { buildDocumentThumb, isAnimatedMedia } from '../utils.js';
 import { GifPlayer } from './gif-player.js';
+import { MediaSourceBadge } from './media-source-badge.js';
 
 const log = getLogger('gram-ui');
 
@@ -111,11 +112,7 @@ export function MediaPlayer(props: MediaPlayerProps) {
               log.error('[MediaPlayer] video error code:', el?.error?.code, 'msg:', mc, 'src:', el?.src?.slice(0, 60));
             }}
           />
-          {cacheSource ? (
-            <span style={`position:absolute;top:4px;right:4px;padding:1px 5px;border-radius:4px;background:${cacheSource === 'memory' ? '#22c55e' : cacheSource === 'persisted' ? '#3b82f6' : '#ef4444'};color:#fff;font-size:10px;line-height:14px;white-space:nowrap;z-index:2`}>
-              {cacheSource === 'memory' ? 'in-memory' : cacheSource === 'persisted' ? 'gram-db' : cacheSource === 'cdn-server' ? 'cdn-server' : cacheSource === 'migrate-server' ? 'migrate-server' : 'home-server'}
-            </span>
-          ) : null}
+          {cacheSource ? <MediaSourceBadge source={cacheSource} /> : null}
           </>
         ) : (
           <div class="tgui-media-preview" style={containerStyle} onClick={isLoading ? undefined : triggerDownload}>

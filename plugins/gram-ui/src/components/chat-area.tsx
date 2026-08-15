@@ -27,6 +27,7 @@ import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getSt
 import { MediaPlayer } from './media-player.js';
 import { VideoMessage } from './video-message.js';
 import { PhotoLoader } from './photo-loader.js';
+import { MediaSourceBadge } from './media-source-badge.js';
 import { WebPageBubble } from './link-preview.js';
 import { MediaCollage, type MediaCollageItem } from './media-collage.js';
 import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
@@ -283,11 +284,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
             <PhotoLoader percent={pct} fileSize={fileSize} hidePercent={imgWidth > 0 && imgWidth < 140} />
           </>
         ) : null}
-        {isEnabled('gram-ui:photo') && cacheSource ? (
-          <span style={`position:absolute;top:4px;right:4px;padding:1px 5px;border-radius:4px;background:${cacheSource === 'memory' ? '#22c55e' : cacheSource === 'persisted' ? '#3b82f6' : '#ef4444'};color:#fff;font-size:10px;line-height:14px;white-space:nowrap;z-index:2`}>
-            {cacheSource === 'memory' ? 'in-memory' : cacheSource === 'persisted' ? 'gram-db' : cacheSource === 'cdn-server' ? 'cdn-server' : cacheSource === 'migrate-server' ? 'migrate-server' : 'home-server'}
-          </span>
-        ) : null}
+        {cacheSource ? <MediaSourceBadge source={cacheSource} /> : null}
         {!m.message ? (
           <div class="MessageBubble__meta MessageBubble__meta_overlay">
             <span class="MessageBubble__time">{timeStr}</span>
