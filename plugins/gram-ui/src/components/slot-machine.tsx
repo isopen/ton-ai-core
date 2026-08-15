@@ -122,6 +122,35 @@ function useSlotLocalData(docId: string | undefined): EmojiData | undefined {
   return data;
 }
 
+function useSlotSetReady(specs: SlotLayerSpec[] | undefined): boolean {
+  const [readyCount, setReadyCount] = useState(0);
+
+  useEffect(() => {
+    if (!specs) return;
+    const ids = specs.filter((s) => !isSlotLocalDoc(s.docId)).map((s) => s.docId);
+    if (ids.length === 0) {
+      setReadyCount(1);
+      return;
+    }
+    let alive = true;
+    const check = () => {
+      if (!alive) return;
+      const ready = ids.filter((id) => getSlotData(id)).length;
+      setReadyCount(ready);
+    };
+    check();
+    const subs = ids.map((id) => subscribeSlotData(id, check));
+    return () => {
+      alive = false;
+      for (const s of subs) s.delete(check);
+    };
+  }, [specs]);
+
+  if (!specs) return false;
+  const total = specs.filter((s) => !isSlotLocalDoc(s.docId)).length;
+  return total > 0 && readyCount >= total;
+}
+
 const LOCAL_PARTS = [SLOT_LOCAL_IDS.reel0, SLOT_LOCAL_IDS.reel1, SLOT_LOCAL_IDS.reel2];
 
 function localFallbackId(role: SlotLayerRole, partIndex: number): string | undefined {
@@ -198,12 +227,22 @@ function localSpecsFor(value: number | null): SlotLayerSpec[] {
     { role: 'spin', docId: SLOT_LOCAL_IDS.reel1 },
     { role: 'spin', docId: SLOT_LOCAL_IDS.reel2 },
   ];
-  if (typeof value === 'number' && value > 0) {
-    specs.push({ role: 'slot', docId: SLOT_LOCAL_IDS.reel0 });
-    specs.push({ role: 'slot', docId: SLOT_LOCAL_IDS.reel1 });
-    specs.push({ role: 'slot', docId: SLOT_LOCAL_IDS.reel2 });
-  }
   return specs;
+}
+
+function useSlotLocalSetReady(): boolean {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const ids = [SLOT_LOCAL_IDS.back, SLOT_LOCAL_IDS.pull, SLOT_LOCAL_IDS.reel0, SLOT_LOCAL_IDS.reel1, SLOT_LOCAL_IDS.reel2];
+    Promise.all(ids.map((id) => getSlotLocalData(id))).then(() => {
+      if (alive) setReady(true);
+    });
+    return () => { alive = false; };
+  }, []);
+
+  return ready;
 }
 
 export function SlotMachineSticker({ value, size = 96 }: { value: number | null; size?: number }) {
@@ -226,8 +265,11 @@ export function SlotMachineSticker({ value, size = 96 }: { value: number | null;
     }
   }, [specs]);
 
-  const layers = specs || localSpecsFor(value);
-  const realSet = !!specs && specs.some((s) => !isSlotLocalDoc(s.docId));
+  const setReady = useSlotSetReady(specs);
+  const localReady = useSlotLocalSetReady();
+  const ready = localReady || setReady;
+  const layers = specs && setReady ? specs : localSpecsFor(value);
+  const realSet = !!specs && setReady;
   const animated = realSet && typeof value === 'number' && value > 0;
 
   const bg = layers.find((s) => s.role === 'bg');
@@ -272,7 +314,7 @@ export function SlotMachineSticker({ value, size = 96 }: { value: number | null;
     if (animated && slots.length > 0 && slotsDone >= slots.length && !allDone) setAllDone(true);
   }, [animated, slotsDone, slots.length, allDone]);
 
-  if (!layers) return <span class="tgui-slot-machine" style={{ display: 'inline-block', width: size + 'px', height: size + 'px' }} />;
+  if (!ready) return <span class="tgui-slot-machine" style={{ display: 'inline-block', width: size + 'px', height: size + 'px' }} />;
 
   return (
     <div class="tgui-slot-machine" style={{ position: 'relative', width: size + 'px', height: size + 'px' }}>
