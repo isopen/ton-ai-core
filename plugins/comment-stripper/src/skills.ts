@@ -2,7 +2,7 @@ import { PluginContext } from '@ton-ai/core';
 import * as fs from 'fs';
 import * as path from 'path';
 import { CommentStripperEngine } from './components';
-import { CommentStripperConfig, StripOptions, StripTextResult, StripFileResult, StripBatchResult } from './types';
+import { CommentStripperConfig, StripOptions, StripTextResult, StripFileResult, StripBatchResult, UnusedTextResult, UnusedFileResult, UnusedBatchResult } from './types';
 
 export class CommentStripperSkills {
     private context: PluginContext;
@@ -54,6 +54,26 @@ export class CommentStripperSkills {
             return { files: [], errors: [], totalComments: 0 };
         }
         return this.stripPaths(files);
+    }
+
+    unusedText(text: string, lang: string, opts?: StripOptions): UnusedTextResult {
+        return this.engine.stripUnusedText(text, lang, opts);
+    }
+
+    unusedFile(file: string, opts?: StripOptions): UnusedFileResult {
+        const result = this.engine.stripUnusedFile(file, opts);
+        if (this.config.verbose && result.changed) {
+            this.context.logger.info(`removed ${result.removed} unused declarations from ${file} (${result.lang})`);
+        }
+        return result;
+    }
+
+    unusedPaths(paths: string[], opts?: StripOptions): UnusedBatchResult {
+        const result = this.engine.stripUnusedPaths(paths, opts);
+        if (this.config.verbose) {
+            this.context.logger.info(`files: ${result.files.length}, unused declarations removed: ${result.totalRemoved}`);
+        }
+        return result;
     }
 
     watch(dir: string, onStripped?: (file: string, comments: number) => void): fs.FSWatcher {

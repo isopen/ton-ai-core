@@ -29,3 +29,22 @@ export interface StripBatchResult {
     errors: string[];
     totalComments: number;
 }
+
+export interface UnusedTextResult {
+    text: string;
+    removed: number;
+}
+
+export interface UnusedFileResult {
+    file: string;
+    lang: string;
+    removed: number;
+    bytes: number;
+    changed: boolean;
+}
+
+export interface UnusedBatchResult {
+    files: UnusedFileResult[];
+    errors: string[];
+    totalRemoved: number;
+}

@@ -2,11 +2,12 @@ import { BasePlugin } from '@ton-ai/core';
 import * as fs from 'fs';
 import { CommentStripperEngine } from './components';
 import { CommentStripperSkills } from './skills';
-import { CommentStripperConfig, StripOptions, StripTextResult, StripFileResult, StripBatchResult } from './types';
+import { CommentStripperConfig, StripOptions, StripTextResult, StripFileResult, StripBatchResult, UnusedTextResult, UnusedFileResult, UnusedBatchResult } from './types';
 
 export * from './components';
 export * from './skills';
 export * from './types';
+export * from './unused';
 
 const defaultEngine = new CommentStripperEngine();
 
@@ -28,6 +29,18 @@ export function stripPaths(paths: string[], opts?: StripOptions): StripBatchResu
 
 export function gitChangedFiles(cwd?: string): string[] {
     return defaultEngine.gitChangedFiles(cwd);
+}
+
+export function stripUnusedText(text: string, lang: string, opts?: StripOptions): UnusedTextResult {
+    return defaultEngine.stripUnusedText(text, lang, opts);
+}
+
+export function stripUnusedFile(file: string, opts?: StripOptions): UnusedFileResult {
+    return defaultEngine.stripUnusedFile(file, opts);
+}
+
+export function stripUnusedPaths(paths: string[], opts?: StripOptions): UnusedBatchResult {
+    return defaultEngine.stripUnusedPaths(paths, opts);
 }
 
 export class CommentStripperPlugin extends BasePlugin<CommentStripperConfig> {
@@ -82,6 +95,18 @@ export class CommentStripperPlugin extends BasePlugin<CommentStripperConfig> {
 
     stripGitDirty(cwd?: string): StripBatchResult {
         return this.skills.stripGitDirty(cwd);
+    }
+
+    unusedText(text: string, lang: string, opts?: StripOptions): UnusedTextResult {
+        return this.skills.unusedText(text, lang, opts);
+    }
+
+    unusedFile(file: string, opts?: StripOptions): UnusedFileResult {
+        return this.skills.unusedFile(file, opts);
+    }
+
+    unusedPaths(paths: string[], opts?: StripOptions): UnusedBatchResult {
+        return this.skills.unusedPaths(paths, opts);
     }
 
     watch(dir: string, onStripped?: (file: string, comments: number) => void): fs.FSWatcher {

@@ -1,5 +1,5 @@
 import { MCPClient, Logger } from './mcp-client';
-import { MCPConfig, NETWORK, WALLET_VERSION } from '../types/mcp.types';
+import { MCPConfig, NETWORK } from '../types/mcp.types';
 
 export interface ServerlessRequest {
   headers?: Record<string, string>;

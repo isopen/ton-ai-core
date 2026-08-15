@@ -3,7 +3,8 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { LANGUAGES, EXTENSION_TO_LANG, TS_LIKE, LanguageConfig } from './languages';
 import { scanComments, ScanRange } from './scanner';
-import { StripOptions, StripTextResult, StripFileResult, StripBatchResult } from './types';
+import { StripOptions, StripTextResult, StripFileResult, StripBatchResult, UnusedTextResult, UnusedFileResult, UnusedBatchResult } from './types';
+import { scriptKindFor, stripUnusedVars, collapseBlanks } from './unused';
 
 function dedupe(ranges: ScanRange[]): ScanRange[] {
     ranges.sort((a, b) => a.start - b.start);
@@ -183,6 +184,33 @@ function stripTextOnce(text: string, lang: string, preserveHeader = false, prese
     return { text: out, count: ranges.length };
 }
 
+function collectFiles(paths: string[]): string[] {
+    const files: string[] = [];
+    for (const p of paths) {
+        const abs = path.resolve(p);
+        let stat: fs.Stats;
+        try {
+            stat = fs.statSync(abs);
+        } catch {
+            continue;
+        }
+        if (stat.isDirectory()) {
+            const walk = (dir: string) => {
+                for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+                    if (ent.name === 'node_modules' || ent.name === 'dist' || ent.name === 'out' || ent.name === 'coverage' || ent.name === '.git') continue;
+                    const full = path.join(dir, ent.name);
+                    if (ent.isDirectory()) walk(full);
+                    else files.push(full);
+                }
+            };
+            walk(abs);
+        } else {
+            files.push(abs);
+        }
+    }
+    return files;
+}
+
 export class CommentStripperEngine {
     constructor(private options: StripOptions = {}) {}
 
@@ -228,29 +256,7 @@ export class CommentStripperEngine {
     }
 
     stripPaths(paths: string[], opts?: StripOptions): StripBatchResult {
-        const files: string[] = [];
-        for (const p of paths) {
-            const abs = path.resolve(p);
-            let stat: fs.Stats;
-            try {
-                stat = fs.statSync(abs);
-            } catch {
-                continue;
-            }
-            if (stat.isDirectory()) {
-                const walk = (dir: string) => {
-                    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
-                        if (ent.name === 'node_modules' || ent.name === 'dist' || ent.name === 'out' || ent.name === 'coverage' || ent.name === '.git') continue;
-                        const full = path.join(dir, ent.name);
-                        if (ent.isDirectory()) walk(full);
-                        else files.push(full);
-                    }
-                };
-                walk(abs);
-            } else {
-                files.push(abs);
-            }
-        }
+        const files = collectFiles(paths);
         const results: StripFileResult[] = [];
         const errors: string[] = [];
         let totalComments = 0;
@@ -264,6 +270,52 @@ export class CommentStripperEngine {
             }
         }
         return { files: results, errors, totalComments };
+    }
+
+    stripUnusedText(text: string, lang: string, opts?: StripOptions): UnusedTextResult {
+        const keepSingleBlank = opts?.keepSingleBlank ?? this.options.keepSingleBlank ?? true;
+        const bom = text.charCodeAt(0) === 0xfeff ? '\uFEFF' : '';
+        const body = bom ? text.slice(1) : text;
+        const crlf = body.includes('\r\n');
+        const normalized = body.replace(/\r\n/g, '\n');
+        const kind: 'TS' | 'JS' = TS_LIKE.has(lang) ? (lang === 'typescript' ? 'TS' : 'JS') : 'JS';
+        const res = stripUnusedVars(normalized, kind);
+        const cleaned = keepSingleBlank ? collapseBlanks(res.text) : res.text;
+        const final = crlf ? cleaned.replace(/\n/g, '\r\n') : cleaned;
+        return { text: bom + final, removed: res.removed };
+    }
+
+    stripUnusedFile(file: string, opts?: StripOptions): UnusedFileResult {
+        const lang = this.detectLanguage(file);
+        if (!lang || !TS_LIKE.has(lang)) {
+            return { file, lang: lang || 'unknown', removed: 0, bytes: 0, changed: false };
+        }
+        const original = fs.readFileSync(file, 'utf8');
+        const kind: 'TS' | 'JS' = lang === 'typescript' ? 'TS' : 'JS';
+        const res = stripUnusedVars(original, kind, scriptKindFor(lang, file));
+        const final = (opts?.keepSingleBlank ?? this.options.keepSingleBlank ?? true) ? collapseBlanks(res.text) : res.text;
+        const changed = final !== original;
+        if (changed) {
+            fs.writeFileSync(file, final);
+        }
+        return { file, lang, removed: res.removed, bytes: Buffer.byteLength(final, 'utf8'), changed };
+    }
+
+    stripUnusedPaths(paths: string[], opts?: StripOptions): UnusedBatchResult {
+        const files = collectFiles(paths);
+        const results: UnusedFileResult[] = [];
+        const errors: string[] = [];
+        let totalRemoved = 0;
+        for (const f of files) {
+            try {
+                const r = this.stripUnusedFile(f, opts);
+                results.push(r);
+                totalRemoved += r.removed;
+            } catch (e) {
+                errors.push(f + ': ' + (e instanceof Error ? e.message : String(e)));
+            }
+        }
+        return { files: results, errors, totalRemoved };
     }
 
     gitChangedFiles(cwd?: string): string[] {

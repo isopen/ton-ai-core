@@ -1,4 +1,4 @@
-import { stripCommentsText, detectLanguage } from '@ton-ai/comment-stripper';
+import { stripCommentsText, detectLanguage, stripUnusedText, stripUnusedFile, stripUnusedPaths } from '@ton-ai/comment-stripper';
 
 describe('language detection', () => {
     it('maps extensions to languages', () => {
@@ -213,5 +213,207 @@ describe('preserve-header mode', () => {
         const first = stripCommentsText(src, 'cpp', { preserveHeader: true }).text;
         const again = stripCommentsText(first, 'cpp', { preserveHeader: true }).text;
         expect(again).toBe(first);
+    });
+});
+
+describe('unused variable removal', () => {
+    it('removes an unused const', () => {
+        const src = `const unused = 42;\nconst used = 'x';\nconsole.log(used);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`const used = 'x';\nconsole.log(used);\n`);
+    });
+    it('keeps variables referenced via template literal', () => {
+        const src = `const msg = 'hi';\nconst t = \`say \${msg}\`;\nconsole.log(t);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('keeps variables referenced via shorthand property', () => {
+        const src = `const x = 1;\nconst obj = { x };\nconsole.log(obj);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('keeps variables re-exported', () => {
+        const src = `const v = 1;\nexport { v };\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('does not treat member access or object key as usage', () => {
+        const src = `const unused = 1;\nconst key = 'k';\nconst obj = { unused: 2 };\nconsole.log(obj[key]);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`const key = 'k';\nconst obj = { unused: 2 };\nconsole.log(obj[key]);\n`);
+    });
+    it('keeps variables used in nested functions', () => {
+        const src = `const outer = 1;\nfunction f() {\n    const inner = outer;\n    return inner;\n}\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('removes only unused declarators from a multi-declarator statement', () => {
+        const src = `const a = 1, b = 2, c = 3;\nconsole.log(a, c);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`const a = 1, c = 3;\nconsole.log(a, c);\n`);
+    });
+    it('removes the first declarator keeping the rest', () => {
+        const src = `const a = 1, b = 2;\nconsole.log(b);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`const b = 2;\nconsole.log(b);\n`);
+    });
+    it('skips destructuring declarations', () => {
+        const src = `const { p } = obj;\nlet [q] = arr;\nconsole.log(p, q);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('skips for-of loop variables', () => {
+        const src = `for (const item of list) {\n    console.log(item);\n}\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('is conservative with shadowed variables', () => {
+        const src = `let x = 1;\nfunction f(x: number): number {\n    return x;\n}\nconsole.log(x);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('is a no-op for non-ts/js languages', () => {
+        const src = `x = 1\n`;
+        const out = stripUnusedText(src, 'python');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('is a no-op when there is nothing unused', () => {
+        const src = `const a = 1;\nconsole.log(a);\n`;
+        const out = stripUnusedText(src, 'javascript');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('handles jsx member usage in tsx via stripUnusedFile', () => {
+        const dir = jest.requireActual<typeof import('os')>('os').tmpdir();
+        const file = require('path').join(dir, 'cs-test-' + Date.now() + '.tsx');
+        require('fs').writeFileSync(file, `import React from 'react';\nconst unused = 1;\nconst el = <div>{React}</div>;\nexport default el;\n`);
+        const r = stripUnusedFile(file);
+        expect(r.changed).toBe(true);
+        expect(r.removed).toBe(1);
+        expect(require('fs').readFileSync(file, 'utf8')).toBe(`import React from 'react';\nconst el = <div>{React}</div>;\nexport default el;\n`);
+        require('fs').unlinkSync(file);
+    });
+    it('reports batch results with errors', () => {
+        const dir = jest.requireActual<typeof import('os')>('os').tmpdir();
+        const base = dir + '/cs-batch-' + Date.now();
+        require('fs').mkdirSync(base);
+        require('fs').writeFileSync(base + '/a.ts', `const u = 1;\n`);
+        require('fs').writeFileSync(base + '/b.py', `x = 1\n`);
+        const r = stripUnusedPaths([base]);
+        expect(r.totalRemoved).toBe(1);
+        expect(r.files.length).toBe(2);
+        expect(r.files.find((f) => f.file.endsWith('a.ts'))?.removed).toBe(1);
+        expect(r.files.find((f) => f.file.endsWith('b.py'))?.removed).toBe(0);
+        expect(r.errors).toEqual([]);
+        require('fs').rmSync(base, { recursive: true, force: true });
+    });
+});
+
+describe('unused import removal', () => {
+    it('removes an unused named import', () => {
+        const src = `import { a, b } from 'x';\nconsole.log(a);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`import { a } from 'x';\nconsole.log(a);\n`);
+    });
+    it('removes an unused default import keeping named ones', () => {
+        const src = `import d, { a } from 'x';\nconsole.log(a);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`import { a } from 'x';\nconsole.log(a);\n`);
+    });
+    it('removes an unused named import keeping the default one', () => {
+        const src = `import d, { a } from 'x';\nconsole.log(d);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`import d from 'x';\nconsole.log(d);\n`);
+    });
+    it('removes the whole statement when every specifier is unused', () => {
+        const src = `import { a, b } from 'x';\nimport { c } from 'y';\nconsole.log(c);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(2);
+        expect(out.text).toBe(`import { c } from 'y';\nconsole.log(c);\n`);
+    });
+    it('removes middle and first specifiers of a named import', () => {
+        const src = `import { a, b, c } from 'x';\nconsole.log(a, c);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`import { a, c } from 'x';\nconsole.log(a, c);\n`);
+    });
+    it('keeps a namespace import when used and removes it when unused', () => {
+        const used = `import * as ns from 'x';\nconsole.log(ns.value);\n`;
+        expect(stripUnusedText(used, 'typescript').removed).toBe(0);
+        const unused = `import * as ns from 'x';\nconsole.log(1);\n`;
+        const out = stripUnusedText(unused, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`console.log(1);\n`);
+    });
+    it('keeps an aliased import when used and removes it when unused', () => {
+        const used = `import { a as z } from 'x';\nconsole.log(z);\n`;
+        expect(stripUnusedText(used, 'typescript').removed).toBe(0);
+        const unused = `import { a as z } from 'x';\nconsole.log(1);\n`;
+        const out = stripUnusedText(unused, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`console.log(1);\n`);
+    });
+    it('keeps a type import used in annotations', () => {
+        const src = `import type { T } from 'x';\nconst y: T = 1;\nconsole.log(y);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('removes an unused type import', () => {
+        const src = `import type { T } from 'x';\nconsole.log(1);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`console.log(1);\n`);
+    });
+    it('keeps re-exports and side-effect imports', () => {
+        const src = `export { a } from 'x';\nexport * from 'y';\nimport './styles.css';\nconsole.log(1);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('removes an unused import equals require', () => {
+        const unused = `import crypto = require('crypto');\nconsole.log(1);\n`;
+        const out = stripUnusedText(unused, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`console.log(1);\n`);
+        const used = `import crypto = require('crypto');\nconsole.log(crypto.randomUUID());\n`;
+        expect(stripUnusedText(used, 'typescript').removed).toBe(0);
+    });
+    it('keeps an import used via typeof type query', () => {
+        const src = `import { A } from 'x';\nlet t: typeof A;\nconsole.log(t);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('keeps imports and removes unused variables inside jsx files (implicit jsx factory)', () => {
+        const dir = jest.requireActual<typeof import('os')>('os').tmpdir();
+        const file = require('path').join(dir, 'cs-import-' + Date.now() + '.tsx');
+        require('fs').writeFileSync(file, `import { h } from 'ui';\nconst unused = 1;\nconst el = <div>{h}</div>;\nexport default el;\n`);
+        const r = stripUnusedFile(file);
+        expect(r.changed).toBe(true);
+        expect(r.removed).toBe(1);
+        expect(require('fs').readFileSync(file, 'utf8')).toBe(`import { h } from 'ui';\nconst el = <div>{h}</div>;\nexport default el;\n`);
+        require('fs').unlinkSync(file);
+    });
+    it('removes imports combined with unused variables', () => {
+        const src = `import { a } from 'x';\nconst unused = 1;\nconsole.log(a);\n`;
+        const out = stripUnusedText(src, 'typescript');
+        expect(out.removed).toBe(1);
+        expect(out.text).toBe(`import { a } from 'x';\nconsole.log(a);\n`);
     });
 });

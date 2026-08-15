@@ -1,5 +1,5 @@
 import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
-import { CommentStripperPlugin, CommentStripperConfig, StripBatchResult, StripOptions } from '@ton-ai/comment-stripper';
+import { CommentStripperPlugin, CommentStripperConfig, StripBatchResult, StripOptions, UnusedBatchResult } from '@ton-ai/comment-stripper';
 import * as fs from 'fs';
 
 export interface StripperAgentConfig extends SimpleAgentConfig {
@@ -47,6 +47,17 @@ export class StripperAgent extends BaseAgentSimple {
     async stripGitDirty(cwd?: string): Promise<StripBatchResult> {
         const result = this.plugin().stripGitDirty(cwd);
         this.report(result);
+        return result;
+    }
+
+    async stripUnused(targets: string[], opts?: StripOptions): Promise<UnusedBatchResult> {
+        const result = this.plugin().unusedPaths(targets, opts);
+        const changed = result.files.filter((f) => f.changed);
+        this.logger.info(`files: ${result.files.length}, changed: ${changed.length}, unused declarations removed: ${result.totalRemoved}`);
+        for (const f of changed) {
+            this.logger.info(`  ${f.file} (${f.lang}): -${f.removed} declarations`);
+        }
+        for (const e of result.errors) this.logger.error('  error: ' + e);
         return result;
     }
 

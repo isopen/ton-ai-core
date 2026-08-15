@@ -5,6 +5,7 @@ const USAGE = `usage: npx ts-node agents/stripper/index.ts <command> [args]
 commands:
   strip <paths...>     strip comments in files/dirs (any language)
                        --preserve-header, -H  keep the leading license/header comment block
+  unused <paths...>    remove unused vars/imports in files/dirs (ts/js/tsx/jsx only)
   git-dirty            strip comments in all files changed since HEAD
   watch <dir>          watch dir and strip comments on every file save
   help                 show this help
@@ -39,6 +40,16 @@ async function main(): Promise<void> {
             case 'git-dirty':
                 await agent.stripGitDirty(process.cwd());
                 break;
+            case 'unused': {
+                const paths = args.slice(1);
+                if (paths.length === 0) {
+                    console.error('usage: unused <paths...>');
+                    process.exitCode = 1;
+                    return;
+                }
+                await agent.stripUnused(paths);
+                break;
+            }
             case 'watch': {
                 const dir = args[1] || process.cwd();
                 agent.watch(dir);

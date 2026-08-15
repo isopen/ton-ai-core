@@ -1,6 +1,6 @@
 import { crypton } from '@ton-ai/core';
-import { GramDbComponents, KeyManager, EncryptedStore, StorageEngine, DbVersion, currentDbVersion, IV_SIZE, HMAC_LABEL, OpfsEngine } from './components';
-import type { StoredSession, GramDbConfig } from './types';
+import { GramDbComponents, KeyManager, EncryptedStore, StorageEngine, DbVersion, currentDbVersion, IV_SIZE, HMAC_LABEL } from './components';
+import type { StoredSession } from './types';
 import { Buffer } from 'buffer';
 
 const KEY_INDEX_KEY = '__key_index';
