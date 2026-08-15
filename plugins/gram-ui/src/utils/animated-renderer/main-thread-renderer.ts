@@ -216,7 +216,17 @@ export class MainThreadRenderer implements IAnimatedRenderer {
   setSharedCanvasCoords(viewId: string, newCoords: { x: number; y: number }) {
     const view = this.views.get(viewId);
     if (!view || !view.isSharedCanvas) return;
+    const prev = view.prevScaledCoords;
     view.coords = { x: newCoords?.x || 0, y: newCoords?.y || 0 };
+    const c = this.getScaledCoords(view);
+    if (prev && (prev.x !== c.x || prev.y !== c.y)) {
+      view.ctx.clearRect(prev.x, prev.y, this.imgSize, this.imgSize);
+    }
+    if (this.offscreen) {
+      view.ctx.clearRect(c.x, c.y, this.imgSize, this.imgSize);
+      view.ctx.drawImage(this.offscreen, c.x, c.y);
+    }
+    view.prevScaledCoords = { x: c.x, y: c.y };
   }
 
   private getScaledCoords(view: AnimatedRendererView) {
@@ -393,7 +403,13 @@ export class MainThreadRenderer implements IAnimatedRenderer {
         }
         renderFrame(this.offscreen, anim, Math.round(frame), 1, this.imgSize, this.imgSize);
         const c = this.getScaledCoords(view);
+        const prev = view.prevScaledCoords;
+        if (prev && (prev.x !== c.x || prev.y !== c.y)) {
+          view.ctx.clearRect(prev.x, prev.y, this.imgSize, this.imgSize);
+        }
+        view.ctx.clearRect(c.x, c.y, this.imgSize, this.imgSize);
         view.ctx.drawImage(this.offscreen, c.x, c.y);
+        view.prevScaledCoords = { x: c.x, y: c.y };
       } else {
         renderFrame(view.canvas, anim, Math.round(frame), 1, this.imgSize, this.imgSize);
       }

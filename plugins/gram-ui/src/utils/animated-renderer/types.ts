@@ -14,6 +14,7 @@ export interface AnimatedRendererView {
   isSharedCanvas?: boolean;
   isDirty?: boolean;
   coords?: { x: number; y: number };
+  prevScaledCoords?: { x: number; y: number };
   onLoad?: () => void;
   onError?: () => void;
   onFrame?: (index: number) => void;
