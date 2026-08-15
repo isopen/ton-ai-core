@@ -39,6 +39,8 @@ export function CustomScrollbar(props: CustomScrollbarProps) {
     _estH: number;
     _startAtBottom: boolean;
     _anchored: boolean;
+    _nearTop: boolean;
+    _lastNearTopAt: number;
   }>({
     content: null, thumb: null, ro: null, ready: false,
     dragY: 0, dragTop: 0,
@@ -48,6 +50,8 @@ export function CustomScrollbar(props: CustomScrollbarProps) {
     _estH: estimatedItemHeight,
     _startAtBottom: !!startAtBottom,
     _anchored: false,
+    _nearTop: false,
+    _lastNearTopAt: 0,
   });
 
   s.current._onScroll = onScroll;
@@ -136,7 +140,12 @@ export function CustomScrollbar(props: CustomScrollbarProps) {
       }
     }
     update();
-    if (c.scrollTop < 80) s.current._onNearTop?.();
+    const nearTop = c.scrollTop < 80;
+    if (nearTop && !s.current._nearTop && Date.now() - s.current._lastNearTopAt > 300) {
+      s.current._lastNearTopAt = Date.now();
+      s.current._onNearTop?.();
+    }
+    s.current._nearTop = nearTop;
     s.current._onScroll?.(e);
   }
 

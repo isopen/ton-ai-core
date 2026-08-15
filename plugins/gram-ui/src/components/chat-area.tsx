@@ -55,6 +55,9 @@ const EMOJI_MEMORY_LIMIT = 200;
 
 const EMOJI_KEEP_MARGIN = 2;
 
+let emojiFetchTimer: ReturnType<typeof setTimeout> | null = null;
+const emojiFetchAccum = new Set<string>();
+
 function isEmojiKey(k: string): boolean {
   return k.startsWith('emojipack-') || k.startsWith('emoji-');
 }
@@ -632,7 +635,15 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
       }
     }
     if (customIds.length > 0) {
-      window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...new Set(customIds)] } }));
+      for (const id of customIds) emojiFetchAccum.add(id);
+      if (emojiFetchTimer != null) clearTimeout(emojiFetchTimer);
+      emojiFetchTimer = setTimeout(() => {
+        emojiFetchTimer = null;
+        if (emojiFetchAccum.size > 0) {
+          window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...emojiFetchAccum] } }));
+          emojiFetchAccum.clear();
+        }
+      }, 120);
     }
     return flushEmojiBatch;
   }, [peer?.id, state.messages, visRange]);
