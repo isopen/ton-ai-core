@@ -458,15 +458,17 @@ function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: numb
       }
     };
     window.addEventListener('tg-emoji-url', onUrl);
-    requestEmojiDownload(docId);
+    requestEmojiDownload(docId, undefined, 2);
+    flushEmojiBatch();
     const t = setInterval(() => {
       tries++;
       if (tries >= 10) {
         clearInterval(t);
         return;
       }
-      requestEmojiDownload(docId, undefined, 1);
-    }, 3000);
+      requestEmojiDownload(docId, undefined, 2);
+      flushEmojiBatch();
+    }, 1500);
     return () => {
       window.removeEventListener('tg-emoji-url', onUrl);
       clearInterval(t);
@@ -474,9 +476,9 @@ function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: numb
   }, [docId]);
 
   if (!docId || !url) {
-    return <EmojiText text={emoticon} entities={undefined} documentUrls={{}} />;
+    return <span class="tgui-dice-loading" style={{ display: 'inline-block', width: DICE_SIZE + 'px', height: DICE_SIZE + 'px' }} />;
   }
-  return <AnimatedEmoji docId={docId} url={url} alt={emoticon} size={DICE_SIZE} autoplay loop={value == null} playKey={'dice-' + msgId} />;
+  return <AnimatedEmoji docId={docId} url={url} alt="" size={DICE_SIZE} autoplay loop={value == null} playKey={'dice-' + msgId} />;
 }
 
 function DiceBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {
