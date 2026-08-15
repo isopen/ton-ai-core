@@ -16,7 +16,8 @@ module.exports = {
     '<rootDir>/plugins/atom/tests',
     '<rootDir>/plugins/tgs/tests',
     '<rootDir>/plugins/comment-stripper/tests',
-    '<rootDir>/plugins/gram-media/tests'
+    '<rootDir>/plugins/gram-media/tests',
+    '<rootDir>/plugins/gram-debug/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
@@ -52,6 +53,8 @@ module.exports = {
     '^@ton-ai/atom/(.*)$': '<rootDir>/plugins/atom/src/$1',
     '^@ton-ai/tgs$': '<rootDir>/plugins/tgs/src/index.ts',
     '^@ton-ai/comment-stripper$': '<rootDir>/plugins/comment-stripper/src/index.ts',
+    '^@ton-ai/gram-debug$': '<rootDir>/plugins/gram-debug/src/index.ts',
+    '^@ton-ai/gram-debug/(.*)$': '<rootDir>/plugins/gram-debug/src/$1',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
 };
