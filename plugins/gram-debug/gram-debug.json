@@ -1,45 +1,45 @@
 {
-    "enabled": true,
+    "enabled": false,
     "level": "info",
     "scopes": {
         "gram-db": {
-            "enabled": true,
+            "enabled": false,
             "level": "info"
         },
         "tl-language": {
-            "enabled": true,
+            "enabled": false,
             "level": "info"
         },
         "telegram": {
-            "enabled": true,
+            "enabled": false,
             "level": "info"
         },
         "tgs": {
-            "enabled": true,
+            "enabled": false,
             "level": "info"
         },
         "atom": {
-            "enabled": true,
+            "enabled": false,
             "level": "info"
         },
         "gram-media": {
-            "enabled": true,
+            "enabled": false,
             "level": "info"
         },
         "gram-browser": {
-            "enabled": true,
+            "enabled": false,
             "level": "info"
         },
         "gram-ui": {
-            "enabled": true,
+            "enabled": false,
             "level": "info"
         },
         "gram-ui:slot": {
-            "enabled": true,
+            "enabled": false,
             "level": "debug"
         },
         "gram-ui:slot-layer": {
-            "enabled": true,
+            "enabled": false,
             "level": "debug"
         },
         "gram-ui:tgs": {

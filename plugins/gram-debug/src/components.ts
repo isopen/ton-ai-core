@@ -1,6 +1,8 @@
 import * as path from 'path';
-import { defaultConfig } from './default-config';
+import defaultConfigRaw from '../gram-debug.json';
 import { GramDebugConfig, LogLevel, LOG_LEVELS, ScopeConfig } from './types';
+
+export const defaultConfig: GramDebugConfig = defaultConfigRaw as unknown as GramDebugConfig;
 
 function hasNodeFs(): boolean {
     return typeof process !== 'undefined' && !!process.versions?.node;
@@ -9,14 +11,17 @@ function hasNodeFs(): boolean {
 function tryReadJson(file: string): GramDebugConfig | null {
     try {
         const fs = require('fs');
+        if (typeof fs?.existsSync !== 'function') {
+            return null;
+        }
         if (fs.existsSync(file)) {
             const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
             if (raw && typeof raw === 'object') {
                 return raw as GramDebugConfig;
             }
         }
-    } catch {
-        // fall through — file missing or unreadable
+    } catch (e) {
+        console.warn('[gram-debug] cannot read config ' + file + ': ' + (e instanceof Error ? e.message : String(e)));
     }
     return null;
 }
@@ -33,7 +38,7 @@ export function resolveConfigFile(): string | null {
             }
         }
     } catch {
-        // fs/path unavailable (browser bundle, worker) — fall back to embedded defaults
+        console.debug('[gram-debug] fs/path unavailable — using embedded defaults');
     }
     return null;
 }

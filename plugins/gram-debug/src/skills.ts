@@ -1,6 +1,6 @@
 import { PluginContext } from '@ton-ai/core';
 import { DebugComponents, DebugLogger } from './components';
-import { defaultConfig } from './default-config';
+import { defaultConfig } from './components';
 import { GramDebugConfig, LogLevel, ScopeConfig } from './types';
 
 export class GramDebugSkills {

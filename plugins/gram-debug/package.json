@@ -14,7 +14,7 @@
     "license": "MIT",
     "private": true,
     "scripts": {
-        "build": "node scripts/sync-config.mjs && tsc && node scripts/copy-config.mjs",
+        "build": "tsc && node scripts/copy-config.mjs",
         "clean": "rm -rf dist"
     },
     "devDependencies": {
