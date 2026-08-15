@@ -147,6 +147,45 @@ export function getDiceDocId(emoticon: string, value?: number | null): string | 
   return set.d[v] || set.p;
 }
 
+export type SlotLayerRole = 'bg' | 'bgWin' | 'handle' | 'spin' | 'slot';
+
+export interface SlotLayerSpec {
+  role: SlotLayerRole;
+  docId: string;
+}
+
+const SLOT_MAP = [1, 2, 3, 0];
+
+export function getSlotLayerSpecs(value?: number | null): SlotLayerSpec[] | undefined {
+  if (!diceSets) return undefined;
+  const set = diceSets['🎰'];
+  if (!set) return undefined;
+  const d = set.d;
+  const v = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : null;
+  const specs: SlotLayerSpec[] = [];
+  const push = (role: SlotLayerRole, idx: number): void => {
+    const id = d[idx];
+    if (id) specs.push({ role, docId: id });
+  };
+  push('bg', 0);
+  if (v == null || v <= 0) return specs;
+  push('handle', 2);
+  push('spin', 8);
+  push('spin', 14);
+  push('spin', 20);
+  if (v === 64) {
+    push('slot', 3);
+    push('slot', 9);
+    push('slot', 15);
+    push('bgWin', 1);
+  } else {
+    push('slot', 4 + SLOT_MAP[(v - 1) & 3]);
+    push('slot', 10 + SLOT_MAP[((v - 1) >> 2) & 3]);
+    push('slot', 16 + SLOT_MAP[((v - 1) >> 4) & 3]);
+  }
+  return specs;
+}
+
 export interface EmojiPickerCategory {
   name: string;
   emojis: string[];

@@ -207,6 +207,52 @@ describe('GramMediaRouter emoji pipeline', () => {
         expect(urlEvents.some((d) => String(d.docId) === base + 5 && d.url)).toBe(true);
     });
 
+    test('re-resolves unknown custom emoji docs after a transient RPC failure (items must not die silently)', async () => {
+        jest.useFakeTimers();
+        const customEmojiCalls: string[] = [];
+        let rpcFail = true;
+        const transport = makeTransport({
+            callRpc: async (method, params) => {
+                if (method === 'messages.getCustomEmojiDocuments') {
+                    customEmojiCalls.push(String(params?.document_id?.[0]));
+                    if (rpcFail) throw new Error('connection down');
+                    return [makeDocument({
+                        id: '9999',
+                        mime_type: 'application/x-tgsticker',
+                        attributes: [{ _: 'documentAttributeSticker', alt: '🧪' }],
+                    })];
+                }
+                return {};
+            },
+            downloadFiles: async () => [{ index: 0, type: 'document', bytes: makeGzipMagicBytes() }],
+        });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        const urlEvents: any[] = [];
+        window.addEventListener('tg-emoji-url', (e) => urlEvents.push((e as CustomEvent).detail));
+        try {
+            window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
+                detail: { items: [{ docId: '9999', priority: 1 }] },
+            }));
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(customEmojiCalls).toEqual(['9999']);
+            expect(urlEvents.length).toBe(0);
+
+            // The batch was retried after the unresolved window (25s) — request
+            // must not be lost and the doc must eventually be delivered.
+            rpcFail = false;
+            await jest.advanceTimersByTimeAsync(60_000);
+            expect(customEmojiCalls.length).toBeGreaterThanOrEqual(2);
+            expect(urlEvents.some((d) => String(d.docId) === '9999' && d.url)).toBe(true);
+        } finally {
+            jest.useRealTimers();
+            router.emoji.detach(window);
+        }
+    });
+
     test('falls back to DICE_SETS when appConfig is unavailable', async () => {
         const diceCalls: Array<{ _: string; emoticon: string }> = [];
         const genericSet = {

@@ -68,6 +68,8 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiBadDocIds = new Map<string, number>();
     private emojiStubDocIds = new Map<string, number>();
     private emojiReleaseGraceTimer: ReturnType<typeof setTimeout> | null = null;
+    private unknownRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    private unknownRetryIds = new Set<string>();
     private handlers: Array<{ event: string; fn: (e: Event) => void }> = [];
 
     constructor(private router: GramMediaRouter) {}
@@ -131,6 +133,11 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private cancelEmojiRetries(): void {
         for (const t of this.emojiRetryTimers.values()) clearTimeout(t);
         this.emojiRetryTimers.clear();
+        if (this.unknownRetryTimer != null) {
+            clearTimeout(this.unknownRetryTimer);
+            this.unknownRetryTimer = null;
+        }
+        this.unknownRetryIds.clear();
     }
 
     private canResolveEmojiId(id: string): boolean {
@@ -180,6 +187,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     chunkDocs = Array.isArray(res) ? res : (res?.items && Array.isArray(res.items) ? res.items : []);
                 } catch (err: any) {
                     if (this.debug) console.error('[gram-media] custom emoji chunk error:', err?.message || err, 'count=' + chunk.length);
+                    for (const id of chunk) unresolved.push(id);
                     continue;
                 }
                 const returned = new Set<string>();
@@ -726,10 +734,22 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         return { resolved, unknownIds, unknownAlts };
     }
 
+    private armUnknownResolveRetry(ids: string[]): void {
+        if (ids.length === 0) return;
+        for (const id of ids) this.unknownRetryIds.add(id);
+        if (this.unknownRetryTimer) return;
+        this.unknownRetryTimer = setTimeout(() => void this.runUnknownResolveRetry(), 5000);
+    }
+
     private async resolveUnknownCustomIds(ids: string[], onResolved: (list: Array<{ id: string; doc: any; priority: number }>) => void): Promise<void> {
         if (ids.length === 0) return;
         const fresh = ids.filter((id: any) => this.canResolveEmojiId(String(id)));
-        if (fresh.length === 0) return;
+        if (fresh.length === 0) {
+            if (ids.some((id: any) => this.unresolvedEmojiIds.has(String(id)) || !this.fetchedEmojiIds.has(String(id))) && !this.unknownRetryTimer) {
+                this.armUnknownResolveRetry(ids);
+            }
+            return;
+        }
         try {
             const { docs, unresolved } = await this.fetchCustomEmojiDocsChunked(fresh);
             const list: Array<{ id: string; doc: any; priority: number }> = [];
@@ -752,9 +772,20 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             if (changed) this.indexEmojiDocs();
             if (list.length > 0) onResolved(list);
             for (const id of unresolved) this.markEmojiUnresolved(id);
+            this.armUnknownResolveRetry(unresolved);
         } catch (err: any) {
             console.error('[gram-media] batch custom emoji resolve error:', err?.message || err);
+            for (const id of fresh) this.markEmojiUnresolved(id);
+            this.armUnknownResolveRetry(fresh);
         }
+    }
+
+    private runUnknownResolveRetry(): void {
+        this.unknownRetryTimer = null;
+        if (this.unknownRetryIds.size === 0) return;
+        const ids = [...this.unknownRetryIds];
+        this.unknownRetryIds.clear();
+        void this.resolveUnknownCustomIds(ids, (list) => void this.downloadEmojiList(list));
     }
 
     private async expandEmojiMap(): Promise<void> {
@@ -1096,6 +1127,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
         this.handlers = [];
         this.cancelEmojiRetries();
+        this.unknownRetryIds.clear();
         if (this.emojiReleaseGraceTimer != null) {
             clearTimeout(this.emojiReleaseGraceTimer);
             this.emojiReleaseGraceTimer = null;

@@ -268,6 +268,11 @@ const trackLastUrl = (docId: string, url: string) => {
   }
 };
 
+export function getEmojiDocUrl(docId: string): string | undefined {
+  const url = lastUrlByDoc.get(String(docId));
+  return url && !revokedUrls.has(url) ? url : undefined;
+}
+
 const kindInFlight = new Map<string, Promise<'video' | 'tgs' | 'img' | null>>();
 
 export function checkEmojiKind(url: string): Promise<'video' | 'tgs' | 'img' | null> {

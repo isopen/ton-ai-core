@@ -18,6 +18,7 @@ import type { ImageSpec } from '../types.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
 import { flushEmojiBatch, getEmojiDocId, getDiceDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeDiceSets } from './emoji-store.js';
+import { SlotMachineSticker } from './slot-machine.js';
 import { releaseEmojiCache } from './emoji-canvas.js';
 import { observeVisibility } from './emoji-canvas.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
@@ -433,6 +434,10 @@ function isGiftMessage(action: any): boolean {
 const DICE_SIZE = 96;
 
 function DiceSticker({ emoticon, value }: { emoticon: string; value: number | null }) {
+  const isSlot = normalizeEmoji(emoticon) === '🎰';
+  if (isSlot) {
+    return <SlotMachineSticker value={value} size={DICE_SIZE} />;
+  }
   const [docId, setDocId] = useState<string | undefined>(undefined);
   const [url, setUrl] = useState<string | undefined>(undefined);
 
@@ -443,20 +448,34 @@ function DiceSticker({ emoticon, value }: { emoticon: string; value: number | nu
 
   useEffect(() => {
     if (!docId) return;
+    let tries = 0;
     const onUrl = (e: Event) => {
       const d = (e as CustomEvent).detail;
-      if (d && d.docId != null && String(d.docId) === docId && d.url) setUrl(String(d.url));
+      if (d && d.docId != null && String(d.docId) === docId && d.url) {
+        setUrl(String(d.url));
+        clearInterval(t);
+      }
     };
     window.addEventListener('tg-emoji-url', onUrl);
     requestEmojiDownload(docId);
-    return () => window.removeEventListener('tg-emoji-url', onUrl);
+    const t = setInterval(() => {
+      tries++;
+      if (tries >= 10) {
+        clearInterval(t);
+        return;
+      }
+      requestEmojiDownload(docId, undefined, 1);
+    }, 3000);
+    return () => {
+      window.removeEventListener('tg-emoji-url', onUrl);
+      clearInterval(t);
+    };
   }, [docId]);
 
   if (!docId || !url) {
     return <EmojiText text={emoticon} entities={undefined} documentUrls={{}} />;
   }
-  const isSlot = normalizeEmoji(emoticon) === '🎰';
-  return <AnimatedEmoji docId={docId} url={url} alt={emoticon} size={DICE_SIZE} autoplay loop={!isSlot} />;
+  return <AnimatedEmoji docId={docId} url={url} alt={emoticon} size={DICE_SIZE} autoplay />;
 }
 
 function DiceBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {
