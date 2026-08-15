@@ -1,5 +1,8 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import * as net from 'net';
+import { getLogger } from '@ton-ai/gram-debug';
+
+const log = getLogger('telegram');
 
 export class WsTcpProxy {
     wss: WebSocketServer;
@@ -75,7 +78,7 @@ if (require.main === module) {
     const port = parseInt(process.env.WS_PROXY_PORT || '9500', 10);
     const proxy = new WsTcpProxy(port);
     proxy.wss.on('listening', () => {
-        console.log(`WS-TCP proxy listening on ws://0.0.0.0:${port}`);
+        log.info(`WS-TCP proxy listening on ws://0.0.0.0:${port}`);
     });
     process.on('SIGINT', () => { proxy.close(); process.exit(0); });
     process.on('SIGTERM', () => { proxy.close(); process.exit(0); });

@@ -1,4 +1,3 @@
-// Try HTTP long polling (POST to https://host:443/apiw1)
 import https from 'https';
 
 const body = Buffer.alloc(0);

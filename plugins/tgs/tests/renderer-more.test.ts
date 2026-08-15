@@ -592,4 +592,3 @@ describe('renderFrame deep coverage', () => {
         }
     });
 });
-

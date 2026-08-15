@@ -1,3 +1,7 @@
+import { getLogger } from '@ton-ai/gram-debug';
+
+const log = getLogger('telegram');
+
 export const TELEGRAM_DC_OPTIONS = [
     { id: 1, host: '149.154.175.50', port: 443 },
     { id: 2, host: '149.154.167.41', port: 443 },
@@ -2551,14 +2555,14 @@ export function hasValidAccessHash(p: PeerInfo): boolean {
 export function serializePeer(p: PeerInfo): Record<string, any> {
     if (p.type === 'user') {
         if (!hasValidAccessHash(p)) {
-            console.warn('[tg] serializePeer user without access_hash id=' + p.id);
+            log.warn('[tg] serializePeer user without access_hash id=' + p.id);
         }
         return { _: 'inputPeerUser', user_id: toBigInt(p.id), access_hash: toBigInt(p.accessHash) };
     } else if (p.type === 'chat') {
         return { _: 'inputPeerChat', chat_id: toBigInt(p.id) };
     }
     if (!hasValidAccessHash(p)) {
-        console.warn('[tg] serializePeer channel without access_hash id=' + p.id);
+        log.warn('[tg] serializePeer channel without access_hash id=' + p.id);
     }
     return { _: 'inputPeerChannel', channel_id: toBigInt(p.id), access_hash: toBigInt(p.accessHash) };
 }

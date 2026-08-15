@@ -327,8 +327,7 @@ describe('renderFrame', () => {
         expect(c.ctx.lineWidth).toBeCloseTo(5, 4);
         expect(c.ctx.lineCap).toBe('round');
         expect(c.ctx.lineJoin).toBe('round');
-        // rlottie Dash::getDashInfo: for an even-sized dash list the last
-        // entry is treated as the offset and the missing gap repeats the dash.
+
         expect(c.ctx.dashes[0][0]).toBeCloseTo(4, 4);
         expect(c.ctx.dashes[0][1]).toBeCloseTo(4, 4);
         expect(c.ctx.dashOffsets[0]).toBeCloseTo(2, 4);

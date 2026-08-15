@@ -1,5 +1,8 @@
 import { spawn } from 'child_process';
 import * as net from 'net';
+import { getLogger } from '@ton-ai/gram-debug';
+
+const log = getLogger('telegram');
 
 const PROXY_PORT = parseInt(process.env.WS_PROXY_PORT || '9500', 10);
 
@@ -26,12 +29,12 @@ async function main() {
     });
 
     proxy.on('exit', (code) => {
-        console.log(`Proxy exited with code ${code}`);
+        log.info(`Proxy exited with code ${code}`);
         process.exit(code ?? 1);
     });
 
     await waitForPort(PROXY_PORT);
-    console.log(`Proxy ready on port ${PROXY_PORT}`);
+    log.info(`Proxy ready on port ${PROXY_PORT}`);
 
     const dev = spawn('next', ['dev'], {
         stdio: 'inherit',
@@ -51,4 +54,4 @@ async function main() {
     process.on('SIGTERM', () => { proxy.kill(); dev.kill(); process.exit(0); });
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => { log.error(e); process.exit(1); });

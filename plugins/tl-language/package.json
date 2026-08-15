@@ -11,6 +11,9 @@
     "test": "npx tsx test/tl-language.test.ts && npx tsx test/spec-compliance.test.ts",
     "clean": "rm -rf dist"
   },
+  "dependencies": {
+    "@ton-ai/gram-debug": "*"
+  },
   "devDependencies": {
     "@ton-ai/core": "*",
     "@types/node": "^20.19.33",

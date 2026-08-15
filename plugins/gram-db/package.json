@@ -11,6 +11,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@ton-ai/gram-debug": "*",
     "buffer": "^6.0.3"
   },
   "devDependencies": {

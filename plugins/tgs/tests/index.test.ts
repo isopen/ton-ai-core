@@ -102,12 +102,17 @@ describe('TgsPlugin', () => {
     });
     it('applies cacheSize from config on init', async () => {
         const p = new TgsPlugin();
-        await p.initialize({ ...context, config: { cacheSize: 1 } });
-        const json = JSON.stringify({ tgs: 1, v: '5.5.2', fr: 60, ip: 0, op: 180, w: 100, h: 100, nm: 't', layers: [] });
-        const a = p.parse(json);
-        p.parse(json);
-        const again = p.parse(json);
-        expect(again).not.toBe(a);
-        expect(context.logger.info).toHaveBeenCalledWith('TGS Parser initialized');
+        const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            await p.initialize({ ...context, config: { cacheSize: 1 } });
+            const json = JSON.stringify({ tgs: 1, v: '5.5.2', fr: 60, ip: 0, op: 180, w: 100, h: 100, nm: 't', layers: [] });
+            const a = p.parse(json);
+            p.parse(json);
+            const again = p.parse(json);
+            expect(again).not.toBe(a);
+            expect(consoleSpy).toHaveBeenCalledWith('[tgs] INFO', 'TGS Parser initialized');
+        } finally {
+            consoleSpy.mockRestore();
+        }
     });
 });

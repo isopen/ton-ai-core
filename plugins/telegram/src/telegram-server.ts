@@ -9,6 +9,9 @@ import { crypton } from '@ton-ai/core';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { getSchemaRegistry } from './schema-loader';
+import { getLogger } from '@ton-ai/gram-debug';
+
+const log = getLogger('telegram');
 
 const TELEGRAM_PUBLIC_KEY = `-----BEGIN RSA PUBLIC KEY-----
 MIIBCgKCAQEA6LszBcC1LGzyr992NzE0ieY+BSaOW622Aa9Bd4ZHLl+TuFQ4lo4g
@@ -141,10 +144,10 @@ export class TelegramServerAgent {
             onUpdate: (ctor, body) => {
                 this.onUpdate?.(ctor, body);
                 for (const cb of this.updateListeners) {
-                    try { cb(ctor, body); } catch (e) { console.error('updateListener error:', e); }
+                    try { cb(ctor, body); } catch (e) { log.error('updateListener error:', e); }
                 }
             },
-            onLog: (msg) => console.log(`[${this.agentTag}] ${msg}`),
+            onLog: (msg) => log.info(`[${this.agentTag}] ${msg}`),
         });
         client.setSchemaRegistry(getSchemaRegistry());
         if (this.authKey && this.authKeyId && this.serverSalt) {
@@ -224,7 +227,7 @@ export class TelegramServerAgent {
             this.client.startReadLoop();
             this.client.startPing();
             this.connected = true;
-            setTimeout(() => this.initUpdates().catch(e => console.error('initUpdates after session restore failed:', e?.message)), 0);
+            setTimeout(() => this.initUpdates().catch(e => log.error('initUpdates after session restore failed:', e?.message)), 0);
             return;
         }
 
@@ -302,7 +305,7 @@ export class TelegramServerAgent {
     };
 
     async uploadGetFile(location: Record<string, any>): Promise<{ typeName: string; bytes: Buffer }> {
-        console.log('[server] uploadGetFile location._=', location?._);
+        log.info('[server] uploadGetFile location._=', location?._);
         const result = await this.callRpc('upload.getFile', {
             precise: false,
             location,
@@ -379,7 +382,7 @@ export class TelegramServerAgent {
         this.passwordPending = false;
         this.authenticated = true;
         if (this.sessionId) await this.saveSession(this.sessionId);
-        this.initUpdates().catch(e => console.error('initUpdates after signIn failed:', e?.message, e?.stack?.split('\n').slice(0, 3).join('|')));
+        this.initUpdates().catch(e => log.error('initUpdates after signIn failed:', e?.message, e?.stack?.split('\n').slice(0, 3).join('|')));
     }
 
     async checkPassword(password: string): Promise<void> {
@@ -403,7 +406,7 @@ export class TelegramServerAgent {
         this.passwordPending = false;
         this.authenticated = true;
         if (this.sessionId) await this.saveSession(this.sessionId);
-        this.initUpdates().catch(e => console.error('initUpdates after checkPassword failed:', e?.message));
+        this.initUpdates().catch(e => log.error('initUpdates after checkPassword failed:', e?.message));
     }
 
     async sendMessage(peerSelf: boolean, message: string): Promise<void> {
@@ -420,9 +423,9 @@ export class TelegramServerAgent {
     }
 
     async initUpdates(): Promise<void> {
-        console.error('initUpdates: account.updateStatus offline:false');
+        log.error('initUpdates: account.updateStatus offline:false');
         await this.callRpc('account.updateStatus', { offline: false });
-        console.error('initUpdates OK');
+        log.error('initUpdates OK');
     }
 
     disconnect(): void {

@@ -1,4 +1,5 @@
 import { BasePlugin } from '@ton-ai/core';
+import { getLogger } from '@ton-ai/gram-debug';
 import { parseTLSchema } from './parser';
 import { SchemaRegistry } from './registry';
 import { SchemaSerializer, computeConstructorIdFromSchema, computeConstructorIdFromName } from './serializer';
@@ -21,6 +22,8 @@ export interface TLConfig {
     schemaPath?: string;
 }
 
+const log = getLogger('tl-language');
+
 export class TLLanguagePlugin extends BasePlugin<TLConfig> {
     readonly metadata = {
         name: 'tl-language',
@@ -38,20 +41,20 @@ export class TLLanguagePlugin extends BasePlugin<TLConfig> {
     }
 
     protected async onInit() {
-        this.logger.info('Initializing TL Language plugin...');
+        log.info('Initializing TL Language plugin...');
         if (this.config.schema) {
             this.loadSchema(this.config.schema);
         }
-        this.logger.info('TL Language plugin initialized');
+        log.info('TL Language plugin initialized');
     }
 
     async onActivate() {
-        this.logger.info('TL Language plugin activated');
+        log.info('TL Language plugin activated');
         this.emit('tl:activated', { types: this.registry?.typeCount ?? 0 });
     }
 
     async onDeactivate() {
-        this.logger.info('TL Language plugin deactivated');
+        log.info('TL Language plugin deactivated');
         this.emit('tl:deactivated', {});
     }
 
@@ -59,13 +62,13 @@ export class TLLanguagePlugin extends BasePlugin<TLConfig> {
         this.registry = null;
         this.schema = null;
         this.initialized = false;
-        this.logger.info('TL Language plugin shut down');
+        log.info('TL Language plugin shut down');
     }
 
     loadSchema(schemaText: string): void {
         this.schema = parseTLSchema(schemaText);
         this.registry = new SchemaRegistry(schemaText);
-        this.logger.info(`Loaded TL schema: ${this.registry.typeCount} types, ${this.registry.constructorCount} constructors, ${this.registry.functionCount} functions`);
+        log.info(`Loaded TL schema: ${this.registry.typeCount} types, ${this.registry.constructorCount} constructors, ${this.registry.functionCount} functions`);
     }
 
     getRegistry(): SchemaRegistry | null {

@@ -326,12 +326,12 @@ describe('GramDbSkills', () => {
     await skills.init();
     await skills.setEncryptionKey('s');
     await skills.set('corrupt-me', 'original');
-    // Tamper with raw engine data
+
     const engine = (skills as any).engine as MockStorageEngine;
     const allKeys = await engine.getAllKeys();
     const targetKey = allKeys.find(k => k !== '__mk_salt' && k !== '__mk_verify' && k !== '__g' && k !== '__ver');
     assert.ok(targetKey, 'target key exists');
-    // Replace with garbage base64
+
     await engine.setItem(targetKey!, 'AAAA');
     const val = await skills.get('corrupt-me');
     assert.strictEqual(val, undefined);
@@ -385,7 +385,6 @@ describe('GramDbSkills', () => {
     const sessionId = 'migrate-test';
     const hmacLabel = 'gram-db-hmac-v1';
 
-    // Setup old-format data (GC magic, sync AES-CTR)
     const plaintext = 'migrated-value';
     const oldKey = await KeyManager.deriveMasterKey(sessionId);
     const oldIv = Buffer.from(crypton.getRandomBytes(16));
@@ -401,7 +400,6 @@ describe('GramDbSkills', () => {
     const userHk = await KeyManager.hash(sessionId, userKey);
     await engine.setItem(userHk, oldEntry);
 
-    // Setup old key index
     const indexKey = '__key_index';
     const indexHk = await KeyManager.hash(sessionId, indexKey);
     const indexPlain = JSON.stringify([userKey]);
@@ -414,19 +412,15 @@ describe('GramDbSkills', () => {
     const indexEntry = Buffer.concat([oldMagic, indexIv, indexCiphertext, indexHmac]).toString('base64');
     await engine.setItem(indexHk, indexEntry);
 
-    // Setup sessionId in old format
     await engine.setItem('__g', sessionId);
 
-    // Run migration
     const skills = new GramDbSkills(comps);
     await skills.init();
 
-    // Verify: new format with GD magic, salt, verify
     assert.ok(await engine.getItem('__mk_salt'), 'salt created');
     assert.ok(await engine.getItem('__mk_verify'), 'verify created');
     assert.strictEqual(await engine.getItem('__ver'), String(currentDbVersion()), 'version set');
 
-    // Re-derive key and read migrated data
     await skills.setEncryptionKey(sessionId);
     const val = await skills.get(userKey);
     assert.strictEqual(val, plaintext);
@@ -436,7 +430,7 @@ describe('GramDbSkills', () => {
     const comps = createComponents();
     const engine = comps.engine;
     await engine.setItem('some-old-data', 'x');
-    await engine.setItem('__g', ''); // empty, treated as no session
+    await engine.setItem('__g', '');
 
     const skills = new GramDbSkills(comps);
     await skills.init();
@@ -504,7 +498,7 @@ describe('GramDbSkills avatar methods', () => {
     await skills.setEncryptionKey('avatar-test');
     const uri = 'data:image/png,content';
     await skills.saveAvatar('opfs-test', uri);
-    // Find the opfs name for the avatar
+
     const avatars = await skills.listAvatars();
     const found = avatars.find(a => a.dataUri === uri);
     assert.ok(found);

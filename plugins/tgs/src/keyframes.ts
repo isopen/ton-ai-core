@@ -27,8 +27,6 @@ export function buildKeyframes(rawK: any, defaultValue: any): ParsedKeyframe[] {
             }
         }
 
-        // Keyframes without a start value are end markers (bodymovin emits a
-        // trailing {t} entry) — keep them only to close the previous segment.
         if (raw.s === undefined) continue;
 
         const hold = raw.h === 1;

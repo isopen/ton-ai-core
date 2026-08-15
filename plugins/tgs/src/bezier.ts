@@ -7,9 +7,6 @@ export interface CubicBezierSeg {
     p3: BezierPoint;
 }
 
-// VLine::length in rlottie: alpha-max plus beta-min approximation of
-// sqrt(x*x + y*y) with alpha = 1, beta = 3/8 (largest error < 7%).
-// VBezier::length uses this same distance, so trimming/dashing matches.
 function dist(x1: number, y1: number, x2: number, y2: number): number {
     let x = x2 - x1;
     let y = y2 - y1;

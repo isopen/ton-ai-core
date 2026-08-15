@@ -91,9 +91,6 @@ function clamp01(v: number): number {
     return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
-// rlottie KeyFrames<Position>::angle(frameNo): 0 outside the animated range
-// or without spatial tangents; otherwise the tangent angle (degrees) of the
-// interpolated bezier at the eased progress, via VBezier::angleAt.
 function positionAngle(prop: any, frame: number): number {
     if (!prop || !prop.animated || !prop.keyframes || prop.keyframes.length === 0) return 0;
     const kfs = prop.keyframes;
@@ -132,7 +129,7 @@ function positionAngle(prop: any, frame: number): number {
             };
             const len = bezierLength(seg);
             if (len < 1e-6) return 0;
-            // VBezier::derivative (the 3x factor cancels in atan2)
+
             const t = bezierTAtLength(seg, progress * len, len);
             const mt = 1 - t;
             const d = t * t;
@@ -449,8 +446,6 @@ function reverseVerts(verts: any[]): any[] {
 function shapeCmds(shape: ParsedShape, frame: number): PathCmd[] | null {
     const type = shape.type;
 
-    // rlottie stores the rounded-corner model only to feed rect roundness;
-    // it never draws a path of its own.
     if (type === 'roundedCorner') return null;
 
     if (type === 'path') {
@@ -795,7 +790,7 @@ function renderRepeatCopies(ctx: CanvasRenderingContext2D, rec: RepeatCopyRec, f
     const r = rec.shape;
     const copiesFloat = toNumber(resolveProp(r.copies, frame, 0));
     if (!Number.isFinite(copiesFloat) || copiesFloat <= 0) return;
-    // rlottie: maxCopies() = int(max over the "c" values), capped at 10000.
+
     const maxCopy = maxPropertyNumber(r.copies, 0);
     const maxCopies = !Number.isFinite(maxCopy) || maxCopy <= 0 ? 0 : Math.min(10000, Math.trunc(maxCopy));
     if (maxCopies <= 0) return;
@@ -1036,9 +1031,6 @@ function drawPaints(ctx: CanvasRenderingContext2D, paints: PaintRec[], frame: nu
             let dashOffset = 0;
             let pattern: number[] | null = null;
             if (dashInfo.length > 1) {
-                // rlottie Dash::getDashInfo: an even-sized list lacks the
-                // closing gap info — copy the last dash into the last gap slot
-                // (the offset value then moves to the end).
                 if (dashInfo.length % 2 === 0) {
                     dashInfo.push(dashInfo[dashInfo.length - 1]);
                     dashInfo[dashInfo.length - 2] = dashInfo[dashInfo.length - 3];
@@ -1051,8 +1043,8 @@ function drawPaints(ctx: CanvasRenderingContext2D, paints: PaintRec[], frame: nu
                     if (!vIsZero(pattern[i])) noLength = false;
                     if (!vIsZero(pattern[i + 1])) noGap = false;
                 }
-                if (noLength) return; // VDasher: all dashes zero -> nothing
-                if (noGap) pattern = null; // VDasher: all gaps zero -> solid
+                if (noLength) return;
+                if (noGap) pattern = null;
             }
             if (pattern) {
                 ctx.setLineDash(pattern);
@@ -1296,9 +1288,6 @@ function renderPrecomp(
 ) {
     const children = precompChildren(layer, assets);
 
-    // rlottie Layer::timeRemap(frameNo): with an animated "tm" the value (in
-    // seconds) maps to a frame via Composition::frameAtTime; otherwise the
-    // layer's own start frame is subtracted. Then time stretch is applied.
     let mappedFrame: number;
     const tm = layer.timeRemap;
     if (tm && tm.animated && tm.keyframes && tm.keyframes.length > 0) {

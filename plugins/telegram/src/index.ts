@@ -1,4 +1,5 @@
 import { BasePlugin } from '@ton-ai/core';
+import { getLogger } from '@ton-ai/gram-debug';
 import { TLSerializer, TLDeserializer } from '@ton-ai/tl-language';
 import { ObfuscatedConnection } from './connection';
 import { TelegramAuthKeyHandshake } from './handshake';
@@ -12,6 +13,8 @@ import {
 } from './types';
 import { MtprotoClient } from './mtproto-client';
 import * as fs from 'fs';
+
+const log = getLogger('telegram');
 
 export * from './types';
 export * from './connection';
@@ -59,27 +62,27 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
     }
 
     protected async onInit(): Promise<void> {
-        this.logger.info('Initializing Telegram Client plugin...');
+        log.info('Initializing Telegram Client plugin...');
         if (this.config.authKeyFile) {
             await this.loadAuthKey(this.config.authKeyFile);
         }
-        this.logger.info('Telegram Client plugin initialized');
+        log.info('Telegram Client plugin initialized');
     }
 
     async onActivate(): Promise<void> {
-        this.logger.info('Telegram Client plugin activated');
+        log.info('Telegram Client plugin activated');
         this.events.emit('telegram:activated', { dcId: this.config.dcId });
     }
 
     async onDeactivate(): Promise<void> {
-        this.logger.info('Telegram Client plugin deactivated');
+        log.info('Telegram Client plugin deactivated');
         this.close();
     }
 
     async shutdown(): Promise<void> {
         this.close();
         this.initialized = false;
-        this.logger.info('Telegram Client plugin shut down');
+        log.info('Telegram Client plugin shut down');
     }
 
     async connect(dcId?: number, noObfuscation?: boolean): Promise<void> {
@@ -96,13 +99,13 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
         const useNoObfuscation = noObfuscation ?? this.config.noObfuscation ?? false;
         const proxy = this.config.proxy;
 
-        this.logger.info(`Connecting to DC${targetDc} (${dcOption.host}:${dcOption.port}) noObfuscation=${useNoObfuscation} proxy=${proxy || 'direct'}`);
+        log.info(`Connecting to DC${targetDc} (${dcOption.host}:${dcOption.port}) noObfuscation=${useNoObfuscation} proxy=${proxy || 'direct'}`);
 
         const conn = new ObfuscatedConnection();
         this.connection = conn;
 
         await conn.connect(dcOption.host, dcOption.port, proxy, targetDc, useNoObfuscation, this.config.connectTimeout, this.config.readTimeout);
-        this.logger.info('Connected');
+        log.info('Connected');
 
         this.client = new MtprotoClient(conn, {
             apiId: this.config.apiId,
@@ -113,9 +116,9 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
             langCode: this.config.langCode,
             layer: this.config.layer,
             onUpdate: (ctor, body) => {
-                this.logger.info(`Update: 0x${ctor.toString(16)} (${body.length} bytes)`);
+                log.info(`Update: 0x${ctor.toString(16)} (${body.length} bytes)`);
             },
-            onLog: (msg) => this.logger.info(msg),
+            onLog: (msg) => log.info(msg),
         });
 
         this.events.emit('telegram:connected', { dcId: targetDc });
@@ -127,7 +130,7 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
             throw new Error('Not connected. Call connect() first.');
         }
 
-        this.logger.info('Starting auth key handshake...');
+        log.info('Starting auth key handshake...');
 
         const handshake = new TelegramAuthKeyHandshake(this.connection, undefined, this.config.isTestDc);
         const result = await handshake.perform(this.config.dcId || 2);
@@ -143,7 +146,7 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
             this.client.startReadLoop();
         }
 
-        this.logger.info(`Auth key created. Key ID: ${result.authKeyId.toString(16).slice(0, 16)}...`);
+        log.info(`Auth key created. Key ID: ${result.authKeyId.toString(16).slice(0, 16)}...`);
         this.events.emit('telegram:authkey', { authKeyId: result.authKeyId });
 
         return result;
@@ -347,9 +350,9 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
                 serverSalt: BigInt(data.serverSalt),
                 serverTime: data.serverTime,
             };
-            this.logger.info('Loaded auth key from file');
+            log.info('Loaded auth key from file');
         } catch {
-            this.logger.info('No auth key file found, will create new one');
+            log.info('No auth key file found, will create new one');
         }
     }
 }

@@ -1,4 +1,5 @@
 import { BasePlugin, type BasePluginConfig } from '@ton-ai/core';
+import { getLogger } from '@ton-ai/gram-debug';
 import { parseTgs, configureModelCacheSize, layerInfo } from './parser.js';
 import type { ParseOptions } from './parser.js';
 import { interpolateKeyframes } from './keyframes.js';
@@ -102,6 +103,6 @@ export class TgsPlugin extends BasePlugin<TgsParserConfig> {
     protected async onInit(): Promise<void> {
         const size = this.config?.cacheSize;
         if (typeof size === 'number') configureModelCacheSize(size);
-        this.context.logger.info('TGS Parser initialized');
+        getLogger('tgs').info('TGS Parser initialized');
     }
 }

@@ -19,9 +19,6 @@ const FLAG_PARTIAL = 2;
 const EVENT_HEADER_SIZE = 28;
 const EVENT_TAIL_SIZE = 4;
 
-// ---------------------------------------------------------------------------
-// CRC32
-// ---------------------------------------------------------------------------
 describe('crc32', () => {
   test('known values', () => {
     assert.strictEqual(crc32(new Uint8Array([])), 0);
@@ -33,12 +30,8 @@ describe('crc32', () => {
     const data = new Uint8Array([1, 2, 3, 4, 5]);
     assert.strictEqual(crc32(data), crc32(data));
   });
-
 });
 
-// ---------------------------------------------------------------------------
-// TL string / TL bytes
-// ---------------------------------------------------------------------------
 describe('TL string', () => {
   test('encode then decode roundtrip', () => {
     const original = 'hello-binlog';
@@ -133,12 +126,12 @@ describe('TL string', () => {
   });
 
   test('decode truncated 0xFE header returns null', () => {
-    const buf = new Uint8Array([0xFE, 0x01]); // only 2 bytes, need 4
+    const buf = new Uint8Array([0xFE, 0x01]);
     assert.strictEqual(readTlString(buf, 0), null);
   });
 
   test('decode truncated 0xFF header returns null', () => {
-    const buf = new Uint8Array([0xFF, 0x01, 0x00, 0x00, 0x00]); // need 8
+    const buf = new Uint8Array([0xFF, 0x01, 0x00, 0x00, 0x00]);
     assert.strictEqual(readTlString(buf, 0), null);
   });
 
@@ -148,9 +141,6 @@ describe('TL string', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Event header
-// ---------------------------------------------------------------------------
 describe('buildEvent / parseEventHeader', () => {
   test('roundtrip for KV set event', () => {
     const payload = encodeKvPayload('mykey', 'myvalue');
@@ -329,9 +319,6 @@ describe('buildEvent / parseEventHeader', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// KV payload
-// ---------------------------------------------------------------------------
 describe('encodeKvPayload / decodeKvPayload', () => {
   test('set roundtrip', () => {
     const payload = encodeKvPayload('chat:123', '{"hello":"world"}');
@@ -376,9 +363,6 @@ describe('encodeKvPayload / decodeKvPayload', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Encryption event
-// ---------------------------------------------------------------------------
 describe('encryption event', () => {
   test('build and parse roundtrip', () => {
     const salt = new Uint8Array(32);
@@ -408,20 +392,16 @@ describe('encryption event', () => {
   });
 
   test('parseEncryptionEvent returns null for truncated fields', () => {
-    // Salt field header says 32 bytes but payload is too short
     const buf = new Uint8Array([32, 0, 0, 0]);
     assert.strictEqual(parseEncryptionEvent(buf), null);
   });
 
   test('parseEncryptionEvent skips 4-byte flags prefix', () => {
-    // Payload with flags=0 followed by an empty salt (len=0)
-    // Total: 4 (flags) + 4 (empty TL-B: 0x00 + 3 padding) = 8
     const buf = new Uint8Array(8);
-    assert.strictEqual(parseEncryptionEvent(buf), null); // salt end=4 but then no TL-B for iv (off=4, read at off=4 gives len=0, end=4, then off=4 and read at off=4 -> same position infinite...)
+    assert.strictEqual(parseEncryptionEvent(buf), null);
   });
 
   test('parseEncryptionEvent minimum valid payload', () => {
-    // 4 bytes flags + empty TL-B salt (1+0+3=4) + empty TL-B iv (1+0+3=4) + empty TL-B keyHash (1+0+3=4) = 16
     const buf = new Uint8Array(16);
     const parsed = parseEncryptionEvent(buf);
     assert.ok(parsed !== null);
@@ -431,18 +411,14 @@ describe('encryption event', () => {
   });
 
   test('parseEncryptionEvent returns null for payload with missing keyHash', () => {
-    // 4 flags + salt(36) + iv(20) = 60, no room for keyHash
     const buf = new Uint8Array(60);
-    buf[4] = 32;  // salt len = 32 -> 1+32+3 = 36 bytes
-    buf[4 + 36] = 16;  // iv len = 16 -> 1+16+3 = 20 bytes
-    // off should be 4+36+20 = 60, no keyHash present
+    buf[4] = 32;
+    buf[4 + 36] = 16;
+
     assert.strictEqual(parseEncryptionEvent(buf), null);
   });
 });
 
-// ---------------------------------------------------------------------------
-// AES-CTR
-// ---------------------------------------------------------------------------
 describe('AES-CTR whole-file encryption', () => {
   const key = Buffer.from(crypton.getRandomBytes(32));
   const iv = Buffer.from(crypton.getRandomBytes(16));
@@ -490,9 +466,6 @@ describe('AES-CTR whole-file encryption', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Binlog replay (plaintext)
-// ---------------------------------------------------------------------------
 describe('binlog replay from buffer', () => {
   function buildReplayBuffer(entries: { type: number; key: string; value?: string }[]): Uint8Array {
     const chunks: Uint8Array[] = [];
@@ -569,7 +542,7 @@ describe('binlog replay from buffer', () => {
 
   test('service events (type < 0) are skipped', () => {
     const buf = buildReplayBuffer([{ type: 1, key: 'k', value: 'v' }]);
-    // Insert a service event (encryption event = -3) with id=0 before the data event
+
     const encPayload = buildEncryptionPayload(
       new Uint8Array(32), new Uint8Array(16), new Uint8Array(32),
     );
@@ -583,19 +556,15 @@ describe('binlog replay from buffer', () => {
   });
 
   test('replay with partial events skips orphaned partials', () => {
-    // A partial event never followed by a non-partial event should be ignored
     const data = new Uint8Array(64);
-    const event = buildEvent(1n, 1, 2, 0n, encodeKvPayload('orphan', 'lost'));  // flags=2 = Partial
-    // Parse header: should parse successfully
+    const event = buildEvent(1n, 1, 2, 0n, encodeKvPayload('orphan', 'lost'));
+
     const hdr = parseEventHeader(event, 0);
     assert.ok(hdr !== null);
     assert.strictEqual(hdr.flags, 2);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Encrypted binlog replay
-// ---------------------------------------------------------------------------
 describe('encrypted binlog replay', () => {
   const sessionId = 'test-session-id-' + Date.now();
 
@@ -603,7 +572,6 @@ describe('encrypted binlog replay', () => {
     const events: Uint8Array[] = [];
     let id = 1n;
 
-    // TDLib single-step KDF: PBKDF2(sessionId, salt, 60002)
     const salt = new Uint8Array(crypton.getRandomBytes(32));
     const iv = Buffer.from(crypton.getRandomBytes(16));
     const derivedKey = await crypton.pbkdf2Sha256(
@@ -640,7 +608,7 @@ describe('encrypted binlog replay', () => {
 
     const encSalt = parseEncryptionEvent(encBuf.subarray(28, hdr0.size - 4));
     assert.ok(encSalt !== null);
-    // Replay: same single-step KDF
+
     const replayKey = await crypton.pbkdf2Sha256(
       Buffer.from(sessionId, 'utf-8'), encSalt.salt, KDF_ITERATIONS, KEY_SIZE,
     );
@@ -667,11 +635,7 @@ describe('encrypted binlog replay', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// TdBinlog core logic: rewrite, empty, partial, compactify, binary search
-// ---------------------------------------------------------------------------
 describe('TdBinlog core logic', () => {
-  // Pure-function replicas of TdBinlog's private logic
   type Entry = { id: bigint; type: number; buf: Buffer; deleted: boolean };
   const EV_HDR = 28;
   const EV_TAIL = 4;
@@ -680,7 +644,6 @@ describe('TdBinlog core logic', () => {
     return EV_HDR + buf.length + EV_TAIL;
   }
 
-  // binary search matching TdBinlog's implementation
   function findEntry(entries: Entry[], id: bigint): number {
     if (entries.length === 0 || entries[entries.length - 1].id < id) return -1;
     let lo = 0, hi = entries.length;
@@ -859,7 +822,6 @@ describe('TdBinlog core logic', () => {
     }
 
     test('removes deleted entries above threshold', () => {
-      // 12 entries, 10 deleted -> 10*4=40 > 12*3=36 -> compact
       const entries: Entry[] = [];
       for (let i = 0; i < 2; i++) {
         entries.push({ id: BigInt(i), type: 1, buf: Buffer.from('alive'), deleted: false });
@@ -876,7 +838,6 @@ describe('TdBinlog core logic', () => {
     });
 
     test('does not compact below threshold', () => {
-      // 12 entries, 8 deleted -> 8*4=32 < 12*3=36 -> no compact
       const entries: Entry[] = [];
       for (let i = 0; i < 4; i++) {
         entries.push({ id: BigInt(i), type: 1, buf: Buffer.from('alive'), deleted: false });
@@ -941,15 +902,12 @@ describe('TdBinlog core logic', () => {
 
     test('service event (type<0) does not affect totalEventsSize', () => {
       let totalSize = 100;
-      // service event skipped — no change
+
       assert.strictEqual(totalSize, 100);
     });
   });
 });
 
-// ---------------------------------------------------------------------------
-// CRC32 edge cases
-// ---------------------------------------------------------------------------
 describe('CRC32 edge cases', () => {
   test('deterministic for single byte', () => {
     const result = crc32(new Uint8Array([0xFF]));
@@ -992,11 +950,7 @@ describe('CRC32 edge cases', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// AES-CTR cipher edge cases
-// ---------------------------------------------------------------------------
 describe('AesCtrCipher edge cases', () => {
-
   test('empty data returns empty', () => {
     const key = new Uint8Array(32);
     const iv = new Uint8Array(16);
@@ -1029,7 +983,7 @@ describe('AesCtrCipher edge cases', () => {
 
   test('48 bytes (three blocks) with counter carry', () => {
     const key = new Uint8Array(32).fill(0x66);
-    const iv = new Uint8Array(16).fill(0xFF);  // will cause carry on increment
+    const iv = new Uint8Array(16).fill(0xFF);
     const plain = new Uint8Array(48).fill(0x77);
     const c1 = new AesCtrCipher(key, iv, 0);
     const enc = c1.process(plain);
@@ -1052,11 +1006,7 @@ describe('AesCtrCipher edge cases', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// serializePayload / deserializePayload roundtrip
-// ---------------------------------------------------------------------------
 describe('serializePayload / deserializePayload', () => {
-  // pure-function replicas matching TdBinlog's private methods
   function serializePayload(values: (number | bigint | string | Buffer)[]): Buffer {
     const parts: Buffer[] = [];
     for (const v of values) {
@@ -1193,9 +1143,6 @@ describe('serializePayload / deserializePayload', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// TdBinlog.getState() logic (pure-function replica)
-// ---------------------------------------------------------------------------
 describe('TdBinlog.getState', () => {
   type Entry = { id: bigint; type: number; buf: Buffer; deleted: boolean };
 

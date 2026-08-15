@@ -1,6 +1,9 @@
 import { crypton, AesCtrCipher } from '@ton-ai/core';
 import { crc32, tlBytesLength, readTlString, readTlBytes, writeTlBytes, encodeKvPayload, decodeKvPayload } from '@ton-ai/tl-language';
+import { getLogger } from '@ton-ai/gram-debug';
 import { Buffer } from 'buffer';
+
+const log = getLogger('gram-db');
 
 const BINLOG_FILE = 'binlog';
 const EVENT_HEADER_SIZE = 28;
@@ -147,9 +150,9 @@ export class TdBinlog {
 
     this.sessionBytes = Buffer.from(sessionId, 'utf-8');
     const file = await this.fileHandle!.getFile();
-    console.log('[td-binlog] init sessionId=' + sessionId + ' fileSize=' + file.size + ' exists=' + (file.size > 0));
+    log.info('[td-binlog] init sessionId=' + sessionId + ' fileSize=' + file.size + ' exists=' + (file.size > 0));
     await this.replay();
-    console.log('[td-binlog] init done entries=' + this.entries.length + ' encKey=' + !!this.encKey);
+    log.info('[td-binlog] init done entries=' + this.entries.length + ' encKey=' + !!this.encKey);
   }
 
   private async replay(): Promise<void> {
@@ -158,7 +161,7 @@ export class TdBinlog {
       const fileSize = file.size;
       this.fileSize = fileSize;
 
-      if (fileSize === 0) { console.log('[td-binlog] replay: empty file'); return; }
+      if (fileSize === 0) { log.info('[td-binlog] replay: empty file'); return; }
 
       let offset = 0;
       let lastGoodOffset = 0;
@@ -167,16 +170,16 @@ export class TdBinlog {
       while (offset + EVENT_MIN_SIZE <= fileSize) {
         const chunk = new Uint8Array(await file.slice(offset, offset + EVENT_MIN_SIZE).arrayBuffer());
         const hdr = parseEventHeader(chunk, 0);
-        if (!hdr) { console.log('[td-binlog] replay: bad header at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
-        if (offset + hdr.size > fileSize) { console.log('[td-binlog] replay: event exceeds file at offset=' + offset + ' size=' + hdr.size + ' fileSize=' + fileSize + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
+        if (!hdr) { log.info('[td-binlog] replay: bad header at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
+        if (offset + hdr.size > fileSize) { log.info('[td-binlog] replay: event exceeds file at offset=' + offset + ' size=' + hdr.size + ' fileSize=' + fileSize + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
 
         const eventBuf = new Uint8Array(await file.slice(offset, offset + hdr.size).arrayBuffer());
-        if (!validateEventCrc(eventBuf, 0, hdr.size)) { console.log('[td-binlog] replay: CRC fail at offset=' + offset + ' size=' + hdr.size + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
+        if (!validateEventCrc(eventBuf, 0, hdr.size)) { log.info('[td-binlog] replay: CRC fail at offset=' + offset + ' size=' + hdr.size + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
         const payload = eventBuf.subarray(EVENT_HEADER_SIZE, hdr.size - EVENT_TAIL_SIZE);
 
         if (hdr.type === SERVICE_TYPE_AES_CTR) {
           const parsed = parseEncryptionEvent(payload);
-          if (!parsed) { console.log('[td-binlog] replay: bad encryption event at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
+          if (!parsed) { log.info('[td-binlog] replay: bad encryption event at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
 
           const encKey = Buffer.from(await crypton.pbkdf2Sha256(
             this.sessionBytes!, parsed.salt, KDF_ITERATIONS, KEY_SIZE,
@@ -185,14 +188,14 @@ export class TdBinlog {
             encKey, new TextEncoder().encode(KEY_HASH_LABEL),
           );
           if (!Buffer.from(computedHash).equals(Buffer.from(parsed.keyHash))) {
-            console.log('[td-binlog] replay: keyHash mismatch truncating to ' + lastGoodOffset);
+            log.info('[td-binlog] replay: keyHash mismatch truncating to ' + lastGoodOffset);
             await this.truncate(lastGoodOffset);
             return;
           }
           this.encKey = encKey;
           this.encIv = parsed.iv;
           this.encDataOffset = offset + hdr.size;
-          console.log('[td-binlog] replay: encryption event found, encDataOffset=' + this.encDataOffset + ' encryptedPortion=' + (fileSize - this.encDataOffset));
+          log.info('[td-binlog] replay: encryption event found, encDataOffset=' + this.encDataOffset + ' encryptedPortion=' + (fileSize - this.encDataOffset));
 
           const encPortion = new Uint8Array(await file.slice(this.encDataOffset, fileSize).arrayBuffer());
           const cipher = new AesCtrCipher(this.encKey, this.encIv, 0);
@@ -205,7 +208,7 @@ export class TdBinlog {
             const decHdr = parseEventHeader(dec, decOff);
             if (!decHdr || !validateEventCrc(dec, decOff, decHdr.size)) {
               const badOffset = this.encDataOffset + ((decOff + 15) & ~15);
-              console.log('[td-binlog] replay: decrypted CRC fail at decOff=' + decOff + ' truncating file to badOffset=' + badOffset + ' but keeping ' + this.entries.length + ' valid entries');
+              log.info('[td-binlog] replay: decrypted CRC fail at decOff=' + decOff + ' truncating file to badOffset=' + badOffset + ' but keeping ' + this.entries.length + ' valid entries');
               try {
                 const w = await this.fileHandle!.createWritable({ keepExistingData: true });
                 await w.truncate(badOffset);
@@ -218,7 +221,7 @@ export class TdBinlog {
             const decPayload = dec.subarray(decOff + EVENT_HEADER_SIZE, decOff + decHdr.size - EVENT_TAIL_SIZE);
             if (!this.commitEvent(decHdr, decPayload)) {
               const badOffset = this.encDataOffset + ((decOff + 15) & ~15);
-              console.log('[td-binlog] replay: commitEvent failed for decrypted event type=' + decHdr.type + ' truncating to badOffset=' + badOffset + ' keeping ' + this.entries.length + ' entries');
+              log.info('[td-binlog] replay: commitEvent failed for decrypted event type=' + decHdr.type + ' truncating to badOffset=' + badOffset + ' keeping ' + this.entries.length + ' entries');
               try {
                 const w = await this.fileHandle!.createWritable({ keepExistingData: true });
                 await w.truncate(badOffset);
@@ -231,21 +234,21 @@ export class TdBinlog {
             decEventCount++;
             decOff = (decOff + decHdr.size + 15) & ~15;
           }
-          console.log('[td-binlog] replay: processed ' + decEventCount + ' decrypted events');
+          log.info('[td-binlog] replay: processed ' + decEventCount + ' decrypted events');
           return;
         }
 
         if (hdr.type > 0) {
-          if (!this.commitEvent(hdr, payload)) { console.log('[td-binlog] replay: commitEvent failed for unencrypted event type=' + hdr.type); await this.truncate(offset); return; }
+          if (!this.commitEvent(hdr, payload)) { log.info('[td-binlog] replay: commitEvent failed for unencrypted event type=' + hdr.type); await this.truncate(offset); return; }
         }
 
         eventCount++;
         lastGoodOffset = offset + hdr.size;
         offset = lastGoodOffset;
       }
-      console.log('[td-binlog] replay: processed ' + eventCount + ' unencrypted events, remaining entries=' + this.entries.length);
+      log.info('[td-binlog] replay: processed ' + eventCount + ' unencrypted events, remaining entries=' + this.entries.length);
     } catch (e) {
-      console.error('[td-binlog] replay: unexpected error', e);
+      log.error('[td-binlog] replay: unexpected error', e);
     }
   }
 
@@ -410,7 +413,7 @@ export class TdBinlog {
         }
       }
     }
-    console.log('[td-binlog] getState: entries=' + this.entries.length + ' foundAuthKey=' + foundAuthKey + ' foundSessionFlags=' + foundSessionFlags + ' authenticated=' + state.authenticated + ' authKey=' + (state.authKey ? state.authKey.length + 'bytes' : 'null'));
+    log.info('[td-binlog] getState: entries=' + this.entries.length + ' foundAuthKey=' + foundAuthKey + ' foundSessionFlags=' + foundSessionFlags + ' authenticated=' + state.authenticated + ' authKey=' + (state.authKey ? state.authKey.length + 'bytes' : 'null'));
     return state;
   }
 
