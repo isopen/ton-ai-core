@@ -658,3 +658,49 @@ describe('hook ordering and errors', () => {
     expect(() => useCallback(() => {}, [])).toThrow('Hooks must be called within a component');
   });
 });
+
+describe('flushAllEffects error handling', () => {
+  test('effect that throws is caught and logged', () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      runWithInstance(() => {
+        useEffect(() => { throw new Error('boom'); }, []);
+        flushAllEffects();
+      });
+      expect(errorSpy).toHaveBeenCalledWith('useEffect error:', expect.any(Error));
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test('skips effects of unmounted instances', () => {
+    const inst = createTestInstance();
+    inst._mounted = false;
+    setCurrentInstance(inst);
+    inst.hookIndex = 0;
+    const fn = jest.fn();
+    useEffect(() => fn, []);
+    flushAllEffects();
+    setCurrentInstance(null);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  test('cleanup that throws is caught and removed from unmountCleanups', () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const inst = createTestInstance();
+      setCurrentInstance(inst);
+      inst.hookIndex = 0;
+      const cleanup = () => { throw new Error('cleanup boom'); };
+      useEffect(() => cleanup, []);
+      flushAllEffects();
+      inst.hookIndex = 0;
+      useEffect(() => cleanup, [1]);
+      flushAllEffects();
+      setCurrentInstance(null);
+      expect(errorSpy).toHaveBeenCalledWith('useEffect cleanup error:', expect.any(Error));
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});

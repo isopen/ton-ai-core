@@ -1,10 +1,24 @@
 import {
   TEXT, FRAGMENT, SLOT, SLOTTABLE,
-  ComponentInstance,
+  ComponentInstance, memo,
   normalizeChild, normalizeChildren,
   currentInstance, setCurrentInstance,
 } from '../src/vdom.js';
 import type { ComponentType, VNode } from '../src/vdom.js';
+
+function h(type: any, props: Record<string, any> = {}, ...children: any[]): any {
+  const flatChildren: any[] = [];
+  for (const c of children) {
+    if (c == null || c === false || c === true) continue;
+    if (Array.isArray(c)) { flatChildren.push(...c); continue; }
+    if (typeof c === 'string' || typeof c === 'number') {
+      flatChildren.push({ type: TEXT, props: { nodeValue: String(c) }, children: [], key: null });
+    } else {
+      flatChildren.push(c);
+    }
+  }
+  return { type, props: { ...props }, children: flatChildren, key: (props as any)?.key ?? null };
+}
 
 describe('vdom constants', () => {
   test('TEXT is defined', () => {
@@ -248,5 +262,129 @@ describe('setCurrentInstance', () => {
   test('sets currentInstance to null', () => {
     setCurrentInstance(null);
     expect(currentInstance).toBeNull();
+  });
+});
+
+describe('memo', () => {
+  test('returns cached vnode when props and subtree are unchanged', () => {
+    let renders = 0;
+    const Inner: ComponentType = memo((props: any) => {
+      renders++;
+      return h('span', {}, String(props.n));
+    });
+
+    const inst = new ComponentInstance(Inner, {});
+    setCurrentInstance(inst);
+    const v1 = Inner({ n: 1 });
+    const v2 = Inner({ n: 1 });
+    setCurrentInstance(null);
+
+    expect(renders).toBe(1);
+    expect(v2).toBe(v1);
+  });
+
+  test('re-renders when a child component is dirty', () => {
+    let parentRenders = 0;
+    const Child: ComponentType = () => h('div', {}, 'c');
+    const Parent: ComponentType = memo(() => {
+      parentRenders++;
+      return h(Child);
+    });
+
+    const inst = new ComponentInstance(Parent, {});
+    setCurrentInstance(inst);
+    const p1 = Parent({});
+    const childInst = new ComponentInstance(Child, {});
+    (p1 as VNode).componentInstance = childInst;
+    childInst._dirty = true;
+
+    const p2 = Parent({});
+    setCurrentInstance(null);
+
+    expect(parentRenders).toBe(2);
+    expect(p2).not.toBe(p1);
+  });
+
+  test('re-renders when a child subtree is dirty (recursion)', () => {
+    let parentRenders = 0;
+    const Leaf: ComponentType = () => h('i', {}, 'l');
+    const Mid: ComponentType = () => h('div', {}, h(Leaf));
+    const Parent: ComponentType = memo(() => {
+      parentRenders++;
+      return h(Mid);
+    });
+
+    const inst = new ComponentInstance(Parent, {});
+    setCurrentInstance(inst);
+    const p1 = Parent({});
+    const midInst = new ComponentInstance(Mid, {});
+    const midVNode = p1 as VNode;
+    midVNode.componentInstance = midInst;
+    const leafInst = new ComponentInstance(Leaf, {});
+    midInst.vnode = h('div', {}, h(Leaf));
+    midInst.vnode.children[0].componentInstance = leafInst;
+    leafInst._dirty = true;
+
+    const p2 = Parent({});
+    setCurrentInstance(null);
+
+    expect(parentRenders).toBe(2);
+    expect(p2).not.toBe(p1);
+  });
+
+  test('handles null and instance-less cached subtrees', () => {
+    let mode: 'null' | 'noinst' | 'ok' = 'null';
+    const Child: ComponentType = () => h('div', {}, 'c');
+    const Inner: ComponentType = memo((props: any) => {
+      if (mode === 'null') return null as any;
+      if (mode === 'noinst') return { type: Child, props: {}, children: [], key: null } as any;
+      return h('span', {}, String(props.n));
+    });
+
+    const inst = new ComponentInstance(Inner, {});
+    setCurrentInstance(inst);
+    const n1 = Inner({ n: 1 });
+    const n2 = Inner({ n: 1 });
+    expect(n2).toBe(n1);
+    expect(n1).toBeNull();
+
+    mode = 'noinst';
+    const c1 = Inner({ n: 2 });
+    const c2 = Inner({ n: 2 });
+    expect(c2).toBe(c1);
+
+    mode = 'ok';
+    const s1 = Inner({ n: 3 });
+    expect((s1 as VNode).type).toBe('span');
+    setCurrentInstance(null);
+  });
+
+  test('re-renders when the props shape changes (shallowEqual length mismatch)', () => {
+    let renders = 0;
+    const Inner: ComponentType = memo((props: any) => {
+      renders++;
+      return h('span', {}, String(props.n));
+    });
+
+    const inst = new ComponentInstance(Inner, {});
+    setCurrentInstance(inst);
+    Inner({ n: 1 });
+    Inner({ n: 1, extra: true });
+    setCurrentInstance(null);
+
+    expect(renders).toBe(2);
+  });
+
+  test('runs the original component when no current instance', () => {
+    const Inner: ComponentType = memo((props: any) => h('b', {}, String(props.n)));
+    setCurrentInstance(null);
+    const v = Inner({ n: 3 });
+    expect((v as VNode).type).toBe('b');
+  });
+
+  test('falls back to the component name for displayName', () => {
+    const Comp = function MyComp() { return null as any; };
+    const Wrapped = memo(Comp);
+    expect((Wrapped as any).displayName).toBe('MyComp');
   });
 });

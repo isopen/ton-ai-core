@@ -781,3 +781,176 @@ describe('patch - updateProp edge cases', () => {
     expect(el.hasAttribute('data-active')).toBe(false);
   });
 });
+
+describe('patch - edge paths', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  test('select value is applied via rAF', (done) => {
+    const vnode = h('select', { value: 'B' },
+      h('option', {}, 'A'),
+      h('option', {}, 'B'),
+    );
+    const el = createDOM(vnode) as HTMLSelectElement;
+    document.body.appendChild(el);
+    requestAnimationFrame(() => {
+      expect(el.value).toBe('B');
+      done();
+    });
+  });
+
+  test('style object added on update replaces style via cssText', () => {
+    const oldVNode = h('div');
+    const el = createDOM(oldVNode) as HTMLElement;
+
+    const newVNode = h('div', { style: { color: 'red', top: '5px' } });
+    patch(el, oldVNode, newVNode);
+    expect(el.style.color).toBe('red');
+    expect(el.style.top).toBe('5px');
+  });
+
+  test('non-string non-object style removes the attribute on update', () => {
+    const oldVNode = h('div', { style: 'color:red' });
+    const el = createDOM(oldVNode) as HTMLElement;
+
+    const newVNode = h('div', { style: false as any });
+    patch(el, oldVNode, newVNode);
+    expect(el.hasAttribute('style')).toBe(false);
+  });
+
+  test('component null to element transition replaces its dom in the parent', () => {
+    let returnNull = true;
+    const Comp: ComponentType = () => (returnNull ? null as any : h('span', {}, 'hi'));
+
+    const vnode = { type: Comp, props: {}, children: [], key: null };
+    const dom = createDOM(vnode);
+    const parent = document.createElement('div');
+    parent.appendChild(dom);
+    document.body.appendChild(parent);
+
+    returnNull = false;
+    const newVnode = { type: Comp, props: {}, children: [], key: null };
+    const newDom = patch(dom, vnode, newVnode);
+    expect((newDom as HTMLElement).tagName).toBe('SPAN');
+    expect(parent.children[0]).toBe(newDom);
+  });
+
+  test('patch component vnode without an existing instance', () => {
+    const Comp: ComponentType = (props) => h('span', { 'data-n': props.n }, String(props.n));
+
+    const vnode1 = { type: Comp, props: { n: 1 }, children: [], key: null };
+    const dom = createDOM(vnode1);
+    document.body.appendChild(dom);
+
+    const oldAlias = { type: Comp, props: { n: 1 }, children: [], key: null };
+    const vnode2 = { type: Comp, props: { n: 2 }, children: [], key: null };
+    const newDom = patch(dom, oldAlias, vnode2);
+    expect((newDom as HTMLElement).textContent).toBe('2');
+  });
+
+  test('findDomNode resolves rendered component children via instance', () => {
+    const Comp: ComponentType = () => h('span', { 'data-c': '1' }, 'C');
+
+    const compVNode = h(Comp);
+    compVNode.componentInstance = { vnode: h('span', { 'data-c': 'x' }, 'X') } as any;
+    const oldFrag = h(FRAGMENT as any, {}, compVNode);
+    const el = document.createElement('div');
+
+    const newFrag = h(FRAGMENT as any, {}, h('span', { 'data-c': 'y' }, 'Y'));
+    patch(el, oldFrag, newFrag);
+    expect(el.querySelector('span')!.getAttribute('data-c')).toBe('y');
+  });
+
+  test('findDomNode recurses into unrendered component children', () => {
+    const Comp: ComponentType = () => h('span', { 'data-c': '1' }, 'C');
+
+    const oldFrag = h(FRAGMENT as any, {}, h(Comp));
+    const el = document.createElement('div');
+
+    const newFrag = h(FRAGMENT as any, {}, h('span', { 'data-c': '2' }, 'D'));
+    patch(el, oldFrag, newFrag);
+    expect(el.querySelector('span')!.getAttribute('data-c')).toBe('2');
+  });
+
+  test('patch fragment whose first child is a component', () => {
+    const Comp: ComponentType = () => h('span', { 'data-c': '1' }, 'C');
+
+    const outer = h('div', {}, h(FRAGMENT as any, {}, h(Comp), h('b', {}, 'x')));
+    const el = createDOM(outer) as HTMLElement;
+    document.body.appendChild(el);
+
+    const outer2 = h('div', {}, h(FRAGMENT as any, {}, h(Comp), h('b', {}, 'y')));
+    patch(el, outer, outer2);
+    expect(el.querySelector('span')!.getAttribute('data-c')).toBe('1');
+    expect(el.querySelector('b')!.textContent).toBe('y');
+  });
+
+  test('keyed children whose vnodes are fragments', () => {
+    const frag = (x: string) => h(FRAGMENT as any, { key: 'f' }, h('i', { 'data-f': x }), h('u', { 'data-f': x }));
+
+    const parent = h('div', {}, frag('1'));
+    const el = createDOM(parent) as HTMLElement;
+    document.body.appendChild(el);
+    expect(el.querySelectorAll('i, u').length).toBe(2);
+
+    const parent2 = h('div', {}, frag('2'));
+    patch(el, parent, parent2);
+    expect(el.querySelector('i')!.getAttribute('data-f')).toBe('2');
+    expect(el.querySelector('u')!.getAttribute('data-f')).toBe('2');
+  });
+
+  test('keyed children reconcile component children via findDomNode', () => {
+    const Comp: ComponentType = (props: any) => h('span', { 'data-v': props.v }, props.v);
+
+    const oldOuter = h('div', {}, h(Comp, { key: 'a', v: 'A' }));
+    const el = createDOM(oldOuter) as HTMLElement;
+    document.body.appendChild(el);
+
+    const newOuter = h('div', {}, h(Comp, { key: 'a', v: 'B' }));
+    patch(el, oldOuter, newOuter);
+    expect(el.textContent).toBe('B');
+  });
+
+  test('keyed child with an unrendered element vnode is created fresh', () => {
+    const oldInner = h('span', { key: 'a' }, 'A');
+    const oldOuter = h('div', {}, oldInner);
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+
+    const newOuter = h('div', {}, h('span', { key: 'a' }, 'A'));
+    patch(el, oldOuter, newOuter);
+    expect(el.textContent).toBe('A');
+  });
+
+  test('keyed fragment child with detached first node leaves cursor null', () => {
+    const inner1 = h('span', {}, '1');
+    const inner2 = h('span', {}, '2');
+    const frag = { type: FRAGMENT, props: {}, children: [inner1, inner2], key: 'f' };
+    const oldOuter = h('div', {}, frag);
+    const el = createDOM(oldOuter) as HTMLElement;
+    document.body.appendChild(el);
+
+    el.removeChild(el.firstChild as Node);
+
+    const newOuter = h('div', {}, h('span', { key: 'f' }, '3'));
+    patch(el, oldOuter, newOuter);
+    expect(el.textContent).toBe('23');
+  });
+
+  test('keyed child whose old dom is detached is recreated', () => {
+    const parent = h('div', {},
+      { type: 'div', props: { key: 'a' }, children: [h(TEXT as any, { nodeValue: 'A' })], key: 'a' } as any,
+    );
+    const parentEl = createDOM(parent) as HTMLElement;
+    parentEl.children[0].remove();
+    document.body.appendChild(parentEl);
+
+    const newParent = h('div', {},
+      { type: 'div', props: { key: 'a' }, children: [h(TEXT as any, { nodeValue: 'A2' })], key: 'a' } as any,
+    );
+    patch(parentEl, parent, newParent);
+    expect(parentEl.children.length).toBe(1);
+    expect(parentEl.textContent).toBe('A2');
+  });
+});
