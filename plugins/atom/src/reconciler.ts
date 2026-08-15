@@ -1,4 +1,7 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import { TEXT, FRAGMENT, SLOT, SLOTTABLE, ComponentInstance, setCurrentInstance, type VNode, type ComponentType } from './vdom.js';
+
+const log = getLogger('atom');
 
 function runUnmountCleanups(vnode: VNode) {
   if (vnode.componentInstance) {
@@ -6,7 +9,7 @@ function runUnmountCleanups(vnode: VNode) {
     inst._mounted = false;
     const cleanups = inst.unmountCleanups;
     for (const fn of cleanups) {
-      try { fn(); } catch (e) { console.error('useEffect unmount cleanup error:', e); }
+      try { fn(); } catch (e) { log.error('useEffect unmount cleanup error:', e); }
     }
     cleanups.length = 0;
     if (inst.vnode) {

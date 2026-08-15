@@ -151,7 +151,7 @@ describe('useState', () => {
 
     inst.hookIndex = 0;
     const [val] = useState(fn);
-    // useState with function initial calls it (lazy init), so val is 'result'
+
     expect(val).toBe('result');
 
     setCurrentInstance(null);
@@ -398,7 +398,6 @@ describe('useEffect', () => {
     useEffect(() => jest.fn(), [2]);
     flushAllEffects();
 
-    // should not throw, just console.error
     setCurrentInstance(null);
   });
 
@@ -654,7 +653,6 @@ describe('hook ordering and errors', () => {
 
     flushAllEffects();
 
-    // no error
     setCurrentInstance(null);
   });
 
@@ -687,7 +685,7 @@ describe('flushAllEffects error handling', () => {
         useEffect(() => { throw new Error('boom'); }, []);
         flushAllEffects();
       });
-      expect(errorSpy).toHaveBeenCalledWith('useEffect error:', expect.any(Error));
+      expect(errorSpy).toHaveBeenCalledWith('[atom] ERROR', 'useEffect error:', expect.any(Error));
     } finally {
       errorSpy.mockRestore();
     }
@@ -718,7 +716,7 @@ describe('flushAllEffects error handling', () => {
       useEffect(() => cleanup, [1]);
       flushAllEffects();
       setCurrentInstance(null);
-      expect(errorSpy).toHaveBeenCalledWith('useEffect cleanup error:', expect.any(Error));
+      expect(errorSpy).toHaveBeenCalledWith('[atom] ERROR', 'useEffect cleanup error:', expect.any(Error));
     } finally {
       errorSpy.mockRestore();
     }

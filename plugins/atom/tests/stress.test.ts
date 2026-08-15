@@ -318,10 +318,10 @@ describe('stress: memo', () => {
     render(Outer, container);
     innerRenders = 0;
 
-    setOuter('hello'); // same label
+    setOuter('hello');
 
     queueMicrotask(() => {
-      expect(innerRenders).toBe(0); // memo prevented re-render
+      expect(innerRenders).toBe(0);
       done();
     });
   });
@@ -385,10 +385,6 @@ describe('stress: memo', () => {
   });
 
   test('memo re-renders when a nested child updates its own state', (done) => {
-    // Regression: the memoized row caches its vnode and the reconciler bails
-    // out on the identical object, so a child that updates its own state
-    // (e.g. an EmojiCanvas fed by window events) must force the memo cache to
-    // bust — otherwise its state is lost forever.
     let childRenders = 0;
     let setChild: any;
 

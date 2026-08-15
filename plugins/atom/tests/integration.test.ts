@@ -532,7 +532,7 @@ describe('integration: useState lazy init in component', () => {
     expect(initFn).toHaveBeenCalledTimes(1);
 
     setVal('updated');
-    // Should re-render but not call initFn again
+
     expect(initFn).toHaveBeenCalledTimes(1);
   });
 });

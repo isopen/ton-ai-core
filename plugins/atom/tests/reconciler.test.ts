@@ -693,9 +693,7 @@ describe('patch - slot', () => {
       children: [],
       key: null,
     };
-    // resolveSlotVNode returns the SLOT vnode itself when no child exists,
-    // which would cause infinite recursion in createDOM. So this should
-    // be treated as an empty text node via the guard in createDOM.
+
     const dom = createDOM({ type: TEXT, props: { nodeValue: '' }, children: [], key: null });
     expect(dom.nodeType).toBe(Node.TEXT_NODE);
   });

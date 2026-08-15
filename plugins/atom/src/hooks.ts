@@ -1,4 +1,7 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import { currentInstance, type ComponentInstance } from './vdom.js';
+
+const log = getLogger('atom');
 
 let reroot: (() => void) | null = null;
 
@@ -61,7 +64,7 @@ export function flushAllEffects() {
     const { inst, fn, oldCleanup, cleanupIdx } = pendingEffects.shift()!;
     if (!inst._mounted) continue;
     if (oldCleanup) {
-      try { oldCleanup(); } catch (e) { console.error('useEffect cleanup error:', e); }
+      try { oldCleanup(); } catch (e) { log.error('useEffect cleanup error:', e); }
       const ci = inst.unmountCleanups.indexOf(oldCleanup);
       if (ci !== -1) inst.unmountCleanups.splice(ci, 1);
     }
@@ -69,7 +72,7 @@ export function flushAllEffects() {
     try {
       cleanup = fn();
     } catch (e) {
-      console.error('useEffect error:', e);
+      log.error('useEffect error:', e);
       cleanup = undefined;
     }
     inst.hookStates[cleanupIdx] = typeof cleanup === 'function' ? cleanup : undefined;

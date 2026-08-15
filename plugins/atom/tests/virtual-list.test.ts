@@ -26,9 +26,6 @@ function generateItems(n: number): { id: number; label: string }[] {
   return Array.from({ length: n }, (_, i) => ({ id: i, label: `Item ${i}` }));
 }
 
-// Scroll-driven state is throttled to one setScrollTop per animation frame
-// (virtual-list rAF batching), so assertions after a scroll event must wait
-// for the rAF callback + the queued render microtask: two rAFs cover both.
 function afterScroll(assert: () => void, done?: jest.DoneCallback): void {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
