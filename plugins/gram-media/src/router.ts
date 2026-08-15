@@ -13,6 +13,18 @@ const MAX_ACTIVE_BLOB_URLS = 1024;
 const TGS_JSON_TTL_MS = 30 * 60 * 1000;
 const STICKER_SET_TTL_MS = 30 * 60 * 1000;
 const MAX_PARALLEL_PHOTOS = 2;
+const PHOTO_DOWNLOAD_DEADLINE_MS = 60_000;
+const PHOTO_REFRESH_TIMEOUT_MS = 20_000;
+
+function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(message)), ms);
+        promise.then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => { clearTimeout(timer); reject(e); }
+        );
+    });
+}
 
 export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_queue' | 'tgs_queue';
 export const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 1, emoji_queue: 6, tgs_queue: 8 };
@@ -465,23 +477,37 @@ export class GramMediaRouter {
 
         this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_PROGRESS', messageId, progress: 0 });
 
+        const deadline = Date.now() + PHOTO_DOWNLOAD_DEADLINE_MS;
+
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            if (Date.now() >= deadline) {
+                this.failPhotoDownload(messageId, sizeType);
+                return;
+            }
             if (attempt > 0) {
                 if (this.debug) log.info('[gram-media] retrying photo download', messageId, sizeType, 'attempt', attempt);
                 await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt - 1]));
+            }
+            if (Date.now() >= deadline) {
+                this.failPhotoDownload(messageId, sizeType);
+                return;
             }
 
             try {
                 let lastProgress = -1;
                 let lastProgressAt = 0;
-                const result = await this.transport?.startPhotoDownload(currentPhoto, sizeType, messageId, (pct: number) => {
-                    const now = Date.now();
-                    if (pct === lastProgress) return;
-                    if (pct < lastProgress + 5 && now - lastProgressAt < 100) return;
-                    lastProgress = pct;
-                    lastProgressAt = now;
-                    this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_PROGRESS', messageId, progress: pct });
-                });
+                const result = await withDeadline(
+                    this.transport?.startPhotoDownload(currentPhoto, sizeType, messageId, (pct: number) => {
+                        const now = Date.now();
+                        if (pct === lastProgress) return;
+                        if (pct < lastProgress + 5 && now - lastProgressAt < 100) return;
+                        lastProgress = pct;
+                        lastProgressAt = now;
+                        this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_PROGRESS', messageId, progress: pct });
+                    }) || Promise.resolve(null),
+                    Math.max(1000, deadline - Date.now()),
+                    'photo download deadline exceeded'
+                );
 
                 if (result?.bytes?.byteLength && result.mime) {
                     const ck2 = this.getPhotoCacheKey(currentPhoto, sizeType);
@@ -500,13 +526,23 @@ export class GramMediaRouter {
 
                 if (result?.fileRefExpired) {
                     log.warn('[gram-media] FILE_REFERENCE_EXPIRED, re-fetching message', messageId, 'attempt', attempt);
-                    const freshMsg = await this.refreshMessage(messageId);
+                    let freshMsg: MediaMessageLike | null | undefined;
+                    try {
+                        freshMsg = await withDeadline(this.refreshMessage(messageId), PHOTO_REFRESH_TIMEOUT_MS, 'photo message refresh exceeded');
+                    } catch (e: any) {
+                        log.error('[gram-media] photo message refresh failed for message', messageId, e?.message || e);
+                    }
+                    if (Date.now() >= deadline) {
+                        this.failPhotoDownload(messageId, sizeType);
+                        return;
+                    }
                     if (freshMsg?.media?.photo) {
                         currentPhoto = freshMsg.media.photo;
                         this.host.dispatch({ type: 'REFRESH_MESSAGE_PHOTO', messageId, photo: currentPhoto });
                         continue;
                     } else {
                         log.error('[gram-media] could not refresh photo for message', messageId);
+                        this.failPhotoDownload(messageId, sizeType);
                         return;
                     }
                 }
@@ -517,13 +553,23 @@ export class GramMediaRouter {
             } catch (err: any) {
                 if (err.message?.includes('FILE_REFERENCE_EXPIRED')) {
                     log.warn('[gram-media] FILE_REFERENCE_EXPIRED (catch), re-fetching message', messageId, 'attempt', attempt);
-                    const freshMsg = await this.refreshMessage(messageId);
+                    let freshMsg: MediaMessageLike | null | undefined;
+                    try {
+                        freshMsg = await withDeadline(this.refreshMessage(messageId), PHOTO_REFRESH_TIMEOUT_MS, 'photo message refresh exceeded');
+                    } catch (e: any) {
+                        log.error('[gram-media] photo message refresh failed for message', messageId, e?.message || e);
+                    }
+                    if (Date.now() >= deadline) {
+                        this.failPhotoDownload(messageId, sizeType);
+                        return;
+                    }
                     if (freshMsg?.media?.photo) {
                         currentPhoto = freshMsg.media.photo;
                         this.host.dispatch({ type: 'REFRESH_MESSAGE_PHOTO', messageId, photo: currentPhoto });
                         continue;
                     } else {
                         log.error('[gram-media] could not refresh photo for message', messageId);
+                        this.failPhotoDownload(messageId, sizeType);
                         return;
                     }
                 }
@@ -533,6 +579,13 @@ export class GramMediaRouter {
                 }
             }
         }
+        this.failPhotoDownload(messageId, sizeType);
+    }
+
+    private failPhotoDownload(messageId: number, sizeType: string): void {
+        if (this.debug) log.info('[gram-media] photo download FAILED, dispatching error', messageId, sizeType);
+        this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_FAILED', messageId, sizeType });
+        this.emitWindow('tg-photo-download-failed', { messageId, sizeType });
     }
 
     private isEmojiKey(s: string): boolean {
