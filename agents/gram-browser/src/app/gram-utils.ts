@@ -34,6 +34,8 @@ export async function loadMessageCache(s: GramState) {
       s.historyInitRef.current.add(peerKey);
       const positiveIds = msgs.filter(m => Number(m.id) > 0).map(m => Number(m.id));
       if (positiveIds.length > 0) s.maxFetchedIdRef.current.set(peerKey, Math.min(...positiveIds));
+      console.log('[loadMsgCache] peer=' + peerKey + ' count=' + msgs.length
+        + ' sample=' + JSON.stringify(msgs.slice(0, 3).map((mm: any) => ({ id: mm.id, msg: (mm.message || '').slice(0, 40), media: mm.media?._ }))));
     } catch {
       await dbDel(k);
     }

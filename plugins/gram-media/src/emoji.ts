@@ -1,4 +1,5 @@
 import type { GramMediaRouter } from './router.js';
+import type { EmojiKind } from './types.js';
 
 export interface EmojiPipeline {
     attach(w: Window): void;
@@ -8,7 +9,7 @@ export interface EmojiPipeline {
     onEmojiDownloadFailed(docId: string): void;
 }
 
-type EmojiDocKind = 'tgs' | 'video' | 'img';
+type EmojiDocKind = EmojiKind; // 'tgs' | 'video' | 'img' | null
 
 const EMOJI_MAX_ATTEMPTS = 5;
 
@@ -23,6 +24,9 @@ const CUSTOM_EMOJI_RPC_CONCURRENCY = 3;
 const ALT_RESOLVE_CONCURRENCY = 6;
 
 const normalizeEmoji = (e: string): string => e.replace(/[\uFE00-\uFE0F\u200D]/g, '');
+
+const DICE_SETS: string[] = ['🎲', '🎯', '🎳', '🎰', '🏀', '⚽', '🎱', '🏈', '⚾', '🎾', '🏏'];
+
 const isEmojiKey = (s: string): boolean => s.startsWith('emoji-') || s.startsWith('emojipack-');
 
 export class EmojiPipelineImpl implements EmojiPipeline {
@@ -34,6 +38,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private requestedEmojiDocIds = new Set<string>();
     private requestedEmojiAlts = new Set<string>();
     private announcedEmojiDocKinds = new Map<string, EmojiDocKind>();
+    private emojiDocKindsById = new Map<string, EmojiDocKind>();
     private emojiPickerCategories: Array<{ name: string; emojis: string[] }> = [];
     private emojiPickerKeywords: Array<{ keyword: string; emoticons: string[] }> = [];
     private emojiPickerKeywordsLoaded = false;
@@ -254,9 +259,14 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         if (docId == null) return;
         const kind = this.router.emojiKindFor((mime || 'application/octet-stream').toLowerCase());
         if (!kind) return;
-        const id = String(docId);
+        this.announceEmojiDocKind(String(docId), kind);
+    }
+
+    private announceEmojiDocKind(id: string, kind: EmojiDocKind): void {
+        if (!kind) return;
         if (this.announcedEmojiDocKinds.has(id) && this.announcedEmojiDocKinds.get(id) === kind) return;
         this.announcedEmojiDocKinds.set(id, kind);
+        this.emojiDocKindsById.set(id, kind);
         if (this.announcedEmojiDocKinds.size > 2048) {
             for (const k of this.announcedEmojiDocKinds.keys()) {
                 this.announcedEmojiDocKinds.delete(k);
@@ -385,6 +395,35 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         await Promise.all(workers);
     }
 
+    private async loadDiceSets(map: Record<string, any>): Promise<void> {
+        for (const emoji of DICE_SETS) {
+            const key = normalizeEmoji(emoji);
+            const prevId = map[key]?.id != null ? String(map[key].id) : null;
+            try {
+                const fs = await this.router.fetchStickerSet('dice-' + emoji, { _: 'inputStickerSetDice', emoticon: emoji });
+                if (!fs) continue;
+                const added = this.buildEmojiMapFromSet(fs, map);
+                let diceDoc: any = null;
+                if (Array.isArray(fs.documents)) {
+                    diceDoc = fs.documents.find((d: any) => {
+                        if (!d?.id) return false;
+                        const attrs = Array.isArray(d.attributes) ? d.attributes : [];
+                        const a = attrs.find((x: any) => x?._ === 'documentAttributeSticker' && typeof x.alt === 'string');
+                        return a && normalizeEmoji(a.alt) === key;
+                    }) || null;
+                }
+                if (diceDoc?.id) {
+                    map[key] = diceDoc;
+                    const newId = String(diceDoc.id);
+                    if (this.debug && prevId !== newId) console.log('[gram-media] dice set', emoji, 'override', prevId, '->', newId);
+                }
+                if (this.debug) console.log('[gram-media] dice set', emoji, 'docs =', Array.isArray(fs?.documents) ? fs.documents.length : 0, 'added =', added);
+            } catch (e: any) {
+                if (this.debug) console.log('[gram-media] dice set error:', e?.message, emoji);
+            }
+        }
+    }
+
     private onFetchEmojiStickers = async () => {
         if (this.emojiStickerDocs && Object.keys(this.emojiStickerDocs).length > 0) {
             this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
@@ -418,6 +457,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 console.error('[gram-media] extra emoji set error:', e?.message, inp);
             }
         }));
+        await this.loadDiceSets(map);
         this.emojiStickerDocs = map;
         if (this.emojiKeycapDocs.length > 0) {
             const kcKeys = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
@@ -439,6 +479,11 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.indexEmojiDocs();
         if (this.debug) {
             console.log('[gram-media] emoji stickers loaded, map size =', Object.keys(map).length, 'sample =', Object.keys(map).slice(0, 5).join(' '));
+            const probe = ['⚽', '🏀', '🎾', '🏈', '⚾', '🎱', '🎯', '🎰', '🎲', '🎳'];
+            console.log('[gram-media] emoji probe', probe.map((e) => {
+                const d = map[normalizeEmoji(e)];
+                return e + '->' + (d?.id ? String(d.id) + ':' + (d?.mime_type || '?') : '-');
+            }).join(' '));
             const kc = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '#️⃣', '*️⃣'];
             const rows = kc.map((e) => {
                 const d = map[normalizeEmoji(e)];
@@ -734,9 +779,10 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         for (const r of resolved) {
             const cachedUrl = this.router.getCachedEmojiUrl('emojipack-' + r.id);
             if (cachedUrl) {
-                this.notifyEmojiDocKind(r.id, r.doc.mime_type || '');
-                this.router.notifyEmojiUrlKind(cachedUrl, this.router.emojiKindFor(r.doc.mime_type || ''));
-                this.router.notifyEmojiUrl(r.id, cachedUrl, r.doc.mime_type || '');
+                const kind = this.emojiDocKindsById.get(r.id) ?? this.router.emojiKindFor((r.doc.mime_type || '').toLowerCase());
+                if (kind) this.announceEmojiDocKind(r.id, kind);
+                this.router.notifyEmojiUrlKind(cachedUrl, kind);
+                this.router.notifyEmojiUrl(r.id, cachedUrl, r.doc.mime_type || '', kind);
                 this.router.dispatchDocumentUrl('emojipack-' + r.id, cachedUrl);
             } else {
                 stillNeeded.push(r);
@@ -773,13 +819,12 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     markFailed();
                     return 'fail';
                 }
-                const url = mime === 'application/x-tgsticker'
-                    ? await this.router.tgsToJsonUrl(bytes)
-                    : this.router.bytesToBlobUrl(bytes, mime);
+                const { kind, url } = await this.router.emojiKindAndUrlFor(bytes, mime);
+                if (this.debug) console.log('[gram-media] emoji item OK', r.id, 'mime=' + mime, 'kind=' + (kind || '?'), 'size=' + bytes.byteLength);
                 this.router.setCachedEmojiUrl('emojipack-' + r.id, url);
-                this.notifyEmojiDocKind(r.id, mime);
-                this.router.notifyEmojiUrlKind(url, this.router.emojiKindFor(mime));
-                this.router.notifyEmojiUrl(r.id, url, mime);
+                this.announceEmojiDocKind(r.id, kind);
+                this.router.notifyEmojiUrlKind(url, kind);
+                this.router.notifyEmojiUrl(r.id, url, mime, kind);
                 this.router.dispatchDocumentUrl('emojipack-' + r.id, url, raw.cacheSource || undefined);
 
                 this.requestedEmojiDocIds.delete(r.id);
@@ -811,10 +856,10 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 const cachedUrl = this.router.getCachedEmojiUrl('emojipack-' + docId);
                 if (!cachedUrl) continue;
                 const doc = this.findEmojiDoc(docId);
-                const mime = (doc?.mime_type || 'application/octet-stream').toLowerCase();
-                this.notifyEmojiDocKind(docId, mime);
-                this.router.notifyEmojiUrlKind(cachedUrl, this.router.emojiKindFor(mime));
-                this.router.notifyEmojiUrl(docId, cachedUrl, mime);
+                const kind = this.emojiDocKindsById.get(docId) ?? this.router.emojiKindFor((doc?.mime_type || '').toLowerCase());
+                if (kind) this.announceEmojiDocKind(docId, kind);
+                this.router.notifyEmojiUrlKind(cachedUrl, kind);
+                this.router.notifyEmojiUrl(docId, cachedUrl, doc?.mime_type || '', kind);
                 this.router.dispatchDocumentUrl('emojipack-' + docId, cachedUrl);
             }
             return;
@@ -835,10 +880,10 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             const cachedUrl = this.router.getCachedEmojiUrl('emojipack-' + docId);
             if (!cachedUrl) continue;
             const doc = this.findEmojiDoc(docId);
-            const mime = (doc?.mime_type || 'application/octet-stream').toLowerCase();
-            this.notifyEmojiDocKind(docId, mime);
-            this.router.notifyEmojiUrlKind(cachedUrl, this.router.emojiKindFor(mime));
-            this.router.notifyEmojiUrl(docId, cachedUrl, mime);
+            const kind = this.emojiDocKindsById.get(docId) ?? this.router.emojiKindFor((doc?.mime_type || '').toLowerCase());
+            if (kind) this.announceEmojiDocKind(docId, kind);
+            this.router.notifyEmojiUrlKind(cachedUrl, kind);
+            this.router.notifyEmojiUrl(docId, cachedUrl, doc?.mime_type || '', kind);
             this.router.dispatchDocumentUrl('emojipack-' + docId, cachedUrl);
         }
     };

@@ -430,6 +430,23 @@ function isGiftMessage(action: any): boolean {
   return t.startsWith('messageActionGift');
 }
 
+function DiceBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {
+  const diceEmoji = m.media?.emoticon || m.media?.emoji || '🎲';
+  const diceValue = typeof m.media?.value === 'number' ? m.media.value : null;
+  return (
+    <div class="MessageBubble MessageBubble_emojiOnly">
+      <div class="MessageBubble__text">
+        <EmojiText text={diceEmoji} entities={undefined} documentUrls={{}} />
+      </div>
+      <div class="MessageBubble__meta">
+        {diceValue != null ? <span class="MessageBubble__dice-value">{diceValue}</span> : null}
+        <span class="MessageBubble__time">{timeStr}</span>
+        {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
+      </div>
+    </div>
+  );
+}
+
 function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, selfPeer, reactions, onReact, onOpenPhoto }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; selfPeer?: boolean; reactions?: MessageReaction[]; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
   const timeStr = formatMessageTime(m.date);
   const out = selfPeer ? true : m.out;
@@ -467,7 +484,9 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
         : null}
       {mediaType === 'sticker'
         ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} documentUrls={rowUrls} documentProgress={rowProgress} />
-        : mediaType === 'photo' || mediaType === 'image'
+        : mediaType === 'dice'
+          ? <DiceBubble m={m} timeStr={timeStr} out={out} status={status} />
+          : mediaType === 'photo' || mediaType === 'image'
           ? <PhotoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} cacheSource={photoSource} entities={m.entities} documentUrls={rowUrls} onOpenPhoto={onOpenPhoto} />
           : mediaType === 'video' && isAnimatedMedia(m.media)
             ? <MediaPlayer m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} />

@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 import { GramMediaRouter } from '../src/router.js';
 import {
-    makeHost, makeTransport, makeDocument, makeBytes,
+    makeHost, makeTransport, makeDocument, makeBytes, makeGzipMagicBytes,
     flushTicks, flushMicrotasks, lastOfType,
 } from './helpers.js';
 
@@ -23,6 +23,10 @@ function makeStickerSet(id: string, alt: string, docId: string): any {
         packs: [{ emoticon: alt, documents: [docId] }],
         documents: [d],
     };
+}
+
+function makeFtypMp4Bytes(): ArrayBuffer {
+    return new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32, 0x00, 0x00, 0x00, 0x00]).buffer as ArrayBuffer;
 }
 
 describe('GramMediaRouter emoji pipeline', () => {
@@ -58,6 +62,60 @@ describe('GramMediaRouter emoji pipeline', () => {
         const map = readyEvents[0]!.map as Record<string, string>;
         expect(map['❤']).toBe('1001');
         expect(map['👍']).toBe('1002');
+    });
+
+    test('loads dice sticker sets via inputStickerSetDice', async () => {
+        const diceCalls: Array<{ _: string; emoticon: string }> = [];
+        const genericSet = {
+            _: 'messages.stickerSet',
+            set: { id: '2', access_hash: '1' },
+            packs: [
+                { emoticon: '👍', documents: ['1002'] },
+                { emoticon: '⚽', documents: ['6001'] },
+            ],
+            documents: [
+                makeDocument({ id: '1002', mime_type: 'application/x-tgsticker', attributes: [{ _: 'documentAttributeSticker', alt: '👍' }] }),
+                makeDocument({ id: '6001', mime_type: 'application/x-tgsticker', attributes: [{ _: 'documentAttributeSticker', alt: '⚽' }] }),
+            ],
+        };
+        const transport = makeTransport({
+            callRpc: async (method, params) => {
+                if (method === 'messages.getStickerSet') {
+                    const set = params?.stickerset?._ || '';
+                    if (set === 'inputStickerSetDice') {
+                        diceCalls.push({ _: set, emoticon: params.stickerset.emoticon });
+                        return makeStickerSet('dice-' + params.stickerset.emoticon, params.stickerset.emoticon, '7' + params.stickerset.emoticon.codePointAt(0));
+                    }
+                    if (set === 'inputStickerSetAnimatedEmoji') return makeStickerSet('1', '❤', '1001');
+                    if (set === 'inputStickerSetEmojiGenericAnimations') return genericSet;
+                    if (set === 'inputStickerSetAnimatedEmojiAnimations') return makeStickerSet('3', '🔥', '1003');
+                    return { _: 'messages.stickerSet', set: {}, documents: [] };
+                }
+                if (method === 'messages.getEmojiStickers') return { sets: [], hash: 0 };
+                return {};
+            },
+        });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        const readyEvents: any[] = [];
+        window.addEventListener('tg-emoji-stickers-ready', (e) => readyEvents.push((e as CustomEvent).detail));
+
+        window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
+        await flushTicks();
+        await flushTicks();
+
+        expect(diceCalls.length).toBeGreaterThanOrEqual(11);
+        expect(diceCalls[0]).toEqual({ _: 'inputStickerSetDice', emoticon: '🎲' });
+        for (const c of diceCalls) {
+            expect(c.emoticon).toMatch(/^[\p{Extended_Pictographic}]+$/u);
+        }
+        const map = readyEvents[readyEvents.length - 1]!.map as Record<string, string>;
+        expect(map['🎯']).toBeTruthy();
+        expect(map['🏏']).toBeTruthy();
+        expect(map['⚽']).toBe('7' + '⚽'.codePointAt(0));
+        expect(map['⚽']).not.toBe('6001');
     });
 
     test('resolves custom emoji documents via RPC', async () => {
@@ -200,6 +258,50 @@ describe('GramMediaRouter emoji pipeline', () => {
         const byId = new Map(done.map((a) => [String(a.messageId), a.url]));
         expect(router.getCachedEmojiUrl('emojipack-8001')).toBe(byId.get('emojipack-8001'));
         expect(router.getCachedEmojiUrl('emojipack-8002')).toBe(byId.get('emojipack-8002'));
+    });
+
+    test('detects kind by bytes when mime does not identify the format', async () => {
+        const gzippedTgs = makeDocument({ id: '9101', mime_type: 'application/octet-stream' });
+        const mp4Hidden = makeDocument({ id: '9102', mime_type: 'application/octet-stream' });
+        const transport = makeTransport({
+            callRpc: async (method) => (method === 'messages.getCustomEmojiDocuments' ? [gzippedTgs, mp4Hidden] : {}),
+            downloadFiles: async (docs) => docs.map((d, i) => ({
+                index: i,
+                type: d.document.mime_type,
+                bytes: String(d.document.id) === '9101' ? makeGzipMagicBytes() : makeFtypMp4Bytes(),
+                cacheSource: 'home-server',
+            })),
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        const urlEvents: any[] = [];
+        window.addEventListener('tg-emoji-url', (e) => urlEvents.push((e as CustomEvent).detail));
+        const kindEvents: any[] = [];
+        window.addEventListener('tg-emoji-kind', (e) => kindEvents.push((e as CustomEvent).detail));
+
+        window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
+            detail: { items: [{ docId: '9101' }, { docId: '9102' }] },
+        }));
+        await flushTicks();
+        await flushTicks();
+        await flushTicks();
+        await flushTicks();
+
+        const done = actions.filter((a) => a.type === 'UPDATE_MESSAGE_DOCUMENT' && String(a.messageId).startsWith('emojipack-'));
+        expect(done).toHaveLength(2);
+        const byId = new Map(done.map((a) => [String(a.messageId), a.url]));
+        expect(router.getCachedEmojiUrl('emojipack-9101')).toBe(byId.get('emojipack-9101'));
+        expect(router.getCachedEmojiUrl('emojipack-9102')).toBe(byId.get('emojipack-9102'));
+
+        const urlByDoc = new Map(urlEvents.map((e) => [String(e.docId), e.kind]));
+        expect(urlByDoc.get('9101')).toBe('tgs');
+        expect(urlByDoc.get('9102')).toBe('video');
+
+        const kindByDoc = new Map(kindEvents.map((e) => [String(e.docId), e.kind]));
+        expect(kindByDoc.get('9101')).toBe('tgs');
+        expect(kindByDoc.get('9102')).toBe('video');
     });
 
     test('reschedules failed emoji downloads with backoff and resets after cap', async () => {

@@ -122,6 +122,15 @@ function appendMappedRuns(segments: EmojiSegment[], value: string): void {
   if (pos < value.length) segments.push({ type: 'text', value: value.slice(pos) });
 }
 
+export function getSingleRegularEmoji(text: string, entities?: any[]): string | undefined {
+  if (!text || (entities || []).some((e: any) => e?._ === 'messageEntityCustomEmoji')) return undefined;
+  const runs = matchEmojiRuns(text);
+  if (runs.length !== 1) return undefined;
+  const r = runs[0];
+  if (text.slice(0, r.start).trim() || text.slice(r.end).trim()) return undefined;
+  return r.emoji;
+}
+
 const KEYCAP_NORM_RE = /^[\d#*]\u20E3$/;
 
 function resolveEntityDocId(docId: string, fallbackAlt: string): string {
@@ -162,12 +171,16 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
     .sort((a: any, b: any) => a.offset - b.offset);
   const emojiIdsKey = emojiEntities.map((e: any) => String(e.document_id)).join(',');
 
+  const singleEmoji = getSingleRegularEmoji(text, entities);
   const [mapVersion, setMapVersion] = useState(0);
   useEffect(() => {
     ensureEmojiStickers();
     const customIds = new Set(emojiEntities.map((e: any) => String(e.document_id)));
     const runAlts = new Set<string>();
     for (const r of matchEmojiRuns(text)) runAlts.add(normalizeEmoji(r.emoji));
+    for (const r of matchEmojiRuns(text)) {
+      if (!getEmojiDocId(r.emoji)) requestEmojiDownload(undefined, r.emoji, 1);
+    }
 
     return subscribeEmojiMap((changed) => {
       if (!changed) {
@@ -178,6 +191,11 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
     });
   }, [emojiIdsKey]);
 
+  useEffect(() => {
+    if (!singleEmoji || getEmojiDocId(singleEmoji)) return;
+    requestEmojiDownload(undefined, singleEmoji, 1);
+  }, [singleEmoji]);
+
   const segsKey = text + '\u0001' + emojiIdsKey + '\u0001' + mapVersion;
   const segsRef = useRef<{ key: string; segments: EmojiSegment[] } | null>(null);
   if (!segsRef.current || segsRef.current.key !== segsKey) {
@@ -186,10 +204,13 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
   const segments = segsRef.current.segments;
 
   const EMOJI_SIZE = 30;
+  const SINGLE_EMOJI_SIZE = 96;
+  const size = singleEmoji ? SINGLE_EMOJI_SIZE : EMOJI_SIZE;
   const hasEmoji = segments.some((s) => s.type === 'emoji');
+  console.log('[emoji-text]', JSON.stringify({ text, singleEmoji, size, mapV: mapVersion, segs: segments.map((s) => s.type + ':' + (s.docId || s.value || '')) }));
   if (!hasEmoji) {
-    return <StaticEmojiText value={text} size={EMOJI_SIZE} />;
+    return <StaticEmojiText value={text} size={size} />;
   }
 
-  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} size={EMOJI_SIZE} />;
+  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} size={size} />;
 }

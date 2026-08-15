@@ -217,6 +217,29 @@ export class GramMediaRouter {
         return this.trackBlobUrl(URL.createObjectURL(new Blob([bytes], { type: mime })));
     }
 
+    async emojiKindAndUrlFor(bytes: ArrayBuffer, mime: string): Promise<{ kind: EmojiKind; url: string }> {
+        const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        const head = u8.length >= 12 ? new TextDecoder('latin1').decode(u8.slice(0, 12)) : '';
+        if (u8.length >= 2 && u8[0] === 0x1f && u8[1] === 0x8b) {
+            return { kind: 'tgs', url: await this.tgsToJsonUrl(u8) };
+        }
+        if (head.startsWith('{')) {
+            return { kind: 'tgs', url: await this.tgsToJsonUrl(u8) };
+        }
+        const brand = head.slice(4, 8);
+        if (brand === 'ftyp' || brand === 'moov' || brand === 'mdat' || brand === 'styp') {
+            return { kind: 'video', url: this.bytesToBlobUrl(bytes, 'video/mp4') };
+        }
+        if (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') {
+            return { kind: 'img', url: this.bytesToBlobUrl(bytes, 'image/webp') };
+        }
+        const m = (mime || '').toLowerCase();
+        if (m.startsWith('video/')) return { kind: 'video', url: this.bytesToBlobUrl(bytes, m) };
+        if (m.startsWith('image/')) return { kind: 'img', url: this.bytesToBlobUrl(bytes, m) };
+        if (m === 'application/x-tgsticker') return { kind: 'tgs', url: await this.tgsToJsonUrl(u8) };
+        return { kind: null, url: this.bytesToBlobUrl(bytes, m || 'application/octet-stream') };
+    }
+
     toArrayBuffer(b: string | ArrayBuffer | Uint8Array): ArrayBuffer {
         if (ArrayBuffer.isView(b)) return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
         if (b instanceof ArrayBuffer) return b;
@@ -240,11 +263,12 @@ export class GramMediaRouter {
         this.emitWindow('tg-emoji-url-kind', { url, kind });
     }
 
-    notifyEmojiUrl(docId: string, url: string, mime: string): void {
+    notifyEmojiUrl(docId: string, url: string, mime: string, kindOverride?: EmojiKind): void {
         if (!docId || !url) return;
+        const kind = kindOverride !== undefined ? kindOverride : this.emojiKindFor(mime);
         const json = this.tgsJsonByUrl.get(url);
         this.emitWindow('tg-emoji-url', {
-            docId: String(docId), url, kind: this.emojiKindFor(mime), json,
+            docId: String(docId), url, kind, json,
         });
     }
 

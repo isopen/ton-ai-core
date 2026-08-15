@@ -66,7 +66,14 @@ export function AnimatedSticker({
       old.removeView(viewId);
     }
     urlRef.current = tgsUrl;
-    const r = initAnimatedRenderer(tgsUrl, container, renderId, { size, noLoop: !loop, quality, isLowPriority, coords }, viewId, onLoad, onError);
+    console.log('[ani-sticker] init', renderId, 'size=' + size, 'shared=' + !!sharedCanvas, 'coords=' + (coords ? coords.x + ',' + coords.y : 'n'), 'url=' + tgsUrl.slice(0, 60));
+    const r = initAnimatedRenderer(tgsUrl, container, renderId, { size, noLoop: !loop, quality, isLowPriority, coords }, viewId, (() => {
+      console.log('[ani-sticker] onLoad', renderId);
+      onLoad?.();
+    }), (() => {
+      console.log('[ani-sticker] onError', renderId);
+      onError?.();
+    }));
     rendererRef.current = r;
     setRenderer(r);
   }, [tgsUrl, container, renderId, size, viewId]);

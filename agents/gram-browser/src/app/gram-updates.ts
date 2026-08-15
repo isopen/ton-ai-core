@@ -138,7 +138,11 @@ export function createHandleUpdate(s: GramState) {
           }
         };
         const pushMsg = u.message || (u.messages?.[0]);
-        if (pushMsg) processNewMsg(pushMsg);
+        if (pushMsg) {
+          console.log('[upd] cid=' + constructorId + ' type=' + (pushMsg._ || '') + ' id=' + (pushMsg.id ?? pushMsg.pts ?? '')
+            + ' msg=' + JSON.stringify((pushMsg.message || '').slice(0, 40)) + ' media=' + (pushMsg.media?._ || '-') + ' ents=' + (pushMsg.entities || []).length);
+          processNewMsg(pushMsg);
+        }
         if (u._ === 'updateShort' && u.update?._ === 'updateNewMessage') processNewMsg(u.update.message);
         if (u._ === 'updateShort' && u.update?._ === 'updateNewChannelMessage') processNewMsg(u.update.message);
         if (u._ === 'updateShort' && u.update?._ === 'updateEditMessage') processNewMsg(u.update.message);

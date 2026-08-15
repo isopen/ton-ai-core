@@ -1,4 +1,4 @@
-import { loadTgs, renderFrame } from '@ton-ai/tgs';
+import { loadTgs, renderFrame, hasAnimatedProperties } from '@ton-ai/tgs';
 import type { ParsedAnimation } from '@ton-ai/tgs';
 import type { AnimatedRendererParams, AnimatedRendererView, IAnimatedRenderer } from './types.js';
 import { isPageFocused } from './page-focus.js';
@@ -46,6 +46,8 @@ export class MainThreadRenderer implements IAnimatedRenderer {
   private imgSize = 0;
 
   private framesCount = 1;
+
+  private isStatic = false;
 
   private isPlayingFlag = false;
 
@@ -293,7 +295,8 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       this.anim = ct.startsWith('text/') || ct.includes('json')
         ? await loadTgs(await resp.text())
         : await loadTgs(new Uint8Array(await resp.arrayBuffer()));
-      this.framesCount = Math.max(1, this.anim.outFrame - this.anim.inFrame);
+      this.isStatic = !hasAnimatedProperties(this.anim);
+      this.framesCount = this.isStatic ? 1 : Math.max(1, this.anim.outFrame - this.anim.inFrame);
       if (this.isDestroyed) return;
       if (this.isPlayingFlag) {
         this.startLoop();
@@ -357,7 +360,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     const small = this.params.size <= 48;
     if (small && now - this.lastDraw < 33.33) return;
     const anim = this.anim;
-    const span = anim.outFrame - anim.inFrame;
+    const span = this.isStatic ? 0 : anim.outFrame - anim.inFrame;
     const views = Array.from(this.views.entries());
     const total = views.length;
     if (total === 0) return;
@@ -368,6 +371,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       const idx = (this.cursor + k) % total;
       const [viewId, view] = views[idx];
       if (view.isPaused) continue;
+      if (this.isStatic && view.isLoaded) continue;
       if (!tryAcquireDrawCall()) break;
       let startT = this.startTimes.get(viewId) || 0;
       if (!startT) {
@@ -401,6 +405,9 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       this.lastDraw = now;
       this.lastPaintAt = now;
       this.heartbeatFrozenStalls = 0;
+    }
+    if (this.isStatic && views.every(([, view]) => view.isLoaded)) {
+      this.stopLoop();
     }
   }
 }

@@ -1,4 +1,4 @@
-import { loadTgs, renderFrame, inflateTgs } from '@ton-ai/tgs';
+import { loadTgs, renderFrame, inflateTgs, hasAnimatedProperties } from '@ton-ai/tgs';
 import type { ParsedAnimation } from '@ton-ai/tgs';
 
 const ctx = self as unknown as Worker;
@@ -145,12 +145,13 @@ async function load(renderId: string, tgsUrl: string, tgsJson: string | undefine
     rawJsonByAnim.set(anim, json);
     const maxFps = isLowPriority ? 30 : 60;
     const reduceFactor = anim.fps % maxFps === 0 ? anim.fps / maxFps : 1;
+    const isStatic = !hasAnimatedProperties(anim);
     const entry: WorkerAnim = {
       anim,
       imgSize,
       reduceFactor,
       msPerFrame: 1000 / (anim.fps / reduceFactor),
-      framesCount: Math.max(1, Math.ceil((anim.outFrame - anim.inFrame) / reduceFactor)),
+      framesCount: isStatic ? 1 : Math.max(1, Math.ceil((anim.outFrame - anim.inFrame) / reduceFactor)),
       baseFrame: anim.inFrame,
     };
     if (generation(renderId) !== gen) {

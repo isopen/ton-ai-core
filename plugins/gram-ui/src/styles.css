@@ -1598,6 +1598,16 @@ body {
   padding: 2px 6px 4px;
 }
 
+.MessageBubble__dice-value {
+  font-size: 13px;
+  font-weight: 600;
+  margin-right: 6px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.08);
+  line-height: 16px;
+}
+
 .Checkmark {
   font-size: 14px;
   line-height: 1;

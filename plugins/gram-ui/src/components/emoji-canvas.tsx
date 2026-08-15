@@ -2,6 +2,9 @@ import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedSticker } from './animated-sticker.js';
 import { getEmojiAlt, matchEmojiRuns, requestEmojiDownload } from './emoji-store.js';
+import { inflateTgs } from '@ton-ai/tgs';
+
+const EMOJI_GZIP_MAGIC: [number, number] = [0x1f, 0x8b];
 
 export interface EmojiData {
   kind: 'tgs' | 'img' | 'video';
@@ -48,6 +51,13 @@ function releaseFetch(): void {
 export async function fetchEmojiData(url: string): Promise<EmojiData> {
   const cached = emojiDataCache.get(url);
   if (cached) return cached;
+  const knownKind = urlKinds.get(url);
+  if (knownKind === 'video') {
+    const data: EmojiData = { kind: 'video', value: url };
+    emojiDataCache.delete(url);
+    cacheEmojiData(url, data);
+    return data;
+  }
   await acquireFetch();
   try {
     const resp = await fetch(url);
@@ -58,8 +68,37 @@ export async function fetchEmojiData(url: string): Promise<EmojiData> {
       cacheEmojiData(url, data);
       return data;
     }
-    const text = await resp.text();
-    const data: EmojiData = text.trim().startsWith('{') ? { kind: 'tgs', value: text } : { kind: 'img', value: url };
+    if (ct.startsWith('text/') || ct.includes('json')) {
+      const text = await resp.text();
+      const data: EmojiData = text.trim().startsWith('{') ? { kind: 'tgs', value: text } : { kind: 'img', value: url };
+      emojiDataCache.delete(url);
+      cacheEmojiData(url, data);
+      return data;
+    }
+    const buf = await resp.arrayBuffer();
+    const u8 = new Uint8Array(buf);
+    if (u8.length >= 2 && u8[0] === EMOJI_GZIP_MAGIC[0] && u8[1] === EMOJI_GZIP_MAGIC[1]) {
+      const text = await inflateTgs(u8);
+      const data: EmojiData = text.trim().startsWith('{') ? { kind: 'tgs', value: text } : { kind: 'img', value: url };
+      emojiDataCache.delete(url);
+      cacheEmojiData(url, data);
+      return data;
+    }
+    const ascii = new TextDecoder('latin1').decode(u8.slice(0, Math.min(u8.length, 12)));
+    if (ascii.trim().startsWith('{')) {
+      const data: EmojiData = { kind: 'tgs', value: new TextDecoder().decode(u8) };
+      emojiDataCache.delete(url);
+      cacheEmojiData(url, data);
+      return data;
+    }
+    const brand = ascii.slice(4, 8);
+    if (brand === 'ftyp' || brand === 'moov' || brand === 'mdat') {
+      const data: EmojiData = { kind: 'video', value: url };
+      emojiDataCache.delete(url);
+      cacheEmojiData(url, data);
+      return data;
+    }
+    const data: EmojiData = { kind: 'img', value: url };
     emojiDataCache.delete(url);
     cacheEmojiData(url, data);
     return data;
@@ -387,6 +426,28 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
     setStuckDocs((prev) => (prev[docId] ? { ...prev, [docId]: false } : prev));
   };
   const tgsPaintable = (docId: string) => loadedDocs[docId] || !stuckDocs[docId];
+
+  useEffect(() => {
+    if (!hasEmoji) return;
+    const rows = emojiSegs.map((s) => {
+      const did = s.docId;
+      const url = urlFor(did);
+      const k = kinds[did] || '-';
+      return {
+        docId: did,
+        u: url ? 'y' : 'n',
+        k,
+        fail: !!failedDocs[did],
+        stuck: !!stuckDocs[did],
+        ld: !!loadedDocs[did],
+        vis: (inView || everShown) ? 'y' : 'n',
+        paint: k === 'tgs' && !!url && !failedDocs[did] && (loadedDocs[did] || !stuckDocs[did]),
+        slots: emojiSegs.length,
+        shared,
+      };
+    });
+    console.log('[emoji-slot] size=' + size, JSON.stringify(rows));
+  }, [slotsKey, urlsKey, kinds, failedDocs, stuckDocs, loadedDocs, inView, everShown, shared, size, hasEmoji]);
 
   useEffect(() => {
     if (!hasEmoji || !inView) return;
