@@ -302,7 +302,7 @@ function renderIdFor(docId: string, size: number): string {
   return 'emojipack-' + docId + ':' + size;
 }
 
-export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: EmojiSegment[]; documentUrls: Record<string, string>; size?: number }) {
+export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = false }: { segments: EmojiSegment[]; documentUrls: Record<string, string>; size?: number; singleLine?: boolean }) {
   const emojiSegs: Array<{ docId: string; value?: string; custom?: boolean }> = [];
   for (const s of segments) {
     if (s.type === 'emoji' && s.docId) emojiSegs.push({ docId: s.docId, value: s.value, custom: s.custom });
@@ -601,7 +601,7 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
   let emojiIdx = -1;
 
   return (
-    <div ref={wrapRef} class="tgui-emoji-canvas-wrap" style="position:relative;display:inline-block;max-width:100%;vertical-align:top">
+    <div ref={wrapRef} class="tgui-emoji-canvas-wrap" style={singleLine ? 'position:relative;display:inline-block;max-width:none;white-space:nowrap;vertical-align:top' : 'position:relative;display:inline-block;max-width:100%;vertical-align:top'}>
       {segments.map((s: EmojiSegment, i: number) => {
         if (s.type === 'text') return <StaticEmojiText key={s.type + ':' + s.value + ':' + i} value={s.value || ''} size={size} />;
         emojiIdx++;

@@ -280,5 +280,5 @@ export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EM
     return <StaticEmojiText value={text} size={size} />;
   }
 
-  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} size={size} />;
+  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} size={size} singleLine={singleLine} />;
 }

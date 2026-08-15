@@ -4,6 +4,7 @@ import { ListItem } from '../primitives/list-item.js';
 import { Text } from '../primitives/text.js';
 import { Badge } from '../primitives/badge.js';
 import { TypingIndicator } from './typing-indicator.js';
+import { EmojiText } from './emoji-text.js';
 import type { Dialog } from '../types.js';
 import { getPeerName, formatDialogDate, getInitials } from '../utils.js';
 
@@ -45,8 +46,8 @@ export function DialogItem(props: DialogItemProps) {
       collapsed={collapsed}
       onClick={onClick}
     >
-      <Text variant="label">{getPeerName(d.peer, selfUserId)}</Text>
-      {typingText ? <TypingIndicator text={typingText} /> : <Text variant="desc">{d.lastMsg || ''}</Text>}
+      <span class="Text Text_variant_label"><EmojiText text={getPeerName(d.peer, selfUserId)} documentUrls={{}} inlineSize={20} singleLine /></span>
+      {typingText ? <TypingIndicator text={typingText} /> : <span class="Text Text_variant_desc"><EmojiText text={d.lastMsg || ''} documentUrls={{}} inlineSize={17} singleLine /></span>}
     </ListItem>
   );
 }
