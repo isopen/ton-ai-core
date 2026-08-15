@@ -148,4 +148,34 @@ describe('hasAnimatedProperties', () => {
         }));
         expect(hasAnimatedProperties(anim)).toBe(true);
     });
+});describe('hasAnimatedProperties edge cases', () => {
+    it('is false when the walk detects a circular reference', () => {
+        const anim = parseTgs(tgs({
+            layers: [
+                {
+                    ind: 0, ty: 4, ip: 0, op: 180, ks: staticKs,
+                    shapes: [
+                        { ty: 'gr', it: [{ ty: 'rc', p: { a: 0, k: [0, 0] }, s: { a: 0, k: [10, 10] }, r: { a: 0, k: 0 } }] },
+                    ],
+                },
+            ],
+        }));
+        anim.layers[0].shapes = [anim.layers[0]] as any;
+        expect(hasAnimatedProperties(anim)).toBe(false);
+    });
+
+    it('is false when a layer entry is undefined', () => {
+        expect(hasAnimatedProperties({ layers: [undefined], assets: [] } as any)).toBe(false);
+    });
+
+    it('is true for animation inside asset layers via a hand-built animation', () => {
+        const anim: any = {
+            layers: [],
+            assets: [{
+                id: 'a1',
+                layers: [{ ks: { o: { animated: true, keyframes: [{ t: 0, value: 100, endFrame: 1 }] } } }],
+            }],
+        };
+        expect(hasAnimatedProperties(anim)).toBe(true);
+    });
 });

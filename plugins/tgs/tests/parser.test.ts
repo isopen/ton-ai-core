@@ -850,3 +850,38 @@ describe('frameAtPos', () => {
         expect(frameAtPos(anim, 5)).toBe(180);
     });
 });
+
+describe('parseShape extra types', () => {
+    it('parses standalone rounded-corner shapes (rd)', () => {
+        const anim = parseTgs(tgs({
+            layers: [{
+                ind: 0,
+                ty: 4,
+                ks: {},
+                shapes: [
+                    { ty: 'rd', r: { a: 0, k: 5 } },
+                    { ty: 'rc', p: { a: 0, k: [0, 0] }, s: { a: 0, k: [50, 50] } },
+                ],
+            }],
+        }));
+        const [corner] = anim.layers[0].shapes!;
+        expect(corner.type).toBe('roundedCorner');
+        expect(corner.radius!.value).toBe(5);
+    });
+    it('parses merge shapes (mm) with a merge mode', () => {
+        const anim = parseTgs(tgs({
+            layers: [{
+                ind: 0,
+                ty: 4,
+                ks: {},
+                shapes: [
+                    { ty: 'mm', mm: 2 },
+                    { ty: 'rc', p: { a: 0, k: [0, 0] }, s: { a: 0, k: [50, 50] } },
+                ],
+            }],
+        }));
+        const [merge] = anim.layers[0].shapes!;
+        expect(merge.type).toBe('merge');
+        expect(merge.mergeMode).toBe(2);
+    });
+});
