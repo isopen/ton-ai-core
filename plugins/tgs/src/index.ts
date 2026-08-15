@@ -18,6 +18,7 @@ export {
     parseTgs, configureModelCacheSize, layerInfo,
 } from './parser.js';
 export { interpolateKeyframes, lerpValue, parseValue } from './keyframes.js';
+export { hasAnimatedProperties } from './static-check.js';
 export { setValue, matchKeyPath, getOverride, Property } from './keypath.js';
 export { CubicBezier, buildEasing } from './easing.js';
 export { bezierLength, bezierPointAt, bezierTAtLength, bezierSplit } from './bezier.js';
