@@ -120,6 +120,28 @@ describe('parseTgs', () => {
         expect(transform.type).toBe('transform');
         expect(transform.position!.value).toEqual([10, 10]);
     });
+    it('parses rect/ellipse direction and the rd rounded-corner attachment', () => {
+        const anim = parseTgs(tgs({
+            layers: [{
+                ind: 0,
+                ty: 4,
+                ks: {},
+                shapes: [
+                    { ty: 'rc', p: { a: 0, k: [0, 0] }, s: { a: 0, k: [100, 50] }, d: 3, rd: { a: 0, k: 8 } },
+                    { ty: 'el', p: { a: 0, k: [0, 0] }, s: { a: 0, k: [20, 20] }, d: 1 },
+                    { ty: 'rc', p: { a: 0, k: [0, 0] }, s: { a: 0, k: [30, 30] } },
+                ],
+            }],
+        }));
+        const [rect, ellipse, plainRect] = anim.layers[0].shapes!;
+        expect(rect.direction).toBe(3);
+        expect(rect.rd).toBeDefined();
+        expect(rect.rd!.type).toBe('roundedCorner');
+        expect(rect.rd!.radius!.value).toBe(8);
+        expect(ellipse.direction).toBe(1);
+        expect(plainRect.direction).toBeUndefined();
+        expect(plainRect.rd).toBeUndefined();
+    });
     it('parses path vertices from ks', () => {
         const anim = parseTgs(tgs({
             layers: [{
@@ -157,7 +179,7 @@ describe('parseTgs', () => {
         const trim = anim.layers[0].shapes![0];
         expect(trim.type).toBe('trim');
         expect(trim.start!.animated).toBe(true);
-        expect(trim.start!.keyframes).toHaveLength(1);
+        expect(trim.start!.keyframes).toHaveLength(2);
         expect(trim.end!.value).toBe(100);
         expect(trim.trimMode).toBe('simultaneously');
         expect(interpolateKeyframes(trim.start!, 30)).toEqual([50]);
@@ -363,7 +385,7 @@ describe('parseTgs', () => {
         expect(interpolateKeyframes(start, 60)).toEqual([100]);
         expect(interpolateKeyframes(start, 120)).toEqual([100]);
     });
-    it('discards intermediate keyframes without i/o tangents (rlottie)', () => {
+    it('keeps intermediate keyframes without i/o tangents and interpolates them linearly', () => {
         const anim = parseTgs(tgs({
             layers: [{
                 ind: 0,
@@ -383,7 +405,7 @@ describe('parseTgs', () => {
             }],
         }));
         const start = anim.layers[0].shapes![0].start!;
-        expect(start.keyframes).toHaveLength(2);
+        expect(start.keyframes).toHaveLength(3);
         expect(interpolateKeyframes(start, 30)).toEqual([50]);
         expect(interpolateKeyframes(start, 45)).toEqual([75]);
         expect(interpolateKeyframes(start, 60)).toEqual([100]);
@@ -450,7 +472,48 @@ describe('parseTgs', () => {
         expect(grad.highlightAngle!.value).toBe(90);
         expect(grad.colorPoints).toBe(2);
     });
-    it('maps mask mode f to difference', () => {
+    it('parses split-dimension positions (p.s = true, x/y keyframes)', () => {
+        const anim = parseTgs(tgs({
+            layers: [{
+                ind: 0,
+                ty: 4,
+                ks: {
+                    p: {
+                        s: true,
+                        x: { a: 1, k: [{ t: 0, s: [50] }, { t: 30, s: [50] }, { t: 60, s: [50] }] },
+                        y: { a: 1, k: [{ t: 0, s: [50] }, { t: 30, s: [70] }, { t: 60, s: [50] }] },
+                    },
+                },
+            }],
+        }));
+        const p = anim.layers[0].transform.position;
+        expect(p.animated).toBe(false);
+        expect(p.x).toBeDefined();
+        expect(p.y).toBeDefined();
+        expect(interpolateKeyframes(p, 0)).toEqual([50, 50]);
+        expect(interpolateKeyframes(p, 15)).toEqual([50, 60]);
+        expect(interpolateKeyframes(p, 30)).toEqual([50, 70]);
+        expect(interpolateKeyframes(p, 59)).toEqual([50, 50.66666666666667]);
+    });
+    it('parses linear position keyframes without i/o tangents as animated', () => {
+        const anim = parseTgs(tgs({
+            layers: [{
+                ind: 0,
+                ty: 4,
+                ks: {
+                    p: { a: 1, k: [{ t: 0, s: [50, 50] }, { t: 30, s: [50, 70] }, { t: 60, s: [50, 50] }] },
+                },
+            }],
+        }));
+        const p = anim.layers[0].transform.position;
+        expect(p.animated).toBe(true);
+        expect(p.keyframes).toHaveLength(3);
+        expect(interpolateKeyframes(p, 0)).toEqual([50, 50]);
+        expect(interpolateKeyframes(p, 15)).toEqual([50, 60]);
+        expect(interpolateKeyframes(p, 30)).toEqual([50, 70]);
+        expect(interpolateKeyframes(p, 59)).toEqual([50, 50.66666666666667]);
+    });
+    it('parses mask mode f to difference', () => {
         const anim = parseTgs(tgs({
             layers: [{
                 ind: 0,

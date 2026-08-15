@@ -111,6 +111,7 @@ function parseShape(s: TgsShape): ParsedShape | undefined {
     if (type === 'ellipse') {
         if (s.p) result.position = parseValue(s.p);
         if (s.s) result.size = parseValue(s.s);
+        if (s.d != null && typeof s.d === 'number') result.direction = s.d;
         return result;
     }
 
@@ -118,6 +119,8 @@ function parseShape(s: TgsShape): ParsedShape | undefined {
         if (s.p) result.position = parseValue(s.p);
         if (s.s) result.size = parseValue(s.s);
         if (s.r) result.radius = parseValue(s.r);
+        if (s.d != null && typeof s.d === 'number') result.direction = s.d;
+        if (s.rd) result.rd = { type: 'roundedCorner', radius: parseValue(s.rd) };
         return result;
     }
 

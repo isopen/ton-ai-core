@@ -364,6 +364,8 @@ export interface ParsedShape {
     size?: ParsedProperty;
     radius?: ParsedProperty;
     roundness?: ParsedProperty;
+    direction?: number;
+    rd?: ParsedShape;
     color?: ParsedProperty;
     strokeWidth?: ParsedProperty;
     lineCap?: number;

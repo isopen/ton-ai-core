@@ -18,6 +18,15 @@ class MockCtx {
     fills: string[] = [];
     strokes: string[] = [];
     dashes: number[][] = [];
+    dashOffsets: number[] = [];
+    private _lineDashOffset = 0;
+    get lineDashOffset() {
+        return this._lineDashOffset;
+    }
+    set lineDashOffset(v: number) {
+        this._lineDashOffset = v;
+        this.dashOffsets.push(v);
+    }
     gradients: MockGradient[] = [];
     textFills: Array<{ text: string; x: number; y: number }> = [];
     textStrokes: Array<{ text: string; x: number; y: number }> = [];
@@ -243,6 +252,24 @@ describe('renderFrame', () => {
         expect(path[0]).toBe('M0,-30');
         expect(path.filter(p => p.startsWith('C'))).toHaveLength(4);
     });
+    it('reverses rect and ellipse paths for counter-clockwise direction (d:3)', () => {
+        const RECT_CCW = { ty: 'rc', p: { a: 0, k: [0, 0] }, s: { a: 0, k: [100, 100] }, r: { a: 0, k: 0 }, d: 3 };
+        const ELLIPSE_CCW = { ty: 'el', p: { a: 0, k: [0, 0] }, s: { a: 0, k: [100, 60] }, d: 3 };
+        const rect = render({ layers: [shapeLayer(0, [RECT_CCW, FILL_RED])] });
+        expect(rect.ctx.pathsAtFill[0]).toEqual([
+            'M-50,-50',
+            'C-50,-50,-50,50,-50,50',
+            'C-50,50,50,50,50,50',
+            'C50,50,50,-50,50,-50',
+            'C50,-50,-50,-50,-50,-50',
+            'Z',
+        ]);
+        const ellipse = render({ layers: [shapeLayer(0, [ELLIPSE_CCW, FILL_RED])] });
+        const pts = ellipse.ctx.pathsAtFill[0];
+        expect(pts[0]).toBe('M-50,0');
+        expect(pts[1].split(',').slice(4).join(',')).toBe('0,30');
+        expect(pts[pts.length - 1]).toBe('Z');
+    });
     it('applies the layer position transform to path points', () => {
         const c = render({ layers: [shapeLayer(0, [RECT, FILL_RED], { p: { a: 0, k: [10, 20] } })] });
         expect(c.ctx.pathsAtFill[0][0]).toBe('M60,-30');
@@ -298,8 +325,11 @@ describe('renderFrame', () => {
         expect(c.ctx.lineWidth).toBeCloseTo(5, 4);
         expect(c.ctx.lineCap).toBe('round');
         expect(c.ctx.lineJoin).toBe('round');
+        // rlottie Dash::getDashInfo: for an even-sized dash list the last
+        // entry is treated as the offset and the missing gap repeats the dash.
         expect(c.ctx.dashes[0][0]).toBeCloseTo(4, 4);
-        expect(c.ctx.dashes[0][1]).toBeCloseTo(2, 4);
+        expect(c.ctx.dashes[0][1]).toBeCloseTo(4, 4);
+        expect(c.ctx.dashOffsets[0]).toBeCloseTo(2, 4);
     });
     it('draws paints in reverse order (later paints first)', () => {
         const c = render({ layers: [shapeLayer(0, [RECT, FILL_RED, FILL_BLUE])] });

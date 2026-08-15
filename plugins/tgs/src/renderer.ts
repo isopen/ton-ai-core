@@ -1,5 +1,6 @@
 import { interpolateKeyframes } from './keyframes.js';
-import { bezierLength, bezierSplit, bezierTAtLength } from './bezier.js';
+import { bezierLength, bezierSplit, bezierTAtLength, type CubicBezierSeg } from './bezier.js';
+import { buildEasing, easingValue } from './easing.js';
 import type {
     ParsedAnimation, ParsedLayer, ParsedShape, ParsedAsset, ParsedTransform, ParsedProperty, ParsedText, TextKeyframe,
 } from './types.js';
@@ -9,6 +10,7 @@ const TGS_DEBUG = false;
 
 const EPSILON = 0.000001;
 const DASH_TOLERANCE = 0.1;
+const DASH_ITER_CAP = 10000;
 const SQRT_2 = 1.41421;
 const MAX_PARENT_DEPTH = 64;
 
@@ -85,9 +87,70 @@ function matScaleOf(m: Mat3): number {
     return Math.sqrt(dx * dx + dy * dy) / 2;
 }
 
-function matFromTransform(tr: any, frame: number): Mat3 {
+function clamp01(v: number): number {
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+// rlottie KeyFrames<Position>::angle(frameNo): 0 outside the animated range
+// or without spatial tangents; otherwise the tangent angle (degrees) of the
+// interpolated bezier at the eased progress, via VBezier::angleAt.
+function positionAngle(prop: any, frame: number): number {
+    if (!prop || !prop.animated || !prop.keyframes || prop.keyframes.length === 0) return 0;
+    const kfs = prop.keyframes;
+    const first = kfs[0];
+    const last = kfs[kfs.length - 1];
+    if (frame <= first.t) return 0;
+    const lastEnd = last.endFrame ?? last.t;
+    if (frame >= lastEnd) return 0;
+
+    let lo = 0;
+    let hi = kfs.length - 1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const kf = kfs[mid];
+        const next = kfs[mid + 1];
+        const end = kf.endFrame ?? (next ? next.t : kf.t);
+        if (frame < kf.t) {
+            hi = mid - 1;
+        } else if (frame >= end) {
+            lo = mid + 1;
+        } else {
+            if (!kf.to || !kf.ti) return 0;
+            const start = Array.isArray(kf.s) ? kf.s : undefined;
+            const endVal = Array.isArray(kf.e) ? kf.e : undefined;
+            if (!start || !endVal) return 0;
+            const duration = Math.max(end - kf.t, 1e-6);
+            let progress = clamp01((frame - kf.t) / duration);
+            let easing = kf.easing;
+            if (!easing && (kf.o || kf.i)) easing = buildEasing(kf.o, kf.i);
+            if (easing) progress = easingValue(easing, progress);
+            const seg: CubicBezierSeg = {
+                p0: [start[0], start[1]],
+                p1: [start[0] + kf.to[0], start[1] + kf.to[1]],
+                p2: [endVal[0] + kf.ti[0], endVal[1] + kf.ti[1]],
+                p3: [endVal[0], endVal[1]],
+            };
+            const len = bezierLength(seg);
+            if (len < 1e-6) return 0;
+            // VBezier::derivative (the 3x factor cancels in atan2)
+            const t = bezierTAtLength(seg, progress * len, len);
+            const mt = 1 - t;
+            const d = t * t;
+            const a = -mt * mt;
+            const b = 1 - 4 * t + 3 * d;
+            const c = 2 * t - 3 * d;
+            const dx = a * seg.p0[0] + b * seg.p1[0] + c * seg.p2[0] + d * seg.p3[0];
+            const dy = a * seg.p0[1] + b * seg.p1[1] + c * seg.p2[1] + d * seg.p3[1];
+            return Math.atan2(dy, dx) * (180 / Math.PI);
+        }
+    }
+    return 0;
+}
+
+function matFromTransform(tr: any, frame: number, autoOrient = false): Mat3 {
     const pos = resolveProp(tr?.position, frame, [0, 0]);
-    const rot = toNumber(resolveProp(tr?.rotation, frame, 0));
+    let rot = toNumber(resolveProp(tr?.rotation, frame, 0));
+    if (autoOrient) rot += positionAngle(tr?.position, frame);
     const sc = resolveProp(tr?.scale, frame, [100, 100]);
     const sx = Array.isArray(sc) ? toNumber(sc[0]) : toNumber(sc);
     const sy = Array.isArray(sc) ? toNumber(sc[1]) : toNumber(sc);
@@ -319,7 +382,7 @@ function starToVerts(shape: ParsedShape, frame: number): any[] {
         }
     }
 
-    const b = (2 * rotation * Math.PI) / 180;
+    const b = (4 * rotation * Math.PI) / 180;
     const s = Math.sin(b);
     const c = Math.cos(b);
     for (const vtx of verts) {
@@ -374,8 +437,21 @@ function transformCmds(cmds: PathCmd[], m: Mat3): PathCmd[] {
     return out;
 }
 
+function reverseVerts(verts: any[]): any[] {
+    const out: any[] = [];
+    for (let i = verts.length - 1; i >= 0; i--) {
+        const v = verts[i];
+        out.push({ v: v.v, i: v.o, o: v.i });
+    }
+    return out;
+}
+
 function shapeCmds(shape: ParsedShape, frame: number): PathCmd[] | null {
     const type = shape.type;
+
+    // rlottie stores the rounded-corner model only to feed rect roundness;
+    // it never draws a path of its own.
+    if (type === 'roundedCorner') return null;
 
     if (type === 'path') {
         const raw = resolveProp(shape.vertices, frame);
@@ -415,14 +491,21 @@ function shapeCmds(shape: ParsedShape, frame: number): PathCmd[] | null {
     if (type === 'ellipse') {
         const p = resolveProp(shape.position, frame, [0, 0]);
         const s = resolveProp(shape.size, frame, [100, 100]);
-        return vertsToCmds(ellipseToVerts(p, s), true);
+        let verts = ellipseToVerts(p, s);
+        if (shape.direction === 3) verts = reverseVerts(verts);
+        return vertsToCmds(verts, true);
     }
 
-    if (type === 'roundedCorner' || type === 'rect') {
+    if (type === 'rect') {
         const p = resolveProp(shape.position, frame, [0, 0]);
         const s = resolveProp(shape.size, frame, [100, 100]);
-        const r = resolveProp(shape.radius, frame, resolveProp(shape.roundness, frame, 0));
-        return vertsToCmds(rectToVerts(p, s, typeof r === 'number' ? r : 0), true);
+        const rd = shape.rd;
+        let r = rd
+            ? resolveProp(rd.radius, frame, 0)
+            : resolveProp(shape.radius, frame, resolveProp(shape.roundness, frame, 0));
+        let verts = rectToVerts(p, s, typeof r === 'number' ? r : 0);
+        if (shape.direction === 3) verts = reverseVerts(verts);
+        return vertsToCmds(verts, true);
     }
 
     if (type === 'star') {
@@ -508,11 +591,16 @@ function trimSegment(rawStart: number, rawEnd: number, rawOffset: number): [numb
 function dasher(cmds: PathCmd[], dash: number[]): PathCmd[] {
     const result: PathCmd[] = [];
     const size = 2;
-    let discard = false;
+    if (!dash || dash.length === 0) return cmds;
+    for (const d of dash) {
+        if (!isFinite(d) || d < 0) return cmds;
+    }
+    if (!dash.some((d) => d > 0)) return cmds;
     let index = 0;
     let currentLength = 0;
     let startNewSegment = true;
     let curPt: [number, number] = [0, 0];
+    let discard = false;
 
     function updateActiveSegment() {
         startNewSegment = true;
@@ -563,7 +651,8 @@ function dasher(cmds: PathCmd[], dash: number[]): PathCmd[] {
             addLine(p);
         } else {
             let length = len;
-            while (length > currentLength) {
+            let iter = 0;
+            while (length > currentLength && iter++ < DASH_ITER_CAP) {
                 length -= currentLength;
                 const t = currentLength / (currentLength + length);
                 const splitX = line.x1 + (line.x2 - line.x1) * t;
@@ -592,7 +681,8 @@ function dasher(cmds: PathCmd[], dash: number[]): PathCmd[] {
             currentLength -= bezLen;
             addCubic(c1, c2, e);
         } else {
-            while (bezLen > currentLength) {
+            let iter = 0;
+            while (bezLen > currentLength && iter++ < DASH_ITER_CAP) {
                 bezLen -= currentLength;
                 const t = bezierTAtLength(b, currentLength, bezierLength(b));
                 const [left, right] = bezierSplit(b, t);
@@ -702,7 +792,10 @@ function renderRepeatCopies(ctx: CanvasRenderingContext2D, rec: RepeatCopyRec, f
     const r = rec.shape;
     const copiesFloat = toNumber(resolveProp(r.copies, frame, 0));
     if (!Number.isFinite(copiesFloat) || copiesFloat <= 0) return;
-    const maxCopies = Math.min(256, Math.ceil(maxPropertyNumber(r.copies, 0)));
+    // rlottie: maxCopies() = int(max over the "c" values), capped at 10000.
+    const maxCopy = maxPropertyNumber(r.copies, 0);
+    const maxCopies = !Number.isFinite(maxCopy) || maxCopy <= 0 ? 0 : Math.min(10000, Math.trunc(maxCopy));
+    if (maxCopies <= 0) return;
     const offset = toNumber(resolveProp(r.copiesOffset, frame, 0));
     const tr = r.transform;
     const so = tr ? toNumber(resolveProp(tr.startOpacity, frame, 100)) / 100 : 1;
@@ -730,6 +823,10 @@ function walkShapeGroup(shapes: ParsedShape[], frame: number, mat: Mat3, alpha: 
         return;
     }
 
+    const ownIndices: number[] = [];
+    const pendingPaints: { shape: ParsedShape; matrix: Mat3; alpha: number }[] = [];
+    const pendingTrims: { shape: ParsedShape }[] = [];
+
     for (const shape of shapes) {
         const type = shape.type;
 
@@ -752,20 +849,31 @@ function walkShapeGroup(shapes: ParsedShape[], frame: number, mat: Mat3, alpha: 
         }
 
         if (type === 'trim') {
-            walk.trims.push({ shape, paths: walk.paths.slice(start) });
+            pendingTrims.push({ shape });
             continue;
         }
 
         if (type === 'fill' || type === 'stroke' || type === 'gradientFill' || type === 'gradientStroke') {
             const paintAlpha = alpha * (toNumber(resolveProp(shape.opacity, frame, 100)) / 100);
-            walk.paints.push({ shape, paths: walk.paths.slice(start), matrix: mat, alpha: paintAlpha });
+            pendingPaints.push({ shape, matrix: mat, alpha: paintAlpha });
             continue;
         }
 
         if (type === 'merge') continue;
 
         const cmds = shapeCmds(shape, frame);
-        if (cmds) walk.paths.push({ original: cmds, current: cmds, matrix: mat });
+        if (cmds) {
+            ownIndices.push(walk.paths.length);
+            walk.paths.push({ original: cmds, current: cmds, matrix: mat });
+        }
+    }
+
+    const groupPaths = ownIndices.map((i) => walk.paths[i]);
+    for (const p of pendingPaints) {
+        walk.paints.push({ shape: p.shape, paths: groupPaths, matrix: p.matrix, alpha: p.alpha });
+    }
+    for (const t of pendingTrims) {
+        walk.trims.push({ shape: t.shape, paths: groupPaths });
     }
 }
 
@@ -906,14 +1014,39 @@ function drawPaints(ctx: CanvasRenderingContext2D, paints: PaintRec[], frame: nu
             if (lj != null) ctx.lineJoin = (['miter', 'round', 'bevel'][lj - 1] || 'miter') as CanvasLineJoin;
             if (paint.shape.miterLimit != null) ctx.miterLimit = paint.shape.miterLimit;
             const scale = matScaleOf(paint.matrix);
-            if (paint.shape.dashes && paint.shape.dashes.length > 0) {
-                const dash: number[] = [];
+            const dashInfo: number[] = [];
+            if (paint.shape.dashes) {
                 for (const d of paint.shape.dashes) {
-                    dash.push(toNumber(resolveProp(d.value, frame, 0)) * scale);
+                    dashInfo.push(toNumber(resolveProp(d.value, frame, 0)));
                 }
-                ctx.setLineDash(dash);
+            }
+            let dashOffset = 0;
+            let pattern: number[] | null = null;
+            if (dashInfo.length > 1) {
+                // rlottie Dash::getDashInfo: an even-sized list lacks the
+                // closing gap info — copy the last dash into the last gap slot
+                // (the offset value then moves to the end).
+                if (dashInfo.length % 2 === 0) {
+                    dashInfo.push(dashInfo[dashInfo.length - 1]);
+                    dashInfo[dashInfo.length - 2] = dashInfo[dashInfo.length - 3];
+                }
+                dashOffset = dashInfo[dashInfo.length - 1] * scale;
+                pattern = dashInfo.slice(0, -1).map((v) => v * scale);
+                let noLength = true;
+                let noGap = true;
+                for (let i = 0; i < pattern.length; i += 2) {
+                    if (!vIsZero(pattern[i])) noLength = false;
+                    if (!vIsZero(pattern[i + 1])) noGap = false;
+                }
+                if (noLength) return; // VDasher: all dashes zero -> nothing
+                if (noGap) pattern = null; // VDasher: all gaps zero -> solid
+            }
+            if (pattern) {
+                ctx.setLineDash(pattern);
+                ctx.lineDashOffset = dashOffset;
                 ctx.stroke();
                 ctx.setLineDash([]);
+                ctx.lineDashOffset = 0;
             } else {
                 ctx.stroke();
             }
@@ -946,7 +1079,7 @@ function layerCombinedMatrix(layer: ParsedLayer, frame: number, layerById: Map<n
     }
     let m = base;
     for (let i = chain.length - 1; i >= 0; i--) m = matMul(m, chain[i]);
-    m = matMul(m, matFromTransform(layer.transform, frame));
+    m = matMul(m, matFromTransform(layer.transform, frame, layer.autoOrient === 1));
     return m;
 }
 
@@ -996,6 +1129,7 @@ function renderCompLayers(
     parentAlpha: number,
     clipRect: Rect,
     assets: ParsedAsset[],
+    anim: ParsedAnimation,
 ) {
     const layerById = new Map<number, ParsedLayer>();
     for (const l of layers) layerById.set(l.index, l);
@@ -1009,10 +1143,10 @@ function renderCompLayers(
             if (layerVisible(layer, frame)) {
                 if (matte) {
                     if (layerVisible(matte, frame)) {
-                        renderMattePair(ctx, matte, layer, frame, base, parentAlpha, clipRect, assets, layerById);
+                        renderMattePair(ctx, matte, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim);
                     }
                 } else {
-                    renderLayer(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById);
+                    renderLayer(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim);
                 }
             }
             matte = null;
@@ -1030,6 +1164,7 @@ function renderMattePair(
     clipRect: Rect,
     assets: ParsedAsset[],
     layerById: Map<number, ParsedLayer>,
+    anim: ParsedAnimation,
 ) {
     const w = Math.max(1, Math.ceil(clipRect.w));
     const h = Math.max(1, Math.ceil(clipRect.h));
@@ -1044,7 +1179,7 @@ function renderMattePair(
     srcCtx.beginPath();
     srcCtx.rect(0, 0, w, h);
     srcCtx.clip();
-    renderLayer(srcCtx, src, frame, shifted, parentAlpha, localClip, assets, layerById);
+    renderLayer(srcCtx, src, frame, shifted, parentAlpha, localClip, assets, layerById, anim);
     srcCtx.restore();
 
     const matteCanvas = getBuffer(w, h, 'matte-layer');
@@ -1055,7 +1190,7 @@ function renderMattePair(
     matteCtx.beginPath();
     matteCtx.rect(0, 0, w, h);
     matteCtx.clip();
-    renderLayer(matteCtx, matte, frame, shifted, parentAlpha, localClip, assets, layerById);
+    renderLayer(matteCtx, matte, frame, shifted, parentAlpha, localClip, assets, layerById, anim);
     matteCtx.restore();
 
     const type = matte.matteType ?? MatteType.None;
@@ -1092,9 +1227,24 @@ function renderPrecomp(
     clipRect: Rect,
     assets: ParsedAsset[],
     layerById: Map<number, ParsedLayer>,
+    anim: ParsedAnimation,
 ) {
     const children = precompChildren(layer, assets);
-    const mappedFrame = layer.timeRemap ? toNumber(interpolateKeyframes(layer.timeRemap, frame)) : frame;
+
+    // rlottie Layer::timeRemap(frameNo): with an animated "tm" the value (in
+    // seconds) maps to a frame via Composition::frameAtTime; otherwise the
+    // layer's own start frame is subtracted. Then time stretch is applied.
+    let mappedFrame: number;
+    const tm = layer.timeRemap;
+    if (tm && tm.animated && tm.keyframes && tm.keyframes.length > 0) {
+        const t = toNumber(interpolateKeyframes(tm, frame));
+        const frameDuration = Math.max(anim.outFrame - anim.inFrame, 0);
+        const pos = frameDuration > 0 ? t * anim.fps / frameDuration : 0;
+        mappedFrame = Math.round(Math.min(1, Math.max(0, pos)) * frameDuration);
+    } else {
+        mappedFrame = frame - (layer.startTime ?? 0);
+    }
+    mappedFrame = Math.trunc(mappedFrame / (layer.stretch ?? 1));
 
     const hasSize = (layer.layerWidth ?? 0) > 0 && (layer.layerHeight ?? 0) > 0;
     let layerClip: Rect | null = clipRect;
@@ -1121,7 +1271,7 @@ function renderPrecomp(
         renderCompLayers(
             bctx, children, mappedFrame,
             matMul(matTranslate(-layerClip.x, -layerClip.y), m),
-            childAlpha, rectOf(0, 0, w, h), assets,
+            childAlpha, rectOf(0, 0, w, h), assets, anim,
         );
         bctx.restore();
         ctx.save();
@@ -1137,7 +1287,7 @@ function renderPrecomp(
     ctx.beginPath();
     ctx.rect(layerClip.x, layerClip.y, layerClip.w, layerClip.h);
     ctx.clip();
-    renderCompLayers(ctx, children, mappedFrame, m, childAlpha, layerClip, assets);
+    renderCompLayers(ctx, children, mappedFrame, m, childAlpha, layerClip, assets, anim);
     ctx.restore();
 }
 
@@ -1306,6 +1456,7 @@ function renderLayer(
     clipRect: Rect,
     assets: ParsedAsset[],
     layerById: Map<number, ParsedLayer>,
+    anim: ParsedAnimation,
 ) {
     if (!layerVisible(layer, frame)) return;
 
@@ -1337,7 +1488,7 @@ function renderLayer(
             ctx.restore();
         }
     } else if (layer.type === LayerType.Precomp) {
-        renderPrecomp(ctx, layer, frame, m, opacity, clipRect, assets, layerById);
+        renderPrecomp(ctx, layer, frame, m, opacity, clipRect, assets, layerById, anim);
     } else if (layer.type === LayerType.Solid) {
         renderSolid(ctx, layer, m, opacity);
     } else if (layer.type === LayerType.Text) {
@@ -1372,7 +1523,7 @@ export function renderFrame(
 
     const root = compositionMatrix(anim, canvas.width, canvas.height);
     const clip: Rect = { x: 0, y: 0, w: canvas.width, h: canvas.height };
-    renderCompLayers(ctx, anim.layers, frame, root, 1, clip, anim.assets);
+    renderCompLayers(ctx, anim.layers, frame, root, 1, clip, anim.assets, anim);
 }
 
 function compositionMatrix(anim: ParsedAnimation, w: number, h: number): Mat3 {

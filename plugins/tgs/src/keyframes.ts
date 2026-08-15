@@ -27,8 +27,11 @@ export function buildKeyframes(rawK: any, defaultValue: any): ParsedKeyframe[] {
             }
         }
 
+        // Keyframes without a start value are end markers (bodymovin emits a
+        // trailing {t} entry) — keep them only to close the previous segment.
+        if (raw.s === undefined) continue;
+
         const hold = raw.h === 1;
-        if (!hold && raw.i === undefined) continue;
 
         const s = unwrapValue(raw.s);
         const kf: ParsedKeyframe = {
@@ -59,9 +62,10 @@ export function parseValue(v: any): ParsedProperty {
     }
     const keyframes = buildKeyframes(v.k, undefined);
     const isAnimated = keyframes.length > 0;
+    const hasSplit = !!(v.x || v.y);
     const prop: ParsedProperty = {
         animated: isAnimated,
-        value: isAnimated ? keyframes[0].s : v.k,
+        value: isAnimated ? keyframes[0].s : (hasSplit ? undefined : v.k),
     };
     if (isAnimated) prop.keyframes = keyframes;
     if (v.x && typeof v.x === 'object') prop.x = parseValue(v.x);
@@ -135,15 +139,18 @@ function clamp01(v: number): number {
 }
 
 function resolveSplitDimensions(prop: ParsedProperty, value: any, frame: number): any {
-    if (!isNumericArray(value) || !prop.x) return value;
-    const xv = interpolateKeyframes(prop.x, frame);
-    const x0 = isNumericArray(xv) ? xv[0] : typeof xv === 'number' ? xv : undefined;
-    if (x0 === undefined) return value;
-    const out = [x0, ...value];
+    if (!prop.x && !prop.y) return value;
+    const xv = prop.x ? interpolateKeyframes(prop.x, frame) : undefined;
+    const x0 = prop.x
+        ? (isNumericArray(xv) ? xv[0] : typeof xv === 'number' ? xv : undefined)
+        : undefined;
+    const out = x0 === undefined
+        ? (isNumericArray(value) ? value.slice() : [])
+        : [x0, ...(isNumericArray(value) ? value : [])];
     if (prop.y) {
         const yv = interpolateKeyframes(prop.y, frame);
-        const y0 = isNumericArray(yv) ? yv[0] : typeof yv === 'number' ? yv : undefined;
-        if (y0 !== undefined) out[1] = y0;
+        const y0 = isNumericArray(yv) ? yv[0] : typeof yv === 'number' ? yv : 0;
+        out[1] = y0;
     }
     return out;
 }
@@ -153,16 +160,18 @@ export function interpolateKeyframes(property: ParsedProperty, frame: number): a
     if (override !== undefined) return override;
 
     if (!property.animated || !property.keyframes || property.keyframes.length === 0) {
-        return property.value;
+        return resolveSplitDimensions(property, property.value, frame);
     }
 
     const kfs = property.keyframes;
     const first = kfs[0];
     const last = kfs[kfs.length - 1];
 
-    if (frame <= first.t) return first.s;
+    if (frame <= first.t) return resolveSplitDimensions(property, first.s, frame);
     const lastEnd = last.endFrame ?? last.t;
-    if (frame >= lastEnd) return last.e !== undefined ? last.e : last.s;
+    if (frame >= lastEnd) {
+        return resolveSplitDimensions(property, last.e !== undefined ? last.e : last.s, frame);
+    }
 
     let lo = 0;
     let hi = kfs.length - 1;
@@ -200,5 +209,5 @@ export function interpolateKeyframes(property: ParsedProperty, frame: number): a
         }
     }
 
-    return last.e !== undefined ? last.e : last.s;
+    return resolveSplitDimensions(property, last.e !== undefined ? last.e : last.s, frame);
 }
