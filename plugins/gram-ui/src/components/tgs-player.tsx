@@ -11,6 +11,20 @@ const MAX_ACTIVE_PLAYERS = 64;
 const MAX_PLAYER_TIME = 12000;
 const playerWaiters = new Set<() => void>();
 
+const completedAnims = new Map<string, boolean>();
+
+function markCompleted(key: string): void {
+    completedAnims.set(key, true);
+    if (completedAnims.size > 512) {
+        const oldest = completedAnims.keys().next().value;
+        if (oldest != null) completedAnims.delete(oldest);
+    }
+}
+
+export function resetCompletedAnimations(): void {
+    completedAnims.clear();
+}
+
 function acquirePlayerSlot(): boolean {
     if (activePlayers < MAX_ACTIVE_PLAYERS) {
         activePlayers++;
@@ -40,6 +54,7 @@ export interface TgsPlayerProps {
     speed?: number;
     className?: string;
     cacheKey?: string;
+    playKey?: string;
     onEnd?: () => void;
     onFrameProgress?: (progress: number) => void;
     layerOrder?: LayerOrder;
@@ -55,6 +70,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
         speed = 1,
         className,
         cacheKey,
+        playKey,
         onEnd,
         onFrameProgress,
         layerOrder,
@@ -62,7 +78,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
 
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [playing, setPlaying] = useState(autoplay);
+    const [playing, setPlaying] = useState(() => playKey != null && completedAnims.get(playKey) ? false : autoplay);
     const [inView, setInView] = useState(autoplay);
     const [animVersion, setAnimVersion] = useState(0);
     const rootRef = useRef<HTMLDivElement | null>(null);
@@ -94,7 +110,6 @@ export function TgsPlayer(props: TgsPlayerProps) {
     }, []);
 
     useEffect(() => {
-        if (!inView) return;
         let cancelled = false;
         (async () => {
             try {
@@ -103,9 +118,16 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 if (cancelled) return;
                 animRef.current = parsed;
                 setError(null);
-                frameRef.current = parsed.inFrame;
+                const done = playKey != null && completedAnims.get(playKey) === true;
+                if (done && parsed.outFrame - parsed.inFrame > 0) {
+                    frameRef.current = parsed.outFrame - 1;
+                    endFiredRef.current = true;
+                    setPlaying(false);
+                } else {
+                    frameRef.current = parsed.inFrame;
+                    endFiredRef.current = false;
+                }
                 lastTimeRef.current = 0;
-                endFiredRef.current = false;
                 setAnimVersion((v) => v + 1);
                 if (TGS_DEBUG) {
                     console.log('[TGS_LOG] parsed', { w: parsed.width, h: parsed.height, fps: parsed.fps, inFrame: parsed.inFrame, outFrame: parsed.outFrame, layers: parsed.layers.length });
@@ -118,7 +140,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
             }
         })();
         return () => { cancelled = true; };
-    }, [animationData, inView]);
+    }, [animationData, cacheKey, playKey]);
 
     const drawFrame = useCallback((frame: number) => {
         const canvas = canvasRef.current;
@@ -132,7 +154,9 @@ export function TgsPlayer(props: TgsPlayerProps) {
         if (!inView) return;
         const anim = animRef.current;
         if (!anim) return;
-        drawFrame(anim.inFrame);
+        const total = anim.outFrame - anim.inFrame;
+        const frame = endFiredRef.current && total > 0 ? anim.outFrame - 1 : anim.inFrame;
+        drawFrame(frame);
     }, [animationData, inView, animVersion, drawFrame]);
 
     useEffect(() => {
@@ -147,9 +171,9 @@ export function TgsPlayer(props: TgsPlayerProps) {
     }, [inView, loop, animVersion]);
 
     useEffect(() => {
-        if (!autoplay) return;
-        setPlaying(true);
-    }, [autoplay, animationData]);
+        if (playKey != null && completedAnims.get(playKey)) return;
+        setPlaying(autoplay);
+    }, [autoplay, animationData, playKey]);
 
     useEffect(() => {
         if (!playing || !inView) {
@@ -213,6 +237,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
                             forceDraw = true;
                             frame = animRef.current.outFrame - 1;
                             setPlaying(false);
+                            if (playKey) markCompleted(playKey);
                             onEndRef.current?.();
                         } else {
                             frame = animRef.current.outFrame - 1;
@@ -276,13 +301,14 @@ export function TgsPlayer(props: TgsPlayerProps) {
     }, [playing, inView, loop, speed, animVersion, drawFrame]);
 
     const togglePlay = useCallback(() => {
+        if (playKey != null && completedAnims.get(playKey)) return;
         setPlaying(v => !v);
         if (rafRef.current != null) {
             cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
         }
         lastTimeRef.current = 0;
-    }, []);
+    }, [playKey]);
 
     if (error) {
         return (

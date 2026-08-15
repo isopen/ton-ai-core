@@ -9,7 +9,7 @@ const TGS_DEBUG = false;
 
 export { releaseEmojiCache } from './emoji-canvas.js';
 
-function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true }: { docId?: string; url: string; alt?: string; size: number; autoplay?: boolean; loop?: boolean }) {
+function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, playKey }: { docId?: string; url: string; alt?: string; size: number; autoplay?: boolean; loop?: boolean; playKey?: string }) {
   const [data, setData] = useState<any>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoIoRef = useRef<IntersectionObserver | null>(null);
@@ -57,7 +57,7 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true }: { 
   }, [url, docId, alt]);
 
   if (data?.kind === 'tgs') {
-    return <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={size} height={size} loop={loop} autoplay={autoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} />;
+    return <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={size} height={size} loop={loop} autoplay={autoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} playKey={playKey} />;
   }
   if (data?.kind === 'video') {
     return (
@@ -94,7 +94,7 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true }: { 
   return <span class="tgui-emoji-placeholder" style={`width:${size}px;height:${size}px`} />;
 }
 
-export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loop = true }: { docId?: string; url: string; alt?: string; size?: number; autoplay?: boolean; loop?: boolean }) {
+export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loop = true, playKey }: { docId?: string; url: string; alt?: string; size?: number; autoplay?: boolean; loop?: boolean; playKey?: string }) {
   useEffect(() => {
     if (!url) {
       requestEmojiDownload(docId, alt, 2);
@@ -103,7 +103,7 @@ export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loo
   if (!docId && !url) {
     return <span class="tgui-emoji-inline" style={`font-size:${Math.round(size * 0.7)}px;line-height:1`}>{alt}</span>;
   }
-  return <EmojiInline docId={docId} url={url} alt={alt} size={size} autoplay={autoplay} loop={loop} />;
+  return <EmojiInline docId={docId} url={url} alt={alt} size={size} autoplay={autoplay} loop={loop} playKey={playKey} />;
 }
 
 function appendMappedRuns(segments: EmojiSegment[], value: string): void {

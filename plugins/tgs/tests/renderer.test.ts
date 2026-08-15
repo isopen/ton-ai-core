@@ -1,6 +1,7 @@
 import { parseTgs } from '@ton-ai/tgs';
 import type { ParsedAnimation } from '@ton-ai/tgs';
 let renderFrame: (canvas: any, anim: ParsedAnimation, frame: number, dpr: number) => void;
+let getBufferPoolStats: () => { size: number; pixels: number; maxPixels: number };
 let created: MockCanvas[] = [];
 class MockGradient {
     stops: Array<[number, string]> = [];
@@ -218,6 +219,7 @@ describe('renderFrame', () => {
         };
         const m = require('../src/renderer.js');
         renderFrame = m.renderFrame;
+        getBufferPoolStats = m.getBufferPoolStats;
     });
     afterAll(() => {
         delete (globalThis as any).document;
@@ -519,6 +521,42 @@ describe('renderFrame', () => {
         expect(c.ctx.calls).toContain('drawImage(0,0)');
         const matteCtx = created.find(cv => cv.ctx.compositeOps.includes('destination-in'));
         expect(matteCtx).toBeDefined();
+    });
+    it('bounds the internal buffer pool across many frames with moving precomps (leak guard)', () => {
+        const FRAMES = 300;
+        const posKf: Array<Record<string, unknown>> = [];
+        for (let f = 0; f <= FRAMES; f++) {
+            posKf.push({ t: f, s: [-420 + f * 3.6, 0], e: [-420 + f * 3.6, 0], i: { x: 0, y: 0 }, o: { x: 0, y: 0 }, to: [0, 0], ti: [0, 0] });
+        }
+        const anim = parseTgs(tgs({
+            w: 512,
+            h: 512,
+            assets: [{
+                id: 'p1', w: 300, h: 300, layers: [
+                    shapeLayer(1, [RECT, FILL_RED]),
+                    shapeLayer(2, [RECT, FILL_BLUE]),
+                ],
+            }],
+            layers: [{
+                ind: 0, ty: 0, refId: 'p1', w: 300, h: 300,
+                ks: {
+                    o: { a: 0, k: 50 },
+                    r: { a: 0, k: 0 },
+                    p: { a: 1, k: posKf },
+                    a: { a: 0, k: [0, 0] },
+                    s: { a: 0, k: [100, 100] },
+                },
+            }],
+        }));
+        const canvas = new MockCanvas();
+        canvas.clientWidth = 200;
+        canvas.clientHeight = 200;
+        for (let cycle = 0; cycle < 2; cycle++) {
+            for (let f = 0; f < FRAMES; f++) renderFrame(canvas, anim, f, 2);
+        }
+        const stats = getBufferPoolStats();
+        expect(stats.pixels).toBeGreaterThan(0);
+        expect(stats.pixels).toBeLessThanOrEqual(stats.maxPixels);
     });
     it('renders text layers through fillText with the document text', () => {
         const c = render({ layers: [textLayer(0, { t: '2', s: 60, f: 'Arial', fc: [0, 0, 0, 1], j: 2 })] });

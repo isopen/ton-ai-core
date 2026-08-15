@@ -1089,6 +1089,8 @@ function layerCombinedMatrix(layer: ParsedLayer, frame: number, layerById: Map<n
 }
 
 const bufferPool = new Map<string, HTMLCanvasElement>();
+const MAX_BUFFER_POOL_PIXELS = 12_000_000;
+let bufferPoolPixels = 0;
 
 function getBuffer(w: number, h: number, tag: string): HTMLCanvasElement {
     const key = tag + ':' + w + 'x' + h;
@@ -1101,8 +1103,20 @@ function getBuffer(w: number, h: number, tag: string): HTMLCanvasElement {
         el.height = h;
         c = el as unknown as HTMLCanvasElement;
         bufferPool.set(key, c);
+        bufferPoolPixels += w * h;
+        while (bufferPoolPixels > MAX_BUFFER_POOL_PIXELS && bufferPool.size > 1) {
+            const oldestKey = bufferPool.keys().next().value;
+            if (oldestKey === undefined) break;
+            const oldest = bufferPool.get(oldestKey)!;
+            bufferPool.delete(oldestKey);
+            bufferPoolPixels -= oldest.width * oldest.height;
+        }
     }
     return c;
+}
+
+export function getBufferPoolStats(): { size: number; pixels: number; maxPixels: number } {
+    return { size: bufferPool.size, pixels: bufferPoolPixels, maxPixels: MAX_BUFFER_POOL_PIXELS };
 }
 
 function rectOf(x: number, y: number, w: number, h: number): Rect {
@@ -1334,6 +1348,18 @@ function renderPrecomp(
 
 const imageBitmaps = new Map<string, ImageBitmap | null>();
 const imageDecodes = new Map<string, Promise<ImageBitmap | null>>();
+const MAX_IMAGE_BITMAPS = 200;
+
+function evictOldestImageCache(): void {
+    if (imageBitmaps.size < MAX_IMAGE_BITMAPS) return;
+    const oldest = imageBitmaps.keys().next().value;
+    if (oldest === undefined) return;
+    const bmp = imageBitmaps.get(oldest);
+    if (bmp) {
+        try { bmp.close(); } catch {}
+    }
+    imageBitmaps.delete(oldest);
+}
 
 function decodeImageAsset(a: ParsedAsset): ImageBitmap | null {
     if (!a.p) return null;
@@ -1355,7 +1381,7 @@ function decodeImageAsset(a: ParsedAsset): ImageBitmap | null {
         }
     })();
     imageDecodes.set(a.id, p);
-    void p.then((b) => { imageBitmaps.set(a.id, b); });
+    void p.then((b) => { evictOldestImageCache(); imageBitmaps.set(a.id, b); });
     return null;
 }
 

@@ -18,7 +18,8 @@ import type { ImageSpec } from '../types.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
 import { flushEmojiBatch, getEmojiDocId, getDiceDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeDiceSets } from './emoji-store.js';
-import { SlotMachineSticker } from './slot-machine.js';
+import { SlotMachineSticker, resetSlotMachineDone } from './slot-machine.js';
+import { resetCompletedAnimations } from './tgs-player.js';
 import { releaseEmojiCache } from './emoji-canvas.js';
 import { observeVisibility } from './emoji-canvas.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
@@ -431,12 +432,12 @@ function isGiftMessage(action: any): boolean {
   return t.startsWith('messageActionGift');
 }
 
-const DICE_SIZE = 96;
+const DICE_SIZE = 208;
 
-function DiceSticker({ emoticon, value }: { emoticon: string; value: number | null }) {
+function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: number | null; msgId: number | string }) {
   const isSlot = normalizeEmoji(emoticon) === '🎰';
   if (isSlot) {
-    return <SlotMachineSticker value={value} size={DICE_SIZE} />;
+    return <SlotMachineSticker value={value} size={DICE_SIZE} playKey={'slot-' + msgId} />;
   }
   const [docId, setDocId] = useState<string | undefined>(undefined);
   const [url, setUrl] = useState<string | undefined>(undefined);
@@ -475,7 +476,7 @@ function DiceSticker({ emoticon, value }: { emoticon: string; value: number | nu
   if (!docId || !url) {
     return <EmojiText text={emoticon} entities={undefined} documentUrls={{}} />;
   }
-  return <AnimatedEmoji docId={docId} url={url} alt={emoticon} size={DICE_SIZE} autoplay />;
+  return <AnimatedEmoji docId={docId} url={url} alt={emoticon} size={DICE_SIZE} autoplay loop={value == null} playKey={'dice-' + msgId} />;
 }
 
 function DiceBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {
@@ -484,7 +485,7 @@ function DiceBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out:
   return (
     <div class="MessageBubble MessageBubble_emojiOnly">
       <div class="MessageBubble__text">
-        <DiceSticker emoticon={diceEmoji} value={diceValue} />
+        <DiceSticker emoticon={diceEmoji} value={diceValue} msgId={m.id} />
       </div>
       <div class="MessageBubble__meta">
         <span class="MessageBubble__time">{timeStr}</span>
@@ -556,6 +557,12 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
 
   const handlerCacheRef = useRef(new Map<string, { onReact: (emoji: string, adding: boolean) => void; onOpenPhoto: (image: ImageSpec) => void }>());
   const handlerPeerKey = peer?.id != null ? String(peer.id) : '';
+  const playbackResetPeerRef = useRef<string>('__init__');
+  if (playbackResetPeerRef.current !== handlerPeerKey) {
+    playbackResetPeerRef.current = handlerPeerKey;
+    resetCompletedAnimations();
+    resetSlotMachineDone();
+  }
   useEffect(() => {
     handlerCacheRef.current = new Map();
   }, [handlerPeerKey]);
