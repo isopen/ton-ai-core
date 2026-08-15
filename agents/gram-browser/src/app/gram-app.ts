@@ -35,9 +35,11 @@ export class GramApp {
       await dbSet('sessionId', s.sessionIdRef.current);
     }
     await setEncryptionKey(s.sessionIdRef.current);
-    await loadOrphanedDialogs(s);
-    await loadMessageCache(s);
-    await loadCachedDialogs(s);
+    await Promise.allSettled([
+      loadOrphanedDialogs(s),
+      loadMessageCache(s),
+      loadCachedDialogs(s),
+    ]);
     setTimeout(() => dbCompact().catch(() => {}), 5000);
 
     const savedTheme = await dbGet<string>('theme')
@@ -119,13 +121,15 @@ export class GramApp {
     const langDeps = { tgui: s.tgui, tgService: s.tgService };
     const loadStringsFn = (code?: string) => loadStrings(langDeps, code);
     s.loadStringsRef.current = loadStringsFn;
-    await loadStringsFn();
 
     s.tgui.current!.setSessionId(savedId);
     addLog(s, t(S.LOG_CONNECTED));
 
     (async () => {
       if (!s.tgui.current) return;
+      try {
+        await loadStringsFn();
+      } catch {}
       try {
         const countries = await fetchCachedCountries(langDeps);
         if (countries.length > 0) {
@@ -149,18 +153,15 @@ export class GramApp {
       await dbSet('authenticated', '1').catch(() => {});
       await dbDel('authInvalidated').catch(() => {});
       s.tgui.current!.setConnectionStatus('connected');
+      s.tgui.current!.setPage('dialogs');
       try {
         const dialogsResult = await service.fetchDialogs();
-        s.tgui.current!.setPage('dialogs');
         if (dialogsResult) {
           setDialogsFromServer(s, dialogsResult);
         }
         await fetchSelfUserId(s);
       } catch (e: any) {
         addLog(s, tpl(S.LOG_GET_DIALOGS_ERROR, { error: e.message }));
-        s.tgui.current!.setPage('auth');
-        s.tgui.current!.setAuthStep('phone');
-        s.tgui.current!.setError('Session error. Please log in again.');
       }
     } else {
       await dbDel('authenticated').catch(() => {});
