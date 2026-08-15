@@ -10,6 +10,10 @@ make build-core build-gram-browser build-gram-db build-gram-ui build-tl-language
 
 Если сборка завершилась ошибкой — исправь её до конца задачи и сохрани в память информацию о проблеме и фиксе. Не завершай задачу с падающей сборкой.
 
+# Browser testing rules
+
+НЕ тестируй приложение в браузере (не запускай playwright/headless browser для проверки UI). Визуальную проверку UI выполняет сам пользователь (F5 в своём браузере и присылает логи/скриншоты). Задача агента — сделать фикс, собрать модули, прогнать jest и отдать результат на проверку. Node-probes (MockCanvas и т.п.) для проверки рендера допустимы.
+
 # Memory persistence rules
 
 Используй rag-memory инструменты (createEntities, addObservations, createRelations, storeDocument, hybridSearch) для долговременной памяти.
