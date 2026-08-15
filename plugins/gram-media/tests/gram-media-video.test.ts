@@ -2,8 +2,7 @@
 
 import { GramMediaRouter } from '../src/router.js';
 import {
-    makeHost, makeTransport, makeVideoDocument, makeBytes,
-    flushPromises, flushTicks, flushMicrotasks, actionsOfType, lastOfType,
+    makeHost, makeTransport, makeVideoDocument, makeBytes, flushTicks, flushMicrotasks, actionsOfType, lastOfType,
 } from './helpers.js';
 
 function makeRouter(): { router: GramMediaRouter; actions: ReturnType<typeof makeHost>['actions']; setTransport: (t: any) => void } {
