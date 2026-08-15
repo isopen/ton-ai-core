@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+
 import { GramMediaRouter } from '../src/router.js';
 import {
     makeHost, makeTransport, makeDocument, makeVideoDocument, makeBytes,

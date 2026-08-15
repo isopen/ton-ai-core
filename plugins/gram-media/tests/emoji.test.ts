@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+
 import { GramMediaRouter } from '../src/router.js';
 import {
     makeHost, makeTransport, makeDocument, makeBytes, makeGzipMagicBytes,
@@ -173,7 +174,6 @@ describe('GramMediaRouter emoji pipeline', () => {
         window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
         await flushTicks(8);
 
-        // All 7 documents of the 🎲 set are indexed by id.
         const base = '7' + '🎲'.codePointAt(0);
         for (let i = 0; i < 7; i++) {
             expect(router.emoji.findEmojiDoc(base + i)).toBeTruthy();
@@ -181,8 +181,6 @@ describe('GramMediaRouter emoji pipeline', () => {
         const sets = diceSetEvents[0]!.sets as Record<string, { p: string; d: string[] }>;
         expect(sets['🎲'].d).toHaveLength(7);
 
-        // Requesting the result doc for value=4 must download directly — no
-        // messages.getCustomEmojiDocuments fallback, which returned stubs before.
         downloadFiles = jest.fn(async () => [{ index: 0, type: 'document', bytes: makeGzipMagicBytes() }]);
         (transport as any).downloadFiles = downloadFiles;
 
@@ -241,8 +239,6 @@ describe('GramMediaRouter emoji pipeline', () => {
             expect(customEmojiCalls).toEqual(['9999']);
             expect(urlEvents.length).toBe(0);
 
-            // The batch was retried after the unresolved window (25s) — request
-            // must not be lost and the doc must eventually be delivered.
             rpcFail = false;
             await jest.advanceTimersByTimeAsync(60_000);
             expect(customEmojiCalls.length).toBeGreaterThanOrEqual(2);
@@ -433,7 +429,6 @@ describe('GramMediaRouter emoji pipeline', () => {
         expect(urlEvents[0]!.kind).toBe('video');
         expect(kindEvents[0]!.kind).toBe('video');
 
-        // second request is served from cache without transport call
         let dlCalls = 0;
         setTransport(makeTransport({
             downloadFile: async () => {
@@ -499,13 +494,11 @@ describe('GramMediaRouter emoji pipeline', () => {
         setTransport(transport);
         router.attach();
 
-        // batch A: starts downloading both docs
         window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
             detail: { items: [{ docId: '8001' }, { docId: '8002' }] },
         }));
         await flushTicks();
 
-        // batch B arrives while 8001 is still in flight: resolved=0, no duplicate download
         window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
             detail: { items: [{ docId: '8001' }] },
         }));
@@ -585,22 +578,18 @@ describe('GramMediaRouter emoji pipeline', () => {
             const retryEvents: any[] = [];
             window.addEventListener('tg-download-emoji', (e) => retryEvents.push((e as CustomEvent).detail));
 
-            // tg-fetch-custom-emoji now auto-downloads and consumes one failed attempt
-            // (attempts=1, retry timer at 600*1.7^1=1020ms). The manual failure below is
-            // merged into the same pending retry timer (attempts=2).
             router.emoji.onEmojiDownloadFailed('5001');
             await jest.advanceTimersByTimeAsync(1_100);
             expect(retryEvents).toHaveLength(1);
-            // its own redownload fails again: attempts=3, next retry at 600*1.7^3=2947ms
+
             await jest.advanceTimersByTimeAsync(1_800);
             expect(retryEvents).toHaveLength(1);
             await jest.advanceTimersByTimeAsync(3_000);
             expect(retryEvents).toHaveLength(2);
-            // attempts=4, next retry capped at 5000ms
+
             await jest.advanceTimersByTimeAsync(5_100);
             expect(retryEvents).toHaveLength(3);
 
-            // attempts cap reached: no more retries until TTL reset
             await jest.advanceTimersByTimeAsync(60_000);
             expect(retryEvents).toHaveLength(3);
             await jest.advanceTimersByTimeAsync(60_000);

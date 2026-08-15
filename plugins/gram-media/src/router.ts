@@ -1,6 +1,9 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import type { MediaHost, MediaTransport, MediaMessageLike, PhotoCacheProbeResult, EmojiKind } from './types.js';
 import type { EmojiPipeline } from './emoji.js';
 import { EmojiPipelineImpl } from './emoji.js';
+
+const log = getLogger('gram-media');
 
 const EMPTY_CHAT_MSG_ID = 'empty-chat';
 const PHOTO_URL_CACHE_MAX = 200;
@@ -464,7 +467,7 @@ export class GramMediaRouter {
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             if (attempt > 0) {
-                if (this.debug) console.log('[gram-media] retrying photo download', messageId, sizeType, 'attempt', attempt);
+                if (this.debug) log.info('[gram-media] retrying photo download', messageId, sizeType, 'attempt', attempt);
                 await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt - 1]));
             }
 
@@ -496,37 +499,37 @@ export class GramMediaRouter {
                 }
 
                 if (result?.fileRefExpired) {
-                    console.warn('[gram-media] FILE_REFERENCE_EXPIRED, re-fetching message', messageId, 'attempt', attempt);
+                    log.warn('[gram-media] FILE_REFERENCE_EXPIRED, re-fetching message', messageId, 'attempt', attempt);
                     const freshMsg = await this.refreshMessage(messageId);
                     if (freshMsg?.media?.photo) {
                         currentPhoto = freshMsg.media.photo;
                         this.host.dispatch({ type: 'REFRESH_MESSAGE_PHOTO', messageId, photo: currentPhoto });
                         continue;
                     } else {
-                        console.error('[gram-media] could not refresh photo for message', messageId);
+                        log.error('[gram-media] could not refresh photo for message', messageId);
                         return;
                     }
                 }
 
                 if (attempt >= MAX_RETRIES) {
-                    console.error('[gram-media] photo download failed for message', messageId, 'size', sizeType, 'after', MAX_RETRIES, 'retries');
+                    log.error('[gram-media] photo download failed for message', messageId, 'size', sizeType, 'after', MAX_RETRIES, 'retries');
                 }
             } catch (err: any) {
                 if (err.message?.includes('FILE_REFERENCE_EXPIRED')) {
-                    console.warn('[gram-media] FILE_REFERENCE_EXPIRED (catch), re-fetching message', messageId, 'attempt', attempt);
+                    log.warn('[gram-media] FILE_REFERENCE_EXPIRED (catch), re-fetching message', messageId, 'attempt', attempt);
                     const freshMsg = await this.refreshMessage(messageId);
                     if (freshMsg?.media?.photo) {
                         currentPhoto = freshMsg.media.photo;
                         this.host.dispatch({ type: 'REFRESH_MESSAGE_PHOTO', messageId, photo: currentPhoto });
                         continue;
                     } else {
-                        console.error('[gram-media] could not refresh photo for message', messageId);
+                        log.error('[gram-media] could not refresh photo for message', messageId);
                         return;
                     }
                 }
 
                 if (attempt >= MAX_RETRIES) {
-                    console.error('[gram-media] photo download error:', err.message, messageId, sizeType, 'after', MAX_RETRIES, 'retries');
+                    log.error('[gram-media] photo download error:', err.message, messageId, sizeType, 'after', MAX_RETRIES, 'retries');
                 }
             }
         }
@@ -573,7 +576,7 @@ export class GramMediaRouter {
         }
         if (priority > 0) this.documentRetryCounts.delete(messageId);
         this.documentPending.add(messageId);
-        if (this.debug) console.log('[gram-media] tg-download-document messageId=' + messageId + ' priority=' + priority + ' docId=' + document.id);
+        if (this.debug) log.info('[gram-media] tg-download-document messageId=' + messageId + ' priority=' + priority + ' docId=' + document.id);
         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
         const mime = (document.mime_type || 'application/octet-stream').toLowerCase();
         const attrs = (document.attributes || []) as any[];
@@ -601,7 +604,7 @@ export class GramMediaRouter {
             }
             const item = queue.splice(bestIdx, 1)[0];
             this.downloadInProgress[queueKey]++;
-            if (this.debug) console.log('[gram-media] queue dequeue ' + queueKey + ' messageId=' + item.messageId + ' priority=' + item.priority + ' remaining=' + queue.length);
+            if (this.debug) log.info('[gram-media] queue dequeue ' + queueKey + ' messageId=' + item.messageId + ' priority=' + item.priority + ' remaining=' + queue.length);
             this.execDownload(item.document, item.messageId, item.mime).finally(() => {
                 this.downloadInProgress[queueKey]--;
                 this.processDownloadQueue(queueKey);
@@ -644,7 +647,7 @@ export class GramMediaRouter {
                         if (pct !== lastProgress) {
                             lastProgress = pct;
                             if (pct >= 99 || pct % 10 === 0) {
-                                if (this.debug) console.log('[gram-media] progress dispatch', messageId, pct);
+                                if (this.debug) log.info('[gram-media] progress dispatch', messageId, pct);
                                 this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
                             }
                         }
@@ -669,7 +672,7 @@ export class GramMediaRouter {
 
                     const u8 = new Uint8Array(chunks[0]);
                     const magic = Array.from(u8.slice(0, 12)).map(b => b.toString(16).padStart(2, '0')).join(' ');
-                    if (this.debug) console.log('[gram-media] stream done chunks:', chunks.length, 'totalSize:', totalSize, 'magic:', magic);
+                    if (this.debug) log.info('[gram-media] stream done chunks:', chunks.length, 'totalSize:', totalSize, 'magic:', magic);
                     break;
                 } catch (err: any) {
                     if (gen !== this.documentDownloadGen) return;
@@ -679,7 +682,7 @@ export class GramMediaRouter {
                         if (fresh?.media?.document) doc = fresh.media.document;
                         continue;
                     }
-                    console.error('[gram-media] video stream error:', err.message, messageId);
+                    log.error('[gram-media] video stream error:', err.message, messageId);
                     const fbDoc = doc;
                     try {
                         const fb = await this.transport?.downloadFile({ document: fbDoc });
@@ -687,7 +690,7 @@ export class GramMediaRouter {
                         if (fb?.bytes) this.dispatchDocumentUrl(messageId, this.bytesToBlobUrl(this.toArrayBuffer(fb.bytes), mime), fb.cacheSource);
                     } catch (e2: any) {
                         if (gen !== this.documentDownloadGen) return;
-                        console.error('[gram-media] video stream fallback error:', e2.message, messageId);
+                        log.error('[gram-media] video stream fallback error:', e2.message, messageId);
                         if (e2.message?.includes('FILE_REFERENCE_EXPIRED')) {
                             try {
                                 const fresh = await this.refreshMessage(Number(messageId));
@@ -699,7 +702,7 @@ export class GramMediaRouter {
                                 }
                             } catch (e3: any) {
                                 if (gen !== this.documentDownloadGen) return;
-                                console.error('[gram-media] video fallback refresh error:', e3.message, messageId);
+                                log.error('[gram-media] video fallback refresh error:', e3.message, messageId);
                             }
                         }
                         if (typeof messageId === 'number') this.scheduleDocumentRetry(messageId, fbDoc);
@@ -770,7 +773,7 @@ export class GramMediaRouter {
                         this.emoji.onEmojiDownloadFailed(messageId.slice('emojipack-'.length));
                     }
                 } else {
-                    console.error('[gram-media] document download error:', err.message, messageId);
+                    log.error('[gram-media] document download error:', err.message, messageId);
                     if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
                         this.emoji.onEmojiDownloadFailed(messageId.slice('emojipack-'.length));
                     } else if (typeof messageId === 'number') {
@@ -784,7 +787,7 @@ export class GramMediaRouter {
     private scheduleDocumentRetry(messageId: number, document: any): void {
         if (this.documentRetryTimers.has(messageId)) return;
         if ((this.documentRetryCounts.get(messageId) || 0) >= 5) {
-            if (this.debug) console.log('[gram-media] document give up retries messageId=' + messageId);
+            if (this.debug) log.info('[gram-media] document give up retries messageId=' + messageId);
             this.documentRetryCounts.delete(messageId);
             window.dispatchEvent(new CustomEvent('tg-document-download-failed', { detail: { messageId } }));
             return;
@@ -794,7 +797,7 @@ export class GramMediaRouter {
         this.documentRetryTimers.set(messageId, setTimeout(() => {
             this.documentRetryTimers.delete(messageId);
             this.documentRetryCounts.set(messageId, attempts + 1);
-            if (this.debug) console.log('[gram-media] document retry messageId=' + messageId + ' attempt=' + (attempts + 1));
+            if (this.debug) log.info('[gram-media] document retry messageId=' + messageId + ' attempt=' + (attempts + 1));
             window.dispatchEvent(new CustomEvent('tg-download-document', {
                 detail: { document, messageId, priority: 0 },
             }));
@@ -802,7 +805,7 @@ export class GramMediaRouter {
     }
 
     private async downloadDocumentThumb(document: any, messageId: number, thumbType: string): Promise<void> {
-        if (this.debug) console.log('[gram-media] tg-download-document-thumb START messageId=' + messageId + ' thumbType=' + thumbType + ' docId=' + document.id);
+        if (this.debug) log.info('[gram-media] tg-download-document-thumb START messageId=' + messageId + ' thumbType=' + thumbType + ' docId=' + document.id);
         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
         try {
             const doc = { ...document, thumb_size: thumbType };
@@ -810,13 +813,13 @@ export class GramMediaRouter {
             if (result?.bytes) {
                 const bytes = this.toArrayBuffer(result.bytes);
                 const url = bytes.byteLength ? this.bytesToBlobUrl(bytes, 'image/jpeg') : '';
-                if (this.debug) console.log('[gram-media] tg-download-document-thumb SUCCESS messageId=' + messageId + ' thumbType=' + thumbType + ' bytesLen=' + bytes.byteLength);
+                if (this.debug) log.info('[gram-media] tg-download-document-thumb SUCCESS messageId=' + messageId + ' thumbType=' + thumbType + ' bytesLen=' + bytes.byteLength);
                 if (url) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_THUMB', messageId, thumbType, url });
             } else {
-                if (this.debug) console.log('[gram-media] tg-download-document-thumb NO_BYTES messageId=' + messageId + ' thumbType=' + thumbType);
+                if (this.debug) log.info('[gram-media] tg-download-document-thumb NO_BYTES messageId=' + messageId + ' thumbType=' + thumbType);
             }
         } catch (err) {
-            console.error('[gram-media] tg-download-document-thumb ERROR:', err, messageId, thumbType);
+            log.error('[gram-media] tg-download-document-thumb ERROR:', err, messageId, thumbType);
         } finally {
             this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
         }

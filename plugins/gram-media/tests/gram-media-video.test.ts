@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+
 import { GramMediaRouter } from '../src/router.js';
 import {
     makeHost, makeTransport, makeVideoDocument, makeBytes,
@@ -41,7 +42,7 @@ describe('GramMediaRouter video streaming', () => {
         expect(done.url).toMatch(/^blob:/);
         expect(done.messageId).toBe(1);
         expect(done.cacheSource).toBe('migrate-server');
-        // progress: 4/8 = 50 -> dispatched (50 % 10 === 0), then 100 -> capped at 99
+
         const progress = actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT_PROGRESS').map((a) => a.progress);
         expect(progress).toContain(50);
         expect(progress).toContain(99);
@@ -152,14 +153,12 @@ describe('GramMediaRouter video streaming', () => {
             expect(actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT')).toHaveLength(0);
             expect(requeueEvents.length).toBe(0);
 
-            // retry 1 (delay 600ms)
             await jest.advanceTimersByTimeAsync(700);
             expect(requeueEvents).toHaveLength(1);
             expect(requeueEvents[0].messageId).toBe(7);
             expect(requeueEvents[0].priority).toBe(0);
             await flushMicrotasks();
 
-            // give up after 5 retries
             await jest.advanceTimersByTimeAsync(10 * 60_000);
             expect(requeueEvents.length).toBeGreaterThanOrEqual(5);
             expect(failedEvents.length).toBe(1);
