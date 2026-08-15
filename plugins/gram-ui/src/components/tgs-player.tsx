@@ -212,6 +212,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
         const start = () => {
             if (started) return;
             started = true;
+            if (playKey && !loop) markCompleted(playKey);
             lastTimeRef.current = 0;
             playStart = performance.now();
             endFiredRef.current = false;
@@ -254,8 +255,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
                     onFrameProgressRef.current(progress);
                 }
                 const el = canvasRef.current;
-                const small = !el || (el.clientWidth <= 48 && el.clientHeight <= 48);
-                if (forceDraw || !small || timestamp - lastDrawRef.current >= 33.33) {
+                if (forceDraw || !el || timestamp - lastDrawRef.current >= 33.33) {
                     try {
                         drawFrame(frame);
                         lastDrawRef.current = timestamp;

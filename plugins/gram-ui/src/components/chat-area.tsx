@@ -18,7 +18,7 @@ import type { ImageSpec } from '../types.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
 import { flushEmojiBatch, getEmojiDocId, getDiceDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeDiceSets } from './emoji-store.js';
-import { SlotMachineSticker, resetSlotMachineDone } from './slot-machine.js';
+import { SlotMachineSticker, resetSlotMachineDone, resetSlotMachineStarted } from './slot-machine.js';
 import { resetCompletedAnimations } from './tgs-player.js';
 import { releaseEmojiCache } from './emoji-canvas.js';
 import { observeVisibility } from './emoji-canvas.js';
@@ -564,6 +564,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
     playbackResetPeerRef.current = handlerPeerKey;
     resetCompletedAnimations();
     resetSlotMachineDone();
+    resetSlotMachineStarted();
   }
   useEffect(() => {
     handlerCacheRef.current = new Map();

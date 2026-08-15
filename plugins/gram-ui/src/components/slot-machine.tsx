@@ -27,6 +27,20 @@ export function resetSlotMachineDone(): void {
   slotMachineDone.clear();
 }
 
+const slotMachineStarted = new Map<string, boolean>();
+
+function markSlotMachineStarted(key: string): void {
+  slotMachineStarted.set(key, true);
+  if (slotMachineStarted.size > 256) {
+    const oldest = slotMachineStarted.keys().next().value;
+    if (oldest != null) slotMachineStarted.delete(oldest);
+  }
+}
+
+export function resetSlotMachineStarted(): void {
+  slotMachineStarted.clear();
+}
+
 function sameSpecs(a: SlotLayerSpec[] | undefined, b: SlotLayerSpec[] | undefined): boolean {
   if (a === b) return true;
   if (!a || !b || a.length !== b.length) return false;
@@ -420,11 +434,12 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
   const slots = layers.filter((s) => s.role === 'slot');
 
   const doneBefore = playKey != null && slotMachineDone.get(playKey) === true;
-  const [handleDone, setHandleDone] = useState(doneBefore);
-  const [spinsDone, setSpinsDone] = useState(doneBefore ? spins.length : 0);
-  const [slotsDone, setSlotsDone] = useState(doneBefore ? slots.length : 0);
-  const [allDone, setAllDone] = useState(doneBefore);
-  const [winReady, setWinReady] = useState(doneBefore);
+  const startedBefore = playKey != null && (doneBefore || slotMachineStarted.get(playKey) === true);
+  const [handleDone, setHandleDone] = useState(startedBefore);
+  const [spinsDone, setSpinsDone] = useState(startedBefore ? spins.length : 0);
+  const [slotsDone, setSlotsDone] = useState(startedBefore ? slots.length : 0);
+  const [allDone, setAllDone] = useState(startedBefore);
+  const [winReady, setWinReady] = useState(startedBefore);
   const slotProgressRef = useRef<boolean[]>([false, false, false]);
 
   const onHandleEnd = useCallback(() => setHandleDone(true), []);
@@ -449,9 +464,14 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
       setAllDone(true);
       if (handle && !handleDone) setHandleDone(true);
       if (spins.length > 0 && spinsDone < spins.length) setSpinsDone(spins.length);
+      if (playKey) markSlotMachineStarted(playKey);
     }, WATCHDOG_MS);
     return () => clearTimeout(t);
   }, [animated, handle, handleDone, spins.length, spinsDone]);
+
+  useEffect(() => {
+    if (playKey && animated && handleDone) markSlotMachineStarted(playKey);
+  }, [playKey, animated, handleDone]);
 
   useEffect(() => {
     if (animated && slots.length > 0 && slotsDone >= slots.length && !allDone) setAllDone(true);
@@ -473,12 +493,12 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
       ))}
       {slots.map((s, i) => (
         <div key={s.docId} class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={s.docId} role="slot" partIndex={i} size={size} autoplay={startSlots} onEnd={onSlotEnd} onFrameProgress={onSlotProgress(i)} playKey={playKey} />
+          <SlotLayer docId={s.docId} role="slot" partIndex={i} size={size} autoplay={startSlots && !allDone} onEnd={onSlotEnd} onFrameProgress={onSlotProgress(i)} playKey={playKey} />
         </div>
       ))}
       {showWinBg ? (
         <div class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={bgWin!.docId} role="bgWin" partIndex={0} size={size} autoplay loop={false} playKey={playKey} />
+          <SlotLayer docId={bgWin!.docId} role="bgWin" partIndex={0} size={size} autoplay={!allDone} loop={false} playKey={playKey} />
         </div>
       ) : null}
       {handle ? (

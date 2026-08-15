@@ -779,7 +779,10 @@ function repeaterMatrix(tr: ParsedTransform | undefined, frame: number, n: numbe
 function maxPropertyNumber(prop: ParsedProperty | undefined, fallback: number): number {
     if (!prop) return fallback;
     let m = fallback;
-    const consider = (v: any) => { if (typeof v === 'number' && Number.isFinite(v) && v > m) m = v; };
+    const consider = (v: any) => {
+        const n = Array.isArray(v) ? v[0] : v;
+        if (typeof n === 'number' && Number.isFinite(n) && n > m) m = n;
+    };
     consider(prop.value);
     for (const k of prop.keyframes || []) {
         consider(k.s);
@@ -1010,7 +1013,12 @@ function drawPaints(ctx: CanvasRenderingContext2D, paints: PaintRec[], frame: nu
         } else {
             ctx.beginPath();
             drawCmds(ctx, cmds);
-            ctx.strokeStyle = paintColorStyle(paint, frame);
+            const grad = paintGradient(ctx, paint, frame);
+            if (grad) {
+                ctx.strokeStyle = grad;
+            } else {
+                ctx.strokeStyle = paintColorStyle(paint, frame);
+            }
             const width = toNumber(resolveProp(paint.shape.strokeWidth, frame, 0)) * matScaleOf(paint.matrix);
             ctx.lineWidth = width;
             const lc = paint.shape.lineCap;
