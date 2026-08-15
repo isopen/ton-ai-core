@@ -963,8 +963,13 @@ function paintGradient(ctx: CanvasRenderingContext2D, paint: PaintRec, frame: nu
                 grad.addColorStop(Math.max(0, Math.min(1, off)), `rgba(${Math.round(entry[1] * 255)},${Math.round(entry[2] * 255)},${Math.round(entry[3] * 255)},${alpha})`);
             }
         } else {
-            const channels = g.colorPoints === 5 || g.colorPoints === 4 ? g.colorPoints : 4;
-            const hasAlpha = channels >= 5;
+            const pointCount = g.colorPoints && g.colorPoints > 0 ? g.colorPoints : 0;
+            let channels = 4;
+            if (pointCount > 0 && stops.length % pointCount === 0) {
+                const perPoint = stops.length / pointCount;
+                if (perPoint === 4 || perPoint === 5) channels = perPoint;
+            }
+            const hasAlpha = channels === 5;
             for (let i = 0; i + 3 < stops.length; i += channels) {
                 const off = toNumber(stops[i]);
                 const r = Math.round(toNumber(stops[i + 1]) * 255);

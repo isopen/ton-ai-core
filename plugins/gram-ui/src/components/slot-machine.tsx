@@ -11,6 +11,7 @@ const SLOT_RETRY_MS = 2500;
 const SLOT_LAYER_FINISH_MS = 300;
 const WATCHDOG_MS = 15000;
 const WIN_BG_PROGRESS = 0.66;
+const SLOT_DEBUG = true;
 
 function sameSpecs(a: SlotLayerSpec[] | undefined, b: SlotLayerSpec[] | undefined): boolean {
   if (a === b) return true;
@@ -170,9 +171,12 @@ function localFallbackId(role: SlotLayerRole, partIndex: number): string | undef
 
 function SlotLayer({ docId, role, partIndex, size, autoplay, loop, onEnd, onFrameProgress }: { docId: string; role: SlotLayerRole; partIndex: number; size: number; autoplay: boolean; loop?: boolean; onEnd?: () => void; onFrameProgress?: (progress: number) => void }) {
   const real = useSlotData(docId);
-  const localId = isSlotLocalDoc(docId) ? undefined : localFallbackId(role, partIndex);
+  const localId = isSlotLocalDoc(docId) ? docId : localFallbackId(role, partIndex);
   const local = useSlotLocalData(localId);
   const data = real || local;
+  if (SLOT_DEBUG) {
+    console.log('[slot-layer]', JSON.stringify({ docId, role, real: !!real, local: !!local, kind: data?.kind }));
+  }
   const firedDataRef = useRef<any>(null);
 
   useEffect(() => {
@@ -271,6 +275,10 @@ export function SlotMachineSticker({ value, size = 96 }: { value: number | null;
   const layers = specs && setReady ? specs : localSpecsFor(value);
   const realSet = !!specs && setReady;
   const animated = realSet && typeof value === 'number' && value > 0;
+
+  if (SLOT_DEBUG) {
+    console.log('[slot]', JSON.stringify({ value, specs: specs ? specs.length : undefined, setReady, localReady, ready, realSet, animated, nLocal: layers.filter((s) => isSlotLocalDoc(s.docId)).length }));
+  }
 
   const bg = layers.find((s) => s.role === 'bg');
   const bgWin = layers.find((s) => s.role === 'bgWin');

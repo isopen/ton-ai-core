@@ -394,7 +394,7 @@ describe('renderFrame', () => {
     it('uses the 5th channel as gradient stop alpha', () => {
         const GF = {
             ty: 'gf',
-            g: { p: 5, k: { a: 0, k: [0, 1, 0, 0, 1, 0.5, 0, 0, 1, 0.5] } },
+            g: { p: 2, k: { a: 0, k: [0, 1, 0, 0, 1, 0.5, 0, 0, 1, 0.5] } },
             s: { a: 0, k: [0, 0] },
             e: { a: 0, k: [100, 0] },
             o: { a: 0, k: 100 },
@@ -404,6 +404,24 @@ describe('renderFrame', () => {
         expect(c.ctx.gradients[0].stops).toEqual([
             [0, 'rgba(255,0,0,1)'],
             [0.5, 'rgba(0,0,255,0.5)'],
+        ]);
+    });
+    it('walks 5-point gradient stops with the 4-channel stride (telegram tgs)', () => {
+        const GF = {
+            ty: 'gf',
+            g: { p: 5, k: { a: 0, k: [0, 0.902, 0, 0, 0.138, 0.951, 0, 0, 0.496, 1, 0, 0, 0.858, 0.931, 0, 0, 0.999, 0.863, 0, 0] } },
+            s: { a: 0, k: [0, 0] },
+            e: { a: 0, k: [100, 0] },
+            o: { a: 0, k: 100 },
+            t: 1,
+        };
+        const c = render({ layers: [shapeLayer(0, [RECT, GF])] });
+        expect(c.ctx.gradients[0].stops).toEqual([
+            [0, 'rgba(230,0,0,1)'],
+            [0.138, 'rgba(243,0,0,1)'],
+            [0.496, 'rgba(255,0,0,1)'],
+            [0.858, 'rgba(237,0,0,1)'],
+            [0.999, 'rgba(220,0,0,1)'],
         ]);
     });
     it('renders precomp children inline when there is a single child', () => {
