@@ -113,7 +113,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
           });
           if (!sizeChanged) return photo;
           changed = true;
-          return { ...photo, sizes };
+          return { ...photo, sizes, failed: false };
         };
         const photo = updPhoto(media.photo);
         const webpage = media.webpage ? { ...media.webpage, photo: updPhoto(media.webpage.photo) } : media.webpage;
@@ -131,9 +131,24 @@ export function reducer(state: AppState, action: UIAction): AppState {
       let mutated = false;
       const messages = state.messages.map(m => {
         if (m.id !== action.messageId || !m.media?.photo) return m;
-        if (m.media.photo.progress === action.progress) return m;
+        if (m.media.photo.progress === action.progress && !m.media.photo.failed) return m;
         mutated = true;
-        return { ...m, media: { ...m.media, photo: { ...m.media.photo, progress: action.progress } } };
+        return { ...m, media: { ...m.media, photo: { ...m.media.photo, progress: action.progress, failed: false } } };
+      });
+      if (!mutated) return state;
+      return {
+        ...state,
+        renderTick: state.renderTick + 1,
+        messages,
+      };
+    }
+    case 'UPDATE_MESSAGE_PHOTO_FAILED': {
+      let mutated = false;
+      const messages = state.messages.map(m => {
+        if (m.id !== action.messageId || !m.media?.photo) return m;
+        if (m.media.photo.failed === true) return m;
+        mutated = true;
+        return { ...m, media: { ...m.media, photo: { ...m.media.photo, failed: true } } };
       });
       if (!mutated) return state;
       return {

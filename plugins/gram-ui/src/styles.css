@@ -2281,6 +2281,40 @@ body {
   background: rgba(10,14,20,.42);
 }
 
+.tgui-photo-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(10,14,20,.55);
+  color: #fff;
+  font-size: 14px;
+  z-index: 2;
+}
+
+.tgui-photo-error-text {
+  text-align: center;
+  padding: 0 12px;
+}
+
+.tgui-photo-error-retry {
+  background: rgba(255,255,255,.14);
+  border: none;
+  border-radius: 12px;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.tgui-photo-error-retry:hover {
+  background: rgba(255,255,255,.26);
+}
+
 .MessageBubble_photo .MessageBubble__text,
 .MessageBubble_media .MessageBubble__text {
   padding: 8px 11px 0;
@@ -4295,8 +4329,15 @@ body {
 
 .login-loading {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   padding: 32px 0;
+}
+
+.login-loading-text {
+  margin-top: 16px;
+  font-size: 15px;
+  color: #8696a6;
 }
 
 .login-spinner {

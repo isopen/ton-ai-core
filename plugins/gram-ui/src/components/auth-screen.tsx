@@ -131,10 +131,16 @@ function handleCheckPassword(dispatch: Dispatch) {
 
 const RESEND_DELAY = 30;
 
-function LoadingView() {
+function LoadingView({ state }: { state: AppState }) {
+  const status = state.connectionStatus === 'connecting'
+    ? t(S.AUTH_CONNECTING)
+    : state.connectionStatus === 'disconnected'
+      ? t(S.CONNECTION_DISCONNECTED)
+      : t(S.AUTH_LOADING);
   return (
     <div class="login-loading">
       <div class="login-spinner"></div>
+      <div class="login-loading-text">{status}</div>
     </div>
   );
 }
@@ -388,7 +394,7 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
           <TelegramCrystal size={100} />
         </div>
         {isLoading ? (
-          <LoadingView />
+          <LoadingView state={state} />
         ) : (
           <div class="auth-content">
             <LangSelector

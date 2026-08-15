@@ -267,6 +267,15 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   const pct = progress !== undefined ? progress : 0;
   const fileSize = toFileSize(m.media?.photo?.size);
   const isPreloading = !hasAnyUrl;
+  const failed = m.media?.photo?.failed === true;
+
+  const retryPhoto = () => {
+    const need = firstMissingSizeType(m.media?.photo, CHAT_PHOTO_PRIO);
+    if (!need) return;
+    window.dispatchEvent(new CustomEvent('tg-download-photo', {
+      detail: { photo: m.media.photo, sizeType: need.sizeType, messageId: m.id },
+    }));
+  };
 
   let mediaCls = 'tgui-photo-preview';
   if (isPreloading) mediaCls += ' tgui-photo-preview_loading';
@@ -280,10 +289,17 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
           t(S.PHOTO_PLACEHOLDER)
         )}
         {isPreloading ? (
-          <>
-            <div class="tgui-photo-scrim" />
-            <PhotoLoader percent={pct} fileSize={fileSize} hidePercent={imgWidth > 0 && imgWidth < 140} />
-          </>
+          failed ? (
+            <div class="tgui-photo-error">
+              <div class="tgui-photo-error-text">{t(S.PHOTO_LOAD_FAILED)}</div>
+              <button class="tgui-photo-error-retry" type="button" onClick={retryPhoto}>{t(S.PHOTO_RETRY)}</button>
+            </div>
+          ) : (
+            <>
+              <div class="tgui-photo-scrim" />
+              <PhotoLoader percent={pct} fileSize={fileSize} hidePercent={imgWidth > 0 && imgWidth < 140} />
+            </>
+          )
         ) : null}
         {cacheSource ? <MediaSourceBadge source={cacheSource} /> : null}
         {!m.message ? (

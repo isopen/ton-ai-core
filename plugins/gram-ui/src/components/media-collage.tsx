@@ -8,6 +8,8 @@ import { MediaSourceBadge } from './media-source-badge.js';
 import type { ImageSpec } from '../types.js';
 import { calculateAlbumLayout } from './photo-album-layout.js';
 import { firstMissingSizeType, CHAT_PHOTO_PRIO } from './photo-spec.js';
+import { t } from '../locale.js';
+import { S } from '../strings.js';
 
 export interface MediaCollageItem {
   m: any;
@@ -144,7 +146,16 @@ export function MediaCollage({
         const hasAnyUrl = sizes.some((s: any) => !!(s.url || s.src));
         const progress = (photo?.progress as number | undefined) ?? 0;
         const isPreloading = !hasAnyUrl;
+        const failed = photo?.failed === true;
         const fileSize = toFileSize(photo?.size);
+
+        const retryPhoto = () => {
+          const need = firstMissingSizeType(photo, CHAT_PHOTO_PRIO);
+          if (!need) return;
+          window.dispatchEvent(new CustomEvent('tg-download-photo', {
+            detail: { photo, sizeType: need.sizeType, messageId: item.m?.id },
+          }));
+        };
 
         return (
           <div
@@ -175,10 +186,17 @@ export function MediaCollage({
                   <div class="MediaCollage__placeholder" />
                 )}
                 {isPreloading ? (
-                  <>
-                    <div class="tgui-photo-scrim" />
-                    <PhotoLoader percent={progress} fileSize={fileSize} hidePercent={cell.width < 140} />
-                  </>
+                  failed ? (
+                    <div class="tgui-photo-error">
+                      <div class="tgui-photo-error-text">{t(S.PHOTO_LOAD_FAILED)}</div>
+                      <button class="tgui-photo-error-retry" type="button" onClick={retryPhoto}>{t(S.PHOTO_RETRY)}</button>
+                    </div>
+                  ) : (
+                    <>
+                      <div class="tgui-photo-scrim" />
+                      <PhotoLoader percent={progress} fileSize={fileSize} hidePercent={cell.width < 140} />
+                    </>
+                  )
                 ) : null}
               </div>
             )}
