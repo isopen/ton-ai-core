@@ -168,11 +168,11 @@ export function getSlotLayerSpecs(value?: number | null): SlotLayerSpec[] | unde
     if (id) specs.push({ role, docId: id });
   };
   push('bg', 0);
-  if (v == null || v <= 0) return specs;
   push('handle', 2);
   push('spin', 8);
   push('spin', 14);
   push('spin', 20);
+  if (v == null || v <= 0) return specs;
   if (v === 64) {
     push('slot', 3);
     push('slot', 9);

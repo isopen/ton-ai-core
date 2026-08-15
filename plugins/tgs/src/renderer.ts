@@ -1121,6 +1121,8 @@ function applyLuma(canvas: HTMLCanvasElement) {
     ctx.putImageData(image, 0, 0);
 }
 
+export type LayerOrder = 'default' | 'reversed';
+
 function renderCompLayers(
     ctx: CanvasRenderingContext2D,
     layers: ParsedLayer[],
@@ -1130,9 +1132,41 @@ function renderCompLayers(
     clipRect: Rect,
     assets: ParsedAsset[],
     anim: ParsedAnimation,
+    layerOrder: LayerOrder = 'default',
 ) {
     const layerById = new Map<number, ParsedLayer>();
     for (const l of layers) layerById.set(l.index, l);
+
+    if (layerOrder === 'reversed') {
+        const matteFor = new Map<number, ParsedLayer>();
+        {
+            let matte: ParsedLayer | null = null;
+            for (let i = layers.length - 1; i >= 0; i--) {
+                const layer = layers[i];
+                if (layer.matteType) {
+                    matte = layer;
+                } else {
+                    if (matte) matteFor.set(layer.index, matte);
+                    matte = null;
+                }
+            }
+        }
+
+        for (let i = 0; i < layers.length; i++) {
+            const layer = layers[i];
+            if (layer.matteType) continue;
+            if (!layerVisible(layer, frame)) continue;
+            const matte = matteFor.get(layer.index);
+            if (matte) {
+                if (layerVisible(matte, frame)) {
+                    renderMattePair(ctx, matte, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+                }
+            } else {
+                renderLayer(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+            }
+        }
+        return;
+    }
 
     let matte: ParsedLayer | null = null;
     for (let i = layers.length - 1; i >= 0; i--) {
@@ -1143,10 +1177,10 @@ function renderCompLayers(
             if (layerVisible(layer, frame)) {
                 if (matte) {
                     if (layerVisible(matte, frame)) {
-                        renderMattePair(ctx, matte, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim);
+                        renderMattePair(ctx, matte, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
                     }
                 } else {
-                    renderLayer(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim);
+                    renderLayer(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
                 }
             }
             matte = null;
@@ -1165,6 +1199,7 @@ function renderMattePair(
     assets: ParsedAsset[],
     layerById: Map<number, ParsedLayer>,
     anim: ParsedAnimation,
+    layerOrder: LayerOrder = 'default',
 ) {
     const w = Math.max(1, Math.ceil(clipRect.w));
     const h = Math.max(1, Math.ceil(clipRect.h));
@@ -1179,7 +1214,7 @@ function renderMattePair(
     srcCtx.beginPath();
     srcCtx.rect(0, 0, w, h);
     srcCtx.clip();
-    renderLayer(srcCtx, src, frame, shifted, parentAlpha, localClip, assets, layerById, anim);
+    renderLayer(srcCtx, src, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder);
     srcCtx.restore();
 
     const matteCanvas = getBuffer(w, h, 'matte-layer');
@@ -1190,7 +1225,7 @@ function renderMattePair(
     matteCtx.beginPath();
     matteCtx.rect(0, 0, w, h);
     matteCtx.clip();
-    renderLayer(matteCtx, matte, frame, shifted, parentAlpha, localClip, assets, layerById, anim);
+    renderLayer(matteCtx, matte, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder);
     matteCtx.restore();
 
     const type = matte.matteType ?? MatteType.None;
@@ -1228,6 +1263,7 @@ function renderPrecomp(
     assets: ParsedAsset[],
     layerById: Map<number, ParsedLayer>,
     anim: ParsedAnimation,
+    layerOrder: LayerOrder = 'default',
 ) {
     const children = precompChildren(layer, assets);
 
@@ -1271,7 +1307,7 @@ function renderPrecomp(
         renderCompLayers(
             bctx, children, mappedFrame,
             matMul(matTranslate(-layerClip.x, -layerClip.y), m),
-            childAlpha, rectOf(0, 0, w, h), assets, anim,
+            childAlpha, rectOf(0, 0, w, h), assets, anim, layerOrder,
         );
         bctx.restore();
         ctx.save();
@@ -1287,7 +1323,7 @@ function renderPrecomp(
     ctx.beginPath();
     ctx.rect(layerClip.x, layerClip.y, layerClip.w, layerClip.h);
     ctx.clip();
-    renderCompLayers(ctx, children, mappedFrame, m, childAlpha, layerClip, assets, anim);
+    renderCompLayers(ctx, children, mappedFrame, m, childAlpha, layerClip, assets, anim, layerOrder);
     ctx.restore();
 }
 
@@ -1457,6 +1493,7 @@ function renderLayer(
     assets: ParsedAsset[],
     layerById: Map<number, ParsedLayer>,
     anim: ParsedAnimation,
+    layerOrder: LayerOrder = 'default',
 ) {
     if (!layerVisible(layer, frame)) return;
 
@@ -1488,7 +1525,7 @@ function renderLayer(
             ctx.restore();
         }
     } else if (layer.type === LayerType.Precomp) {
-        renderPrecomp(ctx, layer, frame, m, opacity, clipRect, assets, layerById, anim);
+        renderPrecomp(ctx, layer, frame, m, opacity, clipRect, assets, layerById, anim, layerOrder);
     } else if (layer.type === LayerType.Solid) {
         renderSolid(ctx, layer, m, opacity);
     } else if (layer.type === LayerType.Text) {
@@ -1505,6 +1542,7 @@ export function renderFrame(
     dpr: number,
     displayW?: number,
     displayH?: number,
+    layerOrder: LayerOrder = 'default',
 ) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -1523,7 +1561,7 @@ export function renderFrame(
 
     const root = compositionMatrix(anim, canvas.width, canvas.height);
     const clip: Rect = { x: 0, y: 0, w: canvas.width, h: canvas.height };
-    renderCompLayers(ctx, anim.layers, frame, root, 1, clip, anim.assets, anim);
+    renderCompLayers(ctx, anim.layers, frame, root, 1, clip, anim.assets, anim, layerOrder);
 }
 
 function compositionMatrix(anim: ParsedAnimation, w: number, h: number): Mat3 {

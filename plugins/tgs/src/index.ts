@@ -23,6 +23,7 @@ export { setValue, matchKeyPath, getOverride, Property } from './keypath.js';
 export { CubicBezier, buildEasing } from './easing.js';
 export { bezierLength, bezierPointAt, bezierTAtLength, bezierSplit } from './bezier.js';
 export { renderFrame } from './renderer.js';
+export type { LayerOrder } from './renderer.js';
 export {
     LayerType, MatteType, MaskMode, GradientType,
 } from './types.js';

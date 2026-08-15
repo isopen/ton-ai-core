@@ -1,7 +1,7 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import { renderFrame } from '@ton-ai/tgs';
-import type { ParsedAnimation } from '@ton-ai/tgs';
+import type { LayerOrder, ParsedAnimation } from '@ton-ai/tgs';
 import { parseTgsJson } from '../utils/tgs-parse.js';
 
 const TGS_DEBUG = false;
@@ -41,6 +41,8 @@ export interface TgsPlayerProps {
     className?: string;
     cacheKey?: string;
     onEnd?: () => void;
+    onFrameProgress?: (progress: number) => void;
+    layerOrder?: LayerOrder;
 }
 
 export function TgsPlayer(props: TgsPlayerProps) {
@@ -54,6 +56,8 @@ export function TgsPlayer(props: TgsPlayerProps) {
         className,
         cacheKey,
         onEnd,
+        onFrameProgress,
+        layerOrder,
     } = props;
 
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -71,6 +75,8 @@ export function TgsPlayer(props: TgsPlayerProps) {
     const ioRef = useRef<IntersectionObserver | null>(null);
     const onEndRef = useRef(onEnd);
     onEndRef.current = onEnd;
+    const onFrameProgressRef = useRef(onFrameProgress);
+    onFrameProgressRef.current = onFrameProgress;
     const endFiredRef = useRef(false);
 
     useEffect(() => {
@@ -119,8 +125,8 @@ export function TgsPlayer(props: TgsPlayerProps) {
         const anim = animRef.current;
         if (!canvas || !anim) return;
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        renderFrame(canvas, anim, frame, dpr);
-    }, []);
+        renderFrame(canvas, anim, frame, dpr, undefined, undefined, layerOrder);
+    }, [layerOrder]);
 
     useEffect(() => {
         if (!inView) return;
@@ -197,12 +203,14 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 const delta = timestamp - lastTimeRef.current;
                 lastTimeRef.current = timestamp;
                 let frame = frameRef.current + delta / frameDuration;
+                let forceDraw = false;
                 if (frame >= animRef.current.outFrame) {
                     if (loop) {
                         frame = animRef.current.inFrame + ((frame - animRef.current.inFrame) % totalFrames);
                     } else {
                         if (!endFiredRef.current) {
                             endFiredRef.current = true;
+                            forceDraw = true;
                             frame = animRef.current.outFrame - 1;
                             setPlaying(false);
                             onEndRef.current?.();
@@ -212,11 +220,30 @@ export function TgsPlayer(props: TgsPlayerProps) {
                     }
                 }
                 frameRef.current = frame;
+                if (onFrameProgressRef.current) {
+                    const animProg = animRef.current;
+                    const total = animProg.outFrame - animProg.inFrame;
+                    const progress = total > 0
+                        ? Math.min(1, Math.max(0, (frame - animProg.inFrame) / total))
+                        : 0;
+                    onFrameProgressRef.current(progress);
+                }
                 const el = canvasRef.current;
                 const small = !el || (el.clientWidth <= 48 && el.clientHeight <= 48);
-                if (!small || timestamp - lastDrawRef.current >= 33.33) {
-                    drawFrame(frame);
-                    lastDrawRef.current = timestamp;
+                if (forceDraw || !small || timestamp - lastDrawRef.current >= 33.33) {
+                    try {
+                        drawFrame(frame);
+                        lastDrawRef.current = timestamp;
+                    } catch (e) {
+                        if (TGS_DEBUG) console.log('[TGS_LOG] draw error', e);
+                        started = false;
+                        releasePlayerSlot();
+                        if (!loop && !endFiredRef.current) {
+                            endFiredRef.current = true;
+                            onEndRef.current?.();
+                        }
+                        return;
+                    }
                 }
                 if (timestamp - playStart > MAX_PLAYER_TIME) {
                     started = false;
