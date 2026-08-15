@@ -166,6 +166,21 @@ function buildSegments(text: string, emojiEntities: any[]): EmojiSegment[] {
   return segments;
 }
 
+function EmojiPendingRuns({ text, size }: { text: string; size: number }) {
+  const runs = matchEmojiRuns(text);
+  if (runs.length === 0) return <StaticEmojiText value={text} size={size} />;
+  const parts: any[] = [];
+  let pos = 0;
+  let key = 0;
+  for (const r of runs) {
+    if (r.start > pos) parts.push(<span key={'t' + key++}>{text.slice(pos, r.start)}</span>);
+    parts.push(<span key={'e' + key++} style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`} />);
+    pos = r.end;
+  }
+  if (pos < text.length) parts.push(<span key={'t' + key++}>{text.slice(pos)}</span>);
+  return <>{parts}</>;
+}
+
 export function EmojiText({ text, entities, documentUrls }: { text: string; entities?: any[]; documentUrls: Record<number, string> }) {
   const emojiEntities = (entities || [])
     .filter((e: any) => e?._ === 'messageEntityCustomEmoji' && typeof e.offset === 'number' && typeof e.length === 'number' && e.length > 0)
@@ -174,6 +189,8 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
 
   const singleEmoji = getSingleRegularEmoji(text, entities);
   const [mapVersion, setMapVersion] = useState(0);
+  const [settledVersion, setSettledVersion] = useState(0);
+  const settleTimer = useRef(0);
   useEffect(() => {
     ensureEmojiStickers();
     const customIds = new Set(emojiEntities.map((e: any) => String(e.document_id)));
@@ -193,11 +210,26 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
   }, [emojiIdsKey]);
 
   useEffect(() => {
+    if (mapVersion === 0 || mapVersion === settledVersion) return;
+    if (settleTimer.current) window.clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(() => {
+      settleTimer.current = 0;
+      setSettledVersion(mapVersion);
+    }, 300);
+    return () => {
+      if (settleTimer.current) {
+        window.clearTimeout(settleTimer.current);
+        settleTimer.current = 0;
+      }
+    };
+  }, [mapVersion, settledVersion]);
+
+  useEffect(() => {
     if (!singleEmoji || getEmojiDocId(singleEmoji)) return;
     requestEmojiDownload(undefined, singleEmoji, 1);
   }, [singleEmoji]);
 
-  const segsKey = text + '\u0001' + emojiIdsKey + '\u0001' + mapVersion;
+  const segsKey = text + '\u0001' + emojiIdsKey + '\u0001' + settledVersion;
   const segsRef = useRef<{ key: string; segments: EmojiSegment[] } | null>(null);
   if (!segsRef.current || segsRef.current.key !== segsKey) {
     segsRef.current = { key: segsKey, segments: buildSegments(text, emojiEntities) };
@@ -209,6 +241,9 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
   const size = singleEmoji ? SINGLE_EMOJI_SIZE : EMOJI_SIZE;
   const hasEmoji = segments.some((s) => s.type === 'emoji');
   if (!hasEmoji) {
+    if (matchEmojiRuns(text).length > 0) {
+      return <EmojiPendingRuns text={text} size={size} />;
+    }
     return <StaticEmojiText value={text} size={size} />;
   }
 

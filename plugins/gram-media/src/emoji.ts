@@ -48,6 +48,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiStickersLoading = false;
     private requestedEmojiDocIds = new Set<string>();
     private requestedEmojiAlts = new Set<string>();
+    private pendingEmojiAlts = new Map<string, { alt: string; priority: number }>();
     private announcedEmojiDocKinds = new Map<string, EmojiDocKind>();
     private emojiDocKindsById = new Map<string, EmojiDocKind>();
     private emojiPickerCategories: Array<{ name: string; emojis: string[] }> = [];
@@ -583,17 +584,28 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 log.error('[gram-media] emoji fallback error:', e?.message || e);
             }
         }
-        await Promise.all(['inputStickerSetEmojiGenericAnimations', 'inputStickerSetAnimatedEmojiAnimations'].map(async (inp) => {
-            try {
-                const extra = await this.router.fetchStickerSet(inp, { _: inp });
-                const added = this.buildEmojiMapFromSet(extra, map);
-                if (this.debug) log.info('[gram-media] extra emoji set', inp, 'docs =', Array.isArray(extra?.documents) ? extra.documents.length : 0, 'added =', added);
-            } catch (e: any) {
-                log.error('[gram-media] extra emoji set error:', e?.message, inp);
-            }
-        }));
-        await this.loadDiceSets(map);
         this.emojiStickerDocs = map;
+        this.indexEmojiDocs();
+        this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
+        this.flushPendingEmojiAlts();
+        void this.loadExtraEmojiSets(map);
+    };
+
+    private loadExtraEmojiSets = async (map: Record<string, any>): Promise<void> => {
+        try {
+            await Promise.all(['inputStickerSetEmojiGenericAnimations', 'inputStickerSetAnimatedEmojiAnimations'].map(async (inp) => {
+                try {
+                    const extra = await this.router.fetchStickerSet(inp, { _: inp });
+                    const added = this.buildEmojiMapFromSet(extra, map);
+                    if (this.debug) log.info('[gram-media] extra emoji set', inp, 'docs =', Array.isArray(extra?.documents) ? extra.documents.length : 0, 'added =', added);
+                } catch (e: any) {
+                    log.error('[gram-media] extra emoji set error:', e?.message, inp);
+                }
+            }));
+            await this.loadDiceSets(map);
+        } catch (e: any) {
+            log.error('[gram-media] extra emoji sets error:', e?.message || e);
+        }
         if (this.emojiKeycapDocs.length > 0) {
             const kcKeys = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
             kcKeys.forEach((e, i) => {
@@ -612,6 +624,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
         this.emojiStickersLoading = false;
         this.indexEmojiDocs();
+        this.flushPendingEmojiAlts();
         if (this.debug) {
             log.info('[gram-media] emoji stickers loaded, map size =', Object.keys(map).length, 'sample =', Object.keys(map).slice(0, 5).join(' '));
             const probe = ['⚽', '🏀', '🎾', '🏈', '⚾', '🎱', '🎯', '🎰', '🎲', '🎳'];
@@ -685,6 +698,10 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             return;
         }
         if (this.requestedEmojiAlts.has(nAlt)) return;
+        if (!this.emojiStickerDocs || Object.keys(this.emojiStickerDocs).length === 0) {
+            this.pendingEmojiAlts.set(nAlt, { alt, priority });
+            return;
+        }
         this.requestedEmojiAlts.add(nAlt);
         const readyEntries: Array<{ alt: string; docId: string }> = [];
         try {
@@ -865,6 +882,10 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             return null;
         }
         if (this.requestedEmojiAlts.has(nAlt)) return null;
+        if (!this.emojiStickerDocs || Object.keys(this.emojiStickerDocs).length === 0) {
+            this.pendingEmojiAlts.set(nAlt, { alt, priority });
+            return null;
+        }
 
         if (!this.emojiStickerDocs) this.router.emitWindow('tg-fetch-emoji-stickers');
         this.requestedEmojiAlts.add(nAlt);
@@ -908,6 +929,20 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             return null;
         }
     }
+
+    private flushPendingEmojiAlts = (): void => {
+        if (this.pendingEmojiAlts.size === 0) return;
+        const pending = [...this.pendingEmojiAlts.entries()];
+        this.pendingEmojiAlts.clear();
+        for (const [nAlt, p] of pending) {
+            const doc = this.emojiStickerDocs ? this.emojiStickerDocs[nAlt] : undefined;
+            if (doc?.id) {
+                this.requestedEmojiAlts.delete(nAlt);
+                continue;
+            }
+            void this.requestEmojiAlt(p.alt, p.priority);
+        }
+    };
 
     private runAltResolve(alt: string, priority: number): Promise<{ id: string; doc: any; priority: number } | null> {
         if (this.altSemaActive < ALT_RESOLVE_CONCURRENCY) {
@@ -1105,6 +1140,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         if (all) {
             this.requestedEmojiDocIds.clear();
             this.requestedEmojiAlts.clear();
+            this.pendingEmojiAlts.clear();
             this.emojiDocAttempts.clear();
             this.emojiStaleDocs.clear();
             this.cancelEmojiRetries();

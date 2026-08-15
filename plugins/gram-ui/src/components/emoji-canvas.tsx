@@ -1,7 +1,7 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedSticker } from './animated-sticker.js';
-import { getEmojiAlt, matchEmojiRuns, requestEmojiDownload } from './emoji-store.js';
+import { matchEmojiRuns, requestEmojiDownload } from './emoji-store.js';
 import { inflateTgs } from '@ton-ai/tgs';
 
 const EMOJI_GZIP_MAGIC: [number, number] = [0x1f, 0x8b];
@@ -611,12 +611,12 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
         const kind = kinds[docId];
         const pos = positions[idx];
         const renderId = renderIdFor(docId, size);
-        const fallbackGlyph = s.value || getEmojiAlt(docId) || '';
         const failed = !!failedDocs[docId];
         const onError = () => {
           setFailedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
           requestEmojiDownload(docId, s.value, 2);
         };
+        const tgsActive = kind === 'tgs' && url && !failed && tgsPaintable(docId);
         return (
           <span key={s.type + ':' + (s.docId || s.value) + ':' + i} class="tgui-emoji-slot" data-doc={docId} style={slotStyle}>
             {kind === 'video' && url ? (
@@ -639,16 +639,12 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
                 loading="eager"
                 decoding="async"
               />
-            ) : kind === 'tgs' && url && !failed && tgsPaintable(docId) ? (
+            ) : tgsActive ? (
               shared ? (
                 (inView || everShown) && pos ? (
                   <span style="position:relative;display:block;width:100%;height:100%">
-                    {!loadedDocs[docId] && (
-                      <span style="position:absolute;left:0;top:0;width:100%;height:100%">
-                        <FallbackGlyph value={fallbackGlyph} size={size} />
-                      </span>
-                    )}
                     <AnimatedSticker
+                      key={'stk-' + renderId + ':' + idx}
                       tgsUrl={url}
                       renderId={renderId}
                       size={size}
@@ -661,18 +657,12 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
                     />
                   </span>
                 ) : (
-                  <span style={`display:block;width:100%;height:100%;line-height:${Math.round(size * 1.1)}px;text-align:center;font-size:${Math.round(size * 0.72)}px`}>
-                    <FallbackGlyph value={fallbackGlyph} size={size} />
-                  </span>
+                  <span style="display:block;width:100%;height:100%" />
                 )
               ) : (inView || everShown) ? (
                 <span style="position:relative;display:block;width:100%;height:100%">
-                  {!loadedDocs[docId] && (
-                    <span style="position:absolute;left:0;top:0;width:100%;height:100%">
-                      <FallbackGlyph value={fallbackGlyph} size={size} />
-                    </span>
-                  )}
                   <AnimatedSticker
+                    key={'stk-' + renderId + ':' + idx}
                     tgsUrl={url}
                     renderId={renderId}
                     size={size}
@@ -683,10 +673,10 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
                   />
                 </span>
               ) : (
-                <FallbackGlyph value={fallbackGlyph} size={size} />
+                <span style="display:block;width:100%;height:100%" />
               )
             ) : (
-              <FallbackGlyph value={fallbackGlyph} size={size} />
+              <span style="display:block;width:100%;height:100%" />
             )}
           </span>
         );

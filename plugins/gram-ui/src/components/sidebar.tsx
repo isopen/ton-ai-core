@@ -1,14 +1,20 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
+import { useEffect } from '@ton-ai/atom/hooks';
 import { CustomScrollbar } from '../primitives/custom-scrollbar.js';
 import { Spinner } from '../primitives/spinner.js';
 import { DialogItem } from './dialog-item.js';
 import { ConnectionIndicator } from './connection-indicator.js';
 import { ActionMenu } from './action-menu.js';
+import { ensureEmojiStickers } from './emoji-store.js';
 import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';
 
 export function Sidebar({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
   const collapsed = state.sidebarCollapsed;
+
+  useEffect(() => {
+    ensureEmojiStickers();
+  }, []);
 
   return (
     <>

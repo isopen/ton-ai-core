@@ -471,6 +471,90 @@ describe('GramMediaRouter emoji pipeline', () => {
         expect(router.getCachedEmojiUrl('emojipack-4002')).toBe(byId.get('emojipack-4002'));
     });
 
+    test('resolves and downloads a large batch of unknown custom emoji without cache', async () => {
+        const N = 30;
+        const docs = Array.from({ length: N }, (_, i) => makeDocument({
+            id: '7000' + i,
+            mime_type: 'application/x-tgsticker',
+            attributes: [{ _: 'documentAttributeCustomEmoji', alt: 'x' + i }],
+        }));
+        const rpcIds: string[] = [];
+        const transport = makeTransport({
+            callRpc: async (method, params) => {
+                if (method === 'messages.getCustomEmojiDocuments') {
+                    const asked = new Set((params?.document_id || []).map(String));
+                    rpcIds.push(...asked);
+                    return docs.filter((d) => asked.has(String(d.id)));
+                }
+                return {};
+            },
+            downloadFiles: async (docsArg) => docsArg.map((d, i) => ({
+                index: i,
+                type: d.document.mime_type,
+                bytes: makeGzipMagicBytes(),
+                cacheSource: 'home-server',
+            })),
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        const urlEvents: any[] = [];
+        window.addEventListener('tg-emoji-url', (e) => urlEvents.push((e as CustomEvent).detail));
+
+        window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
+            detail: { items: docs.map((d) => ({ docId: d.id, priority: 1 })) },
+        }));
+        await flushTicks();
+        await flushTicks();
+        await flushTicks();
+
+        expect(rpcIds).toHaveLength(N);
+        const done = actions.filter((a) => a.type === 'UPDATE_MESSAGE_DOCUMENT' && String(a.messageId).startsWith('emojipack-'));
+        expect(done).toHaveLength(N);
+        const byDoc = new Map(urlEvents.map((e) => [String(e.docId), e]));
+        for (const d of docs) {
+            const ev = byDoc.get(String(d.id));
+            expect(ev).toBeTruthy();
+            expect(ev.url).toMatch(/^blob:/);
+            expect(ev.kind).toBe('tgs');
+            expect(ev.json).toBeTruthy();
+            expect(router.getCachedEmojiUrl('emojipack-' + d.id)).toBe(ev.url);
+        }
+    });
+
+    test('re-batch after full success does not re-download cached emoji', async () => {
+        const doc1 = makeDocument({ id: '7001', mime_type: 'application/x-tgsticker' });
+        const downloadFiles = jest.fn(async (docsArg) => docsArg.map((d, i) => ({
+            index: i,
+            type: d.document.mime_type,
+            bytes: makeGzipMagicBytes(),
+        })));
+        const transport = makeTransport({
+            callRpc: async (method) => (method === 'messages.getCustomEmojiDocuments' ? [doc1] : {}),
+            downloadFiles,
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
+            detail: { items: [{ docId: '7001', priority: 1 }] },
+        }));
+        await flushTicks();
+        await flushTicks();
+        expect(downloadFiles).toHaveBeenCalledTimes(1);
+
+        window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
+            detail: { items: [{ docId: '7001', priority: 1 }] },
+        }));
+        await flushTicks();
+        await flushTicks();
+        expect(downloadFiles).toHaveBeenCalledTimes(1);
+        const done = actions.filter((a) => a.type === 'UPDATE_MESSAGE_DOCUMENT' && String(a.messageId) === 'emojipack-7001');
+        expect(done).toHaveLength(2);
+    });
+
     test('overlapping batch item waits for in-flight download and still gets url', async () => {
         const doc1 = makeDocument({ id: '8001', mime_type: 'video/mp4' });
         const doc2 = makeDocument({ id: '8002', mime_type: 'video/mp4' });
