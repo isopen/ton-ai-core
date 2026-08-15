@@ -26,6 +26,8 @@ const EMOJI_RELEASE_GRACE_MS = 60_000;
 const CUSTOM_EMOJI_RPC_CHUNK = 200;
 const CUSTOM_EMOJI_RPC_CONCURRENCY = 3;
 const ALT_RESOLVE_CONCURRENCY = 6;
+const EMOJI_NO_STICKER_ALT_TTL_MS = 30 * 60_000;
+const EMOJI_EXTRA_SETS_DELAY_MS = 3000;
 
 const normalizeEmoji = (e: string): string => e.replace(/[\uFE00-\uFE0F\u200D]/g, '');
 
@@ -70,6 +72,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiReleaseGraceTimer: ReturnType<typeof setTimeout> | null = null;
     private unknownRetryTimer: ReturnType<typeof setTimeout> | null = null;
     private unknownRetryIds = new Set<string>();
+    private emojiNoStickerAlts = new Map<string, number>();
     private handlers: Array<{ event: string; fn: (e: Event) => void }> = [];
 
     constructor(private router: GramMediaRouter) {}
@@ -101,6 +104,28 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private markEmojiDocAttempt(id: string): void {
         this.requestedEmojiDocIds.delete(id);
         this.emojiDocAttempts.set(id, (this.emojiDocAttempts.get(id) || 0) + 1);
+    }
+
+    private hasNoStickerAlt(nAlt: string): boolean {
+        if (!nAlt) return true;
+        const bannedAt = this.emojiNoStickerAlts.get(nAlt);
+        if (bannedAt == null) return false;
+        if (Date.now() - bannedAt > EMOJI_NO_STICKER_ALT_TTL_MS) {
+            this.emojiNoStickerAlts.delete(nAlt);
+            return false;
+        }
+        return true;
+    }
+
+    private markEmojiNoSticker(nAlt: string): void {
+        if (!nAlt) return;
+        this.emojiNoStickerAlts.set(nAlt, Date.now());
+        if (this.emojiNoStickerAlts.size > 2048) {
+            for (const k of this.emojiNoStickerAlts.keys()) {
+                this.emojiNoStickerAlts.delete(k);
+                if (this.emojiNoStickerAlts.size < 1600) break;
+            }
+        }
     }
 
     private resetEmojiAttempts(id: string): void {
@@ -593,6 +618,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
 
     private loadExtraEmojiSets = async (map: Record<string, any>): Promise<void> => {
         try {
+            await new Promise(r => setTimeout(r, EMOJI_EXTRA_SETS_DELAY_MS));
             await Promise.all(['inputStickerSetEmojiGenericAnimations', 'inputStickerSetAnimatedEmojiAnimations'].map(async (inp) => {
                 try {
                     const extra = await this.router.fetchStickerSet(inp, { _: inp });
@@ -697,6 +723,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             }
             return;
         }
+        if (this.hasNoStickerAlt(nAlt)) return;
         if (this.requestedEmojiAlts.has(nAlt)) return;
         if (!this.emojiStickerDocs || Object.keys(this.emojiStickerDocs).length === 0) {
             this.pendingEmojiAlts.set(nAlt, { alt, priority });
@@ -710,9 +737,11 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             const resolved = stickers.find((d: any) => (d?.mime_type || '').toLowerCase() === 'application/x-tgsticker') || stickers[0];
             if (!resolved?.id) {
                 this.requestedEmojiAlts.delete(nAlt);
+                this.markEmojiNoSticker(nAlt);
                 return;
             }
             if (!this.emojiStickerDocs) this.emojiStickerDocs = {};
+            this.emojiNoStickerAlts.delete(nAlt);
             this.emojiStickerDocs[nAlt] = resolved;
             this.indexEmojiDocs();
             const id = String(resolved.id);
@@ -759,7 +788,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 unknownIds.push(docId);
             } else if (it.alt != null) {
                 const nAlt = normalizeEmoji(it.alt);
-                if (nAlt && !this.requestedEmojiAlts.has(nAlt)) {
+                if (nAlt && !this.hasNoStickerAlt(nAlt) && !this.requestedEmojiAlts.has(nAlt)) {
                     unknownAlts.push({ alt: it.alt, nAlt, priority });
                 }
             }
@@ -875,12 +904,14 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             const doc = this.emojiStickerDocs[nAlt];
             const id = String(doc.id);
             this.requestedEmojiAlts.delete(nAlt);
+            this.emojiNoStickerAlts.delete(nAlt);
             if (this.canRequestEmojiDoc(id)) {
                 this.requestedEmojiDocIds.add(id);
                 return { id, doc, priority };
             }
             return null;
         }
+        if (this.hasNoStickerAlt(nAlt)) return null;
         if (this.requestedEmojiAlts.has(nAlt)) return null;
         if (!this.emojiStickerDocs || Object.keys(this.emojiStickerDocs).length === 0) {
             this.pendingEmojiAlts.set(nAlt, { alt, priority });
@@ -895,9 +926,11 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             const doc = stickers.find((d: any) => (d?.mime_type || '').toLowerCase() === 'application/x-tgsticker') || stickers[0];
             if (!doc?.id) {
                 this.requestedEmojiAlts.delete(nAlt);
+                this.markEmojiNoSticker(nAlt);
                 return null;
             }
             if (!this.emojiStickerDocs) this.emojiStickerDocs = {};
+            this.emojiNoStickerAlts.delete(nAlt);
             this.emojiStickerDocs[nAlt] = doc;
             this.indexEmojiDocs();
             this.notifyEmojiDocsReady([{ alt: nAlt, docId: String(doc.id) }]);
@@ -990,69 +1023,11 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         if (stillNeeded.length === 0) return;
         if (this.debug) log.info('[gram-media] emoji batch download start items=' + stillNeeded.length);
 
-        const emitItem = async (r: { id: string; doc: any; priority: number }): Promise<'ok' | 'fail'> => {
-            const markFailed = () => {
-                this.requestedEmojiDocIds.delete(r.id);
-                this.emojiStaleDocs.add(r.id);
-                this.markEmojiDocAttempt(r.id);
-                this.scheduleEmojiRetry(r.id);
-            };
-            let res: Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>;
-            try {
-                res = await this.router.transport?.downloadFiles([{ document: r.doc, priority: r.priority }]) || [];
-            } catch (err: any) {
-                if (this.debug) log.info('[gram-media] emoji item download THROW', r.id, (err as Error)?.message || err);
-                markFailed();
-                return 'fail';
-            }
-            const raw = res[0];
-            if (!raw?.bytes || raw.error) {
-                if (this.debug) log.info('[gram-media] emoji item FAIL', r.id, 'err=' + (raw?.error || 'no bytes'), 'mime=' + (r.doc.mime_type || ''), 'size=' + (r.doc.size || 0), 'dc=' + (r.doc.dc_id || 0));
-                markFailed();
-                return 'fail';
-            }
-            try {
-                const mime = (r.doc.mime_type || 'application/octet-stream').toLowerCase();
-                const bytes = this.router.toArrayBuffer(raw.bytes);
-                if (!bytes.byteLength) {
-                    markFailed();
-                    return 'fail';
-                }
-                if (mime === 'application/x-tgsticker' && this.diceSetsByEmoji.size > 0) {
-                    const inDiceSet = [...this.diceSetsByEmoji.values()].some((docs) => docs.includes(r.doc));
-                    if (inDiceSet) {
-                        const u8 = new Uint8Array(bytes);
-                        let bin = '';
-                        for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
-                        try {
-                            localStorage.setItem('dice-dump-' + r.id, btoa(bin));
-                            log.info('[dice-dump] saved', r.id, bytes.byteLength);
-                        } catch (e) {
-                            log.warn('[dice-dump] localStorage error:', e);
-                        }
-                    }
-                }
-                const { kind, url } = await this.router.emojiKindAndUrlFor(bytes, mime);
-                if (this.debug) log.info('[gram-media] emoji item OK', r.id, 'mime=' + mime, 'kind=' + (kind || '?'), 'size=' + bytes.byteLength);
-                this.router.setCachedEmojiUrl('emojipack-' + r.id, url);
-                this.announceEmojiDocKind(r.id, kind);
-                this.router.notifyEmojiUrlKind(url, kind);
-                this.router.notifyEmojiUrl(r.id, url, mime, kind);
-                this.router.dispatchDocumentUrl('emojipack-' + r.id, url, raw.cacheSource || undefined);
-
-                this.requestedEmojiDocIds.delete(r.id);
-                this.resetEmojiAttempts(r.id);
-                return 'ok';
-            } catch (err: any) {
-                log.error('[gram-media] emoji item convert error:', (err as Error)?.message || err, r.id);
-                markFailed();
-                return 'fail';
-            }
-        };
-
-        const counted = await Promise.all(stillNeeded.map(emitItem));
-        const okCount = counted.filter((x) => x === 'ok').length;
-        if (this.debug) log.info('[gram-media] emoji batch done ok=' + okCount + ' fail=' + (counted.length - okCount) + ' of', stillNeeded.length);
+        for (const r of stillNeeded) {
+            this.router.emitWindow('tg-download-document', {
+                document: r.doc, messageId: 'emojipack-' + r.id, priority: r.priority,
+            });
+        }
     }
 
     private onDownloadEmojiBatch = async (e: Event) => {

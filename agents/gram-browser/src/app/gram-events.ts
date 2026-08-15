@@ -40,7 +40,9 @@ export function setupEventListeners(s: GramState): void {
       s.tgui.current?.setAuthStep(detail.step);
       if (detail.step === 'main' && !emojiStickersEagerFetched) {
         emojiStickersEagerFetched = true;
-        window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
+        }, 4000);
       }
     }
   };
