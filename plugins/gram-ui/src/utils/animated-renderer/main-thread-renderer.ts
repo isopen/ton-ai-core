@@ -1,8 +1,11 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import { loadTgs, renderFrame, hasAnimatedProperties } from '@ton-ai/tgs';
 import type { ParsedAnimation } from '@ton-ai/tgs';
 import type { AnimatedRendererParams, AnimatedRendererView, IAnimatedRenderer } from './types.js';
 import { isPageFocused } from './page-focus.js';
 import { resetDrawBudgetIfExpired, tryAcquireDrawCall } from './draw-budget.js';
+
+const log = getLogger('gram-ui');
 
 const RENDER_BUDGET = 6;
 const MAX_MAIN_LOADS = 2;
@@ -97,7 +100,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       return;
     }
     if (now - this.lastPaintAt < 4000) return;
-    console.warn(
+    log.warn(
       '[AnimatedRenderer] main-thread anim frozen (no paint for ' + Math.round((now - this.lastPaintAt) / 1000) + 's):',
       this.renderId,
       { framesCount: this.framesCount, views: this.views.size, url: this.tgsUrl.slice(0, 48) },
@@ -308,7 +311,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
         }
       }
     } catch (err: any) {
-      console.error('[AnimatedRenderer] main-thread init error:', this.renderId, err?.message || err);
+      log.error('[AnimatedRenderer] main-thread init error:', this.renderId, err?.message || err);
       if (!this.isDestroyed) {
         this.loadFailed = true;
         for (const view of this.views.values()) {

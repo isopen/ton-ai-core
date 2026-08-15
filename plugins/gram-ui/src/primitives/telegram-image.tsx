@@ -1,7 +1,9 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
-import { DEBUG } from '../debug-flags.js';
+import { getLogger } from '@ton-ai/gram-debug';
+
+const imgLog = getLogger('gram-ui:telegram-image');
 
 function imageLoad(url: string, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -65,7 +67,7 @@ export function TelegramImage(props: {
     if (image.medium?.url) srcs.push(image.medium.url);
     if (image.original?.url) srcs.push(image.original.url);
     if (image.thumbnail?.url) srcs.push(image.thumbnail.url);
-    if (DEBUG.telegramImage) console.log('[TelegramImage] load start', image.id, 'srcs:', srcs.length, 'visible:', visible, 'thumb:', !!image.thumbnail?.url, 'medium:', !!image.medium?.url, 'original:', !!image.original?.url);
+    imgLog.info('[TelegramImage] load start', image.id, 'srcs:', srcs.length, 'visible:', visible, 'thumb:', !!image.thumbnail?.url, 'medium:', !!image.medium?.url, 'original:', !!image.original?.url);
 
     if (srcs.length === 0) {
       return;
@@ -81,7 +83,7 @@ export function TelegramImage(props: {
         try {
           await imageLoad(url, ac.signal);
           if (!ac.signal.aborted) {
-            if (DEBUG.telegramImage) console.log('[TelegramImage] loaded', image.id, 'len:', url.length);
+            imgLog.info('[TelegramImage] loaded', image.id, 'len:', url.length);
             setCurrentSrc(url);
             setLoaded(true);
             setError(false);
@@ -89,12 +91,12 @@ export function TelegramImage(props: {
             return;
           }
         } catch {
-          if (DEBUG.telegramImage) console.log('[TelegramImage] load FAIL', image.id, 'len:', url.length);
+          imgLog.info('[TelegramImage] load FAIL', image.id, 'len:', url.length);
           continue;
         }
       }
       if (!ac.signal.aborted) {
-        if (DEBUG.telegramImage) console.log('[TelegramImage] all srcs failed', image.id);
+        imgLog.info('[TelegramImage] all srcs failed', image.id);
         setError(true);
       }
     })();
@@ -138,8 +140,8 @@ export function TelegramImage(props: {
 
   const showThumb = image.thumbnail?.url && currentSrc !== image.original?.url && currentSrc !== image.medium?.url;
 
-  if (DEBUG.telegramImage && currentSrc) {
-    console.log('[TelegramImage] render', image.id, 'currentSrc len:', currentSrc.length, 'loaded:', loaded, 'visible:', visible, 'src == original:', currentSrc === image.original?.url);
+  if (imgLog.enabled && currentSrc) {
+    imgLog.info('[TelegramImage] render', image.id, 'currentSrc len:', currentSrc.length, 'loaded:', loaded, 'visible:', visible, 'src == original:', currentSrc === image.original?.url);
   }
 
   const handleClick = () => {

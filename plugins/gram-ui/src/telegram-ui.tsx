@@ -1,4 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
+import { getLogger } from '@ton-ai/gram-debug';
 import { Panel } from './primitives/panel.js';
 import { Flex } from './primitives/flex.js';
 import type { AppState, UIAction, PeerInfo, Dialog, Message } from './types.js';
@@ -8,6 +9,8 @@ import { SkillPlugin } from './plugin/skill-plugin.js';
 import { PluginManager } from '@ton-ai/core';
 import { defaultState, reducer } from './state.js';
 import { injectStyles } from './styles.js';
+
+const log = getLogger('gram-ui');
 import { render, setUseRafBatching } from '@ton-ai/atom/render';
 import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
 import { Header } from './components/header.js';
@@ -283,7 +286,7 @@ export class TelegramUI {
   }
 
   destroy() {
-    console.log('[TGUI] destroy start, _rootDom=', this._rootDom, '_rootDom.parentNode=', this._rootDom?.parentNode);
+    log.info('[TGUI] destroy start, _rootDom=', this._rootDom, '_rootDom.parentNode=', this._rootDom?.parentNode);
     window.removeEventListener('tg-auth-send-code', this._onSendCode);
     window.removeEventListener('tg-auth-sign-in', this._onSignIn);
     window.removeEventListener('tg-auth-check-password', this._onCheckPassword);
@@ -292,10 +295,10 @@ export class TelegramUI {
     window.removeEventListener('tg-typing-stop', this._onTypingStop);
     window.removeEventListener('tg-auth-resend-code', this._onResendCode);
     if (this._rootDom && this._rootDom.parentNode) {
-      console.log('[TGUI] destroy: removing rootDom from parent');
+      log.info('[TGUI] destroy: removing rootDom from parent');
       this._rootDom.parentNode.removeChild(this._rootDom);
     }
     this._rootDom = null;
-    console.log('[TGUI] destroy done');
+    log.info('[TGUI] destroy done');
   }
 }

@@ -1,5 +1,9 @@
+import { getLogger } from '@ton-ai/gram-debug';
+
 export const MAX_WORKERS = Math.min(typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4, 4);
 const MAX_INITS = 16;
+
+const log = getLogger('gram-ui');
 
 const REQUEST_TIMEOUT_MS = 12_000;
 
@@ -35,7 +39,7 @@ export function respawnWorker(worker: MediaWorker): void {
   const idx = workers.indexOf(worker);
   if (idx < 0) return;
   workers.splice(idx, 1);
-  console.warn('[AnimatedRenderer] respawning poisoned media worker #' + idx);
+  log.warn('[AnimatedRenderer] respawning poisoned media worker #' + idx);
   const w2 = makeWorker();
   if (w2) workers.push(w2);
   else workersBroken = true;
@@ -64,7 +68,7 @@ function makeWorker(): MediaWorker | null {
   try {
     w = new Worker(new URL('./tgs.worker.js', import.meta.url));
   } catch (err: any) {
-    console.warn('[AnimatedRenderer] worker #' + id + ' construction failed:', err?.message || err);
+    log.warn('[AnimatedRenderer] worker #' + id + ' construction failed:', err?.message || err);
     return null;
   }
   const pending = new Map<number, Pending>();
@@ -81,7 +85,7 @@ function makeWorker(): MediaWorker | null {
   w.onerror = (err: any) => {
     if (crashed) return;
     crashed = true;
-    console.warn('[AnimatedRenderer] worker #' + id + ' crashed:', err?.message || err);
+    log.warn('[AnimatedRenderer] worker #' + id + ' crashed:', err?.message || err);
     failAllPending(w, pending, new Error('worker crashed'));
     const idx = workers.indexOf(worker);
     if (idx >= 0) workers.splice(idx, 1);
@@ -91,7 +95,7 @@ function makeWorker(): MediaWorker | null {
       if (w2) workers.push(w2);
     } else {
       workersBroken = true;
-      console.warn('[AnimatedRenderer] workers disabled: crash budget exhausted');
+      log.warn('[AnimatedRenderer] workers disabled: crash budget exhausted');
     }
   };
   const worker: MediaWorker = {

@@ -1,5 +1,8 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import { loadTgs, renderFrame, inflateTgs, hasAnimatedProperties } from '@ton-ai/tgs';
 import type { ParsedAnimation } from '@ton-ai/tgs';
+
+const log = getLogger('gram-ui');
 
 const ctx = self as unknown as Worker;
 
@@ -44,14 +47,14 @@ function logFrameDiff(anim: ParsedAnimation, frameIndex: number, framesCount: nu
     if (diff > st.maxDiff) st.maxDiff = diff;
   }
   if (frameIndex <= DIFF_CHECK_MAX) {
-    console.log('[tgs-worker] diff', 'idx=' + frameIndex, 'rgbPx=' + diff, 'alphaPx=' + diffAlpha, 'of=' + (a.length / 4));
+    log.info('[tgs-worker] diff', 'idx=' + frameIndex, 'rgbPx=' + diff, 'alphaPx=' + diffAlpha, 'of=' + (a.length / 4));
   }
   if (st && frameIndex === framesCount - 1) {
-    console.log('[tgs-worker] diff summary', 'of=' + framesCount, 'checked=' + st.checked, 'differing=' + st.differing, 'max=' + st.maxDiff, 'firstDiff=' + st.firstDiffIdx);
+    log.info('[tgs-worker] diff summary', 'of=' + framesCount, 'checked=' + st.checked, 'differing=' + st.differing, 'max=' + st.maxDiff, 'firstDiff=' + st.firstDiffIdx);
     if (framesCount > 1 && (st.differing === 0 || st.differing < st.checked * 0.25)) {
       const raw = rawJsonByAnim.get(anim);
       if (raw) {
-        console.log('[tgs-worker] STATIC-JSON ' + raw);
+        log.info('[tgs-worker] STATIC-JSON ' + raw);
       }
     }
   }
@@ -200,7 +203,7 @@ async function renderFrames(renderId: string, frameIndex: number): Promise<{ fra
   if (!entry) throw new Error('TGS anim not found: ' + renderId);
   const t0 = Date.now();
   const srcFrame = entry.baseFrame + frameIndex * entry.reduceFactor;
-  console.log('[tgs-worker] render start', renderId, 'idx=' + frameIndex, 'srcFr=' + srcFrame, 'of=' + (entry.framesCount || 0));
+  log.info('[tgs-worker] render start', renderId, 'idx=' + frameIndex, 'srcFr=' + srcFrame, 'of=' + (entry.framesCount || 0));
   try {
     const off = new OffscreenCanvas(entry.imgSize, entry.imgSize);
     renderFrame(off as unknown as HTMLCanvasElement, entry.anim, srcFrame, 1, entry.imgSize, entry.imgSize);
@@ -208,10 +211,10 @@ async function renderFrames(renderId: string, frameIndex: number): Promise<{ fra
     const imageData = off.getContext('2d')!.getImageData(0, 0, entry.imgSize, entry.imgSize);
     logFrameDiff(entry.anim, frameIndex, entry.framesCount, imageData);
     const bitmap = await createImageBitmap(imageData);
-    console.log('[tgs-worker] render done', renderId, 'idx=' + frameIndex, ms + 'ms');
+    log.info('[tgs-worker] render done', renderId, 'idx=' + frameIndex, ms + 'ms');
     return { frameIndex, imageBitmap: bitmap };
   } catch (err) {
-    console.error('[tgs-worker] render FAILED', renderId, 'idx=' + frameIndex, 'srcFr=' + srcFrame, (err as Error)?.message || err);
+    log.error('[tgs-worker] render FAILED', renderId, 'idx=' + frameIndex, 'srcFr=' + srcFrame, (err as Error)?.message || err);
     throw err;
   }
 }
@@ -320,7 +323,7 @@ ctx.onmessage = (e: MessageEvent) => {
         if (debug && !dumpedRenderIds.has(renderId)) {
           dumpedRenderIds.add(renderId);
           const a = dumpAnim(entry.anim);
-          console.log('[tgs-worker] ' + renderId + ' ' + JSON.stringify(a));
+          log.info('[tgs-worker] ' + renderId + ' ' + JSON.stringify(a));
           reply({ reduceFactor: entry.reduceFactor, msPerFrame: entry.msPerFrame, framesCount: entry.framesCount, animDebug: a });
           return;
         }

@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { initAnimatedRenderer } from '../utils/animated-renderer/index.js';
 import type { IAnimatedRenderer } from '../utils/animated-renderer/types.js';
 import { getIsHeavyAnimating, useHeavyAnimation } from '../utils/heavy-animation.js';
-import { DEBUG } from '../debug-flags.js';
+import { getLogger } from '@ton-ai/gram-debug';
+
+const aniLog = getLogger('gram-ui:ani-sticker');
 
 let uidCounter = 0;
 
@@ -67,12 +69,12 @@ export function AnimatedSticker({
       old.removeView(viewId);
     }
     urlRef.current = tgsUrl;
-    if (DEBUG.aniSticker) console.log('[ani-sticker] init', renderId, 'size=' + size, 'shared=' + !!sharedCanvas, 'coords=' + (coords ? coords.x + ',' + coords.y : 'n'), 'url=' + tgsUrl.slice(0, 60));
+    aniLog.info('[ani-sticker] init', renderId, 'size=' + size, 'shared=' + !!sharedCanvas, 'coords=' + (coords ? coords.x + ',' + coords.y : 'n'), 'url=' + tgsUrl.slice(0, 60));
     const r = initAnimatedRenderer(tgsUrl, container, renderId, { size, noLoop: !loop, quality, isLowPriority, coords }, viewId, (() => {
-      if (DEBUG.aniSticker) console.log('[ani-sticker] onLoad', renderId);
+      aniLog.info('[ani-sticker] onLoad', renderId);
       onLoad?.();
     }), (() => {
-      if (DEBUG.aniSticker) console.log('[ani-sticker] onError', renderId);
+      aniLog.info('[ani-sticker] onError', renderId);
       onError?.();
     }));
     rendererRef.current = r;

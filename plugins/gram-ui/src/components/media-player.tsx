@@ -1,8 +1,11 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useRef } from '@ton-ai/atom/hooks';
 import { Checkmark } from './checkmark.js';
 import { buildDocumentThumb, isAnimatedMedia } from '../utils.js';
 import { GifPlayer } from './gif-player.js';
+
+const log = getLogger('gram-ui');
 
 interface MediaPlayerProps {
   m: any;
@@ -105,7 +108,7 @@ export function MediaPlayer(props: MediaPlayerProps) {
             onError={(e: any) => {
               const el = e.target as HTMLVideoElement;
               const mc = el?.error?.message || 'unknown';
-              console.error('[MediaPlayer] video error code:', el?.error?.code, 'msg:', mc, 'src:', el?.src?.slice(0, 60));
+              log.error('[MediaPlayer] video error code:', el?.error?.code, 'msg:', mc, 'src:', el?.src?.slice(0, 60));
             }}
           />
           {cacheSource ? (

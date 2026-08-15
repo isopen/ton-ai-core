@@ -32,7 +32,9 @@ import { MediaCollage, type MediaCollageItem } from './media-collage.js';
 import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
 import { EmojiText, AnimatedEmoji } from './emoji-text.js';
 import { buildImageSpec, firstMissingSizeType, CHAT_PHOTO_PRIO } from './photo-spec.js';
-import { DEBUG } from '../debug-flags.js';
+import { getLogger, isEnabled } from '@ton-ai/gram-debug';
+
+const photoLog = getLogger('gram-ui:photo');
 
 const STICKER_DOWNLOAD_RETRY_MS = 2500;
 const STICKER_DOWNLOAD_MAX_ATTEMPTS = 8;
@@ -213,11 +215,11 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   if (sameSenderNext) cls += ' MessageBubble_group_next';
 
   const imgSpec = buildImageSpec(m);
-  if (DEBUG.photo) {
+  if (isEnabled('gram-ui:photo')) {
     if (imgSpec) {
-      console.log('[PhotoBubble] render', m.id, 'sizes:', m.media?.photo?.sizes?.length, 'hasUrls:', { thumb: !!imgSpec.thumbnail?.url, medium: !!imgSpec.medium?.url, original: !!imgSpec.original?.url });
+      photoLog.info('[PhotoBubble] render', m.id, 'sizes:', m.media?.photo?.sizes?.length, 'hasUrls:', { thumb: !!imgSpec.thumbnail?.url, medium: !!imgSpec.medium?.url, original: !!imgSpec.original?.url });
     } else {
-      console.log('[PhotoBubble] render', m.id, 'imgSpec: null');
+      photoLog.info('[PhotoBubble] render', m.id, 'imgSpec: null');
     }
   }
 
@@ -225,19 +227,19 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
 
   const photoSizes = m.media?.photo?.sizes;
   const hasAnyUrl = Array.isArray(photoSizes) && photoSizes.some((s: any) => !!(s.url || s.src));
-  if (DEBUG.photo) {
-    console.log('[PhotoBubble] render', m.id, 'photoSizes:', Array.isArray(photoSizes) ? photoSizes.length : photoSizes, 'hasAnyUrl:', hasAnyUrl, 'imgSpec urls:', imgSpec ? { t: !!imgSpec.thumbnail?.url, m: !!imgSpec.medium?.url, o: !!imgSpec.original?.url } : 'null');
+  if (isEnabled('gram-ui:photo')) {
+    photoLog.info('[PhotoBubble] render', m.id, 'photoSizes:', Array.isArray(photoSizes) ? photoSizes.length : photoSizes, 'hasAnyUrl:', hasAnyUrl, 'imgSpec urls:', imgSpec ? { t: !!imgSpec.thumbnail?.url, m: !!imgSpec.medium?.url, o: !!imgSpec.original?.url } : 'null');
   }
 
   const obsRef = useRef<IntersectionObserver | null>(null);
   useEffect(() => {
     const timer = setTimeout(() => {
       const el = document.getElementById(`msg-${m.id}`);
-      if (!el) { if (DEBUG.photo) console.log('[PhotoBubble] NO ELEMENT msg-' + m.id); return; }
+      if (!el) { photoLog.info('[PhotoBubble] NO ELEMENT msg-' + m.id); return; }
       const obs = new IntersectionObserver(([entry]) => {
         if (entry.isIntersecting) {
           const need = firstMissingSizeType(m.media?.photo, CHAT_PHOTO_PRIO);
-          if (DEBUG.photo) console.log('[PhotoBubble] obs intersect', m.id, 'need:', need?.sizeType || null);
+          photoLog.info('[PhotoBubble] obs intersect', m.id, 'need:', need?.sizeType || null);
           if (need) {
             window.dispatchEvent(new CustomEvent('tg-download-photo', {
               detail: { photo: m.media.photo, sizeType: need.sizeType, messageId: m.id },
@@ -279,7 +281,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
             <PhotoLoader percent={pct} fileSize={fileSize} hidePercent={imgWidth > 0 && imgWidth < 140} />
           </>
         ) : null}
-        {DEBUG && cacheSource ? (
+        {isEnabled('gram-ui:photo') && cacheSource ? (
           <span style={`position:absolute;top:4px;right:4px;padding:1px 5px;border-radius:4px;background:${cacheSource === 'memory' ? '#22c55e' : cacheSource === 'persisted' ? '#3b82f6' : '#ef4444'};color:#fff;font-size:10px;line-height:14px;white-space:nowrap;z-index:2`}>
             {cacheSource === 'memory' ? 'in-memory' : cacheSource === 'persisted' ? 'gram-db' : cacheSource === 'cdn-server' ? 'cdn-server' : cacheSource === 'migrate-server' ? 'migrate-server' : 'home-server'}
           </span>

@@ -453,7 +453,6 @@ export function VideoMessage(props: VideoMessageProps) {
             </button>
           </div>
 
-
         </div>
 
       </div>

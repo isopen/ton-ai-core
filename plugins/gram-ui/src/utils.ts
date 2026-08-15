@@ -1,5 +1,8 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import { t } from './locale.js';
 import { S } from './strings.js';
+
+const log = getLogger('gram-ui');
 
 export function getPeerName(p: any, selfUserId?: string): string {
     if (p.id === '_debug_') return t(S.LOGS_PEER);
@@ -103,7 +106,7 @@ const MINI_FOOTER_B64 = '/9k=';
 export function strippedToDataUrl(packed: string | Uint8Array, mime = 'image/jpeg'): string {
   const bytes = typeof packed === 'string' ? hexToBytes(packed) : packed;
   if (bytes.length < 3 || bytes[0] !== 0x01) {
-    console.error('[strippedToDataUrl] invalid format: len=' + bytes.length + ' byte0=' + bytes[0]?.toString(16) + ' type=' + typeof packed);
+    log.error('[strippedToDataUrl] invalid format: len=' + bytes.length + ' byte0=' + bytes[0]?.toString(16) + ' type=' + typeof packed);
     return '';
   }
   const header = (() => {

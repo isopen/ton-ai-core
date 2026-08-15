@@ -1,6 +1,9 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import type { AnimatedRendererParams, IAnimatedRenderer } from './types.js';
 import { TgsRenderer } from './tgs-renderer.js';
 import { MainThreadRenderer } from './main-thread-renderer.js';
+
+const log = getLogger('gram-ui');
 
 let backendChoice: 'worker' | 'main' | null = null;
 let workerBroken = false;
@@ -22,11 +25,11 @@ function detectBackend(): 'worker' | 'main' {
 export function getAnimatedRendererBackend(): 'worker' | 'main' {
   if (!backendChoice) {
     backendChoice = detectBackend();
-    console.log('[AnimatedRenderer] backend detected: ' + backendChoice);
+    log.info('[AnimatedRenderer] backend detected: ' + backendChoice);
   }
   if (workerBroken && !fallbackLogged) {
     fallbackLogged = true;
-    console.warn('[AnimatedRenderer] workers broken, using MAIN-THREAD backend');
+    log.warn('[AnimatedRenderer] workers broken, using MAIN-THREAD backend');
   }
   return workerBroken ? 'main' : backendChoice;
 }
@@ -46,12 +49,12 @@ export function initAnimatedRenderer(
       return TgsRenderer.init(tgsUrl, container, renderId, params, viewId, onLoad, onError, onFrame);
     } catch (err: any) {
       workerBroken = true;
-      console.warn('[AnimatedRenderer] worker init threw for', renderId, ':', err?.message || err);
+      log.warn('[AnimatedRenderer] worker init threw for', renderId, ':', err?.message || err);
     }
   }
   fallbackCount++;
   if (fallbackCount <= 3) {
-    console.warn('[AnimatedRenderer] MAIN-THREAD fallback used (#' + fallbackCount + '), renderId=' + renderId);
+    log.warn('[AnimatedRenderer] MAIN-THREAD fallback used (#' + fallbackCount + '), renderId=' + renderId);
   }
   return MainThreadRenderer.init(tgsUrl, container, renderId, params, viewId, onLoad, onError, onFrame);
 }
