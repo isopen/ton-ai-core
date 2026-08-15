@@ -27,6 +27,7 @@ const isEmojiKey = (s: string): boolean => s.startsWith('emoji-') || s.startsWit
 
 export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiStickerDocs: Record<string, any> | null = null;
+    private emojiKeycapDocs: Array<any> = [];
     private emojiCustomDocsById = new Map<string, any>();
     private emojiDocsById = new Map<string, any>();
     private emojiStickersLoading = false;
@@ -80,7 +81,6 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 this.resetEmojiAttempts(id);
                 const doc = this.findEmojiDoc(id);
                 if (!doc || !this.canRequestEmojiDoc(id)) return;
-                this.requestedEmojiDocIds.add(id);
                 this.router.emitWindow('tg-download-emoji', { docId: id, priority: 1 });
             }, EMOJI_ATTEMPT_TTL));
             return;
@@ -90,7 +90,6 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             this.emojiRetryTimers.delete(id);
             const doc = this.findEmojiDoc(id);
             if (!doc || !this.canRequestEmojiDoc(id)) return;
-            this.requestedEmojiDocIds.add(id);
             this.router.emitWindow('tg-download-emoji', { docId: id, priority: 1 });
         }, delay));
     }
@@ -171,6 +170,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         try {
             const { docs, unresolved } = await this.fetchCustomEmojiDocsChunked(fresh);
             let changed = false;
+            const toDownload: Array<{ id: string; doc: any; priority: number }> = [];
             for (const doc of docs) {
                 if (!doc?.id) continue;
                 const id = String(doc.id);
@@ -181,8 +181,13 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     this.emojiCustomDocsById.set(id, doc);
                     changed = true;
                 }
+                if (this.canRequestEmojiDoc(id)) {
+                    this.requestedEmojiDocIds.add(id);
+                    toDownload.push({ id, doc, priority: 1 });
+                }
             }
             if (changed) this.indexEmojiDocs();
+            if (toDownload.length > 0) void this.downloadEmojiList(toDownload);
             for (const id of unresolved) this.markEmojiUnresolved(id);
         } catch (err: any) {
             console.error('[gram-media] tg-fetch-custom-emoji error:', err?.message || err);
@@ -226,7 +231,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.notifyCustomEmojiAlt(doc);
         this.indexEmojiDocs();
         this.router.emitWindow('tg-download-document', {
-            detail: { document: doc, messageId: 'emojipack-' + docId, priority },
+            document: doc, messageId: 'emojipack-' + docId, priority,
         });
     }
 
@@ -278,6 +283,21 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         const docs = Array.isArray(full?.documents) ? full.documents : [];
         const docsById = new Map<string, any>(docs.map((d: any) => [String(d.id), d]));
         let added = 0;
+        if (this.debug && docs.length > 0) {
+            const counts: Record<string, number> = {};
+            for (const d of docs) {
+                const m = (d?.mime_type || '?').toLowerCase();
+                counts[m] = (counts[m] || 0) + 1;
+            }
+            console.log('[gram-media] set', (full?.short_name || '?').toString(), 'docs=' + docs.length, 'mimes=' + JSON.stringify(counts));
+            if (docs.length <= 300) {
+                const alts = docs.map((d: any) => {
+                    const a = Array.isArray(d?.attributes) ? d.attributes.find((x: any) => x?._ === 'documentAttributeSticker' && x.alt) : undefined;
+                    return String(d.id) + '#' + (a?.alt ? JSON.stringify(a.alt) : '-');
+                });
+                console.log('[gram-media] set alts', alts.join(' '));
+            }
+        }
         if (Array.isArray(full?.packs) && full.packs.length > 0) {
             const catName = (full?.title || full?.short_name || 'Emoji').toString();
             let cat = this.emojiPickerCategories.find((c) => c.name === catName);
@@ -295,8 +315,29 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             for (const pack of full.packs) {
                 if (!pack?.emoticon || !Array.isArray(pack.documents) || pack.documents.length === 0) continue;
                 const key = normalizeEmoji(pack.emoticon);
+                if (this.debug && Array.isArray(pack.documents)) {
+                    const ids = pack.documents.map(String);
+                    if (ids.length > 1 || /^[0-9#*]+$/.test(key.replace(/[^\d#*]/g, ''))) {
+                        const alts = ids.map((id: string) => {
+                            const d = docsById.get(id);
+                            const a = Array.isArray(d?.attributes) ? d.attributes.find((x: any) => x?._ === 'documentAttributeSticker' && x.alt) : undefined;
+                            return id + '#' + (a?.alt ? JSON.stringify(a.alt) : '-');
+                        });
+                        console.log('[gram-media] pack', JSON.stringify(pack.emoticon), 'key=' + key, 'docs=' + alts.join(','));
+                    }
+                }
                 if (!key || map[key]) continue;
-                const doc = docsById.get(String(pack.documents[0]));
+                const ids = pack.documents.map(String);
+                const nAlt = normalizeEmoji(pack.emoticon);
+                let doc: any;
+                if (ids.length > 1) {
+                    doc = ids.map((id: string) => docsById.get(id)).find((d: any) => {
+                        const a = Array.isArray(d?.attributes) ? d.attributes.find((x: any) => x?._ === 'documentAttributeSticker' && x.alt) : undefined;
+                        return a && normalizeEmoji(a.alt) === nAlt;
+                    }) || docsById.get(String(pack.documents[0]));
+                } else {
+                    doc = docsById.get(String(pack.documents[0]));
+                }
                 if (doc?.id) {
                     map[key] = doc;
                     added++;
@@ -311,6 +352,9 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 if (a?._ === 'documentAttributeSticker' && typeof a.alt === 'string' && a.alt) {
                     const key = normalizeEmoji(a.alt);
                     if (key && !map[key]) map[key] = doc;
+                    if (key === '1\u20E3' && !this.emojiKeycapDocs.some((k) => String(k.id) === String(doc.id))) {
+                        this.emojiKeycapDocs.push(doc);
+                    }
                 }
             }
         }
@@ -375,9 +419,33 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             }
         }));
         this.emojiStickerDocs = map;
+        if (this.emojiKeycapDocs.length > 0) {
+            const kcKeys = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
+            kcKeys.forEach((e, i) => {
+                const k = normalizeEmoji(e);
+                if (map[k]) return;
+                const doc = this.emojiKeycapDocs[i];
+                if (doc?.id) map[k] = doc;
+            });
+            if (this.debug) {
+                console.log('[gram-media] keycap probe docs =', this.emojiKeycapDocs.map((d) => String(d.id)).join(','));
+                console.log('[gram-media] keycap probe alts =', this.emojiKeycapDocs.map((d) => {
+                    const a = Array.isArray(d?.attributes) ? d.attributes.find((x: any) => x?._ === 'documentAttributeSticker' && x.alt) : undefined;
+                    return JSON.stringify(a?.alt);
+                }).join(','));
+            }
+        }
         this.emojiStickersLoading = false;
         this.indexEmojiDocs();
-        if (this.debug) console.log('[gram-media] emoji stickers loaded, map size =', Object.keys(map).length, 'sample =', Object.keys(map).slice(0, 5).join(' '));
+        if (this.debug) {
+            console.log('[gram-media] emoji stickers loaded, map size =', Object.keys(map).length, 'sample =', Object.keys(map).slice(0, 5).join(' '));
+            const kc = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '#️⃣', '*️⃣'];
+            const rows = kc.map((e) => {
+                const d = map[normalizeEmoji(e)];
+                return e + '->' + (d?.id ? String(d.id) : '-') + (d?.mime_type ? ':' + d.mime_type : '');
+            });
+            console.log('[gram-media] keycap map', rows.join(' '));
+        }
         this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
     };
 

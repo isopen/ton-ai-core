@@ -26,6 +26,7 @@ export class GramMediaRouter {
     private probedCacheKeys = new Set<string>();
     private photoQueue: Array<{ photo: any; sizeType: string; messageId: number }> = [];
     private photoInFlight = 0;
+    private photoInFlightByKey = new Set<string>();
 
     private stickerSetCache = new Map<string, { set: any; hash: number; expiresAt: number }>();
     private emojiStickersListCache: { sets: any[]; hash: number; expiresAt: number } | null = null;
@@ -35,6 +36,7 @@ export class GramMediaRouter {
     private documentPending = new Set<number>();
     private downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number; mime: string; priority: number }>> = { video_queue: [], gif_queue: [], photo_queue: [], emoji_queue: [], tgs_queue: [] };
     private downloadInProgress: Record<QueueKey, number> = { video_queue: 0, gif_queue: 0, photo_queue: 0, emoji_queue: 0, tgs_queue: 0 };
+    private downloadQueueMicrotasks = new Set<QueueKey>();
     private documentRetryCounts = new Map<number, number>();
     private documentRetryTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -216,8 +218,9 @@ export class GramMediaRouter {
     }
 
     toArrayBuffer(b: string | ArrayBuffer | Uint8Array): ArrayBuffer {
+        if (ArrayBuffer.isView(b)) return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
         if (b instanceof ArrayBuffer) return b;
-        if (b instanceof Uint8Array) return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+        if (Object.prototype.toString.call(b) === '[object ArrayBuffer]') return b as unknown as ArrayBuffer;
         const binary = atob(b);
         const u8 = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) u8[i] = binary.charCodeAt(i);
@@ -398,20 +401,28 @@ export class GramMediaRouter {
     }
 
     private processPhotoQueue(): void {
-        while (this.photoQueue.length > 0 && this.photoInFlight < MAX_PARALLEL_PHOTOS) {
-            const item = this.photoQueue.pop()!;
+        const stillPending: Array<{ photo: any; sizeType: string; messageId: number }> = [];
+        for (let i = this.photoQueue.length - 1; i >= 0; i--) {
+            const item = this.photoQueue[i]!;
             const ck = this.getPhotoCacheKey(item.photo, item.sizeType);
             const cached = this.photoUrlCache.get(ck);
             if (cached) {
                 this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached });
                 continue;
             }
+            if (this.photoInFlightByKey.has(ck) || this.photoInFlight >= MAX_PARALLEL_PHOTOS) {
+                stillPending.push(item);
+                continue;
+            }
+            this.photoInFlightByKey.add(ck);
             this.photoInFlight++;
             this.execPhotoDownload(item.photo, item.sizeType, item.messageId).finally(() => {
                 this.photoInFlight--;
+                this.photoInFlightByKey.delete(ck);
                 this.processPhotoQueue();
             });
         }
+        this.photoQueue = stillPending;
     }
 
     private async execPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<void> {
@@ -541,7 +552,16 @@ export class GramMediaRouter {
         const isAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
         const queueKey = isEmoji ? 'emoji_queue' : (mime === 'application/x-tgsticker' ? 'tgs_queue' : this.getQueueKey(mime, isAnimated));
         this.downloadQueues[queueKey].push({ document, messageId, mime, priority });
-        this.processDownloadQueue(queueKey);
+        this.scheduleDownloadQueue(queueKey);
+    }
+
+    private scheduleDownloadQueue(queueKey: QueueKey): void {
+        if (this.downloadQueueMicrotasks.has(queueKey)) return;
+        this.downloadQueueMicrotasks.add(queueKey);
+        Promise.resolve().then(() => {
+            this.downloadQueueMicrotasks.delete(queueKey);
+            this.processDownloadQueue(queueKey);
+        });
     }
 
     private processDownloadQueue(queueKey: QueueKey): void {

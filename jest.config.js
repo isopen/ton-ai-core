@@ -15,7 +15,8 @@ module.exports = {
     '<rootDir>/plugins/gram-db/tests',
     '<rootDir>/plugins/atom/tests',
     '<rootDir>/plugins/tgs/tests',
-    '<rootDir>/plugins/comment-stripper/tests'
+    '<rootDir>/plugins/comment-stripper/tests',
+    '<rootDir>/plugins/gram-media/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
