@@ -10,6 +10,7 @@
   "dependencies": {
     "@ton-ai/core": "*",
     "@ton-ai/gram-db": "*",
+    "@ton-ai/gram-debug": "*",
     "@ton-ai/gram-media": "*",
     "@ton-ai/gram-ui": "*",
     "@ton-ai/mtproto": "*",

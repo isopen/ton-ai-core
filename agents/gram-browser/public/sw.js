@@ -16,9 +16,7 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  // Navigations are always fetched from the network so the app always gets the
-  // fresh index.html (which references the current hashed bundles); the cached
-  // copy is only a fallback for offline use.
+
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request).then((response) => {

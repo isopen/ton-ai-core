@@ -1,7 +1,9 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import { getGramDb } from '../utils/gram-db';
 
-const AVATAR_DEBUG = true;
-const wlog = (...args: any[]) => { if (AVATAR_DEBUG) console.log(...args); };
+const log = getLogger('gram-browser');
+
+const wlog = (...args: any[]) => log.debug(...args);
 
 export async function setAvatarEncryptionKey(sessionId: string | null): Promise<void> {
     const db = getGramDb();
@@ -14,7 +16,7 @@ export async function getAvatarFromCache(key: string): Promise<string | null> {
         const val = await getGramDb().getAvatar(key);
         return val;
     } catch (e: any) {
-        console.error('[avatar-cache] GET error:', e?.message);
+        log.error('[avatar-cache] GET error:', e?.message);
         return null;
     }
 }
@@ -34,6 +36,6 @@ export async function saveAvatarToCache(key: string, dataUri: string): Promise<v
     try {
         await getGramDb().saveAvatar(key, dataUri);
     } catch (e: any) {
-        console.error('[avatar-cache] SAVE error:', e?.message);
+        log.error('[avatar-cache] SAVE error:', e?.message);
     }
 }

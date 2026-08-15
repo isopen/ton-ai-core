@@ -1,7 +1,10 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import { setStrings, TLG_KEYS, LANG_FALLBACKS } from '@ton-ai/gram-ui';
 import type { TelegramUI } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbKeys } from '@/utils/db';
 import { LANG_CODE_MAP, REVERSE_LANG_CODE_MAP, LANG_CACHE_VERSION } from './gram-constants';
+
+const log = getLogger('gram-browser');
 
 export interface LangDeps {
   tgui: { current: TelegramUI | null };
@@ -20,7 +23,7 @@ export async function fetchLangStrings(
   deps: LangDeps
 ): Promise<Record<string, string> | null> {
   const svc = deps.tgService.current;
-  if (!svc) { console.log('[lang] no service'); return null; }
+  if (!svc) { log.info('[lang] no service'); return null; }
   const cacheKey = 'langStrings_' + LANG_CACHE_VERSION + '_' + langCode;
   try {
     const cached = await dbGet<Record<string, string>>(cacheKey);
@@ -103,7 +106,7 @@ export async function fetchCachedCountries(
     try { await dbSet(COUNTRIES_CACHE, mapped); } catch {}
     return mapped;
   } catch (e: any) {
-    console.log('[lang] getCountries error:', e?.message);
+    log.info('[lang] getCountries error:', e?.message);
     return [];
   }
 }
@@ -131,7 +134,7 @@ export async function fetchLangOptions(
     try { await dbSet(LANG_OPTIONS_CACHE, result); } catch {}
     return result;
   } catch (e: any) {
-    console.log('[lang] getLanguages error:', e?.message);
+    log.info('[lang] getLanguages error:', e?.message);
     return [];
   }
 }

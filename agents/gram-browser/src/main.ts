@@ -1,4 +1,7 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import { GramApp } from './app/gram-app';
+
+const log = getLogger('gram-browser');
 
 let initialized = false;
 
@@ -16,7 +19,7 @@ function initApp() {
   document.body.appendChild(container);
 
   const app = new GramApp();
-  app.init(container).catch(console.error);
+  app.init(container).catch((e) => log.error(e));
 
   window.addEventListener('beforeunload', () => app.destroy());
 }

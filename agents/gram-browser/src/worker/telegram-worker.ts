@@ -1,5 +1,6 @@
 import { Buffer } from 'buffer';
 import { crypton } from '@ton-ai/core';
+import { getLogger } from '@ton-ai/gram-debug';
 import { AuthKeyCreator, DefaultPublicRsaKey } from '@ton-ai/mtproto';
 import { TLSerializer, TLDeserializer } from '@ton-ai/tl-language';
 import { TL_CONSTRUCTORS, TELEGRAM_WS_DC_OPTIONS } from '@ton-ai/telegram/dist/types';
@@ -57,8 +58,9 @@ const TELEGRAM_API_HASH =
     (typeof process !== 'undefined' && (process as any).env?.TELEGRAM_API_HASH) ||
     '';
 
-const WORKER_DEBUG = true;
-const wlog = (...args: any[]) => { if (WORKER_DEBUG) console.log(...args); };
+const log = getLogger('gram-browser');
+
+const wlog = (...args: any[]) => log.debug(...args);
 
 let conn: BrowserObfuscatedConnection | null = null;
 let authKey: Buffer | null = null;
@@ -384,7 +386,7 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
                     wlog('[worker] RPC_RESULT gzip decompressed len=' + decompressed.length + ' firstCid=0x' + decompressed.readUInt32LE(0).toString(16) + ' hex=' + decompressed.subarray(0, 96).toString('hex'));
                     pending.resolve(decompressed);
                 }).catch(err => {
-                    console.warn('[worker] RPC_RESULT gzip decompression error: ' + err.message);
+                    log.warn('[worker] RPC_RESULT gzip decompression error: ' + err.message);
                     pending.reject(new Error('Gzip decompression failed: ' + err.message));
                 });
             } else {
@@ -1251,10 +1253,10 @@ async function downloadAvatar(peerType: string, peerId: string, accessHash: any,
                     wlog('[worker] downloadAvatar migrate error:', e2.message);
                 }
             }
-            console.error('[worker] downloadAvatar error (attempt', attempt, '):', e.message, 'key:', cacheKey);
+            log.error('[worker] downloadAvatar error (attempt', attempt, '):', e.message, 'key:', cacheKey);
         }
     }
-    console.error('[worker] downloadAvatar: all retries exhausted', lastError?.message, 'key:', cacheKey);
+    log.error('[worker] downloadAvatar: all retries exhausted', lastError?.message, 'key:', cacheKey);
     return null;
 }
 
@@ -1308,7 +1310,7 @@ async function requestPhotoDownload(photo: any, sizeType: string, onProgress?: (
         return null;
     }
     if (result.error) {
-        console.error('[worker] requestPhotoDownload error:', result.error, 'sizeType:', sizeType);
+        log.error('[worker] requestPhotoDownload error:', result.error, 'sizeType:', sizeType);
         if (result.error.includes('FILE_REFERENCE_EXPIRED')) throw new Error('FILE_REFERENCE_EXPIRED');
         return null;
     }
@@ -2605,7 +2607,7 @@ async function resolvePeer(peer: any): Promise<any> {
                 return { ...peer, access_hash: BigInt(channel.access_hash) };
             }
         } catch (e: any) {
-            console.warn('[worker] resolvePeer channel failed:', e?.message);
+            log.warn('[worker] resolvePeer channel failed:', e?.message);
         }
     }
     if (peer._ === 'inputPeerUser' && (!peer.access_hash || peer.access_hash === 0n || peer.access_hash === 0)) {
@@ -2620,7 +2622,7 @@ async function resolvePeer(peer: any): Promise<any> {
                 return { ...peer, access_hash: BigInt(user.access_hash) };
             }
         } catch (e: any) {
-            console.warn('[worker] resolvePeer user failed:', e?.message);
+            log.warn('[worker] resolvePeer user failed:', e?.message);
         }
     }
     return peer;
@@ -2714,7 +2716,7 @@ async function persistDownloadCache(key: string, type: string, bytesBase64: stri
         wlog('[dlc] saved key=' + key + ' type=' + type + ' bytesLen=' + bytesBase64.length + ' immune=' + immune);
         await maybeGcPersistedCache();
     } catch (e) {
-        console.error('[dlc] persist error key=' + key, e);
+        log.error('[dlc] persist error key=' + key, e);
     }
 }
 async function loadPersistedDownloadCache(key: string): Promise<{ type: string; bytes: string } | null> {
@@ -2732,7 +2734,7 @@ async function loadPersistedDownloadCache(key: string): Promise<{ type: string; 
         }
         wlog('[dlc] not found key=' + key);
     } catch (e) {
-        console.error('[dlc] load error key=' + key, e);
+        log.error('[dlc] load error key=' + key, e);
     }
     return null;
 }
@@ -2770,7 +2772,7 @@ async function maybeGcPersistedCache(): Promise<void> {
         if (toDel.length > 0) await db.delMany(toDel);
         if (stale.length + toDel.length > 0) wlog('[dlc] gc removed=' + (stale.length + toDel.length));
     } catch (e) {
-        console.warn('[dlc] gc error', (e as Error)?.message);
+        log.warn('[dlc] gc error', (e as Error)?.message);
     }
 }
 
@@ -3244,7 +3246,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             wlog('[dl] single chunk id=' + id + ' label=' + label + ' chunkLen=' + firstChunk.length + ' type=' + typeName);
             const allBytes = Buffer.concat(chunks);
         if (allBytes.length === 0) {
-            console.warn('[dl] empty chunk id=' + id + ' label=' + label + ' type=' + typeName + ' size=' + knownSize + ' dc=' + targetDc + ' — retrying precise');
+            log.warn('[dl] empty chunk id=' + id + ' label=' + label + ' type=' + typeName + ' size=' + knownSize + ' dc=' + targetDc + ' — retrying precise');
             try {
                 const r2 = await poolCall(() => doCall(BigInt(0), PART_SIZE, true));
                 const t2 = r2.type?._ || 'storage.fileUnknown';
@@ -3258,7 +3260,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                     return res2;
                 }
             } catch (e2: any) {
-                console.warn('[dl] precise retry error id=' + id + ' ' + e2.message);
+                log.warn('[dl] precise retry error id=' + id + ' ' + e2.message);
             }
             return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
         }

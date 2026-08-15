@@ -1,3 +1,4 @@
+import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 import { parseEventHeader, parseEncryptionEvent } from '@ton-ai/gram-db';
 import { decodeKvPayload } from '@ton-ai/tl-language';
 import { dbGet, dbSet, dbDel, dbKeys, dbClearCacheKeepSession, dbDeleteAvatarByOpfsName, dbListAvatars } from '@/utils/db';
@@ -6,7 +7,7 @@ import type { MediaMessageLike } from '@ton-ai/gram-media';
 import type { GramState } from './gram-state';
 import type { Message } from '@ton-ai/gram-ui';
 
-const DEBUG = true;
+const log = getLogger('gram-browser');
 
 let mediaRouter: GramMediaRouter | null = null;
 
@@ -127,7 +128,7 @@ export function setupEventListeners(s: GramState): void {
         detail: { dbKeys: entries, opfsRoot, opfs7a, binlogInfo, avatars },
       }));
     } catch (e) {
-      console.error('[gram-app] inspect cache error:', e);
+      log.error('[gram-app] inspect cache error:', e);
     }
   };
   window.addEventListener('tg-inspect-cache', onInspectCache);
@@ -149,14 +150,14 @@ export function setupEventListeners(s: GramState): void {
       if (bytes.length > max) hex += '\n... (' + bytes.length + ' bytes total)';
       window.dispatchEvent(new CustomEvent('tg-cache-binlog-raw', { detail: { hex } }));
     } catch (e) {
-      console.error('[gram-app] read binlog error:', e);
+      log.error('[gram-app] read binlog error:', e);
     }
   };
   window.addEventListener('tg-cache-read-binlog', onReadBinlog);
   const onDeleteKey = async (e: Event) => {
     const key = (e as CustomEvent).detail?.key;
     if (!key) return;
-    try { await dbDel(key); } catch (err) { console.error('[gram-app] delete key error:', err); }
+    try { await dbDel(key); } catch (err) { log.error('[gram-app] delete key error:', err); }
   };
   window.addEventListener('tg-cache-delete-key', onDeleteKey);
   const onDeleteBinlogFiles = async (e: Event) => {
@@ -174,7 +175,7 @@ export function setupEventListeners(s: GramState): void {
     if (!opfsName) return;
     try {
       await dbDeleteAvatarByOpfsName(opfsName);
-    } catch (err) { console.error('[gram-app] delete avatar error:', err); }
+    } catch (err) { log.error('[gram-app] delete avatar error:', err); }
     window.location.reload();
   };
   window.addEventListener('tg-cache-delete-avatar', onDeleteAvatar);
@@ -183,7 +184,7 @@ export function setupEventListeners(s: GramState): void {
     if (!names?.length) return;
     try {
       await Promise.all(names.map((n: string) => dbDeleteAvatarByOpfsName(n)));
-    } catch (err) { console.error('[gram-app] delete all avatars error:', err); }
+    } catch (err) { log.error('[gram-app] delete all avatars error:', err); }
     window.location.reload();
   };
   window.addEventListener('tg-cache-delete-all-avatars', onDeleteAllAvatars);
@@ -215,7 +216,7 @@ export function setupEventListeners(s: GramState): void {
     dispatch: (action: any) => s.tgui.current?.dispatch(action),
     selectedPeerRef: s.selectedPeerRef,
     cleanupFns: s.cleanupFns,
-    debug: DEBUG,
+    debug: isEnabled('gram-browser'),
   });
   mediaRouter.attach();
   s.cancelDocumentDownloads = () => mediaRouter?.cancelDocumentDownloads();
@@ -232,7 +233,7 @@ export function setupEventListeners(s: GramState): void {
       }
       const giftDocs = premiumGiftDocs || [];
       if (giftDocs.length === 0) {
-        console.error('[gram-app] premium gifts sticker set is empty');
+        log.error('[gram-app] premium gifts sticker set is empty');
         return;
       }
 
@@ -244,7 +245,7 @@ export function setupEventListeners(s: GramState): void {
         detail: { document: doc, messageId, priority: 0 },
       }));
     } catch (err: any) {
-      console.error('[gram-app] tg-fetch-premium-gift error:', err?.message || err, messageId);
+      log.error('[gram-app] tg-fetch-premium-gift error:', err?.message || err, messageId);
     }
   };
   window.addEventListener('tg-fetch-premium-gift', onFetchPremiumGift);
@@ -256,7 +257,7 @@ export function setupEventListeners(s: GramState): void {
       if (mediaRouter.lastEmptyChatUrlValue) {
         mediaRouter.revokeBlobUrl(mediaRouter.lastEmptyChatUrlValue);
         mediaRouter.clearLastEmptyChatUrl();
-        if (DEBUG) console.log('[gram-app] greeting sticker: revoked previous blob url');
+        log.info('[gram-app] greeting sticker: revoked previous blob url');
       }
       s.tgui.current?.dispatch({ type: 'CLEAR_EMPTY_CHAT_DOCUMENT' });
       if (!greetingStickerDocs) {
@@ -270,7 +271,7 @@ export function setupEventListeners(s: GramState): void {
       }
       const stickerDocs = greetingStickerDocs || [];
       if (stickerDocs.length === 0) {
-        console.error('[gram-app] greeting stickers empty');
+        log.error('[gram-app] greeting stickers empty');
         return;
       }
       const doc = stickerDocs[Math.floor(Math.random() * stickerDocs.length)];
@@ -278,7 +279,7 @@ export function setupEventListeners(s: GramState): void {
         detail: { document: doc, messageId: 'empty-chat', priority: 0 },
       }));
     } catch (err: any) {
-      console.error('[gram-app] tg-fetch-greeting-sticker error:', err?.message || err);
+      log.error('[gram-app] tg-fetch-greeting-sticker error:', err?.message || err);
     }
   };
   window.addEventListener('tg-fetch-greeting-sticker', onFetchGreetingSticker);

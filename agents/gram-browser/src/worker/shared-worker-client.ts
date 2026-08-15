@@ -1,3 +1,7 @@
+import { getLogger } from '@ton-ai/gram-debug';
+
+const log = getLogger('gram-browser');
+
 type WorkerStatus = 'idle' | 'connecting' | 'connected';
 
 export class SharedWorkerClient {
@@ -49,7 +53,7 @@ export class SharedWorkerClient {
                 return;
             }
             if (msg.type === 'streamLog') {
-                console.warn('[stream-worker]', msg.text);
+                log.warn('[stream-worker]', msg.text);
                 return;
             }
             if (msg.type === 'response') {

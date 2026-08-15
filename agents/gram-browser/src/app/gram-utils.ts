@@ -1,9 +1,12 @@
+import { getLogger } from '@ton-ai/gram-debug';
 import { tpl } from '@ton-ai/gram-ui';
 import type { Dialog, Message } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbGetMany, dbKeys, dbGetAvatar } from '@/utils/db';
 import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, ORPHANED_KEY } from './gram-constants';
 import type { GramState } from './gram-state';
 import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
+
+const log = getLogger('gram-browser');
 
 export function addLog(s: GramState, text: string) {
   s.tgui.current?.addLog(text);
@@ -51,17 +54,17 @@ export function setDialogsFromServer(s: GramState, raw: any) {
   s.dialogsRef.current = merged;
   s.dialogsLoadedRef.current = true;
   s.tgui.current!.setDialogs(merged);
-  dbSet(DIALOG_CACHE_KEY, merged).catch((e: any) => console.error('[dialog-cache] SAVE error', e?.message));
+  dbSet(DIALOG_CACHE_KEY, merged).catch((e: any) => log.error('[dialog-cache] SAVE error', e?.message));
 }
 
 export async function loadCachedDialogs(s: GramState) {
-  if (s.dialogsLoadedRef.current) { console.log('[cache] loadCachedDialogs skipped - already loaded'); return; }
+  if (s.dialogsLoadedRef.current) { log.info('[cache] loadCachedDialogs skipped - already loaded'); return; }
   const cached = await dbGet<Dialog[]>(DIALOG_CACHE_KEY);
-  if (!cached) { console.log('[cache] loadCachedDialogs - no cached dialogs'); return; }
+  if (!cached) { log.info('[cache] loadCachedDialogs - no cached dialogs'); return; }
   try {
     if (cached.length > 0) {
       const merged = mergeOrphanedDialogs(s, cached);
-      if (s.dialogsLoadedRef.current) { console.log('[cache] loadCachedDialogs skipped - race'); return; }
+      if (s.dialogsLoadedRef.current) { log.info('[cache] loadCachedDialogs skipped - race'); return; }
       const avatarTasks = merged.map(d => {
         if (!d.peer?.id || !d.peer?.type || !d.peer.photoId) return Promise.resolve(false);
         const avatarKey = `avatar_${d.peer.type}_${d.peer.id}_${d.peer.photoId}`;
@@ -72,12 +75,12 @@ export async function loadCachedDialogs(s: GramState) {
       });
       const results = await Promise.all(avatarTasks);
       const hitCount = results.filter(Boolean).length;
-      console.log(`[cache] loadCachedDialogs: ${merged.length} dialogs, ${hitCount} avatar hits`);
+      log.info(`[cache] loadCachedDialogs: ${merged.length} dialogs, ${hitCount} avatar hits`);
       s.dialogsRef.current = merged;
       s.tgui.current?.setDialogs(merged);
     }
   } catch (e: any) {
-    console.error('[dialog-cache] LOAD error', e?.message);
+    log.error('[dialog-cache] LOAD error', e?.message);
     await dbDel(DIALOG_CACHE_KEY);
   }
 }
