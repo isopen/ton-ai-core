@@ -40,6 +40,7 @@ export interface TgsPlayerProps {
     speed?: number;
     className?: string;
     cacheKey?: string;
+    onEnd?: () => void;
 }
 
 export function TgsPlayer(props: TgsPlayerProps) {
@@ -52,6 +53,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
         speed = 1,
         className,
         cacheKey,
+        onEnd,
     } = props;
 
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -67,6 +69,9 @@ export function TgsPlayer(props: TgsPlayerProps) {
     const lastDrawRef = useRef(0);
     const yieldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const ioRef = useRef<IntersectionObserver | null>(null);
+    const onEndRef = useRef(onEnd);
+    onEndRef.current = onEnd;
+    const endFiredRef = useRef(false);
 
     useEffect(() => {
         const el = rootRef.current;
@@ -94,6 +99,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 setError(null);
                 frameRef.current = parsed.inFrame;
                 lastTimeRef.current = 0;
+                endFiredRef.current = false;
                 setAnimVersion((v) => v + 1);
                 if (TGS_DEBUG) {
                     console.log('[TGS_LOG] parsed', { w: parsed.width, h: parsed.height, fps: parsed.fps, inFrame: parsed.inFrame, outFrame: parsed.outFrame, layers: parsed.layers.length });
@@ -122,6 +128,17 @@ export function TgsPlayer(props: TgsPlayerProps) {
         if (!anim) return;
         drawFrame(anim.inFrame);
     }, [animationData, inView, animVersion, drawFrame]);
+
+    useEffect(() => {
+        if (!inView || loop || !onEndRef.current) return;
+        const anim = animRef.current;
+        if (!anim) return;
+        if (anim.outFrame - anim.inFrame > 0) return;
+        if (endFiredRef.current) return;
+        endFiredRef.current = true;
+        const t = setTimeout(() => onEndRef.current?.(), 120);
+        return () => clearTimeout(t);
+    }, [inView, loop, animVersion]);
 
     useEffect(() => {
         if (!autoplay) return;
@@ -167,6 +184,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
             started = true;
             lastTimeRef.current = 0;
             playStart = performance.now();
+            endFiredRef.current = false;
             function tick(timestamp: number) {
                 if (!animRef.current) {
                     started = false;
@@ -183,8 +201,14 @@ export function TgsPlayer(props: TgsPlayerProps) {
                     if (loop) {
                         frame = animRef.current.inFrame + ((frame - animRef.current.inFrame) % totalFrames);
                     } else {
-                        frame = animRef.current.outFrame - 1;
-                        setPlaying(false);
+                        if (!endFiredRef.current) {
+                            endFiredRef.current = true;
+                            frame = animRef.current.outFrame - 1;
+                            setPlaying(false);
+                            onEndRef.current?.();
+                        } else {
+                            frame = animRef.current.outFrame - 1;
+                        }
                     }
                 }
                 frameRef.current = frame;
