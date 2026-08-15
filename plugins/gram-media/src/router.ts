@@ -28,6 +28,7 @@ function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Prom
 
 export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_queue' | 'tgs_queue';
 export const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 1, emoji_queue: 6, tgs_queue: 8 };
+const DOC_DOWNLOAD_BATCH = 4;
 
 export class GramMediaRouter {
     readonly debug: boolean;
@@ -45,13 +46,14 @@ export class GramMediaRouter {
 
     private stickerSetCache = new Map<string, { set: any; hash: number; expiresAt: number }>();
     private emojiStickersListCache: { sets: any[]; hash: number; expiresAt: number } | null = null;
+    private emojiStickersListPending: Promise<any[]> | null = null;
     private stickerDocsById = new Map<string, any>();
 
     private documentDownloadGen = 0;
     private documentPending = new Set<number>();
     private downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number; mime: string; priority: number }>> = { video_queue: [], gif_queue: [], photo_queue: [], emoji_queue: [], tgs_queue: [] };
     private downloadInProgress: Record<QueueKey, number> = { video_queue: 0, gif_queue: 0, photo_queue: 0, emoji_queue: 0, tgs_queue: 0 };
-    private downloadQueueMicrotasks = new Set<QueueKey>();
+    private downloadQueueTimers = new Map<QueueKey, ReturnType<typeof setTimeout>>();
     private documentRetryCounts = new Map<number, number>();
     private documentRetryTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -340,22 +342,29 @@ export class GramMediaRouter {
     }
 
     async fetchEmojiStickersList(): Promise<any[]> {
+        if (this.emojiStickersListPending) return this.emojiStickersListPending;
         const now = Date.now();
         const hash = this.emojiStickersListCache && this.emojiStickersListCache.expiresAt > now ? this.emojiStickersListCache.hash : 0;
-        let res: any;
-        try {
-            res = await this.transport?.callRpc('messages.getEmojiStickers', { hash });
-        } catch (err: any) {
-            if (this.emojiStickersListCache) return this.emojiStickersListCache.sets;
-            throw err;
-        }
-        if (res && (res._ === 'allStickersNotModified' || res._ === 'messages.allStickersNotModified')) {
-            if (this.emojiStickersListCache) this.emojiStickersListCache.expiresAt = now + STICKER_SET_TTL_MS;
-            return this.emojiStickersListCache ? this.emojiStickersListCache.sets : [];
-        }
-        const sets = Array.isArray(res?.sets) ? res.sets : [];
-        this.emojiStickersListCache = { sets, hash: Number(res?.hash ?? 0), expiresAt: now + STICKER_SET_TTL_MS };
-        return sets;
+        const p = (async (): Promise<any[]> => {
+            let res: any;
+            try {
+                res = await this.transport?.callRpc('messages.getEmojiStickers', { hash });
+            } catch (err: any) {
+                if (this.emojiStickersListCache) return this.emojiStickersListCache.sets;
+                throw err;
+            }
+            if (res && (res._ === 'allStickersNotModified' || res._ === 'messages.allStickersNotModified')) {
+                if (this.emojiStickersListCache) this.emojiStickersListCache.expiresAt = now + STICKER_SET_TTL_MS;
+                return this.emojiStickersListCache ? this.emojiStickersListCache.sets : [];
+            }
+            const sets = Array.isArray(res?.sets) ? res.sets : [];
+            this.emojiStickersListCache = { sets, hash: Number(res?.hash ?? 0), expiresAt: now + STICKER_SET_TTL_MS };
+            return sets;
+        })().finally(() => {
+            this.emojiStickersListPending = null;
+        });
+        this.emojiStickersListPending = p;
+        return p;
     }
 
     async refreshMessage(messageId: number): Promise<any> {
@@ -640,37 +649,131 @@ export class GramMediaRouter {
     }
 
     private scheduleDownloadQueue(queueKey: QueueKey): void {
-        if (this.downloadQueueMicrotasks.has(queueKey)) return;
-        this.downloadQueueMicrotasks.add(queueKey);
-        Promise.resolve().then(() => {
-            this.downloadQueueMicrotasks.delete(queueKey);
+        const existing = this.downloadQueueTimers.get(queueKey);
+        if (existing) clearTimeout(existing);
+        this.downloadQueueTimers.set(queueKey, setTimeout(() => {
+            this.downloadQueueTimers.delete(queueKey);
             this.processDownloadQueue(queueKey);
-        });
+        }, 40));
     }
 
     private processDownloadQueue(queueKey: QueueKey): void {
         const queue = this.downloadQueues[queueKey];
         while (queue.length > 0 && this.downloadInProgress[queueKey] < QUEUE_CONCURRENCY[queueKey]) {
-            let bestIdx = 0;
-            for (let i = 1; i < queue.length; i++) {
-                if (queue[i].priority >= queue[bestIdx].priority) bestIdx = i;
+            const slots = QUEUE_CONCURRENCY[queueKey] - this.downloadInProgress[queueKey];
+            const batchSize = Math.min(queueKey === 'video_queue' ? 1 : DOC_DOWNLOAD_BATCH, slots, queue.length);
+            const items: Array<{ document: any; messageId: number | string; mime: string; priority: number }> = [];
+            for (let n = 0; n < batchSize; n++) {
+                let bestIdx = 0;
+                for (let i = 1; i < queue.length; i++) {
+                    if (queue[i].priority >= queue[bestIdx].priority) bestIdx = i;
+                }
+                items.push(queue.splice(bestIdx, 1)[0]);
             }
-            const item = queue.splice(bestIdx, 1)[0];
-            this.downloadInProgress[queueKey]++;
-            if (this.debug) log.info('[gram-media] queue dequeue ' + queueKey + ' messageId=' + item.messageId + ' priority=' + item.priority + ' remaining=' + queue.length);
-            this.execDownload(item.document, item.messageId, item.mime).finally(() => {
-                this.downloadInProgress[queueKey]--;
+            this.downloadInProgress[queueKey] += items.length;
+            void this.execDownloadsBatch(items, queueKey).finally(() => {
+                this.downloadInProgress[queueKey] -= items.length;
                 this.processDownloadQueue(queueKey);
             });
         }
     }
 
-    private async execDownload(document: any, messageId: number, mime: string): Promise<void> {
+    private async execDownloadsBatch(items: Array<{ document: any; messageId: number | string; mime: string; priority: number }>, queueKey: QueueKey): Promise<void> {
+        const gen = this.documentDownloadGen;
         try {
-            await this.execDownloadBody(document, messageId, mime);
+            const videoItems = items.filter((it) => it.mime.startsWith('video/'));
+            for (const it of videoItems) {
+                if (gen !== this.documentDownloadGen) return;
+                await this.execDownloadBody(it.document, it.messageId, it.mime);
+            }
+            const rest = items.filter((it) => !it.mime.startsWith('video/'));
+            if (rest.length === 0) return;
+            if (rest.length === 1) {
+                await this.execDownloadBody(rest[0].document, rest[0].messageId, rest[0].mime);
+                return;
+            }
+            if (gen !== this.documentDownloadGen) return;
+            let results: Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }> = [];
+            try {
+                results = (await this.transport?.downloadFiles(
+                    rest.map((it) => ({ document: it.document, priority: it.priority })),
+                )) || [];
+            } catch (err: any) {
+                if (gen !== this.documentDownloadGen) return;
+                if (this.debug) log.info('[gram-media] downloadFiles batch error, falling back per-item:', err?.message, 'items=' + rest.length);
+                for (const it of rest) {
+                    if (gen !== this.documentDownloadGen) return;
+                    await this.execDownloadBody(it.document, it.messageId, it.mime);
+                }
+                return;
+            }
+            for (const r of results) {
+                if (gen !== this.documentDownloadGen) return;
+                const it = rest[r.index];
+                if (!it) continue;
+                await this.processFileDownloadResult(it, r, gen);
+            }
         } finally {
-            this.documentPending.delete(messageId);
+            for (const it of items) this.documentPending.delete(it.messageId as number);
         }
+    }
+
+    private async processFileDownloadResult(
+        item: { document: any; messageId: number | string; mime: string },
+        result: { bytes?: ArrayBuffer; cacheSource?: string; error?: string },
+        gen: number,
+    ): Promise<void> {
+        if (gen !== this.documentDownloadGen) return;
+        if (result?.bytes && result.bytes.byteLength > 0) {
+            const bytes = this.toArrayBuffer(result.bytes);
+            const url = item.mime === 'application/x-tgsticker'
+                ? await this.tgsToJsonUrl(bytes)
+                : this.bytesToBlobUrl(bytes, item.mime);
+            if (gen !== this.documentDownloadGen) return;
+            if (typeof item.messageId === 'string' && this.isEmojiKey(item.messageId)) {
+                this.emoji.onEmojiDownloadSuccess(item.messageId.slice('emojipack-'.length), url);
+            }
+            this.notifyEmojiUrlKind(url, this.emojiKindFor(item.mime));
+            this.notifyEmojiUrl(String(item.document.id), url, item.mime);
+            this.dispatchDocumentUrl(item.messageId, url, result.cacheSource);
+            return;
+        }
+        const error = (result?.error || '') as string;
+        if (typeof item.messageId === 'string' && this.isEmojiKey(item.messageId)) {
+            this.emoji.onEmojiDownloadFailed(item.messageId.slice('emojipack-'.length));
+            return;
+        }
+        if (typeof item.messageId !== 'number') return;
+        if (error.includes('FILE_REFERENCE_EXPIRED')) {
+            if (this.debug) log.info('[gram-media] batch FILE_REFERENCE_EXPIRED, re-fetching message', item.messageId);
+            try {
+                const freshMsg = await this.refreshMessage(item.messageId);
+                if (gen !== this.documentDownloadGen) return;
+                if (freshMsg?.media?.document) {
+                    const retry = await this.transport?.downloadFile({ document: freshMsg.media.document });
+                    if (gen !== this.documentDownloadGen) return;
+                    if (retry?.bytes) {
+                        const m = (freshMsg.media.document.mime_type || 'application/octet-stream').toLowerCase();
+                        const bytes = this.toArrayBuffer(retry.bytes);
+                        if (bytes.byteLength) {
+                            const url = m === 'application/x-tgsticker'
+                                ? await this.tgsToJsonUrl(bytes)
+                                : this.bytesToBlobUrl(bytes, m);
+                            this.notifyEmojiUrlKind(url, this.emojiKindFor(m));
+                            this.notifyEmojiUrl(String(freshMsg.media.document.id), url, m);
+                            this.dispatchDocumentUrl(item.messageId, url, retry.cacheSource);
+                            return;
+                        }
+                    }
+                }
+            } catch (e: any) {
+                log.error('[gram-media] batch FILE_REFERENCE refresh error:', e?.message, item.messageId);
+            }
+            this.scheduleDocumentRetry(item.messageId, item.document);
+            return;
+        }
+        if (error) log.warn('[gram-media] document batch item error:', error, item.messageId);
+        this.scheduleDocumentRetry(item.messageId, item.document);
     }
 
     private async execDownloadBody(document: any, messageId: number | string, mime: string): Promise<void> {
