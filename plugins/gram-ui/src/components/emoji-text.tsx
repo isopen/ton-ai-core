@@ -174,7 +174,11 @@ function EmojiPendingRuns({ text, size }: { text: string; size: number }) {
   let key = 0;
   for (const r of runs) {
     if (r.start > pos) parts.push(<span key={'t' + key++}>{text.slice(pos, r.start)}</span>);
-    parts.push(<span key={'e' + key++} style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`} />);
+    parts.push(
+      <span key={'e' + key++} style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`}>
+        <span style={`display:block;width:100%;height:100%;line-height:${Math.round(size * 1.1)}px;text-align:center;font-size:${Math.round(size * 0.72)}px`}>{r.emoji}</span>
+      </span>
+    );
     pos = r.end;
   }
   if (pos < text.length) parts.push(<span key={'t' + key++}>{text.slice(pos)}</span>);
