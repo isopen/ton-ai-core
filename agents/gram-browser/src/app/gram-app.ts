@@ -1,6 +1,6 @@
 import { WorkerTelegramService } from '@/utils/worker-telegram-service';
 import { TelegramUI, setStrings, t, tpl, S, LANG_FALLBACKS } from '@ton-ai/gram-ui';
-import type { PeerInfo, Message, AppState, TelegramUICallbacks } from '@ton-ai/gram-ui';
+import type { AppState, TelegramUICallbacks } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbCompact, migrateFromLocalStorage, setEncryptionKey } from '@/utils/db';
 import { genId, LANG_CACHE_VERSION } from './gram-constants';
 import type { GramState } from './gram-state';
