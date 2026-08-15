@@ -473,7 +473,6 @@ describe('renderFrame deep coverage', () => {
         };
         renderFrame = require('../src/renderer.js').renderFrame;
     });
-    const TGS_HEAD = { tgs: 1, v: '5.5.2', fr: 60, ip: 0, op: 180, w: 512, h: 512, nm: 'deep' };
 
     function baseLayer(over: any = {}): any {
         return {

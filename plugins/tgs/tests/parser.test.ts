@@ -12,7 +12,7 @@ import {
     MaskMode,
     GradientType,
 } from '@ton-ai/tgs';
-import type { ParsedProperty, ParsedShape } from '@ton-ai/tgs';
+import type { ParsedProperty } from '@ton-ai/tgs';
 function tgs(body: object): string {
     return JSON.stringify({
         tgs: 1,

@@ -1,6 +1,6 @@
 import type {
     TgsAnimation, TgsLayer, TgsShape, TgsAsset, TgsMask, TgsTransform, TgsText,
-    ParsedAnimation, ParsedLayer, ParsedTransform, ParsedProperty, ParsedShape,
+    ParsedAnimation, ParsedLayer, ParsedTransform, ParsedShape,
     ParsedAsset, ParsedMask, ParsedGradient, ParsedText, TextKeyframe, LayerInfo, TgsMarker,
 } from './types.js';
 import {

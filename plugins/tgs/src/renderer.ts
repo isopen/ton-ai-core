@@ -6,8 +6,6 @@ import type {
 } from './types.js';
 import { MatteType, LayerType } from './types.js';
 
-const TGS_DEBUG = false;
-
 const EPSILON = 0.000001;
 const DASH_TOLERANCE = 0.1;
 const DASH_ITER_CAP = 10000;

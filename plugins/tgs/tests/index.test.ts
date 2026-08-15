@@ -1,4 +1,5 @@
 import { inflateTgs, loadTgs, parseTgs, frameAtPos, TgsPlugin, Property } from '@ton-ai/tgs';
+import { getLogger } from '@ton-ai/gram-debug';
 import { gzipSync } from 'zlib';
 
 const JSON_BODY = JSON.stringify({
@@ -110,7 +111,12 @@ describe('TgsPlugin', () => {
             p.parse(json);
             const again = p.parse(json);
             expect(again).not.toBe(a);
-            expect(consoleSpy).toHaveBeenCalledWith('[tgs] INFO', 'TGS Parser initialized');
+            const log = getLogger('tgs');
+            if (log.enabled) {
+                expect(consoleSpy).toHaveBeenCalledWith('[tgs] INFO', 'TGS Parser initialized');
+            } else {
+                expect(consoleSpy).not.toHaveBeenCalled();
+            }
         } finally {
             consoleSpy.mockRestore();
         }

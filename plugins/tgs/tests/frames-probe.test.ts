@@ -1,5 +1,5 @@
 import { parseTgs } from '@ton-ai/tgs';
-import type { ParsedAnimation, ParsedProperty } from '@ton-ai/tgs';
+import type { ParsedAnimation } from '@ton-ai/tgs';
 import * as fs from 'fs';
 import * as path from 'path';
 let renderFrame: (canvas: any, anim: ParsedAnimation, frame: number, dpr: number, w?: number, h?: number) => void;
