@@ -62,6 +62,23 @@ const log = getLogger('gram-browser');
 
 const wlog = (...args: any[]) => log.debug(...args);
 
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(message)), ms);
+        promise.then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => { clearTimeout(timer); reject(e); }
+        );
+    });
+}
+
+const DC_CONNECT_TIMEOUT_MS = 30000;
+const CDN_CALL_TIMEOUT_MS = 15000;
+const DC_RPC_SLOT_TIMEOUT_MS = 30000;
+const CDN_PROBE_TIMEOUT_MS = 8000;
+const cdnUnreachableDcs = new Set<number>();
+let cdnProbeStarted = false;
+
 let conn: BrowserObfuscatedConnection | null = null;
 let authKey: Buffer | null = null;
 let authKeyId: bigint = 0n;
@@ -607,7 +624,10 @@ function acquireDcRpcSlot(dcId: number): Promise<void> {
         dcRpcSlots.set(dcId, used + 1);
         return Promise.resolve();
     }
-    return new Promise<void>((enter) => { dcRpcWaiters.push({ dcId, enter }); });
+    return new Promise<void>((enter, reject) => {
+        const timer = setTimeout(() => reject(new Error('DC ' + dcId + ' RPC slot timeout')), DC_RPC_SLOT_TIMEOUT_MS);
+        dcRpcWaiters.push({ dcId, enter: () => { clearTimeout(timer); enter(); } });
+    });
 }
 function releaseDcRpcSlot(dcId: number): void {
     const used = Math.max(0, (dcRpcSlots.get(dcId) || 1) - 1);
@@ -631,6 +651,10 @@ interface StoredAuthKey {
 const dcStoredAuthKeys = new Map<number, StoredAuthKey>();
 
 async function createDcConnection(dcId: number, type: 'video' | 'download' = 'download'): Promise<DcConnection> {
+    return withTimeout(createDcConnectionInner(dcId, type), DC_CONNECT_TIMEOUT_MS, 'DC ' + dcId + ' connection timeout');
+}
+
+async function createDcConnectionInner(dcId: number, type: 'video' | 'download' = 'download'): Promise<DcConnection> {
     const dcOpts = TELEGRAM_WS_DC_OPTIONS.find(d => d.id === dcId);
     if (!dcOpts) throw new Error('Unknown DC ' + dcId);
 
@@ -832,6 +856,29 @@ async function acquireDcConnection(dcId: number, type: 'video' | 'download'): Pr
 
 function releaseDcConnection(entry: DcConnection): void {
     entry.busy = false;
+}
+
+async function probeCdnDcs(): Promise<void> {
+    if (cdnProbeStarted) return;
+    cdnProbeStarted = true;
+    try {
+        const cfg = await callRpc('help.getCdnConfig', {});
+        const ids = Array.isArray(cfg?.dc_id) ? cfg.dc_id : (cfg?.dc_id != null ? [cfg.dc_id] : []);
+        await Promise.all(ids.map(async (id: any) => {
+            const dcId = Number(id);
+            if (!dcId || cdnUnreachableDcs.has(dcId)) return;
+            let entry: DcConnection | null = null;
+            try {
+                entry = await withTimeout(acquireDcConnection(dcId, 'download'), CDN_PROBE_TIMEOUT_MS, 'CDN probe timeout dc=' + dcId);
+                wlog('[worker] CDN probe: DC ' + dcId + ' reachable');
+            } catch {
+                cdnUnreachableDcs.add(dcId);
+                wlog('[worker] CDN probe: DC ' + dcId + ' unreachable, blacklisted');
+            } finally {
+                if (entry) releaseDcConnection(entry);
+            }
+        }));
+    } catch {}
 }
 
 function invalidateDcKey(dcId: number): void {
@@ -2517,6 +2564,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
             setTimeout(() => initUpdates().catch(() => {}), 100);
             createDcConnection(ses!.dcId).catch(() => {});
             startHealthCheck();
+            setTimeout(() => probeCdnDcs().catch(() => {}), 0);
         }
         return;
     }
@@ -3170,6 +3218,10 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         let cdnIv: Buffer | null = null;
         const applyCdnRedirect = (res: any): boolean => {
             if (res._ !== 'upload.fileCdnRedirect') return false;
+            if (cdnUnreachableDcs.has(res.dc_id)) {
+                wlog('[dl] CDN DC ' + res.dc_id + ' blacklisted — using origin DC for id=' + id);
+                return false;
+            }
             cdnDcId = res.dc_id;
             serverType = 'cdn-server';
             cdnFileToken = typeof res.file_token === 'string'
@@ -3186,14 +3238,22 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 const p = { file_token: cdnFileToken, offset: ofs, limit: lim };
                 let result: any;
                 try {
-                    result = await runWithSem(() => callRpcOnDc(cdnDcId, 'upload.getCdnFile', p), fileSmall);
+                    result = await runWithSem(() => withTimeout(
+                        callRpcOnDc(cdnDcId, 'upload.getCdnFile', p, 'download'),
+                        CDN_CALL_TIMEOUT_MS,
+                        'CDN DC ' + cdnDcId + ' request timeout'
+                    ), fileSmall);
                 } catch (e: any) {
-                    if (String((e as Error)?.message || e).includes('FILE_TOKEN_INVALID')) {
+                    const msg = String((e as Error)?.message || e);
+                    if (msg.includes('FILE_TOKEN_INVALID')) {
                         wlog('[dl] CDN token invalid id=' + id + ' — falling back to origin DC');
                         cdnDcId = 0; cdnFileToken = null; cdnKey = null; cdnIv = null;
                         return doCall(ofs, lim, precise);
                     }
-                    throw e;
+                    wlog('[dl] CDN DC ' + cdnDcId + ' unreachable (' + msg + ') id=' + id + ' — blacklisting, falling back to origin DC');
+                    cdnUnreachableDcs.add(cdnDcId);
+                    cdnDcId = 0; cdnFileToken = null; cdnKey = null; cdnIv = null;
+                    return doCall(ofs, lim, precise);
                 }
                 if (result._ === 'upload.cdnFileReuploadNeeded') {
                     const requestToken = Buffer.from(result.request_token, 'hex');
@@ -3231,7 +3291,9 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         if (genRef && genRef.value !== photoDownloadGen) return { type: '', bytes: new ArrayBuffer(0), error: 'ABORTED' };
 
         if (firstResult._ === 'upload.fileCdnRedirect') {
-            applyCdnRedirect(firstResult);
+            if (!applyCdnRedirect(firstResult)) {
+                throw new Error('File requires CDN DC ' + firstResult.dc_id + ' which is unreachable');
+            }
             wlog('[dl] CDN redirect id=' + id + ' label=' + label + ' cdnDc=' + cdnDcId);
             firstResult = await poolCall(() => doCall(BigInt(0), PART_SIZE));
         }
@@ -3410,6 +3472,10 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     };
     const applyStreamCdnRedirect = (res: any): boolean => {
         if (res._ !== 'upload.fileCdnRedirect') return false;
+        if (cdnUnreachableDcs.has(res.dc_id)) {
+            vlog('CDN DC ' + res.dc_id + ' blacklisted — using origin DC');
+            return false;
+        }
         cdnDcId = res.dc_id;
         serverType = 'cdn-server';
         cdnFileToken = typeof res.file_token === 'string'
@@ -3425,14 +3491,22 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
             const p = { file_token: cdnFileToken, offset: ofs, limit };
             let result: any;
             try {
-                result = await runWithSem(() => callRpcOnDc(cdnDcId, 'upload.getCdnFile', p, 'video'), false);
+                result = await runWithSem(() => withTimeout(
+                    callRpcOnDc(cdnDcId, 'upload.getCdnFile', p, 'video'),
+                    CDN_CALL_TIMEOUT_MS,
+                    'CDN DC ' + cdnDcId + ' request timeout'
+                ), false);
             } catch (e: any) {
-                if (String((e as Error)?.message || e).includes('FILE_TOKEN_INVALID')) {
-                    wlog('[dl-stream] CDN token invalid — falling back to origin DC');
+                const msg = String((e as Error)?.message || e);
+                if (msg.includes('FILE_TOKEN_INVALID')) {
+                    vlog('CDN token invalid — falling back to origin DC');
                     cdnDcId = 0; cdnFileToken = null; cdnKey = null; cdnIv = null;
                     return doCall(ofs);
                 }
-                throw e;
+                vlog('CDN DC ' + cdnDcId + ' unreachable (' + msg + ') — blacklisting, falling back to origin DC');
+                cdnUnreachableDcs.add(cdnDcId);
+                cdnDcId = 0; cdnFileToken = null; cdnKey = null; cdnIv = null;
+                return doCall(ofs);
             }
             if (result._ === 'upload.cdnFileReuploadNeeded') {
                 const requestToken = Buffer.from(result.request_token, 'hex');
