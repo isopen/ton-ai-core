@@ -3,7 +3,9 @@ import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import { renderFrame } from '@ton-ai/tgs';
 import type { LayerOrder, ParsedAnimation } from '@ton-ai/tgs';
 import { parseTgsJson } from '../utils/tgs-parse.js';
-import { DEBUG } from '../debug-flags.js';
+import { getLogger } from '@ton-ai/gram-debug';
+
+const tgsLog = getLogger('gram-ui:tgs');
 
 let activePlayers = 0;
 const MAX_ACTIVE_PLAYERS = 64;
@@ -136,12 +138,12 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 }
                 lastTimeRef.current = 0;
                 setAnimVersion((v) => v + 1);
-                if (DEBUG.tgs) {
-                    console.log('[TGS_LOG] parsed', { w: parsed.width, h: parsed.height, fps: parsed.fps, inFrame: parsed.inFrame, outFrame: parsed.outFrame, layers: parsed.layers.length });
+                if (tgsLog.enabled) {
+                    tgsLog.info('[TGS_LOG] parsed', { w: parsed.width, h: parsed.height, fps: parsed.fps, inFrame: parsed.inFrame, outFrame: parsed.outFrame, layers: parsed.layers.length });
                 }
             } catch (e: any) {
                 if (cancelled) return;
-                if (DEBUG.tgs) console.log('[TGS_LOG] parse error', e);
+                tgsLog.info('[TGS_LOG] parse error', e);
                 setError(e.message || 'Invalid TGS');
                 animRef.current = null;
             }
@@ -267,7 +269,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
                         drawFrame(frame);
                         lastDrawRef.current = timestamp;
                     } catch (e) {
-                        if (DEBUG.tgs) console.log('[TGS_LOG] draw error', e);
+                        tgsLog.info('[TGS_LOG] draw error', e);
                         started = false;
                         releasePlayerSlot();
                         if (!loop && !endFiredRef.current) {

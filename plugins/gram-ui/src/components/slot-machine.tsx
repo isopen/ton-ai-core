@@ -6,7 +6,10 @@ import { TgsPlayer, isAnimationCompleted } from './tgs-player.js';
 import { getSlotLayerSpecs, requestEmojiDownload, subscribeDiceSets, ensureEmojiStickers } from './emoji-store.js';
 import type { SlotLayerRole, SlotLayerSpec } from './emoji-store.js';
 import { SLOT_LOCAL_IDS, getSlotLocalData, getSlotLocalResult, isSlotLocalDoc } from './slot-idle.js';
-import { DEBUG } from '../debug-flags.js';
+import { getLogger, isEnabled } from '@ton-ai/gram-debug';
+
+const slotLog = getLogger('gram-ui:slot');
+const slotLayerLog = getLogger('gram-ui:slot-layer');
 
 const SLOT_RETRY_MS = 2500;
 const SLOT_LAYER_FINISH_MS = 300;
@@ -75,7 +78,7 @@ function ensureSlotData(docId: string, url: string): void {
       slotDataCache.set(did, data);
       emitSlotData(did, data);
     } catch (err) {
-      if (DEBUG.slot) console.warn('[slot] slot data fetch failed', did, (err as Error)?.message || err);
+      slotLog.warn('[slot] slot data fetch failed', did, (err as Error)?.message || err);
       scheduleSlotRetry(did);
     } finally {
       slotDataInFlight.delete(did);
@@ -94,10 +97,10 @@ window.addEventListener('tg-emoji-url', (e) => {
       slotDataCache.set(did, { kind: 'tgs', value: d.json });
       emitSlotData(did, { kind: 'tgs', value: d.json });
     }
-    if (DEBUG.slot) console.log('[slot] tg-emoji-url', did, 'cached:', slotDataCache.has(did), 'inflight:', slotDataInFlight.has(did), 'viaJson:true');
+    slotLog.info('[slot] tg-emoji-url', did, 'cached:', slotDataCache.has(did), 'inflight:', slotDataInFlight.has(did), 'viaJson:true');
     return;
   }
-  if (DEBUG.slot) console.log('[slot] tg-emoji-url', did, 'cached:', slotDataCache.has(did), 'inflight:', slotDataInFlight.has(did));
+  slotLog.info('[slot] tg-emoji-url', did, 'cached:', slotDataCache.has(did), 'inflight:', slotDataInFlight.has(did));
   ensureSlotData(did, String(d.url));
 });
 
@@ -213,8 +216,8 @@ function SlotLayer({ docId, role, partIndex, size, autoplay, loop, playKey, show
   const localId = isSlotLocalDoc(docId) ? docId : localFallbackId(role, partIndex);
   const local = useSlotLocalData(localId);
   const data = real || local;
-  if (DEBUG.slotLayer) {
-    console.log('[slot-layer]', JSON.stringify({ docId, role, real: !!real, local: !!local, kind: data?.kind }));
+  if (isEnabled('gram-ui:slot-layer')) {
+    slotLayerLog.info('[slot-layer]', JSON.stringify({ docId, role, real: !!real, local: !!local, kind: data?.kind }));
   }
   const firedDataRef = useRef<any>(null);
 
@@ -319,9 +322,9 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
   const [winReady, setWinReady] = useState(doneBefore);
   const slotProgressRef = useRef<boolean[]>([false, false, false]);
 
-  if (DEBUG.slot) {
+  if (isEnabled('gram-ui:slot')) {
     const realIds = (specs || []).filter((s) => !isSlotLocalDoc(s.docId)).map((s) => s.docId);
-    console.log('[slot]', JSON.stringify({ value, specs: specs ? specs.length : undefined, setReady, ready, realSet, animated, doneBefore, nLocal: layers.filter((s) => isSlotLocalDoc(s.docId)).length, cached: realIds.filter((id) => slotDataCache.has(String(id))).length, h: handleDone, sp: spinsDone, sl: slotsDone, a: allDone, win: winReady }));
+    slotLog.info('[slot]', JSON.stringify({ value, specs: specs ? specs.length : undefined, setReady, ready, realSet, animated, doneBefore, nLocal: layers.filter((s) => isSlotLocalDoc(s.docId)).length, cached: realIds.filter((id) => slotDataCache.has(String(id))).length, h: handleDone, sp: spinsDone, sl: slotsDone, a: allDone, win: winReady }));
   }
 
   const progressedRef = useRef(false);
