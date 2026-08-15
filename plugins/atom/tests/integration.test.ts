@@ -5,7 +5,7 @@
 import { render } from '../src/render.js';
 import { useState, useEffect, useRef, useMemo, useCallback } from '../src/hooks.js';
 import { createDOM, patch } from '../src/reconciler.js';
-import { TEXT, FRAGMENT, ComponentInstance, setCurrentInstance, currentInstance } from '../src/vdom.js';
+import { TEXT } from '../src/vdom.js';
 import type { VNode, ComponentType } from '../src/vdom.js';
 
 function h(type: any, props: Record<string, any> = {}, ...children: any[]): VNode {

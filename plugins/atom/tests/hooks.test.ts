@@ -2,9 +2,10 @@ import {
   useState, useEffect, useRef, useMemo, useCallback, __setReroot, flushAllEffects,
 } from '../src/hooks.js';
 import {
-  ComponentInstance, setCurrentInstance, currentInstance,
+  ComponentInstance, setCurrentInstance,
 } from '../src/vdom.js';
-import type { ComponentType, VNode } from '../src/vdom.js';
+import { getLogger } from '@ton-ai/gram-debug';
+import type { ComponentType } from '../src/vdom.js';
 
 function createTestInstance(): ComponentInstance {
   const Comp: ComponentType = () => ({ type: 'div', props: {}, children: [], key: null });
@@ -685,7 +686,12 @@ describe('flushAllEffects error handling', () => {
         useEffect(() => { throw new Error('boom'); }, []);
         flushAllEffects();
       });
-      expect(errorSpy).toHaveBeenCalledWith('[atom] ERROR', 'useEffect error:', expect.any(Error));
+      const log = getLogger('atom');
+      if (log.enabled) {
+        expect(errorSpy).toHaveBeenCalledWith('[atom] ERROR', 'useEffect error:', expect.any(Error));
+      } else {
+        expect(errorSpy).not.toHaveBeenCalled();
+      }
     } finally {
       errorSpy.mockRestore();
     }
@@ -716,7 +722,12 @@ describe('flushAllEffects error handling', () => {
       useEffect(() => cleanup, [1]);
       flushAllEffects();
       setCurrentInstance(null);
-      expect(errorSpy).toHaveBeenCalledWith('[atom] ERROR', 'useEffect cleanup error:', expect.any(Error));
+      const log = getLogger('atom');
+      if (log.enabled) {
+        expect(errorSpy).toHaveBeenCalledWith('[atom] ERROR', 'useEffect cleanup error:', expect.any(Error));
+      } else {
+        expect(errorSpy).not.toHaveBeenCalled();
+      }
     } finally {
       errorSpy.mockRestore();
     }

@@ -4,8 +4,7 @@
 
 import { createDOM, patch } from '../src/reconciler.js';
 import {
-  TEXT, FRAGMENT, SLOT, SLOTTABLE,
-  ComponentInstance, setCurrentInstance, currentInstance,
+  TEXT, FRAGMENT, SLOT, SLOTTABLE, currentInstance,
 } from '../src/vdom.js';
 import type { VNode, ComponentType } from '../src/vdom.js';
 
@@ -425,9 +424,6 @@ describe('patch - keyed children', () => {
       { type: 'div', props: { key: 'b', 'data-id': 'b' }, children: [h(TEXT as any, { nodeValue: 'B' })], key: 'b' } as any,
       { type: 'div', props: { key: 'a', 'data-id': 'a' }, children: [h(TEXT as any, { nodeValue: 'A' })], key: 'a' } as any,
     );
-
-    const childA = parentEl.children[0];
-    const childB = parentEl.children[1];
 
     patch(parentEl, parent, newParent);
 

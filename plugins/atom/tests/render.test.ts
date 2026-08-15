@@ -3,7 +3,7 @@
  */
 
 import { render, flushRender, setUseRafBatching } from '../src/render.js';
-import { useState, useRef, useEffect } from '../src/hooks.js';
+import { useState, useEffect } from '../src/hooks.js';
 import type { ComponentType } from '../src/vdom.js';
 
 function h(type: any, props: Record<string, any> = {}, ...children: any[]): any {

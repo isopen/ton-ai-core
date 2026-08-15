@@ -1,6 +1,5 @@
 import { jsx, h, Fragment } from '../src/jsx-runtime.js';
 import { TEXT, FRAGMENT } from '../src/vdom.js';
-import type { VNode } from '../src/vdom.js';
 
 describe('jsx', () => {
   test('creates element vnode for string type', () => {
