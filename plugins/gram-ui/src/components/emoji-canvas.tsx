@@ -213,7 +213,7 @@ window.addEventListener('tg-emoji-url', (e) => {
   const { docId, url, kind } = (e as CustomEvent).detail || {};
   if (!docId || !url) return;
   const did = String(docId);
-  const k = (kind === 'video' || kind === 'img' || kind === 'tgs') ? kind : 'tgs';
+  const k = (kind === 'video' || kind === 'img' || kind === 'tgs') ? kind : 'img';
   urlKinds.set(url, k);
   if (!resolvedKinds.has(did)) {
     resolvedKinds.set(did, k);
@@ -277,7 +277,7 @@ const kindInFlight = new Map<string, Promise<'video' | 'tgs' | 'img' | null>>();
 
 export function checkEmojiKind(url: string): Promise<'video' | 'tgs' | 'img' | null> {
   if (url.startsWith('blob:')) {
-    return Promise.resolve(urlKinds.get(url) || 'tgs');
+    return Promise.resolve(urlKinds.get(url) || 'img');
   }
   const inFlight = kindInFlight.get(url);
   if (inFlight) return inFlight;
@@ -316,7 +316,7 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
       const { docId, url, kind } = (e as CustomEvent).detail || {};
       if (!docId || !url) return;
       const did = String(docId);
-      const k = (kind === 'video' || kind === 'img' || kind === 'tgs') ? kind : 'tgs';
+      const k = (kind === 'video' || kind === 'img' || kind === 'tgs') ? kind : 'img';
       urlKinds.set(url, k);
       resolvedKinds.set(did, k);
       trackLastUrl(did, url);
@@ -643,9 +643,11 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
               shared ? (
                 (inView || everShown) && pos ? (
                   <span style="position:relative;display:block;width:100%;height:100%">
-                    <span style="position:absolute;left:0;top:0;width:100%;height:100%">
-                      <FallbackGlyph value={fallbackGlyph} size={size} />
-                    </span>
+                    {!loadedDocs[docId] && (
+                      <span style="position:absolute;left:0;top:0;width:100%;height:100%">
+                        <FallbackGlyph value={fallbackGlyph} size={size} />
+                      </span>
+                    )}
                     <AnimatedSticker
                       tgsUrl={url}
                       renderId={renderId}

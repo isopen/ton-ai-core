@@ -245,6 +245,7 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
       const instance = reuseInstance ?? new ComponentInstance(component, vnode.props);
       if (reuseInstance) {
         reuseInstance.props = vnode.props;
+        reuseInstance._mounted = true;
       }
       setCurrentInstance(instance);
       const result = instance.render();
@@ -363,6 +364,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
       instance = new ComponentInstance(component, newVNode.props);
     } else {
       instance.props = newVNode.props;
+      instance._mounted = true;
     }
     newVNode.componentInstance = instance;
 

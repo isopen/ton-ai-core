@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { initAnimatedRenderer } from '../utils/animated-renderer/index.js';
 import type { IAnimatedRenderer } from '../utils/animated-renderer/types.js';
 import { getIsHeavyAnimating, useHeavyAnimation } from '../utils/heavy-animation.js';
+import { DEBUG } from '../debug-flags.js';
 
 let uidCounter = 0;
 
@@ -66,12 +67,12 @@ export function AnimatedSticker({
       old.removeView(viewId);
     }
     urlRef.current = tgsUrl;
-    console.log('[ani-sticker] init', renderId, 'size=' + size, 'shared=' + !!sharedCanvas, 'coords=' + (coords ? coords.x + ',' + coords.y : 'n'), 'url=' + tgsUrl.slice(0, 60));
+    if (DEBUG.aniSticker) console.log('[ani-sticker] init', renderId, 'size=' + size, 'shared=' + !!sharedCanvas, 'coords=' + (coords ? coords.x + ',' + coords.y : 'n'), 'url=' + tgsUrl.slice(0, 60));
     const r = initAnimatedRenderer(tgsUrl, container, renderId, { size, noLoop: !loop, quality, isLowPriority, coords }, viewId, (() => {
-      console.log('[ani-sticker] onLoad', renderId);
+      if (DEBUG.aniSticker) console.log('[ani-sticker] onLoad', renderId);
       onLoad?.();
     }), (() => {
-      console.log('[ani-sticker] onError', renderId);
+      if (DEBUG.aniSticker) console.log('[ani-sticker] onError', renderId);
       onError?.();
     }));
     rendererRef.current = r;

@@ -4,8 +4,7 @@ import { EmojiCanvas, StaticEmojiText, fetchEmojiData } from './emoji-canvas.js'
 import type { EmojiSegment } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
 import { ensureEmojiStickers, getEmojiAlt, getEmojiDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
-
-const TGS_DEBUG = false;
+import { DEBUG } from '../debug-flags.js';
 
 export { releaseEmojiCache } from './emoji-canvas.js';
 
@@ -46,7 +45,7 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
         const next = await fetchEmojiData(url);
         if (!cancelled) setData(next);
       } catch (e) {
-        if (TGS_DEBUG) console.log('[TGS_LOG] EmojiInline fetch error', e);
+        if (DEBUG.emojiText) console.log('[TGS_LOG] EmojiInline fetch error', e);
         if (!cancelled && failRef.current < 2) {
           failRef.current++;
           requestEmojiDownload(docId, alt, 2);

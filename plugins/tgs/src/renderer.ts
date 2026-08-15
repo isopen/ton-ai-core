@@ -1160,6 +1160,7 @@ function renderCompLayers(
     assets: ParsedAsset[],
     anim: ParsedAnimation,
     layerOrder: LayerOrder = 'default',
+    hiddenLayers?: (name?: string) => boolean,
 ) {
     const layerById = new Map<number, ParsedLayer>();
     for (const l of layers) layerById.set(l.index, l);
@@ -1182,6 +1183,7 @@ function renderCompLayers(
         for (let i = 0; i < layers.length; i++) {
             const layer = layers[i];
             if (layer.matteType) continue;
+            if (hiddenLayers?.(layer.name)) continue;
             if (!layerVisible(layer, frame)) continue;
             const matte = matteFor.get(layer.index);
             if (matte) {
@@ -1201,7 +1203,7 @@ function renderCompLayers(
         if (layer.matteType) {
             matte = layer;
         } else {
-            if (layerVisible(layer, frame)) {
+            if (layerVisible(layer, frame) && !hiddenLayers?.(layer.name)) {
                 if (matte) {
                     if (layerVisible(matte, frame)) {
                         renderMattePair(ctx, matte, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
@@ -1582,6 +1584,7 @@ export function renderFrame(
     displayW?: number,
     displayH?: number,
     layerOrder: LayerOrder = 'default',
+    hiddenLayers?: (name?: string) => boolean,
 ) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -1600,7 +1603,7 @@ export function renderFrame(
 
     const root = compositionMatrix(anim, canvas.width, canvas.height);
     const clip: Rect = { x: 0, y: 0, w: canvas.width, h: canvas.height };
-    renderCompLayers(ctx, anim.layers, frame, root, 1, clip, anim.assets, anim, layerOrder);
+    renderCompLayers(ctx, anim.layers, frame, root, 1, clip, anim.assets, anim, layerOrder, hiddenLayers);
 }
 
 function compositionMatrix(anim: ParsedAnimation, w: number, h: number): Mat3 {

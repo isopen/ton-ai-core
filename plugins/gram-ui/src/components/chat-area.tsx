@@ -17,8 +17,8 @@ import { TelegramImage } from '../primitives/telegram-image.js';
 import type { ImageSpec } from '../types.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
-import { flushEmojiBatch, getEmojiDocId, getDiceDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeDiceSets } from './emoji-store.js';
-import { SlotMachineSticker, resetSlotMachineDone, resetSlotMachineStarted } from './slot-machine.js';
+import { flushEmojiBatch, getEmojiDocId, getDiceDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeDiceSets, ensureEmojiStickers } from './emoji-store.js';
+import { SlotMachineSticker, resetSlotMachineDone } from './slot-machine.js';
 import { resetCompletedAnimations } from './tgs-player.js';
 import { releaseEmojiCache } from './emoji-canvas.js';
 import { observeVisibility } from './emoji-canvas.js';
@@ -32,8 +32,7 @@ import { MediaCollage, type MediaCollageItem } from './media-collage.js';
 import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
 import { EmojiText, AnimatedEmoji } from './emoji-text.js';
 import { buildImageSpec, firstMissingSizeType, CHAT_PHOTO_PRIO } from './photo-spec.js';
-
-const DEBUG = false;
+import { DEBUG } from '../debug-flags.js';
 
 const STICKER_DOWNLOAD_RETRY_MS = 2500;
 const STICKER_DOWNLOAD_MAX_ATTEMPTS = 8;
@@ -214,7 +213,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   if (sameSenderNext) cls += ' MessageBubble_group_next';
 
   const imgSpec = buildImageSpec(m);
-  if (DEBUG) {
+  if (DEBUG.photo) {
     if (imgSpec) {
       console.log('[PhotoBubble] render', m.id, 'sizes:', m.media?.photo?.sizes?.length, 'hasUrls:', { thumb: !!imgSpec.thumbnail?.url, medium: !!imgSpec.medium?.url, original: !!imgSpec.original?.url });
     } else {
@@ -226,7 +225,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
 
   const photoSizes = m.media?.photo?.sizes;
   const hasAnyUrl = Array.isArray(photoSizes) && photoSizes.some((s: any) => !!(s.url || s.src));
-  if (DEBUG) {
+  if (DEBUG.photo) {
     console.log('[PhotoBubble] render', m.id, 'photoSizes:', Array.isArray(photoSizes) ? photoSizes.length : photoSizes, 'hasAnyUrl:', hasAnyUrl, 'imgSpec urls:', imgSpec ? { t: !!imgSpec.thumbnail?.url, m: !!imgSpec.medium?.url, o: !!imgSpec.original?.url } : 'null');
   }
 
@@ -234,11 +233,11 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   useEffect(() => {
     const timer = setTimeout(() => {
       const el = document.getElementById(`msg-${m.id}`);
-      if (!el) { if (DEBUG) console.log('[PhotoBubble] NO ELEMENT msg-' + m.id); return; }
+      if (!el) { if (DEBUG.photo) console.log('[PhotoBubble] NO ELEMENT msg-' + m.id); return; }
       const obs = new IntersectionObserver(([entry]) => {
         if (entry.isIntersecting) {
           const need = firstMissingSizeType(m.media?.photo, CHAT_PHOTO_PRIO);
-          if (DEBUG) console.log('[PhotoBubble] obs intersect', m.id, 'need:', need?.sizeType || null);
+          if (DEBUG.photo) console.log('[PhotoBubble] obs intersect', m.id, 'need:', need?.sizeType || null);
           if (need) {
             window.dispatchEvent(new CustomEvent('tg-download-photo', {
               detail: { photo: m.media.photo, sizeType: need.sizeType, messageId: m.id },
@@ -443,6 +442,7 @@ function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: numb
   const [url, setUrl] = useState<string | undefined>(undefined);
 
   useEffect(() => {
+    ensureEmojiStickers();
     setDocId(getDiceDocId(emoticon, value));
     return subscribeDiceSets(() => setDocId(getDiceDocId(emoticon, value)));
   }, [emoticon, value]);
@@ -450,20 +450,21 @@ function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: numb
   useEffect(() => {
     if (!docId) return;
     let tries = 0;
+    let t: ReturnType<typeof setInterval> | undefined;
     const onUrl = (e: Event) => {
       const d = (e as CustomEvent).detail;
       if (d && d.docId != null && String(d.docId) === docId && d.url) {
         setUrl(String(d.url));
-        clearInterval(t);
+        if (t) clearInterval(t);
       }
     };
     window.addEventListener('tg-emoji-url', onUrl);
     requestEmojiDownload(docId, undefined, 2);
     flushEmojiBatch();
-    const t = setInterval(() => {
+    t = setInterval(() => {
       tries++;
-      if (tries >= 10) {
-        clearInterval(t);
+      if (tries >= 40) {
+        if (t) clearInterval(t);
         return;
       }
       requestEmojiDownload(docId, undefined, 2);
@@ -471,7 +472,7 @@ function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: numb
     }, 1500);
     return () => {
       window.removeEventListener('tg-emoji-url', onUrl);
-      clearInterval(t);
+      if (t) clearInterval(t);
     };
   }, [docId]);
 
@@ -564,7 +565,6 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
     playbackResetPeerRef.current = handlerPeerKey;
     resetCompletedAnimations();
     resetSlotMachineDone();
-    resetSlotMachineStarted();
   }
   useEffect(() => {
     handlerCacheRef.current = new Map();

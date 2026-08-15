@@ -243,6 +243,20 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
     };
 
+    private isKnownSetDoc(id: string): boolean {
+        for (const docs of this.diceSetsByEmoji.values()) {
+            for (const d of docs) {
+                if (d?.id != null && String(d.id) === id) return true;
+            }
+        }
+        if (this.emojiStickerDocs) {
+            for (const d of Object.values(this.emojiStickerDocs)) {
+                if (d?.id != null && String(d.id) === id) return true;
+            }
+        }
+        return false;
+    }
+
     private async fetchFreshEmojiDoc(docId: string): Promise<any> {
         try {
             const res = await this.router.transport?.callRpc('messages.getCustomEmojiDocuments', {
@@ -252,6 +266,9 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             const fresh = docs.find((d: any) => d?.id && String(d.id) === docId);
             if (!fresh) return undefined;
             if (isStubEmojiDoc(fresh)) {
+                if (this.isKnownSetDoc(docId)) {
+                    return undefined;
+                }
                 this.markEmojiDocStub(docId);
                 this.emojiCustomDocsById.delete(docId);
                 this.indexEmojiDocs();
