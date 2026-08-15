@@ -8,6 +8,10 @@ import { getLogger } from '@ton-ai/gram-debug';
 
 const log = getLogger('gram-ui:emoji-text');
 
+const INLINE_EMOJI_SIZE = 19;
+const EMOJI_ONLY_SIZE = 30;
+const SINGLE_EMOJI_SIZE = 96;
+
 export { releaseEmojiCache } from './emoji-canvas.js';
 
 function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, playKey }: { docId?: string; url: string; alt?: string; size: number; autoplay?: boolean; loop?: boolean; playKey?: string }) {
@@ -185,7 +189,31 @@ function EmojiPendingRuns({ text, size }: { text: string; size: number }) {
   return <>{parts}</>;
 }
 
-export function EmojiText({ text, entities, documentUrls }: { text: string; entities?: any[]; documentUrls: Record<number, string> }) {
+function isEmojiOnlyText(text: string, entities?: any[]): boolean {
+  if (!text) return false;
+  const spans: Array<{ start: number; end: number }> = [];
+  const customSpans: Array<{ start: number; end: number }> = [];
+  for (const e of entities || []) {
+    if (e?._ !== 'messageEntityCustomEmoji' || typeof e.offset !== 'number' || typeof e.length !== 'number' || e.length <= 0) continue;
+    customSpans.push({ start: e.offset, end: e.offset + e.length });
+  }
+  if (customSpans.length > 0) {
+    for (const s of customSpans) spans.push(s);
+  } else {
+    const runs = matchEmojiRuns(text);
+    if (runs.length === 0) return false;
+    for (const r of runs) spans.push({ start: r.start, end: r.end });
+  }
+  spans.sort((a, b) => a.start - b.start || a.end - b.end);
+  let pos = 0;
+  for (const s of spans) {
+    if (s.start > pos && /\S/.test(text.slice(pos, s.start))) return false;
+    if (s.end > pos) pos = s.end;
+  }
+  return !/\S/.test(text.slice(pos));
+}
+
+export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EMOJI_SIZE, singleLine = false }: { text: string; entities?: any[]; documentUrls: Record<number, string>; inlineSize?: number; singleLine?: boolean }) {
   const emojiEntities = (entities || [])
     .filter((e: any) => e?._ === 'messageEntityCustomEmoji' && typeof e.offset === 'number' && typeof e.length === 'number' && e.length > 0)
     .sort((a: any, b: any) => a.offset - b.offset);
@@ -242,9 +270,8 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
   }
   const segments = segsRef.current.segments;
 
-  const EMOJI_SIZE = 30;
-  const SINGLE_EMOJI_SIZE = 96;
-  const size = singleEmoji ? SINGLE_EMOJI_SIZE : EMOJI_SIZE;
+  const emojiOnly = isEmojiOnlyText(text, entities);
+  const size = singleEmoji ? SINGLE_EMOJI_SIZE : (emojiOnly ? EMOJI_ONLY_SIZE : inlineSize);
   const hasEmoji = segments.some((s) => s.type === 'emoji');
   if (!hasEmoji) {
     if (matchEmojiRuns(text).length > 0) {
