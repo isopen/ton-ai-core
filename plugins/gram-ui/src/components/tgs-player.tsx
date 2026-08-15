@@ -79,7 +79,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [playing, setPlaying] = useState(() => playKey != null && completedAnims.get(playKey) ? false : autoplay);
-    const [inView, setInView] = useState(autoplay);
+    const [inView, setInView] = useState(true);
     const [animVersion, setAnimVersion] = useState(0);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const animRef = useRef<ParsedAnimation | null>(null);

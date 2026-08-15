@@ -183,7 +183,7 @@ function localFallbackId(role: SlotLayerRole, partIndex: number): string | undef
   }
 }
 
-function SlotLayer({ docId, role, partIndex, size, autoplay, loop, playKey, onEnd, onFrameProgress }: { docId: string; role: SlotLayerRole; partIndex: number; size: number; autoplay: boolean; loop?: boolean; playKey?: string; onEnd?: () => void; onFrameProgress?: (progress: number) => void }) {
+function SlotLayer({ docId, role, partIndex, size, autoplay, spinsOver, loop, playKey, onEnd, onFrameProgress }: { docId: string; role: SlotLayerRole; partIndex: number; size: number; autoplay: boolean; spinsOver?: boolean; loop?: boolean; playKey?: string; onEnd?: () => void; onFrameProgress?: (progress: number) => void }) {
   const real = useSlotData(docId);
   const localId = isSlotLocalDoc(docId) ? docId : localFallbackId(role, partIndex);
   const local = useSlotLocalData(localId);
@@ -204,15 +204,28 @@ function SlotLayer({ docId, role, partIndex, size, autoplay, loop, playKey, onEn
 
   if (!data) return null;
   if (data.kind === 'tgs') {
+    if (role === 'slot' && !autoplay) return null;
+    let animData = data.value;
+    let layerCacheKey = (real ? 'emojipack-' : 'slotidle-') + docId;
+    const stripHidden = role === 'spin' && (!autoplay || spinsOver);
+    if (stripHidden && typeof data.value === 'string') {
+      try {
+        const j = JSON.parse(data.value);
+        animData = { ...j, layers: j.layers.filter((l: any) => !String(l.nm || '').startsWith('spinloop')) };
+        layerCacheKey += ':frame';
+      } catch {
+        animData = data.value;
+      }
+    }
     return (
       <TgsPlayer
         className="tgui-slot-layer-player"
-        animationData={data.value}
+        animationData={animData}
         width={size}
         height={size}
         loop={loop ?? false}
         autoplay={!!real && autoplay}
-        cacheKey={(real ? 'emojipack-' : 'slotidle-') + docId}
+        cacheKey={layerCacheKey}
         playKey={playKey ? playKey + ':' + role + ':' + docId : undefined}
         onEnd={real ? onEnd : undefined}
         onFrameProgress={real ? onFrameProgress : undefined}
@@ -322,6 +335,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
 
   const startSpins = animated && handleDone && spins.length > 0;
   const startSlots = animated && startSpins && spinsDone >= spins.length && slots.length > 0;
+  const spinsOver = animated && spins.length > 0 && spinsDone >= spins.length;
   const showWinBg = !!bgWin && (allDone || winReady);
 
   useEffect(() => {
@@ -349,7 +363,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
       {bg ? <SlotLayer docId={bg.docId} role="bg" partIndex={0} size={size} autoplay={false} playKey={playKey} /> : null}
       {spins.map((s, i) => (
         <div key={s.docId} class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={s.docId} role="spin" partIndex={i} size={size} autoplay={startSpins} onEnd={onSpinEnd} playKey={playKey} />
+          <SlotLayer docId={s.docId} role="spin" partIndex={i} size={size} autoplay={startSpins && !spinsOver} spinsOver={spinsOver} onEnd={onSpinEnd} playKey={playKey} />
         </div>
       ))}
       {slots.map((s, i) => (

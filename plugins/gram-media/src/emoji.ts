@@ -967,6 +967,20 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     markFailed();
                     return 'fail';
                 }
+                if (mime === 'application/x-tgsticker' && this.diceSetsByEmoji.size > 0) {
+                    const inDiceSet = [...this.diceSetsByEmoji.values()].some((docs) => docs.includes(r.doc));
+                    if (inDiceSet) {
+                        const u8 = new Uint8Array(bytes);
+                        let bin = '';
+                        for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+                        try {
+                            localStorage.setItem('dice-dump-' + r.id, btoa(bin));
+                            console.log('[dice-dump] saved', r.id, bytes.byteLength);
+                        } catch (e) {
+                            console.warn('[dice-dump] localStorage error:', e);
+                        }
+                    }
+                }
                 const { kind, url } = await this.router.emojiKindAndUrlFor(bytes, mime);
                 if (this.debug) console.log('[gram-media] emoji item OK', r.id, 'mime=' + mime, 'kind=' + (kind || '?'), 'size=' + bytes.byteLength);
                 this.router.setCachedEmojiUrl('emojipack-' + r.id, url);
