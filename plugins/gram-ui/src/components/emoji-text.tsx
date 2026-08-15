@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { EmojiCanvas, StaticEmojiText, fetchEmojiData } from './emoji-canvas.js';
 import type { EmojiSegment } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
-import { ensureEmojiStickers, getEmojiAlt, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
+import { ensureEmojiStickers, getEmojiAlt, getEmojiDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
 
 const TGS_DEBUG = false;
 
@@ -106,14 +106,40 @@ export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loo
   return <EmojiInline docId={docId} url={url} alt={alt} size={size} autoplay={autoplay} loop={loop} />;
 }
 
+function appendMappedRuns(segments: EmojiSegment[], value: string): void {
+  if (!value) return;
+  let pos = 0;
+  for (const r of matchEmojiRuns(value)) {
+    if (r.start > pos) segments.push({ type: 'text', value: value.slice(pos, r.start) });
+    const docId = getEmojiDocId(r.emoji);
+    if (docId) {
+      segments.push({ type: 'emoji', docId, value: r.emoji, custom: false });
+    } else {
+      segments.push({ type: 'text', value: r.emoji });
+    }
+    pos = r.end;
+  }
+  if (pos < value.length) segments.push({ type: 'text', value: value.slice(pos) });
+}
+
+const KEYCAP_NORM_RE = /^[\d#*]\u20E3$/;
+
+function resolveEntityDocId(docId: string, fallbackAlt: string): string {
+  const alt = getEmojiAlt(docId) || fallbackAlt;
+  if (!alt) return docId;
+  if (!KEYCAP_NORM_RE.test(normalizeEmoji(alt))) return docId;
+  return getEmojiDocId(alt) || docId;
+}
+
 function buildSegments(text: string, emojiEntities: any[]): EmojiSegment[] {
   const cuts: Array<{ start: number; end: number; docId: string; alt: string }> = [];
   for (const e of emojiEntities) {
+    const rawAlt = text.slice(e.offset, e.offset + e.length);
     cuts.push({
       start: e.offset,
       end: e.offset + e.length,
-      docId: String(e.document_id),
-      alt: getEmojiAlt(String(e.document_id)) || text.slice(e.offset, e.offset + e.length),
+      docId: resolveEntityDocId(String(e.document_id), rawAlt),
+      alt: getEmojiAlt(String(e.document_id)) || rawAlt,
     });
   }
   cuts.sort((a, b) => a.start - b.start || a.end - b.end);
@@ -122,11 +148,11 @@ function buildSegments(text: string, emojiEntities: any[]): EmojiSegment[] {
   let pos = 0;
   for (const c of cuts) {
     if (c.start < pos) continue;
-    if (c.start > pos) segments.push({ type: 'text', value: text.slice(pos, c.start) });
+    if (c.start > pos) appendMappedRuns(segments, text.slice(pos, c.start));
     segments.push({ type: 'emoji', docId: c.docId, value: c.alt, custom: true });
     pos = c.end;
   }
-  if (pos < text.length) segments.push({ type: 'text', value: text.slice(pos) });
+  appendMappedRuns(segments, text.slice(pos));
   return segments;
 }
 
@@ -140,13 +166,15 @@ export function EmojiText({ text, entities, documentUrls }: { text: string; enti
   useEffect(() => {
     ensureEmojiStickers();
     const customIds = new Set(emojiEntities.map((e: any) => String(e.document_id)));
+    const runAlts = new Set<string>();
+    for (const r of matchEmojiRuns(text)) runAlts.add(normalizeEmoji(r.emoji));
 
     return subscribeEmojiMap((changed) => {
       if (!changed) {
         setMapVersion((v) => v + 1);
         return;
       }
-      if (changed.some((c) => customIds.has(c.docId))) setMapVersion((v) => v + 1);
+      if (changed.some((c) => customIds.has(c.docId) || runAlts.has(c.alt) || runAlts.has(normalizeEmoji(c.alt)))) setMapVersion((v) => v + 1);
     });
   }, [emojiIdsKey]);
 

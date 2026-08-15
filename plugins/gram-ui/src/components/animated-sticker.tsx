@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { initAnimatedRenderer } from '../utils/animated-renderer/index.js';
 import type { IAnimatedRenderer } from '../utils/animated-renderer/types.js';
 import { getIsHeavyAnimating, useHeavyAnimation } from '../utils/heavy-animation.js';
-import { useBackgroundMode } from '../utils/use-background-mode.js';
 
 let uidCounter = 0;
 
@@ -47,20 +46,14 @@ export function AnimatedSticker({
   const urlRef = useRef<string>('');
   const [renderer, setRenderer] = useState<IAnimatedRenderer | null>(null);
   const [isFrozen, setFrozen] = useState(getIsHeavyAnimating() && !forceAlways);
-  const [isBgMode, setBgMode] = useState(false);
 
   useHeavyAnimation(
     () => setFrozen(true),
     () => setFrozen(false),
     forceAlways,
   );
-  useBackgroundMode(
-    () => setBgMode(true),
-    () => setBgMode(false),
-    forceAlways,
-  );
 
-  const isPaused = (noPlay || isFrozen || isBgMode) && !forceAlways;
+  const isPaused = (noPlay || isFrozen) && !forceAlways;
   const container = sharedCanvas || canvasNode;
 
   useEffect(() => {

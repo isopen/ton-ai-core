@@ -276,6 +276,7 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
       urlKinds.set(url, k);
       resolvedKinds.set(did, k);
       trackLastUrl(did, url);
+      setFailedDocs((prev) => (prev[did] ? { ...prev, [did]: false } : prev));
       setKinds((prev) => (prev[did] === k ? prev : { ...prev, [did]: k }));
       setLive((prev) => {
         const cur = prev[did];
@@ -511,13 +512,19 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
         }
       }
     };
+    const raf = requestAnimationFrame(measure);
+    const t = setTimeout(measure, 80);
     measure();
     const ro = new ResizeObserver(() => {
       measure();
     });
     ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [slotsKey, shared, sharedCanvasNode]);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(t);
+      ro.disconnect();
+    };
+  }, [slotsKey, shared, sharedCanvasNode, urlsKey, inView]);
 
   if (!hasEmoji) {
     return <>{segments.map((s: EmojiSegment, i: number) => s.type === 'emoji'
@@ -571,6 +578,9 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
               shared ? (
                 (inView || everShown) && pos ? (
                   <span style="position:relative;display:block;width:100%;height:100%">
+                    <span style="position:absolute;left:0;top:0;width:100%;height:100%">
+                      <FallbackGlyph value={fallbackGlyph} size={size} />
+                    </span>
                     <AnimatedSticker
                       tgsUrl={url}
                       renderId={renderId}
@@ -590,6 +600,11 @@ export function EmojiCanvas({ segments, documentUrls, size = 30 }: { segments: E
                 )
               ) : (inView || everShown) ? (
                 <span style="position:relative;display:block;width:100%;height:100%">
+                  {!loadedDocs[docId] && (
+                    <span style="position:absolute;left:0;top:0;width:100%;height:100%">
+                      <FallbackGlyph value={fallbackGlyph} size={size} />
+                    </span>
+                  )}
                   <AnimatedSticker
                     tgsUrl={url}
                     renderId={renderId}

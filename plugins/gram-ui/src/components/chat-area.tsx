@@ -21,7 +21,7 @@ import { flushEmojiBatch, getEmojiDocId, matchEmojiRuns } from './emoji-store.js
 import { releaseEmojiCache } from './emoji-canvas.js';
 import { observeVisibility } from './emoji-canvas.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
-import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb } from '../utils.js';
+import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText } from '../utils.js';
 import { MediaPlayer } from './media-player.js';
 import { VideoMessage } from './video-message.js';
 import { PhotoLoader } from './photo-loader.js';
@@ -32,6 +32,10 @@ import { EmojiText } from './emoji-text.js';
 import { buildImageSpec, firstMissingSizeType, CHAT_PHOTO_PRIO } from './photo-spec.js';
 
 const DEBUG = false;
+
+const STICKER_DOWNLOAD_RETRY_MS = 2500;
+const STICKER_DOWNLOAD_MAX_ATTEMPTS = 8;
+const STICKER_ANIM_RETRY_MAX = 2;
 
 function toFileSize(bytes?: number): string {
   if (!bytes) return '';
@@ -116,6 +120,8 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
   const [visible, setVisible] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [animFailed, setAnimFailed] = useState(false);
+  const [animRetries, setAnimRetries] = useState(0);
+  const [downloadAttempts, setDownloadAttempts] = useState(0);
   const [attachTick, setAttachTick] = useState(0);
 
   const handleRef = useCallback((el: HTMLDivElement | null) => {
@@ -146,14 +152,29 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
   useEffect(() => {
     if (!visible) return;
     if (url) return;
+    if (downloadAttempts >= STICKER_DOWNLOAD_MAX_ATTEMPTS) return;
     window.dispatchEvent(new CustomEvent('tg-download-document', {
       detail: { document: doc, messageId: m.id, priority: 1 },
     }));
-  }, [visible, url, doc, m.id]);
+    const t = setTimeout(() => {
+      setDownloadAttempts((a) => a + 1);
+    }, STICKER_DOWNLOAD_RETRY_MS);
+    return () => clearTimeout(t);
+  }, [visible, url, doc, m.id, downloadAttempts, documentProgress]);
 
   useEffect(() => {
     setAnimFailed(false);
+    setAnimRetries(0);
   }, [url]);
+
+  useEffect(() => {
+    if (!animFailed || animRetries >= STICKER_ANIM_RETRY_MAX) return;
+    const t = setTimeout(() => {
+      setAnimFailed(false);
+      setAnimRetries((r) => r + 1);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [animFailed, animRetries]);
 
   const renderId = 'sticker-' + String(doc?.id || m.id);
   const showTgs = isTgs && !!url && !animFailed;
@@ -257,7 +278,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
             <PhotoLoader percent={pct} fileSize={fileSize} hidePercent={imgWidth > 0 && imgWidth < 140} />
           </>
         ) : null}
-        {cacheSource ? (
+        {DEBUG && cacheSource ? (
           <span style={`position:absolute;top:4px;right:4px;padding:1px 5px;border-radius:4px;background:${cacheSource === 'memory' ? '#22c55e' : cacheSource === 'persisted' ? '#3b82f6' : '#ef4444'};color:#fff;font-size:10px;line-height:14px;white-space:nowrap;z-index:2`}>
             {cacheSource === 'memory' ? 'in-memory' : cacheSource === 'persisted' ? 'gram-db' : cacheSource === 'cdn-server' ? 'cdn-server' : cacheSource === 'migrate-server' ? 'migrate-server' : 'home-server'}
           </span>
@@ -454,7 +475,7 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
             ? <VideoMessage m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} />
           : isLinkMsg
             ? <WebPageBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
-            : <MessageBubble text={m.message || ''} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} />
+            : <MessageBubble text={m.message || mediaFallbackText(m.media)} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} />
       }
     </div>
   );

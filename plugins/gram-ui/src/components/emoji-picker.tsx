@@ -318,6 +318,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
   const onPickEmoji = useCallback((e: string) => {
     recentRef.current = [e, ...recentRef.current.filter((x) => x !== e)].slice(0, RECENT_MAX);
     setRecent(recentRef.current);
+    saveRecents(recentRef.current);
     if (onPick) {
       onPick(e);
       onClose?.();

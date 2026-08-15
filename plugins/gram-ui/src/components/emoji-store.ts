@@ -76,7 +76,7 @@ window.addEventListener('tg-custom-emoji-alt', (e) => {
   const id = String(docId);
   if (customAltMap[id] === alt) return;
   customAltMap[id] = alt;
-  emit([{ alt, docId: id }]);
+  emit([{ alt: normalizeEmoji(alt), docId: id }]);
 });
 
 window.addEventListener('tg-emoji-docs-ready', (e) => {

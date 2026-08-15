@@ -54,7 +54,7 @@ export function getMediaType(media: any): string {
         const hasVideo = attrs.some((a: any) => a._ === 'documentAttributeVideo');
         const hasAudio = attrs.some((a: any) => a._ === 'documentAttributeAudio');
         const mime = (doc.mime_type || '').toLowerCase();
-        if (hasSticker) return 'sticker';
+        if (hasSticker || mime === 'application/x-tgsticker') return 'sticker';
         if (mime === 'video/webm') return hasAnimated || hasVideo ? 'video' : 'sticker';
         if (hasAnimated || mime === 'video/mp4' || (mime.startsWith('video/') && hasVideo)) return 'video';
         if (hasAudio || mime.startsWith('audio/')) return 'audio';
@@ -69,6 +69,15 @@ export function getStickerEmoji(doc: any): string {
     if (!doc) return '';
     const attr = (doc.attributes || []).find((a: any) => a._ === 'documentAttributeSticker');
     return attr?.alt || '';
+}
+
+export function mediaFallbackText(media: any): string {
+    if (!media) return '';
+    const doc = media.document;
+    const name = doc?.file_name;
+    if (name) return name;
+    if (media._ === 'messageMediaDocument') return '[Документ]';
+    return '';
 }
 
 export function hexToBytes(hex: string): Uint8Array {

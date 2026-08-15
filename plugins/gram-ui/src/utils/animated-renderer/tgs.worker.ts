@@ -16,6 +16,47 @@ const anims = new Map<string, WorkerAnim>();
 const loading = new Map<string, Promise<void>>();
 const generations = new Map<string, number>();
 
+const prevFrameData = new WeakMap<ParsedAnimation, Uint8ClampedArray>();
+const frameStats = new WeakMap<ParsedAnimation, { checked: number; differing: number; maxDiff: number; firstDiffIdx: number }>();
+const rawJsonByAnim = new WeakMap<ParsedAnimation, string>();
+const DIFF_CHECK_MAX = 4;
+
+function logFrameDiff(anim: ParsedAnimation, frameIndex: number, framesCount: number, imageData: ImageData) {
+  if (frameIndex === 0) frameStats.set(anim, { checked: 0, differing: 0, maxDiff: 0, firstDiffIdx: -1 });
+  const prev = prevFrameData.get(anim);
+  prevFrameData.set(anim, imageData.data.slice());
+  if (!prev) return;
+  const a = prev;
+  const b = imageData.data;
+  let diff = 0;
+  let diffAlpha = 0;
+  for (let i = 0; i < a.length; i += 4) {
+    if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2]) diff++;
+    if (a[i + 3] !== b[i + 3]) diffAlpha++;
+  }
+  const st = frameStats.get(anim);
+  if (st) {
+    st.checked++;
+    if (diff > 0) {
+      st.differing++;
+      if (st.firstDiffIdx < 0) st.firstDiffIdx = frameIndex;
+    }
+    if (diff > st.maxDiff) st.maxDiff = diff;
+  }
+  if (frameIndex <= DIFF_CHECK_MAX) {
+    console.log('[tgs-worker] diff', 'idx=' + frameIndex, 'rgbPx=' + diff, 'alphaPx=' + diffAlpha, 'of=' + (a.length / 4));
+  }
+  if (st && frameIndex === framesCount - 1) {
+    console.log('[tgs-worker] diff summary', 'of=' + framesCount, 'checked=' + st.checked, 'differing=' + st.differing, 'max=' + st.maxDiff, 'firstDiff=' + st.firstDiffIdx);
+    if (framesCount > 1 && (st.differing === 0 || st.differing < st.checked * 0.25)) {
+      const raw = rawJsonByAnim.get(anim);
+      if (raw) {
+        console.log('[tgs-worker] STATIC-JSON ' + raw);
+      }
+    }
+  }
+}
+
 const idleAnims = new Map<string, { entry: WorkerAnim; ts: number }>();
 const idleOrder: string[] = [];
 const IDLE_MAX = 64;
@@ -101,6 +142,7 @@ async function load(renderId: string, tgsUrl: string, tgsJson: string | undefine
     } catch (err: any) {
       throw new Error('parse-fail ' + tgsUrl + ' body=' + JSON.stringify(json.slice(0, 80)) + ': ' + String(err?.message || err));
     }
+    rawJsonByAnim.set(anim, json);
     const maxFps = isLowPriority ? 30 : 60;
     const reduceFactor = anim.fps % maxFps === 0 ? anim.fps / maxFps : 1;
     const entry: WorkerAnim = {
@@ -155,10 +197,22 @@ function inflateAndDecode(buf: Uint8Array): Promise<string> {
 async function renderFrames(renderId: string, frameIndex: number): Promise<{ frameIndex: number; imageBitmap: ImageBitmap }> {
   const entry = (await waitForLoads(renderId));
   if (!entry) throw new Error('TGS anim not found: ' + renderId);
-  const off = new OffscreenCanvas(entry.imgSize, entry.imgSize);
-  renderFrame(off as unknown as HTMLCanvasElement, entry.anim, entry.baseFrame + frameIndex * entry.reduceFactor, 1, entry.imgSize, entry.imgSize);
-  const imageData = off.getContext('2d')!.getImageData(0, 0, entry.imgSize, entry.imgSize);
-  return { frameIndex, imageBitmap: await createImageBitmap(imageData) };
+  const t0 = Date.now();
+  const srcFrame = entry.baseFrame + frameIndex * entry.reduceFactor;
+  console.log('[tgs-worker] render start', renderId, 'idx=' + frameIndex, 'srcFr=' + srcFrame, 'of=' + (entry.framesCount || 0));
+  try {
+    const off = new OffscreenCanvas(entry.imgSize, entry.imgSize);
+    renderFrame(off as unknown as HTMLCanvasElement, entry.anim, srcFrame, 1, entry.imgSize, entry.imgSize);
+    const ms = Date.now() - t0;
+    const imageData = off.getContext('2d')!.getImageData(0, 0, entry.imgSize, entry.imgSize);
+    logFrameDiff(entry.anim, frameIndex, entry.framesCount, imageData);
+    const bitmap = await createImageBitmap(imageData);
+    console.log('[tgs-worker] render done', renderId, 'idx=' + frameIndex, ms + 'ms');
+    return { frameIndex, imageBitmap: bitmap };
+  } catch (err) {
+    console.error('[tgs-worker] render FAILED', renderId, 'idx=' + frameIndex, 'srcFr=' + srcFrame, (err as Error)?.message || err);
+    throw err;
+  }
 }
 
 function valueOf(p: any): any {
@@ -178,6 +232,7 @@ function dumpShape(s: any): any {
     c: valueOf(s.color),
     o: valueOf(s.opacity),
     n: (s.children || []).length,
+    d: s.dashes && s.dashes.length ? valueOf(s.dashes) : undefined,
     it: (s.children || []).map(dumpShape),
   };
 }

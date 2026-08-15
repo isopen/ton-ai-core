@@ -8,6 +8,8 @@ import type { ImageSpec } from '../types.js';
 import { calculateAlbumLayout } from './photo-album-layout.js';
 import { firstMissingSizeType, CHAT_PHOTO_PRIO } from './photo-spec.js';
 
+const DEBUG = false;
+
 export interface MediaCollageItem {
   m: any;
   image: ImageSpec | null;
@@ -184,7 +186,7 @@ export function MediaCollage({
             {isMoreCell ? (
               <div class="MediaCollage__more-overlay">+{moreCount}</div>
             ) : null}
-            {item.cacheSource ? (
+            {DEBUG && item.cacheSource ? (
               <span class="MediaCollage__src" style={`background:${item.cacheSource === 'memory' ? '#22c55e' : item.cacheSource === 'persisted' ? '#3b82f6' : '#ef4444'}`}>
                 {item.cacheSource === 'memory' ? 'in-memory' : item.cacheSource === 'persisted' ? 'gram-db' : 'cdn'}
               </span>

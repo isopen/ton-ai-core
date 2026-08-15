@@ -55,6 +55,10 @@ export class MainThreadRenderer implements IAnimatedRenderer {
 
   private raf = 0;
 
+  private rafTimer = 0;
+
+  private isLooping = false;
+
   private lastDraw = 0;
 
   private cursor = 0;
@@ -156,7 +160,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
 
   private park() {
     this.isPlayingFlag = false;
-    cancelAnimationFrame(this.raf);
+    this.stopLoop();
     if (this.destroyTimer) return;
     if (!parkOrder.includes(this.renderId)) parkOrder.push(this.renderId);
     while (parkOrder.length > MAX_PARKED) {
@@ -197,7 +201,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       if (!areAllPaused) return;
     }
     this.isPlayingFlag = false;
-    cancelAnimationFrame(this.raf);
+    this.stopLoop();
   }
 
   setSpeed(_speed: number) {}
@@ -277,7 +281,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     }
     this.isDestroyed = true;
     this.stopHeartbeat();
-    cancelAnimationFrame(this.raf);
+    this.stopLoop();
     if (instancesByRenderId.get(this.renderId) === this) instancesByRenderId.delete(this.renderId);
   }
 
@@ -314,12 +318,37 @@ export class MainThreadRenderer implements IAnimatedRenderer {
   }
 
   private startLoop() {
+    if (this.isLooping) return;
+    this.isLooping = true;
+    this.loop();
+  }
+
+  private stopLoop() {
+    this.isLooping = false;
     cancelAnimationFrame(this.raf);
-    const step = () => {
-      this.raf = requestAnimationFrame(step);
+    if (this.rafTimer) {
+      window.clearTimeout(this.rafTimer);
+      this.rafTimer = 0;
+    }
+  }
+
+  private loop() {
+    if (!this.isLooping) return;
+    this.raf = requestAnimationFrame(() => {
+      if (!this.isLooping) return;
+      if (this.rafTimer) {
+        window.clearTimeout(this.rafTimer);
+        this.rafTimer = 0;
+      }
+      this.loop();
       this.tick();
-    };
-    this.raf = requestAnimationFrame(step);
+    });
+    this.rafTimer = window.setTimeout(() => {
+      this.rafTimer = 0;
+      if (!this.isLooping) return;
+      this.loop();
+      this.tick();
+    }, 33);
   }
 
   private tick() {
