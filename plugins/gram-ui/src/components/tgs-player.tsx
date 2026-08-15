@@ -3,8 +3,7 @@ import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import { renderFrame } from '@ton-ai/tgs';
 import type { LayerOrder, ParsedAnimation } from '@ton-ai/tgs';
 import { parseTgsJson } from '../utils/tgs-parse.js';
-
-const TGS_DEBUG = false;
+import { DEBUG } from '../debug-flags.js';
 
 let activePlayers = 0;
 const MAX_ACTIVE_PLAYERS = 64;
@@ -15,7 +14,7 @@ const completedAnims = new Map<string, boolean>();
 
 function markCompleted(key: string): void {
     completedAnims.set(key, true);
-    if (completedAnims.size > 512) {
+    if (completedAnims.size > 1024) {
         const oldest = completedAnims.keys().next().value;
         if (oldest != null) completedAnims.delete(oldest);
     }
@@ -23,6 +22,10 @@ function markCompleted(key: string): void {
 
 export function resetCompletedAnimations(): void {
     completedAnims.clear();
+}
+
+export function isAnimationCompleted(key: string): boolean {
+    return completedAnims.get(key) === true;
 }
 
 function acquirePlayerSlot(): boolean {
@@ -55,9 +58,11 @@ export interface TgsPlayerProps {
     className?: string;
     cacheKey?: string;
     playKey?: string;
+    showLastFrame?: boolean;
     onEnd?: () => void;
     onFrameProgress?: (progress: number) => void;
     layerOrder?: LayerOrder;
+    hiddenLayers?: (name?: string) => boolean;
 }
 
 export function TgsPlayer(props: TgsPlayerProps) {
@@ -71,14 +76,16 @@ export function TgsPlayer(props: TgsPlayerProps) {
         className,
         cacheKey,
         playKey,
+        showLastFrame,
         onEnd,
         onFrameProgress,
         layerOrder,
+        hiddenLayers,
     } = props;
 
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [playing, setPlaying] = useState(() => playKey != null && completedAnims.get(playKey) ? false : autoplay);
+    const [playing, setPlaying] = useState(() => (playKey != null && completedAnims.get(playKey)) || showLastFrame ? false : autoplay);
     const [inView, setInView] = useState(true);
     const [animVersion, setAnimVersion] = useState(0);
     const rootRef = useRef<HTMLDivElement | null>(null);
@@ -118,7 +125,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 if (cancelled) return;
                 animRef.current = parsed;
                 setError(null);
-                const done = playKey != null && completedAnims.get(playKey) === true;
+                const done = (playKey != null && completedAnims.get(playKey) === true) || showLastFrame;
                 if (done && parsed.outFrame - parsed.inFrame > 0) {
                     frameRef.current = parsed.outFrame - 1;
                     endFiredRef.current = true;
@@ -129,26 +136,26 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 }
                 lastTimeRef.current = 0;
                 setAnimVersion((v) => v + 1);
-                if (TGS_DEBUG) {
+                if (DEBUG.tgs) {
                     console.log('[TGS_LOG] parsed', { w: parsed.width, h: parsed.height, fps: parsed.fps, inFrame: parsed.inFrame, outFrame: parsed.outFrame, layers: parsed.layers.length });
                 }
             } catch (e: any) {
                 if (cancelled) return;
-                if (TGS_DEBUG) console.log('[TGS_LOG] parse error', e);
+                if (DEBUG.tgs) console.log('[TGS_LOG] parse error', e);
                 setError(e.message || 'Invalid TGS');
                 animRef.current = null;
             }
         })();
         return () => { cancelled = true; };
-    }, [animationData, cacheKey, playKey]);
+    }, [animationData, cacheKey, playKey, showLastFrame]);
 
     const drawFrame = useCallback((frame: number) => {
         const canvas = canvasRef.current;
         const anim = animRef.current;
         if (!canvas || !anim) return;
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        renderFrame(canvas, anim, frame, dpr, undefined, undefined, layerOrder);
-    }, [layerOrder]);
+        renderFrame(canvas, anim, frame, dpr, undefined, undefined, layerOrder, hiddenLayers);
+    }, [layerOrder, hiddenLayers]);
 
     useEffect(() => {
         if (!inView) return;
@@ -166,14 +173,15 @@ export function TgsPlayer(props: TgsPlayerProps) {
         if (anim.outFrame - anim.inFrame > 0) return;
         if (endFiredRef.current) return;
         endFiredRef.current = true;
+        if (playKey) markCompleted(playKey);
         const t = setTimeout(() => onEndRef.current?.(), 120);
         return () => clearTimeout(t);
-    }, [inView, loop, animVersion]);
+    }, [inView, loop, animVersion, playKey]);
 
     useEffect(() => {
-        if (playKey != null && completedAnims.get(playKey)) return;
+        if ((playKey != null && completedAnims.get(playKey)) || showLastFrame) return;
         setPlaying(autoplay);
-    }, [autoplay, animationData, playKey]);
+    }, [autoplay, animationData, playKey, showLastFrame]);
 
     useEffect(() => {
         if (!playing || !inView) {
@@ -212,7 +220,6 @@ export function TgsPlayer(props: TgsPlayerProps) {
         const start = () => {
             if (started) return;
             started = true;
-            if (playKey && !loop) markCompleted(playKey);
             lastTimeRef.current = 0;
             playStart = performance.now();
             endFiredRef.current = false;
@@ -260,7 +267,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
                         drawFrame(frame);
                         lastDrawRef.current = timestamp;
                     } catch (e) {
-                        if (TGS_DEBUG) console.log('[TGS_LOG] draw error', e);
+                        if (DEBUG.tgs) console.log('[TGS_LOG] draw error', e);
                         started = false;
                         releasePlayerSlot();
                         if (!loop && !endFiredRef.current) {
@@ -301,14 +308,14 @@ export function TgsPlayer(props: TgsPlayerProps) {
     }, [playing, inView, loop, speed, animVersion, drawFrame]);
 
     const togglePlay = useCallback(() => {
-        if (playKey != null && completedAnims.get(playKey)) return;
+        if ((playKey != null && completedAnims.get(playKey)) || showLastFrame) return;
         setPlaying(v => !v);
         if (rafRef.current != null) {
             cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
         }
         lastTimeRef.current = 0;
-    }, [playKey]);
+    }, [playKey, showLastFrame]);
 
     if (error) {
         return (
