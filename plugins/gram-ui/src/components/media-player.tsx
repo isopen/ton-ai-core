@@ -4,6 +4,7 @@ import { useRef } from '@ton-ai/atom/hooks';
 import { Checkmark } from './checkmark.js';
 import { buildDocumentThumb, isAnimatedMedia } from '../utils.js';
 import { GifPlayer } from './gif-player.js';
+import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 
 const log = getLogger('gram-ui');
@@ -33,14 +34,27 @@ export function MediaPlayer(props: MediaPlayerProps) {
       + (out ? ' MessageBubble_out' : ' MessageBubble_in')
       + (sameSenderPrev ? ' MessageBubble_group_prev' : '')
       + (sameSenderNext ? ' MessageBubble_group_next' : '');
+    const attrs: any[] = doc.attributes || [];
+    const videoAttr = attrs.find((a: any) => a._ === 'documentAttributeVideo');
+    const videoW = videoAttr?.w || doc.w || 0;
+    const videoH = videoAttr?.h || doc.h || 0;
+    const displayW = videoW ? Math.min(videoW, 320) : 0;
+    const displayH = videoH && videoW ? Math.round(videoH * (displayW / videoW)) : 0;
+    const containerStyle = displayW && displayH ? `width:${displayW}px;height:${displayH}px` : displayW ? `width:${displayW}px` : '';
+    const captionStyle = displayW ? `width:${displayW}px` : '';
     return (
       <div class={cls}>
-        <div class="tgui-media-container">
+        <div class="tgui-media-container" style={containerStyle}>
           <GifPlayer m={m} documentUrls={documentUrls} documentProgress={documentProgress} documentSources={documentSources} />
-          <div class="MessageBubble__meta MessageBubble__meta_overlay">
-            <span class="MessageBubble__time">{timeStr}</span>
-            {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
-          </div>
+          {!m.message ? (
+            <div class="MessageBubble__meta MessageBubble__meta_overlay">
+              <span class="MessageBubble__time">{timeStr}</span>
+              {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
+            </div>
+          ) : null}
+        </div>
+        <div style={captionStyle}>
+          <MediaCaption text={m.message} entities={m.entities} documentUrls={documentUrls} timeStr={timeStr} out={out} status={status} />
         </div>
       </div>
     );
@@ -146,6 +160,7 @@ export function MediaPlayer(props: MediaPlayerProps) {
           {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
         </div>
       </div>
+      <MediaCaption text={m.message} entities={m.entities} documentUrls={documentUrls} timeStr={timeStr} out={out} status={status} />
     </div>
   );
 }

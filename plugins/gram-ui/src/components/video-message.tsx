@@ -2,6 +2,7 @@ import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import { Checkmark } from './checkmark.js';
 import { buildDocumentThumb } from '../utils.js';
+import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 
 const RING_CIRC = 2 * Math.PI * 28;
@@ -453,11 +454,7 @@ export function VideoMessage(props: VideoMessageProps) {
         </div>
 
       </div>
-      {m.message ? <div class="MessageBubble__text">{m.message}</div> : null}
-      {m.message ? <div class="MessageBubble__meta">
-        <span class="MessageBubble__time">{timeStr}</span>
-        {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
-      </div> : null}
+      <MediaCaption text={m.message} entities={m.entities} documentUrls={documentUrls} timeStr={timeStr} out={out} status={status} />
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import { TelegramImage } from '../primitives/telegram-image.js';
 import { PhotoLoader } from './photo-loader.js';
 import { Checkmark } from './checkmark.js';
-import { EmojiText } from './emoji-text.js';
+import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import type { ImageSpec } from '../types.js';
 import { calculateAlbumLayout } from './photo-album-layout.js';
@@ -196,11 +196,7 @@ export function MediaCollage({
         </div>
       ) : null}
     </div>
-    {caption ? <div class="MessageBubble__text"><EmojiText text={caption} entities={captionEntities} documentUrls={captionDocumentUrls || {}} /></div> : null}
-    {caption ? <div class="MessageBubble__meta">
-      <span class="MessageBubble__time">{timeStr}</span>
-      <Checkmark status={status} className="MessageBubble__status" />
-    </div> : null}
+    <MediaCaption text={caption} entities={captionEntities} documentUrls={captionDocumentUrls || {}} timeStr={timeStr} out={true} status={status} />
   </Fragment>
   );
 }

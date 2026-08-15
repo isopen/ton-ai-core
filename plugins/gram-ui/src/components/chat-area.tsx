@@ -31,7 +31,8 @@ import { MediaSourceBadge } from './media-source-badge.js';
 import { WebPageBubble } from './link-preview.js';
 import { MediaCollage, type MediaCollageItem } from './media-collage.js';
 import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
-import { EmojiText, AnimatedEmoji } from './emoji-text.js';
+import { AnimatedEmoji } from './emoji-text.js';
+import { MediaCaption } from './media-caption.js';
 import { buildImageSpec, firstMissingSizeType, CHAT_PHOTO_PRIO } from './photo-spec.js';
 import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 
@@ -292,11 +293,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
           </div>
         ) : null}
       </div>
-      {m.message ? <div class="MessageBubble__text"><EmojiText text={m.message} entities={entities} documentUrls={documentUrls || {}} /></div> : null}
-      {m.message ? <div class="MessageBubble__meta">
-        <span class="MessageBubble__time">{timeStr}</span>
-        {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
-      </div> : null}
+      <MediaCaption text={m.message} entities={entities} documentUrls={documentUrls || {}} timeStr={timeStr} out={out} status={status} />
     </div>
   );
 }
