@@ -164,12 +164,7 @@ export class SharedWorkerClient {
         });
     }
 
-    async requestPeerAvatar(peerType: string, peerId: string, accessHash: any, photo: any): Promise<string | null> {
-        const r = await this.send({ type: 'requestPeerAvatar', peerType, peerId, accessHash, photo });
-        return r.avatarUrl;
-    }
-
-    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
+    async startPhotoDownload(photo: any, sizeType: string, messageId: number | string, onProgress: (pct: number) => void): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return new Promise((resolve, reject) => {
             if (!this.port) { reject(new Error('Not started')); return; }
             const id = ++this.msgId;
@@ -191,7 +186,7 @@ export class SharedWorkerClient {
         });
     }
 
-    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
+    async requestPhotoDownload(photo: any, sizeType: string, messageId: number | string): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return this.send({ type: 'requestPhotoDownload', photo, sizeType, messageId }, 120_000);
     }
 

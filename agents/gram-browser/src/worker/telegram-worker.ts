@@ -13,7 +13,7 @@ const TELEGRAM_WS_FALLBACKS: Record<number, Array<{ host: string; noObfuscation?
     5: [{ host: 'kws5.web.telegram.org', noObfuscation: true }],
 };
 import { getSchemaRegistry, SchemaSerializer, SchemaDeserializer } from '@ton-ai/telegram/dist/schema-setup';
-import { getAvatarFromCache, saveAvatarToCache, setAvatarEncryptionKey, needAvatar } from './avatar-cache';
+import { setAvatarEncryptionKey } from './avatar-cache';
 import { getGramDb } from '../utils/gram-db';
 import { BrowserObfuscatedConnection } from '@ton-ai/telegram/dist/browser-connection';
 import { generateObfuscationInit, abridgedEncode } from '@ton-ai/telegram/dist/obfuscation-utils';
@@ -184,25 +184,7 @@ function emitUpdate(constructorId: number, data: string): void {
     }
 }
 
-const AVATAR_MAX_PARALLEL = 1;
-let avatarInFlight = 0;
-const avatarQueue: Array<() => Promise<void>> = [];
-const avatarFetchPromises = new Map<string, Promise<string | null>>();
 const peerPhotoMap = new Map<string, { type: string; accessHash: any; photo: any }>();
-
-function processAvatarQueue(): void {
-    while (avatarQueue.length > 0 && avatarInFlight < AVATAR_MAX_PARALLEL) {
-        const task = avatarQueue.shift();
-        if (!task) continue;
-        avatarInFlight++;
-        wlog('[avatar] start, inFlight:', avatarInFlight, 'queued:', avatarQueue.length);
-        task().finally(() => {
-            avatarInFlight--;
-            wlog('[avatar] done, inFlight:', avatarInFlight, 'queued:', avatarQueue.length);
-            processAvatarQueue();
-        }).catch(() => {});
-    }
-}
 
 function getInlineThumb(photo: any): string | null {
     if (!photo?.sizes) return null;
@@ -223,48 +205,12 @@ function getInlineThumb(photo: any): string | null {
     return null;
 }
 
-async function enqueueAvatarDownload(peerType: string, peerId: string, accessHash: any, photo: any): Promise<void> {
-    if (!photo || !photo.photo_id || !onUpdateCb) return;
-    const cacheKey = `avatar_${peerType}_${peerId}_${String(photo.photo_id)}`;
-    if (avatarFetchPromises.has(cacheKey)) return;
-    const need = await needAvatar(cacheKey);
-    if (!need) {
-        wlog('[avatar] HIT cache:', cacheKey);
-        const url = await getAvatarFromCache(cacheKey);
-        if (url) {
-            const payload = JSON.stringify({ _: 'avatarUpdated', peerId, peerType, avatarUrl: url });
-            onUpdateCb(0x41564154, payload);
-        }
-        return;
-    }
-    wlog('[avatar] MISS cache, downloading:', cacheKey);
-    if (avatarFetchPromises.has(cacheKey)) return;
-    const cb = onUpdateCb;
-
-    const promise = downloadAvatar(peerType, peerId, accessHash, photo).then(async (url) => {
-        if (url) {
-            await saveAvatarToCache(cacheKey, url).catch(() => {});
-            wlog('[avatar] cache verify after save:', cacheKey, url ? 'OK' : 'FAIL');
-            const payload = JSON.stringify({ _: 'avatarUpdated', peerId, peerType, avatarUrl: url });
-            cb(0x41564154, payload);
-        }
-        return url;
-    }).finally(() => {
-        avatarFetchPromises.delete(cacheKey);
-    });
-
-    avatarFetchPromises.set(cacheKey, promise);
-    avatarQueue.push(async () => { await promise; });
-    processAvatarQueue();
-}
-
 function handleUpdateAvatars(parsed: any): void {
     if (parsed._ === 'updates' || parsed._ === 'updatesCombined') {
         for (const u of (parsed.users || [])) {
             if (u.photo?.photo_id) {
                 const key = `user_${String(u.id)}`;
                 peerPhotoMap.set(key, { type: 'user', accessHash: u.access_hash, photo: u.photo });
-                enqueueAvatarDownload('user', String(u.id), u.access_hash, u.photo);
             }
         }
         for (const c of (parsed.chats || [])) {
@@ -272,7 +218,6 @@ function handleUpdateAvatars(parsed: any): void {
                 const type = c._ === 'chat' ? 'chat' : 'channel';
                 const key = `${type}_${String(c.id)}`;
                 peerPhotoMap.set(key, { type, accessHash: c.access_hash, photo: c.photo });
-                enqueueAvatarDownload(type, String(c.id), c.access_hash, c.photo);
             }
         }
     }
@@ -1226,119 +1171,40 @@ async function directRpcWith(
     return rpcResult;
 }
 
-async function downloadAvatar(peerType: string, peerId: string, accessHash: any, photo: any): Promise<string | null> {
-    if (!photo || !photo.photo_id) return null;
-    const photoId = typeof photo.photo_id === 'string' ? BigInt(photo.photo_id) : photo.photo_id;
-
-    const cacheKey = `avatar_${peerType}_${peerId}_${String(photo.photo_id)}`;
-    try {
-        const cached = await getAvatarFromCache(cacheKey);
-        if (cached) return cached;
-    } catch {}
-
-    const peer: any = { _: 'inputPeer' + (peerType === 'user' ? 'User' : peerType === 'chat' ? 'Chat' : 'Channel') };
-    if (peerType === 'user') {
-        peer.user_id = BigInt(peerId);
-        if (accessHash) peer.access_hash = typeof accessHash === 'string' ? BigInt(accessHash) : accessHash;
-    } else if (peerType === 'chat') {
-        peer.chat_id = BigInt(peerId);
-    } else {
-        peer.channel_id = BigInt(peerId);
-        if (accessHash) peer.access_hash = typeof accessHash === 'string' ? BigInt(accessHash) : accessHash;
-    }
-    const location = { _: 'inputPeerPhotoFileLocation', flags: 0, peer, photo_id: photoId };
-    const params = { precise: false, location, offset: BigInt(0), limit: 1048576 };
-    const knownDc = photo.dc_id ? (typeof photo.dc_id === 'number' ? photo.dc_id : Number(photo.dc_id)) : 0;
-
-    let lastError: any = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-        if (attempt > 0) {
-            wlog('[worker] downloadAvatar retry', attempt, 'key:', cacheKey);
-            await new Promise(r => setTimeout(r, 1000));
-        }
-        try {
-            await acquirePool(knownDc || UNKNOWN_DC, false, 1048576, cacheKey, TDLIB_PRIORITY_MAX);
-            let result: any;
-            try {
-                result = await runWithSem(() =>
-                    knownDc > 0 ? callRpcOnDc(knownDc, 'upload.getFile', params) : callRpc('upload.getFile', params, { noMigrate: true })
-                );
-            } finally {
-                releasePool(knownDc || UNKNOWN_DC, false, 1048576);
-            }
-            if (result && result._ === 'upload.file') {
-                const chunk = Buffer.from(result.bytes || '', 'hex');
-                if (chunk.length >= 100) {
-                    const url = 'data:image/jpeg;base64,' + chunk.toString('base64');
-                    saveAvatarToCache(cacheKey, url).catch(() => {});
-                    return url;
-                }
-            }
-            return null;
-        } catch (e: any) {
-            lastError = e;
-            const m = e.message?.match(/^FILE_MIGRATE_(\d+)$/);
-            if (m) {
-                const targetDc = parseInt(m[1]);
-                try {
-                    await acquirePool(targetDc || UNKNOWN_DC, false, 1048576, cacheKey, TDLIB_PRIORITY_MAX);
-                    let result: any;
-                    try {
-                        result = await runWithSem(() => callRpcOnDc(targetDc, 'upload.getFile', params));
-                    } finally {
-                        releasePool(targetDc || UNKNOWN_DC, false, 1048576);
-                    }
-                    if (result && result._ === 'upload.file') {
-                        const chunk = Buffer.from(result.bytes || '', 'hex');
-                        if (chunk.length >= 100) {
-                            const url = 'data:image/jpeg;base64,' + chunk.toString('base64');
-                            saveAvatarToCache(cacheKey, url).catch(() => {});
-                            return url;
-                        }
-                    }
-                } catch (e2: any) {
-                    wlog('[worker] downloadAvatar migrate error:', e2.message);
-                }
-            }
-            log.error('[worker] downloadAvatar error (attempt', attempt, '):', e.message, 'key:', cacheKey);
-        }
-    }
-    log.error('[worker] downloadAvatar: all retries exhausted', lastError?.message, 'key:', cacheKey);
-    return null;
-}
-
-async function requestPeerAvatar(peerType: string, peerId: string, accessHash?: any, photo?: any): Promise<string | null> {
-    if (!photo || !photo.photo_id) {
-        const entry = peerPhotoMap.get(`${peerType}_${peerId}`);
-        if (entry) {
-            peerType = entry.type;
-            accessHash = entry.accessHash;
-            photo = entry.photo;
-        }
-    }
-    if (!photo || !photo.photo_id) return null;
-    const cacheKey = `avatar_${peerType}_${peerId}_${String(photo.photo_id)}`;
-    if (!(await needAvatar(cacheKey))) {
-        return getAvatarFromCache(cacheKey);
-    }
-    const inlineThumb = getInlineThumb(photo);
-    if (inlineThumb && onUpdateCb) {
-        const payload = JSON.stringify({ _: 'avatarUpdated', peerId, peerType, avatarUrl: inlineThumb });
-        onUpdateCb(0x41564154, payload);
-    }
-    const url = await downloadAvatar(peerType, peerId, accessHash, photo);
-    if (url && onUpdateCb) {
-        const payload = JSON.stringify({ _: 'avatarUpdated', peerId, peerType, avatarUrl: url });
-        onUpdateCb(0x41564154, payload);
-    }
-    return url;
-}
-
-async function requestPhotoDownload(photo: any, sizeType: string, onProgress?: (pct: number) => void): Promise<{ bytes: ArrayBuffer; mime: string; cacheSource: string } | null> {
-    wlog('[worker] requestPhotoDownload CALLED', { sizeType, photoId: photo?.id?.toString(), hasId: !!photo?.id, hasAccessHash: !!photo?.access_hash, hasFileRef: !!photo?.file_reference, fileRefType: typeof photo?.file_reference, fileRefLen: photo?.file_reference?.length });
+async function requestPhotoDownload(photo: any, sizeType: string, messageId?: any, onProgress?: (pct: number) => void): Promise<{ bytes: ArrayBuffer; mime: string; cacheSource: string } | null> {
+    wlog('[worker] requestPhotoDownload CALLED', { sizeType, photoId: photo?.id?.toString(), hasId: !!photo?.id, hasAccessHash: !!photo?.access_hash, hasFileRef: !!photo?.file_reference, fileRefType: typeof photo?.file_reference, fileRefLen: photo?.file_reference?.length, messageId });
     if (!photo) { wlog('[worker] requestPhotoDownload: photo is null'); return null; }
+    let locationOverride: Record<string, any> | null = null;
+    if (!photo.access_hash && !photo.file_reference) {
+        const m = /^avatar_(user|chat|channel)_(\d+)$/.exec(String(messageId || ''));
+        if (!m) {
+            wlog('[worker] requestPhotoDownload: peer photo without avatar messageId, messageId:', messageId);
+            return null;
+        }
+        const peerType = m[1];
+        const peerId = m[2];
+        const entry = peerPhotoMap.get(`${peerType}_${peerId}`);
+        if (!entry) {
+            wlog('[worker] requestPhotoDownload: no peerPhotoMap entry for', peerType, peerId);
+            return null;
+        }
+        const peerIdBig = BigInt(peerId);
+        const toBig = (v: any): bigint => (typeof v === 'string' ? BigInt(v) : v || 0n);
+        const peer: any = peerType === 'user'
+            ? { _: 'inputPeerUser', user_id: peerIdBig, access_hash: entry?.accessHash ? toBig(entry.accessHash) : 0n }
+            : peerType === 'chat'
+                ? { _: 'inputPeerChat', chat_id: peerIdBig }
+                : { _: 'inputPeerChannel', channel_id: peerIdBig, access_hash: entry?.accessHash ? toBig(entry.accessHash) : 0n };
+        const photoId = typeof photo.photo_id === 'string' ? BigInt(photo.photo_id) : photo.photo_id;
+        if (!photoId) {
+            wlog('[worker] requestPhotoDownload: peer photo without photo_id');
+            return null;
+        }
+        photo = { ...photo, id: photo.photo_id, thumb_size: sizeType };
+        locationOverride = { _: 'inputPeerPhotoFileLocation', flags: 0, peer, photo_id: photoId };
+    }
     const photoWithThumb = { ...photo, thumb_size: sizeType };
-    if (!buildDownloadLocation(undefined, photoWithThumb)) {
+    if (!locationOverride && !buildDownloadLocation(undefined, photoWithThumb)) {
         wlog('[worker] requestPhotoDownload: buildDownloadLocation returned null', { id: photo?.id, access_hash: photo?.access_hash, file_reference: !!photo?.file_reference, sizeType });
         return null;
     }
@@ -1351,7 +1217,7 @@ async function requestPhotoDownload(photo: any, sizeType: string, onProgress?: (
     if (!totalSize && Array.isArray(sizeEntry?.sizes)) {
         totalSize = Math.max(...sizeEntry.sizes);
     }
-    const result = await downloadFile_(undefined, photoWithThumb, genRef, onProgress, totalSize);
+    const result = await downloadFile_(undefined, photoWithThumb, genRef, onProgress, totalSize, TDLIB_PRIORITY_MAX, locationOverride);
     if (result.error === 'ABORTED') {
         wlog('[worker] requestPhotoDownload: ABORTED', 'sizeType:', sizeType);
         return null;
@@ -1443,7 +1309,6 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
         if (pid && !lastMsgMap.has(pid)) lastMsgMap.set(pid, msg_);
     }
     const dialogs: any[] = [];
-    const avatarBatch: Array<{ peer: any; photo: any; cacheKey: string }> = [];
     for (const d of (dialogsResult.dialogs || [])) {
         const peer = peerInfo(d.peer);
         if (!peer) continue;
@@ -1452,109 +1317,10 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
         let lastMsgText = '';
         if (lastMsg) { lastMsgText = lastMsg.message || ''; if (lastMsgText.length > 100) lastMsgText = lastMsgText.slice(0, 100) + '...'; }
         dialogs.push({ peer, topMessage: d.top_message, unreadCount: d.unread_count || 0, lastMsg: lastMsgText, date: lastMsg?.date, readInboxMaxId: d.read_inbox_max_id, readOutboxMaxId: d.read_outbox_max_id });
-        if (peer.photo?.photo_id) {
-            const ck = `avatar_${peer.type}_${peer.id}_${String(peer.photo.photo_id)}`;
-            avatarBatch.push({ peer, photo: peer.photo, cacheKey: ck });
-        }
     }
-    processAvatarBatch(avatarBatch).catch(() => {});
     return { dialogs };
 }
 
-async function processAvatarBatch(tasks: Array<{ peer: any; photo: any; cacheKey: string }>): Promise<void> {
-    wlog('[avatar] processAvatarBatch called with', tasks.length, 'tasks');
-    const cb = onUpdateCb;
-    const homeDc = ses?.dcId || homeSession?.dcId || 2;
-
-    const homeTasks: Array<{ peer: any; photo: any; cacheKey: string }> = [];
-    const remoteByDc = new Map<number, Array<{ peer: any; photo: any; cacheKey: string }>>();
-
-    for (const t of tasks) {
-        let dcId = 0;
-        if (t.photo?.dc_id != null) {
-            dcId = typeof t.photo.dc_id === 'number' ? t.photo.dc_id : Number(t.photo.dc_id);
-            if (!Number.isFinite(dcId) || dcId <= 0) dcId = 0;
-        }
-        if (dcId <= 0) dcId = homeDc;
-        if (dcId === homeDc) {
-            homeTasks.push(t);
-        } else {
-            if (!remoteByDc.has(dcId)) remoteByDc.set(dcId, []);
-            remoteByDc.get(dcId)!.push(t);
-        }
-    }
-
-    const runConcurrent = async (batch: Array<{ peer: any; photo: any; cacheKey: string }>): Promise<void> => {
-        const it = batch[Symbol.iterator]();
-        const workers = Array.from({ length: Math.min(10, batch.length) }, async () => {
-            for (const t of it) {
-                try {
-                    const cached = await needAvatar(t.cacheKey);
-                    if (!cached) {
-                        const url = await getAvatarFromCache(t.cacheKey);
-                        if (url && cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: url }));
-                        continue;
-                    }
-                    const inlineThumb = getInlineThumb(t.photo);
-                    if (inlineThumb && cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: inlineThumb }));
-                    const url = await downloadAvatar(t.peer.type, t.peer.id, t.peer.accessHash, t.photo);
-                    if (url && cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: url }));
-                } catch (e: any) {
-                    wlog('[avatar] error for', t.peer.type, t.peer.id, ':', e.message);
-                }
-            }
-        });
-        await Promise.all(workers);
-    };
-
-    const dcIds = Array.from(remoteByDc.keys());
-    await Promise.all([
-        runConcurrent(homeTasks),
-        ...dcIds.map(async (dcId) => {
-            const dcTasks = remoteByDc.get(dcId)!;
-            wlog('[avatar] downloading', dcTasks.length, 'avatars on DC', dcId);
-            for (const t of dcTasks) {
-                try {
-                    const cached = await needAvatar(t.cacheKey);
-                    if (!cached) {
-                        const url = await getAvatarFromCache(t.cacheKey);
-                        if (url && cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: url }));
-                        continue;
-                    }
-                    const inlineThumb = getInlineThumb(t.photo);
-                    if (inlineThumb && cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: inlineThumb }));
-
-                    const photoId = typeof t.photo.photo_id === 'string' ? BigInt(t.photo.photo_id) : t.photo.photo_id;
-                    const peer: any = { _: 'inputPeer' + (t.peer.type === 'user' ? 'User' : t.peer.type === 'chat' ? 'Chat' : 'Channel') };
-                    if (t.peer.type === 'user') {
-                        peer.user_id = BigInt(t.peer.id);
-                        if (t.peer.accessHash) peer.access_hash = typeof t.peer.accessHash === 'string' ? BigInt(t.peer.accessHash) : t.peer.accessHash;
-                    } else if (t.peer.type === 'chat') {
-                        peer.chat_id = BigInt(t.peer.id);
-                    } else {
-                        peer.channel_id = BigInt(t.peer.id);
-                        if (t.peer.accessHash) peer.access_hash = typeof t.peer.accessHash === 'string' ? BigInt(t.peer.accessHash) : t.peer.accessHash;
-                    }
-                    const location = { _: 'inputPeerPhotoFileLocation', flags: 0, peer, photo_id: photoId };
-                    const params = { precise: false, location, offset: BigInt(0), limit: 1048576 };
-
-                    const result = await callRpcOnDc(dcId, 'upload.getFile', params);
-                    if (result && result._ === 'upload.file') {
-                        const bytes = result.bytes;
-                        const chunk = typeof bytes === 'string' ? Buffer.from(bytes, 'hex') : bytes;
-                        if (chunk && chunk.length >= 100) {
-                            const url = 'data:image/jpeg;base64,' + chunk.toString('base64');
-                            saveAvatarToCache(t.cacheKey, url).catch(() => {});
-                            if (cb) cb(0x41564154, JSON.stringify({ _: 'avatarUpdated', peerId: t.peer.id, peerType: t.peer.type, avatarUrl: url }));
-                        }
-                    }
-                } catch (e: any) {
-                    wlog('[avatar] error on DC', dcId, 'for', t.peer.type, t.peer.id, ':', e.message);
-                }
-            }
-        }),
-    ]);
-}
 
 let resolveReadLoopEnd: (() => void) | null = null;
 
@@ -3136,7 +2902,7 @@ function enqueueDownload(document?: any, photo?: any, priority = 0): Promise<Dow
     return p;
 }
 
-async function downloadFile_(document?: any, photo?: any, genRef?: { value: number }, onProgress?: (pct: number) => void, totalSize?: number, priority = TDLIB_PRIORITY_MAX): Promise<DownloadResult> {
+async function downloadFile_(document?: any, photo?: any, genRef?: { value: number }, onProgress?: (pct: number) => void, totalSize?: number, priority = TDLIB_PRIORITY_MAX, locationOverride?: Record<string, any> | null): Promise<DownloadResult> {
     const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
     const id = document?.id?.toString() || photo?.id?.toString() || '?';
     wlog('[dl] start id=' + id + ' label=' + label + ' thumbSuffix=' + (document?.thumb_size || photo?.thumb_size || '') + ' totalSize=' + (totalSize || 0));
@@ -3163,8 +2929,8 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             }
         };
 
-        location = buildDownloadLocation(document, photo);
-        if (!location && document?.id && !photo?.id) {
+        location = locationOverride || buildDownloadLocation(document, photo);
+        if (!locationOverride && !location && document?.id && !photo?.id) {
             if (await refreshDocumentRef()) location = buildDownloadLocation(document, photo);
         }
         if (!location) return { type: '', bytes: new ArrayBuffer(0), error: 'No file_reference for document (stub or empty)' };
@@ -3701,7 +3467,7 @@ async function downloadFiles_(docs: Array<{ document: any; priority?: number }>)
     return Promise.all(tasks);
 }
 
-export { callRpc, resolvePeer, sendCode, signIn, checkPassword, downloadFile_, downloadFileStream_, requestPeerAvatar, requestPhotoDownload, cancelPhotoDownloads, enqueueDownload, downloadFiles_ };
+export { callRpc, resolvePeer, sendCode, signIn, checkPassword, downloadFile_, downloadFileStream_, requestPhotoDownload, cancelPhotoDownloads, enqueueDownload, downloadFiles_ };
 export { handleConnectInternal as handleConnect };
 export { handleDisconnect as disconnect };
 export { handleLogout as logout };

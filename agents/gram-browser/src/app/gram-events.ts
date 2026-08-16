@@ -5,6 +5,7 @@ import { dbGet, dbSet, dbDel, dbKeys, dbClearCacheKeepSession, dbDeleteAvatarByO
 import { GramMediaRouter } from '@ton-ai/gram-media';
 import type { MediaMessageLike } from '@ton-ai/gram-media';
 import type { GramState } from './gram-state';
+import { DIALOG_CACHE_KEY } from './gram-constants';
 import type { Message } from '@ton-ai/gram-ui';
 
 const log = getLogger('gram-browser');
@@ -215,7 +216,24 @@ export function setupEventListeners(s: GramState): void {
 
   mediaRouter = new GramMediaRouter({
     tgService: s.tgService,
-    dispatch: (action: any) => s.tgui.current?.dispatch(action),
+    dispatch: (action: any) => {
+      if (action?.type === 'UPDATE_MESSAGE_PHOTO' && typeof action.messageId === 'string' && action.messageId.startsWith('avatar_') && action.url) {
+        const m = /^avatar_(user|chat|channel)_(\d+)$/.exec(action.messageId);
+        if (m) {
+          const peerType = m[1];
+          const peerId = m[2];
+          s.dialogsRef.current = s.dialogsRef.current.map(d =>
+            d.peer.id === peerId && d.peer.type === peerType
+              ? { ...d, peer: { ...d.peer, avatarUrl: action.url } }
+              : d
+          );
+          dbSet(DIALOG_CACHE_KEY, s.dialogsRef.current.map(d =>
+            d.peer.avatarUrl ? { ...d, peer: { ...d.peer, avatarUrl: undefined } } : d
+          )).catch(() => {});
+        }
+      }
+      s.tgui.current?.dispatch(action);
+    },
     selectedPeerRef: s.selectedPeerRef,
     cleanupFns: s.cleanupFns,
     debug: isEnabled('gram-browser'),

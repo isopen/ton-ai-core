@@ -50,7 +50,7 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
                 }
             } else if (msg.type === 'startPhotoDownload') {
                 try {
-                    const result = await TW.requestPhotoDownload(msg.photo, msg.sizeType, (pct: number) => {
+                    const result = await TW.requestPhotoDownload(msg.photo, msg.sizeType, msg.messageId, (pct: number) => {
                         try { port.postMessage({ type: 'photoProgress', streamId: msg.id, progress: pct }); } catch {}
                     });
                     try { port.postMessage({ type: 'photoProgress', streamId: msg.id, progress: 100 }); } catch {}
@@ -157,13 +157,9 @@ async function handleMessage(msg: Record<string, any>): Promise<any> {
             const results = await TW.downloadFiles_(msg.docs || []);
             return { type: 'downloadFilesResult', results };
         }
-        case 'requestPeerAvatar': {
-            const avatarUrl = await TW.requestPeerAvatar(msg.peerType, msg.peerId, msg.accessHash, msg.photo);
-            return { type: 'peerAvatarResult', avatarUrl };
-        }
         case 'requestPhotoDownload': {
             try {
-                const result = await TW.requestPhotoDownload(msg.photo, msg.sizeType);
+                const result = await TW.requestPhotoDownload(msg.photo, msg.sizeType, msg.messageId);
                 if (result) {
                     return { type: 'photoDownloadResult', bytes: result.bytes.slice(0), mime: result.mime, sizeType: msg.sizeType, messageId: msg.messageId, cacheSource: result.cacheSource };
                 }

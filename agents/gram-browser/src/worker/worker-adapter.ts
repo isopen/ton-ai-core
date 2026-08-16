@@ -68,15 +68,11 @@ export class TelegramWorkerClient {
         return this.client.startVideoStream(document, onChunk);
     }
 
-    async requestPeerAvatar(peerType: string, peerId: string, accessHash: any, photo: any): Promise<string | null> {
-        return this.client.requestPeerAvatar(peerType, peerId, accessHash, photo);
-    }
-
-    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
+    async startPhotoDownload(photo: any, sizeType: string, messageId: number | string, onProgress: (pct: number) => void): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return this.client.startPhotoDownload(photo, sizeType, messageId, onProgress);
     }
 
-    async requestPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
+    async requestPhotoDownload(photo: any, sizeType: string, messageId: number | string): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return this.client.requestPhotoDownload(photo, sizeType, messageId);
     }
 

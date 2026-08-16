@@ -179,12 +179,6 @@ export class TelegramService {
         return dlData?.bytes ? { bytes: dlData.bytes, type: dlData.type || '' } : null;
     }
 
-    async requestPeerAvatar(peerType: string, peerId: string, accessHash: any, photo: any): Promise<string | null> {
-        this.config.onLog?.('→ requestPeerAvatar peer=' + peerType + '_' + peerId);
-        this.config.onLog?.('← requestPeerAvatar not supported (server mode)');
-        return null;
-    }
-
     async callRpc(method: string, params: Record<string, any> = {}): Promise<any> {
         this.config.onLog?.('→ rpc ' + method + ' ' + logJson(params));
         try {

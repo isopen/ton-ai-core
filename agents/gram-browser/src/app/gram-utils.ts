@@ -1,7 +1,7 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { tpl } from '@ton-ai/gram-ui';
 import type { Dialog, Message } from '@ton-ai/gram-ui';
-import { dbGet, dbSet, dbDel, dbGetMany, dbKeys, dbGetAvatar } from '@/utils/db';
+import { dbGet, dbSet, dbDel, dbGetMany, dbKeys } from '@/utils/db';
 import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, ORPHANED_KEY } from './gram-constants';
 import type { GramState } from './gram-state';
 import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
@@ -43,18 +43,23 @@ export async function loadMessageCache(s: GramState) {
   }
 }
 
+export function dispatchAvatarDownload(peerType: string, peerId: string, photo: any) {
+  if (!photo || !photo.photo_id || typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('tg-download-photo', {
+    detail: { photo, sizeType: 'm', messageId: `avatar_${peerType}_${peerId}` },
+  }));
+}
+
 export function setDialogsFromServer(s: GramState, raw: any) {
   const dialogs = raw.dialogs || raw;
   const merged = mergeOrphanedDialogs(s, dialogs);
-  for (const d of merged) {
-    if (d.peer.avatarUrl) continue;
-    const existing = s.dialogsRef.current.find(e => e.peer.id === d.peer.id && e.peer.type === d.peer.type);
-    if (existing?.peer.avatarUrl) d.peer.avatarUrl = existing.peer.avatarUrl;
-  }
   s.dialogsRef.current = merged;
   s.dialogsLoadedRef.current = true;
   s.tgui.current!.setDialogs(merged);
   dbSet(DIALOG_CACHE_KEY, merged).catch((e: any) => log.error('[dialog-cache] SAVE error', e?.message));
+  for (const d of merged) {
+    if (d.peer?.photo?.photo_id) dispatchAvatarDownload(d.peer.type, d.peer.id, d.peer.photo);
+  }
 }
 
 export async function loadCachedDialogs(s: GramState) {
@@ -65,17 +70,10 @@ export async function loadCachedDialogs(s: GramState) {
     if (cached.length > 0) {
       const merged = mergeOrphanedDialogs(s, cached);
       if (s.dialogsLoadedRef.current) { log.info('[cache] loadCachedDialogs skipped - race'); return; }
-      const avatarTasks = merged.map(d => {
-        if (!d.peer?.id || !d.peer?.type || !d.peer.photoId) return Promise.resolve(false);
-        const avatarKey = `avatar_${d.peer.type}_${d.peer.id}_${d.peer.photoId}`;
-        return dbGetAvatar(avatarKey).then(url => {
-          if (url) { d.peer.avatarUrl = url; return true; }
-          return false;
-        }).catch(() => false);
-      });
-      const results = await Promise.all(avatarTasks);
-      const hitCount = results.filter(Boolean).length;
-      log.info(`[cache] loadCachedDialogs: ${merged.length} dialogs, ${hitCount} avatar hits`);
+      for (const d of merged) {
+        if (d.peer?.avatarUrl) d.peer.avatarUrl = undefined;
+      }
+      log.info(`[cache] loadCachedDialogs: ${merged.length} dialogs, avatars served by worker`);
       s.dialogsRef.current = merged;
       s.tgui.current?.setDialogs(merged);
     }
@@ -138,7 +136,7 @@ export async function fetchPeerInfo(s: GramState, peerType: string, peerId: stri
             username: item.username,
           });
           if (item.photo?.photo_id) {
-            svc.requestPeerAvatar('user', id, item.access_hash, item.photo).catch(() => {});
+            dispatchAvatarDownload('user', id, item.photo);
           }
         } else {
           s.peerInfoMap.current.set(`${peerType}_${id}`, {
@@ -146,7 +144,7 @@ export async function fetchPeerInfo(s: GramState, peerType: string, peerId: stri
             username: item.username,
           });
           if (item.photo?.photo_id) {
-            svc.requestPeerAvatar(peerType, id, item.access_hash, item.photo).catch(() => {});
+            dispatchAvatarDownload(peerType, id, item.photo);
           }
         }
       }
@@ -261,7 +259,11 @@ export async function loadOrphanedDialogs(s: GramState) {
 }
 
 export function persistOrphanedDialogs(s: GramState) {
-  dbSet(ORPHANED_KEY, Array.from(s.orphanedDialogsRef.current.entries())).catch(() => {});
+  const clean = Array.from(s.orphanedDialogsRef.current.entries()).map(([key, d]: [string, Dialog]) => [
+    key,
+    d?.peer?.avatarUrl ? { ...d, peer: { ...d.peer, avatarUrl: undefined } } : d,
+  ]);
+  dbSet(ORPHANED_KEY, clean).catch(() => {});
 }
 
 export function addOrphanedDialog(s: GramState, key: string, dialog: Dialog) {
@@ -274,7 +276,8 @@ export function mergeOrphanedDialogs(s: GramState, serverDialogs: Dialog[]): Dia
   const existingKeys = new Set(merged.map(d => `${d.peer.type}_${d.peer.id}`));
   for (const [key, dialog] of s.orphanedDialogsRef.current.entries()) {
     if (!existingKeys.has(key)) {
-      merged.push(dialog);
+      const peer = dialog.peer?.avatarUrl ? { ...dialog.peer, avatarUrl: undefined } : dialog.peer;
+      merged.push({ ...dialog, peer });
     }
   }
   merged.sort((a, b) => (b.date || 0) - (a.date || 0));

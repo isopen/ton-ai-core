@@ -161,12 +161,7 @@ export class WorkerTelegramService extends TelegramService {
         return this.workerClient.startVideoStream(document, onChunk);
     }
 
-    async requestPeerAvatar(peerType: string, peerId: string, accessHash: any, photo: any): Promise<string | null> {
-        if (!this.workerClient) return null;
-        return this.workerClient.requestPeerAvatar(peerType, peerId, accessHash, photo);
-    }
-
-    async startPhotoDownload(photo: any, sizeType: string, messageId: number, onProgress: (pct: number) => void): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
+    async startPhotoDownload(photo: any, sizeType: string, messageId: number | string, onProgress: (pct: number) => void): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         if (!this.workerClient) return { photoUrl: null };
         return this.workerClient.startPhotoDownload(photo, sizeType, messageId, onProgress);
     }

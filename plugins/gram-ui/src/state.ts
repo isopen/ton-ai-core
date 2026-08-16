@@ -96,6 +96,24 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_ACTIVE_SKILL': return { ...state, activeSkill: action.id, ...(action.id ? { selectedPeer: null } : {}) };
     case 'SET_LANG_OPTIONS': return { ...state, langOptions: action.options };
     case 'UPDATE_MESSAGE_PHOTO': {
+      if (typeof action.messageId === 'string' && action.messageId.startsWith('avatar_') && action.url) {
+        const m = /^avatar_(user|chat|channel)_(\d+)$/.exec(action.messageId);
+        if (!m) return state;
+        const peerId = m[2];
+        const peerType = m[1];
+        return {
+          ...state,
+          renderTick: state.renderTick + 1,
+          dialogs: state.dialogs.map(d =>
+            d.peer.id === peerId && d.peer.type === peerType
+              ? { ...d, peer: { ...d.peer, avatarUrl: action.url } }
+              : d
+          ),
+          selectedPeer: state.selectedPeer?.id === peerId && state.selectedPeer?.type === peerType
+            ? { ...state.selectedPeer, avatarUrl: action.url }
+            : state.selectedPeer,
+        };
+      }
       let targetFound = false;
       let changed = false;
       const messages = state.messages.map(m => {

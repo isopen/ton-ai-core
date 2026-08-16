@@ -40,7 +40,7 @@ export class GramMediaRouter {
 
     private photoUrlCache = new Map<string, string>();
     private probedCacheKeys = new Set<string>();
-    private photoQueue: Array<{ photo: any; sizeType: string; messageId: number }> = [];
+    private photoQueue: Array<{ photo: any; sizeType: string; messageId: number | string }> = [];
     private photoInFlight = 0;
     private photoInFlightByKey = new Set<string>();
 
@@ -380,7 +380,7 @@ export class GramMediaRouter {
         return p;
     }
 
-    async refreshMessage(messageId: number): Promise<any> {
+    async refreshMessage(messageId: number | string): Promise<any> {
         if (typeof messageId !== 'number' || !Number.isFinite(messageId)) return null;
         const peer = this.host.selectedPeerRef.current;
         if (peer?.type === 'channel' && peer.accessHash) {
@@ -436,7 +436,7 @@ export class GramMediaRouter {
     }
 
     private getPhotoCacheKey(photo: any, sizeType: string): string {
-        return `${photo.id || ''}_${sizeType}`;
+        return `${(photo?.id ?? photo?.photo_id) || ''}_${sizeType}`;
     }
 
     private photoUrlCacheSet(key: string, url: string): void {
@@ -463,7 +463,7 @@ export class GramMediaRouter {
     }
 
     private processPhotoQueue(): void {
-        const stillPending: Array<{ photo: any; sizeType: string; messageId: number }> = [];
+        const stillPending: Array<{ photo: any; sizeType: string; messageId: number | string }> = [];
         for (let i = this.photoQueue.length - 1; i >= 0; i--) {
             const item = this.photoQueue[i]!;
             const ck = this.getPhotoCacheKey(item.photo, item.sizeType);
@@ -487,7 +487,7 @@ export class GramMediaRouter {
         this.photoQueue = stillPending;
     }
 
-    private async execPhotoDownload(photo: any, sizeType: string, messageId: number): Promise<void> {
+    private async execPhotoDownload(photo: any, sizeType: string, messageId: number | string): Promise<void> {
         const MAX_RETRIES = 3;
         const RETRY_DELAYS = [1000, 3000, 5000];
         let currentPhoto = photo;
@@ -605,7 +605,7 @@ export class GramMediaRouter {
         this.failPhotoDownload(messageId, sizeType);
     }
 
-    private failPhotoDownload(messageId: number, sizeType: string): void {
+    private failPhotoDownload(messageId: number | string, sizeType: string): void {
         if (this.debug) log.info('[gram-media] photo download FAILED, dispatching error', messageId, sizeType);
         this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_FAILED', messageId, sizeType });
         this.emitWindow('tg-photo-download-failed', { messageId, sizeType });

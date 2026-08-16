@@ -198,7 +198,8 @@ describe('gram-debug', () => {
             configure({ noMediaCache: true });
             expect(isNoMediaCache()).toBe(true);
             configure({ noMediaCache: false });
-            expect(isNoMediaCache()).toBe(before);
+            expect(isNoMediaCache()).toBe(false);
+            configure({ noMediaCache: before });
         });
 
         it('isEnabled works with and without level', () => {

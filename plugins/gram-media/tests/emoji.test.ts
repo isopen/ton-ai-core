@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 
+import { configure } from '@ton-ai/gram-debug';
 import { GramMediaRouter } from '../src/router.js';
 import {
     makeHost, makeTransport, makeDocument, makeBytes, makeGzipMagicBytes,
@@ -44,6 +45,7 @@ function makeFtypMp4Bytes(): ArrayBuffer {
 }
 
 describe('GramMediaRouter emoji pipeline', () => {
+    beforeAll(() => configure({ noMediaCache: false }));
     test('loads sticker sets and indexes docs by id and alt', async () => {
         jest.useFakeTimers();
         try {

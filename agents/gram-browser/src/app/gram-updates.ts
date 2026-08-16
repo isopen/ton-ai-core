@@ -1,12 +1,10 @@
 import { t, S, tpl } from '@ton-ai/gram-ui';
 import type { Message } from '@ton-ai/gram-ui';
-import { dbSet } from '@/utils/db';
-import { DIALOG_CACHE_KEY } from './gram-constants';
 import type { GramState } from './gram-state';
 import {
   addLog, setMessageCache, deleteMessageCache, scheduleDialogsFlush,
   scheduleMessagesFlush, applyReadReceipt, addOrphanedDialog,
-  fetchPeerInfo,
+  fetchPeerInfo, dispatchAvatarDownload,
 } from './gram-utils';
 import { isTypingUpdate, handleTypingUpdate } from './gram-typing';
 import { getLogger } from '@ton-ai/gram-debug';
@@ -18,16 +16,6 @@ export function createHandleUpdate(s: GramState) {
       if (u && u._) {
         const clean = JSON.stringify(u).replace(/"data:image\/[^"]+base64,[^"]{20,}"/g, (m) => `"[base64:${m.length - 2} bytes]"`);
         addLog(s, '← [' + constructorId + '] ' + clean.slice(0, 500));
-        if (u._ === 'avatarUpdated') {
-          s.tgui.current?.updateDialogAvatar(u.peerId, u.peerType, u.avatarUrl);
-          s.dialogsRef.current = s.dialogsRef.current.map(d =>
-            d.peer.id === u.peerId && d.peer.type === u.peerType
-              ? { ...d, peer: { ...d.peer, avatarUrl: u.avatarUrl } }
-              : d
-          );
-          dbSet(DIALOG_CACHE_KEY, s.dialogsRef.current).catch(() => {});
-          return;
-        }
         if (u.users && Array.isArray(u.users)) {
           for (const user of u.users) {
             if (user && user.id) {
@@ -39,6 +27,7 @@ export function createHandleUpdate(s: GramState) {
                 lastName: user.last_name,
                 username: user.username,
               });
+              if (user.photo?.photo_id) dispatchAvatarDownload('user', uid, user.photo);
             }
           }
         }
@@ -51,6 +40,7 @@ export function createHandleUpdate(s: GramState) {
                 title: chat.title,
                 username: chat.username,
               });
+              if (chat.photo?.photo_id) dispatchAvatarDownload(type, cid, chat.photo);
             }
           }
         }

@@ -8,6 +8,7 @@ export interface PeerInfo {
     username?: string;
     avatarUrl?: string;
     photoId?: string;
+    photo?: any;
 }
 
 export interface Dialog {
@@ -75,7 +76,7 @@ export interface AppState {
   langOptions: Array<{ code: string; label: string }>;
   documentUrls: Record<number | string, string>;
   documentProgress: Record<number | string, number>;
-  photoSources: Record<number, string>;
+  photoSources: Record<string, string>;
   documentSources: Record<number | string, string>;
   reactions: Record<number, MessageReaction[]>;
 }
@@ -144,7 +145,7 @@ export type UIAction =
     | { type: 'SET_PLUGIN_SKILLS'; skills: Array<{ id: string; label: string }> }
     | { type: 'SET_ACTIVE_SKILL'; id: string | null }
     | { type: 'SET_LANG_OPTIONS'; options: Array<{ code: string; label: string }> }
-    | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number; sizeType: string; url: string; cacheSource?: string }
+    | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number | string; sizeType: string; url: string; cacheSource?: string }
     | { type: 'UPDATE_MESSAGE_PHOTO_PROGRESS'; messageId: number; progress: number }
     | { type: 'UPDATE_MESSAGE_PHOTO_FAILED'; messageId: number; sizeType: string }
     | { type: 'REFRESH_MESSAGE_PHOTO'; messageId: number; photo: any }
