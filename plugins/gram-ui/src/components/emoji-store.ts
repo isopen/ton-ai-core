@@ -57,6 +57,13 @@ export function ensureEmojiStickers(): void {
   };
   window.addEventListener('tg-emoji-stickers-ready', onReady, { once: true });
   window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
+  window.setTimeout(() => {
+    if (loading) {
+      loading = false;
+      window.removeEventListener('tg-emoji-stickers-ready', onReady);
+      setTimeout(ensureEmojiStickers, 4000);
+    }
+  }, 12000);
 }
 
 window.addEventListener('tg-emoji-doc-ready', (e) => {
