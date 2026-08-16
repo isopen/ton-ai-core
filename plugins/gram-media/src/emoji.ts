@@ -8,8 +8,8 @@ export interface EmojiPipeline {
     attach(w: Window): void;
     detach(w: Window): void;
     findEmojiDoc(docId: string): any;
-    onEmojiDownloadSuccess(docId: string, url: string): void;
-    onEmojiDownloadFailed(docId: string): void;
+    onEmojiDownloadSuccess(docId: string, url: string, kindOverride?: EmojiKind): void;
+    onEmojiDownloadFailed(docId: string, error?: string): void;
 }
 
 type EmojiDocKind = EmojiKind;
@@ -26,8 +26,12 @@ const EMOJI_RELEASE_GRACE_MS = 60_000;
 const CUSTOM_EMOJI_RPC_CHUNK = 200;
 const CUSTOM_EMOJI_RPC_CONCURRENCY = 3;
 const ALT_RESOLVE_CONCURRENCY = 6;
-const EMOJI_NO_STICKER_ALT_TTL_MS = 30 * 60_000;
+const EMOJI_NO_STICKER_ALT_TTL_MS = 60_000;
 const EMOJI_EXTRA_SETS_DELAY_MS = 3000;
+
+// TDLib: Random::fast(300, 600) — retry special sticker set loads forever
+const SPECIAL_SET_RETRY_MIN_MS = 300;
+const SPECIAL_SET_RETRY_MAX_MS = 600;
 
 const normalizeEmoji = (e: string): string => e.replace(/[\uFE00-\uFE0F\u200D]/g, '');
 
@@ -45,6 +49,11 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiStickerDocs: Record<string, any> | null = null;
     private emojiKeycapDocs: Array<any> = [];
     private diceSetsByEmoji = new Map<string, any[]>();
+    private diceSetsLoading = new Set<string>();
+    private diceSetRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    private diceEmojiByKey = new Map<string, string>();
+    private diceEmojisCache: string[] | null = null;
+    private diceEmojisPromise: Promise<string[]> | null = null;
     private emojiCustomDocsById = new Map<string, any>();
     private emojiDocsById = new Map<string, any>();
     private emojiStickersLoading = false;
@@ -73,6 +82,8 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private unknownRetryTimer: ReturnType<typeof setTimeout> | null = null;
     private unknownRetryIds = new Set<string>();
     private emojiNoStickerAlts = new Map<string, number>();
+    private emojiStickersRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    private emojiStickersRetryCount = 0;
     private handlers: Array<{ event: string; fn: (e: Event) => void }> = [];
 
     constructor(private router: GramMediaRouter) {}
@@ -340,19 +351,52 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         });
     }
 
-    onEmojiDownloadSuccess(docId: string, url: string): void {
+    onEmojiDownloadSuccess(docId: string, url: string, kindOverride?: EmojiKind): void {
         const doc = this.findEmojiDoc(docId);
         const mime = (doc?.mime_type || 'application/octet-stream').toLowerCase();
         this.router.setCachedEmojiUrl('emojipack-' + docId, url);
         this.requestedEmojiDocIds.delete(docId);
         this.resetEmojiAttempts(docId);
-        this.notifyEmojiDocKind(docId, mime);
+        if (kindOverride) {
+            this.announceEmojiDocKind(docId, kindOverride);
+        } else {
+            this.notifyEmojiDocKind(docId, mime);
+        }
     }
 
-    onEmojiDownloadFailed(docId: string): void {
+    onEmojiDownloadFailed(docId: string, error?: string): void {
         this.emojiStaleDocs.add(docId);
         this.markEmojiDocAttempt(docId);
+        if (error && error.includes('FILE_REFERENCE_EXPIRED')) {
+            // TDLib: refresh file_reference immediately (getCustomEmojiDocuments / sticker set reload), no backoff
+            if (this.debug) log.info('[gram-media] emoji FILE_REFERENCE_EXPIRED, refreshing doc immediately', docId);
+            void this.refreshDocAfterRefExpired(docId);
+            return;
+        }
         this.scheduleEmojiRetry(docId);
+    }
+
+    private async refreshDocAfterRefExpired(docId: string): Promise<void> {
+        const diceKey = this.diceKeyForDoc(docId);
+        if (diceKey != null) {
+            const emoji = this.diceEmojiByKey.get(diceKey) ?? diceKey;
+            await this.loadDiceSet(emoji, true);
+            const doc = this.findEmojiDoc(docId);
+            if (doc?.id && this.canRequestEmojiDoc(docId)) {
+                this.requestedEmojiDocIds.add(docId);
+                this.downloadEmojiDoc(doc, docId, 2);
+                return;
+            }
+            if (this.canRequestEmojiDoc(docId)) this.scheduleEmojiRetry(docId);
+            return;
+        }
+        const fresh = await this.fetchFreshEmojiDoc(docId);
+        if (fresh?.id && this.canRequestEmojiDoc(docId)) {
+            this.requestedEmojiDocIds.add(docId);
+            this.downloadEmojiDoc(fresh, docId, 2);
+            return;
+        }
+        if (this.canRequestEmojiDoc(docId)) this.scheduleEmojiRetry(docId);
     }
 
     private notifyEmojiDocKind(docId: string | number, mime: string): void {
@@ -495,80 +539,138 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         await Promise.all(workers);
     }
 
-    private async diceEmoticonList(): Promise<string[]> {
-        const seen = new Set<string>();
-        const out: string[] = [];
-        const push = (e: any) => {
-            if (typeof e !== 'string' || !e) return;
-            const k = normalizeEmoji(e);
-            if (!k || seen.has(k)) return;
-            seen.add(k);
-            out.push(e);
-        };
-        try {
-            const cfg = await this.router.transport?.callRpc('help.getAppConfig', {});
-            const raw = cfg?.config;
-            const list = Array.isArray(raw?.emojies_send_dice)
-                ? raw.emojies_send_dice
-                : Array.isArray(raw?.value?.emojies_send_dice)
-                    ? raw.value.emojies_send_dice
-                    : undefined;
-            if (Array.isArray(list) && list.length > 0) {
-                for (const e of list) push(e);
-                if (out.length > 0) return out;
+    private diceEmoticonList(): Promise<string[]> {
+        if (this.diceEmojisPromise) return this.diceEmojisPromise;
+        this.diceEmojisPromise = (async (): Promise<string[]> => {
+            const seen = new Set<string>();
+            const out: string[] = [];
+            const push = (e: any) => {
+                if (typeof e !== 'string' || !e) return;
+                const k = normalizeEmoji(e);
+                if (!k || seen.has(k)) return;
+                seen.add(k);
+                out.push(e);
+            };
+            try {
+                const cfg = await this.router.transport?.callRpc('help.getAppConfig', {});
+                const raw = cfg?.config;
+                const list = Array.isArray(raw?.emojies_send_dice)
+                    ? raw.emojies_send_dice
+                    : Array.isArray(raw?.value?.emojies_send_dice)
+                        ? raw.value.emojies_send_dice
+                        : undefined;
+                if (Array.isArray(list) && list.length > 0) {
+                    for (const e of list) push(e);
+                    if (out.length > 0) {
+                        this.diceEmojisCache = out;
+                        return out;
+                    }
+                }
+            } catch (e: any) {
+                if (this.debug) log.info('[gram-media] dice appConfig error:', e?.message);
             }
-        } catch (e: any) {
-            if (this.debug) log.info('[gram-media] dice appConfig error:', e?.message);
-        }
-        for (const e of DICE_SETS) push(e);
-        return out;
+            for (const e of DICE_SETS) push(e);
+            this.diceEmojisCache = out;
+            return out;
+        })();
+        return this.diceEmojisPromise;
     }
 
-    private async loadDiceSets(map: Record<string, any>): Promise<void> {
-        const emojis = await this.diceEmoticonList();
-        await Promise.all(emojis.map(async (emoji) => {
-            const key = normalizeEmoji(emoji);
-            const prevId = map[key]?.id != null ? String(map[key].id) : null;
-            try {
-                const fs = await this.router.fetchStickerSet('dice-' + key, { _: 'inputStickerSetDice', emoticon: emoji });
-                if (!fs) return;
-                const docs = Array.isArray(fs.documents) ? fs.documents : [];
-                if (docs.length > 0) this.diceSetsByEmoji.set(key, docs);
-                for (const d of docs) {
-                    if (d?.id == null) continue;
-                    if (isStubEmojiDoc(d)) {
-                        this.markEmojiDocStub(String(d.id));
-                        continue;
-                    }
-                    const id = String(d.id);
-                    if (!this.emojiCustomDocsById.has(id)) {
-                        this.emojiCustomDocsById.set(id, d);
-                        this.fetchedEmojiIds.add(id);
-                    }
-                }
-                const added = this.buildEmojiMapFromSet(fs, map);
-                this.indexEmojiDocs();
-                let diceDoc: any = null;
-                if (docs.length > 0) {
-                    diceDoc = docs.find((d: any) => {
-                        if (!d?.id) return false;
-                        const attrs = Array.isArray(d.attributes) ? d.attributes : [];
-                        const a = attrs.find((x: any) => x?._ === 'documentAttributeSticker' && typeof x.alt === 'string');
-                        return a && normalizeEmoji(a.alt) === key;
-                    }) || null;
-                }
-                if (diceDoc?.id) {
-                    map[key] = diceDoc;
-                    const newId = String(diceDoc.id);
-                    if (this.debug && prevId !== newId) log.info('[gram-media] dice set', emoji, 'override', prevId, '->', newId);
-                }
-                if (this.debug) log.info('[gram-media] dice set', emoji, 'docs =', docs.length, 'added =', added);
-            } catch (e: any) {
-                if (this.debug) log.info('[gram-media] dice set error:', e?.message, emoji);
-            }
-        }));
-        this.emitDiceSetsReady();
+    private diceEmojiFor(nAlt: string): string | undefined {
+        if (!this.diceEmojisCache) return undefined;
+        return this.diceEmojisCache.find((e) => normalizeEmoji(e) === nAlt);
     }
+
+    private diceKeyForDoc(docId: string): string | null {
+        for (const [key, docs] of this.diceSetsByEmoji) {
+            for (const d of docs) {
+                if (d?.id != null && String(d.id) === docId) return key;
+            }
+        }
+        return null;
+    }
+
+    private scheduleDiceSetRetry(emoji: string): void {
+        const key = normalizeEmoji(emoji);
+        if (this.diceSetRetryTimers.has(key)) return;
+        const delay = SPECIAL_SET_RETRY_MIN_MS + Math.floor(Math.random() * (SPECIAL_SET_RETRY_MAX_MS - SPECIAL_SET_RETRY_MIN_MS + 1));
+        if (this.debug) log.info('[gram-media] dice set retry in ' + delay + 'ms:', emoji);
+        this.diceSetRetryTimers.set(key, setTimeout(() => {
+            this.diceSetRetryTimers.delete(key);
+            void this.loadDiceSet(emoji);
+        }, delay));
+    }
+
+    private async loadDiceSet(emoji: string, force = false): Promise<void> {
+        const key = normalizeEmoji(emoji);
+        if (this.diceSetsLoading.has(key)) return;
+        if (!force && this.diceSetsByEmoji.has(key)) return;
+        this.diceSetsLoading.add(key);
+        try {
+            const fs = await this.router.fetchStickerSet('dice-' + key, { _: 'inputStickerSetDice', emoticon: emoji }, force);
+            if (!fs) throw new Error('empty dice set response');
+            const docs = Array.isArray(fs.documents) ? fs.documents : [];
+            if (docs.length > 0) {
+                this.diceSetsByEmoji.set(key, docs);
+                this.diceEmojiByKey.set(key, emoji);
+            }
+            for (const d of docs) {
+                if (d?.id == null) continue;
+                if (isStubEmojiDoc(d)) {
+                    this.markEmojiDocStub(String(d.id));
+                    continue;
+                }
+                const id = String(d.id);
+                this.emojiCustomDocsById.set(id, d);
+                this.fetchedEmojiIds.add(id);
+            }
+            const map: Record<string, any> = {};
+            this.buildEmojiMapFromSet(fs, map);
+            if (!this.emojiStickerDocs) this.emojiStickerDocs = {};
+            let diceDoc: any = null;
+            if (docs.length > 0) {
+                diceDoc = docs.find((d: any) => {
+                    if (!d?.id) return false;
+                    const attrs = Array.isArray(d.attributes) ? d.attributes : [];
+                    const a = attrs.find((x: any) => x?._ === 'documentAttributeSticker' && typeof x.alt === 'string');
+                    return a && normalizeEmoji(a.alt) === key;
+                }) || null;
+            }
+            for (const [k, v] of Object.entries(map)) this.emojiStickerDocs[k] = v;
+            if (diceDoc?.id) this.emojiStickerDocs[key] = diceDoc;
+            this.indexEmojiDocs();
+            if (this.debug) log.info('[gram-media] dice set', emoji, 'docs =', docs.length, 'map =', Object.keys(map).length);
+            this.emitDiceSetsReady();
+            this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
+        } catch (e: any) {
+            if (this.debug) log.info('[gram-media] dice set error:', e?.message, emoji);
+            this.scheduleDiceSetRetry(emoji);
+        } finally {
+            this.diceSetsLoading.delete(key);
+        }
+    }
+
+    private maybeLoadDiceSetForAlt(alt: string): void {
+        const nAlt = normalizeEmoji(alt);
+        if (!nAlt || this.diceSetsByEmoji.has(nAlt)) return;
+        const emoji = this.diceEmojiFor(nAlt);
+        if (emoji == null) return;
+        void this.loadDiceSet(emoji);
+    }
+
+    private onRequestDiceSet = async (e: Event) => {
+        const { emoticon } = (e as CustomEvent).detail || {};
+        if (typeof emoticon !== 'string' || !emoticon) return;
+        const nAlt = normalizeEmoji(emoticon);
+        if (!nAlt || this.diceSetsByEmoji.has(nAlt) || this.diceSetsLoading.has(nAlt)) return;
+        const list = await this.diceEmoticonList();
+        if (!list.some((x) => normalizeEmoji(x) === nAlt)) {
+            if (this.debug) log.info('[gram-media] ignore tg-request-dice-set for non-dice emoji', emoticon);
+            return;
+        }
+        const emoji = this.diceEmojiFor(nAlt) ?? emoticon;
+        void this.loadDiceSet(emoji);
+    };
 
     private emitDiceSetsReady(): void {
         if (this.diceSetsByEmoji.size === 0) return;
@@ -583,6 +685,17 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
         if (Object.keys(sets).length === 0) return;
         this.router.emitWindow('tg-dice-sets-ready', { sets });
+    }
+
+    private scheduleEmojiStickersRetry(): void {
+        if (this.emojiStickersRetryTimer) return;
+        this.emojiStickersRetryCount++;
+        const delay = SPECIAL_SET_RETRY_MIN_MS + Math.floor(Math.random() * (SPECIAL_SET_RETRY_MAX_MS - SPECIAL_SET_RETRY_MIN_MS + 1));
+        if (this.debug) log.info('[gram-media] emoji stickers retry in ' + delay + 'ms (attempt ' + this.emojiStickersRetryCount + ')');
+        this.emojiStickersRetryTimer = setTimeout(() => {
+            this.emojiStickersRetryTimer = null;
+            void this.onFetchEmojiStickers();
+        }, delay);
     }
 
     private onFetchEmojiStickers = async () => {
@@ -609,10 +722,17 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 log.error('[gram-media] emoji fallback error:', e?.message || e);
             }
         }
+        if (Object.keys(map).length === 0) {
+            this.emojiStickersLoading = false;
+            this.scheduleEmojiStickersRetry();
+            return;
+        }
+        this.emojiStickersRetryCount = 0;
         this.emojiStickerDocs = map;
         this.indexEmojiDocs();
         this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
         this.flushPendingEmojiAlts();
+        this.emojiStickersLoading = false;
         void this.loadExtraEmojiSets(map);
     };
 
@@ -628,7 +748,6 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     log.error('[gram-media] extra emoji set error:', e?.message, inp);
                 }
             }));
-            await this.loadDiceSets(map);
         } catch (e: any) {
             log.error('[gram-media] extra emoji sets error:', e?.message || e);
         }
@@ -708,6 +827,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             if (fresh?.id && this.canRequestEmojiDoc(key)) {
                 this.requestedEmojiDocIds.add(key);
                 this.downloadEmojiDoc(fresh, key, priority);
+            } else {
             }
             return;
         }
@@ -724,6 +844,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             return;
         }
         if (this.hasNoStickerAlt(nAlt)) return;
+        this.maybeLoadDiceSetForAlt(alt);
         if (this.requestedEmojiAlts.has(nAlt)) return;
         if (!this.emojiStickerDocs || Object.keys(this.emojiStickerDocs).length === 0) {
             this.pendingEmojiAlts.set(nAlt, { alt, priority });
@@ -789,6 +910,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             } else if (it.alt != null) {
                 const nAlt = normalizeEmoji(it.alt);
                 if (nAlt && !this.hasNoStickerAlt(nAlt) && !this.requestedEmojiAlts.has(nAlt)) {
+                    this.maybeLoadDiceSetForAlt(it.alt);
                     unknownAlts.push({ alt: it.alt, nAlt, priority });
                 }
             }
@@ -919,6 +1041,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
 
         if (!this.emojiStickerDocs) this.router.emitWindow('tg-fetch-emoji-stickers');
+        this.maybeLoadDiceSetForAlt(alt);
         this.requestedEmojiAlts.add(nAlt);
         try {
             const res = await this.router.transport?.callRpc('messages.getStickers', { emoticon: alt, hash: 0 });
@@ -1121,6 +1244,9 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             this.cancelEmojiRetries();
             for (const t of this.emojiAltRetryTimers.values()) clearTimeout(t);
             this.emojiAltRetryTimers.clear();
+            for (const t of this.diceSetRetryTimers.values()) clearTimeout(t);
+            this.diceSetRetryTimers.clear();
+            this.diceSetsLoading.clear();
             this.dropEmojiUrlsGracefully();
             return;
         }
@@ -1150,6 +1276,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             ['tg-fetch-custom-emoji', this.onFetchCustomEmoji],
             ['tg-fetch-emoji-stickers', this.onFetchEmojiStickers],
             ['tg-fetch-emoji-picker', this.onFetchEmojiPicker],
+            ['tg-request-dice-set', this.onRequestDiceSet],
             ['tg-download-emoji', this.onDownloadEmoji],
             ['tg-download-emoji-batch', this.onDownloadEmojiBatch],
             ['tg-emoji-bad', this.onEmojiBad],
@@ -1168,6 +1295,9 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
         this.handlers = [];
         this.cancelEmojiRetries();
+        for (const t of this.diceSetRetryTimers.values()) clearTimeout(t);
+        this.diceSetRetryTimers.clear();
+        this.diceSetsLoading.clear();
         this.unknownRetryIds.clear();
         if (this.emojiReleaseGraceTimer != null) {
             clearTimeout(this.emojiReleaseGraceTimer);

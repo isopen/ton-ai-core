@@ -27,7 +27,7 @@ function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Prom
 }
 
 export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_queue' | 'tgs_queue';
-export const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 1, emoji_queue: 6, tgs_queue: 8 };
+export const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 1, emoji_queue: 12, tgs_queue: 8 };
 const DOC_DOWNLOAD_BATCH = 4;
 
 export class GramMediaRouter {
@@ -53,7 +53,7 @@ export class GramMediaRouter {
     private documentPending = new Set<number>();
     private downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number; mime: string; priority: number }>> = { video_queue: [], gif_queue: [], photo_queue: [], emoji_queue: [], tgs_queue: [] };
     private downloadInProgress: Record<QueueKey, number> = { video_queue: 0, gif_queue: 0, photo_queue: 0, emoji_queue: 0, tgs_queue: 0 };
-    private downloadQueueTimers = new Map<QueueKey, ReturnType<typeof setTimeout>>();
+    private downloadQueueMicrotasks = new Set<QueueKey>();
     private documentRetryCounts = new Map<number, number>();
     private documentRetryTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -317,9 +317,9 @@ export class GramMediaRouter {
         }
     }
 
-    async fetchStickerSet(key: string, stickerset: any): Promise<any> {
+    async fetchStickerSet(key: string, stickerset: any, forceRefresh = false): Promise<any> {
         const now = Date.now();
-        const cached = this.stickerSetCache.get(key);
+        const cached = forceRefresh ? undefined : this.stickerSetCache.get(key);
         const hash = cached && cached.expiresAt > now ? cached.hash : 0;
         let res: any;
         try {
@@ -330,15 +330,20 @@ export class GramMediaRouter {
         }
         if (res && (res._ === 'stickerSetNotModified' || res._ === 'messages.stickerSetNotModified')) {
             if (cached) {
-                cached.expiresAt = Date.now() + STICKER_SET_TTL_MS;
+                // TDLib: expires_at_ = now + random(30..50 min) on revalidation
+                cached.expiresAt = now + this.stickerSetTtlMs();
                 return cached.set;
             }
             return undefined;
         }
         if (res && Array.isArray(res?.documents)) {
-            this.stickerSetCache.set(key, { set: res, hash: Number(res.hash ?? 0), expiresAt: now + STICKER_SET_TTL_MS });
+            this.stickerSetCache.set(key, { set: res, hash: Number(res.hash ?? 0), expiresAt: now + this.stickerSetTtlMs() });
         }
         return res;
+    }
+
+    private stickerSetTtlMs(): number {
+        return STICKER_SET_TTL_MS + Math.floor(Math.random() * 20 * 60 * 1000);
     }
 
     async fetchEmojiStickersList(): Promise<any[]> {
@@ -354,11 +359,11 @@ export class GramMediaRouter {
                 throw err;
             }
             if (res && (res._ === 'allStickersNotModified' || res._ === 'messages.allStickersNotModified')) {
-                if (this.emojiStickersListCache) this.emojiStickersListCache.expiresAt = now + STICKER_SET_TTL_MS;
+                if (this.emojiStickersListCache) this.emojiStickersListCache.expiresAt = now + this.stickerSetTtlMs();
                 return this.emojiStickersListCache ? this.emojiStickersListCache.sets : [];
             }
             const sets = Array.isArray(res?.sets) ? res.sets : [];
-            this.emojiStickersListCache = { sets, hash: Number(res?.hash ?? 0), expiresAt: now + STICKER_SET_TTL_MS };
+            this.emojiStickersListCache = { sets, hash: Number(res?.hash ?? 0), expiresAt: now + this.stickerSetTtlMs() };
             return sets;
         })().finally(() => {
             this.emojiStickersListPending = null;
@@ -649,12 +654,12 @@ export class GramMediaRouter {
     }
 
     private scheduleDownloadQueue(queueKey: QueueKey): void {
-        const existing = this.downloadQueueTimers.get(queueKey);
-        if (existing) clearTimeout(existing);
-        this.downloadQueueTimers.set(queueKey, setTimeout(() => {
-            this.downloadQueueTimers.delete(queueKey);
+        if (this.downloadQueueMicrotasks.has(queueKey)) return;
+        this.downloadQueueMicrotasks.add(queueKey);
+        Promise.resolve().then(() => {
+            this.downloadQueueMicrotasks.delete(queueKey);
             this.processDownloadQueue(queueKey);
-        }, 40));
+        });
     }
 
     private processDownloadQueue(queueKey: QueueKey): void {
@@ -666,7 +671,7 @@ export class GramMediaRouter {
             for (let n = 0; n < batchSize; n++) {
                 let bestIdx = 0;
                 for (let i = 1; i < queue.length; i++) {
-                    if (queue[i].priority >= queue[bestIdx].priority) bestIdx = i;
+                    if (queue[i].priority > queue[bestIdx].priority) bestIdx = i;
                 }
                 items.push(queue.splice(bestIdx, 1)[0]);
             }
@@ -681,14 +686,15 @@ export class GramMediaRouter {
     private async execDownloadsBatch(items: Array<{ document: any; messageId: number | string; mime: string; priority: number }>, queueKey: QueueKey): Promise<void> {
         const gen = this.documentDownloadGen;
         try {
-            const videoItems = items.filter((it) => it.mime.startsWith('video/'));
+            const isEmoji = (it: { messageId: number | string }): boolean => typeof it.messageId === 'string' && this.isEmojiKey(String(it.messageId));
+            const videoItems = items.filter((it) => !isEmoji(it) && it.mime.startsWith('video/'));
             for (const it of videoItems) {
                 if (gen !== this.documentDownloadGen) return;
                 await this.execDownloadBody(it.document, it.messageId, it.mime);
             }
-            const rest = items.filter((it) => !it.mime.startsWith('video/'));
+            const rest = items.filter((it) => isEmoji(it) || !it.mime.startsWith('video/'));
             if (rest.length === 0) return;
-            if (rest.length === 1) {
+            if (rest.length === 1 && !isEmoji(rest[0])) {
                 await this.execDownloadBody(rest[0].document, rest[0].messageId, rest[0].mime);
                 return;
             }
@@ -713,6 +719,12 @@ export class GramMediaRouter {
                 if (!it) continue;
                 await this.processFileDownloadResult(it, r, gen);
             }
+            if (results.length === 0 && rest.length > 0) {
+                for (const it of rest) {
+                    if (gen !== this.documentDownloadGen) return;
+                    await this.processFileDownloadResult(it, { error: 'empty batch result' }, gen);
+                }
+            }
         } finally {
             for (const it of items) this.documentPending.delete(it.messageId as number);
         }
@@ -726,21 +738,19 @@ export class GramMediaRouter {
         if (gen !== this.documentDownloadGen) return;
         if (result?.bytes && result.bytes.byteLength > 0) {
             const bytes = this.toArrayBuffer(result.bytes);
-            const url = item.mime === 'application/x-tgsticker'
-                ? await this.tgsToJsonUrl(bytes)
-                : this.bytesToBlobUrl(bytes, item.mime);
+            const { kind, url } = await this.emojiKindAndUrlFor(bytes, item.mime);
             if (gen !== this.documentDownloadGen) return;
             if (typeof item.messageId === 'string' && this.isEmojiKey(item.messageId)) {
-                this.emoji.onEmojiDownloadSuccess(item.messageId.slice('emojipack-'.length), url);
+                this.emoji.onEmojiDownloadSuccess(item.messageId.slice('emojipack-'.length), url, kind);
             }
-            this.notifyEmojiUrlKind(url, this.emojiKindFor(item.mime));
-            this.notifyEmojiUrl(String(item.document.id), url, item.mime);
+            this.notifyEmojiUrlKind(url, kind);
+            this.notifyEmojiUrl(String(item.document.id), url, item.mime, kind);
             this.dispatchDocumentUrl(item.messageId, url, result.cacheSource);
             return;
         }
         const error = (result?.error || '') as string;
         if (typeof item.messageId === 'string' && this.isEmojiKey(item.messageId)) {
-            this.emoji.onEmojiDownloadFailed(item.messageId.slice('emojipack-'.length));
+            this.emoji.onEmojiDownloadFailed(item.messageId.slice('emojipack-'.length), error);
             return;
         }
         if (typeof item.messageId !== 'number') return;
@@ -776,12 +786,21 @@ export class GramMediaRouter {
         this.scheduleDocumentRetry(item.messageId, item.document);
     }
 
+    private announceDownloadedUrl(messageId: number | string, document: any, mime: string, url: string, cacheSource?: string): void {
+        if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
+            this.emoji.onEmojiDownloadSuccess(messageId.slice('emojipack-'.length), url);
+        }
+        this.notifyEmojiUrlKind(url, this.emojiKindFor(mime));
+        this.notifyEmojiUrl(String(document.id), url, mime);
+        this.dispatchDocumentUrl(messageId, url, cacheSource);
+    }
+
     private async execDownloadBody(document: any, messageId: number | string, mime: string): Promise<void> {
         const gen = this.documentDownloadGen;
         const attrs = (document.attributes || []) as any[];
         const isAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
 
-        if (mime.startsWith('video/') && typeof MediaSource !== 'undefined') {
+        if (mime.startsWith('video/') && typeof MediaSource !== 'undefined' && !this.isEmojiKey(String(messageId))) {
             let doc = document;
             for (let streamAttempt = 0; streamAttempt < 3; streamAttempt++) {
                 try {
@@ -824,7 +843,7 @@ export class GramMediaRouter {
                     const blob = new Blob([merged], { type: mime });
                     const url = URL.createObjectURL(blob);
                     if (gen !== this.documentDownloadGen) return;
-                    this.dispatchDocumentUrl(messageId, url, streamCacheSource);
+                    this.announceDownloadedUrl(messageId, doc, mime, url, streamCacheSource);
 
                     const u8 = new Uint8Array(chunks[0]);
                     const magic = Array.from(u8.slice(0, 12)).map(b => b.toString(16).padStart(2, '0')).join(' ');
@@ -843,7 +862,7 @@ export class GramMediaRouter {
                     try {
                         const fb = await this.transport?.downloadFile({ document: fbDoc });
                         if (gen !== this.documentDownloadGen) return;
-                        if (fb?.bytes) this.dispatchDocumentUrl(messageId, this.bytesToBlobUrl(this.toArrayBuffer(fb.bytes), mime), fb.cacheSource);
+                        if (fb?.bytes) this.announceDownloadedUrl(messageId, fbDoc, mime, this.bytesToBlobUrl(this.toArrayBuffer(fb.bytes), mime), fb.cacheSource);
                     } catch (e2: any) {
                         if (gen !== this.documentDownloadGen) return;
                         log.error('[gram-media] video stream fallback error:', e2.message, messageId);
@@ -854,7 +873,7 @@ export class GramMediaRouter {
                                 if (fresh?.media?.document) {
                                     const fb2 = await this.transport?.downloadFile({ document: fresh.media.document });
                                     if (gen !== this.documentDownloadGen) return;
-                                    if (fb2?.bytes) this.dispatchDocumentUrl(messageId, this.bytesToBlobUrl(this.toArrayBuffer(fb2.bytes), mime), fb2.cacheSource);
+                                    if (fb2?.bytes) this.announceDownloadedUrl(messageId, fresh.media.document, mime, this.bytesToBlobUrl(this.toArrayBuffer(fb2.bytes), mime), fb2.cacheSource);
                                 }
                             } catch (e3: any) {
                                 if (gen !== this.documentDownloadGen) return;
@@ -886,12 +905,7 @@ export class GramMediaRouter {
                         const url = mime === 'application/x-tgsticker'
                             ? await this.tgsToJsonUrl(bytes)
                             : this.bytesToBlobUrl(bytes, mime);
-                        if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
-                            this.emoji.onEmojiDownloadSuccess(messageId.slice('emojipack-'.length), url);
-                        }
-                        this.notifyEmojiUrlKind(url, this.emojiKindFor(mime));
-                        this.notifyEmojiUrl(String(document.id), url, mime);
-                        this.dispatchDocumentUrl(messageId, url, result.cacheSource);
+                        this.announceDownloadedUrl(messageId, document, mime, url, result.cacheSource);
                     } else if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
                         this.emoji.onEmojiDownloadFailed(messageId.slice('emojipack-'.length));
                     } else if (typeof messageId === 'number') {
@@ -917,12 +931,7 @@ export class GramMediaRouter {
                                 const url = m === 'application/x-tgsticker'
                                     ? await this.tgsToJsonUrl(bytes)
                                     : this.bytesToBlobUrl(bytes, m);
-                                if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
-                                    this.emoji.onEmojiDownloadSuccess(messageId.slice('emojipack-'.length), url);
-                                }
-                                this.notifyEmojiUrlKind(url, this.emojiKindFor(m));
-                                this.notifyEmojiUrl(String(freshMsg.media.document.id), url, m);
-                                this.dispatchDocumentUrl(messageId, url, retry.cacheSource);
+                                this.announceDownloadedUrl(messageId, freshMsg.media.document, m, url, retry.cacheSource);
                             }
                         }
                     } else if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
