@@ -9,8 +9,21 @@ import {
 function makeRouter(): { router: GramMediaRouter; actions: ReturnType<typeof makeHost>['actions']; setTransport: (t: any) => void } {
     const { host, actions, setTransport } = makeHost();
     const router = new GramMediaRouter(host);
+    liveRouters.push(router);
     return { router, actions, setTransport };
 }
+
+const liveRouters: GramMediaRouter[] = [];
+
+afterEach(() => {
+    while (liveRouters.length > 0) {
+        const r = liveRouters.pop();
+        if (!r) continue;
+        const cleanup = (r as any).host?.cleanupFns as Array<() => void> | undefined;
+        for (const fn of cleanup || []) fn();
+    }
+    jest.useRealTimers();
+});
 
 function makeStickerSet(id: string, alt: string, docId: string): any {
     const d = makeDocument({
@@ -32,41 +45,48 @@ function makeFtypMp4Bytes(): ArrayBuffer {
 
 describe('GramMediaRouter emoji pipeline', () => {
     test('loads sticker sets and indexes docs by id and alt', async () => {
-        const transport = makeTransport({
-            callRpc: async (method, params) => {
-                if (method === 'messages.getStickerSet') {
-                    const name = params?.stickerset?._ || '';
-                    if (name === 'inputStickerSetAnimatedEmoji') return makeStickerSet('1', '❤', '1001');
-                    if (name === 'inputStickerSetEmojiGenericAnimations') return makeStickerSet('2', '👍', '1002');
-                    if (name === 'inputStickerSetAnimatedEmojiAnimations') return makeStickerSet('3', '🔥', '1003');
-                    return { _: 'messages.stickerSet', set: {}, documents: [] };
-                }
-                if (method === 'messages.getEmojiStickers') return { sets: [], hash: 0 };
-                return {};
-            },
-        });
-        const { router, setTransport } = makeRouter();
-        setTransport(transport);
-        router.attach();
+        jest.useFakeTimers();
+        try {
+            const transport = makeTransport({
+                callRpc: async (method, params) => {
+                    if (method === 'messages.getStickerSet') {
+                        const name = params?.stickerset?._ || '';
+                        if (name === 'inputStickerSetAnimatedEmoji') return makeStickerSet('1', '❤', '1001');
+                        if (name === 'inputStickerSetEmojiGenericAnimations') return makeStickerSet('2', '👍', '1002');
+                        if (name === 'inputStickerSetAnimatedEmojiAnimations') return makeStickerSet('3', '🔥', '1003');
+                        return { _: 'messages.stickerSet', set: {}, documents: [] };
+                    }
+                    if (method === 'messages.getEmojiStickers') return { sets: [], hash: 0 };
+                    return {};
+                },
+            });
+            const { router, setTransport } = makeRouter();
+            setTransport(transport);
+            router.attach();
 
-        const readyEvents: any[] = [];
-        window.addEventListener('tg-emoji-stickers-ready', (e) => readyEvents.push((e as CustomEvent).detail));
+            const readyEvents: any[] = [];
+            window.addEventListener('tg-emoji-stickers-ready', (e) => readyEvents.push((e as CustomEvent).detail));
 
-        window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
-        await flushTicks();
-        await flushTicks();
+            window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
+            await jest.advanceTimersByTimeAsync(3_200);
+            await flushMicrotasks();
 
-        expect(router.emoji.findEmojiDoc('1001')).toBeTruthy();
-        expect(router.emoji.findEmojiDoc('1002')).toBeTruthy();
-        expect(router.emoji.findEmojiDoc('1003')).toBeTruthy();
-        expect(readyEvents.length).toBe(1);
-        const map = readyEvents[0]!.map as Record<string, string>;
-        expect(map['❤']).toBe('1001');
-        expect(map['👍']).toBe('1002');
+            expect(router.emoji.findEmojiDoc('1001')).toBeTruthy();
+            expect(router.emoji.findEmojiDoc('1002')).toBeTruthy();
+            expect(router.emoji.findEmojiDoc('1003')).toBeTruthy();
+            expect(readyEvents.length).toBe(2);
+            const map = readyEvents[readyEvents.length - 1]!.map as Record<string, string>;
+            expect(map['❤']).toBe('1001');
+            expect(map['👍']).toBe('1002');
+        } finally {
+            jest.useRealTimers();
+        }
     });
 
-    test('loads dice sticker sets from appConfig emojies_send_dice', async () => {
-        const diceCalls: Array<{ _: string; emoticon: string }> = [];
+    test('loads dice sticker sets on demand from appConfig emojies_send_dice', async () => {
+        jest.useFakeTimers();
+        try {
+            const diceCalls: Array<{ _: string; emoticon: string }> = [];
         const genericSet = {
             _: 'messages.stickerSet',
             set: { id: '2', access_hash: '1' },
@@ -109,12 +129,25 @@ describe('GramMediaRouter emoji pipeline', () => {
         window.addEventListener('tg-dice-sets-ready', (e) => diceSetEvents.push((e as CustomEvent).detail));
 
         window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
-        await flushTicks(6);
+        await jest.advanceTimersByTimeAsync(3_200);
+        await flushMicrotasks();
 
-        const calledSet = new Set(diceCalls.map((c) => c.emoticon));
-        expect(calledSet).toEqual(new Set(['🎲', '⚽', '🎯']));
-        expect(calledSet.size).toBe(3);
+        // TDLib: only animated_emoji is loaded at startup; dice sets load on demand
+        expect(diceCalls).toEqual([]);
+
+        window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '🎲' } }));
+        await flushMicrotasks();
+        expect(diceCalls.map((c) => c.emoticon)).toEqual(['🎲']);
+
+        window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '⚽' } }));
+        await flushMicrotasks();
+        expect(diceCalls.map((c) => c.emoticon)).toEqual(['🎲', '⚽']);
+
+        window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '🎯' } }));
+        await flushMicrotasks();
+        expect(diceCalls.map((c) => c.emoticon)).toEqual(['🎲', '⚽', '🎯']);
         expect(diceCalls.every((c) => c._ === 'inputStickerSetDice')).toBe(true);
+
         const map = readyEvents[readyEvents.length - 1]!.map as Record<string, string>;
         expect(map['🎯']).toBe('7' + '🎯'.codePointAt(0));
         expect(map['⚽']).toBe('7' + '⚽'.codePointAt(0));
@@ -125,6 +158,14 @@ describe('GramMediaRouter emoji pipeline', () => {
         const sets = diceSetEvents[0]!.sets as Record<string, { p: string; d: string[] }>;
         expect(sets['🎲'].p).toBeTruthy();
         expect(sets['🎲'].d).toContain(sets['🎲'].p);
+
+        // non-dice emoji must be ignored (TDLib validates against dice_emojis option)
+        window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '😀' } }));
+        await flushMicrotasks();
+        expect(diceCalls).toHaveLength(3);
+        } finally {
+            jest.useRealTimers();
+        }
     });
 
     test('indexes all dice set documents and downloads a result value directly without custom emoji RPC', async () => {
@@ -171,7 +212,7 @@ describe('GramMediaRouter emoji pipeline', () => {
 
         const diceSetEvents: any[] = [];
         window.addEventListener('tg-dice-sets-ready', (e) => diceSetEvents.push((e as CustomEvent).detail));
-        window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
+        window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '🎲' } }));
         await flushTicks(8);
 
         const base = '7' + '🎲'.codePointAt(0);
@@ -249,8 +290,10 @@ describe('GramMediaRouter emoji pipeline', () => {
         }
     });
 
-    test('falls back to DICE_SETS when appConfig is unavailable', async () => {
-        const diceCalls: Array<{ _: string; emoticon: string }> = [];
+    test('loads dice sets on demand, falling back to DICE_SETS when appConfig is unavailable', async () => {
+        jest.useFakeTimers();
+        try {
+            const diceCalls: Array<{ _: string; emoticon: string }> = [];
         const genericSet = {
             _: 'messages.stickerSet',
             set: { id: '2', access_hash: '1' },
@@ -291,9 +334,17 @@ describe('GramMediaRouter emoji pipeline', () => {
         window.addEventListener('tg-emoji-stickers-ready', (e) => readyEvents.push((e as CustomEvent).detail));
 
         window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
-        await flushTicks(6);
+        await jest.advanceTimersByTimeAsync(3_200);
+        await flushMicrotasks();
 
-        expect(diceCalls.length).toBeGreaterThanOrEqual(11);
+        expect(diceCalls).toEqual([]);
+
+        for (const e of ['🎯', '🏏', '⚽']) {
+            window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: e } }));
+        }
+        await flushMicrotasks();
+
+        expect(diceCalls.length).toBe(3);
         for (const c of diceCalls) {
             expect(c.emoticon).toMatch(/^[\p{Extended_Pictographic}]+$/u);
         }
@@ -302,6 +353,14 @@ describe('GramMediaRouter emoji pipeline', () => {
         expect(map['🏏']).toBeTruthy();
         expect(map['⚽']).toBe('7' + '⚽'.codePointAt(0));
         expect(map['⚽']).not.toBe('6001');
+
+        // emoji not present in the dice list is ignored
+        window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '🏓' } }));
+        await flushMicrotasks();
+        expect(diceCalls).toHaveLength(3);
+        } finally {
+            jest.useRealTimers();
+        }
     });
 
     test('resolves custom emoji documents via RPC', async () => {
@@ -404,19 +463,19 @@ describe('GramMediaRouter emoji pipeline', () => {
         const emojiDoc = makeDocument({ id: '3001', mime_type: 'video/mp4' });
         const transport = makeTransport({
             callRpc: async (method) => (method === 'messages.getCustomEmojiDocuments' ? [emojiDoc] : {}),
-            downloadFile: async () => ({ bytes: makeBytes(16), type: 'video/mp4' }),
+            downloadFiles: async () => [{ index: 0, type: 'video/mp4', bytes: makeBytes(16), cacheSource: 'home-server' }],
         });
         const { router, actions, setTransport } = makeRouter();
         setTransport(transport);
         router.attach();
 
-        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: ['3001'] } }));
-        await flushTicks();
-
         const urlEvents: any[] = [];
         window.addEventListener('tg-emoji-url', (e) => urlEvents.push((e as CustomEvent).detail));
         const kindEvents: any[] = [];
         window.addEventListener('tg-emoji-kind', (e) => kindEvents.push((e as CustomEvent).detail));
+
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: ['3001'] } }));
+        await flushTicks();
 
         window.dispatchEvent(new CustomEvent('tg-download-emoji', { detail: { docId: '3001', priority: 1 } }));
         await flushTicks();
@@ -683,6 +742,37 @@ describe('GramMediaRouter emoji pipeline', () => {
         } finally {
             jest.useRealTimers();
         }
+    });
+
+    test('refreshes emoji doc immediately on FILE_REFERENCE_EXPIRED (no backoff wait)', async () => {
+        const emojiDoc = makeDocument({ id: '5201', mime_type: 'video/mp4' });
+        let refreshed = 0;
+        const transport = makeTransport({
+            callRpc: async (method) => {
+                if (method === 'messages.getCustomEmojiDocuments') {
+                    refreshed++;
+                    return [emojiDoc];
+                }
+                return {};
+            },
+            downloadFile: async () => null,
+        });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: ['5201'] } }));
+        await flushTicks();
+
+        const downloadEvents: any[] = [];
+        window.addEventListener('tg-download-document', (e) => downloadEvents.push((e as CustomEvent).detail));
+
+        router.emoji.onEmojiDownloadFailed('5201', 'FILE_REFERENCE_EXPIRED');
+        await flushTicks();
+        await flushTicks();
+
+        expect(refreshed).toBeGreaterThanOrEqual(1);
+        expect(downloadEvents.some((d) => String(d.document?.id) === '5201')).toBe(true);
     });
 
     test('emoji url cache caps at 100 entries', () => {
