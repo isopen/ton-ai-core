@@ -460,6 +460,7 @@ function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: numb
 
   useEffect(() => {
     ensureEmojiStickers();
+    window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon } }));
     setDocId(getDiceDocId(emoticon, value));
     return subscribeDiceSets(() => setDocId(getDiceDocId(emoticon, value)));
   }, [emoticon, value]);

@@ -285,6 +285,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
 
   useEffect(() => {
     ensureEmojiStickers();
+    window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '🎰' } }));
     const update = () => {
       const next = getSlotLayerSpecs(value);
       setSpecs((prev) => (sameSpecs(prev, next) ? prev : next));
