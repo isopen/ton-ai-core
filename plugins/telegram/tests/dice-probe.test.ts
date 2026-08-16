@@ -28,7 +28,6 @@ test('messageMediaDice round-trips emoticon', () => {
     const boxed = d.readBoxedObject();
     const plain = deepConvert(boxed);
 
-    // eslint-disable-next-line no-console
     console.log('DECODED:', JSON.stringify(plain));
     expect(plain._).toBe('messageMediaDice');
     expect((plain as any).emoticon).toBe('🏀');
@@ -48,6 +47,5 @@ test('messageMediaDice nested inside a Message round-trips', () => {
     const mediaComb = registry.getConstructorsByName('messageMediaDice')[0];
     const mediaBody = new SchemaSerializer(registry).serializeCombinator(mediaComb, dice as any);
 
-    // eslint-disable-next-line no-console
     console.log('MEDIA SERIALIZED bytes:', mediaBody.length);
 });

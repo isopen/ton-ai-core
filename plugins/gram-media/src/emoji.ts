@@ -29,7 +29,6 @@ const ALT_RESOLVE_CONCURRENCY = 6;
 const EMOJI_NO_STICKER_ALT_TTL_MS = 60_000;
 const EMOJI_EXTRA_SETS_DELAY_MS = 3000;
 
-// TDLib: Random::fast(300, 600) — retry special sticker set loads forever
 const SPECIAL_SET_RETRY_MIN_MS = 300;
 const SPECIAL_SET_RETRY_MAX_MS = 600;
 
@@ -368,7 +367,6 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.emojiStaleDocs.add(docId);
         this.markEmojiDocAttempt(docId);
         if (error && error.includes('FILE_REFERENCE_EXPIRED')) {
-            // TDLib: refresh file_reference immediately (getCustomEmojiDocuments / sticker set reload), no backoff
             if (this.debug) log.info('[gram-media] emoji FILE_REFERENCE_EXPIRED, refreshing doc immediately', docId);
             void this.refreshDocAfterRefExpired(docId);
             return;

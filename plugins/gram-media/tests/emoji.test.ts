@@ -132,7 +132,6 @@ describe('GramMediaRouter emoji pipeline', () => {
         await jest.advanceTimersByTimeAsync(3_200);
         await flushMicrotasks();
 
-        // TDLib: only animated_emoji is loaded at startup; dice sets load on demand
         expect(diceCalls).toEqual([]);
 
         window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '🎲' } }));
@@ -159,7 +158,6 @@ describe('GramMediaRouter emoji pipeline', () => {
         expect(sets['🎲'].p).toBeTruthy();
         expect(sets['🎲'].d).toContain(sets['🎲'].p);
 
-        // non-dice emoji must be ignored (TDLib validates against dice_emojis option)
         window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '😀' } }));
         await flushMicrotasks();
         expect(diceCalls).toHaveLength(3);
@@ -354,7 +352,6 @@ describe('GramMediaRouter emoji pipeline', () => {
         expect(map['⚽']).toBe('7' + '⚽'.codePointAt(0));
         expect(map['⚽']).not.toBe('6001');
 
-        // emoji not present in the dice list is ignored
         window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '🏓' } }));
         await flushMicrotasks();
         expect(diceCalls).toHaveLength(3);

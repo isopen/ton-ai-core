@@ -330,7 +330,6 @@ export class GramMediaRouter {
         }
         if (res && (res._ === 'stickerSetNotModified' || res._ === 'messages.stickerSetNotModified')) {
             if (cached) {
-                // TDLib: expires_at_ = now + random(30..50 min) on revalidation
                 cached.expiresAt = now + this.stickerSetTtlMs();
                 return cached.set;
             }
