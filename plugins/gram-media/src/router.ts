@@ -1,4 +1,4 @@
-import { getLogger } from '@ton-ai/gram-debug';
+import { getLogger, isNoMediaCache } from '@ton-ai/gram-debug';
 import type { MediaHost, MediaTransport, MediaMessageLike, PhotoCacheProbeResult, EmojiKind } from './types.js';
 import type { EmojiPipeline } from './emoji.js';
 import { EmojiPipelineImpl } from './emoji.js';
@@ -110,6 +110,7 @@ export class GramMediaRouter {
     }
 
     injectCachedDocumentSources(msgs: MediaMessageLike[]): Promise<void> {
+        if (isNoMediaCache()) return Promise.resolve();
         const docToMsgs = new Map<string, number[]>();
         for (const m of this.probeWindow(msgs)) {
             const doc = m.media?.document;
@@ -134,6 +135,7 @@ export class GramMediaRouter {
     }
 
     prefetchPhotoCaches(msgs: MediaMessageLike[]): Promise<void> {
+        if (isNoMediaCache()) return Promise.resolve();
         const requests: Array<{ photo: any; sizeType: string }> = [];
         for (const m of this.probeWindow(msgs)) {
             const photo = m.media?.photo;
@@ -154,6 +156,7 @@ export class GramMediaRouter {
     }
 
     injectCachedPhotoUrls(msgs: MediaMessageLike[]): PhotoCacheProbeResult {
+        if (isNoMediaCache()) return { messages: msgs, cachedIds: [] };
         const cachedIds: number[] = [];
         const messages = msgs.map(m => {
             const photo = m.media?.photo;
@@ -183,10 +186,12 @@ export class GramMediaRouter {
     }
 
     getCachedEmojiUrl(key: string): string | undefined {
+        if (isNoMediaCache()) return undefined;
         return this.emojiUrlCache.get(key);
     }
 
     setCachedEmojiUrl(key: string, url: string): void {
+        if (isNoMediaCache()) return;
         if (this.emojiUrlCache.size >= 100) {
             for (const k of this.emojiUrlCache.keys()) {
                 this.emojiUrlCache.delete(k);
@@ -319,7 +324,7 @@ export class GramMediaRouter {
 
     async fetchStickerSet(key: string, stickerset: any, forceRefresh = false): Promise<any> {
         const now = Date.now();
-        const cached = forceRefresh ? undefined : this.stickerSetCache.get(key);
+        const cached = forceRefresh || isNoMediaCache() ? undefined : this.stickerSetCache.get(key);
         const hash = cached && cached.expiresAt > now ? cached.hash : 0;
         let res: any;
         try {
@@ -336,7 +341,9 @@ export class GramMediaRouter {
             return undefined;
         }
         if (res && Array.isArray(res?.documents)) {
-            this.stickerSetCache.set(key, { set: res, hash: Number(res.hash ?? 0), expiresAt: now + this.stickerSetTtlMs() });
+            if (!isNoMediaCache()) {
+                this.stickerSetCache.set(key, { set: res, hash: Number(res.hash ?? 0), expiresAt: now + this.stickerSetTtlMs() });
+            }
         }
         return res;
     }
@@ -348,7 +355,7 @@ export class GramMediaRouter {
     async fetchEmojiStickersList(): Promise<any[]> {
         if (this.emojiStickersListPending) return this.emojiStickersListPending;
         const now = Date.now();
-        const hash = this.emojiStickersListCache && this.emojiStickersListCache.expiresAt > now ? this.emojiStickersListCache.hash : 0;
+        const hash = !isNoMediaCache() && this.emojiStickersListCache && this.emojiStickersListCache.expiresAt > now ? this.emojiStickersListCache.hash : 0;
         const p = (async (): Promise<any[]> => {
             let res: any;
             try {
@@ -362,7 +369,9 @@ export class GramMediaRouter {
                 return this.emojiStickersListCache ? this.emojiStickersListCache.sets : [];
             }
             const sets = Array.isArray(res?.sets) ? res.sets : [];
-            this.emojiStickersListCache = { sets, hash: Number(res?.hash ?? 0), expiresAt: now + this.stickerSetTtlMs() };
+            if (!isNoMediaCache()) {
+                this.emojiStickersListCache = { sets, hash: Number(res?.hash ?? 0), expiresAt: now + this.stickerSetTtlMs() };
+            }
             return sets;
         })().finally(() => {
             this.emojiStickersListPending = null;
@@ -431,6 +440,7 @@ export class GramMediaRouter {
     }
 
     private photoUrlCacheSet(key: string, url: string): void {
+        if (isNoMediaCache()) return;
         if (this.photoUrlCache.has(key)) this.photoUrlCache.delete(key);
         this.photoUrlCache.set(key, url);
         while (this.photoUrlCache.size > PHOTO_URL_CACHE_MAX) {
@@ -457,7 +467,7 @@ export class GramMediaRouter {
         for (let i = this.photoQueue.length - 1; i >= 0; i--) {
             const item = this.photoQueue[i]!;
             const ck = this.getPhotoCacheKey(item.photo, item.sizeType);
-            const cached = this.photoUrlCache.get(ck);
+            const cached = isNoMediaCache() ? undefined : this.photoUrlCache.get(ck);
             if (cached) {
                 this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached });
                 continue;
@@ -482,7 +492,7 @@ export class GramMediaRouter {
         const RETRY_DELAYS = [1000, 3000, 5000];
         let currentPhoto = photo;
         const ck = this.getPhotoCacheKey(photo, sizeType);
-        const cached = this.photoUrlCache.get(ck);
+        const cached = isNoMediaCache() ? undefined : this.photoUrlCache.get(ck);
         if (cached) {
             this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: cached, cacheSource: 'memory' });
             return;
@@ -627,7 +637,7 @@ export class GramMediaRouter {
             return;
         }
         if (isEmoji) {
-            const cachedUrl = this.emojiUrlCache.get(messageId);
+            const cachedUrl = isNoMediaCache() ? undefined : this.emojiUrlCache.get(messageId);
             if (cachedUrl) {
                 this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
                 this.dispatchDocumentUrl(messageId, cachedUrl);

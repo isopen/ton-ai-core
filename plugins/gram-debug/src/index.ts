@@ -29,6 +29,10 @@ export function getConfig(): GramDebugConfig {
     return components.getConfig();
 }
 
+export function isNoMediaCache(): boolean {
+    return components.isNoMediaCache();
+}
+
 export function loadConfigFile(file?: string): GramDebugConfig {
     return loadConfig(file);
 }

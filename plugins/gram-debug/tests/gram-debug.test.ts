@@ -8,6 +8,7 @@ import {
     GramDebugPlugin,
     GramDebugSkills,
     isEnabled,
+    isNoMediaCache,
     loadConfig,
     resolveConfigFile,
     setScope,
@@ -190,6 +191,14 @@ describe('gram-debug', () => {
             const config = getConfig();
             const scopes = Object.keys(config.scopes || {});
             expect(scopes.length).toBeGreaterThan(0);
+        });
+
+        it('isNoMediaCache reflects the noMediaCache flag', () => {
+            const before = isNoMediaCache();
+            configure({ noMediaCache: true });
+            expect(isNoMediaCache()).toBe(true);
+            configure({ noMediaCache: false });
+            expect(isNoMediaCache()).toBe(before);
         });
 
         it('isEnabled works with and without level', () => {

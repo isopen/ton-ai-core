@@ -18,5 +18,6 @@ export interface ScopeConfig {
 export interface GramDebugConfig {
     enabled?: boolean;
     level?: LogLevel;
+    noMediaCache?: boolean;
     scopes?: Record<string, ScopeConfig>;
 }

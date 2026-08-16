@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 
+import { configure } from '@ton-ai/gram-debug';
 import { GramMediaRouter } from '../src/router.js';
 import {
     makeHost, makeTransport, makeDocument, makePhoto, makeBytes,
@@ -11,6 +12,43 @@ function makeRouter(): { router: GramMediaRouter; actions: ReturnType<typeof mak
     const router = new GramMediaRouter(host);
     return { router, actions, setTransport };
 }
+
+describe('GramMediaRouter noMediaCache flag', () => {
+    test('emoji URL cache is bypassed when the flag is on and works when it is off', () => {
+        const { router } = makeRouter();
+        configure({ noMediaCache: true });
+        try {
+            router.setCachedEmojiUrl('emojipack-1', 'blob:x');
+            expect(router.getCachedEmojiUrl('emojipack-1')).toBeUndefined();
+            expect(router.emojiUrlCacheKeys()).toHaveLength(0);
+        } finally {
+            configure({ noMediaCache: false });
+        }
+        router.setCachedEmojiUrl('emojipack-1', 'blob:x');
+        expect(router.getCachedEmojiUrl('emojipack-1')).toBe('blob:x');
+    });
+
+    test('photo downloads do not populate the photo URL cache when the flag is on', async () => {
+        const transport = makeTransport({
+            startPhotoDownload: async () => ({ bytes: makeBytes(64), mime: 'image/jpeg' }),
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+        configure({ noMediaCache: true });
+        try {
+            window.dispatchEvent(new CustomEvent('tg-download-photo', {
+                detail: { photo: makePhoto(), sizeType: 'm', messageId: 1 },
+            }));
+            await flushTicks();
+            expect(lastOfType(actions, 'UPDATE_MESSAGE_PHOTO')!.url).toMatch(/^blob:/);
+            const probe = router.injectCachedPhotoUrls([{ id: 1, media: { photo: makePhoto() } }]);
+            expect(probe.cachedIds).toHaveLength(0);
+        } finally {
+            configure({ noMediaCache: false });
+        }
+    });
+});
 
 describe('GramMediaRouter photos', () => {
     test('downloads photo and dispatches blob url with progress', async () => {

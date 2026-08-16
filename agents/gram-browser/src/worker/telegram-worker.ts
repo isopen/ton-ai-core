@@ -1,6 +1,6 @@
 import { Buffer } from 'buffer';
 import { crypton } from '@ton-ai/core';
-import { getLogger } from '@ton-ai/gram-debug';
+import { getLogger, isNoMediaCache } from '@ton-ai/gram-debug';
 import { AuthKeyCreator, DefaultPublicRsaKey } from '@ton-ai/mtproto';
 import { TLSerializer, TLDeserializer } from '@ton-ai/tl-language';
 import { TL_CONSTRUCTORS, TELEGRAM_WS_DC_OPTIONS } from '@ton-ai/telegram/dist/types';
@@ -3172,7 +3172,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         const baseKey = document?.id?.toString() || photo?.id?.toString() || '';
         const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : photo?.thumb_size ? `_thumb_${photo.thumb_size}` : '';
         const cacheKey = baseKey + thumbSuffix;
-        if (cacheKey) {
+        if (cacheKey && !isNoMediaCache()) {
             if (downloadCache.has(cacheKey)) {
                 const cached = downloadCacheGet(cacheKey)!;
                 wlog('[dl] cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey);
@@ -3315,7 +3315,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 const c2 = Buffer.from(r2.bytes || '', 'hex');
                 if (r2._ === 'upload.file' && c2.length > 0) {
                     const res2: DownloadResult = { type: t2, bytes: bufToAb(c2) };
-                    if (cacheKey) {
+                    if (cacheKey && !isNoMediaCache()) {
                         downloadCacheSet(cacheKey, { type: t2, bytes: c2.toString('base64') }, document?.mime_type);
                         persistDownloadCache(cacheKey, t2, c2.toString('base64'), document?.mime_type);
                     }
@@ -3327,7 +3327,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
         }
         const res: DownloadResult = { type: finalType, bytes: bufToAb(allBytes) };
-            if (cacheKey) {
+            if (cacheKey && !isNoMediaCache()) {
                 downloadCacheSet(cacheKey, { type: finalType, bytes: allBytes.toString('base64') }, document?.mime_type);
                 persistDownloadCache(cacheKey, finalType, allBytes.toString('base64'), document?.mime_type);
             }
@@ -3336,7 +3336,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
 
         let maxTotal = knownSize > 0 ? knownSize : MAX_FILE_SIZE;
         let nextPart = 1;
-        const usePartsResume = !!cacheKey && knownSize > 0 && knownSize > PART_SIZE;
+        const usePartsResume = !!cacheKey && !isNoMediaCache() && knownSize > 0 && knownSize > PART_SIZE;
         const resumed = usePartsResume ? await loadPersistedParts(cacheKey) : null;
         if (resumed && resumed.partSize !== PART_SIZE) {
             await clearPersistedParts(cacheKey);
@@ -3407,7 +3407,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
         }
         const res: DownloadResult = { type: finalType, bytes: bufToAb(allBytes), cacheSource: serverType };
-        if (cacheKey) {
+        if (cacheKey && !isNoMediaCache()) {
             if (resumed && resumed.parts.size > 0) await clearPersistedParts(cacheKey);
             downloadCacheSet(cacheKey, { type: finalType, bytes: allBytes.toString('base64') }, document?.mime_type);
             persistDownloadCache(cacheKey, finalType, allBytes.toString('base64'), document?.mime_type);
@@ -3429,7 +3429,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     const baseKey = document?.id?.toString() || '';
     const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : '';
     const cacheKey = baseKey + thumbSuffix;
-    if (cacheKey) {
+    if (cacheKey && !isNoMediaCache()) {
         if (downloadCache.has(cacheKey)) {
             const cached = downloadCacheGet(cacheKey)!;
             if (cached.type && cached.bytes && cached.bytes.length > 0) {
@@ -3590,7 +3590,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     }
     vlog('DONE chunks=' + cacheChunks.length + ' total=' + (cacheChunks.reduce((s, c) => s + c.byteLength, 0)) + ' in ' + (Date.now() - t0) + 'ms');
 
-    if (cacheKey && cacheChunks.length > 0) {
+    if (cacheKey && !isNoMediaCache() && cacheChunks.length > 0) {
         const allBytes = Buffer.concat(cacheChunks);
         const res = { type: finalType, bytes: allBytes.toString('base64'), cacheSource: serverType };
         if (res.bytes.length <= 20 * 1024 * 1024) {
@@ -3642,6 +3642,7 @@ self.onerror = (e: string | Event) => {
 
 export async function batchCheckPhotoCache(requests: Array<{ photo: any; sizeType: string }>): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
+  if (isNoMediaCache()) return result;
   for (const { photo, sizeType } of requests) {
     const photoWithThumb = { ...photo, thumb_size: sizeType };
     const location = buildDownloadLocation(undefined, photoWithThumb);
@@ -3668,6 +3669,7 @@ export async function batchCheckPhotoCache(requests: Array<{ photo: any; sizeTyp
 
 export async function batchCheckDocumentCache(documents: Array<{ id: string | number; thumb_size?: string }>): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
+  if (isNoMediaCache()) return result;
   for (const doc of documents) {
     const baseKey = doc?.id?.toString() || '';
     const thumbSuffix = doc?.thumb_size ? `_thumb_${doc.thumb_size}` : '';

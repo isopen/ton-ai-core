@@ -1,4 +1,4 @@
-import { getLogger } from '@ton-ai/gram-debug';
+import { getLogger, isNoMediaCache } from '@ton-ai/gram-debug';
 import { getGramDb } from '../utils/gram-db';
 
 const log = getLogger('gram-browser');
@@ -12,6 +12,7 @@ export async function setAvatarEncryptionKey(sessionId: string | null): Promise<
 }
 
 export async function getAvatarFromCache(key: string): Promise<string | null> {
+    if (isNoMediaCache()) return null;
     try {
         const val = await getGramDb().getAvatar(key);
         return val;
@@ -22,6 +23,7 @@ export async function getAvatarFromCache(key: string): Promise<string | null> {
 }
 
 export async function needAvatar(key: string): Promise<boolean> {
+    if (isNoMediaCache()) return true;
     const db = getGramDb();
     if (!db) return true;
     const cached = await db.getAvatar(key);
@@ -33,6 +35,7 @@ export async function needAvatar(key: string): Promise<boolean> {
 }
 
 export async function saveAvatarToCache(key: string, dataUri: string): Promise<void> {
+    if (isNoMediaCache()) return;
     try {
         await getGramDb().saveAvatar(key, dataUri);
     } catch (e: any) {
