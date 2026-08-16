@@ -559,7 +559,7 @@ const dcConnectionPool: DcConnection[] = [];
 
 let dcDhInFlight = Promise.resolve();
 
-const MAX_DC_PARALLEL_RPC = 6;
+const MAX_DC_PARALLEL_RPC = 64;
 const dcRpcSlots = new Map<number, number>();
 const dcRpcWaiters: Array<{ dcId: number; enter: () => void }> = [];
 
@@ -2775,10 +2775,6 @@ function normalizePriority(p: number): number {
     return Math.min(TDLIB_PRIORITY_MAX, Math.max(TDLIB_PRIORITY_MIN, Math.round(p)));
 }
 
-const uploadSemMax = 6;
-let uploadSemActive = 0;
-const uploadSemQueue: Array<() => void> = [];
-
 const UPLOAD_GAP_START_MS = 50;
 const UPLOAD_GAP_DECAY = 0.8;
 const UPLOAD_GAP_MIN_MS = 3;
@@ -2802,18 +2798,6 @@ function createDelayDispatcher(): { pace: () => Promise<void> } {
     };
 }
 
-function acquireUploadSem(): Promise<void> {
-    if (uploadSemActive < uploadSemMax) {
-        uploadSemActive++;
-        return Promise.resolve();
-    }
-    return new Promise<void>(r => { uploadSemQueue.push(r); });
-}
-function releaseUploadSem(): void {
-    if (uploadSemQueue.length > 0) uploadSemQueue.shift()!();
-    else { uploadSemActive--; }
-}
-
 function acquireSmallUploadSem(): void {
     smallUploadActive++;
 }
@@ -2826,9 +2810,7 @@ function releaseSmallUploadSem(): void {
 
 async function runWithSem<T>(fn: () => Promise<T>, small = false): Promise<T> {
     if (!small) {
-        await acquireUploadSem();
-        try { return await fn(); }
-        finally { releaseUploadSem(); }
+        return fn();
     }
     if (smallUploadActive >= SMALL_UPLOAD_MAX) {
         await new Promise<void>(r => smallUploadQueue.push(r));
@@ -3114,7 +3096,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             const cachedChunk = resumed?.parts.get(partIdx);
             if (cachedChunk) return cachedChunk;
             let lastErr: any = new Error('Part download failed idx=' + partIdx);
-            for (let attempt = 0; attempt < 3; attempt++) {
+            for (let attempt = 0; attempt < 5; attempt++) {
                 try {
                     const r = await poolCall(() => doCall(BigInt(partIdx * PART_SIZE), PART_SIZE));
                     if (r._ === 'upload.file') {
@@ -3136,7 +3118,6 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 }
                 if (genRef && genRef.value !== photoDownloadGen) throw new Error('ABORTED');
                 wlog('[dl] part retry id=' + id + ' label=' + label + ' idx=' + partIdx + ' attempt=' + (attempt + 1) + ' err=' + ((lastErr as Error)?.message || lastErr));
-                await new Promise(r => setTimeout(r, Math.min(1000 * (attempt + 1), 3000)));
             }
             throw lastErr;
         };

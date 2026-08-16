@@ -175,7 +175,7 @@ describe('GramMediaRouter photos', () => {
         }
     });
 
-    test('limits parallel photo downloads to 2', async () => {
+    test('limits parallel photo downloads to MAX_PARALLEL_PHOTOS', async () => {
         const resolvers: Array<() => void> = [];
         const transport = makeTransport({
             startPhotoDownload: async () => new Promise((resolve) => {
@@ -186,25 +186,21 @@ describe('GramMediaRouter photos', () => {
         setTransport(transport);
         router.attach();
 
-        for (let i = 1; i <= 4; i++) {
+        for (let i = 1; i <= 17; i++) {
             window.dispatchEvent(new CustomEvent('tg-download-photo', {
                 detail: { photo: makePhoto({ id: 'p' + i }), sizeType: 'm', messageId: i },
             }));
         }
         await flushTicks();
 
-        expect(resolvers.length).toBe(2);
+        expect(resolvers.length).toBe(16);
         resolvers[0]!();
         await flushTicks();
-        expect(resolvers.length).toBe(3);
-        resolvers[1]!();
-        resolvers[2]!();
-        await flushTicks();
-        expect(resolvers.length).toBe(4);
-        resolvers[3]!();
+        expect(resolvers.length).toBe(17);
+        for (let i = 1; i <= 16; i++) resolvers[i]!();
         await flushTicks();
 
-        expect(actionsOfType(actions, 'UPDATE_MESSAGE_PHOTO')).toHaveLength(4);
+        expect(actionsOfType(actions, 'UPDATE_MESSAGE_PHOTO')).toHaveLength(17);
     });
 
     test('injects cached photo urls and reports cachedIds', () => {

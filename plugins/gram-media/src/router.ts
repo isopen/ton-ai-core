@@ -12,7 +12,7 @@ const PROBE_LRU_MAX = 600;
 const MAX_ACTIVE_BLOB_URLS = 1024;
 const TGS_JSON_TTL_MS = 30 * 60 * 1000;
 const STICKER_SET_TTL_MS = 30 * 60 * 1000;
-const MAX_PARALLEL_PHOTOS = 2;
+const MAX_PARALLEL_PHOTOS = 16;
 const PHOTO_DOWNLOAD_DEADLINE_MS = 60_000;
 const PHOTO_REFRESH_TIMEOUT_MS = 20_000;
 
@@ -27,7 +27,7 @@ function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Prom
 }
 
 export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_queue' | 'tgs_queue';
-export const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 1, emoji_queue: 12, tgs_queue: 8 };
+export const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 4, emoji_queue: 12, tgs_queue: 8 };
 const DOC_DOWNLOAD_BATCH = 4;
 
 export class GramMediaRouter {
