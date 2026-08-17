@@ -222,6 +222,97 @@ describe('GramMediaRouter photos', () => {
     });
 });
 
+describe('GramMediaRouter avatars', () => {
+    test('routes avatar requests to a separate queue not limited by MAX_PARALLEL_PHOTOS', async () => {
+        const photoResolvers: Array<() => void> = [];
+        const avatarResolvers: Array<() => void> = [];
+        const transport = makeTransport({
+            startPhotoDownload: async (photo: any, sizeType: string, messageId: number | string) =>
+                new Promise((resolve) => {
+                    if (typeof messageId === 'string' && messageId.startsWith('avatar_')) {
+                        avatarResolvers.push(() => resolve({ bytes: makeBytes(16), mime: 'image/jpeg' }));
+                    } else {
+                        photoResolvers.push(() => resolve({ bytes: makeBytes(16), mime: 'image/jpeg' }));
+                    }
+                }),
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        for (let i = 1; i <= 17; i++) {
+            window.dispatchEvent(new CustomEvent('tg-download-photo', {
+                detail: { photo: makePhoto({ id: 'p' + i }), sizeType: 'm', messageId: i },
+            }));
+        }
+        for (let i = 1; i <= 33; i++) {
+            window.dispatchEvent(new CustomEvent('tg-download-photo', {
+                detail: { photo: makePhoto({ id: 'a' + i }), sizeType: 'm', messageId: 'avatar_user_' + i },
+            }));
+        }
+        await flushTicks();
+
+        expect(photoResolvers.length).toBe(16);
+        expect(avatarResolvers.length).toBe(32);
+
+        photoResolvers[0]!();
+        await flushTicks();
+        expect(photoResolvers.length).toBe(17);
+
+        avatarResolvers[0]!();
+        await flushTicks();
+        expect(avatarResolvers.length).toBe(33);
+
+        for (const r of [...photoResolvers, ...avatarResolvers]) r();
+        await flushTicks();
+        expect(actionsOfType(actions, 'UPDATE_MESSAGE_PHOTO')).toHaveLength(50);
+    });
+
+    test('dedupes avatar requests per messageId+sizeType+photo id', async () => {
+        const resolvers: Array<() => void> = [];
+        const transport = makeTransport({
+            startPhotoDownload: async () => new Promise((resolve) => {
+                resolvers.push(() => resolve({ bytes: makeBytes(16), mime: 'image/jpeg' }));
+            }),
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        for (let i = 0; i < 3; i++) {
+            window.dispatchEvent(new CustomEvent('tg-download-photo', {
+                detail: { photo: makePhoto({ id: 'a1' }), sizeType: 'm', messageId: 'avatar_user_1' },
+            }));
+        }
+        await flushTicks();
+
+        expect(resolvers.length).toBe(1);
+        resolvers[0]!();
+        await flushTicks();
+        expect(actionsOfType(actions, 'UPDATE_MESSAGE_PHOTO')).toHaveLength(1);
+    });
+
+    test('serves repeated avatar requests from memory cache', async () => {
+        const transport = makeTransport({
+            startPhotoDownload: async () => ({ bytes: makeBytes(16), mime: 'image/jpeg' }),
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        for (let i = 0; i < 2; i++) {
+            window.dispatchEvent(new CustomEvent('tg-download-photo', {
+                detail: { photo: makePhoto({ id: 'a1' }), sizeType: 'm', messageId: 'avatar_user_1' },
+            }));
+        }
+        await flushTicks();
+        await flushTicks();
+
+        expect(actionsOfType(actions, 'UPDATE_MESSAGE_PHOTO')).toHaveLength(1);
+        expect(lastOfType(actions, 'UPDATE_MESSAGE_PHOTO')!.url).toMatch(/^blob:/);
+    });
+});
+
 describe('GramMediaRouter documents', () => {
     test('downloads non-video document and dispatches url', async () => {
         const transport = makeTransport({

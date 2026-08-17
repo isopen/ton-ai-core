@@ -13,9 +13,11 @@ const MAX_ACTIVE_BLOB_URLS = 1024;
 const TGS_JSON_TTL_MS = 30 * 60 * 1000;
 const STICKER_SET_TTL_MS = 30 * 60 * 1000;
 const MAX_PARALLEL_PHOTOS = 16;
+const MAX_PARALLEL_AVATARS = 32;
 const PHOTO_DOWNLOAD_DEADLINE_MS = 60_000;
 const PHOTO_REFRESH_TIMEOUT_MS = 20_000;
 const PHOTO_QUEUED_KEYS_MAX = 512;
+const AVATAR_REDISPATCH_DELAY_MS = 10_000;
 
 function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -45,6 +47,10 @@ export class GramMediaRouter {
     private photoQueuedKeys = new Set<string>();
     private photoInFlight = 0;
     private photoInFlightByKey = new Set<string>();
+    private avatarQueue: Array<{ photo: any; sizeType: string; messageId: string }> = [];
+    private avatarQueuedKeys = new Set<string>();
+    private avatarInFlight = 0;
+    private avatarInFlightByKey = new Set<string>();
 
     private stickerSetCache = new Map<string, { set: any; hash: number; expiresAt: number }>();
     private emojiStickersListCache: { sets: any[]; hash: number; expiresAt: number } | null = null;
@@ -83,6 +89,18 @@ export class GramMediaRouter {
         const onDownloadPhoto = (e: Event) => {
             const { photo, sizeType, messageId } = (e as CustomEvent).detail || {};
             if (!photo || !sizeType || messageId == null) return;
+            if (typeof messageId === 'string' && messageId.startsWith('avatar_')) {
+                const dk = messageId + '_' + sizeType + '_' + (photo?.id ?? '');
+                if (this.avatarQueuedKeys.has(dk)) return;
+                this.avatarQueuedKeys.add(dk);
+                if (this.avatarQueuedKeys.size > PHOTO_QUEUED_KEYS_MAX) {
+                    const first = this.avatarQueuedKeys.values().next().value;
+                    if (first !== undefined) this.avatarQueuedKeys.delete(first);
+                }
+                this.avatarQueue.push({ photo, sizeType, messageId });
+                this.processAvatarQueue();
+                return;
+            }
             const dk = String(messageId) + '_' + sizeType + '_' + (photo?.id ?? '');
             if (this.photoQueuedKeys.has(dk)) return;
             this.photoQueuedKeys.add(dk);
@@ -501,6 +519,33 @@ export class GramMediaRouter {
         this.photoQueue = stillPending;
     }
 
+    private processAvatarQueue(): void {
+        const stillPending: Array<{ photo: any; sizeType: string; messageId: string }> = [];
+        for (let i = this.avatarQueue.length - 1; i >= 0; i--) {
+            const item = this.avatarQueue[i]!;
+            const ck = this.getPhotoCacheKey(item.photo, item.sizeType);
+            const cached = isNoMediaCache() ? undefined : this.photoUrlCache.get(ck);
+            if (cached) {
+                this.avatarQueuedKeys.delete(item.messageId + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
+                this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached });
+                continue;
+            }
+            if (this.avatarInFlightByKey.has(ck) || this.avatarInFlight >= MAX_PARALLEL_AVATARS) {
+                stillPending.push(item);
+                continue;
+            }
+            this.avatarInFlightByKey.add(ck);
+            this.avatarInFlight++;
+            this.execPhotoDownload(item.photo, item.sizeType, item.messageId).finally(() => {
+                this.avatarInFlight--;
+                this.avatarInFlightByKey.delete(ck);
+                this.avatarQueuedKeys.delete(item.messageId + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
+                this.processAvatarQueue();
+            });
+        }
+        this.avatarQueue = stillPending;
+    }
+
     private async execPhotoDownload(photo: any, sizeType: string, messageId: number | string): Promise<void> {
         const MAX_RETRIES = 3;
         const RETRY_DELAYS = [1000, 3000, 5000];
@@ -514,20 +559,14 @@ export class GramMediaRouter {
 
         this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_PROGRESS', messageId, progress: 0 });
 
-        const deadline = Date.now() + PHOTO_DOWNLOAD_DEADLINE_MS;
+        const ATTEMPT_TIMEOUT_MS = PHOTO_DOWNLOAD_DEADLINE_MS;
+        const isAvatar = typeof messageId === 'string' && messageId.startsWith('avatar_');
+        const requeuePhoto = isAvatar ? currentPhoto : null;
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-            if (Date.now() >= deadline) {
-                this.failPhotoDownload(messageId, sizeType);
-                return;
-            }
             if (attempt > 0) {
                 if (this.debug) log.info('[gram-media] retrying photo download', messageId, sizeType, 'attempt', attempt);
                 await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt - 1]));
-            }
-            if (Date.now() >= deadline) {
-                this.failPhotoDownload(messageId, sizeType);
-                return;
             }
 
             try {
@@ -542,8 +581,8 @@ export class GramMediaRouter {
                         lastProgressAt = now;
                         this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_PROGRESS', messageId, progress: pct });
                     }) || Promise.resolve(null),
-                    Math.max(1000, deadline - Date.now()),
-                    'photo download deadline exceeded'
+                    ATTEMPT_TIMEOUT_MS,
+                    'photo download attempt timeout'
                 );
 
                 if (result?.bytes?.byteLength && result.mime) {
@@ -569,17 +608,13 @@ export class GramMediaRouter {
                     } catch (e: any) {
                         log.error('[gram-media] photo message refresh failed for message', messageId, e?.message || e);
                     }
-                    if (Date.now() >= deadline) {
-                        this.failPhotoDownload(messageId, sizeType);
-                        return;
-                    }
                     if (freshMsg?.media?.photo) {
                         currentPhoto = freshMsg.media.photo;
                         this.host.dispatch({ type: 'REFRESH_MESSAGE_PHOTO', messageId, photo: currentPhoto });
                         continue;
                     } else {
                         log.error('[gram-media] could not refresh photo for message', messageId);
-                        this.failPhotoDownload(messageId, sizeType);
+                        this.failPhotoDownload(messageId, sizeType, requeuePhoto);
                         return;
                     }
                 }
@@ -600,17 +635,13 @@ export class GramMediaRouter {
                     } catch (e: any) {
                         log.error('[gram-media] photo message refresh failed for message', messageId, e?.message || e);
                     }
-                    if (Date.now() >= deadline) {
-                        this.failPhotoDownload(messageId, sizeType);
-                        return;
-                    }
                     if (freshMsg?.media?.photo) {
                         currentPhoto = freshMsg.media.photo;
                         this.host.dispatch({ type: 'REFRESH_MESSAGE_PHOTO', messageId, photo: currentPhoto });
                         continue;
                     } else {
                         log.error('[gram-media] could not refresh photo for message', messageId);
-                        this.failPhotoDownload(messageId, sizeType);
+                        this.failPhotoDownload(messageId, sizeType, requeuePhoto);
                         return;
                     }
                 }
@@ -620,13 +651,19 @@ export class GramMediaRouter {
                 }
             }
         }
-        this.failPhotoDownload(messageId, sizeType);
+        this.failPhotoDownload(messageId, sizeType, requeuePhoto);
     }
 
-    private failPhotoDownload(messageId: number | string, sizeType: string): void {
+    private failPhotoDownload(messageId: number | string, sizeType: string, requeuePhoto?: any): void {
         if (this.debug) log.info('[gram-media] photo download FAILED, dispatching error', messageId, sizeType);
         this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_FAILED', messageId, sizeType });
         this.emitWindow('tg-photo-download-failed', { messageId, sizeType });
+        if (requeuePhoto) {
+            if (this.debug) log.info('[gram-media] avatar download exhausted, re-queueing', messageId, sizeType);
+            setTimeout(() => {
+                this.emitWindow('tg-download-photo', { photo: requeuePhoto, sizeType, messageId });
+            }, AVATAR_REDISPATCH_DELAY_MS);
+        }
     }
 
     private isEmojiKey(s: string): boolean {

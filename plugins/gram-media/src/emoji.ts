@@ -15,6 +15,7 @@ export interface EmojiPipeline {
 type EmojiDocKind = EmojiKind;
 
 const EMOJI_MAX_ATTEMPTS = 5;
+const EMOJI_IN_FLIGHT_TTL_MS = 45_000;
 
 const EMOJI_ATTEMPT_TTL = 120_000;
 
@@ -57,6 +58,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiDocsById = new Map<string, any>();
     private emojiStickersLoading = false;
     private requestedEmojiDocIds = new Set<string>();
+    private emojiInFlightSince = new Map<string, number>();
     private requestedEmojiAlts = new Set<string>();
     private pendingEmojiAlts = new Map<string, { alt: string; priority: number }>();
     private announcedEmojiDocKinds = new Map<string, EmojiDocKind>();
@@ -92,10 +94,34 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     }
 
     private canRequestEmojiDoc(id: string): boolean {
-        if (this.requestedEmojiDocIds.has(id)) return false;
+        if (this.requestedEmojiDocIds.has(id)) {
+            if (this.unstickEmojiDocIfStale(id)) {
+                if (this.debug) log.warn('[gram-media] emoji in-flight stale, re-requesting', id);
+            } else {
+                return false;
+            }
+        }
         if ((this.emojiDocAttempts.get(id) || 0) >= EMOJI_MAX_ATTEMPTS) return false;
         const bannedAt = this.emojiStubDocIds.get(id);
         if (bannedAt != null) return Date.now() - bannedAt > EMOJI_STUB_BAN_MS;
+        return true;
+    }
+
+    private markEmojiDocInFlight(id: string): void {
+        this.requestedEmojiDocIds.add(id);
+        this.emojiInFlightSince.set(id, Date.now());
+    }
+
+    private clearEmojiInFlight(id: string): void {
+        this.requestedEmojiDocIds.delete(id);
+        this.emojiInFlightSince.delete(id);
+    }
+
+    private unstickEmojiDocIfStale(id: string): boolean {
+        const since = this.emojiInFlightSince.get(id);
+        if (since == null) return false;
+        if (Date.now() - since <= EMOJI_IN_FLIGHT_TTL_MS) return false;
+        this.clearEmojiInFlight(id);
         return true;
     }
 
@@ -112,7 +138,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     }
 
     private markEmojiDocAttempt(id: string): void {
-        this.requestedEmojiDocIds.delete(id);
+        this.clearEmojiInFlight(id);
         this.emojiDocAttempts.set(id, (this.emojiDocAttempts.get(id) || 0) + 1);
     }
 
@@ -266,7 +292,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     changed = true;
                 }
                 if (this.canRequestEmojiDoc(id)) {
-                    this.requestedEmojiDocIds.add(id);
+                    this.markEmojiDocInFlight(id);
                     toDownload.push({ id, doc, priority: 1 });
                 }
             }
@@ -338,11 +364,11 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private downloadEmojiDoc(doc: any, docId: string, priority: number): void {
         if (isStubEmojiDoc(doc)) {
             this.markEmojiDocStub(docId);
-            this.requestedEmojiDocIds.delete(docId);
+            this.clearEmojiInFlight(docId);
             if (this.debug) log.info('[gram-media] skip download of stub emoji doc', docId);
             return;
         }
-        this.requestedEmojiDocIds.add(docId);
+        this.markEmojiDocInFlight(docId);
         this.notifyCustomEmojiAlt(doc);
         this.indexEmojiDocs();
         this.router.emitWindow('tg-download-document', {
@@ -354,7 +380,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         const doc = this.findEmojiDoc(docId);
         const mime = (doc?.mime_type || 'application/octet-stream').toLowerCase();
         this.router.setCachedEmojiUrl('emojipack-' + docId, url);
-        this.requestedEmojiDocIds.delete(docId);
+        this.clearEmojiInFlight(docId);
         this.resetEmojiAttempts(docId);
         if (kindOverride) {
             this.announceEmojiDocKind(docId, kindOverride);
@@ -381,7 +407,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             await this.loadDiceSet(emoji, true);
             const doc = this.findEmojiDoc(docId);
             if (doc?.id && this.canRequestEmojiDoc(docId)) {
-                this.requestedEmojiDocIds.add(docId);
+                this.markEmojiDocInFlight(docId);
                 this.downloadEmojiDoc(doc, docId, 2);
                 return;
             }
@@ -390,7 +416,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
         const fresh = await this.fetchFreshEmojiDoc(docId);
         if (fresh?.id && this.canRequestEmojiDoc(docId)) {
-            this.requestedEmojiDocIds.add(docId);
+            this.markEmojiDocInFlight(docId);
             this.downloadEmojiDoc(fresh, docId, 2);
             return;
         }
@@ -816,14 +842,14 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         if (key && !this.canRequestEmojiDoc(key)) return;
         let doc = key ? this.findEmojiDoc(key) : undefined;
         if (doc && key && !this.emojiStaleDocs.has(key)) {
-            this.requestedEmojiDocIds.add(key);
+            this.markEmojiDocInFlight(key);
             this.downloadEmojiDoc(doc, key, priority);
             return;
         }
         if (key && this.emojiStaleDocs.has(key)) {
             const fresh = await this.fetchFreshEmojiDoc(key);
             if (fresh?.id && this.canRequestEmojiDoc(key)) {
-                this.requestedEmojiDocIds.add(key);
+                this.markEmojiDocInFlight(key);
                 this.downloadEmojiDoc(fresh, key, priority);
             } else {
             }
@@ -836,7 +862,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         if (doc?.id) {
             const id = String(doc.id);
             if (this.canRequestEmojiDoc(id)) {
-                this.requestedEmojiDocIds.add(id);
+                this.markEmojiDocInFlight(id);
                 this.downloadEmojiDoc(doc, id, priority);
             }
             return;
@@ -866,7 +892,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             const id = String(resolved.id);
             readyEntries.push({ alt: nAlt, docId: id });
             if (this.canRequestEmojiDoc(id)) {
-                this.requestedEmojiDocIds.add(id);
+                this.markEmojiDocInFlight(id);
                 this.downloadEmojiDoc(resolved, id, priority);
             }
         } catch (err: any) {
@@ -899,7 +925,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 const id = String(doc.id);
                 this.notifyEmojiDocKind(id, doc?.mime_type || '');
                 if (this.canRequestEmojiDoc(id)) {
-                    this.requestedEmojiDocIds.add(id);
+                    this.markEmojiDocInFlight(id);
                     this.notifyCustomEmojiAlt(doc);
                     resolved.push({ id, doc, priority });
                 }
@@ -947,7 +973,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     changed = true;
                 }
                 if (this.canRequestEmojiDoc(id)) {
-                    this.requestedEmojiDocIds.add(id);
+                    this.markEmojiDocInFlight(id);
                     list.push({ id, doc, priority: 0 });
                 }
             }
@@ -1026,7 +1052,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             this.requestedEmojiAlts.delete(nAlt);
             this.emojiNoStickerAlts.delete(nAlt);
             if (this.canRequestEmojiDoc(id)) {
-                this.requestedEmojiDocIds.add(id);
+                this.markEmojiDocInFlight(id);
                 return { id, doc, priority };
             }
             return null;
@@ -1058,7 +1084,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             this.requestedEmojiAlts.delete(nAlt);
             const id = String(doc.id);
             if (this.canRequestEmojiDoc(id)) {
-                this.requestedEmojiDocIds.add(id);
+                this.markEmojiDocInFlight(id);
                 return { id, doc, priority };
             }
             return null;
@@ -1126,7 +1152,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         for (const r of resolved) {
             if (isStubEmojiDoc(r.doc)) {
                 this.markEmojiDocStub(r.id);
-                this.requestedEmojiDocIds.delete(r.id);
+                this.clearEmojiInFlight(r.id);
                 if (this.debug) log.info('[gram-media] emoji batch SKIP stub', r.id);
                 continue;
             }
@@ -1222,13 +1248,13 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.emojiBadDocIds.set(id, now);
         if (this.debug) log.warn('[gram-media] emoji bad url, re-downloading fresh', id, url ? url.slice(0, 48) : '');
         this.router.notifyEmojiUrlRevoked(url);
-        this.requestedEmojiDocIds.delete(id);
+        this.clearEmojiInFlight(id);
         this.emojiStaleDocs.add(id);
         this.router.deleteCachedEmojiUrl('emojipack-' + id);
         this.router.deleteCachedEmojiUrl('emoji-' + id);
         const doc = this.findEmojiDoc(id);
         if (!doc || !this.canRequestEmojiDoc(id)) return;
-        this.requestedEmojiDocIds.add(id);
+        this.markEmojiDocInFlight(id);
         this.router.emitWindow('tg-download-emoji', { docId: id, priority: 3 });
     };
 
@@ -1250,6 +1276,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         const { docIds, all } = (e as CustomEvent).detail || {};
         if (all) {
             this.requestedEmojiDocIds.clear();
+            this.emojiInFlightSince.clear();
             this.requestedEmojiAlts.clear();
             this.pendingEmojiAlts.clear();
             this.emojiDocAttempts.clear();
@@ -1266,7 +1293,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         if (Array.isArray(docIds)) {
             for (const d of docIds) {
                 const id = String(d);
-                this.requestedEmojiDocIds.delete(id);
+                this.clearEmojiInFlight(id);
                 this.emojiDocAttempts.delete(id);
                 this.router.revokeBlobUrl(this.router.getCachedEmojiUrl('emojipack-' + id));
                 this.router.revokeBlobUrl(this.router.getCachedEmojiUrl('emoji-' + id));

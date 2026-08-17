@@ -36,7 +36,7 @@ describe('GramMediaRouter load tests', () => {
         jest.useRealTimers();
     });
 
-    test('avatar-style burst: 24 peer photos drain through the 16-slot photo pipeline', async () => {
+    test('avatar-style burst: 24 peer photos drain through the 32-slot avatar queue', async () => {
         let concurrent = 0;
         let peak = 0;
         const transport = makeTransport({
@@ -70,7 +70,7 @@ describe('GramMediaRouter load tests', () => {
             expect(p).toBeTruthy();
             expect(p!.url).toMatch(/^blob:/);
         }
-        expect(peak).toBe(16);
+        expect(peak).toBe(24);
     });
 
     test('throughput: 30 photos at 20ms latency serialize into ceil(N/16) rounds', async () => {

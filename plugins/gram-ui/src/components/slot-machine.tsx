@@ -28,8 +28,46 @@ function markSlotMachineDone(key: string): void {
   }
 }
 
+const SLOT_DONE_KEY = 'tg-slot-done-v1';
+const SLOT_DONE_MAX = 512;
+let slotDoneSet: Set<string> | null = null;
+
+function loadSlotDoneSet(): Set<string> {
+  if (slotDoneSet) return slotDoneSet;
+  try {
+    const raw = localStorage.getItem(SLOT_DONE_KEY);
+    slotDoneSet = new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    slotDoneSet = new Set();
+  }
+  return slotDoneSet;
+}
+
+function saveSlotDoneSet(): void {
+  if (!slotDoneSet) return;
+  try {
+    const arr = [...slotDoneSet].slice(-SLOT_DONE_MAX);
+    if (arr.length === 0) {
+      localStorage.removeItem(SLOT_DONE_KEY);
+    } else {
+      localStorage.setItem(SLOT_DONE_KEY, JSON.stringify(arr));
+    }
+  } catch { /* ignore */ }
+}
+
+function isSlotDone(key: string): boolean {
+  return slotMachineDone.get(key) === true || loadSlotDoneSet().has(key);
+}
+
+function markSlotDone(key: string): void {
+  markSlotMachineDone(key);
+  loadSlotDoneSet().add(key);
+  saveSlotDoneSet();
+}
+
 export function resetSlotMachineDone(): void {
   slotMachineDone.clear();
+  slotDoneSet = null;
 }
 
 function sameSpecs(a: SlotLayerSpec[] | undefined, b: SlotLayerSpec[] | undefined): boolean {
@@ -60,7 +98,7 @@ function scheduleSlotRetry(docId: string): void {
     if (url) {
       ensureSlotData(docId, url);
     } else if (!slotDataCache.has(String(docId))) {
-      requestEmojiDownload(docId, undefined, 1);
+      requestEmojiDownload(docId, undefined, 2);
     }
   }, SLOT_RETRY_MS));
 }
@@ -134,7 +172,7 @@ function useSlotData(docId: string): EmojiData | undefined {
       if (url) {
         ensureSlotData(docId, url);
       } else {
-        requestEmojiDownload(docId, undefined, 1);
+        requestEmojiDownload(docId, undefined, 2);
       }
     }
     return () => { subs.delete(onData); };
@@ -188,6 +226,35 @@ function useSlotSetReady(specs: SlotLayerSpec[] | undefined): boolean {
   if (!specs) return false;
   const total = specs.filter((s) => !isSlotLocalDoc(s.docId)).length;
   return total > 0 && readyCount >= total;
+}
+
+function useSlotRoleReady(specs: SlotLayerSpec[] | undefined, role: SlotLayerRole): boolean {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!specs) {
+      setReady(true);
+      return;
+    }
+    const ids = specs.filter((s) => s.role === role && !isSlotLocalDoc(s.docId)).map((s) => s.docId);
+    if (ids.length === 0) {
+      setReady(true);
+      return;
+    }
+    let alive = true;
+    const check = () => {
+      if (!alive) return;
+      setReady(ids.every((id) => getSlotData(id)));
+    };
+    check();
+    const subs = ids.map((id) => subscribeSlotData(id, check));
+    return () => {
+      alive = false;
+      for (const s of subs) s.delete(check);
+    };
+  }, [specs, role]);
+
+  return ready;
 }
 
 const LOCAL_PARTS = [SLOT_LOCAL_IDS.reel0, SLOT_LOCAL_IDS.reel1, SLOT_LOCAL_IDS.reel2];
@@ -298,17 +365,19 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
     if (!specs) return;
     for (const s of specs) {
       if (isSlotLocalDoc(s.docId)) continue;
-      requestEmojiDownload(s.docId, undefined, 1);
+      requestEmojiDownload(s.docId, undefined, 2);
     }
   }, [specs]);
 
   const setReady = useSlotSetReady(specs);
-  const ready = setReady;
+  const handleReady = useSlotRoleReady(specs, 'handle');
+  const spinsReady = useSlotRoleReady(specs, 'spin');
+  const slotsReady = useSlotRoleReady(specs, 'slot');
   const layers = specs ? specs : localSpecsFor(value);
   const realSet = !!specs && setReady;
   const animated = !!specs && typeof value === 'number' && value > 0;
 
-  const doneBefore = playKey != null && slotMachineDone.get(playKey) === true;
+  const doneBefore = playKey != null && isSlotDone(playKey);
 
   const bg = layers.find((s) => s.role === 'bg');
   const bgWin = layers.find((s) => s.role === 'bgWin');
@@ -325,7 +394,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
 
   if (isEnabled('gram-ui:slot')) {
     const realIds = (specs || []).filter((s) => !isSlotLocalDoc(s.docId)).map((s) => s.docId);
-    slotLog.info('[slot]', JSON.stringify({ value, specs: specs ? specs.length : undefined, setReady, ready, realSet, animated, doneBefore, nLocal: layers.filter((s) => isSlotLocalDoc(s.docId)).length, cached: realIds.filter((id) => slotDataCache.has(String(id))).length, h: handleDone, sp: spinsDone, sl: slotsDone, a: allDone, win: winReady }));
+    slotLog.info('[slot]', JSON.stringify({ value, specs: specs ? specs.length : undefined, setReady, ready: setReady, realSet, animated, doneBefore, handleReady, spinsReady, slotsReady, nLocal: layers.filter((s) => isSlotLocalDoc(s.docId)).length, cached: realIds.filter((id) => slotDataCache.has(String(id))).length, h: handleDone, sp: spinsDone, sl: slotsDone, a: allDone, win: winReady }));
   }
 
   const progressedRef = useRef(false);
@@ -350,10 +419,11 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
     }
   }, []);
 
-  const startSpins = animated && handleDone && spins.length > 0;
-  const startSlots = animated && startSpins && spinsDone >= spins.length && slots.length > 0;
+  const startSpins = animated && handleDone && spinsReady && spins.length > 0;
+  const startSlots = animated && startSpins && spinsDone >= spins.length && slotsReady && slots.length > 0;
   const spinsOver = animated && spins.length > 0 && spinsDone >= spins.length;
   const showWinBg = !!bgWin && (allDone || winReady);
+  const reelsLive = !spinsOver && (animated || !allDone);
 
   useEffect(() => {
     if (!startSpins) return;
@@ -372,7 +442,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
   }, [animated, slotsDone, slots.length, allDone]);
 
   useEffect(() => {
-    if (allDone && playKey) markSlotMachineDone(playKey);
+    if (allDone && playKey) markSlotDone(playKey);
   }, [allDone, playKey]);
 
   useEffect(() => {
@@ -389,17 +459,15 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
     setSlotsDone(slotCount);
     setAllDone(true);
     setWinReady(true);
-    if (keys.every((k) => isAnimationCompleted(k))) markSlotMachineDone(playKey);
+    if (keys.every((k) => isAnimationCompleted(k))) markSlotDone(playKey);
   }, [playKey, specs, setReady]);
-
-  if (!ready) return <span class="tgui-slot-machine" style={{ display: 'inline-block', width: size + 'px', height: size + 'px' }} />;
 
   return (
     <div class="tgui-slot-machine" style={{ position: 'relative', width: size + 'px', height: size + 'px' }}>
-      {bg ? <SlotLayer docId={bg.docId} role="bg" partIndex={0} size={size} autoplay={false} playKey={playKey} showLastFrame={allDone} /> : null}
+      {bg ? <SlotLayer docId={bg.docId} role="bg" partIndex={0} size={size} autoplay={!allDone} playKey={playKey} showLastFrame={allDone} /> : null}
       {spins.map((s, i) => (
         <div key={s.docId} class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={s.docId} role="spin" partIndex={i} size={size} autoplay={startSpins && !spinsOver} loop={true} onEnd={onSpinEnd} playKey={playKey} showLastFrame={allDone || spinsOver} />
+          <SlotLayer docId={s.docId} role="spin" partIndex={i} size={size} autoplay={reelsLive} loop={true} onEnd={onSpinEnd} playKey={playKey} showLastFrame={allDone || spinsOver} />
         </div>
       ))}
       {slots.map((s, i) => (
@@ -414,7 +482,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
       ) : null}
       {handle ? (
         <div class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={handle.docId} role="handle" partIndex={0} size={size} autoplay={animated && !handleDone} onEnd={onHandleEnd} playKey={playKey} showLastFrame={allDone || handleDone} />
+          <SlotLayer docId={handle.docId} role="handle" partIndex={0} size={size} autoplay={animated && !handleDone && handleReady} onEnd={onHandleEnd} playKey={playKey} showLastFrame={allDone || handleDone} />
         </div>
       ) : null}
     </div>

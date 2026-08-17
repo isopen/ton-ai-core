@@ -568,6 +568,7 @@ interface DcConnection {
     readLoopRunning: boolean;
     dead: boolean;
     encQueue: Promise<void>;
+    lastDataAt: number;
 }
 
 const dcConnectionPool: DcConnection[] = [];
@@ -747,6 +748,7 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
         readLoopRunning: false,
         dead: false,
         encQueue: Promise.resolve(),
+        lastDataAt: Date.now(),
     };
 
     if (needsAuthImport) {
@@ -873,6 +875,15 @@ function rejectDcPending(entry: DcConnection, err: Error): void {
         p.reject(err);
     }
     entry.pending.clear();
+}
+
+function killDcConnection(entry: DcConnection, err: Error): void {
+    if (entry.dead) return;
+    entry.dead = true;
+    const idx = dcConnectionPool.indexOf(entry);
+    if (idx >= 0) dcConnectionPool.splice(idx, 1);
+    try { entry.conn.close(); } catch {}
+    rejectDcPending(entry, err);
 }
 
 function dcNextMsgId(entry: DcConnection): bigint {
@@ -1038,6 +1049,7 @@ function startDcReadLoop(entry: DcConnection): void {
             try {
                 const data = await entry.conn.readPacket();
                 if (entry.dead) break;
+                entry.lastDataAt = Date.now();
                 if (data.length >= 8 && data.readBigUInt64LE(0) === 0n) {
                     if (data.length >= 20) {
                         const msgId = data.readBigUInt64LE(8);
@@ -1064,6 +1076,18 @@ function startDcReadLoop(entry: DcConnection): void {
     })();
 }
 
+const DC_IDLE_RECYCLE_MS = 20000;
+setInterval(() => {
+    for (const c of dcConnectionPool) {
+        if (c.dead) continue;
+        const idleMs = Date.now() - c.lastDataAt;
+        if (c.pending.size > 0 && idleMs > DC_IDLE_RECYCLE_MS) {
+            wlog('[worker] DC ' + c.dcId + ' read stall: ' + c.pending.size + ' pending, ' + idleMs + 'ms no data — recycling connection');
+            killDcConnection(c, new Error('DC ' + c.dcId + ' read stall (' + idleMs + 'ms no data with ' + c.pending.size + ' pending)'));
+        }
+    }
+}, 5000);
+
 async function sendDcRpc(entry: DcConnection, methodName: string, params: Record<string, any>): Promise<Buffer> {
     const registry = getSchemaRegistry();
     const comb = registry.findFunctionByName(methodName);
@@ -1086,9 +1110,11 @@ async function sendDcRpc(entry: DcConnection, methodName: string, params: Record
     const methodBody = new SchemaSerializer(registry).serializeCombinator(comb, effectiveParams);
 
     const prev = entry.encQueue;
-    let release: () => void;
+    let release: () => void = () => {};
     entry.encQueue = new Promise<void>(resolve => { release = resolve; });
     await prev;
+
+    let responsePromise: Promise<Buffer>;
     try {
         let body: Buffer;
         if (!entry.initialized) {
@@ -1116,9 +1142,12 @@ async function sendDcRpc(entry: DcConnection, methodName: string, params: Record
         wlog('[worker] DC' + entry.dcId + ' tx ' + methodName + ' msgId=' + msgId + ' seq=' + seqNo + ' header=' + (body.length > methodBody.length) + ' bodyLen=' + body.length + ' pendingAfter=' + (entry.pending.size + 1));
 
         const key = msgId.toString();
-        return await new Promise<Buffer>((resolve, reject) => {
+        responsePromise = new Promise<Buffer>((resolve, reject) => {
             const timer = setTimeout(() => {
                 entry.pending.delete(key);
+                if (entry.pending.size === 0) {
+                    killDcConnection(entry, new Error('RPC timeout on DC ' + entry.dcId + ' ' + methodName + ' (no pending left — recycling)'));
+                }
                 reject(new Error('RPC timeout on DC ' + entry.dcId + ' ' + methodName));
             }, 30000);
             entry.pending.set(key, {
@@ -1128,15 +1157,32 @@ async function sendDcRpc(entry: DcConnection, methodName: string, params: Record
                 reject: (e: Error) => { clearTimeout(timer); reject(e); },
                 timer,
             });
-            entry.conn.sendEncrypted(encrypted).catch((e: any) => {
+            const sendTimer = setTimeout(() => {
+                killDcConnection(entry, new Error('Connection closed on DC ' + entry.dcId + ' (send stuck)'));
+            }, 10000);
+            try {
+                entry.conn.sendEncrypted(encrypted).then(
+                    () => { clearTimeout(sendTimer); },
+                    (e: any) => {
+                        entry.pending.delete(key);
+                        clearTimeout(timer);
+                        clearTimeout(sendTimer);
+                        reject(e);
+                    }
+                );
+            } catch (e: any) {
                 entry.pending.delete(key);
                 clearTimeout(timer);
+                clearTimeout(sendTimer);
                 reject(e);
-            });
+            }
         });
-    } finally {
-        release!();
+        release();
+    } catch (e) {
+        release();
+        throw e;
     }
+    return await responsePromise;
 }
 
 async function callRpcOnDcInner(dcId: number, methodName: string, params: Record<string, any>, type: 'video' | 'download' = 'download'): Promise<any> {
@@ -1237,11 +1283,16 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
 
 async function callRpcOnDc(dcId: number, methodName: string, params: Record<string, any>, type: 'video' | 'download' = 'download'): Promise<any> {
     const slot = methodName === 'upload.getFile' || methodName === 'upload.getCdnFile' || methodName === 'upload.reuploadCdnFile';
+    const firstChunk = params?.offset === 0n || params?.offset === 0 || params?.offset == null;
     if (slot) await acquireDcRpcSlot(dcId);
+    if (slot && firstChunk) wlog('[dl] rpc-send dc=' + dcId + ' method=' + methodName);
     try {
         return await callRpcOnDcInner(dcId, methodName, params, type);
     } finally {
-        if (slot) releaseDcRpcSlot(dcId);
+        if (slot) {
+            if (firstChunk) wlog('[dl] rpc-recv dc=' + dcId + ' method=' + methodName);
+            releaseDcRpcSlot(dcId);
+        }
     }
 }
 
@@ -1535,7 +1586,10 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
         wlog('[worker] requestPhotoDownload: buildDownloadLocation returned null', { id: photo?.id, access_hash: photo?.access_hash, file_reference: !!photo?.file_reference, sizeType });
         return null;
     }
-    const genRef = { value: photoDownloadGen };
+    const isAvatarMsg = typeof messageId === 'string' && messageId.startsWith('avatar_');
+    const genRef = isAvatarMsg
+        ? { value: avatarDownloadGen, counter: 'avatar' as const }
+        : { value: photoDownloadGen, counter: 'photo' as const };
     const sizeEntry = (photo.sizes || []).find((s: any) => s.type === sizeType);
     let totalSize = sizeEntry?.size || 0;
     if (!totalSize && sizeEntry?.bytes) {
@@ -1544,7 +1598,7 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
     if (!totalSize && Array.isArray(sizeEntry?.sizes)) {
         totalSize = Math.max(...sizeEntry.sizes);
     }
-    const result = await downloadFile_(undefined, photoWithThumb, genRef, onProgress, totalSize, TDLIB_PRIORITY_MAX, locationOverride);
+    const result = await downloadFile_(undefined, photoWithThumb, genRef, onProgress, totalSize, TDLIB_PRIORITY_MAX, locationOverride, isAvatarMsg ? 'avatar' : null);
     if (result.error === 'ABORTED') {
         wlog('[worker] requestPhotoDownload: ABORTED', 'sizeType:', sizeType);
         return null;
@@ -2522,6 +2576,7 @@ async function persistSession(): Promise<void> {
 }
 
 let photoDownloadGen = 0;
+let avatarDownloadGen = 0;
 
 function cancelPhotoDownloads(): void {
     photoDownloadGen++;
@@ -3234,7 +3289,7 @@ function enqueueDownload(document?: any, photo?: any, priority = 0): Promise<Dow
     return p;
 }
 
-async function downloadFile_(document?: any, photo?: any, genRef?: { value: number }, onProgress?: (pct: number) => void, totalSize?: number, priority = TDLIB_PRIORITY_MAX, locationOverride?: Record<string, any> | null): Promise<DownloadResult> {
+async function downloadFile_(document?: any, photo?: any, genRef?: { value: number; counter: 'photo' | 'avatar' }, onProgress?: (pct: number) => void, totalSize?: number, priority = TDLIB_PRIORITY_MAX, locationOverride?: Record<string, any> | null, bucket?: string | null): Promise<DownloadResult> {
     const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
     const id = document?.id?.toString() || photo?.id?.toString() || '?';
     wlog('[dl] start id=' + id + ' label=' + label + ' thumbSuffix=' + (document?.thumb_size || photo?.thumb_size || '') + ' totalSize=' + (totalSize || 0));
@@ -3305,9 +3360,9 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         const poolDc = targetDc || UNKNOWN_DC;
         const poolCall = async <T>(fn: () => Promise<T>, size: number): Promise<T> => {
             if (dispatcher) await dispatcher.pace();
-            await acquirePool(poolDc, fileSmall, size, cacheKey, effPriority());
+            await acquirePool(poolDc, fileSmall, size, cacheKey, effPriority(), bucket || undefined);
             try { return await fn(); }
-            finally { releasePool(poolDc, fileSmall, size); }
+            finally { releasePool(poolDc, fileSmall, size, bucket || undefined); }
         };
         const requestSize = (ofs: bigint): number => {
             if (knownSize > 0) {
@@ -3338,7 +3393,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         };
 
         const doCall = async (ofs: bigint, lim: number, precise = false): Promise<any> => {
-            if (genRef && genRef.value !== photoDownloadGen) throw new Error('ABORTED');
+            if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen : photoDownloadGen)) throw new Error('ABORTED');
             if (ofs === 0n) {
                 wlog('[dl] req0 location=' + JSON.stringify({ _: location?._, id: location?.id?.toString?.(), ah: location?.access_hash?.toString?.(),
                     frLen: location?.file_reference?.length, frHex: Buffer.isBuffer(location?.file_reference) ? location.file_reference.subarray(0, 16).toString('hex') : typeof location?.file_reference === 'string' ? location.file_reference.slice(0, 32) : location?.file_reference,
@@ -3396,13 +3451,34 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         let firstResult: any;
         const firstSize = PART_SIZE;
         const firstClaimSize = knownSize > 0 ? Math.min(PART_SIZE, knownSize) : Math.min(PART_SIZE, SMALL_FILE_LIMIT);
+        let abortFirstRequest: (() => void) | null = null;
+        const firstRequestAbort = new Promise<never>((_, reject) => {
+            abortFirstRequest = () => reject(new Error('download STALL timeout after 45s'));
+        });
+        const stallDumpTimer = setTimeout(() => {
+            wlog('[dl] STALL id=' + id + ' label=' + label + ' dc=' + targetDc +
+                ' smallActive=' + smallUploadActive + ' smallQueue=' + smallUploadQueue.length +
+                ' rpcSlots=' + JSON.stringify(Array.from(dcRpcSlots.entries())) +
+                ' pool=' + JSON.stringify(Array.from(poolInFlight.entries())) +
+                ' connecting=' + JSON.stringify(Array.from(dcConnecting.keys())) +
+                ' conns=' + JSON.stringify(dcConnectionPool.map((c) => ({ d: c.dcId, t: c.type, dead: c.dead, ok: c.conn.isConnected(), pend: c.pending.size, encq: !!c.encQueue }))));
+        }, 20000);
+        const stallAbortTimer = setTimeout(() => {
+            wlog('[dl] STALL ABORT id=' + id + ' label=' + label + ' dc=' + targetDc + ' — rejecting first request');
+            if (abortFirstRequest) abortFirstRequest();
+        }, 45000);
         try {
-            firstResult = await poolCall(() => doCall(BigInt(0), firstSize, false), firstClaimSize);
-        } catch (e: any) {
-            if (!e.message?.includes('FILE_REFERENCE_EXPIRED') || !(await refreshDocumentRef())) throw e;
-            firstResult = await poolCall(() => doCall(BigInt(0), firstSize, false), firstClaimSize);
+            try {
+                firstResult = await Promise.race([poolCall(() => doCall(BigInt(0), firstSize, false), firstClaimSize), firstRequestAbort]);
+            } catch (e: any) {
+                if (!e.message?.includes('FILE_REFERENCE_EXPIRED') || !(await refreshDocumentRef())) throw e;
+                firstResult = await Promise.race([poolCall(() => doCall(BigInt(0), firstSize, false), firstClaimSize), firstRequestAbort]);
+            }
+        } finally {
+            clearTimeout(stallDumpTimer);
+            clearTimeout(stallAbortTimer);
         }
-        if (genRef && genRef.value !== photoDownloadGen) return { type: '', bytes: new ArrayBuffer(0), error: 'ABORTED' };
+        if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen : photoDownloadGen)) return { type: '', bytes: new ArrayBuffer(0), error: 'ABORTED' };
 
         if (firstResult._ === 'upload.fileCdnRedirect') {
             if (!applyCdnRedirect(firstResult)) {
@@ -3482,14 +3558,14 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                     if (e.message?.includes('FILE_REFERENCE_EXPIRED')) throw e;
                     lastErr = e;
                 }
-                if (genRef && genRef.value !== photoDownloadGen) throw new Error('ABORTED');
+if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen : photoDownloadGen)) throw new Error('ABORTED');
                 wlog('[dl] part retry id=' + id + ' label=' + label + ' idx=' + partIdx + ' attempt=' + (attempt + 1) + ' err=' + ((lastErr as Error)?.message || lastErr));
             }
             throw lastErr;
         };
 
         while (nextPart * PART_SIZE < maxTotal) {
-            if (genRef && genRef.value !== photoDownloadGen) return { type: '', bytes: new ArrayBuffer(0), error: 'ABORTED' };
+            if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen : photoDownloadGen)) return { type: '', bytes: new ArrayBuffer(0), error: 'ABORTED' };
             const batch: Promise<{ idx: number; chunk: Buffer }>[] = [];
             for (let i = 0; i < MAX_CONCURRENT; i++) {
                 const partIdx = nextPart + i;
@@ -3805,11 +3881,18 @@ export async function batchCheckDocumentCache(documents: Array<{ id: string | nu
 }
 
 async function downloadFiles_(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
+    const BATCH_ITEM_TIMEOUT_MS = 30000;
     const tasks = (docs || []).map((item, index) =>
-        enqueueDownload(item?.document, undefined, item?.priority || 0).then(
-            (r) => ({ index, type: r.type, bytes: r.bytes.slice(0), error: r.error, cacheSource: r.cacheSource }),
-            (err) => ({ index, type: '', bytes: new ArrayBuffer(0), error: String((err as Error)?.message || err) }),
-        ),
+        new Promise<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>((resolve) => {
+            const timer = setTimeout(() => {
+                wlog('[dl] batch item timeout index=' + index + ' docId=' + (item?.document?.id?.toString?.() ?? '?') + ' — resolving with error');
+                resolve({ index, type: '', bytes: new ArrayBuffer(0), error: 'download timeout' });
+            }, BATCH_ITEM_TIMEOUT_MS);
+            enqueueDownload(item?.document, undefined, item?.priority || 0).then(
+                (r) => { clearTimeout(timer); resolve({ index, type: r.type, bytes: r.bytes.slice(0), error: r.error, cacheSource: r.cacheSource }); },
+                (err) => { clearTimeout(timer); resolve({ index, type: '', bytes: new ArrayBuffer(0), error: String((err as Error)?.message || err) }); },
+            );
+        }),
     );
     return Promise.all(tasks);
 }

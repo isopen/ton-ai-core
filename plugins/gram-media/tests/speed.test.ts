@@ -147,11 +147,10 @@ describe('GramMediaRouter speed tests', () => {
         for (let i = 13; i <= N; i++) dispatchPhoto(i, 'p' + i);
         await jest.advanceTimersByTimeAsync(0);
         await flushMicrotasks();
-        expect(started).toBe(MAX_PARALLEL_PHOTOS);
+        expect(started).toBe(N);
 
-        const rounds = Math.ceil(N / MAX_PARALLEL_PHOTOS);
-        await jest.advanceTimersByTimeAsync(rounds * LATENCY - 1);
-        expect(actionsOfType(actions, 'UPDATE_MESSAGE_PHOTO')).toHaveLength((rounds - 1) * MAX_PARALLEL_PHOTOS);
+        await jest.advanceTimersByTimeAsync(LATENCY - 1);
+        expect(actionsOfType(actions, 'UPDATE_MESSAGE_PHOTO')).toHaveLength(0);
 
         await jest.advanceTimersByTimeAsync(1);
         await flushMicrotasks();

@@ -40,6 +40,7 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
     ports.add(port);
 
     port.postMessage({ type: 'ready' });
+    try { port.postMessage({ type: 'streamLog', text: '[dl] worker up (fresh instance, watchdog armed)' }); } catch {}
 
     port.onmessage = async (event) => {
         const msg = event.data;
