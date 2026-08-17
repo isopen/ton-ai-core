@@ -113,6 +113,7 @@ export enum EventType {
   SessionFlags = 3,
   ServerTimeOffset = 4,
   PendingCodeHash = 5,
+  DcAuthKey = 6,
 }
 
 export interface TdSessionState {
@@ -128,6 +129,7 @@ export interface TdSessionState {
   homeServerSalt?: bigint;
   homeDcId?: number;
   pendingCodeHash?: string;
+  dcAuthKeys?: Record<string, { authKey: Buffer; authKeyId: bigint; serverSalt: bigint; serverTime: number }>;
 }
 
 export class TdBinlog {
@@ -303,6 +305,10 @@ export class TdBinlog {
     await this.maybeReindex();
   }
 
+  async saveDcAuthKey(dcId: number, key: { authKey: Buffer; authKeyId: bigint; serverSalt: bigint; serverTime: number }): Promise<void> {
+    await this.append(EventType.DcAuthKey, dcId, key.authKey, key.authKeyId, key.serverSalt, key.serverTime);
+  }
+
   private async maybeReindex(): Promise<void> {
     const needReindex = (minSize: number, rate: number) =>
       this.fileSize > minSize && this.fileSize / rate > this.totalEventsSize;
@@ -409,6 +415,19 @@ export class TdBinlog {
         case EventType.PendingCodeHash: {
           const [hash] = this.deserializePayload(e.buf, ['string']);
           state.pendingCodeHash = hash;
+          break;
+        }
+        case EventType.DcAuthKey: {
+          const [dcId, authKey, authKeyId, serverSalt, serverTime] = this.deserializePayload(e.buf, ['int32', 'bytes', 'int64', 'int64', 'int32']);
+          if (typeof dcId === 'number' && dcId >= 1 && dcId <= 5 && Buffer.isBuffer(authKey) && authKey.length > 0) {
+            if (!state.dcAuthKeys) state.dcAuthKeys = {};
+            state.dcAuthKeys[String(dcId)] = {
+              authKey: Buffer.from(authKey),
+              authKeyId,
+              serverSalt,
+              serverTime: typeof serverTime === 'number' ? serverTime : Math.floor(Date.now() / 1000),
+            };
+          }
           break;
         }
       }

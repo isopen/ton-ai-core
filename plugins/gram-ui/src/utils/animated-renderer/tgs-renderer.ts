@@ -68,6 +68,12 @@ if (typeof window !== 'undefined') {
   });
 }
 
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') TgsRenderer.resumeLoops();
+  });
+}
+
 async function getTgsJson(url: string): Promise<string | undefined> {
   if (!url) return undefined;
   const cached = tgsJsonCache.get(url);
@@ -271,6 +277,10 @@ export class TgsRenderer implements IAnimatedRenderer {
 
   private step() {
     try {
+      if (!isPageFocused()) {
+        this.stopLoop();
+        return;
+      }
       if (!this.stepFrame()) this.stopLoop();
     } catch (err) {
       if (!this.stepErrorLogged) {
@@ -327,6 +337,13 @@ export class TgsRenderer implements IAnimatedRenderer {
 
   static get(renderId: string): TgsRenderer | undefined {
     return instancesByRenderId.get(renderId);
+  }
+
+  static resumeLoops(): void {
+    for (const r of instancesByRenderId.values()) {
+      if (r.isDestroyed || r.views.size === 0) continue;
+      if (r.isAnimating && !r.isWaiting && !r.isLooping) r.startLoop();
+    }
   }
 
   static debugDump(): Array<Record<string, unknown>> {

@@ -16,6 +16,7 @@ export interface Dialog {
     topMessage: number;
     unreadCount: number;
     lastMsg: string;
+    lastMsgEntities?: any[];
     date?: number;
     readInboxMaxId?: number;
     readOutboxMaxId?: number;

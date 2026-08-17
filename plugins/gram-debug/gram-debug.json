@@ -24,8 +24,8 @@
             "level": "debug"
         },
         "gram-media": {
-            "enabled": false,
-            "level": "info"
+            "enabled": true,
+            "level": "debug"
         },
         "gram-browser": {
             "enabled": true,
@@ -60,7 +60,7 @@
             "level": "debug"
         },
         "gram-ui:photo": {
-            "enabled": false,
+            "enabled": true,
             "level": "debug"
         },
         "gram-ui:media-source-badge": {

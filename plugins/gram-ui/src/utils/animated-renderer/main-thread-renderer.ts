@@ -93,7 +93,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
   private checkHeartbeat() {
     if (this.isDestroyed || this.views.size === 0) return;
     const wantsPaint = Array.from(this.views.values()).some((v) => !v.isPaused);
-    if (!wantsPaint) return;
+    if (!wantsPaint || !isPageFocused()) return;
     const now = performance.now();
     if (!this.lastPaintAt) {
       this.lastPaintAt = now;
@@ -136,6 +136,13 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     }
     instance.addView(viewId, container, onLoad, onError, onFrame, params.coords);
     return instance;
+  }
+
+  static resumeLoops(): void {
+    for (const r of instancesByRenderId.values()) {
+      if (r.isDestroyed || r.views.size === 0) continue;
+      if (r.isPlayingFlag && !r.isLooping) r.startLoop();
+    }
   }
 
   private constructor(
@@ -368,7 +375,11 @@ export class MainThreadRenderer implements IAnimatedRenderer {
   }
 
   private tick() {
-    if (!this.anim || this.isDestroyed || !isPageFocused()) return;
+    if (!this.anim || this.isDestroyed) return;
+    if (!isPageFocused()) {
+      this.stopLoop();
+      return;
+    }
     const now = performance.now();
     const small = this.params.size <= 48;
     if (small && now - this.lastDraw < 33.33) return;
@@ -429,4 +440,10 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       this.stopLoop();
     }
   }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') MainThreadRenderer.resumeLoops();
+  });
 }

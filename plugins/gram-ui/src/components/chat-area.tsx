@@ -1,5 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
-import { useEffect, useRef, useState, useCallback } from '@ton-ai/atom/hooks';
+import { useEffect, useRef, useState, useCallback, useMemo } from '@ton-ai/atom/hooks';
 import { VirtualList, memo } from '@ton-ai/atom';
 import { Spinner } from '../primitives/spinner.js';
 import { Avatar } from '../primitives/avatar.js';
@@ -33,7 +33,7 @@ import { MediaCollage, type MediaCollageItem } from './media-collage.js';
 import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
 import { AnimatedEmoji } from './emoji-text.js';
 import { MediaCaption } from './media-caption.js';
-import { buildImageSpec, firstMissingSizeType, CHAT_PHOTO_PRIO } from './photo-spec.js';
+import { buildImageSpec, firstMissingSizeType, CHAT_PHOTO_PRIO, isInlinePhotoSize } from './photo-spec.js';
 import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 
 const photoLog = getLogger('gram-ui:photo');
@@ -72,6 +72,8 @@ interface AlbumRow {
   msgs: any[];
   key: string;
 }
+
+const rowKeyOf = (row: AlbumRow) => row.key;
 
 function isAlbumMedia(m: any): boolean {
   const t = getMediaType(m.media);
@@ -233,7 +235,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   const imgWidth = imgSpec ? Math.min(imgSpec.width || 320, 320) : 0;
 
   const photoSizes = m.media?.photo?.sizes;
-  const hasAnyUrl = Array.isArray(photoSizes) && photoSizes.some((s: any) => !!(s.url || s.src));
+  const hasAnyUrl = Array.isArray(photoSizes) && photoSizes.some((s: any) => !isInlinePhotoSize(s) && !!(s.url || s.src));
   if (isEnabled('gram-ui:photo')) {
     photoLog.info('[PhotoBubble] render', m.id, 'photoSizes:', Array.isArray(photoSizes) ? photoSizes.length : photoSizes, 'hasAnyUrl:', hasAnyUrl, 'imgSpec urls:', imgSpec ? { t: !!imgSpec.thumbnail?.url, m: !!imgSpec.medium?.url, o: !!imgSpec.original?.url } : 'null');
   }
@@ -245,6 +247,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
       if (!el) { photoLog.info('[PhotoBubble] NO ELEMENT msg-' + m.id); return; }
       const obs = new IntersectionObserver(([entry]) => {
         if (entry.isIntersecting) {
+          if (m.media?.photo?.failed === true) return;
           const need = firstMissingSizeType(m.media?.photo, CHAT_PHOTO_PRIO);
           photoLog.info('[PhotoBubble] obs intersect', m.id, 'need:', need?.sizeType || null);
           if (need) {
@@ -604,7 +607,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   };
 
   const handleVisibleRangeChange = useCallback((start: number, end: number) => {
-    setVisRange([start, end]);
+    setVisRange((prev) => (prev[0] === start && prev[1] === end ? prev : [start, end]));
   }, []);
   const handleNearTop = useCallback(() => {
     dispatch({ type: 'LOAD_MORE' });
@@ -659,10 +662,11 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
     try { URL.revokeObjectURL(url); } catch {}
   }, [peer?.id]);
 
+  const msgs = Array.isArray(state.messages) ? state.messages : [];
+  const rows = useMemo(() => buildAlbumRows(msgs), [state.messages]);
+
   useEffect(() => {
     const urls: Record<string, string> = (state.documentUrls || {}) as any;
-    const msgs = Array.isArray(state.messages) ? state.messages : [];
-    const rows = buildAlbumRows(msgs);
     const [rs, re] = visRange;
     const keep = new Set<string>();
     const from = Math.max(0, rs - EMOJI_KEEP_MARGIN);
@@ -735,9 +739,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   const readOutboxMaxId = currentDialog?.readOutboxMaxId;
 
   const msgListChildren: any[] = [];
-  const msgs = Array.isArray(state.messages) ? state.messages : [];
   const isGroup = (state.selectedPeer as any)?.type === 'chat';
-  const rows = buildAlbumRows(msgs);
 
   const readInboxMaxId = currentDialog?.readInboxMaxId;
   const firstUnreadRowIdx = readInboxMaxId != null
@@ -786,7 +788,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
           data={rows}
           estimatedItemHeight={48}
           startAtBottom={!hasUnread}
-          keyExtractor={(row: AlbumRow) => row.key}
+          keyExtractor={rowKeyOf}
           scrollToKey={hasUnread ? rows[firstUnreadRowIdx]?.key : undefined}
           topLoader={state.loadingMessages && rows.length > 0 ? <Spinner size="small" /> : null}
           renderItem={({ item: row, index: i }: { item: AlbumRow; index: number }) => {

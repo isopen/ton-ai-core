@@ -9,13 +9,14 @@ let setVisibleGlobal: ((on: boolean) => void) | null = null;
 
 export function FpsMeter({ defaultVisible = true }: { defaultVisible?: boolean } = {}) {
   const [visible, setVisible] = useState(defaultVisible);
-  const [stats, setStats] = useState({ fps: 0, gap: 0, long: 0 });
+  const boxRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef(0);
   const lastTsRef = useRef(0);
   const winStartRef = useRef(0);
   const frameCountRef = useRef(0);
   const maxGapRef = useRef(0);
   const longRef = useRef(0);
+  const lastStatsRef = useRef({ fps: 0, gap: 0, long: 0 });
 
   useEffect(() => {
     setVisibleGlobal = setVisible;
@@ -26,6 +27,11 @@ export function FpsMeter({ defaultVisible = true }: { defaultVisible?: boolean }
 
   useEffect(() => {
     if (!visible) return;
+    const box = () => boxRef.current;
+    const el0 = box();
+    if (el0 && el0.childNodes.length === 0) {
+      el0.textContent = 'FPS — · gap —ms · long 0';
+    }
     const onFrame = (ts: number) => {
       rafRef.current = requestAnimationFrame(onFrame);
       if (!lastTsRef.current) {
@@ -38,7 +44,16 @@ export function FpsMeter({ defaultVisible = true }: { defaultVisible?: boolean }
       if (gap > maxGapRef.current) maxGapRef.current = gap;
       if (ts - winStartRef.current >= 500) {
         const fps = (frameCountRef.current * 1000) / (ts - winStartRef.current);
-        setStats({ fps, gap: Math.round(maxGapRef.current), long: longRef.current });
+        const s = { fps, gap: Math.round(maxGapRef.current), long: longRef.current };
+        const prev = lastStatsRef.current;
+        if (s.fps !== prev.fps || s.gap !== prev.gap || s.long !== prev.long) {
+          lastStatsRef.current = s;
+          const el = box();
+          if (el) {
+            el.textContent = `FPS ${s.fps > 0 ? s.fps.toFixed(0) : '—'} · gap ${s.gap}ms · long ${s.long}`;
+            el.style.background = s.fps > 0 && s.fps < 30 ? 'rgba(200,40,40,0.75)' : 'rgba(0,0,0,0.55)';
+          }
+        }
         frameCountRef.current = 0;
         maxGapRef.current = 0;
         winStartRef.current = ts;
@@ -63,13 +78,11 @@ export function FpsMeter({ defaultVisible = true }: { defaultVisible?: boolean }
   }, [visible]);
 
   if (!visible) return null;
-  const low = stats.fps > 0 && stats.fps < 30;
   return (
     <div
+      ref={boxRef}
       id="tg-fps-meter"
-      style={`position:fixed;top:6px;left:50%;transform:translateX(-50%);z-index:2147483647;padding:3px 10px;border-radius:8px;font:11px/1.4 monospace;color:#fff;background:${low ? 'rgba(200,40,40,0.75)' : 'rgba(0,0,0,0.55)'};pointer-events:none;user-select:none;white-space:nowrap;backdrop-filter:blur(2px)`}
-    >
-      {`FPS ${stats.fps > 0 ? stats.fps.toFixed(0) : '—'} · gap ${stats.gap}ms · long ${stats.long}`}
-    </div>
+      style={`position:fixed;top:6px;left:50%;transform:translateX(-50%);z-index:2147483647;padding:3px 10px;border-radius:8px;font:11px/1.4 monospace;color:#fff;background:rgba(0,0,0,0.55);pointer-events:none;user-select:none;white-space:nowrap;backdrop-filter:blur(2px)`}
+    ></div>
   );
 }

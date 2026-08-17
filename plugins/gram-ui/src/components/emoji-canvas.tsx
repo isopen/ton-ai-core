@@ -5,6 +5,7 @@ import { matchEmojiRuns, requestEmojiDownload } from './emoji-store.js';
 import { inflateTgs } from '@ton-ai/tgs';
 
 const EMOJI_GZIP_MAGIC: [number, number] = [0x1f, 0x8b];
+const MISSING_EMOJI_STRIKE_LIMIT = 8;
 
 export interface EmojiData {
   kind: 'tgs' | 'img' | 'video';
@@ -122,42 +123,11 @@ export function StaticEmojiText({ value, size }: { value: string; size: number }
   let key = 0;
   for (const r of runs) {
     if (r.start > pos) parts.push(<span key={'t' + key++}>{value.slice(pos, r.start)}</span>);
-    parts.push(<span key={'e' + key++} style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`}>
-      <FallbackGlyph value={value.slice(r.start, r.end)} size={size} />
-    </span>);
+    parts.push(<span key={'e' + key++} style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`} />);
     pos = r.end;
   }
   if (pos < value.length) parts.push(<span key={'t' + key++}>{value.slice(pos)}</span>);
   return <>{parts}</>;
-}
-
-function isKeycapEmoji(value: string): boolean {
-  return /^[#*0-9]\u20E3$/.test(value.replace(/\uFE0F/g, ''));
-}
-
-function keycapDigit(value: string): string {
-  return /^[#*0-9]/.exec(value.replace(/\uFE0F/g, ''))?.[0] || '#';
-}
-
-function KeycapGlyph({ digit, size }: { digit: string; size: number }) {
-  return (
-    <span style="display:inline-flex;align-items:center;justify-content:center;width:100%;height:100%">
-      <span
-        style={`display:inline-flex;align-items:center;justify-content:center;width:${Math.round(size * 0.88)}px;height:${Math.round(size * 0.88)}px;border-radius:${Math.round(size * 0.16)}px;background:#fff;box-shadow:0 0 0 ${Math.max(1, Math.round(size * 0.045))}px rgba(0,0,0,0.4);color:#000;font-size:${Math.round(size * 0.5)}px;font-weight:700;font-family:'DejaVu Sans','Arial',sans-serif;line-height:1`}
-      >
-        {digit}
-      </span>
-    </span>
-  );
-}
-
-function FallbackGlyph({ value, size }: { value: string; size: number }) {
-  if (isKeycapEmoji(value)) return <KeycapGlyph digit={keycapDigit(value)} size={size} />;
-  return (
-    <span style={`display:block;width:100%;height:100%;line-height:${Math.round(size * 1.1)}px;text-align:center;font-size:${Math.round(size * 0.72)}px`}>
-      {value}
-    </span>
-  );
 }
 
 interface SlotPos {
@@ -453,24 +423,44 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
     });
   }, [slotsKey, urlsKey, kinds, failedDocs, stuckDocs, loadedDocs, inView, everShown, shared, size, hasEmoji]);
 
+  const missingStrikes = useRef<Record<string, number>>({});
+
   useEffect(() => {
     if (!hasEmoji || !inView) return;
     let timer = 0;
     const requestMissing = () => {
       const missing = emojiSegs.filter((s) => !urlFor(s.docId));
-      if (missing.length === 0) return;
+      const strikes = missingStrikes.current;
+      const stillMissing = new Set(missing.map((s) => s.docId));
+      for (const docId of Object.keys(strikes)) {
+        if (!stillMissing.has(docId)) delete strikes[docId];
+      }
+      let anyRequested = false;
       for (const s of missing) {
+        const n = (strikes[s.docId] || 0) + 1;
+        strikes[s.docId] = n;
+        if (n > MISSING_EMOJI_STRIKE_LIMIT) continue;
+        anyRequested = true;
         requestEmojiDownload(s.docId, s.value, 1);
       }
-      const customIds = missing.filter((s) => s.custom).map((s) => s.docId);
-      if (customIds.length > 0) {
-        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...new Set(customIds)] } }));
+      if (anyRequested) {
+        const customIds = missing
+          .filter((s) => s.custom && (strikes[s.docId] || 0) <= MISSING_EMOJI_STRIKE_LIMIT)
+          .map((s) => s.docId);
+        if (customIds.length > 0) {
+          window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...new Set(customIds)] } }));
+        }
+      } else if (timer) {
+        window.clearInterval(timer);
+        timer = 0;
       }
+      return anyRequested;
     };
-    requestMissing();
-    timer = window.setInterval(requestMissing, 3000);
+    if (requestMissing()) {
+      timer = window.setInterval(requestMissing, 3000);
+    }
     return () => {
-      window.clearInterval(timer);
+      if (timer) window.clearInterval(timer);
     };
   }, [slotsKey, urlsKey, inView]);
 
@@ -682,7 +672,7 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
                 <span style="display:block;width:100%;height:100%" />
               )
             ) : (
-              <span style="display:block;width:100%;height:100%" />
+              <span style="display:block;width:100%;height:100%;overflow:hidden" />
             )}
           </span>
         );

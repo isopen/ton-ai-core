@@ -175,14 +175,16 @@ export function reducer(state: AppState, action: UIAction): AppState {
         messages,
       };
     }
-    case 'REFRESH_MESSAGE_PHOTO': return {
-      ...state,
-      messages: state.messages.map(m =>
-        m.id === action.messageId
-          ? { ...m, media: { ...m.media, photo: action.photo } }
+    case 'REFRESH_MESSAGE_PHOTO': {
+      let changed = false;
+      const messages = state.messages.map(m =>
+        m.id === action.messageId && m.media?.photo && m.media.photo !== action.photo
+          ? (changed = true, { ...m, media: { ...m.media, photo: action.photo } })
           : m
-      ),
-    };
+      );
+      if (!changed) return state;
+      return { ...state, renderTick: state.renderTick + 1, messages };
+    }
     case 'UPDATE_MESSAGE_DOCUMENT': {
       if ((state.documentUrls as any)[action.messageId] === action.url) return state;
       return {
@@ -191,15 +193,29 @@ export function reducer(state: AppState, action: UIAction): AppState {
         documentSources: action.cacheSource ? { ...state.documentSources, [action.messageId]: action.cacheSource } : state.documentSources,
       };
     }
-    case 'UPDATE_MESSAGE_DOCUMENT_THUMB': return {
-      ...state,
-      renderTick: state.renderTick + 1,
-      messages: state.messages.map(m =>
+    case 'UPDATE_MESSAGE_DOCUMENT_THUMB': {
+      let changed = false;
+      const messages = state.messages.map(m =>
         m.id === action.messageId && m.media?.document?.video_thumbs
-          ? { ...m, media: { ...m.media, document: { ...m.media.document, video_thumbs: m.media.document.video_thumbs.map((s: any) => s.type === action.thumbType ? { ...s, url: action.url } : s) } } }
+          ? {
+              ...m,
+              media: {
+                ...m.media,
+                document: {
+                  ...m.media.document,
+                  video_thumbs: m.media.document.video_thumbs.map((s: any) => {
+                    if (s.type !== action.thumbType || s.url === action.url) return s;
+                    changed = true;
+                    return { ...s, url: action.url };
+                  }),
+                },
+              },
+            }
           : m
-      ),
-    };
+      );
+      if (!changed) return state;
+      return { ...state, renderTick: state.renderTick + 1, messages };
+    }
     case 'UPDATE_MESSAGE_DOCUMENT_PROGRESS': {
       if (state.documentProgress[action.messageId] === action.progress) return state;
       return {

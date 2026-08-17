@@ -23,6 +23,12 @@ TW.setVideoStreamLogHandler((text) => {
         try { port.postMessage({ type: 'streamLog', text }); } catch { ports.delete(port); }
     }
 });
+TW.setWlogForwardHandler((text) => {
+    if (!text.includes('[dl') && !text.includes('requestPhotoDownload')) return;
+    for (const port of ports) {
+        try { port.postMessage({ type: 'streamLog', text }); } catch { ports.delete(port); }
+    }
+});
 TW.setOnAuthInvalidated(() => {
     for (const port of ports) {
         try { port.postMessage({ type: 'authInvalidated' }); } catch { ports.delete(port); }
@@ -53,8 +59,8 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
                     const result = await TW.requestPhotoDownload(msg.photo, msg.sizeType, msg.messageId, (pct: number) => {
                         try { port.postMessage({ type: 'photoProgress', streamId: msg.id, progress: pct }); } catch {}
                     });
-                    try { port.postMessage({ type: 'photoProgress', streamId: msg.id, progress: 100 }); } catch {}
                     if (result) {
+                        try { port.postMessage({ type: 'photoProgress', streamId: msg.id, progress: 100 }); } catch {}
                         const payload = { bytes: result.bytes.slice(0), mime: result.mime, sizeType: msg.sizeType, messageId: msg.messageId, cacheSource: result.cacheSource };
                         try { port.postMessage({ type: 'response', id: msg.id, result: payload }, [result.bytes]); } catch {}
                     } else {

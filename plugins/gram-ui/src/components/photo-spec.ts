@@ -1,9 +1,14 @@
 import type { ImageSpec } from '../types.js';
 import { hexToBytes, hexToDataUrl, strippedToDataUrl } from '../utils.js';
 
-export const CHAT_PHOTO_PRIO = ['m', 's'];
+export const CHAT_PHOTO_PRIO = ['m'];
 
-export const VIEWER_PHOTO_PRIO = ['y', 'w', 'x', 'v', 'u', 'm', 's'];
+export const VIEWER_PHOTO_PRIO = ['y', 'w', 'x', 'v', 'u', 'm'];
+
+const INLINE_PHOTO_SIZES = new Set(['photoStrippedSize', 'photoCachedSize']);
+export function isInlinePhotoSize(s: any): boolean {
+  return !!s && INLINE_PHOTO_SIZES.has(s._);
+}
 
 function sizeUrl(s: any): string {
   let url = s.src || s.url || '';
@@ -89,12 +94,11 @@ export function buildImageSpec(m: any): ImageSpec | null {
 export function firstMissingSizeType(photo: any, prio: string[] = CHAT_PHOTO_PRIO): { sizeType: string; id: number } | null {
   const sizes = Array.isArray(photo?.sizes) ? photo.sizes : [];
   if (sizes.length === 0) return null;
-  if (sizes.some((s: any) => !!(s.url || s.src))) return null;
   for (const t of prio) {
     const s = sizes.find((x: any) => x.type === t);
-    if (s) return { sizeType: t, id: photo.id ?? 0 };
+    if (s && !isInlinePhotoSize(s) && !(s.url || s.src)) return { sizeType: t, id: photo.id ?? 0 };
   }
-  const fallback = sizes.find((s: any) => !!(s.w || s.width));
+  const fallback = sizes.find((s: any) => !!(s.w || s.width) && !isInlinePhotoSize(s) && !(s.url || s.src));
   return fallback ? { sizeType: fallback.type || 'm', id: photo.id ?? 0 } : null;
 }
 
@@ -103,7 +107,7 @@ export function largestMissingSizeType(photo: any, prio: string[] = VIEWER_PHOTO
   if (sizes.length === 0) return null;
   for (const t of prio) {
     const s = sizes.find((x: any) => x.type === t);
-    if (s && !s.url && !s.src) return { sizeType: t, id: photo.id ?? 0 };
+    if (s && !s.url && !s.src && !isInlinePhotoSize(s)) return { sizeType: t, id: photo.id ?? 0 };
   }
   return null;
 }

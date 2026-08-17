@@ -57,6 +57,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   const measuredHRef = useRef(ch ?? 600);
 
   const [measTick, setMeasTick] = useState(0);
+  const measureRefsRef = useRef<Map<number, (el: HTMLDivElement | null) => void>>(new Map());
   const endReachedRef = useRef(false);
   const nearTopFiredRef = useRef(false);
   const readyFired = useRef(false);
@@ -300,17 +301,18 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
     if (suppressScrollRef.current) {
       suppressScrollRef.current = false;
+      st.current.lastST = el.scrollTop;
+      st.current.lastSH = el.scrollHeight;
     } else {
       userScrolledRef.current = true;
-    }
-
-    if (newSH !== st.current.lastSH && st.current.lastSH > 0) {
-      const diff = newSH - st.current.lastSH;
-      const nearBottom = st.current.lastST > 50 && st.current.lastST + el.clientHeight >= st.current.lastSH - 50;
-      if (nearBottom) {
-        el.scrollTop = newSH;
-      } else {
-        el.scrollTop = st.current.lastST + diff;
+      if (newSH !== st.current.lastSH && st.current.lastSH > 0) {
+        const diff = newSH - st.current.lastSH;
+        const nearBottom = st.current.lastST > 50 && st.current.lastST + el.clientHeight >= st.current.lastSH - 50;
+        if (nearBottom) {
+          el.scrollTop = newSH;
+        } else {
+          el.scrollTop = st.current.lastST + diff;
+        }
       }
     }
 
@@ -417,7 +419,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       }
       updateThumb();
     });
-  }, [scrollToKey, data.length, keyExtractor, containerHeight]);
+  }, [scrollToKey, data.length, containerHeight]);
 
   useEffect(() => {
     if (!dynamicMode) return;
@@ -447,15 +449,20 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     const extraProps: Record<string, any> = { 'data-vl-key': String(k) };
     if (withRef && dynamicMode) {
       const idx = i;
-      extraProps.ref = (el2: HTMLDivElement | null) => {
-        if (!el2) return;
-        const h = el2.offsetHeight;
-        if (h > 0 && st.current.heights[idx] !== h) {
-          st.current.heights[idx] = h;
-          st.current.heightsVersion++;
-          setMeasTick((t) => t + 1);
-        }
-      };
+      let refCb = measureRefsRef.current.get(idx);
+      if (!refCb) {
+        refCb = (el2: HTMLDivElement | null) => {
+          if (!el2) return;
+          const h = el2.offsetHeight;
+          if (h > 0 && st.current.heights[idx] !== h) {
+            st.current.heights[idx] = h;
+            st.current.heightsVersion++;
+            setMeasTick((t) => t + 1);
+          }
+        };
+        measureRefsRef.current.set(idx, refCb);
+      }
+      extraProps.ref = refCb;
     }
     vnode.props = { ...prev, ...extraProps };
     return vnode;

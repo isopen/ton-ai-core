@@ -86,17 +86,7 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
   if (data?.kind === 'img') {
     return <img class="tgui-emoji-inline" src={data.value} style={`width:${size}px;height:${size}px;vertical-align:middle`} />;
   }
-  if (alt) {
-    return (
-      <span
-        class="tgui-emoji-inline"
-        style={`width:${size}px;height:${size}px;line-height:${Math.round(size * 1.1)}px;text-align:center;font-size:${Math.round(size * 0.72)}px`}
-      >
-        {alt}
-      </span>
-    );
-  }
-  return <span class="tgui-emoji-placeholder" style={`width:${size}px;height:${size}px`} />;
+  return <span class="tgui-emoji-placeholder" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle`} />;
 }
 
 export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loop = true, playKey }: { docId?: string; url: string; alt?: string; size?: number; autoplay?: boolean; loop?: boolean; playKey?: string }) {
@@ -106,7 +96,7 @@ export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loo
     }
   }, [docId, url, alt]);
   if (!docId && !url) {
-    return <span class="tgui-emoji-inline" style={`font-size:${Math.round(size * 0.7)}px;line-height:1`}>{alt}</span>;
+    return <span class="tgui-emoji-inline" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle`} />;
   }
   return <EmojiInline docId={docId} url={url} alt={alt} size={size} autoplay={autoplay} loop={loop} playKey={playKey} />;
 }
@@ -179,9 +169,7 @@ function EmojiPendingRuns({ text, size }: { text: string; size: number }) {
   for (const r of runs) {
     if (r.start > pos) parts.push(<span key={'t' + key++}>{text.slice(pos, r.start)}</span>);
     parts.push(
-      <span key={'e' + key++} style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`}>
-        <span style={`display:block;width:100%;height:100%;line-height:${Math.round(size * 1.1)}px;text-align:center;font-size:${Math.round(size * 0.72)}px`}>{r.emoji}</span>
-      </span>
+      <span key={'e' + key++} style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`} />
     );
     pos = r.end;
   }

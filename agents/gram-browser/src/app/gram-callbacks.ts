@@ -76,7 +76,7 @@ export function createCallbacks(
         }
         const dialogs = s.dialogsRef.current.map(d => {
           if (`${d.peer.type}_${d.peer.id}` === cacheKey) {
-            return { ...d, topMessage: sentId, lastMsg: text, date: sentDate, unreadCount: 0 };
+            return { ...d, topMessage: sentId, lastMsg: text, lastMsgEntities: newMsgUpdate.message?.entities, date: sentDate, unreadCount: 0 };
           }
           return d;
         });

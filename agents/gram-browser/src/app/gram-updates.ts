@@ -101,6 +101,7 @@ export function createHandleUpdate(s: GramState) {
             dialogs[dialogIdx] = {
               ...dialogs[dialogIdx], topMessage: m.id || dialogs[dialogIdx].topMessage,
               lastMsg: m.message || dialogs[dialogIdx].lastMsg,
+              lastMsgEntities: m.entities || dialogs[dialogIdx].lastMsgEntities,
               date: m.date || dialogs[dialogIdx].date,
               unreadCount: m.out ? 0 : (isActiveChat ? dialogs[dialogIdx].unreadCount : (dialogs[dialogIdx].unreadCount || 0) + 1)
             };
@@ -112,7 +113,7 @@ export function createHandleUpdate(s: GramState) {
             const hasName = pinfo.firstName || pinfo.lastName || pinfo.username || pinfo.title;
             s.dialogsRef.current = [{
               peer: { type: peerType as any, id: peerId, ...pinfo },
-              topMessage: m.id, unreadCount: 1, lastMsg: m.message, date: m.date
+              topMessage: m.id, unreadCount: 1, lastMsg: m.message, lastMsgEntities: m.entities, date: m.date
             }, ...s.dialogsRef.current];
             scheduleDialogsFlush(s);
             if (!hasName) {
@@ -196,6 +197,7 @@ export function createHandleUpdate(s: GramState) {
                   const last = filtered[filtered.length - 1];
                   dialog.lastMsg = last.message || '[non-text message]';
                   if (dialog.lastMsg.length > 100) dialog.lastMsg = dialog.lastMsg.slice(0, 100) + '...';
+                  dialog.lastMsgEntities = Array.isArray(last.entities) ? last.entities.filter((e: any) => e.offset + e.length <= 100) : undefined;
                   dialog.topMessage = last.id;
                 } else {
                   dialog.lastMsg = t(S.HISTORY_CLEARED);

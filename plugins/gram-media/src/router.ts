@@ -15,6 +15,7 @@ const STICKER_SET_TTL_MS = 30 * 60 * 1000;
 const MAX_PARALLEL_PHOTOS = 16;
 const PHOTO_DOWNLOAD_DEADLINE_MS = 60_000;
 const PHOTO_REFRESH_TIMEOUT_MS = 20_000;
+const PHOTO_QUEUED_KEYS_MAX = 512;
 
 function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -41,6 +42,7 @@ export class GramMediaRouter {
     private photoUrlCache = new Map<string, string>();
     private probedCacheKeys = new Set<string>();
     private photoQueue: Array<{ photo: any; sizeType: string; messageId: number | string }> = [];
+    private photoQueuedKeys = new Set<string>();
     private photoInFlight = 0;
     private photoInFlightByKey = new Set<string>();
 
@@ -81,6 +83,13 @@ export class GramMediaRouter {
         const onDownloadPhoto = (e: Event) => {
             const { photo, sizeType, messageId } = (e as CustomEvent).detail || {};
             if (!photo || !sizeType || messageId == null) return;
+            const dk = String(messageId) + '_' + sizeType + '_' + (photo?.id ?? '');
+            if (this.photoQueuedKeys.has(dk)) return;
+            this.photoQueuedKeys.add(dk);
+            if (this.photoQueuedKeys.size > PHOTO_QUEUED_KEYS_MAX) {
+                const first = this.photoQueuedKeys.values().next().value;
+                if (first !== undefined) this.photoQueuedKeys.delete(first);
+            }
             this.photoQueue.push({ photo, sizeType, messageId });
             this.processPhotoQueue();
         };
@@ -158,6 +167,7 @@ export class GramMediaRouter {
     injectCachedPhotoUrls(msgs: MediaMessageLike[]): PhotoCacheProbeResult {
         if (isNoMediaCache()) return { messages: msgs, cachedIds: [] };
         const cachedIds: number[] = [];
+        let changedAny = false;
         const messages = msgs.map(m => {
             const photo = m.media?.photo;
             if (!photo?.sizes) return m;
@@ -172,9 +182,11 @@ export class GramMediaRouter {
                 return s;
             });
             if (!changed) return m;
+            changedAny = true;
             cachedIds.push(m.id);
             return { ...m, media: { ...m.media, photo: { ...photo, sizes: newSizes } } };
         });
+        if (!changedAny) return { messages: msgs, cachedIds: [] };
         return { messages, cachedIds };
     }
 
@@ -469,6 +481,7 @@ export class GramMediaRouter {
             const ck = this.getPhotoCacheKey(item.photo, item.sizeType);
             const cached = isNoMediaCache() ? undefined : this.photoUrlCache.get(ck);
             if (cached) {
+                this.photoQueuedKeys.delete(String(item.messageId) + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
                 this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached });
                 continue;
             }
@@ -481,6 +494,7 @@ export class GramMediaRouter {
             this.execPhotoDownload(item.photo, item.sizeType, item.messageId).finally(() => {
                 this.photoInFlight--;
                 this.photoInFlightByKey.delete(ck);
+                this.photoQueuedKeys.delete(String(item.messageId) + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
                 this.processPhotoQueue();
             });
         }
@@ -568,6 +582,10 @@ export class GramMediaRouter {
                         this.failPhotoDownload(messageId, sizeType);
                         return;
                     }
+                }
+
+                if (!result || (!result.bytes && !result.photoUrl && !result.fileRefExpired)) {
+                    throw new Error('empty photo download result');
                 }
 
                 if (attempt >= MAX_RETRIES) {

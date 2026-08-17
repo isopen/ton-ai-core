@@ -60,7 +60,19 @@ const TELEGRAM_API_HASH =
 
 const log = getLogger('gram-browser');
 
-const wlog = (...args: any[]) => log.debug(...args);
+let wlogForwardHandler: ((text: string) => void) | null = null;
+
+export function setWlogForwardHandler(h: ((text: string) => void) | null): void {
+    wlogForwardHandler = h;
+}
+
+const wlog = (...args: any[]) => {
+    log.debug(...args);
+    try {
+        const text = args.map((a) => (typeof a === 'string' ? a : a instanceof Error ? a.message : JSON.stringify(a))).join(' ');
+        wlogForwardHandler?.(text);
+    } catch {}
+};
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -552,12 +564,16 @@ interface DcConnection {
     session: any;
     counter: { value: number };
     initialized: boolean;
-    busy: boolean;
+    pending: Map<string, PendingCall>;
+    readLoopRunning: boolean;
+    dead: boolean;
+    encQueue: Promise<void>;
 }
 
 const dcConnectionPool: DcConnection[] = [];
 
-let dcDhInFlight = Promise.resolve();
+const dcDhInFlightMap = new Map<number, Promise<void>>();
+const dcConnecting = new Map<string, Promise<DcConnection>>();
 
 const MAX_DC_PARALLEL_RPC = 64;
 const dcRpcSlots = new Map<number, number>();
@@ -660,9 +676,9 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
         };
         dcStoredAuthKeys.set(dcId, { authKey: homeSession.authKey, authKeyId: homeSession.authKeyId, serverSalt: homeSession.serverSalt, serverTime: homeSession.serverTime });
     } else {
-        const prevDh = dcDhInFlight;
+        const prevDh = dcDhInFlightMap.get(dcId);
         let dhDone = false;
-        dcDhInFlight = (async () => {
+        const dhPromise = (async () => {
             await prevDh;
             if (dcStoredAuthKeys.has(dcId)) return;
             const rsaKey = new DefaultPublicRsaKey([TELEGRAM_PUBLIC_KEY]);
@@ -673,11 +689,17 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
                 const response = await newConn.readPacket();
                 return parseNoCryptoResponse(response);
             });
-            dcStoredAuthKeys.set(dcId, { authKey: authResult.authKey, authKeyId: authResult.authKeyId, serverSalt: authResult.serverSalt, serverTime: authResult.serverTime });
+            const storedKey = { authKey: authResult.authKey, authKeyId: authResult.authKeyId, serverSalt: authResult.serverSalt, serverTime: authResult.serverTime };
+            dcStoredAuthKeys.set(dcId, storedKey);
+            if (tdBinlog) {
+                void tdBinlog.saveDcAuthKey(dcId, storedKey).catch(() => {});
+            }
             needsAuthImport = !isHomeDc && !isCurrentDc && authenticated;
             dhDone = true;
         })();
-        await dcDhInFlight;
+        dcDhInFlightMap.set(dcId, dhPromise);
+        void dhPromise.finally(() => { if (dcDhInFlightMap.get(dcId) === dhPromise) dcDhInFlightMap.delete(dcId); }).catch(() => {});
+        await dhPromise;
         if (!dhDone) {
             const stored = dcStoredAuthKeys.get(dcId)!;
             const akBuf = Buffer.alloc(8);
@@ -721,7 +743,10 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
         session,
         counter: { value: msgIdCounter },
         initialized: false,
-        busy: false,
+        pending: new Map(),
+        readLoopRunning: false,
+        dead: false,
+        encQueue: Promise.resolve(),
     };
 
     if (needsAuthImport) {
@@ -784,23 +809,29 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
 async function acquireDcConnection(dcId: number, type: 'video' | 'download'): Promise<DcConnection> {
     for (let i = dcConnectionPool.length - 1; i >= 0; i--) {
         const c = dcConnectionPool[i];
-        if (c.dcId === dcId && !c.conn.isConnected()) {
+        if (c.dcId !== dcId || c.type !== type) continue;
+        if (c.dead || !c.conn.isConnected()) {
             try { c.conn.close(); } catch {}
+            rejectDcPending(c, new Error('Connection closed'));
             dcConnectionPool.splice(i, 1);
+            continue;
         }
+        return c;
     }
-    const free = dcConnectionPool.find(c => c.dcId === dcId && c.type === type && !c.busy && c.conn.isConnected());
-    if (free) {
-        free.busy = true;
-        return free;
+    const key = dcId + ':' + type;
+    let connecting = dcConnecting.get(key);
+    if (!connecting) {
+        connecting = createDcConnection(dcId, type).then((entry) => {
+            startDcReadLoop(entry);
+            return entry;
+        }).finally(() => {
+            if (dcConnecting.get(key) === connecting) dcConnecting.delete(key);
+        });
+        dcConnecting.set(key, connecting);
     }
-    const entry = await createDcConnection(dcId, type);
-    entry.busy = true;
+    const entry = await connecting;
+    if (entry.dead || !entry.conn.isConnected()) throw new Error('Connection lost on DC ' + dcId);
     return entry;
-}
-
-function releaseDcConnection(entry: DcConnection): void {
-    entry.busy = false;
 }
 
 async function probeCdnDcs(): Promise<void> {
@@ -812,15 +843,12 @@ async function probeCdnDcs(): Promise<void> {
         await Promise.all(ids.map(async (id: any) => {
             const dcId = Number(id);
             if (!dcId || cdnUnreachableDcs.has(dcId)) return;
-            let entry: DcConnection | null = null;
             try {
-                entry = await withTimeout(acquireDcConnection(dcId, 'download'), CDN_PROBE_TIMEOUT_MS, 'CDN probe timeout dc=' + dcId);
-                wlog('[worker] CDN probe: DC ' + dcId + ' reachable');
+                const entry = await withTimeout(acquireDcConnection(dcId, 'download'), CDN_PROBE_TIMEOUT_MS, 'CDN probe timeout dc=' + dcId);
+                if (entry) wlog('[worker] CDN probe: DC ' + dcId + ' reachable');
             } catch {
                 cdnUnreachableDcs.add(dcId);
                 wlog('[worker] CDN probe: DC ' + dcId + ' unreachable, blacklisted');
-            } finally {
-                if (entry) releaseDcConnection(entry);
             }
         }));
     } catch {}
@@ -831,9 +859,283 @@ function invalidateDcKey(dcId: number): void {
     for (let i = dcConnectionPool.length - 1; i >= 0; i--) {
         const c = dcConnectionPool[i];
         if (c.dcId === dcId) {
+            c.dead = true;
+            rejectDcPending(c, new Error('Connection closed'));
             try { c.conn.close(); } catch {}
             dcConnectionPool.splice(i, 1);
         }
+    }
+}
+
+function rejectDcPending(entry: DcConnection, err: Error): void {
+    for (const [, p] of entry.pending) {
+        clearTimeout(p.timer);
+        p.reject(err);
+    }
+    entry.pending.clear();
+}
+
+function dcNextMsgId(entry: DcConnection): bigint {
+    const now = Math.floor(Date.now() / 1000) + serverTimeOffset;
+    entry.session.serverTime = now;
+    const timeBig = BigInt(now & 0xFFFFFFFF) << 32n;
+    entry.counter.value = (entry.counter.value + 4) & 0xFFFFFFFF;
+    return (timeBig | BigInt(entry.counter.value)) & 0x7FFFFFFFFFFFFFFFn;
+}
+
+function dcNextSeqNo(entry: DcConnection): number {
+    const seq = entry.session.seqNo;
+    entry.session.seqNo += 2;
+    return seq | 1;
+}
+
+async function dcEncrypt(entry: DcConnection, msgId: bigint, seqNo: number, body: Buffer): Promise<Buffer> {
+    const plaintext = Buffer.alloc(32 + body.length);
+    const saltBuf = Buffer.alloc(8);
+    saltBuf.writeBigUInt64LE(entry.serverSalt, 0);
+    saltBuf.copy(plaintext, 0);
+    plaintext.writeBigUInt64LE(entry.session.sessionId, 8);
+    plaintext.writeBigUInt64LE(msgId, 16);
+    plaintext.writeInt32LE(seqNo, 24);
+    plaintext.writeInt32LE(body.length, 28);
+    body.copy(plaintext, 32);
+
+    const totalLen = plaintext.length + 12;
+    const alignedLen = ((totalLen + 15) & ~15);
+    const padLen = alignedLen - plaintext.length;
+    const padding = crypton.getRandomBytes(padLen);
+
+    const msgKey = await crypton.MTProtoKDF.computeMsgKey(entry.authKey, plaintext, padding, true);
+    const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(entry.authKey, msgKey, true);
+    const encryptedPayload = await crypton.AES256IGE.encrypt(Buffer.concat([plaintext, padding]), aesKey, aesIv);
+    const authKeyIdBuf = Buffer.alloc(8);
+    authKeyIdBuf.writeBigUInt64LE(entry.authKeyId, 0);
+    return Buffer.concat([authKeyIdBuf, msgKey, encryptedPayload]);
+}
+
+async function dcDecrypt(entry: DcConnection, data: Buffer): Promise<{ msgId: bigint; body: Buffer } | null> {
+    if (data.length < 32) return null;
+    const msgKey = Buffer.from(data.subarray(8, 24));
+    const encryptedData = Buffer.from(data.subarray(24));
+    const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(entry.authKey, msgKey, false);
+    const decrypted = await crypton.AES256IGE.decrypt(encryptedData, aesKey, aesIv);
+    if (decrypted.length < 32) return null;
+    entry.serverSalt = decrypted.readBigUInt64LE(0);
+    const msgId = decrypted.readBigUInt64LE(16);
+    const bodyLen = decrypted.readInt32LE(28);
+    if (bodyLen < 0 || 32 + bodyLen > decrypted.length) return null;
+    const padLen = decrypted.length - 32 - bodyLen;
+    if (padLen < 12 || padLen > 1024) return null;
+    const body = Buffer.from(decrypted.subarray(32, 32 + bodyLen));
+    return { msgId, body };
+}
+
+function dispatchDcMessage(entry: DcConnection, msgId: bigint, body: Buffer): void {
+    if (body.length < 4) return;
+    const constructorId = body.readUInt32LE(0);
+    wlog('[worker] DC' + entry.dcId + ' rx cid=0x' + constructorId.toString(16) + ' len=' + body.length + ' pending=' + entry.pending.size + ' msgId=' + msgId);
+    if (constructorId === TL_CONSTRUCTORS.RPC_RESULT) {
+        if (body.length < 12) return;
+        const reqMsgId = body.readBigUInt64LE(4);
+        const pending = entry.pending.get(reqMsgId.toString());
+        if (!pending) {
+            wlog('[worker] DC' + entry.dcId + ' RPC_RESULT for unknown reqMsgId=' + reqMsgId);
+            return;
+        }
+        const inner = Buffer.from(body.subarray(12));
+        if (inner.length < 4) return;
+        const innerId = inner.readUInt32LE(0);
+        if (innerId === TL_CONSTRUCTORS.GZIPPED) {
+            if (inner.length < 8) return;
+            const len = inner.readUInt32LE(4);
+            if (len <= 0 || 8 + len > inner.length) return;
+            const compressed = Buffer.from(inner.subarray(8, 8 + len));
+            entry.pending.delete(reqMsgId.toString());
+            clearTimeout(pending.timer);
+            decompressGzip(compressed).then(decompressed => {
+                pending.resolve(decompressed);
+            }).catch(err => {
+                pending.reject(new Error('Gzip decompression failed: ' + err.message));
+            });
+            return;
+        }
+        if (innerId === TL_CONSTRUCTORS.RPC_ERROR) {
+            const reader = new TLDeserializer(inner.subarray(4));
+            const code = reader.readInt32();
+            const msg = reader.readString();
+            entry.pending.delete(reqMsgId.toString());
+            clearTimeout(pending.timer);
+            pending.reject(new Error('RPC Error ' + code + ': ' + msg));
+            return;
+        }
+        entry.pending.delete(reqMsgId.toString());
+        clearTimeout(pending.timer);
+        pending.resolve(inner);
+        return;
+    }
+    if (constructorId === TL_CONSTRUCTORS.MSG_CONTAINER) {
+        if (body.length < 8) return;
+        const count = body.readUInt32LE(4);
+        let off = 8;
+        for (let i = 0; i < count; i++) {
+            if (off + 16 > body.length) return;
+            const innerMsgId = body.readBigUInt64LE(off);
+            const innerLen = body.readUInt32LE(off + 12);
+            if (innerLen <= 0 || off + 16 + innerLen > body.length) return;
+            dispatchDcMessage(entry, innerMsgId, Buffer.from(body.subarray(off + 16, off + 16 + innerLen)));
+            off += 16 + innerLen + ((4 - (innerLen % 4)) % 4);
+        }
+        return;
+    }
+    if (constructorId === TL_CONSTRUCTORS.MSGS_ACK) {
+        return;
+    }
+    if (constructorId === TL_CONSTRUCTORS.BAD_MSG_NOTIFICATION) {
+        if (body.length < 20) return;
+        const badMsgId = body.readBigUInt64LE(4);
+        const errorCode = body.readInt32LE(16);
+        if (errorCode === 16) {
+            entry.initialized = false;
+        }
+        const pending = entry.pending.get(badMsgId.toString());
+        if (pending) {
+            entry.pending.delete(badMsgId.toString());
+            clearTimeout(pending.timer);
+            pending.reject(new Error('BAD_MSG ' + errorCode + ' on DC ' + entry.dcId));
+        }
+        return;
+    }
+    if (constructorId === TL_CONSTRUCTORS.BAD_SERVER_SALT) {
+        if (body.length < 28) return;
+        const badMsgId = body.readBigUInt64LE(4);
+        const errorCode = body.readInt32LE(16);
+        const newSalt = body.readBigUInt64LE(20);
+        entry.serverSalt = newSalt;
+        entry.session.serverSalt = newSalt;
+        entry.initialized = false;
+        const pending = entry.pending.get(badMsgId.toString());
+        if (pending) {
+            entry.pending.delete(badMsgId.toString());
+            clearTimeout(pending.timer);
+            pending.reject(new Error('BAD_SERVER_SALT ' + errorCode + ' on DC ' + entry.dcId));
+        }
+        return;
+    }
+    if (constructorId === TL_CONSTRUCTORS.NEW_SESSION_CREATED) {
+        if (body.length < 20) return;
+        const newSalt = body.readBigUInt64LE(12);
+        entry.serverSalt = newSalt;
+        entry.session.serverSalt = newSalt;
+        return;
+    }
+}
+
+function startDcReadLoop(entry: DcConnection): void {
+    if (entry.readLoopRunning || entry.dead) return;
+    entry.readLoopRunning = true;
+    (async () => {
+        while (!entry.dead && entry.conn.isConnected()) {
+            try {
+                const data = await entry.conn.readPacket();
+                if (entry.dead) break;
+                if (data.length >= 8 && data.readBigUInt64LE(0) === 0n) {
+                    if (data.length >= 20) {
+                        const msgId = data.readBigUInt64LE(8);
+                        const msgLen = data.readUint32LE(16);
+                        if (msgLen > 0 && data.length >= 20 + msgLen) {
+                            dispatchDcMessage(entry, msgId, Buffer.from(data.subarray(20, 20 + msgLen)));
+                        }
+                    }
+                    continue;
+                }
+                const dec = await dcDecrypt(entry, data);
+                if (!dec) continue;
+                dispatchDcMessage(entry, dec.msgId, dec.body);
+            } catch (e: any) {
+                if (entry.dead || !entry.readLoopRunning) break;
+                const msg = String((e as Error)?.message || e);
+                wlog('[worker] DC ' + entry.dcId + ' read loop error: ' + msg);
+                entry.dead = true;
+                rejectDcPending(entry, new Error('DC read loop error: ' + msg));
+                break;
+            }
+        }
+        entry.readLoopRunning = false;
+    })();
+}
+
+async function sendDcRpc(entry: DcConnection, methodName: string, params: Record<string, any>): Promise<Buffer> {
+    const registry = getSchemaRegistry();
+    const comb = registry.findFunctionByName(methodName);
+    if (!comb) throw new Error('Unknown method: ' + methodName);
+
+    let effectiveParams = { ...params };
+    let flags = effectiveParams['flags'] ?? 0;
+    for (const field of comb.fields) {
+        if (field.conditionalFlagsField !== undefined && field.conditionalBit !== undefined) {
+            const val = effectiveParams[field.name];
+            if (val !== undefined && val !== null && val !== false) {
+                flags |= (1 << field.conditionalBit);
+            }
+        }
+    }
+    if (comb.fields.some((f: any) => f.name === 'flags' && f.type === '#')) {
+        effectiveParams['flags'] = flags;
+    }
+
+    const methodBody = new SchemaSerializer(registry).serializeCombinator(comb, effectiveParams);
+
+    const prev = entry.encQueue;
+    let release: () => void;
+    entry.encQueue = new Promise<void>(resolve => { release = resolve; });
+    await prev;
+    try {
+        let body: Buffer;
+        if (!entry.initialized) {
+            entry.initialized = true;
+            const header = new SchemaSerializer(registry);
+            header.writeUint32(TL_CONSTRUCTORS.INVOKE_WITH_LAYER);
+            header.writeInt32(223);
+            header.writeUint32(TL_CONSTRUCTORS.INIT_CONNECTION);
+            header.writeInt32(0);
+            header.writeInt32(getApiId());
+            header.writeString(getDeviceModel());
+            header.writeString('1.0');
+            header.writeString(getAppVersion());
+            header.writeString('en');
+            header.writeString('');
+            header.writeString('en');
+            body = Buffer.concat([header.toBuffer(), methodBody]);
+        } else {
+            body = methodBody;
+        }
+
+        const msgId = dcNextMsgId(entry);
+        const seqNo = dcNextSeqNo(entry);
+        const encrypted = await dcEncrypt(entry, msgId, seqNo, body);
+        wlog('[worker] DC' + entry.dcId + ' tx ' + methodName + ' msgId=' + msgId + ' seq=' + seqNo + ' header=' + (body.length > methodBody.length) + ' bodyLen=' + body.length + ' pendingAfter=' + (entry.pending.size + 1));
+
+        const key = msgId.toString();
+        return await new Promise<Buffer>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                entry.pending.delete(key);
+                reject(new Error('RPC timeout on DC ' + entry.dcId + ' ' + methodName));
+            }, 30000);
+            entry.pending.set(key, {
+                msgId,
+                constructorId: comb.id,
+                resolve: (v: Buffer) => { clearTimeout(timer); resolve(v); },
+                reject: (e: Error) => { clearTimeout(timer); reject(e); },
+                timer,
+            });
+            entry.conn.sendEncrypted(encrypted).catch((e: any) => {
+                entry.pending.delete(key);
+                clearTimeout(timer);
+                reject(e);
+            });
+        });
+    } finally {
+        release!();
     }
 }
 
@@ -842,6 +1144,7 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
     let connRebuilds = 0;
     let authRebuilds = 0;
     let floodRetries = 0;
+    let saltRetries = 0;
     try {
         const acquire = async (): Promise<DcConnection> => {
             for (let f = 0; ; f++) {
@@ -858,13 +1161,29 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
             }
         };
         const call = async (conn: DcConnection): Promise<any> => {
-            const result = await directRpcWith(
-                conn.conn, conn.authKey, conn.authKeyId,
-                conn.serverSalt, conn.session, conn.counter, conn.initialized,
-                methodName, params
-            );
+            const rawResult = await sendDcRpc(conn, methodName, params);
             conn.initialized = true;
-            return result;
+            const registry = getSchemaRegistry();
+            const d = new SchemaDeserializer(rawResult, registry);
+            const boxed = d.readBoxedObject();
+            if (!boxed) return null;
+
+            function deepConvert(v: any): any {
+                if (v && typeof v === 'object' && 'constructorId' in v && 'constructorName' in v && 'fields' in v) {
+                    const name = v.constructorName;
+                    if (name === 'boolTrue') return true;
+                    if (name === 'boolFalse') return false;
+                    const r: any = { _: name };
+                    for (const [k, val] of Object.entries(v.fields)) r[k] = deepConvert(val);
+                    return r;
+                }
+                if (Array.isArray(v)) return v.map(deepConvert);
+                if (v instanceof Buffer) return v.toString('hex');
+                if (typeof v === 'bigint') return v.toString();
+                return v;
+            }
+
+            return deepConvert(boxed);
         };
         for (;;) {
             try {
@@ -880,6 +1199,11 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
                     await new Promise(r => setTimeout(r, Math.min(6000, (floodSec + 1) * 1000)));
                     continue;
                 }
+                if (msg.includes('BAD_SERVER_SALT') && saltRetries < 2) {
+                    saltRetries++;
+                    wlog('[worker] DC ' + dcId + ' BAD_SERVER_SALT on ' + methodName + ' — retrying with new salt');
+                    continue;
+                }
                 const isAuthUnregistered = msg.includes('AUTH_KEY_UNREGISTERED');
                 const isAuthBytesInvalid = msg.includes('AUTH_BYTES_INVALID') || msg.includes('Connection closed') || msg.includes('Connection lost') || msg.includes('Failed to connect') || msg.includes('auth export failed') || msg.includes('auth import failed');
                 if (isAuthUnregistered && authRebuilds < 2) {
@@ -891,9 +1215,11 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
                 }
                 if (isAuthBytesInvalid) {
                     if (dc) {
+                        dc.dead = true;
                         const idx = dcConnectionPool.indexOf(dc);
                         if (idx >= 0) dcConnectionPool.splice(idx, 1);
                         try { dc.conn.close(); } catch {}
+                        rejectDcPending(dc, new Error('Connection closed'));
                     }
                     dc = null;
                     if (connRebuilds < 2) {
@@ -906,7 +1232,6 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
             }
         }
     } finally {
-        if (dc) dc.busy = false;
     }
 }
 
@@ -922,6 +1247,8 @@ async function callRpcOnDc(dcId: number, methodName: string, params: Record<stri
 
 function closeAllDcConnections(): void {
     for (const entry of dcConnectionPool) {
+        entry.dead = true;
+        rejectDcPending(entry, new Error('Disconnected'));
         try { entry.conn.close(); } catch {}
     }
     dcConnectionPool.length = 0;
@@ -1315,8 +1642,14 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
         const pid = String(d.peer?.user_id ?? d.peer?.chat_id ?? d.peer?.channel_id ?? '');
         const lastMsg = lastMsgMap.get(pid);
         let lastMsgText = '';
-        if (lastMsg) { lastMsgText = lastMsg.message || ''; if (lastMsgText.length > 100) lastMsgText = lastMsgText.slice(0, 100) + '...'; }
-        dialogs.push({ peer, topMessage: d.top_message, unreadCount: d.unread_count || 0, lastMsg: lastMsgText, date: lastMsg?.date, readInboxMaxId: d.read_inbox_max_id, readOutboxMaxId: d.read_outbox_max_id });
+        let lastMsgEntities: any[] | undefined;
+        if (lastMsg) {
+            lastMsgText = lastMsg.message || '';
+            if (lastMsgText.length > 100) lastMsgText = lastMsgText.slice(0, 100) + '...';
+            lastMsgEntities = Array.isArray(lastMsg.entities) ? lastMsg.entities.filter((e: any) => e.offset + e.length <= 100) : undefined;
+            if (lastMsgEntities && lastMsgEntities.length === 0) lastMsgEntities = undefined;
+        }
+        dialogs.push({ peer, topMessage: d.top_message, unreadCount: d.unread_count || 0, lastMsg: lastMsgText, lastMsgEntities, date: lastMsg?.date, readInboxMaxId: d.read_inbox_max_id, readOutboxMaxId: d.read_outbox_max_id });
     }
     return { dialogs };
 }
@@ -2250,6 +2583,17 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     const state = tdBinlog.getState();
     const saved = state.authKey ? state : null;
     wlog('[worker] handleConnectInternal: saved=' + !!saved + ' authenticated=' + state.authenticated + ' dcId=' + state.dcId + ' authKey=' + (state.authKey ? state.authKey.length + 'bytes' : 'null'));
+    if (saved?.dcAuthKeys) {
+        let loaded = 0;
+        for (const [dc, k] of Object.entries(saved.dcAuthKeys)) {
+            const dcN = Number(dc);
+            if (dcN >= 1 && dcN <= 5 && k && Buffer.isBuffer(k.authKey) && k.authKey.length > 0) {
+                dcStoredAuthKeys.set(dcN, { authKey: k.authKey, authKeyId: k.authKeyId, serverSalt: k.serverSalt, serverTime: k.serverTime });
+                loaded++;
+            }
+        }
+        if (loaded > 0) wlog('[worker] handleConnectInternal: restored ' + loaded + ' dc auth keys from binlog');
+    }
     if (saved) {
         serverTimeOffset = saved.serverTimeOffset;
         const authKey = saved.authKey!;
@@ -2647,8 +2991,8 @@ let downloadInFlight = 0;
 const MAX_PARALLEL_DOWNLOADS = 48;
 
 const IS_PREMIUM = false;
-const POOL_BUDGET = (IS_PREMIUM ? 16 : 4) << 20;
-const STREAM_POOL_BUDGET = (IS_PREMIUM ? 16 : 4) << 20;
+const POOL_BUDGET = (IS_PREMIUM ? 16 : 8) << 20;
+const STREAM_POOL_BUDGET = (IS_PREMIUM ? 16 : 8) << 20;
 const UNKNOWN_DC = 0;
 const poolInFlight = new Map<string, number>();
 const poolWaiters = new Map<string, PoolWaiter[]>();
@@ -2756,10 +3100,8 @@ function dcAndSize(document?: any, photo?: any): { dc: number; size: number } {
 const MAX_PART_COUNT = IS_PREMIUM ? 8000 : 4000;
 const MAX_FILE_SIZE = (512 << 10) * MAX_PART_COUNT;
 function selectPartSize(size: number): number {
-    if (!(size > 0)) return 32 << 10;
-    let part = 64 << 10;
-    while (part < (512 << 10) && size / part > MAX_PART_COUNT) part *= 2;
-    return part;
+    const maxPart = 1 << 20;
+    return maxPart;
 }
 
 const SMALL_FILE_LIMIT = 20 << 10;
@@ -2821,6 +3163,7 @@ async function runWithSem<T>(fn: () => Promise<T>, small = false): Promise<T> {
 }
 
 let queueProcessing = false;
+let lastQueueStallLog = 0;
 async function processDownloadQueue(): Promise<void> {
     if (queueProcessing) return;
     queueProcessing = true;
@@ -2832,13 +3175,20 @@ async function processDownloadQueue(): Promise<void> {
             const { dc, size } = dcAndSize(downloadQueue[i].document, downloadQueue[i].photo);
             const small = size < SMALL_FILE_LIMIT;
             const partSize = selectPartSize(size);
-            if (poolFree(poolKey(dc, small)) < partSize) continue;
+            const effSize = size > 0 ? Math.min(partSize, size) : Math.min(partSize, SMALL_FILE_LIMIT);
+            if (poolFree(poolKey(dc, small)) < effSize) continue;
             if (downloadQueue[i].priority >= bestPriority) {
                 bestPriority = downloadQueue[i].priority;
                 bestIdx = i;
             }
         }
-        if (bestIdx < 0) break;
+        if (bestIdx < 0) {
+            if (downloadQueue.length > 0 && Date.now() - lastQueueStallLog > 5000) {
+                lastQueueStallLog = Date.now();
+                wlog('[dlq] stall queued=' + downloadQueue.length + ' inflight=' + downloadInFlight + ' pools=' + JSON.stringify(Array.from(poolInFlight.entries())));
+            }
+            break;
+        }
         const item = downloadQueue.splice(bestIdx, 1)[0];
         downloadInFlight++;
         const label = item.photo ? 'photo' : item.document?.thumb_size ? `thumb:${item.document.thumb_size}` : 'document';
@@ -2953,11 +3303,18 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         const effPriority = (): number => activeDownloadPriority.get(cacheKey) ?? priority;
 
         const poolDc = targetDc || UNKNOWN_DC;
-        const poolCall = async <T>(fn: () => Promise<T>): Promise<T> => {
+        const poolCall = async <T>(fn: () => Promise<T>, size: number): Promise<T> => {
             if (dispatcher) await dispatcher.pace();
-            await acquirePool(poolDc, fileSmall, PART_SIZE, cacheKey, effPriority());
+            await acquirePool(poolDc, fileSmall, size, cacheKey, effPriority());
             try { return await fn(); }
-            finally { releasePool(poolDc, fileSmall, PART_SIZE); }
+            finally { releasePool(poolDc, fileSmall, size); }
+        };
+        const requestSize = (ofs: bigint): number => {
+            if (knownSize > 0) {
+                const remaining = knownSize - Number(ofs);
+                return remaining > 0 ? Math.min(PART_SIZE, remaining) : PART_SIZE;
+            }
+            return PART_SIZE;
         };
 
         let cdnDcId = 0;
@@ -2982,6 +3339,13 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
 
         const doCall = async (ofs: bigint, lim: number, precise = false): Promise<any> => {
             if (genRef && genRef.value !== photoDownloadGen) throw new Error('ABORTED');
+            if (ofs === 0n) {
+                wlog('[dl] req0 location=' + JSON.stringify({ _: location?._, id: location?.id?.toString?.(), ah: location?.access_hash?.toString?.(),
+                    frLen: location?.file_reference?.length, frHex: Buffer.isBuffer(location?.file_reference) ? location.file_reference.subarray(0, 16).toString('hex') : typeof location?.file_reference === 'string' ? location.file_reference.slice(0, 32) : location?.file_reference,
+                    thumb: location?.thumb_size ?? location?.thumb, photoId: location?.photo_id?.toString?.(),
+                    peer: location?.peer ? { _: location.peer._, peerId: location.peer.channel_id?.toString?.() || location.peer.user_id?.toString?.() || location.peer.chat_id?.toString?.(), ah: location.peer.access_hash?.toString?.() } : undefined,
+                    flags: location?.flags }) + ' precise=' + precise + ' lim=' + lim + ' locType=' + typeof location + ' dc=' + targetDc + ' route=' + (targetDc > 0 ? 'callRpcOnDc' : 'callRpc'));
+            }
             if (cdnDcId > 0 && cdnFileToken) {
                 const p = { file_token: cdnFileToken, offset: ofs, limit: lim };
                 let result: any;
@@ -3030,11 +3394,13 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         };
 
         let firstResult: any;
+        const firstSize = PART_SIZE;
+        const firstClaimSize = knownSize > 0 ? Math.min(PART_SIZE, knownSize) : Math.min(PART_SIZE, SMALL_FILE_LIMIT);
         try {
-            firstResult = await poolCall(() => doCall(BigInt(0), PART_SIZE));
+            firstResult = await poolCall(() => doCall(BigInt(0), firstSize, false), firstClaimSize);
         } catch (e: any) {
             if (!e.message?.includes('FILE_REFERENCE_EXPIRED') || !(await refreshDocumentRef())) throw e;
-            firstResult = await poolCall(() => doCall(BigInt(0), PART_SIZE));
+            firstResult = await poolCall(() => doCall(BigInt(0), firstSize, false), firstClaimSize);
         }
         if (genRef && genRef.value !== photoDownloadGen) return { type: '', bytes: new ArrayBuffer(0), error: 'ABORTED' };
 
@@ -3043,7 +3409,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 throw new Error('File requires CDN DC ' + firstResult.dc_id + ' which is unreachable');
             }
             wlog('[dl] CDN redirect id=' + id + ' label=' + label + ' cdnDc=' + cdnDcId);
-            firstResult = await poolCall(() => doCall(BigInt(0), PART_SIZE));
+            firstResult = await poolCall(() => doCall(BigInt(0), firstSize, false), firstClaimSize);
         }
         if (firstResult._ !== 'upload.file') return { type: '', bytes: new ArrayBuffer(0), error: 'Unexpected response: ' + firstResult._ };
 
@@ -3058,7 +3424,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         if (allBytes.length === 0) {
             log.warn('[dl] empty chunk id=' + id + ' label=' + label + ' type=' + typeName + ' size=' + knownSize + ' dc=' + targetDc + ' — retrying precise');
             try {
-                const r2 = await poolCall(() => doCall(BigInt(0), PART_SIZE, true));
+                const r2 = await poolCall(() => doCall(BigInt(0), firstSize, true), firstSize);
                 const t2 = r2.type?._ || 'storage.fileUnknown';
                 const c2 = Buffer.from(r2.bytes || '', 'hex');
                 if (r2._ === 'upload.file' && c2.length > 0) {
@@ -3098,14 +3464,14 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             let lastErr: any = new Error('Part download failed idx=' + partIdx);
             for (let attempt = 0; attempt < 5; attempt++) {
                 try {
-                    const r = await poolCall(() => doCall(BigInt(partIdx * PART_SIZE), PART_SIZE));
+                    const lim = requestSize(BigInt(partIdx * PART_SIZE));
+                    const precise = knownSize > 0 && lim < PART_SIZE;
+                    const r = await poolCall(() => doCall(BigInt(partIdx * PART_SIZE), lim, precise), lim);
+                    if (r._ === 'upload.fileEmpty') {
+                        return Buffer.alloc(0);
+                    }
                     if (r._ === 'upload.file') {
-                        const c = Buffer.from(r.bytes || '', 'hex');
-                        if (partIdx === 1 && c.length === 0) {
-                            lastErr = new Error('Empty first part');
-                        } else {
-                            return c;
-                        }
+                        return Buffer.from(r.bytes || '', 'hex');
                     } else if (r._ === 'upload.fileCdnRedirect') {
                         applyCdnRedirect(r);
                         wlog('[dl] CDN redirect mid-file id=' + id + ' label=' + label + ' cdnDc=' + cdnDcId);

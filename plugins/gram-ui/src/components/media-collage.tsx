@@ -7,7 +7,7 @@ import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import type { ImageSpec } from '../types.js';
 import { calculateAlbumLayout } from './photo-album-layout.js';
-import { firstMissingSizeType, CHAT_PHOTO_PRIO } from './photo-spec.js';
+import { firstMissingSizeType, CHAT_PHOTO_PRIO, isInlinePhotoSize } from './photo-spec.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
 
@@ -143,7 +143,7 @@ export function MediaCollage({
         const v = item.video;
         const photo = v ? null : item.m?.media?.photo;
         const sizes = Array.isArray(photo?.sizes) ? photo.sizes : [];
-        const hasAnyUrl = sizes.some((s: any) => !!(s.url || s.src));
+        const hasAnyUrl = sizes.some((s: any) => !isInlinePhotoSize(s) && !!(s.url || s.src));
         const progress = (photo?.progress as number | undefined) ?? 0;
         const isPreloading = !hasAnyUrl;
         const failed = photo?.failed === true;

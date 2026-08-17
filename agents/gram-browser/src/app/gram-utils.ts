@@ -102,9 +102,11 @@ export function scheduleMessagesFlush(s: GramState) {
       prefetchPhotoCaches(s, cached).catch(() => {});
       injectCachedDocumentSources(s, cached);
       const { messages: cachedMsgs, cachedIds } = injectCachedPhotoUrls(cached);
-      const cachedSources: Record<number, string> = {};
-      for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
-      s.tgui.current?.dispatch({ type: 'SET_MESSAGES', messages: cachedMsgs, photoSources: cachedSources });
+      if (cachedMsgs !== cached || (cachedIds.length > 0)) {
+        const cachedSources: Record<number, string> = {};
+        for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
+        s.tgui.current?.dispatch({ type: 'SET_MESSAGES', messages: cachedMsgs, photoSources: cachedSources });
+      }
     }
   });
 }

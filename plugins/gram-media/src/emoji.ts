@@ -1157,7 +1157,22 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         if (this.debug) log.info('[gram-media] tg-download-emoji-batch items=' + items.length);
         const { resolved, unknownIds, unknownAlts } = await this.resolveEmojiBatchDocs(items);
         if (resolved.length === 0 && unknownIds.length === 0 && unknownAlts.length === 0) {
-            if (this.debug) log.info('[gram-media] emoji batch resolved=0 of', items.length);
+            if (this.debug) {
+                const detail = items.map((it) => {
+                    const id = it.docId != null ? String(it.docId) : null;
+                    let why = 'no-doc';
+                    if (id) {
+                        if (this.requestedEmojiDocIds.has(id)) why = 'in-flight';
+                        else if ((this.emojiDocAttempts.get(id) || 0) >= EMOJI_MAX_ATTEMPTS) why = 'attempts=' + this.emojiDocAttempts.get(id);
+                        else {
+                            const bannedAt = this.emojiStubDocIds.get(id);
+                            why = bannedAt != null ? 'stub-ban-' + Math.round((Date.now() - bannedAt) / 1000) + 's' : 'unknown';
+                        }
+                    }
+                    return (it.alt != null ? 'alt=' + it.alt : '') + (id ? ' doc=' + id : '') + ' [' + why + ']';
+                });
+                log.info('[gram-media] emoji batch resolved=0 of', items.length, '->', detail.join(' | '));
+            }
 
             for (const it of items) {
                 const docId = it.docId != null ? String(it.docId) : null;
