@@ -201,7 +201,7 @@ function isEmojiOnlyText(text: string, entities?: any[]): boolean {
   return !/\S/.test(text.slice(pos));
 }
 
-export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EMOJI_SIZE, singleLine = false }: { text: string; entities?: any[]; documentUrls: Record<number, string>; inlineSize?: number; singleLine?: boolean }) {
+export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EMOJI_SIZE, singleLine = false, ctx = 'chat' }: { text: string; entities?: any[]; documentUrls: Record<number, string>; inlineSize?: number; singleLine?: boolean; ctx?: 'dialog' | 'chat' }) {
   const emojiEntities = (entities || [])
     .filter((e: any) => e?._ === 'messageEntityCustomEmoji' && typeof e.offset === 'number' && typeof e.length === 'number' && e.length > 0)
     .sort((a: any, b: any) => a.offset - b.offset);
@@ -219,7 +219,7 @@ export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EM
     const runAlts = new Set<string>();
     for (const r of matchEmojiRuns(text)) runAlts.add(normalizeEmoji(r.emoji));
     for (const r of matchEmojiRuns(text)) {
-      if (!getEmojiDocId(r.emoji)) requestEmojiDownload(undefined, r.emoji, 1);
+      if (!getEmojiDocId(r.emoji)) requestEmojiDownload(undefined, r.emoji, 1, ctx);
     }
 
     return subscribeEmojiMap((changed) => {
@@ -248,7 +248,7 @@ export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EM
 
   useEffect(() => {
     if (!singleEmoji || getEmojiDocId(singleEmoji)) return;
-    requestEmojiDownload(undefined, singleEmoji, 1);
+    requestEmojiDownload(undefined, singleEmoji, 1, ctx);
   }, [singleEmoji]);
 
   const segsKey = text + '\u0001' + emojiIdsKey + '\u0001' + settledVersion;
@@ -259,7 +259,8 @@ export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EM
   const segments = segsRef.current.segments;
 
   const emojiOnly = isEmojiOnlyText(text, entities);
-  const size = singleEmoji ? SINGLE_EMOJI_SIZE : (emojiOnly ? EMOJI_ONLY_SIZE : inlineSize);
+  const isDialog = ctx === 'dialog';
+  const size = isDialog ? inlineSize : (singleEmoji ? SINGLE_EMOJI_SIZE : (emojiOnly ? EMOJI_ONLY_SIZE : inlineSize));
   const hasEmoji = segments.some((s) => s.type === 'emoji');
   if (!hasEmoji) {
     if (matchEmojiRuns(text).length > 0) {
@@ -268,5 +269,5 @@ export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EM
     return <StaticEmojiText value={text} size={size} />;
   }
 
-  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} size={size} singleLine={singleLine} />;
+  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} size={size} singleLine={singleLine} vAlign={isDialog ? 'middle' : 'top'} />;
 }

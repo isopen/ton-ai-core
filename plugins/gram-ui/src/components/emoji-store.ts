@@ -269,12 +269,12 @@ export function searchServerEmojis(query: string): string[] {
 
 const BATCH_WINDOW_MS = 50;
 const BATCH_MAX_ITEMS = 200;
-const pendingEmojiRequests = new Map<string, { docId?: string; alt?: string; priority: number }>();
+const pendingEmojiRequests = new Map<string, { docId?: string; alt?: string; priority: number; ctx?: string }>();
 let emojiBatchTimer: ReturnType<typeof setTimeout> | null = null;
 
 function dispatchEmojiBatch(): void {
   if (pendingEmojiRequests.size === 0) return;
-  const items: Array<{ docId?: string; alt?: string; priority: number }> = [];
+  const items: Array<{ docId?: string; alt?: string; priority: number; ctx?: string }> = [];
   for (const [key, item] of pendingEmojiRequests) {
     if (items.length >= BATCH_MAX_ITEMS) break;
     items.push(item);
@@ -294,12 +294,12 @@ export function flushEmojiBatch(): void {
   dispatchEmojiBatch();
 }
 
-export function requestEmojiDownload(docId?: string, alt?: string, priority = 0): void {
+export function requestEmojiDownload(docId?: string, alt?: string, priority = 0, ctx?: string): void {
   const key = docId != null ? 'd:' + docId : alt ? 'a:' + alt : '';
   if (!key) return;
   const prev = pendingEmojiRequests.get(key);
   if (!prev || priority > prev.priority) {
-    pendingEmojiRequests.set(key, { docId: docId != null ? String(docId) : undefined, alt: alt || undefined, priority });
+    pendingEmojiRequests.set(key, { docId: docId != null ? String(docId) : undefined, alt: alt || undefined, priority, ctx });
   }
   if (emojiBatchTimer == null) {
     emojiBatchTimer = setTimeout(flushEmojiBatch, BATCH_WINDOW_MS);

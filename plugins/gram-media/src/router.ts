@@ -29,8 +29,8 @@ function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Prom
     });
 }
 
-export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_queue' | 'tgs_queue';
-export const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 4, emoji_queue: 12, tgs_queue: 8 };
+export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_dialog_queue' | 'emoji_chat_queue' | 'tgs_queue';
+export const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 4, emoji_dialog_queue: 8, emoji_chat_queue: 8, tgs_queue: 8 };
 const DOC_DOWNLOAD_BATCH = 4;
 
 export class GramMediaRouter {
@@ -59,8 +59,8 @@ export class GramMediaRouter {
 
     private documentDownloadGen = 0;
     private documentPending = new Set<number>();
-    private downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number; mime: string; priority: number }>> = { video_queue: [], gif_queue: [], photo_queue: [], emoji_queue: [], tgs_queue: [] };
-    private downloadInProgress: Record<QueueKey, number> = { video_queue: 0, gif_queue: 0, photo_queue: 0, emoji_queue: 0, tgs_queue: 0 };
+    private downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number | string; mime: string; priority: number; ctx?: string }>> = { video_queue: [], gif_queue: [], photo_queue: [], emoji_dialog_queue: [], emoji_chat_queue: [], tgs_queue: [] };
+    private downloadInProgress: Record<QueueKey, number> = { video_queue: 0, gif_queue: 0, photo_queue: 0, emoji_dialog_queue: 0, emoji_chat_queue: 0, tgs_queue: 0 };
     private downloadQueueMicrotasks = new Set<QueueKey>();
     private documentRetryCounts = new Map<number, number>();
     private documentRetryTimers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -121,8 +121,8 @@ export class GramMediaRouter {
         w.addEventListener('tg-download-document-thumb', onDownloadDocumentThumb);
 
         const onDownloadDocument = (e: Event) => {
-            const { document: docParam, messageId, priority = 0 } = (e as CustomEvent).detail || {};
-            this.queueDocumentDownload(docParam, messageId, priority);
+            const { document: docParam, messageId, priority = 0, ctx } = (e as CustomEvent).detail || {};
+            this.queueDocumentDownload(docParam, messageId, priority, ctx);
         };
         w.addEventListener('tg-download-document', onDownloadDocument);
 
@@ -676,7 +676,7 @@ export class GramMediaRouter {
         return 'photo_queue';
     }
 
-    queueDocumentDownload(docParam: any, messageId: any, priority: number): void {
+    queueDocumentDownload(docParam: any, messageId: any, priority: number, ctx?: string): void {
         let document = docParam;
         if (!document) {
             if (messageId != null && typeof messageId === 'string' && this.isEmojiKey(messageId)) {
@@ -707,13 +707,13 @@ export class GramMediaRouter {
         }
         if (priority > 0) this.documentRetryCounts.delete(messageId);
         this.documentPending.add(messageId);
-        if (this.debug) log.info('[gram-media] tg-download-document messageId=' + messageId + ' priority=' + priority + ' docId=' + document.id);
+        if (this.debug) log.info('[gram-media] tg-download-document messageId=' + messageId + ' priority=' + priority + ' ctx=' + (ctx || 'chat') + ' docId=' + document.id);
         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
         const mime = (document.mime_type || 'application/octet-stream').toLowerCase();
         const attrs = (document.attributes || []) as any[];
         const isAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
-        const queueKey = isEmoji ? 'emoji_queue' : (mime === 'application/x-tgsticker' ? 'tgs_queue' : this.getQueueKey(mime, isAnimated));
-        this.downloadQueues[queueKey].push({ document, messageId, mime, priority });
+        const queueKey = isEmoji ? (ctx === 'dialog' ? 'emoji_dialog_queue' : 'emoji_chat_queue') : (mime === 'application/x-tgsticker' ? 'tgs_queue' : this.getQueueKey(mime, isAnimated));
+        this.downloadQueues[queueKey].push({ document, messageId, mime, priority, ctx });
         this.scheduleDownloadQueue(queueKey);
     }
 

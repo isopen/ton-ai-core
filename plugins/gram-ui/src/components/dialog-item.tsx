@@ -46,8 +46,8 @@ export function DialogItem(props: DialogItemProps) {
       collapsed={collapsed}
       onClick={onClick}
     >
-      <span class="Text Text_variant_label"><EmojiText text={getPeerName(d.peer, selfUserId)} documentUrls={{}} inlineSize={20} singleLine /></span>
-      {typingText ? <TypingIndicator text={typingText} /> : <span class="Text Text_variant_desc"><EmojiText text={d.lastMsg || ''} entities={d.lastMsgEntities} documentUrls={{}} inlineSize={17} singleLine /></span>}
+      <span class="Text Text_variant_label"><EmojiText text={getPeerName(d.peer, selfUserId)} documentUrls={{}} inlineSize={20} singleLine ctx="dialog" /></span>
+      {typingText ? <TypingIndicator text={typingText} /> : <span class="Text Text_variant_desc"><EmojiText text={d.lastMsg || ''} entities={d.lastMsgEntities} documentUrls={{}} inlineSize={17} singleLine ctx="dialog" /></span>}
     </ListItem>
   );
 }

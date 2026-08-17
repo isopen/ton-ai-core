@@ -569,6 +569,7 @@ interface DcConnection {
     dead: boolean;
     encQueue: Promise<void>;
     lastDataAt: number;
+    suspect: boolean;
 }
 
 const dcConnectionPool: DcConnection[] = [];
@@ -749,6 +750,7 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
         dead: false,
         encQueue: Promise.resolve(),
         lastDataAt: Date.now(),
+        suspect: false,
     };
 
     if (needsAuthImport) {
@@ -809,6 +811,9 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
 }
 
 async function acquireDcConnection(dcId: number, type: 'video' | 'download'): Promise<DcConnection> {
+    let best: DcConnection | null = null;
+    let bestSuspect: DcConnection | null = null;
+    let aliveSameKind = 0;
     for (let i = dcConnectionPool.length - 1; i >= 0; i--) {
         const c = dcConnectionPool[i];
         if (c.dcId !== dcId || c.type !== type) continue;
@@ -818,8 +823,15 @@ async function acquireDcConnection(dcId: number, type: 'video' | 'download'): Pr
             dcConnectionPool.splice(i, 1);
             continue;
         }
-        return c;
+        aliveSameKind++;
+        if (c.suspect) {
+            if (!bestSuspect || c.pending.size < bestSuspect.pending.size) bestSuspect = c;
+        } else if (!best || c.pending.size < best.pending.size) {
+            best = c;
+        }
     }
+    if (best) return best;
+    if (bestSuspect && aliveSameKind >= 3) return bestSuspect;
     const key = dcId + ':' + type;
     let connecting = dcConnecting.get(key);
     if (!connecting) {
@@ -1050,6 +1062,7 @@ function startDcReadLoop(entry: DcConnection): void {
                 const data = await entry.conn.readPacket();
                 if (entry.dead) break;
                 entry.lastDataAt = Date.now();
+                entry.suspect = false;
                 if (data.length >= 8 && data.readBigUInt64LE(0) === 0n) {
                     if (data.length >= 20) {
                         const msgId = data.readBigUInt64LE(8);
@@ -1076,17 +1089,22 @@ function startDcReadLoop(entry: DcConnection): void {
     })();
 }
 
-const DC_IDLE_RECYCLE_MS = 20000;
+const DC_IDLE_RECYCLE_MS = 12000;
 setInterval(() => {
     for (const c of dcConnectionPool) {
         if (c.dead) continue;
         const idleMs = Date.now() - c.lastDataAt;
+        if (c.suspect && c.pending.size === 0) {
+            wlog('[worker] DC ' + c.dcId + ' suspect drained (no pending) — recycling connection');
+            killDcConnection(c, new Error('DC ' + c.dcId + ' suspect drained'));
+            continue;
+        }
         if (c.pending.size > 0 && idleMs > DC_IDLE_RECYCLE_MS) {
             wlog('[worker] DC ' + c.dcId + ' read stall: ' + c.pending.size + ' pending, ' + idleMs + 'ms no data — recycling connection');
             killDcConnection(c, new Error('DC ' + c.dcId + ' read stall (' + idleMs + 'ms no data with ' + c.pending.size + ' pending)'));
         }
     }
-}, 5000);
+}, 3000);
 
 async function sendDcRpc(entry: DcConnection, methodName: string, params: Record<string, any>): Promise<Buffer> {
     const registry = getSchemaRegistry();
@@ -1145,6 +1163,7 @@ async function sendDcRpc(entry: DcConnection, methodName: string, params: Record
         responsePromise = new Promise<Buffer>((resolve, reject) => {
             const timer = setTimeout(() => {
                 entry.pending.delete(key);
+                entry.suspect = true;
                 if (entry.pending.size === 0) {
                     killDcConnection(entry, new Error('RPC timeout on DC ' + entry.dcId + ' ' + methodName + ' (no pending left — recycling)'));
                 }
@@ -1167,6 +1186,7 @@ async function sendDcRpc(entry: DcConnection, methodName: string, params: Record
                         entry.pending.delete(key);
                         clearTimeout(timer);
                         clearTimeout(sendTimer);
+                        entry.suspect = true;
                         reject(e);
                     }
                 );
@@ -1174,6 +1194,7 @@ async function sendDcRpc(entry: DcConnection, methodName: string, params: Record
                 entry.pending.delete(key);
                 clearTimeout(timer);
                 clearTimeout(sendTimer);
+                entry.suspect = true;
                 reject(e);
             }
         });
@@ -3461,7 +3482,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 ' rpcSlots=' + JSON.stringify(Array.from(dcRpcSlots.entries())) +
                 ' pool=' + JSON.stringify(Array.from(poolInFlight.entries())) +
                 ' connecting=' + JSON.stringify(Array.from(dcConnecting.keys())) +
-                ' conns=' + JSON.stringify(dcConnectionPool.map((c) => ({ d: c.dcId, t: c.type, dead: c.dead, ok: c.conn.isConnected(), pend: c.pending.size, encq: !!c.encQueue }))));
+                ' conns=' + JSON.stringify(dcConnectionPool.map((c) => ({ d: c.dcId, t: c.type, dead: c.dead, ok: c.conn.isConnected(), susp: c.suspect, pend: c.pending.size, encq: !!c.encQueue }))));
         }, 20000);
         const stallAbortTimer = setTimeout(() => {
             wlog('[dl] STALL ABORT id=' + id + ' label=' + label + ' dc=' + targetDc + ' — rejecting first request');
@@ -3881,7 +3902,7 @@ export async function batchCheckDocumentCache(documents: Array<{ id: string | nu
 }
 
 async function downloadFiles_(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
-    const BATCH_ITEM_TIMEOUT_MS = 30000;
+    const BATCH_ITEM_TIMEOUT_MS = 8000;
     const tasks = (docs || []).map((item, index) =>
         new Promise<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>((resolve) => {
             const timer = setTimeout(() => {

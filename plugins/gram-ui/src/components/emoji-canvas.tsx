@@ -272,7 +272,7 @@ function renderIdFor(docId: string, size: number): string {
   return 'emojipack-' + docId + ':' + size;
 }
 
-export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = false }: { segments: EmojiSegment[]; documentUrls: Record<string, string>; size?: number; singleLine?: boolean }) {
+export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = false, vAlign = 'top' }: { segments: EmojiSegment[]; documentUrls: Record<string, string>; size?: number; singleLine?: boolean; vAlign?: 'top' | 'middle' }) {
   const emojiSegs: Array<{ docId: string; value?: string; custom?: boolean }> = [];
   for (const s of segments) {
     if (s.type === 'emoji' && s.docId) emojiSegs.push({ docId: s.docId, value: s.value, custom: s.custom });
@@ -589,9 +589,10 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
 
   const slotStyle = `display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`;
   let emojiIdx = -1;
+  const align = vAlign === 'middle' ? 'middle' : 'top';
 
   return (
-    <div ref={wrapRef} class="tgui-emoji-canvas-wrap" style={singleLine ? 'position:relative;display:inline-block;max-width:none;white-space:nowrap;vertical-align:top' : 'position:relative;display:inline-block;max-width:100%;vertical-align:top'}>
+    <div ref={wrapRef} class="tgui-emoji-canvas-wrap" style={singleLine ? `position:relative;display:inline-block;max-width:none;white-space:nowrap;vertical-align:${align}` : `position:relative;display:inline-block;max-width:100%;vertical-align:${align}`}>
       {segments.map((s: EmojiSegment, i: number) => {
         if (s.type === 'text') return <StaticEmojiText key={s.type + ':' + s.value + ':' + i} value={s.value || ''} size={size} />;
         emojiIdx++;

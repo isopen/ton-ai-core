@@ -60,7 +60,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private requestedEmojiDocIds = new Set<string>();
     private emojiInFlightSince = new Map<string, number>();
     private requestedEmojiAlts = new Set<string>();
-    private pendingEmojiAlts = new Map<string, { alt: string; priority: number }>();
+    private pendingEmojiAlts = new Map<string, { alt: string; priority: number; ctx?: string }>();
     private announcedEmojiDocKinds = new Map<string, EmojiDocKind>();
     private emojiDocKindsById = new Map<string, EmojiDocKind>();
     private emojiPickerCategories: Array<{ name: string; emojis: string[] }> = [];
@@ -361,7 +361,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         return this.emojiDocsById.get(docId) || undefined;
     }
 
-    private downloadEmojiDoc(doc: any, docId: string, priority: number): void {
+    private downloadEmojiDoc(doc: any, docId: string, priority: number, ctx?: string): void {
         if (isStubEmojiDoc(doc)) {
             this.markEmojiDocStub(docId);
             this.clearEmojiInFlight(docId);
@@ -372,7 +372,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.notifyCustomEmojiAlt(doc);
         this.indexEmojiDocs();
         this.router.emitWindow('tg-download-document', {
-            document: doc, messageId: 'emojipack-' + docId, priority,
+            document: doc, messageId: 'emojipack-' + docId, priority, ctx,
         });
     }
 
@@ -836,21 +836,21 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     };
 
     private onDownloadEmoji = async (e: Event) => {
-        const { docId, alt, priority = 0 } = (e as CustomEvent).detail || {};
+        const { docId, alt, priority = 0, ctx } = (e as CustomEvent).detail || {};
         if (docId == null && alt == null) return;
         const key = docId != null ? String(docId) : null;
         if (key && !this.canRequestEmojiDoc(key)) return;
         let doc = key ? this.findEmojiDoc(key) : undefined;
         if (doc && key && !this.emojiStaleDocs.has(key)) {
             this.markEmojiDocInFlight(key);
-            this.downloadEmojiDoc(doc, key, priority);
+            this.downloadEmojiDoc(doc, key, priority, ctx);
             return;
         }
         if (key && this.emojiStaleDocs.has(key)) {
             const fresh = await this.fetchFreshEmojiDoc(key);
             if (fresh?.id && this.canRequestEmojiDoc(key)) {
                 this.markEmojiDocInFlight(key);
-                this.downloadEmojiDoc(fresh, key, priority);
+                this.downloadEmojiDoc(fresh, key, priority, ctx);
             } else {
             }
             return;
@@ -863,7 +863,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             const id = String(doc.id);
             if (this.canRequestEmojiDoc(id)) {
                 this.markEmojiDocInFlight(id);
-                this.downloadEmojiDoc(doc, id, priority);
+                this.downloadEmojiDoc(doc, id, priority, ctx);
             }
             return;
         }
@@ -871,7 +871,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.maybeLoadDiceSetForAlt(alt);
         if (this.requestedEmojiAlts.has(nAlt)) return;
         if (!this.emojiStickerDocs || Object.keys(this.emojiStickerDocs).length === 0) {
-            this.pendingEmojiAlts.set(nAlt, { alt, priority });
+            this.pendingEmojiAlts.set(nAlt, { alt, priority, ctx });
             return;
         }
         this.requestedEmojiAlts.add(nAlt);
@@ -893,7 +893,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             readyEntries.push({ alt: nAlt, docId: id });
             if (this.canRequestEmojiDoc(id)) {
                 this.markEmojiDocInFlight(id);
-                this.downloadEmojiDoc(resolved, id, priority);
+                this.downloadEmojiDoc(resolved, id, priority, ctx);
             }
         } catch (err: any) {
             log.error('[gram-media] tg-download-emoji resolve error:', err?.message || err);
@@ -902,14 +902,14 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.notifyEmojiDocsReady(readyEntries);
     };
 
-    private async resolveEmojiBatchDocs(items: Array<{ docId?: string; alt?: string; priority?: number }>): Promise<{
-        resolved: Array<{ id: string; doc: any; priority: number }>;
+    private async resolveEmojiBatchDocs(items: Array<{ docId?: string; alt?: string; priority?: number; ctx?: string }>): Promise<{
+        resolved: Array<{ id: string; doc: any; priority: number; ctx?: string }>;
         unknownIds: string[];
-        unknownAlts: Array<{ alt: string; nAlt: string; priority: number }>;
+        unknownAlts: Array<{ alt: string; nAlt: string; priority: number; ctx?: string }>;
     }> {
-        const resolved: Array<{ id: string; doc: any; priority: number }> = [];
+        const resolved: Array<{ id: string; doc: any; priority: number; ctx?: string }> = [];
         const unknownIds: string[] = [];
-        const unknownAlts: Array<{ alt: string; nAlt: string; priority: number }> = [];
+        const unknownAlts: Array<{ alt: string; nAlt: string; priority: number; ctx?: string }> = [];
         for (const it of items) {
             const docId = it.docId != null ? String(it.docId) : null;
             let doc = docId ? this.findEmojiDoc(docId) : undefined;
@@ -927,7 +927,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 if (this.canRequestEmojiDoc(id)) {
                     this.markEmojiDocInFlight(id);
                     this.notifyCustomEmojiAlt(doc);
-                    resolved.push({ id, doc, priority });
+                    resolved.push({ id, doc, priority, ctx: it.ctx });
                 }
             } else if (docId) {
                 unknownIds.push(docId);
@@ -935,7 +935,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 const nAlt = normalizeEmoji(it.alt);
                 if (nAlt && !this.hasNoStickerAlt(nAlt) && !this.requestedEmojiAlts.has(nAlt)) {
                     this.maybeLoadDiceSetForAlt(it.alt);
-                    unknownAlts.push({ alt: it.alt, nAlt, priority });
+                    unknownAlts.push({ alt: it.alt, nAlt, priority, ctx: it.ctx });
                 }
             }
         }
@@ -949,7 +949,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.unknownRetryTimer = setTimeout(() => void this.runUnknownResolveRetry(), 5000);
     }
 
-    private async resolveUnknownCustomIds(ids: string[], onResolved: (list: Array<{ id: string; doc: any; priority: number }>) => void): Promise<void> {
+    private async resolveUnknownCustomIds(ids: string[], onResolved: (list: Array<{ id: string; doc: any; priority: number; ctx?: string }>) => void): Promise<void> {
         if (ids.length === 0) return;
         const fresh = ids.filter((id: any) => this.canResolveEmojiId(String(id)));
         if (fresh.length === 0) {
@@ -960,7 +960,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
         try {
             const { docs, unresolved } = await this.fetchCustomEmojiDocsChunked(fresh);
-            const list: Array<{ id: string; doc: any; priority: number }> = [];
+            const list: Array<{ id: string; doc: any; priority: number; ctx?: string }> = [];
             let changed = false;
             for (const doc of docs) {
                 if (!doc?.id) continue;
@@ -1043,7 +1043,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
     }
 
-    private async requestEmojiAlt(alt: string, priority: number): Promise<{ id: string; doc: any; priority: number } | null> {
+    private async requestEmojiAlt(alt: string, priority: number, ctx?: string): Promise<{ id: string; doc: any; priority: number; ctx?: string } | null> {
         const nAlt = normalizeEmoji(alt);
         if (!nAlt) return null;
         if (this.emojiStickerDocs && this.emojiStickerDocs[nAlt]) {
@@ -1053,14 +1053,14 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             this.emojiNoStickerAlts.delete(nAlt);
             if (this.canRequestEmojiDoc(id)) {
                 this.markEmojiDocInFlight(id);
-                return { id, doc, priority };
+                return { id, doc, priority, ctx };
             }
             return null;
         }
         if (this.hasNoStickerAlt(nAlt)) return null;
         if (this.requestedEmojiAlts.has(nAlt)) return null;
         if (!this.emojiStickerDocs || Object.keys(this.emojiStickerDocs).length === 0) {
-            this.pendingEmojiAlts.set(nAlt, { alt, priority });
+            this.pendingEmojiAlts.set(nAlt, { alt, priority, ctx });
             return null;
         }
 
@@ -1085,7 +1085,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             const id = String(doc.id);
             if (this.canRequestEmojiDoc(id)) {
                 this.markEmojiDocInFlight(id);
-                return { id, doc, priority };
+                return { id, doc, priority, ctx };
             }
             return null;
         } catch (err: any) {
@@ -1098,7 +1098,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 if (!this.emojiAltRetryTimers.has(nAlt)) {
                     this.emojiAltRetryTimers.set(nAlt, setTimeout(() => {
                         this.emojiAltRetryTimers.delete(nAlt);
-                        void this.requestEmojiAlt(alt, priority);
+                        void this.requestEmojiAlt(alt, priority, ctx);
                     }, delay));
                 }
                 log.warn('[gram-media] emoji alt flood wait ' + secs + 's, retry later:', alt);
@@ -1120,14 +1120,14 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 this.requestedEmojiAlts.delete(nAlt);
                 continue;
             }
-            void this.requestEmojiAlt(p.alt, p.priority);
+            void this.requestEmojiAlt(p.alt, p.priority, p.ctx);
         }
     };
 
-    private runAltResolve(alt: string, priority: number): Promise<{ id: string; doc: any; priority: number } | null> {
+    private runAltResolve(alt: string, priority: number, ctx?: string): Promise<{ id: string; doc: any; priority: number; ctx?: string } | null> {
         if (this.altSemaActive < ALT_RESOLVE_CONCURRENCY) {
             this.altSemaActive++;
-            return this.requestEmojiAlt(alt, priority).finally(() => {
+            return this.requestEmojiAlt(alt, priority, ctx).finally(() => {
                 this.altSemaActive--;
                 const next = this.altSemaQueue.shift();
                 if (next) next();
@@ -1135,20 +1135,20 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
         return new Promise((resolve) => {
             this.altSemaQueue.push(() => {
-                resolve(this.runAltResolve(alt, priority));
+                resolve(this.runAltResolve(alt, priority, ctx));
             });
         });
     }
 
-    private async resolveUnknownAlts(list: Array<{ alt: string; nAlt: string; priority: number }>): Promise<Array<{ id: string; doc: any; priority: number }>> {
+    private async resolveUnknownAlts(list: Array<{ alt: string; nAlt: string; priority: number; ctx?: string }>): Promise<Array<{ id: string; doc: any; priority: number; ctx?: string }>> {
         if (list.length === 0) return [];
         void this.expandEmojiMap();
-        const results = await Promise.all(list.map((a) => this.runAltResolve(a.alt, a.priority)));
-        return results.filter((r): r is { id: string; doc: any; priority: number } => !!r);
+        const results = await Promise.all(list.map((a) => this.runAltResolve(a.alt, a.priority, a.ctx)));
+        return results.filter((r): r is { id: string; doc: any; priority: number; ctx?: string } => !!r);
     }
 
-    private async downloadEmojiList(resolved: Array<{ id: string; doc: any; priority: number }>): Promise<void> {
-        const stillNeeded: Array<{ id: string; doc: any; priority: number }> = [];
+    private async downloadEmojiList(resolved: Array<{ id: string; doc: any; priority: number; ctx?: string }>): Promise<void> {
+        const stillNeeded: Array<{ id: string; doc: any; priority: number; ctx?: string }> = [];
         for (const r of resolved) {
             if (isStubEmojiDoc(r.doc)) {
                 this.markEmojiDocStub(r.id);
@@ -1172,7 +1172,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
 
         for (const r of stillNeeded) {
             this.router.emitWindow('tg-download-document', {
-                document: r.doc, messageId: 'emojipack-' + r.id, priority: r.priority,
+                document: r.doc, messageId: 'emojipack-' + r.id, priority: r.priority, ctx: r.ctx,
             });
         }
     }
