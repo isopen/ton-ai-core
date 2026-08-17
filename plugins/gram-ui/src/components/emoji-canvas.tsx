@@ -439,7 +439,9 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
       for (const s of missing) {
         const n = (strikes[s.docId] || 0) + 1;
         strikes[s.docId] = n;
-        if (n > MISSING_EMOJI_STRIKE_LIMIT) continue;
+        // known docs: keep re-requesting forever (queue downloads are cheap and deduped server-side)
+        // only the RPC resolve path (unknown custom emoji) is bounded by the strike limit
+        if (s.custom && n > MISSING_EMOJI_STRIKE_LIMIT) continue;
         anyRequested = true;
         requestEmojiDownload(s.docId, s.value, 1);
       }

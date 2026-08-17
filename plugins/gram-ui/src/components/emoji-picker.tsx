@@ -86,6 +86,14 @@ function PickerCellImpl({ emoji, docId, size, url, coords, sharedCanvas, onPlayi
   }, [playing, shown, docId, url, emoji]);
 
   useEffect(() => {
+    if (!shown || !docId || url) return;
+    const timer = window.setInterval(() => {
+      requestEmojiDownload(docId, emoji, 2);
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [shown, docId, emoji, url]);
+
+  useEffect(() => {
     if (!shown || !docId || !url) return;
     let cancelled = false;
     checkEmojiKind(url).then((k) => { if (!cancelled && k) setKind(k); });

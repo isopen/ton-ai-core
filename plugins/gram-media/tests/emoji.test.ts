@@ -210,10 +210,17 @@ describe('GramMediaRouter emoji pipeline', () => {
         setTransport(transport);
         router.attach();
 
+        downloadFiles = jest.fn(async (docsArg: any[]) => docsArg.map((d, i) => ({
+            index: i,
+            type: d.document.mime_type,
+            bytes: makeGzipMagicBytes(),
+        })));
+        (transport as any).downloadFiles = downloadFiles;
+
         const diceSetEvents: any[] = [];
         window.addEventListener('tg-dice-sets-ready', (e) => diceSetEvents.push((e as CustomEvent).detail));
         window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '🎲' } }));
-        await flushTicks(8);
+        await flushTicks(16);
 
         const base = '7' + '🎲'.codePointAt(0);
         for (let i = 0; i < 7; i++) {
@@ -222,26 +229,31 @@ describe('GramMediaRouter emoji pipeline', () => {
         const sets = diceSetEvents[0]!.sets as Record<string, { p: string; d: string[] }>;
         expect(sets['🎲'].d).toHaveLength(7);
 
-        downloadFiles = jest.fn(async () => [{ index: 0, type: 'document', bytes: makeGzipMagicBytes() }]);
-        (transport as any).downloadFiles = downloadFiles;
+        // set load prefetches all 7 docs directly, without custom emoji RPC
+        const prefetchCalls = downloadFiles.mock.calls.length;
+        expect(prefetchCalls).toBeGreaterThanOrEqual(1);
+        expect(customEmojiCalls).toEqual([]);
 
+        // known dice doc requests resolve from cache: no extra download, no RPC
+        const urlEvents: any[] = [];
+        window.addEventListener('tg-emoji-url', (e) => urlEvents.push((e as CustomEvent).detail));
         window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
             detail: { items: [{ docId: base + 4, priority: 1 }] },
         }));
         await flushTicks();
         await flushTicks();
         await flushTicks();
-        expect(downloadFiles).toHaveBeenCalledTimes(1);
+        expect(downloadFiles.mock.calls.length).toBe(prefetchCalls);
         expect(customEmojiCalls).toEqual([]);
-        const urlEvents: any[] = [];
-        window.addEventListener('tg-emoji-url', (e) => urlEvents.push((e as CustomEvent).detail));
+        expect(urlEvents.some((d) => String(d.docId) === base + 4 && d.url)).toBe(true);
+
         window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
             detail: { items: [{ docId: base + 5, priority: 1 }] },
         }));
         await flushTicks();
         await flushTicks();
         await flushTicks();
-        expect(downloadFiles).toHaveBeenCalledTimes(2);
+        expect(downloadFiles.mock.calls.length).toBe(prefetchCalls);
         expect(customEmojiCalls).toEqual([]);
         expect(urlEvents.some((d) => String(d.docId) === base + 5 && d.url)).toBe(true);
     });
@@ -701,7 +713,7 @@ describe('GramMediaRouter emoji pipeline', () => {
         expect(kindByDoc.get('9102')).toBe('video');
     });
 
-    test('reschedules failed emoji downloads with backoff and resets after cap', async () => {
+    test('rapid repeated failures do not amplify attempts; spaced failures reach cap then reset after TTL', async () => {
         jest.useFakeTimers();
         try {
             const emojiDoc = makeDocument({ id: '5001', mime_type: 'video/mp4' });
@@ -720,24 +732,32 @@ describe('GramMediaRouter emoji pipeline', () => {
             const retryEvents: any[] = [];
             window.addEventListener('tg-download-emoji', (e) => retryEvents.push((e as CustomEvent).detail));
 
+            // three failures within the 20s cooldown window count as ONE attempt:
+            // retries keep firing on the short backoff instead of exhausting the cap
             router.emoji.onEmojiDownloadFailed('5001');
-            await jest.advanceTimersByTimeAsync(1_100);
-            expect(retryEvents).toHaveLength(1);
+            await jest.advanceTimersByTimeAsync(5_000);
+            router.emoji.onEmojiDownloadFailed('5001');
+            await jest.advanceTimersByTimeAsync(5_000);
+            router.emoji.onEmojiDownloadFailed('5001');
+            await jest.advanceTimersByTimeAsync(5_000);
+            expect(retryEvents.length).toBeGreaterThanOrEqual(3);
 
-            await jest.advanceTimersByTimeAsync(1_800);
-            expect(retryEvents).toHaveLength(1);
-            await jest.advanceTimersByTimeAsync(3_000);
-            expect(retryEvents).toHaveLength(2);
+            // spaced failures (>20s apart) DO count toward the cap
+            for (let i = 0; i < 5; i++) {
+                router.emoji.onEmojiDownloadFailed('5001');
+                await jest.advanceTimersByTimeAsync(21_000);
+            }
+            await jest.advanceTimersByTimeAsync(5_000);
+            const capped = retryEvents.length;
 
-            await jest.advanceTimersByTimeAsync(5_100);
-            expect(retryEvents).toHaveLength(3);
+            // beyond the cap: no new retries are scheduled (blocked)
+            router.emoji.onEmojiDownloadFailed('5001');
+            await jest.advanceTimersByTimeAsync(5_000);
+            expect(retryEvents.length).toBe(capped);
 
-            await jest.advanceTimersByTimeAsync(60_000);
-            expect(retryEvents).toHaveLength(3);
-            await jest.advanceTimersByTimeAsync(60_000);
-            expect(retryEvents).toHaveLength(5);
-            await jest.advanceTimersByTimeAsync(2_000);
-            expect(retryEvents).toHaveLength(6);
+            // after the cap TTL: attempts reset and a retry fires
+            await jest.advanceTimersByTimeAsync(120_000);
+            expect(retryEvents.length).toBeGreaterThan(capped);
         } finally {
             jest.useRealTimers();
         }

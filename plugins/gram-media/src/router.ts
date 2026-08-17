@@ -29,8 +29,8 @@ function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Prom
     });
 }
 
-export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_dialog_queue' | 'emoji_chat_queue' | 'tgs_queue';
-export const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 4, emoji_dialog_queue: 8, emoji_chat_queue: 8, tgs_queue: 8 };
+export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_dialog_queue' | 'emoji_chat_queue' | 'dice_queue' | 'tgs_queue';
+export const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 4, emoji_dialog_queue: 8, emoji_chat_queue: 8, dice_queue: 2, tgs_queue: 8 };
 const DOC_DOWNLOAD_BATCH = 4;
 
 export class GramMediaRouter {
@@ -59,8 +59,8 @@ export class GramMediaRouter {
 
     private documentDownloadGen = 0;
     private documentPending = new Set<number>();
-    private downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number | string; mime: string; priority: number; ctx?: string }>> = { video_queue: [], gif_queue: [], photo_queue: [], emoji_dialog_queue: [], emoji_chat_queue: [], tgs_queue: [] };
-    private downloadInProgress: Record<QueueKey, number> = { video_queue: 0, gif_queue: 0, photo_queue: 0, emoji_dialog_queue: 0, emoji_chat_queue: 0, tgs_queue: 0 };
+    private downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number | string; mime: string; priority: number; ctx?: string }>> = { video_queue: [], gif_queue: [], photo_queue: [], emoji_dialog_queue: [], emoji_chat_queue: [], dice_queue: [], tgs_queue: [] };
+    private downloadInProgress: Record<QueueKey, number> = { video_queue: 0, gif_queue: 0, photo_queue: 0, emoji_dialog_queue: 0, emoji_chat_queue: 0, dice_queue: 0, tgs_queue: 0 };
     private downloadQueueMicrotasks = new Set<QueueKey>();
     private documentRetryCounts = new Map<number, number>();
     private documentRetryTimers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -712,7 +712,7 @@ export class GramMediaRouter {
         const mime = (document.mime_type || 'application/octet-stream').toLowerCase();
         const attrs = (document.attributes || []) as any[];
         const isAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
-        const queueKey = isEmoji ? (ctx === 'dialog' ? 'emoji_dialog_queue' : 'emoji_chat_queue') : (mime === 'application/x-tgsticker' ? 'tgs_queue' : this.getQueueKey(mime, isAnimated));
+        const queueKey = isEmoji ? (ctx === 'dialog' ? 'emoji_dialog_queue' : ctx === 'dice' ? 'dice_queue' : 'emoji_chat_queue') : (mime === 'application/x-tgsticker' ? 'tgs_queue' : this.getQueueKey(mime, isAnimated));
         this.downloadQueues[queueKey].push({ document, messageId, mime, priority, ctx });
         this.scheduleDownloadQueue(queueKey);
     }

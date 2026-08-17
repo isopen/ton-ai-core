@@ -15,6 +15,7 @@ export interface EmojiPipeline {
 type EmojiDocKind = EmojiKind;
 
 const EMOJI_MAX_ATTEMPTS = 5;
+const EMOJI_ATTEMPT_MIN_GAP_MS = 20_000;
 const EMOJI_IN_FLIGHT_TTL_MS = 45_000;
 
 const EMOJI_ATTEMPT_TTL = 120_000;
@@ -67,6 +68,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiPickerKeywords: Array<{ keyword: string; emoticons: string[] }> = [];
     private emojiPickerKeywordsLoaded = false;
     private emojiDocAttempts = new Map<string, number>();
+    private emojiAttemptAt = new Map<string, number>();
     private emojiStaleDocs = new Set<string>();
     private emojiRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private emojiAltRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -139,6 +141,10 @@ export class EmojiPipelineImpl implements EmojiPipeline {
 
     private markEmojiDocAttempt(id: string): void {
         this.clearEmojiInFlight(id);
+        const last = this.emojiAttemptAt.get(id) || 0;
+        const now = Date.now();
+        if (now - last < EMOJI_ATTEMPT_MIN_GAP_MS) return;
+        this.emojiAttemptAt.set(id, now);
         this.emojiDocAttempts.set(id, (this.emojiDocAttempts.get(id) || 0) + 1);
     }
 
@@ -166,6 +172,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
 
     private resetEmojiAttempts(id: string): void {
         this.emojiDocAttempts.delete(id);
+        this.emojiAttemptAt.delete(id);
         this.emojiStaleDocs.delete(id);
     }
 
@@ -663,6 +670,12 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             for (const [k, v] of Object.entries(map)) this.emojiStickerDocs[k] = v;
             if (diceDoc?.id) this.emojiStickerDocs[key] = diceDoc;
             this.indexEmojiDocs();
+            for (const d of docs) {
+                if (d?.id == null) continue;
+                const id = String(d.id);
+                if (isStubEmojiDoc(d)) continue;
+                if (this.canRequestEmojiDoc(id)) this.downloadEmojiDoc(d, id, 2, 'dice');
+            }
             if (this.debug) log.info('[gram-media] dice set', emoji, 'docs =', docs.length, 'map =', Object.keys(map).length);
             this.emitDiceSetsReady();
             this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
@@ -851,7 +864,8 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             if (fresh?.id && this.canRequestEmojiDoc(key)) {
                 this.markEmojiDocInFlight(key);
                 this.downloadEmojiDoc(fresh, key, priority, ctx);
-            } else {
+            } else if (this.canRequestEmojiDoc(key)) {
+                this.scheduleEmojiRetry(key);
             }
             return;
         }

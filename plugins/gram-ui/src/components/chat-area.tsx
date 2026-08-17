@@ -470,31 +470,39 @@ function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: numb
 
   useEffect(() => {
     if (!docId) return;
-    let tries = 0;
-    let t: ReturnType<typeof setInterval> | undefined;
+    let cancelled = false;
+    let retries = 0;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const request = () => {
+      requestEmojiDownload(docId, undefined, 2, 'dice');
+      flushEmojiBatch();
+    };
     const onUrl = (e: Event) => {
       const d = (e as CustomEvent).detail;
       if (d && d.docId != null && String(d.docId) === docId && d.url) {
         setUrl(String(d.url));
-        if (t) clearInterval(t);
+        cleanup();
       }
+    };
+    const onBad = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (d && String(d.docId) === docId && retries < 3) {
+        retries++;
+        t = setTimeout(() => {
+          if (!cancelled) request();
+        }, 1500 * retries);
+      }
+    };
+    const cleanup = () => {
+      cancelled = true;
+      window.removeEventListener('tg-emoji-url', onUrl);
+      window.removeEventListener('tg-emoji-bad', onBad);
+      if (t) clearTimeout(t);
     };
     window.addEventListener('tg-emoji-url', onUrl);
-    requestEmojiDownload(docId, undefined, 2);
-    flushEmojiBatch();
-    t = setInterval(() => {
-      tries++;
-      if (tries >= 40) {
-        if (t) clearInterval(t);
-        return;
-      }
-      requestEmojiDownload(docId, undefined, 2);
-      flushEmojiBatch();
-    }, 1500);
-    return () => {
-      window.removeEventListener('tg-emoji-url', onUrl);
-      if (t) clearInterval(t);
-    };
+    window.addEventListener('tg-emoji-bad', onBad);
+    request();
+    return cleanup;
   }, [docId]);
 
   if (!docId || !url) {
@@ -635,6 +643,10 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
         if (!m) continue;
         for (const e of (m.entities || [])) {
           if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) customIds.push(String(e.document_id));
+        }
+        const diceEmoji = m.media?.emoticon || m.media?.emoji;
+        if (typeof diceEmoji === 'string' && diceEmoji) {
+          window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: diceEmoji } }));
         }
       }
     }
