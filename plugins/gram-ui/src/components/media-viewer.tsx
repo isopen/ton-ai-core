@@ -86,7 +86,7 @@ export function MediaViewer({
     if (need) {
       requestedFullRef.current = pid;
       window.dispatchEvent(new CustomEvent('tg-download-photo', {
-        detail: { photo: livePhoto, sizeType: need.sizeType, messageId: Number(liveM.id) },
+        detail: { photo: livePhoto, sizeType: need.sizeType, messageId: Number(liveM.id), ctx: 'viewer' },
       }));
     } else {
       requestedFullRef.current = pid;
@@ -262,7 +262,7 @@ function VideoViewerContent({ item, documentUrls }: { item: MediaViewerVideoItem
     if (!url && !requestedRef.current) {
       requestedRef.current = true;
       window.dispatchEvent(new CustomEvent('tg-download-document', {
-        detail: { document: m.media?.document, messageId: m.id, priority: 0 },
+        detail: { document: m.media?.document, messageId: m.id, priority: 0, ctx: 'viewer' },
       }));
     }
   }, [url, m]);

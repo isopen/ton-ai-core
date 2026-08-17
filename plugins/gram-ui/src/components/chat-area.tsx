@@ -586,6 +586,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   const peer = state.selectedPeer;
   const [visRange, setVisRange] = useState<[number, number]>([0, 0]);
   const [viewer, setViewer] = useState<{ items: MediaViewerItem[]; index: number } | null>(null);
+  const rowsRef = useRef<AlbumRow[]>([]);
 
   const handlerCacheRef = useRef(new Map<string, { onReact: (emoji: string, adding: boolean) => void; onOpenPhoto: (image: ImageSpec) => void }>());
   const handlerPeerKey = peer?.id != null ? String(peer.id) : '';
@@ -616,7 +617,19 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
 
   const handleVisibleRangeChange = useCallback((start: number, end: number) => {
     setVisRange((prev) => (prev[0] === start && prev[1] === end ? prev : [start, end]));
-  }, []);
+    const rows = rowsRef.current;
+    const ids: number[] = [];
+    for (let i = Math.max(0, start); i < Math.min(rows.length, end); i++) {
+      const row = rows[i];
+      if (!row) continue;
+      for (const m of row.msgs) {
+        if (m && typeof m.id === 'number') ids.push(m.id);
+      }
+    }
+    window.dispatchEvent(new CustomEvent('tg-media-viewport', {
+      detail: { peer: peer?.id != null ? String(peer.id) : '', ids },
+    }));
+  }, [peer?.id]);
   const handleNearTop = useCallback(() => {
     dispatch({ type: 'LOAD_MORE' });
   }, [dispatch]);
@@ -676,6 +689,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
 
   const msgs = Array.isArray(state.messages) ? state.messages : [];
   const rows = useMemo(() => buildAlbumRows(msgs), [state.messages]);
+  rowsRef.current = rows;
 
   useEffect(() => {
     const urls: Record<string, string> = (state.documentUrls || {}) as any;

@@ -43,7 +43,7 @@ export class GramMediaRouter {
 
     private photoUrlCache = new Map<string, string>();
     private probedCacheKeys = new Set<string>();
-    private photoQueue: Array<{ photo: any; sizeType: string; messageId: number | string }> = [];
+    private photoQueue: Array<{ photo: any; sizeType: string; messageId: number | string; ctx?: string }> = [];
     private photoQueuedKeys = new Set<string>();
     private photoInFlight = 0;
     private photoInFlightByKey = new Set<string>();
@@ -56,6 +56,9 @@ export class GramMediaRouter {
     private emojiStickersListCache: { sets: any[]; hash: number; expiresAt: number } | null = null;
     private emojiStickersListPending: Promise<any[]> | null = null;
     private stickerDocsById = new Map<string, any>();
+
+    private visibleMessageIds = new Set<number>();
+    private viewportKnown = false;
 
     private documentDownloadGen = 0;
     private documentPending = new Set<number>();
@@ -87,7 +90,7 @@ export class GramMediaRouter {
     attach(): void {
         const w = window;
         const onDownloadPhoto = (e: Event) => {
-            const { photo, sizeType, messageId } = (e as CustomEvent).detail || {};
+            const { photo, sizeType, messageId, ctx } = (e as CustomEvent).detail || {};
             if (!photo || !sizeType || messageId == null) return;
             if (typeof messageId === 'string' && messageId.startsWith('avatar_')) {
                 const dk = messageId + '_' + sizeType + '_' + (photo?.id ?? '');
@@ -108,7 +111,7 @@ export class GramMediaRouter {
                 const first = this.photoQueuedKeys.values().next().value;
                 if (first !== undefined) this.photoQueuedKeys.delete(first);
             }
-            this.photoQueue.push({ photo, sizeType, messageId });
+            this.photoQueue.push({ photo, sizeType, messageId, ctx });
             this.processPhotoQueue();
         };
         w.addEventListener('tg-download-photo', onDownloadPhoto);
@@ -126,12 +129,28 @@ export class GramMediaRouter {
         };
         w.addEventListener('tg-download-document', onDownloadDocument);
 
+        const onMediaViewport = (e: Event) => {
+            const detail = (e as CustomEvent).detail || {};
+            const ids: unknown[] = Array.isArray(detail.ids) ? detail.ids : [];
+            const next = new Set<number>();
+            for (const id of ids) {
+                const n = Number(id);
+                if (Number.isFinite(n)) next.add(n);
+            }
+            this.viewportKnown = true;
+            this.visibleMessageIds = next;
+            this.prunePhotoQueue();
+            this.reprocessDocumentQueues();
+        };
+        w.addEventListener('tg-media-viewport', onMediaViewport);
+
         this.emoji.attach(w);
 
         this.host.cleanupFns.push(() => {
             w.removeEventListener('tg-download-photo', onDownloadPhoto);
             w.removeEventListener('tg-download-document-thumb', onDownloadDocumentThumb);
             w.removeEventListener('tg-download-document', onDownloadDocument);
+            w.removeEventListener('tg-media-viewport', onMediaViewport);
             this.emoji.detach(w);
         });
     }
@@ -492,10 +511,39 @@ export class GramMediaRouter {
         return Array.isArray(msgs) ? msgs.slice(-PROBE_MSG_LIMIT) : msgs;
     }
 
+    private isViewportEligible(messageId: number | string, ctx?: string): boolean {
+        if (ctx === 'viewer') return true;
+        if (typeof messageId === 'string') return true;
+        if (!this.viewportKnown) return true;
+        return this.visibleMessageIds.has(messageId);
+    }
+
+    private prunePhotoQueue(): void {
+        const stillPending: Array<{ photo: any; sizeType: string; messageId: number | string; ctx?: string }> = [];
+        for (const item of this.photoQueue) {
+            if (this.isViewportEligible(item.messageId, item.ctx)) {
+                stillPending.push(item);
+            } else {
+                this.photoQueuedKeys.delete(String(item.messageId) + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
+            }
+        }
+        this.photoQueue = stillPending;
+    }
+
+    private reprocessDocumentQueues(): void {
+        for (const key of Object.keys(this.downloadQueues) as QueueKey[]) {
+            this.scheduleDownloadQueue(key);
+        }
+    }
+
     private processPhotoQueue(): void {
-        const stillPending: Array<{ photo: any; sizeType: string; messageId: number | string }> = [];
+        const stillPending: Array<{ photo: any; sizeType: string; messageId: number | string; ctx?: string }> = [];
         for (let i = this.photoQueue.length - 1; i >= 0; i--) {
             const item = this.photoQueue[i]!;
+            if (!this.isViewportEligible(item.messageId, item.ctx)) {
+                this.photoQueuedKeys.delete(String(item.messageId) + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
+                continue;
+            }
             const ck = this.getPhotoCacheKey(item.photo, item.sizeType);
             const cached = isNoMediaCache() ? undefined : this.photoUrlCache.get(ck);
             if (cached) {
@@ -686,6 +734,10 @@ export class GramMediaRouter {
             this.registerStickerDoc(document);
         }
         if (!document || messageId == null) return;
+        if (!this.isViewportEligible(messageId, ctx)) {
+            if (this.debug) log.info('[gram-media] skip tg-download-document (off-viewport) messageId=' + messageId + ' ctx=' + (ctx || 'chat'));
+            return;
+        }
         const isEmoji = typeof messageId === 'string' && this.isEmojiKey(messageId);
         if (isEmoji && document && (document._ === 'documentEmpty' || (!document.file_reference && !document.mime_type && !document.size && !document.dc_id))) {
             if (document.id != null) this.emoji.onEmojiDownloadFailed(String(document.id));
@@ -733,10 +785,12 @@ export class GramMediaRouter {
             const batchSize = Math.min(queueKey === 'video_queue' ? 1 : DOC_DOWNLOAD_BATCH, slots, queue.length);
             const items: Array<{ document: any; messageId: number | string; mime: string; priority: number }> = [];
             for (let n = 0; n < batchSize; n++) {
-                let bestIdx = 0;
-                for (let i = 1; i < queue.length; i++) {
-                    if (queue[i].priority > queue[bestIdx].priority) bestIdx = i;
+                let bestIdx = -1;
+                for (let i = 0; i < queue.length; i++) {
+                    if (!this.isViewportEligible(queue[i].messageId, queue[i].ctx)) continue;
+                    if (bestIdx === -1 || queue[i].priority > queue[bestIdx].priority) bestIdx = i;
                 }
+                if (bestIdx === -1) break;
                 items.push(queue.splice(bestIdx, 1)[0]);
             }
             this.downloadInProgress[queueKey] += items.length;
