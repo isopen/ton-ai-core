@@ -244,35 +244,27 @@ export class TgsRenderer implements IAnimatedRenderer {
   private startLoop() {
     if (this.isLooping) return;
     this.isLooping = true;
-    this.loop();
+    this.scheduleTick();
   }
 
   private stopLoop() {
     this.isLooping = false;
     cancelAnimationFrame(this.raf);
+    this.raf = 0;
     if (this.rafTimer) {
       window.clearTimeout(this.rafTimer);
       this.rafTimer = 0;
     }
   }
 
-  private loop() {
+  private scheduleTick() {
     if (!this.isLooping) return;
     this.raf = requestAnimationFrame(() => {
       if (!this.isLooping) return;
-      if (this.rafTimer) {
-        window.clearTimeout(this.rafTimer);
-        this.rafTimer = 0;
-      }
-      this.loop();
+      this.raf = 0;
       this.step();
+      this.scheduleTick();
     });
-    this.rafTimer = window.setTimeout(() => {
-      this.rafTimer = 0;
-      if (!this.isLooping) return;
-      this.loop();
-      this.step();
-    }, 33);
   }
 
   private step() {
