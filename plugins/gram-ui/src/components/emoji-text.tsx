@@ -117,7 +117,7 @@ function appendMappedRuns(segments: EmojiSegment[], value: string): void {
   if (pos < value.length) segments.push({ type: 'text', value: value.slice(pos) });
 }
 
-export function getSingleRegularEmoji(text: string, entities?: any[]): string | undefined {
+function getSingleRegularEmoji(text: string, entities?: any[]): string | undefined {
   if (!text || (entities || []).some((e: any) => e?._ === 'messageEntityCustomEmoji')) return undefined;
   const runs = matchEmojiRuns(text);
   if (runs.length !== 1) return undefined;

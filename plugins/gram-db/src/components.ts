@@ -4,7 +4,7 @@ import type { GramDbConfig } from './types';
 const KEY_LEN = 32;
 const KEY_SALT_SIZE = 32;
 export const IV_SIZE = 16;
-export const DIR = '_7a';
+const DIR = '_7a';
 const PBKDF2_ITERATIONS = 310000;
 
 declare global {
@@ -37,7 +37,7 @@ export interface StorageEngine {
   setEncryptionKey?(key: Uint8Array | null): Promise<void>;
 }
 
-export class OpfsEngine implements StorageEngine {
+class OpfsEngine implements StorageEngine {
   private root!: FileSystemDirectoryHandle;
   private queue: Promise<void> = Promise.resolve();
 
@@ -131,7 +131,7 @@ export function currentDbVersion(): number {
   return DbVersion.TDLibStyle;
 }
 
-export const HMAC_SIZE = 32;
+const HMAC_SIZE = 32;
 export const HMAC_LABEL = 'gram-db-hmac-v1';
 const KEY_VERIFY_LABEL = 'gram-db-key-verify-v1';
 

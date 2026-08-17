@@ -1,7 +1,7 @@
 import { MTProtoCryptoPlugin, AuthKey } from '@ton-ai/mtproto';
 import { TLSerializer, TLDeserializer, SchemaSerializer, SchemaDeserializer } from '@ton-ai/tl-language';
 import { EventEmitter } from 'events';
-import { IConnection, TL_CONSTRUCTORS } from './types';
+import { IConnection, TL_CONSTRUCTORS, API_LAYER } from './types';
 
 export interface MtprotoClientConfig {
     apiId: number;
@@ -32,7 +32,7 @@ interface PendingCall {
     timer: NodeJS.Timeout;
 }
 
-const DEFAULT_LAYER = 223;
+const DEFAULT_LAYER = API_LAYER;
 
 export class MtprotoClient {
     private conn: IConnection;

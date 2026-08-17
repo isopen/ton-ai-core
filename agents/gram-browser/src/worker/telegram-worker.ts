@@ -3,7 +3,7 @@ import { crypton } from '@ton-ai/core';
 import { getLogger, isNoMediaCache } from '@ton-ai/gram-debug';
 import { AuthKeyCreator, DefaultPublicRsaKey } from '@ton-ai/mtproto';
 import { TLSerializer, TLDeserializer } from '@ton-ai/tl-language';
-import { TL_CONSTRUCTORS, TELEGRAM_WS_DC_OPTIONS } from '@ton-ai/telegram/dist/types';
+import { TL_CONSTRUCTORS, TELEGRAM_WS_DC_OPTIONS, API_LAYER } from '@ton-ai/telegram/dist/types';
 
 const TELEGRAM_WS_FALLBACKS: Record<number, Array<{ host: string; noObfuscation?: boolean }>> = {
     1: [{ host: 'kws1.web.telegram.org', noObfuscation: true }],
@@ -1139,7 +1139,7 @@ async function sendDcRpc(entry: DcConnection, methodName: string, params: Record
             entry.initialized = true;
             const header = new SchemaSerializer(registry);
             header.writeUint32(TL_CONSTRUCTORS.INVOKE_WITH_LAYER);
-            header.writeInt32(223);
+            header.writeInt32(API_LAYER);
             header.writeUint32(TL_CONSTRUCTORS.INIT_CONNECTION);
             header.writeInt32(0);
             header.writeInt32(getApiId());
@@ -1361,7 +1361,7 @@ async function directRpcWith(
     if (!initialized) {
         const header = new SchemaSerializer(registry);
         header.writeUint32(TL_CONSTRUCTORS.INVOKE_WITH_LAYER);
-        header.writeInt32(223);
+        header.writeInt32(API_LAYER);
         header.writeUint32(TL_CONSTRUCTORS.INIT_CONNECTION);
         header.writeInt32(0);
         header.writeInt32(getApiId());
@@ -2146,7 +2146,7 @@ function buildCallBody(constructorId: number, params: Record<string, any>): Buff
     const s = new TLSerializer();
     if (!connectionInitialized) {
         connectionInitialized = true;
-        const layer = 223;
+        const layer = API_LAYER;
         const apiId = getApiId();
         s.writeUint32(TL_CONSTRUCTORS.INVOKE_WITH_LAYER);
         s.writeInt32(layer);
@@ -2447,7 +2447,7 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
                 connectionInitialized = true;
                 const header = new SchemaSerializer(registry);
                 header.writeUint32(TL_CONSTRUCTORS.INVOKE_WITH_LAYER);
-                header.writeInt32(223);
+                header.writeInt32(API_LAYER);
                 header.writeUint32(TL_CONSTRUCTORS.INIT_CONNECTION);
                 header.writeInt32(0);
                 header.writeInt32(getApiId());

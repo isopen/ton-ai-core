@@ -4,7 +4,7 @@ import { isEnabled, subscribeScope } from '@ton-ai/gram-debug';
 
 const SCOPE = 'gram-ui:media-source-badge';
 
-export function mediaSourceLabel(source?: string): string {
+function mediaSourceLabel(source?: string): string {
   if (!source) return '';
   switch (source) {
     case 'memory':

@@ -176,7 +176,7 @@ export async function fetchSelfUserId(s: GramState) {
   }
 }
 
-export function getLastVisibleMsgId(): number {
+function getLastVisibleMsgId(): number {
   const container = document.getElementById('tg-msg-list-content');
   if (!container) return 0;
   const containerRect = container.getBoundingClientRect();
@@ -226,7 +226,7 @@ export function applyReadReceipt(s: GramState, peerKey: string, maxId: number) {
   }
 }
 
-export function scrollReadHandler(s: GramState) {
+function scrollReadHandler(s: GramState) {
   if (s.scrollReadRef.current) clearTimeout(s.scrollReadRef.current);
   s.scrollReadRef.current = setTimeout(() => {
     const peer = s.selectedPeerRef.current;
@@ -260,7 +260,7 @@ export async function loadOrphanedDialogs(s: GramState) {
   } catch {}
 }
 
-export function persistOrphanedDialogs(s: GramState) {
+function persistOrphanedDialogs(s: GramState) {
   const clean = Array.from(s.orphanedDialogsRef.current.entries()).map(([key, d]: [string, Dialog]) => [
     key,
     d?.peer?.avatarUrl ? { ...d, peer: { ...d.peer, avatarUrl: undefined } } : d,
@@ -273,7 +273,7 @@ export function addOrphanedDialog(s: GramState, key: string, dialog: Dialog) {
   persistOrphanedDialogs(s);
 }
 
-export function mergeOrphanedDialogs(s: GramState, serverDialogs: Dialog[]): Dialog[] {
+function mergeOrphanedDialogs(s: GramState, serverDialogs: Dialog[]): Dialog[] {
   const merged = [...serverDialogs].filter(d => d?.peer?.type && d?.peer?.id);
   const existingKeys = new Set(merged.map(d => `${d.peer.type}_${d.peer.id}`));
   for (const [key, dialog] of s.orphanedDialogsRef.current.entries()) {

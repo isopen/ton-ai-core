@@ -18,7 +18,7 @@ export async function getLangCode(): Promise<string> {
   return nav.split(/[-_]/)[0] || 'en';
 }
 
-export async function fetchLangStrings(
+async function fetchLangStrings(
   langCode: string,
   deps: LangDeps
 ): Promise<Record<string, string> | null> {

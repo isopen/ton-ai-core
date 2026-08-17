@@ -22,7 +22,7 @@ function detectBackend(): 'worker' | 'main' {
   return 'worker';
 }
 
-export function getAnimatedRendererBackend(): 'worker' | 'main' {
+function getAnimatedRendererBackend(): 'worker' | 'main' {
   if (!backendChoice) {
     backendChoice = detectBackend();
     log.info('[AnimatedRenderer] backend detected: ' + backendChoice);
@@ -59,16 +59,12 @@ export function initAnimatedRenderer(
   return MainThreadRenderer.init(tgsUrl, container, renderId, params, viewId, onLoad, onError, onFrame);
 }
 
-export function markWorkerBroken(): void {
+function markWorkerBroken(): void {
   workerBroken = true;
 }
 
-export function getRenderDebug(): Array<Record<string, unknown>> {
+function getRenderDebug(): Array<Record<string, unknown>> {
   return TgsRenderer.debugDump();
-}
-
-export function getWorkerPoolInfo(): { count: number; broken: boolean } {
-  return { count: 0, broken: workerBroken };
 }
 
 (window as unknown as Record<string, unknown>).__tgRenderDebug = () => getRenderDebug();

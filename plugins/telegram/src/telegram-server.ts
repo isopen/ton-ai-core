@@ -1,4 +1,4 @@
-import { IConnection, TL_CONSTRUCTORS, TELEGRAM_DC_OPTIONS, TELEGRAM_WS_DC_OPTIONS } from './types';
+import { IConnection, TL_CONSTRUCTORS, TELEGRAM_DC_OPTIONS, TELEGRAM_WS_DC_OPTIONS, API_LAYER } from './types';
 import { MtprotoClient } from './mtproto-client';
 import { TelegramWsConnection, TelegramTcpConnection } from './telegram-transport';
 import { AuthKeyCreator, DefaultPublicRsaKey } from '@ton-ai/mtproto';
@@ -50,7 +50,7 @@ interface PendingAuth {
 
 type TransportType = 'tcp' | 'websocket';
 
-export class TelegramServerAgent {
+class TelegramServerAgent {
     private static nextId = 0;
     private agentTag: string;
     private conn: IConnection | null = null;
@@ -139,7 +139,7 @@ export class TelegramServerAgent {
             systemVersion: '1.0',
             appVersion: '0.0.1',
             langCode: 'en',
-            layer: 223,
+            layer: API_LAYER,
             onUpdate: (ctor, body) => {
                 this.onUpdate?.(ctor, body);
                 for (const cb of this.updateListeners) {
@@ -295,9 +295,9 @@ export class TelegramServerAgent {
         codeSettings: 0xad253d78,
         inputPeerSelf: 0x7da07ec9,
         inputPeerEmpty: 0x7f3b18ea,
-        inputPeerUser: 0x7b8e7de6,
-        inputPeerChat: 0x179be863,
-        inputPeerChannel: 0x20adaef8,
+        inputPeerUser: 0xdde8a54c,
+        inputPeerChat: 0x35a95cb9,
+        inputPeerChannel: 0x27bcbbfc,
         inputDocumentFileLocation: 0xbad07584,
         inputPhotoFileLocation: 0x40181ffe,
         inputFileLocation: 0xdfdaabe1,
@@ -452,7 +452,3 @@ export class TelegramServerAgent {
         this.disconnect();
     }
 }
-
-const g = globalThis as any;
-if (!g.__tgAgentManager) g.__tgAgentManager = new Map<string, TelegramServerAgent>();
-export const agentManager: Map<string, TelegramServerAgent> = g.__tgAgentManager;

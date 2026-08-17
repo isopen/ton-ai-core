@@ -9,7 +9,7 @@ const aniLog = getLogger('gram-ui:ani-sticker');
 
 let uidCounter = 0;
 
-export function useUniqueId(): string {
+function useUniqueId(): string {
   return useRef(`animated-view-${++uidCounter}`).current;
 }
 

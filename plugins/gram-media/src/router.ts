@@ -30,7 +30,7 @@ function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Prom
 }
 
 export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_dialog_queue' | 'emoji_chat_queue' | 'dice_queue' | 'tgs_queue';
-export const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 4, emoji_dialog_queue: 8, emoji_chat_queue: 8, dice_queue: 2, tgs_queue: 8 };
+const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 4, emoji_dialog_queue: 8, emoji_chat_queue: 8, dice_queue: 2, tgs_queue: 8 };
 const DOC_DOWNLOAD_BATCH = 4;
 
 export class GramMediaRouter {

@@ -107,21 +107,8 @@ export function getEmojiDocId(alt: string): string | undefined {
   return emojiMap[normalizeEmoji(alt)];
 }
 
-export function getEmojiList(): string[] {
-  return emojiMap ? Object.keys(emojiMap) : [];
-}
-
-export function getEmojiMapRef(): Record<string, string> | null {
-  return emojiMap;
-}
-
 export function subscribeEmojiMap(cb: (changed?: EmojiChange[]) => void): () => void {
   if (emojiMap && Object.keys(emojiMap).length > 0) cb();
-  listeners.add(cb);
-  return () => listeners.delete(cb);
-}
-
-export function subscribeEmojiChanges(cb: (changed?: EmojiChange[]) => void): () => void {
   listeners.add(cb);
   return () => listeners.delete(cb);
 }

@@ -10,7 +10,7 @@ function unwrapValue(v: any): any {
     return v;
 }
 
-export function buildKeyframes(rawK: any, defaultValue: any): ParsedKeyframe[] {
+function buildKeyframes(rawK: any, defaultValue: any): ParsedKeyframe[] {
     if (!Array.isArray(rawK)) return [];
     const keyframes: ParsedKeyframe[] = [];
 

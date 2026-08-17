@@ -18,7 +18,7 @@ function getActionLabel(actionName: string): string {
   return key ? t(key) : t(S.ACTION_TYPING);
 }
 
-export function getTypingStr(
+function getTypingStr(
   peerKey: string,
   peerType: string | undefined,
   typingMap: Map<string, Map<string, { userId: string; userName: string; action: string; ts: number }>>

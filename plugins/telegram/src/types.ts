@@ -10,14 +10,6 @@ export const TELEGRAM_DC_OPTIONS = [
     { id: 5, host: '91.108.56.100', port: 443 },
 ];
 
-export const TELEGRAM_WS_DC_OPTIONS_LEGACY = [
-    { id: 1, host: 'pluto.web.telegram.org', port: 443 },
-    { id: 2, host: 'venus.web.telegram.org', port: 443 },
-    { id: 3, host: 'aurora.web.telegram.org', port: 443 },
-    { id: 4, host: 'vesta.web.telegram.org', port: 443 },
-    { id: 5, host: 'flora.web.telegram.org', port: 443 },
-];
-
 export const TELEGRAM_TEST_DC_OPTIONS = [
     { id: 1, host: '149.154.175.10', port: 443 },
     { id: 2, host: '149.154.167.40', port: 443 },
@@ -42,6 +34,8 @@ export interface IConnection {
 
 export const PROXY = 'socks5://127.0.0.1:7897';
 
+export const API_LAYER = 228;
+
 export const INTERMEDIATE_MAGIC = 0xEEEEEEEE;
 export const ABRIDGED_MAGIC = 0xEFEFEFEF;
 
@@ -58,13 +52,12 @@ export const TL_CONSTRUCTORS = {
     MSG_CONTAINER: 0x73f1f8dc,
     MSGS_ACK: 0x62d6b459,
     AUTH_SEND_CODE: 0xa677244f,
-    AUTH_SIGNED_IN: 0xbcd51581,
-    AUTH_SIGN_IN: 0xbcd51581,
+    AUTH_SIGN_IN: 0x8d52a951,
     AUTH_SENT_CODE: 0x5e002502,
     AUTH_CHECK_PASSWORD: 0xd18b4d16,
-    MESSAGES_SEND_MESSAGE: 0x520c3870,
-    MESSAGES_SEND_MEDIA: 0x70c0b41c,
-    MESSAGES_GET_DIALOGS: 0xa0ee3b73,
+    MESSAGES_SEND_MESSAGE: 0xfef48f62,
+    MESSAGES_SEND_MEDIA: 0x0330e77f,
+    MESSAGES_GET_DIALOGS: 0xa0f4cb4f,
     MESSAGES_DIALOGS: 0x15ba6c40,
     MESSAGES_DIALOGS_SLICE: 0x71e094f3,
     UPDATES_GET_STATE: 0xedd4882a,
@@ -72,15 +65,15 @@ export const TL_CONSTRUCTORS = {
     UPDATES_STATE: 0xa56c2a3e,
     INPUT_PEER_EMPTY: 0x7f3b18ea,
     INPUT_PEER_SELF: 0x7da07ec9,
-    INPUT_PEER_USER: 0x7b8e7de6,
-    INPUT_PEER_CHAT: 0x179be863,
-    INPUT_PEER_CHANNEL: 0x20adaef8,
+    INPUT_PEER_USER: 0xdde8a54c,
+    INPUT_PEER_CHAT: 0x35a95cb9,
+    INPUT_PEER_CHANNEL: 0x27bcbbfc,
     INPUT_USER_EMPTY: 0xb98886cf,
-    INPUT_USER_SELF: 0xf7c1b80f,
-    INPUT_USER: 0xd8292816,
-    USER_EMPTY: 0x200250ba,
-    USER: 0x939b00d9,
-    USER_FULL: 0x35b2a8a9,
+    INPUT_USER_SELF: 0xf7c1b13f,
+    INPUT_USER: 0xf21158c6,
+    USER_EMPTY: 0xd3bc4b7a,
+    USER: 0xb1b8cc83,
+    USER_FULL: 0x06cbe645,
     TRUE: 0x3fedd339,
     BOOL_FALSE: 0xbc799737,
     BOOL_TRUE: 0x997275b5,
@@ -164,7 +157,7 @@ export const TL_CONSTRUCTORS = {
     CHAT_EMPTY: 0x29562865,
     CHAT: 0x41cbf256,
     CHAT_FORBIDDEN: 0x6592a1a7,
-    CHANNEL: 0x1c32b11c,
+    CHANNEL: 0xd49f34c6,
     CHANNEL_FORBIDDEN: 0x17d493d5,
     CHAT_FULL: 0x2633421b,
     CHANNEL_FULL: 0xa04e8d3a,
@@ -667,7 +660,7 @@ export const TL_CONSTRUCTORS = {
     STICKER_SET: 0x2dd14edc,
     MESSAGES_STICKER_SET: 0x6e153f16,
     MESSAGES_STICKER_SET_NOT_MODIFIED: 0xd3f924eb,
-    BOT_COMMAND: 0xc27ac8c7,
+    BOT_COMMAND: 0x9852d6d2,
     BOT_INFO: 0x4d8a0299,
     KEYBOARD_BUTTON: 0x7d170cff,
     KEYBOARD_BUTTON_URL: 0xd80c25ec,
@@ -1681,7 +1674,7 @@ export const TL_CONSTRUCTORS = {
     AI_COMPOSE_TONE_EXAMPLE: 0xf1d628ec,
     BOTS_ACCESS_SETTINGS: 0xdd1fbf93,
     MESSAGES_CHAT_INVITE_JOIN_RESULT_OK: 0x445663a7,
-    MESSAGES_CHAT_INVITE_JOIN_RESULT_WEB_VIEW: 0x2f51c337,
+    MESSAGES_CHAT_INVITE_JOIN_RESULT_WEB_VIEW: 0x61ca29d3,
     JOIN_CHAT_BOT_RESULT_APPROVED: 0xae152a69,
     JOIN_CHAT_BOT_RESULT_DECLINED: 0x0efa0194,
     JOIN_CHAT_BOT_RESULT_QUEUED: 0x98a3a840,
@@ -1934,7 +1927,7 @@ export const TL_CONSTRUCTORS = {
     MESSAGES_GET_MESSAGES_VIEWS: 0x5784d3e1,
     MESSAGES_EDIT_CHAT_ADMIN: 0xa85bd1c2,
     MESSAGES_MIGRATE_CHAT: 0xa2875319,
-    MESSAGES_SEARCH_GLOBAL: 0x4bc6589a,
+    MESSAGES_SEARCH_GLOBAL: 0x6126a43c,
     MESSAGES_REORDER_STICKER_SETS: 0x78337739,
     MESSAGES_GET_DOCUMENT_BY_HASH: 0xb1f2061f,
     MESSAGES_GET_SAVED_GIFS: 0x5cf09635,

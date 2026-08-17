@@ -18,7 +18,6 @@ const log = getLogger('telegram');
 
 export * from './types';
 export * from './connection';
-export * from './ws-connection';
 export * from './handshake';
 export * from './obfuscation-utils';
 export * from './mtproto-client';
@@ -27,7 +26,6 @@ export * from './telegram-server';
 export * from './telegram-transport';
 export * from './ws-request';
 export * from './ws-tcp-proxy';
-export * from './server-connection';
 export * from './deserialize-helper';
 export * from './browser-connection';
 export * from './json-schema-to-tl';

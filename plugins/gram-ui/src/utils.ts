@@ -186,7 +186,7 @@ export function isAnimatedMedia(media: any): boolean {
   return hasAnimated || mime === 'image/gif';
 }
 
-export const SENDER_COLORS = ['#6bc3ff', '#f5a623', '#4cd964', '#ff6b6b', '#a6a6ff', '#ff85a2', '#50c8c8', '#ffcc02'];
+const SENDER_COLORS = ['#6bc3ff', '#f5a623', '#4cd964', '#ff6b6b', '#a6a6ff', '#ff85a2', '#50c8c8', '#ffcc02'];
 
 export function senderColor(name: string): string {
     const hash = name.split('').reduce((a, c) => a + c.charCodeAt(0), 0);

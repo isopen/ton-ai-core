@@ -304,7 +304,7 @@
       "type": "InputMedia"
     },
     {
-      "id": "505969924",
+      "id": "2105767386",
       "predicate": "inputMediaUploadedPhoto",
       "params": [
         {
@@ -323,16 +323,25 @@
           }
         },
         {
+          "name": "live_photo",
+          "type": "true",
+          "repr": "flags.3?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
           "name": "file",
           "type": "InputFile",
           "repr": "InputFile"
         },
         {
           "name": "stickers",
-          "type": "InputDocument",
+          "type": "Vector<InputDocument>",
           "repr": "flags.0?Vector<InputDocument>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 0
@@ -347,12 +356,22 @@
             "field": "flags",
             "bit": 1
           }
+        },
+        {
+          "name": "video",
+          "type": "InputDocument",
+          "repr": "flags.3?InputDocument",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
         }
       ],
       "type": "InputMedia"
     },
     {
-      "id": "-1279654347",
+      "id": "-475053004",
       "predicate": "inputMediaPhoto",
       "params": [
         {
@@ -371,6 +390,16 @@
           }
         },
         {
+          "name": "live_photo",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
           "name": "id",
           "type": "InputPhoto",
           "repr": "InputPhoto"
@@ -383,6 +412,16 @@
           "flag": {
             "field": "flags",
             "bit": 0
+          }
+        },
+        {
+          "name": "video",
+          "type": "InputDocument",
+          "repr": "flags.2?InputDocument",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
           }
         }
       ],
@@ -881,7 +920,7 @@
       "type": "InputMedia"
     },
     {
-      "id": "261416433",
+      "id": "-2009448184",
       "predicate": "inputMediaPoll",
       "params": [
         {
@@ -896,13 +935,22 @@
         },
         {
           "name": "correct_answers",
-          "type": "bytes",
-          "repr": "flags.0?Vector<bytes>",
+          "type": "Vector<int>",
+          "repr": "flags.0?Vector<int>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 0
+          }
+        },
+        {
+          "name": "attached_media",
+          "type": "InputMedia",
+          "repr": "flags.3?InputMedia",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
           }
         },
         {
@@ -917,13 +965,22 @@
         },
         {
           "name": "solution_entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.1?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 1
+          }
+        },
+        {
+          "name": "solution_media",
+          "type": "InputMedia",
+          "repr": "flags.2?InputMedia",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
           }
         }
       ],
@@ -1571,7 +1628,7 @@
       "type": "User"
     },
     {
-      "id": "829899656",
+      "id": "-1313289085",
       "predicate": "user",
       "params": [
         {
@@ -1855,6 +1912,36 @@
           }
         },
         {
+          "name": "bot_can_manage_bots",
+          "type": "true",
+          "repr": "flags2.18?true",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 18
+          }
+        },
+        {
+          "name": "bot_guestchat",
+          "type": "true",
+          "repr": "flags2.19?true",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 19
+          }
+        },
+        {
+          "name": "bot_guard",
+          "type": "true",
+          "repr": "flags2.20?true",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 20
+          }
+        },
+        {
           "name": "id",
           "type": "long",
           "repr": "long"
@@ -1941,10 +2028,9 @@
         },
         {
           "name": "restriction_reason",
-          "type": "RestrictionReason",
+          "type": "Vector<RestrictionReason>",
           "repr": "flags.18?Vector<RestrictionReason>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 18
@@ -1982,10 +2068,9 @@
         },
         {
           "name": "usernames",
-          "type": "Username",
+          "type": "Vector<Username>",
           "repr": "flags2.0?Vector<Username>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags2",
             "bit": 0
@@ -2049,6 +2134,16 @@
           "flag": {
             "field": "flags2",
             "bit": 15
+          }
+        },
+        {
+          "name": "linked_community_id",
+          "type": "long",
+          "repr": "flags2.21?long",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 21
           }
         }
       ],
@@ -2246,16 +2341,6 @@
           }
         },
         {
-          "name": "kicked",
-          "type": "true",
-          "repr": "flags.1?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 1
-          }
-        },
-        {
           "name": "left",
           "type": "true",
           "repr": "flags.2?true",
@@ -2386,7 +2471,7 @@
       "type": "Chat"
     },
     {
-      "id": "473084188",
+      "id": "-727763770",
       "predicate": "channel",
       "params": [
         {
@@ -2721,10 +2806,9 @@
         },
         {
           "name": "restriction_reason",
-          "type": "RestrictionReason",
+          "type": "Vector<RestrictionReason>",
           "repr": "flags.9?Vector<RestrictionReason>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 9
@@ -2772,10 +2856,9 @@
         },
         {
           "name": "usernames",
-          "type": "Username",
+          "type": "Vector<Username>",
           "repr": "flags2.0?Vector<Username>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags2",
             "bit": 0
@@ -2869,6 +2952,16 @@
           "flag": {
             "field": "flags2",
             "bit": 18
+          }
+        },
+        {
+          "name": "linked_community_id",
+          "type": "long",
+          "repr": "flags2.20?long",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 20
           }
         }
       ],
@@ -3136,7 +3229,7 @@
       "type": "ChatFull"
     },
     {
-      "id": "-455036259",
+      "id": "-1605464774",
       "predicate": "channelFull",
       "params": [
         {
@@ -3456,9 +3549,8 @@
         },
         {
           "name": "bot_info",
-          "type": "BotInfo",
-          "repr": "Vector<BotInfo>",
-          "vector": true
+          "type": "Vector<BotInfo>",
+          "repr": "Vector<BotInfo>"
         },
         {
           "name": "migrated_from_chat_id",
@@ -3597,10 +3689,9 @@
         },
         {
           "name": "pending_suggestions",
-          "type": "string",
+          "type": "Vector<string>",
           "repr": "flags.25?Vector<string>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 25
@@ -3638,10 +3729,9 @@
         },
         {
           "name": "recent_requesters",
-          "type": "long",
+          "type": "Vector<long>",
           "repr": "flags.28?Vector<long>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 28
@@ -3765,6 +3855,16 @@
           "flag": {
             "field": "flags2",
             "bit": 22
+          }
+        },
+        {
+          "name": "guard_bot_id",
+          "type": "long",
+          "repr": "flags2.23?long",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 23
           }
         }
       ],
@@ -3997,7 +4097,7 @@
       "type": "Message"
     },
     {
-      "id": "988112002",
+      "id": "1979759059",
       "predicate": "message",
       "params": [
         {
@@ -4241,6 +4341,16 @@
           }
         },
         {
+          "name": "guestchat_via_from",
+          "type": "Peer",
+          "repr": "flags2.19?Peer",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 19
+          }
+        },
+        {
           "name": "reply_to",
           "type": "MessageReplyHeader",
           "repr": "flags.3?MessageReplyHeader",
@@ -4282,10 +4392,9 @@
         },
         {
           "name": "entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.7?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 7
@@ -4363,10 +4472,9 @@
         },
         {
           "name": "restriction_reason",
-          "type": "RestrictionReason",
+          "type": "Vector<RestrictionReason>",
           "repr": "flags.22?Vector<RestrictionReason>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 22
@@ -4460,6 +4568,16 @@
           "flag": {
             "field": "flags2",
             "bit": 11
+          }
+        },
+        {
+          "name": "rich_message",
+          "type": "RichMessage",
+          "repr": "flags2.13?RichMessage",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 13
           }
         }
       ],
@@ -4624,7 +4742,7 @@
       "type": "MessageMedia"
     },
     {
-      "id": "1766936791",
+      "id": "-501814429",
       "predicate": "messageMediaPhoto",
       "params": [
         {
@@ -4640,6 +4758,16 @@
           "flag": {
             "field": "flags",
             "bit": 3
+          }
+        },
+        {
+          "name": "live_photo",
+          "type": "true",
+          "repr": "flags.4?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
           }
         },
         {
@@ -4660,6 +4788,16 @@
           "flag": {
             "field": "flags",
             "bit": 2
+          }
+        },
+        {
+          "name": "video",
+          "type": "Document",
+          "repr": "flags.4?Document",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
           }
         }
       ],
@@ -5064,9 +5202,14 @@
       "type": "MessageMedia"
     },
     {
-      "id": "1272375192",
+      "id": "2000637542",
       "predicate": "messageMediaPoll",
       "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
         {
           "name": "poll",
           "type": "Poll",
@@ -5076,6 +5219,16 @@
           "name": "results",
           "type": "PollResults",
           "repr": "PollResults"
+        },
+        {
+          "name": "attached_media",
+          "type": "MessageMedia",
+          "repr": "flags.0?MessageMedia",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
         }
       ],
       "type": "MessageMedia"
@@ -6631,13 +6784,13 @@
           }
         },
         {
-          "name": "transferred",
+          "name": "refunded",
           "type": "true",
-          "repr": "flags.6?true",
+          "repr": "flags.9?true",
           "optional": true,
           "flag": {
             "field": "flags",
-            "bit": 6
+            "bit": 9
           }
         },
         {
@@ -6648,16 +6801,6 @@
           "flag": {
             "field": "flags",
             "bit": 10
-          }
-        },
-        {
-          "name": "refunded",
-          "type": "true",
-          "repr": "flags.9?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 9
           }
         },
         {
@@ -7511,7 +7654,7 @@
       "type": "MessageAction"
     },
     {
-      "id": "-712374074",
+      "id": "-58066957",
       "predicate": "dialog",
       "params": [
         {
@@ -7581,6 +7724,11 @@
         },
         {
           "name": "unread_reactions_count",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "unread_poll_votes_count",
           "type": "int",
           "repr": "int"
         },
@@ -7991,7 +8139,7 @@
       "type": "auth.SentCode"
     },
     {
-      "id": "-527082948",
+      "id": "-125665601",
       "predicate": "auth.sentCodePaymentRequired",
       "params": [
         {
@@ -8013,6 +8161,11 @@
           "name": "support_email_subject",
           "type": "string",
           "repr": "string"
+        },
+        {
+          "name": "premium_days",
+          "type": "int",
+          "repr": "int"
         },
         {
           "name": "currency",
@@ -8786,7 +8939,7 @@
       "type": "ReportReason"
     },
     {
-      "id": "-1607745218",
+      "id": "114026053",
       "predicate": "userFull",
       "params": [
         {
@@ -8987,6 +9140,16 @@
           "flag": {
             "field": "flags2",
             "bit": 24
+          }
+        },
+        {
+          "name": "unofficial_security_risk",
+          "type": "true",
+          "repr": "flags2.26?true",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 26
           }
         },
         {
@@ -9337,6 +9500,16 @@
           "flag": {
             "field": "flags2",
             "bit": 22
+          }
+        },
+        {
+          "name": "bot_manager_id",
+          "type": "long",
+          "repr": "flags2.25?long",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 25
           }
         }
       ],
@@ -11567,13 +11740,43 @@
       "type": "Update"
     },
     {
-      "id": "-1398708869",
+      "id": "-699641301",
       "predicate": "updateMessagePoll",
       "params": [
         {
           "name": "flags",
           "type": "#",
           "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "Peer",
+          "repr": "flags.1?Peer",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "flags.1?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "top_msg_id",
+          "type": "int",
+          "repr": "flags.2?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
         },
         {
           "name": "poll_id",
@@ -11755,7 +11958,7 @@
       "type": "Update"
     },
     {
-      "id": "619974263",
+      "id": "1989799956",
       "predicate": "updateMessagePollVote",
       "params": [
         {
@@ -11770,9 +11973,13 @@
         },
         {
           "name": "options",
-          "type": "bytes",
-          "repr": "Vector<bytes>",
-          "vector": true
+          "type": "Vector<bytes>",
+          "repr": "Vector<bytes>"
+        },
+        {
+          "name": "positions",
+          "type": "Vector<int>",
+          "repr": "Vector<int>"
         },
         {
           "name": "qts",
@@ -12440,9 +12647,14 @@
       "type": "Update"
     },
     {
-      "id": "299870598",
+      "id": "2092125561",
       "predicate": "updateBotChatInviteRequester",
       "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
         {
           "name": "peer",
           "type": "Peer",
@@ -12472,6 +12684,16 @@
           "name": "qts",
           "type": "int",
           "repr": "int"
+        },
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "flags.0?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
         }
       ],
       "type": "Update"
@@ -17860,9 +18082,24 @@
       "type": "messages.StickerSet"
     },
     {
-      "id": "-1032140601",
+      "id": "-1739401518",
       "predicate": "botCommand",
       "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "ephemeral",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
         {
           "name": "command",
           "type": "string",
@@ -22136,7 +22373,7 @@
       "type": "DraftMessage"
     },
     {
-      "id": "-1763006997",
+      "id": "1627271828",
       "predicate": "draftMessage",
       "params": [
         {
@@ -22181,10 +22418,9 @@
         },
         {
           "name": "entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.3?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 3
@@ -22223,6 +22459,16 @@
           "flag": {
             "field": "flags",
             "bit": 8
+          }
+        },
+        {
+          "name": "rich_message",
+          "type": "RichMessage",
+          "repr": "flags.9?RichMessage",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 9
           }
         }
       ],
@@ -23021,6 +23267,16 @@
           "repr": "#"
         },
         {
+          "name": "spoiler",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
           "name": "photo_id",
           "type": "long",
           "repr": "long"
@@ -23080,6 +23336,16 @@
           "flag": {
             "field": "flags",
             "bit": 1
+          }
+        },
+        {
+          "name": "spoiler",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
           }
         },
         {
@@ -23358,14 +23624,48 @@
       "type": "PageBlock"
     },
     {
-      "id": "-1702174239",
+      "id": "534181569",
       "predicate": "pageBlockOrderedList",
       "params": [
         {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "reversed",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
           "name": "items",
-          "type": "PageListOrderedItem",
-          "repr": "Vector<PageListOrderedItem>",
-          "vector": true
+          "type": "Vector<PageListOrderedItem>",
+          "repr": "Vector<PageListOrderedItem>"
+        },
+        {
+          "name": "start",
+          "type": "int",
+          "repr": "flags.0?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
         }
       ],
       "type": "PageBlock"
@@ -24167,26 +24467,6 @@
           "repr": "#"
         },
         {
-          "name": "can_save_credentials",
-          "type": "true",
-          "repr": "flags.2?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 2
-          }
-        },
-        {
-          "name": "password_missing",
-          "type": "true",
-          "repr": "flags.3?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 3
-          }
-        },
-        {
           "name": "form_id",
           "type": "long",
           "repr": "long"
@@ -24223,9 +24503,8 @@
         },
         {
           "name": "users",
-          "type": "User",
-          "repr": "Vector<User>",
-          "vector": true
+          "type": "Vector<User>",
+          "repr": "Vector<User>"
         }
       ],
       "type": "payments.PaymentForm"
@@ -28210,61 +28489,209 @@
       "type": "PageCaption"
     },
     {
-      "id": "-1188055347",
+      "id": "794323004",
       "predicate": "pageListItemText",
       "params": [
         {
-          "name": "text",
-          "type": "RichText",
-          "repr": "RichText"
-        }
-      ],
-      "type": "PageListItem"
-    },
-    {
-      "id": "635466748",
-      "predicate": "pageListItemBlocks",
-      "params": [
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
         {
-          "name": "blocks",
-          "type": "PageBlock",
-          "repr": "Vector<PageBlock>",
-          "vector": true
-        }
-      ],
-      "type": "PageListItem"
-    },
-    {
-      "id": "1577484359",
-      "predicate": "pageListOrderedItemText",
-      "params": [
+          "name": "checkbox",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
         {
-          "name": "num",
-          "type": "string",
-          "repr": "string"
+          "name": "checked",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
         },
         {
           "name": "text",
           "type": "RichText",
           "repr": "RichText"
+        }
+      ],
+      "type": "PageListItem"
+    },
+    {
+      "id": "1674209194",
+      "predicate": "pageListItemBlocks",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "checkbox",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "checked",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "blocks",
+          "type": "Vector<PageBlock>",
+          "repr": "Vector<PageBlock>"
+        }
+      ],
+      "type": "PageListItem"
+    },
+    {
+      "id": "352522633",
+      "predicate": "pageListOrderedItemText",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "checkbox",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "checked",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "num",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        },
+        {
+          "name": "value",
+          "type": "int",
+          "repr": "flags.3?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "repr": "flags.4?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
         }
       ],
       "type": "PageListOrderedItem"
     },
     {
-      "id": "-1730311882",
+      "id": "-1879910928",
       "predicate": "pageListOrderedItemBlocks",
       "params": [
         {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "checkbox",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "checked",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
           "name": "num",
           "type": "string",
-          "repr": "string"
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
         },
         {
           "name": "blocks",
-          "type": "PageBlock",
-          "repr": "Vector<PageBlock>",
-          "vector": true
+          "type": "Vector<PageBlock>",
+          "repr": "Vector<PageBlock>"
+        },
+        {
+          "name": "value",
+          "type": "int",
+          "repr": "flags.3?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "repr": "flags.4?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
         }
       ],
       "type": "PageListOrderedItem"
@@ -28463,9 +28890,14 @@
       "type": "help.UserInfo"
     },
     {
-      "id": "-15277366",
+      "id": "1266514026",
       "predicate": "pollAnswer",
       "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
         {
           "name": "text",
           "type": "TextWithEntities",
@@ -28475,12 +28907,42 @@
           "name": "option",
           "type": "bytes",
           "repr": "bytes"
+        },
+        {
+          "name": "media",
+          "type": "MessageMedia",
+          "repr": "flags.0?MessageMedia",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "added_by",
+          "type": "Peer",
+          "repr": "flags.1?Peer",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "date",
+          "type": "int",
+          "repr": "flags.1?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
         }
       ],
       "type": "PollAnswer"
     },
     {
-      "id": "1484026161",
+      "id": "-1771164225",
       "predicate": "poll",
       "params": [
         {
@@ -28534,15 +28996,74 @@
           }
         },
         {
+          "name": "open_answers",
+          "type": "true",
+          "repr": "flags.6?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 6
+          }
+        },
+        {
+          "name": "revoting_disabled",
+          "type": "true",
+          "repr": "flags.7?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 7
+          }
+        },
+        {
+          "name": "shuffle_answers",
+          "type": "true",
+          "repr": "flags.8?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 8
+          }
+        },
+        {
+          "name": "hide_results_until_close",
+          "type": "true",
+          "repr": "flags.9?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 9
+          }
+        },
+        {
+          "name": "creator",
+          "type": "true",
+          "repr": "flags.10?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 10
+          }
+        },
+        {
+          "name": "subscribers_only",
+          "type": "true",
+          "repr": "flags.11?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 11
+          }
+        },
+        {
           "name": "question",
           "type": "TextWithEntities",
           "repr": "TextWithEntities"
         },
         {
           "name": "answers",
-          "type": "PollAnswer",
-          "repr": "Vector<PollAnswer>",
-          "vector": true
+          "type": "Vector<PollAnswer>",
+          "repr": "Vector<PollAnswer>"
         },
         {
           "name": "close_period",
@@ -28563,12 +29084,27 @@
             "field": "flags",
             "bit": 5
           }
+        },
+        {
+          "name": "countries_iso2",
+          "type": "Vector<string>",
+          "repr": "flags.12?Vector<string>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 12
+          }
+        },
+        {
+          "name": "hash",
+          "type": "long",
+          "repr": "long"
         }
       ],
       "type": "Poll"
     },
     {
-      "id": "997055186",
+      "id": "910500618",
       "predicate": "pollAnswerVoters",
       "params": [
         {
@@ -28604,13 +29140,28 @@
         {
           "name": "voters",
           "type": "int",
-          "repr": "int"
+          "repr": "flags.2?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "recent_voters",
+          "type": "Vector<Peer>",
+          "repr": "flags.2?Vector<Peer>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
         }
       ],
       "type": "PollAnswerVoters"
     },
     {
-      "id": "2061444128",
+      "id": "-1166298786",
       "predicate": "pollResults",
       "params": [
         {
@@ -28629,11 +29180,30 @@
           }
         },
         {
+          "name": "has_unread_votes",
+          "type": "true",
+          "repr": "flags.6?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 6
+          }
+        },
+        {
+          "name": "can_view_stats",
+          "type": "true",
+          "repr": "flags.7?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 7
+          }
+        },
+        {
           "name": "results",
-          "type": "PollAnswerVoters",
+          "type": "Vector<PollAnswerVoters>",
           "repr": "flags.1?Vector<PollAnswerVoters>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 1
@@ -28651,10 +29221,9 @@
         },
         {
           "name": "recent_voters",
-          "type": "Peer",
+          "type": "Vector<Peer>",
           "repr": "flags.3?Vector<Peer>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 3
@@ -28672,13 +29241,22 @@
         },
         {
           "name": "solution_entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.4?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 4
+          }
+        },
+        {
+          "name": "solution_media",
+          "type": "MessageMedia",
+          "repr": "flags.5?MessageMedia",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
           }
         }
       ],
@@ -28885,6 +29463,16 @@
           "flag": {
             "field": "flags",
             "bit": 18
+          }
+        },
+        {
+          "name": "manage_linked_peers",
+          "type": "true",
+          "repr": "flags.19?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 19
           }
         }
       ],
@@ -29107,6 +29695,26 @@
           "flag": {
             "field": "flags",
             "bit": 26
+          }
+        },
+        {
+          "name": "send_reactions",
+          "type": "true",
+          "repr": "flags.27?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 27
+          }
+        },
+        {
+          "name": "manage_linked_peers",
+          "type": "true",
+          "repr": "flags.28?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 28
           }
         },
         {
@@ -29718,7 +30326,7 @@
       "type": "messages.SearchCounter"
     },
     {
-      "id": "-117904610",
+      "id": "1020666860",
       "predicate": "urlAuthResultRequest",
       "params": [
         {
@@ -29754,6 +30362,16 @@
           "flag": {
             "field": "flags",
             "bit": 5
+          }
+        },
+        {
+          "name": "is_app",
+          "type": "true",
+          "repr": "flags.6?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 6
           }
         },
         {
@@ -29808,10 +30426,9 @@
         },
         {
           "name": "match_codes",
-          "type": "string",
+          "type": "Vector<string>",
           "repr": "flags.3?Vector<string>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 3
@@ -29825,6 +30442,16 @@
           "flag": {
             "field": "flags",
             "bit": 4
+          }
+        },
+        {
+          "name": "verified_app_name",
+          "type": "string",
+          "repr": "flags.7?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 7
           }
         }
       ],
@@ -31738,7 +32365,7 @@
       "type": "messages.DiscussionMessage"
     },
     {
-      "id": "1763137035",
+      "id": "462937446",
       "predicate": "messageReplyHeader",
       "params": [
         {
@@ -31774,6 +32401,16 @@
           "flag": {
             "field": "flags",
             "bit": 9
+          }
+        },
+        {
+          "name": "reply_to_ephemeral",
+          "type": "true",
+          "repr": "flags.13?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 13
           }
         },
         {
@@ -31838,10 +32475,9 @@
         },
         {
           "name": "quote_entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.7?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 7
@@ -31865,6 +32501,16 @@
           "flag": {
             "field": "flags",
             "bit": 11
+          }
+        },
+        {
+          "name": "poll_option",
+          "type": "bytes",
+          "repr": "flags.12?bytes",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 12
           }
         }
       ],
@@ -34215,6 +34861,16 @@
           }
         },
         {
+          "name": "same_origin",
+          "type": "true",
+          "repr": "flags.3?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
           "name": "query_id",
           "type": "long",
           "repr": "flags.0?long",
@@ -35207,7 +35863,7 @@
       "type": "InputStorePaymentPurpose"
     },
     {
-      "id": "-1682807955",
+      "id": "1069645911",
       "predicate": "inputStorePaymentAuthCode",
       "params": [
         {
@@ -35234,6 +35890,11 @@
           "name": "phone_code_hash",
           "type": "string",
           "repr": "string"
+        },
+        {
+          "name": "premium_days",
+          "type": "int",
+          "repr": "int"
         },
         {
           "name": "currency",
@@ -35842,7 +36503,7 @@
       "type": "ForumTopic"
     },
     {
-      "id": "-838922550",
+      "id": "-52766699",
       "predicate": "forumTopic",
       "params": [
         {
@@ -35972,6 +36633,11 @@
         },
         {
           "name": "unread_reactions_count",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "unread_poll_votes_count",
           "type": "int",
           "repr": "int"
         },
@@ -36703,16 +37369,6 @@
           "repr": "#"
         },
         {
-          "name": "revoked",
-          "type": "true",
-          "repr": "flags.0?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 0
-          }
-        },
-        {
           "name": "title",
           "type": "string",
           "repr": "string"
@@ -36724,9 +37380,8 @@
         },
         {
           "name": "peers",
-          "type": "Peer",
-          "repr": "Vector<Peer>",
-          "vector": true
+          "type": "Vector<Peer>",
+          "repr": "Vector<Peer>"
         }
       ],
       "type": "ExportedChatlistInvite"
@@ -37102,7 +37757,7 @@
       "type": "StoryItem"
     },
     {
-      "id": "-302947087",
+      "id": "379894076",
       "predicate": "storyItem",
       "params": [
         {
@@ -37247,10 +37902,9 @@
         },
         {
           "name": "entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.1?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 1
@@ -37263,10 +37917,9 @@
         },
         {
           "name": "media_areas",
-          "type": "MediaArea",
+          "type": "Vector<MediaArea>",
           "repr": "flags.14?Vector<MediaArea>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 14
@@ -37274,10 +37927,9 @@
         },
         {
           "name": "privacy",
-          "type": "PrivacyRule",
+          "type": "Vector<PrivacyRule>",
           "repr": "flags.2?Vector<PrivacyRule>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 2
@@ -37305,13 +37957,22 @@
         },
         {
           "name": "albums",
-          "type": "int",
+          "type": "Vector<int>",
           "repr": "flags.19?Vector<int>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 19
+          }
+        },
+        {
+          "name": "music",
+          "type": "Document",
+          "repr": "flags.20?Document",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 20
           }
         }
       ],
@@ -37651,7 +38312,7 @@
       "type": "stories.StoryViews"
     },
     {
-      "id": "-2036351472",
+      "id": "1003796418",
       "predicate": "inputReplyToMessage",
       "params": [
         {
@@ -37696,10 +38357,9 @@
         },
         {
           "name": "quote_entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.3?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 3
@@ -37733,6 +38393,16 @@
           "flag": {
             "field": "flags",
             "bit": 6
+          }
+        },
+        {
+          "name": "poll_option",
+          "type": "bytes",
+          "repr": "flags.7?bytes",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 7
           }
         }
       ],
@@ -40215,7 +40885,7 @@
       "type": "messages.QuickReplies"
     },
     {
-      "id": "-849058964",
+      "id": "54448129",
       "predicate": "connectedBot",
       "params": [
         {
@@ -40237,6 +40907,36 @@
           "name": "rights",
           "type": "BusinessBotRights",
           "repr": "BusinessBotRights"
+        },
+        {
+          "name": "device",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "date",
+          "type": "int",
+          "repr": "flags.1?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "location",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
         }
       ],
       "type": "ConnectedBot"
@@ -41131,7 +41831,7 @@
       "type": "ReactionNotificationsFrom"
     },
     {
-      "id": "1457736048",
+      "id": "1910827608",
       "predicate": "reactionsNotifySettings",
       "params": [
         {
@@ -41157,6 +41857,16 @@
           "flag": {
             "field": "flags",
             "bit": 1
+          }
+        },
+        {
+          "name": "poll_votes_notify_from",
+          "type": "ReactionNotificationsFrom",
+          "repr": "flags.2?ReactionNotificationsFrom",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
           }
         },
         {
@@ -41467,26 +42177,6 @@
           }
         },
         {
-          "name": "subscription",
-          "type": "true",
-          "repr": "flags.12?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 12
-          }
-        },
-        {
-          "name": "floodskip",
-          "type": "true",
-          "repr": "flags.15?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 15
-          }
-        },
-        {
           "name": "stargift_upgrade",
           "type": "true",
           "repr": "flags.18?true",
@@ -41494,26 +42184,6 @@
           "flag": {
             "field": "flags",
             "bit": 18
-          }
-        },
-        {
-          "name": "paid_message",
-          "type": "true",
-          "repr": "flags.19?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 19
-          }
-        },
-        {
-          "name": "premium_gift",
-          "type": "true",
-          "repr": "flags.20?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 20
           }
         },
         {
@@ -41688,10 +42358,9 @@
         },
         {
           "name": "extended_media",
-          "type": "MessageMedia",
+          "type": "Vector<MessageMedia>",
           "repr": "flags.9?Vector<MessageMedia>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 9
@@ -42569,16 +43238,6 @@
           "flag": {
             "field": "flags",
             "bit": 2
-          }
-        },
-        {
-          "name": "can_upgrade",
-          "type": "true",
-          "repr": "flags.3?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 3
           }
         },
         {
@@ -45420,16 +46079,6 @@
           }
         },
         {
-          "name": "anonymous",
-          "type": "true",
-          "repr": "flags.2?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 2
-          }
-        },
-        {
           "name": "peer_id",
           "type": "Peer",
           "repr": "flags.3?Peer",
@@ -46409,47 +47058,93 @@
         }
       ],
       "type": "messages.WebViewResult"
-    }
-  ],
-  "methods": [
-    {
-      "id": "-878758099",
-      "method": "invokeAfterMsg",
-      "params": [
-        {
-          "name": "msg_id",
-          "type": "long",
-          "repr": "long"
-        },
-        {
-          "name": "query",
-          "type": "!X",
-          "repr": "!X"
-        }
-      ],
-      "type": "X"
     },
     {
-      "id": "1036301552",
-      "method": "invokeAfterMsgs",
+      "id": "-734810765",
+      "predicate": "ipPort",
       "params": [
         {
-          "name": "msg_ids",
-          "type": "long",
-          "repr": "Vector<long>",
-          "vector": true
+          "name": "ipv4",
+          "type": "int",
+          "repr": "int"
         },
         {
-          "name": "query",
-          "type": "!X",
-          "repr": "!X"
+          "name": "port",
+          "type": "int",
+          "repr": "int"
         }
       ],
-      "type": "X"
+      "type": "IpPort"
     },
     {
-      "id": "-1043505495",
-      "method": "initConnection",
+      "id": "932718150",
+      "predicate": "ipPortSecret",
+      "params": [
+        {
+          "name": "ipv4",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "port",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "secret",
+          "type": "bytes",
+          "repr": "bytes"
+        }
+      ],
+      "type": "IpPort"
+    },
+    {
+      "id": "1182381663",
+      "predicate": "accessPointRule",
+      "params": [
+        {
+          "name": "phone_prefix_rules",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "dc_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "ips",
+          "type": "vector<IpPort>",
+          "repr": "vector<IpPort>"
+        }
+      ],
+      "type": "AccessPointRule"
+    },
+    {
+      "id": "1515793004",
+      "predicate": "help.configSimple",
+      "params": [
+        {
+          "name": "date",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "expires",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "rules",
+          "type": "vector<AccessPointRule>",
+          "repr": "vector<AccessPointRule>"
+        }
+      ],
+      "type": "help.ConfigSimple"
+    },
+    {
+      "id": "668375447",
+      "predicate": "inputPeerPhotoFileLocationLegacy",
       "params": [
         {
           "name": "flags",
@@ -46457,44 +47152,9 @@
           "repr": "#"
         },
         {
-          "name": "api_id",
-          "type": "int",
-          "repr": "int"
-        },
-        {
-          "name": "device_model",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "system_version",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "app_version",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "system_lang_code",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "lang_pack",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "lang_code",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "proxy",
-          "type": "InputClientProxy",
-          "repr": "flags.0?InputClientProxy",
+          "name": "big",
+          "type": "true",
+          "repr": "flags.0?true",
           "optional": true,
           "flag": {
             "field": "flags",
@@ -46502,9 +47162,258 @@
           }
         },
         {
-          "name": "params",
-          "type": "JSONValue",
-          "repr": "flags.1?JSONValue",
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "volume_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "local_id",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "InputFileLocation"
+    },
+    {
+      "id": "230353641",
+      "predicate": "inputStickerSetThumbLegacy",
+      "params": [
+        {
+          "name": "stickerset",
+          "type": "InputStickerSet",
+          "repr": "InputStickerSet"
+        },
+        {
+          "name": "volume_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "local_id",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "InputFileLocation"
+    },
+    {
+      "id": "-1650340500",
+      "predicate": "messageActionPollAppendAnswer",
+      "params": [
+        {
+          "name": "answer",
+          "type": "PollAnswer",
+          "repr": "PollAnswer"
+        }
+      ],
+      "type": "MessageAction"
+    },
+    {
+      "id": "966161628",
+      "predicate": "messageActionPollDeleteAnswer",
+      "params": [
+        {
+          "name": "answer",
+          "type": "PollAnswer",
+          "repr": "PollAnswer"
+        }
+      ],
+      "type": "MessageAction"
+    },
+    {
+      "id": "375414334",
+      "predicate": "messageActionManagedBotCreated",
+      "params": [
+        {
+          "name": "bot_id",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "MessageAction"
+    },
+    {
+      "id": "1216408986",
+      "predicate": "updateManagedBot",
+      "params": [
+        {
+          "name": "user_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "bot_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "qts",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "Update"
+    },
+    {
+      "id": "-841742019",
+      "predicate": "updateBotGuestChatQuery",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "message",
+          "type": "Message",
+          "repr": "Message"
+        },
+        {
+          "name": "reference_messages",
+          "type": "Vector<Message>",
+          "repr": "flags.0?Vector<Message>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "qts",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "Update"
+    },
+    {
+      "id": "1903653142",
+      "predicate": "messageEntityDiffInsert",
+      "params": [
+        {
+          "name": "offset",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "length",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "MessageEntity"
+    },
+    {
+      "id": "-960371289",
+      "predicate": "messageEntityDiffReplace",
+      "params": [
+        {
+          "name": "offset",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "length",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "old_text",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "MessageEntity"
+    },
+    {
+      "id": "106086853",
+      "predicate": "messageEntityDiffDelete",
+      "params": [
+        {
+          "name": "offset",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "length",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "MessageEntity"
+    },
+    {
+      "id": "429911446",
+      "predicate": "inputPollAnswer",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "text",
+          "type": "TextWithEntities",
+          "repr": "TextWithEntities"
+        },
+        {
+          "name": "media",
+          "type": "InputMedia",
+          "repr": "flags.0?InputMedia",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "PollAnswer"
+    },
+    {
+      "id": "2005007896",
+      "predicate": "webPageAttributeAiComposeTone",
+      "params": [
+        {
+          "name": "emoji_id",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "WebPageAttribute"
+    },
+    {
+      "id": "1048699000",
+      "predicate": "requestPeerTypeCreateBot",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "bot_managed",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "suggested_name",
+          "type": "string",
+          "repr": "flags.1?string",
           "optional": true,
           "flag": {
             "field": "flags",
@@ -46512,154 +47421,2049 @@
           }
         },
         {
-          "name": "query",
-          "type": "!X",
-          "repr": "!X"
+          "name": "suggested_username",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
         }
       ],
-      "type": "X"
+      "type": "RequestPeerType"
     },
     {
-      "id": "-627372787",
-      "method": "invokeWithLayer",
+      "id": "1076577429",
+      "predicate": "inputMessageReadMetric",
       "params": [
         {
-          "name": "layer",
+          "name": "msg_id",
           "type": "int",
           "repr": "int"
         },
         {
-          "name": "query",
-          "type": "!X",
-          "repr": "!X"
-        }
-      ],
-      "type": "X"
-    },
-    {
-      "id": "-1080796745",
-      "method": "invokeWithoutUpdates",
-      "params": [
-        {
-          "name": "query",
-          "type": "!X",
-          "repr": "!X"
-        }
-      ],
-      "type": "X"
-    },
-    {
-      "id": "911373810",
-      "method": "invokeWithMessagesRange",
-      "params": [
-        {
-          "name": "range",
-          "type": "MessageRange",
-          "repr": "MessageRange"
-        },
-        {
-          "name": "query",
-          "type": "!X",
-          "repr": "!X"
-        }
-      ],
-      "type": "X"
-    },
-    {
-      "id": "-1398145746",
-      "method": "invokeWithTakeout",
-      "params": [
-        {
-          "name": "takeout_id",
+          "name": "view_id",
           "type": "long",
           "repr": "long"
         },
         {
-          "name": "query",
-          "type": "!X",
-          "repr": "!X"
+          "name": "time_in_view_ms",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "active_time_in_view_ms",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "height_to_viewport_ratio_permille",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "seen_range_ratio_permille",
+          "type": "int",
+          "repr": "int"
         }
       ],
-      "type": "X"
+      "type": "InputMessageReadMetric"
     },
     {
-      "id": "-584540274",
-      "method": "invokeWithBusinessConnection",
-      "params": [
-        {
-          "name": "connection_id",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "query",
-          "type": "!X",
-          "repr": "!X"
-        }
-      ],
-      "type": "X"
-    },
-    {
-      "id": "502868356",
-      "method": "invokeWithGooglePlayIntegrity",
-      "params": [
-        {
-          "name": "nonce",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "token",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "query",
-          "type": "!X",
-          "repr": "!X"
-        }
-      ],
-      "type": "X"
-    },
-    {
-      "id": "229528824",
-      "method": "invokeWithApnsSecret",
-      "params": [
-        {
-          "name": "nonce",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "secret",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "query",
-          "type": "!X",
-          "repr": "!X"
-        }
-      ],
-      "type": "X"
-    },
-    {
-      "id": "-1380249708",
-      "method": "invokeWithReCaptcha",
+      "id": "1012971041",
+      "predicate": "bots.exportedBotToken",
       "params": [
         {
           "name": "token",
           "type": "string",
           "repr": "string"
-        },
-        {
-          "name": "query",
-          "type": "!X",
-          "repr": "!X"
         }
       ],
-      "type": "X"
+      "type": "bots.ExportedBotToken"
     },
+    {
+      "id": "-247743273",
+      "predicate": "bots.requestedButton",
+      "params": [
+        {
+          "name": "webapp_req_id",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "bots.RequestedButton"
+    },
+    {
+      "id": "-1864913414",
+      "predicate": "messages.composedMessageWithAI",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "result_text",
+          "type": "TextWithEntities",
+          "repr": "TextWithEntities"
+        },
+        {
+          "name": "diff_text",
+          "type": "TextWithEntities",
+          "repr": "flags.0?TextWithEntities",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "messages.ComposedMessageWithAI"
+    },
+    {
+      "id": "697941741",
+      "predicate": "stats.pollStats",
+      "params": [
+        {
+          "name": "votes_graph",
+          "type": "StatsGraph",
+          "repr": "StatsGraph"
+        }
+      ],
+      "type": "stats.PollStats"
+    },
+    {
+      "id": "535407039",
+      "predicate": "inputAiComposeToneDefault",
+      "params": [
+        {
+          "name": "tone",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "InputAiComposeTone"
+    },
+    {
+      "id": "125026432",
+      "predicate": "inputAiComposeToneID",
+      "params": [
+        {
+          "name": "id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "access_hash",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "InputAiComposeTone"
+    },
+    {
+      "id": "530584407",
+      "predicate": "inputAiComposeToneSlug",
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "InputAiComposeTone"
+    },
+    {
+      "id": "-805945687",
+      "predicate": "aiComposeTone",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "creator",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "access_hash",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "slug",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "emoji_id",
+          "type": "long",
+          "repr": "flags.1?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "prompt",
+          "type": "string",
+          "repr": "flags.4?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        },
+        {
+          "name": "installs_count",
+          "type": "int",
+          "repr": "flags.2?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "author_id",
+          "type": "long",
+          "repr": "flags.3?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "example_english",
+          "type": "AiComposeToneExample",
+          "repr": "flags.5?AiComposeToneExample",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
+        }
+      ],
+      "type": "AiComposeTone"
+    },
+    {
+      "id": "-1683135468",
+      "predicate": "aiComposeToneDefault",
+      "params": [
+        {
+          "name": "tone",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "emoji_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "AiComposeTone"
+    },
+    {
+      "id": "1822232318",
+      "predicate": "aicompose.tones",
+      "params": [
+        {
+          "name": "hash",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "tones",
+          "type": "Vector<AiComposeTone>",
+          "repr": "Vector<AiComposeTone>"
+        },
+        {
+          "name": "users",
+          "type": "Vector<User>",
+          "repr": "Vector<User>"
+        }
+      ],
+      "type": "aicompose.Tones"
+    },
+    {
+      "id": "-237623060",
+      "predicate": "aiComposeToneExample",
+      "params": [
+        {
+          "name": "from",
+          "type": "TextWithEntities",
+          "repr": "TextWithEntities"
+        },
+        {
+          "name": "to",
+          "type": "TextWithEntities",
+          "repr": "TextWithEntities"
+        }
+      ],
+      "type": "AiComposeToneExample"
+    },
+    {
+      "id": "-585121901",
+      "predicate": "bots.accessSettings",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "restricted",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "add_users",
+          "type": "Vector<User>",
+          "repr": "flags.1?Vector<User>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "bots.AccessSettings"
+    },
+    {
+      "id": "-46343496",
+      "predicate": "communityForbidden",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "access_hash",
+          "type": "long",
+          "repr": "flags.13?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 13
+          }
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Chat"
+    },
+    {
+      "id": "1710221652",
+      "predicate": "community",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "creator",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "left",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "min",
+          "type": "true",
+          "repr": "flags.12?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 12
+          }
+        },
+        {
+          "name": "flags2",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "collapsed_in_dialogs",
+          "type": "true",
+          "repr": "flags2.20?true",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 20
+          }
+        },
+        {
+          "name": "id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "access_hash",
+          "type": "long",
+          "repr": "flags.13?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 13
+          }
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "photo",
+          "type": "ChatPhoto",
+          "repr": "ChatPhoto"
+        },
+        {
+          "name": "date",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "admin_rights",
+          "type": "ChatAdminRights",
+          "repr": "flags.14?ChatAdminRights",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 14
+          }
+        },
+        {
+          "name": "default_banned_rights",
+          "type": "ChatBannedRights",
+          "repr": "flags.18?ChatBannedRights",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 18
+          }
+        }
+      ],
+      "type": "Chat"
+    },
+    {
+      "id": "-877157113",
+      "predicate": "communityFull",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "about",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "chat_photo",
+          "type": "Photo",
+          "repr": "Photo"
+        },
+        {
+          "name": "linked_peers",
+          "type": "Vector<CommunityPeer>",
+          "repr": "Vector<CommunityPeer>"
+        },
+        {
+          "name": "admins_count",
+          "type": "int",
+          "repr": "flags.1?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "kicked_count",
+          "type": "int",
+          "repr": "flags.2?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "peer_link_requests_pending",
+          "type": "int",
+          "repr": "flags.0?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "ChatFull"
+    },
+    {
+      "id": "1562426088",
+      "predicate": "messageActionChangeCommunity",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "community_id",
+          "type": "long",
+          "repr": "flags.0?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "MessageAction"
+    },
+    {
+      "id": "-141948557",
+      "predicate": "dialogCommunity",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "pinned",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "community_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "notify_settings",
+          "type": "PeerNotifySettings",
+          "repr": "PeerNotifySettings"
+        }
+      ],
+      "type": "Dialog"
+    },
+    {
+      "id": "666573532",
+      "predicate": "inputNotifyCommunity",
+      "params": [
+        {
+          "name": "community",
+          "type": "InputChannel",
+          "repr": "InputChannel"
+        }
+      ],
+      "type": "InputNotifyPeer"
+    },
+    {
+      "id": "-1112768912",
+      "predicate": "updateJoinChatWebViewDecision",
+      "params": [
+        {
+          "name": "peer",
+          "type": "Peer",
+          "repr": "Peer"
+        },
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "result",
+          "type": "JoinChatBotResult",
+          "repr": "JoinChatBotResult"
+        }
+      ],
+      "type": "Update"
+    },
+    {
+      "id": "-1306491994",
+      "predicate": "updateNewBotConnection",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "confirmed",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "bot_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "date",
+          "type": "int",
+          "repr": "flags.1?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "device",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "location",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "Update"
+    },
+    {
+      "id": "-1013306658",
+      "predicate": "updateWebBrowserSettings",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "open_external_browser",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "display_close_button",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "Update"
+    },
+    {
+      "id": "335872721",
+      "predicate": "updateWebBrowserException",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "delete",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "open_external_browser",
+          "type": "Bool",
+          "repr": "flags.0?Bool",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "exception",
+          "type": "WebDomainException",
+          "repr": "WebDomainException"
+        }
+      ],
+      "type": "Update"
+    },
+    {
+      "id": "549239713",
+      "predicate": "updateNewEphemeralMessage",
+      "params": [
+        {
+          "name": "message",
+          "type": "EphemeralMessage",
+          "repr": "EphemeralMessage"
+        }
+      ],
+      "type": "Update"
+    },
+    {
+      "id": "1457257720",
+      "predicate": "updateDeleteEphemeralMessages",
+      "params": [
+        {
+          "name": "peer",
+          "type": "Peer",
+          "repr": "Peer"
+        },
+        {
+          "name": "ids",
+          "type": "Vector<int>",
+          "repr": "Vector<int>"
+        }
+      ],
+      "type": "Update"
+    },
+    {
+      "id": "1270583041",
+      "predicate": "updateEditEphemeralMessage",
+      "params": [
+        {
+          "name": "message",
+          "type": "EphemeralMessage",
+          "repr": "EphemeralMessage"
+        }
+      ],
+      "type": "Update"
+    },
+    {
+      "id": "-1690826910",
+      "predicate": "updateEphemeralBotCallbackQuery",
+      "params": [
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "user_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "peer",
+          "type": "Peer",
+          "repr": "Peer"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "data",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "message",
+          "type": "EphemeralMessage",
+          "repr": "EphemeralMessage"
+        }
+      ],
+      "type": "Update"
+    },
+    {
+      "id": "1812827683",
+      "predicate": "updateBotStarsSubscription",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "canceled",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "payment_failed",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "restored",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "user_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "payload",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "qts",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "Update"
+    },
+    {
+      "id": "-1103664743",
+      "predicate": "notifyCommunity",
+      "params": [
+        {
+          "name": "community_id",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "NotifyPeer"
+    },
+    {
+      "id": "-491635887",
+      "predicate": "inputSendMessageRichMessageDraftAction",
+      "params": [
+        {
+          "name": "random_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "rich_message",
+          "type": "InputRichMessage",
+          "repr": "InputRichMessage"
+        }
+      ],
+      "type": "SendMessageAction"
+    },
+    {
+      "id": "-1563745031",
+      "predicate": "sendMessageRichMessageDraftAction",
+      "params": [
+        {
+          "name": "random_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "rich_message",
+          "type": "RichMessage",
+          "repr": "RichMessage"
+        }
+      ],
+      "type": "SendMessageAction"
+    },
+    {
+      "id": "-1271007892",
+      "predicate": "inputBotInlineMessageRichMessage",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "reply_markup",
+          "type": "ReplyMarkup",
+          "repr": "flags.2?ReplyMarkup",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "rich_message",
+          "type": "InputRichMessage",
+          "repr": "InputRichMessage"
+        }
+      ],
+      "type": "InputBotInlineMessage"
+    },
+    {
+      "id": "174161531",
+      "predicate": "botInlineMessageRichMessage",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "reply_markup",
+          "type": "ReplyMarkup",
+          "repr": "flags.2?ReplyMarkup",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "rich_message",
+          "type": "RichMessage",
+          "repr": "RichMessage"
+        }
+      ],
+      "type": "BotInlineMessage"
+    },
+    {
+      "id": "-1657885545",
+      "predicate": "textMath",
+      "params": [
+        {
+          "name": "source",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "-1570679104",
+      "predicate": "textCustomEmoji",
+      "params": [
+        {
+          "name": "document_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "alt",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "1277844834",
+      "predicate": "textSpoiler",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "-853225660",
+      "predicate": "textMention",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "1368728810",
+      "predicate": "textHashtag",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "50276819",
+      "predicate": "textBotCommand",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "2073958401",
+      "predicate": "textCashtag",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "-1402305622",
+      "predicate": "textAutoUrl",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "-984177571",
+      "predicate": "textAutoEmail",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "616720265",
+      "predicate": "textAutoPhone",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "-1185513171",
+      "predicate": "textBankCard",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "27917308",
+      "predicate": "textMentionName",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        },
+        {
+          "name": "user_id",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "-1514906069",
+      "predicate": "textDate",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "relative",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "short_time",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "long_time",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "short_date",
+          "type": "true",
+          "repr": "flags.3?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "long_date",
+          "type": "true",
+          "repr": "flags.4?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        },
+        {
+          "name": "day_of_week",
+          "type": "true",
+          "repr": "flags.5?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
+        },
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        },
+        {
+          "name": "date",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "-1769551024",
+      "predicate": "textDiff",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        },
+        {
+          "name": "old_text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "RichText"
+    },
+    {
+      "id": "-1157691601",
+      "predicate": "pageBlockHeading1",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "PageBlock"
+    },
+    {
+      "id": "158018284",
+      "predicate": "pageBlockHeading2",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "PageBlock"
+    },
+    {
+      "id": "1743204781",
+      "predicate": "pageBlockHeading3",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "PageBlock"
+    },
+    {
+      "id": "-1254983893",
+      "predicate": "pageBlockHeading4",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "PageBlock"
+    },
+    {
+      "id": "-608277398",
+      "predicate": "pageBlockHeading5",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "PageBlock"
+    },
+    {
+      "id": "1747599785",
+      "predicate": "pageBlockHeading6",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "PageBlock"
+    },
+    {
+      "id": "1493699616",
+      "predicate": "pageBlockMath",
+      "params": [
+        {
+          "name": "source",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "PageBlock"
+    },
+    {
+      "id": "1009361890",
+      "predicate": "pageBlockThinking",
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "PageBlock"
+    },
+    {
+      "id": "1464557951",
+      "predicate": "inputPageBlockMap",
+      "params": [
+        {
+          "name": "geo",
+          "type": "InputGeoPoint",
+          "repr": "InputGeoPoint"
+        },
+        {
+          "name": "zoom",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "w",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "h",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "caption",
+          "type": "PageCaption",
+          "repr": "PageCaption"
+        }
+      ],
+      "type": "PageBlock"
+    },
+    {
+      "id": "242108356",
+      "predicate": "pageBlockBlockquoteBlocks",
+      "params": [
+        {
+          "name": "blocks",
+          "type": "Vector<PageBlock>",
+          "repr": "Vector<PageBlock>"
+        },
+        {
+          "name": "caption",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "PageBlock"
+    },
+    {
+      "id": "1777300164",
+      "predicate": "inputDialogPeerCommunity",
+      "params": [
+        {
+          "name": "community",
+          "type": "InputChannel",
+          "repr": "InputChannel"
+        }
+      ],
+      "type": "InputDialogPeer"
+    },
+    {
+      "id": "795199716",
+      "predicate": "dialogPeerCommunity",
+      "params": [
+        {
+          "name": "community_id",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "DialogPeer"
+    },
+    {
+      "id": "1092204894",
+      "predicate": "inputReplyToEphemeralMessage",
+      "params": [
+        {
+          "name": "id",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "InputReplyTo"
+    },
+    {
+      "id": "235681199",
+      "predicate": "inputAiComposeToneSingleUse",
+      "params": [
+        {
+          "name": "custom_prompt",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "InputAiComposeTone"
+    },
+    {
+      "id": "-689719277",
+      "predicate": "joinChatBotResultWebView",
+      "params": [
+        {
+          "name": "url",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "JoinChatBotResult"
+    },
+    {
+      "id": "-1824741993",
+      "predicate": "webDomainException",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "domain",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "favicon",
+          "type": "long",
+          "repr": "flags.0?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "WebDomainException"
+    },
+    {
+      "id": "2045480115",
+      "predicate": "account.webBrowserSettings",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "open_external_browser",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "display_close_button",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "external_exceptions",
+          "type": "Vector<WebDomainException>",
+          "repr": "Vector<WebDomainException>"
+        },
+        {
+          "name": "inapp_exceptions",
+          "type": "Vector<WebDomainException>",
+          "repr": "Vector<WebDomainException>"
+        },
+        {
+          "name": "hash",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "account.WebBrowserSettings"
+    },
+    {
+      "id": "-1694473685",
+      "predicate": "inputRichFilePhoto",
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "photo",
+          "type": "InputPhoto",
+          "repr": "InputPhoto"
+        }
+      ],
+      "type": "InputRichFile"
+    },
+    {
+      "id": "-2094522947",
+      "predicate": "inputRichFileDocument",
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "document",
+          "type": "InputDocument",
+          "repr": "InputDocument"
+        }
+      ],
+      "type": "InputRichFile"
+    },
+    {
+      "id": "-456898052",
+      "predicate": "inputRichMessage",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "rtl",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "noautolink",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "blocks",
+          "type": "Vector<PageBlock>",
+          "repr": "Vector<PageBlock>"
+        },
+        {
+          "name": "photos",
+          "type": "Vector<InputPhoto>",
+          "repr": "flags.2?Vector<InputPhoto>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "documents",
+          "type": "Vector<InputDocument>",
+          "repr": "flags.3?Vector<InputDocument>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "users",
+          "type": "Vector<InputUser>",
+          "repr": "flags.4?Vector<InputUser>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        }
+      ],
+      "type": "InputRichMessage"
+    },
+    {
+      "id": "-624196758",
+      "predicate": "inputRichMessageHTML",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "rtl",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "noautolink",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "html",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "files",
+          "type": "Vector<InputRichFile>",
+          "repr": "flags.2?Vector<InputRichFile>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        }
+      ],
+      "type": "InputRichMessage"
+    },
+    {
+      "id": "4937516",
+      "predicate": "inputRichMessageMarkdown",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "rtl",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "noautolink",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "markdown",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "files",
+          "type": "Vector<InputRichFile>",
+          "repr": "flags.2?Vector<InputRichFile>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        }
+      ],
+      "type": "InputRichMessage"
+    },
+    {
+      "id": "-1158439541",
+      "predicate": "richMessage",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "rtl",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "part",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "blocks",
+          "type": "Vector<PageBlock>",
+          "repr": "Vector<PageBlock>"
+        },
+        {
+          "name": "photos",
+          "type": "Vector<Photo>",
+          "repr": "Vector<Photo>"
+        },
+        {
+          "name": "documents",
+          "type": "Vector<Document>",
+          "repr": "Vector<Document>"
+        }
+      ],
+      "type": "RichMessage"
+    },
+    {
+      "id": "1981030077",
+      "predicate": "communityPeer",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "can_view_history",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "visible",
+          "type": "Bool",
+          "repr": "flags.0?Bool",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "peer",
+          "type": "Peer",
+          "repr": "Peer"
+        }
+      ],
+      "type": "CommunityPeer"
+    },
+    {
+      "id": "2078997125",
+      "predicate": "communityPeerRequest",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "visible",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "peer",
+          "type": "Peer",
+          "repr": "Peer"
+        },
+        {
+          "name": "requested_by",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "date",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "CommunityPeerRequest"
+    },
+    {
+      "id": "574926765",
+      "predicate": "communities.peerLinkRequests",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "total_count",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "requests",
+          "type": "Vector<CommunityPeerRequest>",
+          "repr": "Vector<CommunityPeerRequest>"
+        },
+        {
+          "name": "next_offset",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "chats",
+          "type": "Vector<Chat>",
+          "repr": "Vector<Chat>"
+        },
+        {
+          "name": "users",
+          "type": "Vector<User>",
+          "repr": "Vector<User>"
+        }
+      ],
+      "type": "communities.PeerLinkRequests"
+    },
+    {
+      "id": "-641278950",
+      "predicate": "ephemeralMessage",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "out",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "from_id",
+          "type": "Peer",
+          "repr": "Peer"
+        },
+        {
+          "name": "peer_id",
+          "type": "Peer",
+          "repr": "Peer"
+        },
+        {
+          "name": "receiver_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "top_msg_id",
+          "type": "int",
+          "repr": "flags.1?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "date",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "entities",
+          "type": "Vector<MessageEntity>",
+          "repr": "flags.2?Vector<MessageEntity>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "media",
+          "type": "MessageMedia",
+          "repr": "flags.3?MessageMedia",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "reply_markup",
+          "type": "ReplyMarkup",
+          "repr": "flags.4?ReplyMarkup",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        },
+        {
+          "name": "reply_to",
+          "type": "MessageReplyHeader",
+          "repr": "flags.6?MessageReplyHeader",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 6
+          }
+        }
+      ],
+      "type": "EphemeralMessage"
+    },
+    {
+      "id": "-1921494742",
+      "predicate": "communities.participantJoinedChats",
+      "params": [
+        {
+          "name": "creator_chat_ids",
+          "type": "Vector<long>",
+          "repr": "Vector<long>"
+        },
+        {
+          "name": "joined_chat_ids",
+          "type": "Vector<long>",
+          "repr": "Vector<long>"
+        },
+        {
+          "name": "chats",
+          "type": "Vector<Chat>",
+          "repr": "Vector<Chat>"
+        },
+        {
+          "name": "users",
+          "type": "Vector<User>",
+          "repr": "Vector<User>"
+        }
+      ],
+      "type": "communities.ParticipantJoinedChats"
+    },
+    {
+      "id": "1107532175",
+      "predicate": "messages.translatedRichMessage",
+      "params": [
+        {
+          "name": "result",
+          "type": "Vector<RichMessage>",
+          "repr": "Vector<RichMessage>"
+        }
+      ],
+      "type": "messages.TranslatedRichMessage"
+    },
+    {
+      "id": "1279604680",
+      "predicate": "messages.composedRichMessageWithAI",
+      "params": [
+        {
+          "name": "result",
+          "type": "RichMessage",
+          "repr": "RichMessage"
+        }
+      ],
+      "type": "messages.ComposedRichMessageWithAI"
+    }
+  ],
+  "methods": [
     {
       "id": "-1502141361",
       "method": "auth.sendCode",
@@ -49718,9 +52522,34 @@
       "type": "contacts.Blocked"
     },
     {
-      "id": "301470424",
+      "id": "99978511",
       "method": "contacts.search",
       "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "broadcasts",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "bots",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
         {
           "name": "q",
           "type": "string",
@@ -49858,6 +52687,16 @@
           "flag": {
             "field": "flags",
             "bit": 16
+          }
+        },
+        {
+          "name": "bots_guestchat",
+          "type": "true",
+          "repr": "flags.17?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 17
           }
         },
         {
@@ -50568,7 +53407,7 @@
       "type": "Bool"
     },
     {
-      "id": "1415369050",
+      "id": "-17526942",
       "method": "messages.sendMessage",
       "params": [
         {
@@ -50693,10 +53532,9 @@
         },
         {
           "name": "entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.3?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 3
@@ -50770,6 +53608,16 @@
           "flag": {
             "field": "flags",
             "bit": 22
+          }
+        },
+        {
+          "name": "rich_message",
+          "type": "InputRichMessage",
+          "repr": "flags.23?InputRichMessage",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 23
           }
         }
       ],
@@ -51787,7 +54635,7 @@
       "type": "ChatInvite"
     },
     {
-      "id": "1817183516",
+      "id": "-560905362",
       "method": "messages.importChatInvite",
       "params": [
         {
@@ -51929,7 +54777,7 @@
       "type": "Updates"
     },
     {
-      "id": "1271290010",
+      "id": "1629922364",
       "method": "messages.searchGlobal",
       "params": [
         {
@@ -51975,6 +54823,16 @@
           "flag": {
             "field": "flags",
             "bit": 0
+          }
+        },
+        {
+          "name": "community",
+          "type": "InputChannel",
+          "repr": "flags.4?InputChannel",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
           }
         },
         {
@@ -52369,7 +55227,7 @@
       "type": "messages.MessageEditData"
     },
     {
-      "id": "1374175969",
+      "id": "-1324947860",
       "method": "messages.editMessage",
       "params": [
         {
@@ -52439,10 +55297,9 @@
         },
         {
           "name": "entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.3?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 3
@@ -52477,12 +55334,22 @@
             "field": "flags",
             "bit": 17
           }
+        },
+        {
+          "name": "rich_message",
+          "type": "InputRichMessage",
+          "repr": "flags.23?InputRichMessage",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 23
+          }
         }
       ],
       "type": "Updates"
     },
     {
-      "id": "-2091549254",
+      "id": "-1541162159",
       "method": "messages.editInlineBotMessage",
       "params": [
         {
@@ -52547,13 +55414,22 @@
         },
         {
           "name": "entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.3?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 3
+          }
+        },
+        {
+          "name": "rich_message",
+          "type": "InputRichMessage",
+          "repr": "flags.23?InputRichMessage",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 23
           }
         }
       ],
@@ -52677,7 +55553,7 @@
       "type": "messages.PeerDialogs"
     },
     {
-      "id": "1420701838",
+      "id": "-1391484580",
       "method": "messages.saveDraft",
       "params": [
         {
@@ -52727,10 +55603,9 @@
         },
         {
           "name": "entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.3?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 3
@@ -52764,6 +55639,16 @@
           "flag": {
             "field": "flags",
             "bit": 8
+          }
+        },
+        {
+          "name": "rich_message",
+          "type": "InputRichMessage",
+          "repr": "flags.9?InputRichMessage",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 9
           }
         }
       ],
@@ -53804,7 +56689,7 @@
       "type": "Updates"
     },
     {
-      "id": "1941660731",
+      "id": "-308026565",
       "method": "messages.getPollResults",
       "params": [
         {
@@ -53816,6 +56701,11 @@
           "name": "msg_id",
           "type": "int",
           "repr": "int"
+        },
+        {
+          "name": "poll_hash",
+          "type": "long",
+          "repr": "long"
         }
       ],
       "type": "Updates"
@@ -55313,7 +58203,7 @@
       "type": "Bool"
     },
     {
-      "id": "1662529584",
+      "id": "-1511079099",
       "method": "messages.translateText",
       "params": [
         {
@@ -55333,10 +58223,9 @@
         },
         {
           "name": "id",
-          "type": "int",
+          "type": "Vector<int>",
           "repr": "flags.0?Vector<int>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 0
@@ -55344,10 +58233,9 @@
         },
         {
           "name": "text",
-          "type": "TextWithEntities",
+          "type": "Vector<TextWithEntities>",
           "repr": "flags.1?Vector<TextWithEntities>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 1
@@ -55357,6 +58245,16 @@
           "name": "to_lang",
           "type": "string",
           "repr": "string"
+        },
+        {
+          "name": "tone",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
         }
       ],
       "type": "messages.TranslatedText"
@@ -56028,9 +58926,14 @@
       "type": "DefaultHistoryTTL"
     },
     {
-      "id": "-1850552224",
+      "id": "1818030759",
       "method": "messages.sendBotRequestedPeer",
       "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
         {
           "name": "peer",
           "type": "InputPeer",
@@ -56039,7 +58942,22 @@
         {
           "name": "msg_id",
           "type": "int",
-          "repr": "int"
+          "repr": "flags.0?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "webapp_req_id",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
         },
         {
           "name": "button_id",
@@ -56048,9 +58966,8 @@
         },
         {
           "name": "requested_peers",
-          "type": "InputPeer",
-          "repr": "Vector<InputPeer>",
-          "vector": true
+          "type": "Vector<InputPeer>",
+          "repr": "Vector<InputPeer>"
         }
       ],
       "type": "Updates"
@@ -57692,7 +60609,7 @@
       "type": "messages.EmojiGameInfo"
     },
     {
-      "id": "-1656683294",
+      "id": "-1413754042",
       "method": "messages.summarizeText",
       "params": [
         {
@@ -57718,6 +60635,16 @@
           "flag": {
             "field": "flags",
             "bit": 0
+          }
+        },
+        {
+          "name": "tone",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
           }
         }
       ],
@@ -59052,7 +61979,7 @@
       "type": "Bool"
     },
     {
-      "id": "615851205",
+      "id": "2137660962",
       "method": "channels.joinChannel",
       "params": [
         {
@@ -59221,6 +62148,16 @@
           "flag": {
             "field": "flags",
             "bit": 2
+          }
+        },
+        {
+          "name": "for_community_peer",
+          "type": "true",
+          "repr": "flags.3?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
           }
         }
       ],
@@ -59554,9 +62491,24 @@
       "type": "Updates"
     },
     {
-      "id": "1277789622",
+      "id": "248260120",
       "method": "channels.toggleJoinRequest",
       "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "apply_to_invites",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
         {
           "name": "channel",
           "type": "InputChannel",
@@ -59566,6 +62518,16 @@
           "name": "enabled",
           "type": "Bool",
           "repr": "Bool"
+        },
+        {
+          "name": "guard_bot",
+          "type": "InputUser",
+          "repr": "flags.0?InputUser",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
         }
       ],
       "type": "Updates"
@@ -61875,6 +64837,16 @@
           }
         },
         {
+          "name": "stars_only",
+          "type": "true",
+          "repr": "flags.5?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
+        },
+        {
           "name": "attributes_hash",
           "type": "long",
           "repr": "flags.0?long",
@@ -61891,10 +64863,9 @@
         },
         {
           "name": "attributes",
-          "type": "StarGiftAttributeId",
+          "type": "Vector<StarGiftAttributeId>",
           "repr": "flags.3?Vector<StarGiftAttributeId>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 3
@@ -64152,16 +67123,6 @@
           "repr": "#"
         },
         {
-          "name": "revoked",
-          "type": "true",
-          "repr": "flags.0?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 0
-          }
-        },
-        {
           "name": "chatlist",
           "type": "InputChatlist",
           "repr": "InputChatlist"
@@ -64183,10 +67144,9 @@
         },
         {
           "name": "peers",
-          "type": "InputPeer",
+          "type": "Vector<InputPeer>",
           "repr": "flags.2?Vector<InputPeer>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 2
@@ -64322,7 +67282,7 @@
       "type": "stories.CanSendStoryCount"
     },
     {
-      "id": "1937752812",
+      "id": "-1885443944",
       "method": "stories.sendStory",
       "params": [
         {
@@ -64372,10 +67332,9 @@
         },
         {
           "name": "media_areas",
-          "type": "MediaArea",
+          "type": "Vector<MediaArea>",
           "repr": "flags.5?Vector<MediaArea>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 5
@@ -64393,10 +67352,9 @@
         },
         {
           "name": "entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.1?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 1
@@ -64404,9 +67362,8 @@
         },
         {
           "name": "privacy_rules",
-          "type": "InputPrivacyRule",
-          "repr": "Vector<InputPrivacyRule>",
-          "vector": true
+          "type": "Vector<InputPrivacyRule>",
+          "repr": "Vector<InputPrivacyRule>"
         },
         {
           "name": "random_id",
@@ -64445,20 +67402,29 @@
         },
         {
           "name": "albums",
-          "type": "int",
+          "type": "Vector<int>",
           "repr": "flags.8?Vector<int>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 8
+          }
+        },
+        {
+          "name": "music",
+          "type": "InputDocument",
+          "repr": "flags.9?InputDocument",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 9
           }
         }
       ],
       "type": "Updates"
     },
     {
-      "id": "-1249658298",
+      "id": "744728363",
       "method": "stories.editStory",
       "params": [
         {
@@ -64488,10 +67454,9 @@
         },
         {
           "name": "media_areas",
-          "type": "MediaArea",
+          "type": "Vector<MediaArea>",
           "repr": "flags.3?Vector<MediaArea>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 3
@@ -64509,10 +67474,9 @@
         },
         {
           "name": "entities",
-          "type": "MessageEntity",
+          "type": "Vector<MessageEntity>",
           "repr": "flags.1?Vector<MessageEntity>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 1
@@ -64520,13 +67484,22 @@
         },
         {
           "name": "privacy_rules",
-          "type": "InputPrivacyRule",
+          "type": "Vector<InputPrivacyRule>",
           "repr": "flags.2?Vector<InputPrivacyRule>",
           "optional": true,
-          "vector": true,
           "flag": {
             "field": "flags",
             "bit": 2
+          }
+        },
+        {
+          "name": "music",
+          "type": "InputDocument",
+          "repr": "flags.4?InputDocument",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
           }
         }
       ],
@@ -65571,6 +68544,1761 @@
         }
       ],
       "type": "fragment.CollectibleInfo"
+    },
+    {
+      "id": "-622017143",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "proofread",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "emojify",
+          "type": "true",
+          "repr": "flags.3?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "text",
+          "type": "TextWithEntities",
+          "repr": "TextWithEntities"
+        },
+        {
+          "name": "translate_to_lang",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "tone",
+          "type": "InputAiComposeTone",
+          "repr": "flags.2?InputAiComposeTone",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        }
+      ],
+      "type": "messages.ComposedMessageWithAI",
+      "method": "messages.composeMessageWithAI"
+    },
+    {
+      "id": "1080542694",
+      "params": [
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "metrics",
+          "type": "Vector<InputMessageReadMetric>",
+          "repr": "Vector<InputMessageReadMetric>"
+        }
+      ],
+      "type": "Bool",
+      "method": "messages.reportReadMetrics"
+    },
+    {
+      "id": "-574826471",
+      "params": [
+        {
+          "name": "id",
+          "type": "InputDocument",
+          "repr": "InputDocument"
+        },
+        {
+          "name": "listened_duration",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "Bool",
+      "method": "messages.reportMusicListen"
+    },
+    {
+      "id": "431770477",
+      "params": [
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "answer",
+          "type": "PollAnswer",
+          "repr": "PollAnswer"
+        }
+      ],
+      "type": "Updates",
+      "method": "messages.addPollAnswer"
+    },
+    {
+      "id": "-1400568411",
+      "params": [
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "option",
+          "type": "bytes",
+          "repr": "bytes"
+        }
+      ],
+      "type": "Updates",
+      "method": "messages.deletePollAnswer"
+    },
+    {
+      "id": "1126722802",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "top_msg_id",
+          "type": "int",
+          "repr": "flags.0?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "offset_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "add_offset",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "max_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "min_id",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "messages.Messages",
+      "method": "messages.getUnreadPollVotes"
+    },
+    {
+      "id": "388019416",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "top_msg_id",
+          "type": "int",
+          "repr": "flags.0?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "messages.AffectedHistory",
+      "method": "messages.readPollVotes"
+    },
+    {
+      "id": "-1192163613",
+      "params": [
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "result",
+          "type": "InputBotInlineResult",
+          "repr": "InputBotInlineResult"
+        }
+      ],
+      "type": "InputBotInlineMessageID",
+      "method": "messages.setBotGuestChatResult"
+    },
+    {
+      "id": "-1598550792",
+      "params": [
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "participant",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        }
+      ],
+      "type": "Bool",
+      "method": "messages.deleteParticipantReactions"
+    },
+    {
+      "id": "-474482644",
+      "params": [
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "participant",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        }
+      ],
+      "type": "Updates",
+      "method": "messages.deleteParticipantReaction"
+    },
+    {
+      "id": "1442515350",
+      "params": [
+        {
+          "name": "user_id",
+          "type": "InputUser",
+          "repr": "InputUser"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "max_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "min_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "hash",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "messages.Messages",
+      "method": "messages.getPersonalChannelHistory"
+    },
+    {
+      "id": "-2014174821",
+      "params": [
+        {
+          "name": "username",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Bool",
+      "method": "bots.checkUsername"
+    },
+    {
+      "id": "-441352405",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "via_deeplink",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "username",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "manager_id",
+          "type": "InputUser",
+          "repr": "InputUser"
+        }
+      ],
+      "type": "User",
+      "method": "bots.createBot"
+    },
+    {
+      "id": "-1123182101",
+      "params": [
+        {
+          "name": "bot",
+          "type": "InputUser",
+          "repr": "InputUser"
+        },
+        {
+          "name": "revoke",
+          "type": "Bool",
+          "repr": "Bool"
+        }
+      ],
+      "type": "bots.ExportedBotToken",
+      "method": "bots.exportBotToken"
+    },
+    {
+      "id": "832742238",
+      "params": [
+        {
+          "name": "user_id",
+          "type": "InputUser",
+          "repr": "InputUser"
+        },
+        {
+          "name": "button",
+          "type": "KeyboardButton",
+          "repr": "KeyboardButton"
+        }
+      ],
+      "type": "bots.RequestedButton",
+      "method": "bots.requestWebViewButton"
+    },
+    {
+      "id": "-1088047117",
+      "params": [
+        {
+          "name": "bot",
+          "type": "InputUser",
+          "repr": "InputUser"
+        },
+        {
+          "name": "webapp_req_id",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "KeyboardButton",
+      "method": "bots.getRequestedWebViewButton"
+    },
+    {
+      "id": "557339555",
+      "params": [
+        {
+          "name": "bot",
+          "type": "InputUser",
+          "repr": "InputUser"
+        }
+      ],
+      "type": "bots.AccessSettings",
+      "method": "bots.getAccessSettings"
+    },
+    {
+      "id": "830553304",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "restricted",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "bot",
+          "type": "InputUser",
+          "repr": "InputUser"
+        },
+        {
+          "name": "add_users",
+          "type": "Vector<InputUser>",
+          "repr": "flags.1?Vector<InputUser>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "Bool",
+      "method": "bots.editAccessSettings"
+    },
+    {
+      "id": "-1031931288",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "dark",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "stats.PollStats",
+      "method": "stats.getPollStats"
+    },
+    {
+      "id": "1252538643",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "display_author",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "emoji_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "prompt",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "AiComposeTone",
+      "method": "aicompose.createTone"
+    },
+    {
+      "id": "-1875128487",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "tone",
+          "type": "InputAiComposeTone",
+          "repr": "InputAiComposeTone"
+        },
+        {
+          "name": "display_author",
+          "type": "Bool",
+          "repr": "flags.0?Bool",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "emoji_id",
+          "type": "long",
+          "repr": "flags.1?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "prompt",
+          "type": "string",
+          "repr": "flags.3?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        }
+      ],
+      "type": "AiComposeTone",
+      "method": "aicompose.updateTone"
+    },
+    {
+      "id": "394447793",
+      "params": [
+        {
+          "name": "tone",
+          "type": "InputAiComposeTone",
+          "repr": "InputAiComposeTone"
+        },
+        {
+          "name": "unsave",
+          "type": "Bool",
+          "repr": "Bool"
+        }
+      ],
+      "type": "Bool",
+      "method": "aicompose.saveTone"
+    },
+    {
+      "id": "-583454358",
+      "params": [
+        {
+          "name": "tone",
+          "type": "InputAiComposeTone",
+          "repr": "InputAiComposeTone"
+        }
+      ],
+      "type": "Bool",
+      "method": "aicompose.deleteTone"
+    },
+    {
+      "id": "-1293370877",
+      "params": [
+        {
+          "name": "tone",
+          "type": "InputAiComposeTone",
+          "repr": "InputAiComposeTone"
+        }
+      ],
+      "type": "aicompose.Tones",
+      "method": "aicompose.getTone"
+    },
+    {
+      "id": "-1412066815",
+      "params": [
+        {
+          "name": "hash",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "aicompose.Tones",
+      "method": "aicompose.getTones"
+    },
+    {
+      "id": "-776688876",
+      "params": [
+        {
+          "name": "tone",
+          "type": "InputAiComposeTone",
+          "repr": "InputAiComposeTone"
+        },
+        {
+          "name": "num",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "AiComposeToneExample",
+      "method": "aicompose.getToneExample"
+    },
+    {
+      "id": "1146512295",
+      "params": [
+        {
+          "name": "updates",
+          "type": "Updates",
+          "repr": "Updates"
+        }
+      ],
+      "type": "messages.ChatInviteJoinResult",
+      "method": "messages.chatInviteJoinResultOk"
+    },
+    {
+      "id": "1640638931",
+      "params": [
+        {
+          "name": "bot_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "users",
+          "type": "Vector<User>",
+          "repr": "Vector<User>"
+        }
+      ],
+      "type": "messages.ChatInviteJoinResult",
+      "method": "messages.chatInviteJoinResultWebView"
+    },
+    {
+      "id": "1743593320",
+      "params": [
+        {
+          "name": "bot_id",
+          "type": "InputUser",
+          "repr": "InputUser"
+        }
+      ],
+      "type": "Bool",
+      "method": "account.confirmBotConnection"
+    },
+    {
+      "id": "1449482088",
+      "params": [
+        {
+          "name": "hash",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "account.WebBrowserSettings",
+      "method": "account.getWebBrowserSettings"
+    },
+    {
+      "id": "-1696627970",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "open_external_browser",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "display_close_button",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "account.WebBrowserSettings",
+      "method": "account.updateWebBrowserSettings"
+    },
+    {
+      "id": "1626161705",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "delete",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "open_external_browser",
+          "type": "Bool",
+          "repr": "flags.0?Bool",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Updates",
+      "method": "account.toggleWebBrowserSettingsException"
+    },
+    {
+      "id": "1343580623",
+      "params": [
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "messages.Messages",
+      "method": "messages.getRichMessage"
+    },
+    {
+      "id": "441720836",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "flags.0?InputPeer",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "id",
+          "type": "Vector<int>",
+          "repr": "flags.0?Vector<int>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "text",
+          "type": "Vector<InputRichMessage>",
+          "repr": "flags.1?Vector<InputRichMessage>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "to_lang",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "tone",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        }
+      ],
+      "type": "messages.TranslatedRichMessage",
+      "method": "messages.translateRichMessage"
+    },
+    {
+      "id": "-1921325393",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "proofread",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "emojify",
+          "type": "true",
+          "repr": "flags.3?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "text",
+          "type": "InputRichMessage",
+          "repr": "flags.4?InputRichMessage",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        },
+        {
+          "name": "translate_to_lang",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "tone",
+          "type": "InputAiComposeTone",
+          "repr": "flags.2?InputAiComposeTone",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        }
+      ],
+      "type": "messages.ComposedRichMessageWithAI",
+      "method": "messages.composeRichMessageWithAI"
+    },
+    {
+      "id": "-1163991431",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "theme_params",
+          "type": "DataJSON",
+          "repr": "flags.0?DataJSON",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "platform",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "WebViewResult",
+      "method": "messages.requestChatJoinWebView"
+    },
+    {
+      "id": "-417708016",
+      "params": [
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "result",
+          "type": "JoinChatBotResult",
+          "repr": "JoinChatBotResult"
+        }
+      ],
+      "type": "Bool",
+      "method": "bots.setJoinChatResults"
+    },
+    {
+      "id": "-1506256404",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "hidden",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "about",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        }
+      ],
+      "type": "Updates",
+      "method": "communities.create"
+    },
+    {
+      "id": "1936576490",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "visible",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "hidden",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "deleted",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "community",
+          "type": "InputChannel",
+          "repr": "InputChannel"
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        }
+      ],
+      "type": "Bool",
+      "method": "communities.togglePeerLink"
+    },
+    {
+      "id": "-681122838",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "collapsed",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "community",
+          "type": "InputChannel",
+          "repr": "InputChannel"
+        }
+      ],
+      "type": "Updates",
+      "method": "communities.toggleCommunityCollapsedInDialogs"
+    },
+    {
+      "id": "-1820904636",
+      "params": [
+        {
+          "name": "community",
+          "type": "InputChannel",
+          "repr": "InputChannel"
+        },
+        {
+          "name": "offset",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "communities.PeerLinkRequests",
+      "method": "communities.getPeerLinkRequests"
+    },
+    {
+      "id": "-1937630808",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "reject",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "community",
+          "type": "InputChannel",
+          "repr": "InputChannel"
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        }
+      ],
+      "type": "Bool",
+      "method": "communities.togglePeerLinkRequestApproval"
+    },
+    {
+      "id": "-1075585731",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "reject",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "community",
+          "type": "InputChannel",
+          "repr": "InputChannel"
+        }
+      ],
+      "type": "Bool",
+      "method": "communities.toggleAllPeerLinkRequestApproval"
+    },
+    {
+      "id": "-1721258737",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "unban",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "community",
+          "type": "InputChannel",
+          "repr": "InputChannel"
+        },
+        {
+          "name": "participant",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        }
+      ],
+      "type": "Bool",
+      "method": "communities.toggleParticipantBanned"
+    },
+    {
+      "id": "-125916245",
+      "params": [
+        {
+          "name": "community",
+          "type": "InputChannel",
+          "repr": "InputChannel"
+        },
+        {
+          "name": "participant",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        }
+      ],
+      "type": "communities.ParticipantJoinedChats",
+      "method": "communities.getParticipantJoinedChats"
+    },
+    {
+      "id": "1758187679",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "receiver_id",
+          "type": "InputUser",
+          "repr": "InputUser"
+        },
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "flags.0?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "entities",
+          "type": "Vector<MessageEntity>",
+          "repr": "flags.1?Vector<MessageEntity>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "media",
+          "type": "InputMedia",
+          "repr": "flags.2?InputMedia",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "reply_markup",
+          "type": "ReplyMarkup",
+          "repr": "flags.3?ReplyMarkup",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "rich_message",
+          "type": "InputRichMessage",
+          "repr": "flags.4?InputRichMessage",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        },
+        {
+          "name": "random_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "reply_to",
+          "type": "InputReplyTo",
+          "repr": "flags.5?InputReplyTo",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
+        }
+      ],
+      "type": "Updates",
+      "method": "ephemeral.sendMessage"
+    },
+    {
+      "id": "-1547643631",
+      "params": [
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "receiver_id",
+          "type": "InputUser",
+          "repr": "InputUser"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "Bool",
+      "method": "ephemeral.deleteMessage"
+    },
+    {
+      "id": "-2029718849",
+      "params": [
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "option",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "ReportResult",
+      "method": "ephemeral.reportMessage"
+    },
+    {
+      "id": "1067738312",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "data",
+          "type": "bytes",
+          "repr": "flags.1?bytes",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "messages.BotCallbackAnswer",
+      "method": "ephemeral.getCallbackAnswer"
+    },
+    {
+      "id": "334647534",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "receiver_id",
+          "type": "InputUser",
+          "repr": "InputUser"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "media",
+          "type": "InputMedia",
+          "repr": "flags.3?InputMedia",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "entities",
+          "type": "Vector<MessageEntity>",
+          "repr": "flags.1?Vector<MessageEntity>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "reply_markup",
+          "type": "ReplyMarkup",
+          "repr": "flags.2?ReplyMarkup",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        }
+      ],
+      "type": "Updates",
+      "method": "ephemeral.editMessage"
+    },
+    {
+      "id": "-878758099",
+      "method": "invokeAfterMsg",
+      "params": [
+        {
+          "name": "msg_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "query",
+          "type": "!X",
+          "repr": "!X"
+        }
+      ],
+      "type": "X"
+    },
+    {
+      "id": "1036301552",
+      "method": "invokeAfterMsgs",
+      "params": [
+        {
+          "name": "msg_ids",
+          "type": "Vector<long>",
+          "repr": "Vector<long>"
+        },
+        {
+          "name": "query",
+          "type": "!X",
+          "repr": "!X"
+        }
+      ],
+      "type": "X"
+    },
+    {
+      "id": "-1043505495",
+      "method": "initConnection",
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "api_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "device_model",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "system_version",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "app_version",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "system_lang_code",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "lang_pack",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "lang_code",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "proxy",
+          "type": "InputClientProxy",
+          "repr": "flags.0?InputClientProxy",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "params",
+          "type": "JSONValue",
+          "repr": "flags.1?JSONValue",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "query",
+          "type": "!X",
+          "repr": "!X"
+        }
+      ],
+      "type": "X"
+    },
+    {
+      "id": "-627372787",
+      "method": "invokeWithLayer",
+      "params": [
+        {
+          "name": "layer",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "query",
+          "type": "!X",
+          "repr": "!X"
+        }
+      ],
+      "type": "X"
+    },
+    {
+      "id": "-1080796745",
+      "method": "invokeWithoutUpdates",
+      "params": [
+        {
+          "name": "query",
+          "type": "!X",
+          "repr": "!X"
+        }
+      ],
+      "type": "X"
+    },
+    {
+      "id": "911373810",
+      "method": "invokeWithMessagesRange",
+      "params": [
+        {
+          "name": "range",
+          "type": "MessageRange",
+          "repr": "MessageRange"
+        },
+        {
+          "name": "query",
+          "type": "!X",
+          "repr": "!X"
+        }
+      ],
+      "type": "X"
+    },
+    {
+      "id": "-1398145746",
+      "method": "invokeWithTakeout",
+      "params": [
+        {
+          "name": "takeout_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "query",
+          "type": "!X",
+          "repr": "!X"
+        }
+      ],
+      "type": "X"
+    },
+    {
+      "id": "-584540274",
+      "method": "invokeWithBusinessConnection",
+      "params": [
+        {
+          "name": "connection_id",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "query",
+          "type": "!X",
+          "repr": "!X"
+        }
+      ],
+      "type": "X"
+    },
+    {
+      "id": "502868356",
+      "method": "invokeWithGooglePlayIntegrity",
+      "params": [
+        {
+          "name": "nonce",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "query",
+          "type": "!X",
+          "repr": "!X"
+        }
+      ],
+      "type": "X"
+    },
+    {
+      "id": "229528824",
+      "method": "invokeWithApnsSecret",
+      "params": [
+        {
+          "name": "nonce",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "secret",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "query",
+          "type": "!X",
+          "repr": "!X"
+        }
+      ],
+      "type": "X"
+    },
+    {
+      "id": "-1380249708",
+      "method": "invokeWithReCaptcha",
+      "params": [
+        {
+          "name": "token",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "query",
+          "type": "!X",
+          "repr": "!X"
+        }
+      ],
+      "type": "X"
+    },
+    {
+      "id": "-584540274",
+      "method": "invokeWithBusinessConnectionPrefix",
+      "params": [
+        {
+          "name": "connection_id",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Error"
+    },
+    {
+      "id": "502868356",
+      "method": "invokeWithGooglePlayIntegrityPrefix",
+      "params": [
+        {
+          "name": "nonce",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Error"
+    },
+    {
+      "id": "229528824",
+      "method": "invokeWithApnsSecretPrefix",
+      "params": [
+        {
+          "name": "nonce",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "secret",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Error"
+    },
+    {
+      "id": "-1380249708",
+      "method": "invokeWithReCaptchaPrefix",
+      "params": [
+        {
+          "name": "token",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Error"
     }
   ]
 }

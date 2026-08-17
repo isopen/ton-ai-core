@@ -4,7 +4,7 @@ import { getLogger } from '@ton-ai/gram-debug';
 
 const log = getLogger('telegram');
 
-export class WsTcpProxy {
+class WsTcpProxy {
     wss: WebSocketServer;
 
     constructor(port: number) {

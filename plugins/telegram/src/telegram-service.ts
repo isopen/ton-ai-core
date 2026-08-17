@@ -11,7 +11,7 @@ function sanitizeJson(s: string): string {
     });
 }
 
-export function logJson(obj: any, maxLen = 500): string {
+function logJson(obj: any, maxLen = 500): string {
     try {
         const s = sanitizeJson(JSON.stringify(obj));
         return s.length > maxLen ? s.slice(0, maxLen) + '…' : s;

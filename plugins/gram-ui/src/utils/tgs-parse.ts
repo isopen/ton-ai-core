@@ -88,10 +88,6 @@ function cacheParsed(key: string, parsed: ParsedAnimation) {
   parsedCache.set(key, parsed);
 }
 
-export function getParsedTgs(key: string): ParsedAnimation | undefined {
-  return parsedCache.get(key);
-}
-
 export function parseTgsJson(json: string, cacheKey?: string): Promise<ParsedAnimation> {
   const key = cacheKey || json;
   const cached = parsedCache.get(key);
