@@ -5,8 +5,7 @@ import type { EmojiData } from './emoji-canvas.js';
 import { TgsPlayer, isAnimationCompleted } from './tgs-player.js';
 import { getSlotLayerSpecs, requestEmojiDownload, subscribeDiceSets, ensureEmojiStickers } from './emoji-store.js';
 import type { SlotLayerRole, SlotLayerSpec } from './emoji-store.js';
-import { SLOT_LOCAL_IDS } from './slot-local-assets.js';
-import { getSlotLocalData, isSlotLocalDoc } from './slot-idle.js';
+import { SLOT_LOCAL_IDS, getSlotLocalData, getSlotLocalResult, isSlotLocalDoc } from './slot-idle.js';
 import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 
 const slotLog = getLogger('gram-ui:slot');
@@ -20,10 +19,9 @@ const SLOT_SPIN_MIN_MS = 1200;
 const SLOT_PHASE_MS = 4000;
 const WIN_BG_PROGRESS = 0.66;
 const SLOT_HANDLE_TIMEOUT_MS = 3000;
-const SLOT_MASTER_TIMEOUT_MS = 16000;
-const SLOT_SET_TIMEOUT_MS = 6000;
+const SLOT_MASTER_TIMEOUT_MS = 20000;
 
-const SLOT_DONE_KEY = 'tg-slot-done-v1';
+const SLOT_DONE_KEY = 'tg-slot-done-v2';
 const SLOT_DONE_MAX = 512;
 
 const slotMachineDone = new Map<string, boolean>();
@@ -162,13 +160,15 @@ function useSlotData(docId: string): EmojiData | undefined {
 }
 
 function useSlotLocalData(docId: string | undefined): EmojiData | undefined {
-  const [data, setData] = useState<EmojiData | undefined>(undefined);
+  const [data, setData] = useState<EmojiData | undefined>(() => (docId ? getSlotLocalResult(docId) : undefined));
 
   useEffect(() => {
-    let alive = true;
-    setData(undefined);
+    setData(docId ? getSlotLocalResult(docId) : undefined);
     if (!docId) return;
-    getSlotLocalData(docId).then((d) => {
+    let alive = true;
+    const p = getSlotLocalData(docId);
+    if (!p) return;
+    p.then((d) => {
       if (alive && d) setData(d);
     });
     return () => { alive = false; };
@@ -370,6 +370,16 @@ function localSpecsFor(value: number | null): SlotLayerSpec[] {
 
 export function SlotMachineSticker({ value, size = 96, playKey }: { value: number | null; size?: number; playKey?: string }) {
   const [specs, setSpecs] = useState<SlotLayerSpec[] | undefined>(undefined);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [inView, setInView] = useState(true);
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), { rootMargin: '80px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
 
   useEffect(() => {
     ensureEmojiStickers();
@@ -424,6 +434,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
   }
 
   const progressedRef = useRef(false);
+  const completedNaturallyRef = useRef(false);
 
   const onHandleEnd = useCallback(() => {
     progressedRef.current = true;
@@ -487,39 +498,31 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
   }, [startSlots, slots.length]);
 
   useEffect(() => {
-    if (animated && slots.length > 0 && slotsDone >= slots.length && !allDone) setAllDone(true);
+    if (animated && slots.length > 0 && slotsDone >= slots.length && !allDone) {
+      completedNaturallyRef.current = true;
+      setAllDone(true);
+    }
   }, [animated, slotsDone, slots.length, allDone]);
 
   useEffect(() => {
-    if (allDone && playKey) markSlotDone(playKey);
+    if (allDone && playKey && completedNaturallyRef.current) markSlotDone(playKey);
   }, [allDone, playKey]);
 
   useEffect(() => {
-    if (!animated || handleDone || !handleReady || allDone) return;
+    if (!inView || !animated || handleDone || !handleReady || allDone) return;
     const t = setTimeout(() => setHandleDone(true), SLOT_HANDLE_TIMEOUT_MS);
     return () => clearTimeout(t);
-  }, [animated, handleDone, handleReady, allDone]);
+  }, [inView, animated, handleDone, handleReady, allDone]);
 
   useEffect(() => {
-    if (!animated || allDone) return;
+    if (!inView || !animated || allDone) return;
     const t = setTimeout(() => {
       setSpinsDone(spins.length);
       setSlotsDone(slots.length);
       setAllDone(true);
     }, SLOT_MASTER_TIMEOUT_MS);
     return () => clearTimeout(t);
-  }, [animated, allDone, spins.length, slots.length]);
-
-  useEffect(() => {
-    if (specs || allDone) return;
-    if (value == null || value <= 0) return;
-    const t = setTimeout(() => {
-      setSpinsDone(spins.length);
-      setSlotsDone(slots.length);
-      setAllDone(true);
-    }, SLOT_SET_TIMEOUT_MS);
-    return () => clearTimeout(t);
-  }, [specs, allDone, value, spins.length, slots.length]);
+  }, [inView, animated, allDone, spins.length, slots.length]);
 
   useEffect(() => {
     if (!animated || !specs || allDone) return;
@@ -553,7 +556,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
   }, [playKey, specs, setReady]);
 
   return (
-    <div class="tgui-slot-machine" style={{ position: 'relative', width: size + 'px', height: size + 'px' }}>
+    <div ref={rootRef} class="tgui-slot-machine" style={{ position: 'relative', width: size + 'px', height: size + 'px' }}>
       {bg ? <SlotLayer docId={bg.docId} role="bg" partIndex={0} size={size} autoplay={!allDone} playKey={playKey} showLastFrame={allDone} /> : null}
       {spins.map((s, i) => (
         <div key={s.docId} class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
