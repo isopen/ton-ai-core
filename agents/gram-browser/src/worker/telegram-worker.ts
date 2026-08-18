@@ -480,7 +480,7 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
         const count = d.readInt32();
         wlog('[worker] MSG_CONTAINER count=' + count);
         for (let i = 0; i < count; i++) {
-            d.readInt64();
+            const innerMsgId = d.readInt64();
             d.readInt32();
             const len = d.readInt32();
             const innerBody = d.readRawBytes(len);
@@ -488,7 +488,7 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
             wlog('[worker] MSG_CONTAINER[' + i + '] innerCid=0x' + innerCid.toString(16) + ' len=' + len);
             const padding = (4 - (len % 4)) % 4;
             if (padding) d.readRawBytes(padding);
-            dispatchMessage(0n, innerBody);
+            dispatchMessage(innerMsgId, innerBody);
         }
         return;
     }
@@ -496,7 +496,7 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
     if (constructorId === 0x3072cfa1) {
         try {
             const compressed = new Uint8Array(d.readBytes());
-            decompressGzip(Buffer.from(compressed)).then(result => dispatchMessage(0n, result)).catch(() => emitUpdate(0, 'Decompression failed'));
+            decompressGzip(Buffer.from(compressed)).then(result => dispatchMessage(_msgId, result)).catch(() => emitUpdate(0, 'Decompression failed'));
         } catch {}
         return;
     }
@@ -570,12 +570,16 @@ interface DcConnection {
     encQueue: Promise<void>;
     lastDataAt: number;
     suspect: boolean;
+    hostUsed: string;
 }
 
 const dcConnectionPool: DcConnection[] = [];
 
 const dcDhInFlightMap = new Map<number, Promise<void>>();
 const dcConnecting = new Map<string, Promise<DcConnection>>();
+
+const DC_STALLED_HOST_TTL_MS = 5 * 60_000;
+const dcStalledHosts = new Map<number, { host: string; until: number }>();
 
 const MAX_DC_PARALLEL_RPC = 64;
 const dcRpcSlots = new Map<number, number>();
@@ -626,9 +630,17 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
         { host: dcOpts.host },
         ...(TELEGRAM_WS_FALLBACKS[dcId] || []),
     ];
+    const stalled = dcStalledHosts.get(dcId);
+    if (stalled && stalled.until > Date.now()) {
+        hosts.sort((a, b) => (a.host === stalled.host ? 1 : 0) - (b.host === stalled.host ? 1 : 0));
+    } else if (stalled) {
+        dcStalledHosts.delete(dcId);
+    }
+    let hostUsed = '';
     for (const entry of hosts) {
         try {
             await newConn.connect(entry.host, dcOpts.port, undefined, dcId, !!entry.noObfuscation);
+            hostUsed = entry.host;
             break;
         } catch {
             continue;
@@ -751,6 +763,7 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
         encQueue: Promise.resolve(),
         lastDataAt: Date.now(),
         suspect: false,
+        hostUsed,
     };
 
     if (needsAuthImport) {
@@ -895,6 +908,11 @@ function killDcConnection(entry: DcConnection, err: Error): void {
     const idx = dcConnectionPool.indexOf(entry);
     if (idx >= 0) dcConnectionPool.splice(idx, 1);
     try { entry.conn.close(); } catch {}
+    const msg = String(err?.message || err);
+    if (entry.hostUsed && (msg.includes('read stall') || msg.includes('read loop') || msg.includes('RPC timeout') || msg.includes('send stuck') || msg.includes('socket') || msg.includes('recycling'))) {
+        dcStalledHosts.set(entry.dcId, { host: entry.hostUsed, until: Date.now() + DC_STALLED_HOST_TTL_MS });
+        wlog('[worker] DC ' + entry.dcId + ' host ' + entry.hostUsed + ' stalled (' + msg + ') — avoiding for ' + (DC_STALLED_HOST_TTL_MS / 1000) + 's');
+    }
     rejectDcPending(entry, err);
 }
 
@@ -1017,6 +1035,14 @@ function dispatchDcMessage(entry: DcConnection, msgId: bigint, body: Buffer): vo
         if (body.length < 20) return;
         const badMsgId = body.readBigUInt64LE(4);
         const errorCode = body.readInt32LE(16);
+        if (errorCode === 16 || errorCode === 17 || errorCode === 18 || errorCode === 48) {
+            const serverSec = Number(msgId >> 32n);
+            if (serverSec > 0 && Math.abs(serverSec - Math.floor(Date.now() / 1000)) > 2) {
+                serverTimeOffset = serverSec - Math.floor(Date.now() / 1000);
+                wlog('[worker] DC' + entry.dcId + ' bad_msg code ' + errorCode + ' — syncing serverTimeOffset to ' + serverTimeOffset + 's');
+                persistSession().catch(() => {});
+            }
+        }
         if (errorCode === 16) {
             entry.initialized = false;
         }
@@ -1090,6 +1116,19 @@ function startDcReadLoop(entry: DcConnection): void {
 }
 
 const DC_IDLE_RECYCLE_MS = 12000;
+const DC_RECONNECT_BACKOFF_MS = 5000;
+const dcReconnectAt = new Map<string, number>();
+
+function warmUpDcConnection(dcId: number, type: 'video' | 'download'): void {
+    const key = dcId + ':' + type;
+    const at = dcReconnectAt.get(key) || 0;
+    if (Date.now() < at) return;
+    dcReconnectAt.set(key, Date.now() + DC_RECONNECT_BACKOFF_MS);
+    acquireDcConnection(dcId, type).then((e) => {
+        wlog('[worker] DC ' + dcId + ' (' + type + ') warmed up, pending=' + e.pending.size);
+    }).catch(() => {});
+}
+
 setInterval(() => {
     for (const c of dcConnectionPool) {
         if (c.dead) continue;
@@ -1097,11 +1136,13 @@ setInterval(() => {
         if (c.suspect && c.pending.size === 0) {
             wlog('[worker] DC ' + c.dcId + ' suspect drained (no pending) — recycling connection');
             killDcConnection(c, new Error('DC ' + c.dcId + ' suspect drained'));
+            warmUpDcConnection(c.dcId, c.type);
             continue;
         }
         if (c.pending.size > 0 && idleMs > DC_IDLE_RECYCLE_MS) {
             wlog('[worker] DC ' + c.dcId + ' read stall: ' + c.pending.size + ' pending, ' + idleMs + 'ms no data — recycling connection');
             killDcConnection(c, new Error('DC ' + c.dcId + ' read stall (' + idleMs + 'ms no data with ' + c.pending.size + ' pending)'));
+            warmUpDcConnection(c.dcId, c.type);
         }
     }
 }, 3000);
@@ -1271,8 +1312,20 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
                     wlog('[worker] DC ' + dcId + ' BAD_SERVER_SALT on ' + methodName + ' — retrying with new salt');
                     continue;
                 }
+                if ((msg.includes('BAD_MSG 16') || msg.includes('BAD_MSG 17') || msg.includes('BAD_MSG 18') || msg.includes('BAD_MSG 48')) && saltRetries < 2) {
+                    saltRetries++;
+                    wlog('[worker] DC ' + dcId + ' ' + methodName + ' ' + msg + ' — time offset synced, retrying');
+                    continue;
+                }
                 const isAuthUnregistered = msg.includes('AUTH_KEY_UNREGISTERED');
-                const isAuthBytesInvalid = msg.includes('AUTH_BYTES_INVALID') || msg.includes('Connection closed') || msg.includes('Connection lost') || msg.includes('Failed to connect') || msg.includes('auth export failed') || msg.includes('auth import failed');
+                const isAuthBytesInvalid = msg.includes('AUTH_BYTES_INVALID') || msg.includes('auth export failed') || msg.includes('auth import failed');
+                const isConnLevel = isAuthBytesInvalid ||
+                    msg.includes('Connection closed') || msg.includes('Connection lost') ||
+                    msg.includes('Failed to connect') ||
+                    msg.includes('read stall') || msg.includes('read loop') ||
+                    msg.includes('RPC timeout') || msg.includes('send stuck') ||
+                    msg.includes('connection timeout') || msg.includes('socket') ||
+                    msg.includes('suspect drained');
                 if (isAuthUnregistered && authRebuilds < 2) {
                     authRebuilds++;
                     wlog('[worker] DC ' + dcId + ' AUTH_KEY_UNREGISTERED on ' + methodName + ' — dropping key and reconnecting (' + authRebuilds + '/2)');
@@ -1280,7 +1333,7 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
                     dc = null;
                     continue;
                 }
-                if (isAuthBytesInvalid) {
+                if (isConnLevel) {
                     if (dc) {
                         dc.dead = true;
                         const idx = dcConnectionPool.indexOf(dc);
@@ -1289,8 +1342,9 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
                         rejectDcPending(dc, new Error('Connection closed'));
                     }
                     dc = null;
-                    if (connRebuilds < 2) {
+                    if (connRebuilds < 3) {
                         connRebuilds++;
+                        wlog('[worker] DC ' + dcId + ' ' + methodName + ' conn-level error "' + msg + '" — rebuilding connection (' + connRebuilds + '/3)');
                         continue;
                     }
                     throw e;
@@ -3068,6 +3122,7 @@ const MAX_PARALLEL_DOWNLOADS = 48;
 
 const IS_PREMIUM = false;
 const POOL_BUDGET = (IS_PREMIUM ? 16 : 8) << 20;
+const SMALL_POOL_BUDGET = (IS_PREMIUM ? 8 : 4) << 20;
 const STREAM_POOL_BUDGET = (IS_PREMIUM ? 16 : 8) << 20;
 const UNKNOWN_DC = 0;
 const poolInFlight = new Map<string, number>();
@@ -3077,7 +3132,9 @@ function streamPoolKey(dc: number): string {
     return 'stream:' + dc;
 }
 function poolBudgetOf(key: string): number {
-    return key.startsWith('stream:') ? STREAM_POOL_BUDGET : POOL_BUDGET;
+    if (key.startsWith('stream:')) return STREAM_POOL_BUDGET;
+    if (key.endsWith(':s')) return SMALL_POOL_BUDGET;
+    return POOL_BUDGET;
 }
 
 const activeDownloadPriority = new Map<string, number>();
@@ -3180,9 +3237,9 @@ function selectPartSize(size: number): number {
     return maxPart;
 }
 
-const SMALL_FILE_LIMIT = 20 << 10;
+const SMALL_FILE_LIMIT = 1 << 20;
 
-const SMALL_UPLOAD_MAX = 36;
+const SMALL_UPLOAD_MAX = 48;
 let smallUploadActive = 0;
 const smallUploadQueue: Array<() => void> = [];
 
@@ -3282,7 +3339,7 @@ async function processDownloadQueue(): Promise<void> {
 }
 
 function enqueueDownload(document?: any, photo?: any, priority = 0): Promise<DownloadResult> {
-    const norm = normalizePriority(priority < 1 ? 31 : 32);
+    const norm = normalizePriority(priority < 1 ? 1 : Math.min(TDLIB_PRIORITY_MAX, priority + 1));
     const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
     const id = document?.id?.toString() || photo?.id?.toString() || '?';
     wlog('[dlq] enqueue id=' + id + ' label=' + label + ' priority=' + priority + ' norm=' + norm + ' queued_before=' + downloadQueue.length);
@@ -3902,16 +3959,15 @@ export async function batchCheckDocumentCache(documents: Array<{ id: string | nu
 }
 
 async function downloadFiles_(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
-    const BATCH_ITEM_TIMEOUT_MS = 8000;
+    const BATCH_ITEM_WATCHDOG_MS = 8000;
     const tasks = (docs || []).map((item, index) =>
         new Promise<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>((resolve) => {
-            const timer = setTimeout(() => {
-                wlog('[dl] batch item timeout index=' + index + ' docId=' + (item?.document?.id?.toString?.() ?? '?') + ' — resolving with error');
-                resolve({ index, type: '', bytes: new ArrayBuffer(0), error: 'download timeout' });
-            }, BATCH_ITEM_TIMEOUT_MS);
+            const watchdog = setTimeout(() => {
+                wlog('[dl] batch item slow index=' + index + ' docId=' + (item?.document?.id?.toString?.() ?? '?') + ' — still downloading, waiting for completion');
+            }, BATCH_ITEM_WATCHDOG_MS);
             enqueueDownload(item?.document, undefined, item?.priority || 0).then(
-                (r) => { clearTimeout(timer); resolve({ index, type: r.type, bytes: r.bytes.slice(0), error: r.error, cacheSource: r.cacheSource }); },
-                (err) => { clearTimeout(timer); resolve({ index, type: '', bytes: new ArrayBuffer(0), error: String((err as Error)?.message || err) }); },
+                (r) => { clearTimeout(watchdog); resolve({ index, type: r.type, bytes: r.bytes.slice(0), error: r.error, cacheSource: r.cacheSource }); },
+                (err) => { clearTimeout(watchdog); resolve({ index, type: '', bytes: new ArrayBuffer(0), error: String((err as Error)?.message || err) }); },
             );
         }),
     );

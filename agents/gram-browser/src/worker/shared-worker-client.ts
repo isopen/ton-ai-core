@@ -130,11 +130,11 @@ export class SharedWorkerClient {
     }
 
     async downloadFile(document: any, photo: any): Promise<{ fileType: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }> {
-        return this.send({ type: 'downloadFile', document, photo }, 120_000);
+        return this.send({ type: 'downloadFile', document, photo }, 60_000);
     }
 
     async downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
-        const resp = await this.send({ type: 'downloadFiles', docs }, 300_000);
+        const resp = await this.send({ type: 'downloadFiles', docs }, 60_000);
         return resp && Array.isArray(resp.results) ? resp.results : [];
     }
 
