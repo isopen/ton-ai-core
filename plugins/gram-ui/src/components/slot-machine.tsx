@@ -20,6 +20,7 @@ const SLOT_PHASE_MS = 4000;
 const WIN_BG_PROGRESS = 0.66;
 const SLOT_HANDLE_TIMEOUT_MS = 3000;
 const SLOT_MASTER_TIMEOUT_MS = 20000;
+const SLOT_SLOTS_WAIT_MS = 5000;
 
 const SLOT_DONE_KEY = 'tg-slot-done-v2';
 const SLOT_DONE_MAX = 512;
@@ -146,10 +147,16 @@ function useSlotData(docId: string): EmojiData | undefined {
 
     apply();
     if (!getEmojiDocUrl(docId)) requestEmojiDownload(docId, undefined, 2);
+    const healTimer = setInterval(() => {
+      if (!alive) return;
+      if (!getEmojiDocUrl(docId)) requestEmojiDownload(docId, undefined, 2);
+      apply();
+    }, SLOT_RETRY_MS);
     window.addEventListener('tg-emoji-url', onUrlEvent);
 
     return () => {
       alive = false;
+      clearInterval(healTimer);
       if (retryTimer != null) clearTimeout(retryTimer);
       urlUnsub?.();
       window.removeEventListener('tg-emoji-url', onUrlEvent);
@@ -214,9 +221,15 @@ function useSlotSetReady(specs: SlotLayerSpec[] | undefined): boolean {
     };
     check();
     watch();
+    const healTimer = setInterval(() => {
+      if (!alive) return;
+      check();
+      watch();
+    }, SLOT_RETRY_MS);
     window.addEventListener('tg-emoji-url', onUrlEvent);
     return () => {
       alive = false;
+      clearInterval(healTimer);
       window.removeEventListener('tg-emoji-url', onUrlEvent);
       for (const u of unsubs) u();
     };
@@ -266,9 +279,15 @@ function useSlotRoleReady(specs: SlotLayerSpec[] | undefined, role: SlotLayerRol
     };
     check();
     watch();
+    const healTimer = setInterval(() => {
+      if (!alive) return;
+      check();
+      watch();
+    }, SLOT_RETRY_MS);
     window.addEventListener('tg-emoji-url', onUrlEvent);
     return () => {
       alive = false;
+      clearInterval(healTimer);
       window.removeEventListener('tg-emoji-url', onUrlEvent);
       for (const u of unsubs) u();
     };
@@ -434,6 +453,15 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
 
   const progressedRef = useRef(false);
   const completedNaturallyRef = useRef(false);
+  const pullStartedRef = useRef(false);
+  const [pullStarted, setPullStarted] = useState(false);
+
+  const onPullProgress = useCallback((p: number) => {
+    if (p > 0 && !pullStartedRef.current) {
+      pullStartedRef.current = true;
+      setPullStarted(true);
+    }
+  }, []);
 
   const onHandleEnd = useCallback(() => {
     progressedRef.current = true;
@@ -471,9 +499,18 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
     }
   }, [finishSpins]);
 
-  const startSpins = animated && handleDone && spinsReady && spins.length > 0;
-  const startSlots = animated && startSpins && spinsDone >= spins.length && slotsReady && slots.length > 0;
-  const spinsOver = animated && spins.length > 0 && spinsDone >= spins.length && (slots.length === 0 || slotsReady);
+  const [slotsWaitOver, setSlotsWaitOver] = useState(false);
+
+  useEffect(() => {
+    if (!animated || allDone || slots.length === 0 || slotsReady || slotsWaitOver) return;
+    if (spinsDone < spins.length) return;
+    const t = setTimeout(() => setSlotsWaitOver(true), SLOT_SLOTS_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [animated, allDone, slots.length, slotsReady, slotsWaitOver, spinsDone, spins.length]);
+
+  const startSpins = animated && handleDone && spins.length > 0;
+  const startSlots = animated && startSpins && spinsDone >= spins.length && slots.length > 0 && (slotsReady || slotsWaitOver);
+  const spinsOver = animated && spins.length > 0 && spinsDone >= spins.length && (slots.length === 0 || slotsReady || slotsWaitOver);
   const showWinBg = !!bgWin && (allDone || winReady);
   const reelsLive = !spinsOver && (animated ? handleDone : !allDone);
 
@@ -508,10 +545,10 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
   }, [allDone, playKey]);
 
   useEffect(() => {
-    if (!inView || !animated || handleDone || allDone) return;
+    if (!inView || !animated || handleDone || allDone || pullStarted) return;
     const t = setTimeout(() => setHandleDone(true), SLOT_HANDLE_TIMEOUT_MS);
     return () => clearTimeout(t);
-  }, [inView, animated, handleDone, allDone]);
+  }, [inView, animated, handleDone, allDone, pullStarted]);
 
   useEffect(() => {
     if (!inView || !animated || allDone) return;
@@ -522,6 +559,18 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
     }, SLOT_MASTER_TIMEOUT_MS);
     return () => clearTimeout(t);
   }, [inView, animated, allDone, spins.length, slots.length]);
+
+  useEffect(() => {
+    if (!specs || !animated || allDone) return;
+    const t = setInterval(() => {
+      for (const s of specs) {
+        if (isSlotLocalDoc(s.docId)) continue;
+        if (cachedSlotData(s.docId)) continue;
+        requestEmojiDownload(s.docId, undefined, 2);
+      }
+    }, SLOT_RETRY_MS);
+    return () => clearInterval(t);
+  }, [specs, animated, allDone]);
 
   useEffect(() => {
     if (!animated || !specs || allDone) return;
@@ -579,7 +628,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
       ) : null}
       {handle ? (
         <div class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={handle.docId} role="handle" partIndex={0} size={size} autoplay={animated && !handleDone} onEnd={onHandleEnd} playKey={playKey} showLastFrame={allDone || handleDone} />
+          <SlotLayer docId={handle.docId} role="handle" partIndex={0} size={size} autoplay={animated && !handleDone} onEnd={onHandleEnd} onFrameProgress={onPullProgress} playKey={playKey} showLastFrame={allDone || handleDone} />
         </div>
       ) : null}
     </div>
