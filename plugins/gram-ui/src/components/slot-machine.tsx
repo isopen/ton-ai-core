@@ -15,6 +15,7 @@ const SLOT_RETRY_MS = 2500;
 const SLOT_FETCH_TIMEOUT_MS = 12000;
 const MIN_SPIN_MS = 2600;
 const WIN_BACKGROUND_DELAY = 700;
+const SPIN_TIMEOUT_MS = 15000;
 
 const slotMachineDone = new Map<string, boolean>();
 
@@ -306,8 +307,11 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
 
   const [spinEndAllowed, setSpinEndAllowed] = useState(false);
   useEffect(() => {
-    if (!resultsReady || spinEndAllowed) return;
-    const t = setTimeout(() => setSpinEndAllowed(true), Math.max(0, MIN_SPIN_MS - (performance.now() - spinStartRef.current)));
+    if (spinEndAllowed) return;
+    const delay = resultsReady
+      ? Math.max(0, MIN_SPIN_MS - (performance.now() - spinStartRef.current))
+      : SPIN_TIMEOUT_MS;
+    const t = setTimeout(() => setSpinEndAllowed(true), delay);
     return () => clearTimeout(t);
   }, [resultsReady, spinEndAllowed]);
 
@@ -328,7 +332,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
     <div class="tgui-slot-machine" style={{ position: 'relative', width: size + 'px', height: size + 'px' }}>
       {bg && backgroundState === 'base' ? (
         <div class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={bg.docId} role="bg" partIndex={0} size={size} play loop={isSlotLocalDoc(bg.docId)} playKey={playKey} showLastFrame={doneBefore} />
+          <SlotLayer docId={bg.docId} role="bg" partIndex={0} size={size} play playKey={playKey} showLastFrame={doneBefore} />
         </div>
       ) : null}
       {bgWin && backgroundState === 'win' ? (
