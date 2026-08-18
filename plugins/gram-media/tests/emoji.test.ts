@@ -229,12 +229,12 @@ describe('GramMediaRouter emoji pipeline', () => {
         const sets = diceSetEvents[0]!.sets as Record<string, { p: string; d: string[] }>;
         expect(sets['🎲'].d).toHaveLength(7);
 
-        // set load prefetches all 7 docs directly, without custom emoji RPC
+        // set load indexes docs but does NOT download them; only requested values are downloaded
         const prefetchCalls = downloadFiles.mock.calls.length;
-        expect(prefetchCalls).toBeGreaterThanOrEqual(1);
+        expect(prefetchCalls).toBe(0);
         expect(customEmojiCalls).toEqual([]);
 
-        // known dice doc requests resolve from cache: no extra download, no RPC
+        // known dice doc requests resolve from cache: exactly one doc downloaded, no custom emoji RPC
         const urlEvents: any[] = [];
         window.addEventListener('tg-emoji-url', (e) => urlEvents.push((e as CustomEvent).detail));
         window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
@@ -243,7 +243,9 @@ describe('GramMediaRouter emoji pipeline', () => {
         await flushTicks();
         await flushTicks();
         await flushTicks();
-        expect(downloadFiles.mock.calls.length).toBe(prefetchCalls);
+        expect(downloadFiles.mock.calls.length).toBe(prefetchCalls + 1);
+        expect(downloadFiles.mock.calls[prefetchCalls]![0]).toHaveLength(1);
+        expect(downloadFiles.mock.calls[prefetchCalls]![0]![0]!.document.id).toBe(base + 4);
         expect(customEmojiCalls).toEqual([]);
         expect(urlEvents.some((d) => String(d.docId) === base + 4 && d.url)).toBe(true);
 
@@ -253,7 +255,9 @@ describe('GramMediaRouter emoji pipeline', () => {
         await flushTicks();
         await flushTicks();
         await flushTicks();
-        expect(downloadFiles.mock.calls.length).toBe(prefetchCalls);
+        expect(downloadFiles.mock.calls.length).toBe(prefetchCalls + 2);
+        expect(downloadFiles.mock.calls[prefetchCalls + 1]![0]).toHaveLength(1);
+        expect(downloadFiles.mock.calls[prefetchCalls + 1]![0]![0]!.document.id).toBe(base + 5);
         expect(customEmojiCalls).toEqual([]);
         expect(urlEvents.some((d) => String(d.docId) === base + 5 && d.url)).toBe(true);
     });
@@ -794,16 +798,16 @@ describe('GramMediaRouter emoji pipeline', () => {
         expect(downloadEvents.some((d) => String(d.document?.id) === '5201')).toBe(true);
     });
 
-    test('emoji url cache caps at 100 entries', () => {
+    test('emoji url cache caps at 2048 entries', () => {
         const { router } = makeRouter();
-        for (let i = 0; i < 150; i++) {
+        for (let i = 0; i < 2500; i++) {
             router.setCachedEmojiUrl('emoji-' + i, 'blob:emoji-' + i);
         }
         const keys = router.emojiUrlCacheKeys();
-        expect(keys.length).toBeLessThanOrEqual(100);
-        expect(keys.length).toBeGreaterThanOrEqual(80);
-        expect(router.getCachedEmojiUrl('emoji-149')).toBe('blob:emoji-149');
-        expect(keys).toContain('emoji-149');
+        expect(keys.length).toBeLessThanOrEqual(2048);
+        expect(keys.length).toBeGreaterThanOrEqual(1600);
+        expect(router.getCachedEmojiUrl('emoji-2499')).toBe('blob:emoji-2499');
+        expect(keys).toContain('emoji-2499');
     });
 
     test('cache-hit emoji documents dispatch without transport', async () => {
@@ -826,5 +830,34 @@ describe('GramMediaRouter emoji pipeline', () => {
         const done = lastOfType(actions, 'UPDATE_MESSAGE_DOCUMENT')!;
         expect(done.url).toBe('blob:cached');
         expect(done.messageId).toBe('emojipack-6001');
+    });
+
+    test('cancelDocumentDownloads clears documentPending so queued emoji can be re-requested immediately', async () => {
+        let batchItems: any[] = [];
+        const downloadFiles = jest.fn(async (docsArg: any[]) => {
+            batchItems = docsArg;
+            return [];
+        });
+        const transport = makeTransport({ downloadFiles });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        const emojiDoc = makeDocument({ id: '9100', mime_type: 'application/x-tgsticker' });
+
+        window.dispatchEvent(new CustomEvent('tg-download-document', {
+            detail: { document: emojiDoc, messageId: 'emojipack-9100', priority: 0 },
+        }));
+        router.cancelDocumentDownloads();
+        await flushTicks();
+        expect(downloadFiles.mock.calls.length).toBe(0);
+
+        window.dispatchEvent(new CustomEvent('tg-download-document', {
+            detail: { document: emojiDoc, messageId: 'emojipack-9100', priority: 0 },
+        }));
+        await flushTicks();
+
+        expect(downloadFiles.mock.calls.length).toBe(1);
+        expect(batchItems.map((i: any) => i.document?.id)).toContain('9100');
     });
 });

@@ -92,7 +92,9 @@ describe('GramMediaRouter viewport gate', () => {
             detail: { photo: makePhoto(), sizeType: 'm', messageId: 1 },
         }));
         await flushTicks();
-        expect(calls).toBe(2);
+        expect(calls).toBe(1);
+        expect(actionsOfType(actions, 'UPDATE_MESSAGE_PHOTO')).toHaveLength(3);
+        expect(lastOfType(actions, 'UPDATE_MESSAGE_PHOTO')!.messageId).toBe(1);
     });
 
     test('document download for an off-viewport message is skipped', async () => {
@@ -117,14 +119,55 @@ describe('GramMediaRouter viewport gate', () => {
         }));
         await flushTicks();
         expect(calls).toBe(1);
-        expect(actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT_PROGRESS').some((a) => a.messageId === 7)).toBe(false);
+        expect(actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT_PROGRESS').some((a) => a.messageId === 7)).toBe(true);
 
         setViewport([7]);
-        window.dispatchEvent(new CustomEvent('tg-download-document', {
-            detail: { document: makeDocument(), messageId: 7, priority: 0 },
-        }));
         await flushTicks();
         expect(calls).toBe(2);
+    });
+
+    test('photo dispatched with stale viewport ids downloads when the viewport updates (no re-dispatch needed)', async () => {
+        let calls = 0;
+        const transport = makeTransport({
+            startPhotoDownload: async () => { calls++; return { bytes: makeBytes(64), mime: 'image/jpeg' }; },
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        setViewport([1]);
+        window.dispatchEvent(new CustomEvent('tg-download-photo', {
+            detail: { photo: makePhoto(), sizeType: 'm', messageId: 2 },
+        }));
+        await flushTicks();
+        expect(calls).toBe(0);
+
+        setViewport([2]);
+        await flushTicks();
+        expect(calls).toBe(1);
+        expect(lastOfType(actions, 'UPDATE_MESSAGE_PHOTO')!.messageId).toBe(2);
+    });
+
+    test('document dispatched off-viewport downloads when the viewport updates (no re-dispatch needed)', async () => {
+        let calls = 0;
+        const transport = makeTransport({
+            downloadFile: async () => { calls++; return { bytes: makeBytes(64), type: 'application/octet-stream' }; },
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        setViewport([10]);
+        window.dispatchEvent(new CustomEvent('tg-download-document', {
+            detail: { document: makeDocument(), messageId: 11, priority: 0 },
+        }));
+        await flushTicks();
+        expect(calls).toBe(0);
+
+        setViewport([11]);
+        await flushTicks();
+        expect(calls).toBe(1);
+        expect(actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT_PROGRESS').some((a) => a.messageId === 11)).toBe(true);
     });
 
     test('viewer ctx bypasses the viewport gate', async () => {

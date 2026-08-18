@@ -9,7 +9,8 @@ const EMPTY_CHAT_MSG_ID = 'empty-chat';
 const PHOTO_URL_CACHE_MAX = 200;
 const PROBE_MSG_LIMIT = 60;
 const PROBE_LRU_MAX = 600;
-const MAX_ACTIVE_BLOB_URLS = 1024;
+const MAX_ACTIVE_BLOB_URLS = 4096;
+const EMOJI_BLOB_URLS_MAX = 8192;
 const TGS_JSON_TTL_MS = 30 * 60 * 1000;
 const STICKER_SET_TTL_MS = 30 * 60 * 1000;
 const MAX_PARALLEL_PHOTOS = 16;
@@ -30,13 +31,15 @@ function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Prom
 }
 
 export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_dialog_queue' | 'emoji_chat_queue' | 'dice_queue' | 'tgs_queue';
-const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 4, emoji_dialog_queue: 8, emoji_chat_queue: 8, dice_queue: 2, tgs_queue: 8 };
+const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 4, emoji_dialog_queue: 16, emoji_chat_queue: 16, dice_queue: 4, tgs_queue: 8 };
 const DOC_DOWNLOAD_BATCH = 4;
+const DOC_PENDING_TTL_MS = 30_000;
 
 export class GramMediaRouter {
     readonly debug: boolean;
 
     private activeBlobUrls = new Set<string>();
+    private emojiBlobUrls = new Set<string>();
     private tgsJsonByUrl = new Map<string, string>();
     private tgsJsonByUrlTs = new Map<string, number>();
     private tgsJsonSweepAt = 0;
@@ -61,7 +64,7 @@ export class GramMediaRouter {
     private viewportKnown = false;
 
     private documentDownloadGen = 0;
-    private documentPending = new Set<number>();
+    private documentPending = new Map<number | string, number>();
     private downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number | string; mime: string; priority: number; ctx?: string }>> = { video_queue: [], gif_queue: [], photo_queue: [], emoji_dialog_queue: [], emoji_chat_queue: [], dice_queue: [], tgs_queue: [] };
     private downloadInProgress: Record<QueueKey, number> = { video_queue: 0, gif_queue: 0, photo_queue: 0, emoji_dialog_queue: 0, emoji_chat_queue: 0, dice_queue: 0, tgs_queue: 0 };
     private downloadQueueMicrotasks = new Set<QueueKey>();
@@ -139,7 +142,7 @@ export class GramMediaRouter {
             }
             this.viewportKnown = true;
             this.visibleMessageIds = next;
-            this.prunePhotoQueue();
+            this.processPhotoQueue();
             this.reprocessDocumentQueues();
         };
         w.addEventListener('tg-media-viewport', onMediaViewport);
@@ -229,6 +232,8 @@ export class GramMediaRouter {
 
     cancelDocumentDownloads(): void {
         this.documentDownloadGen++;
+        this.emoji.resetEmojiDownloads();
+        this.documentPending.clear();
         for (const key of Object.keys(this.downloadQueues) as QueueKey[]) {
             this.downloadQueues[key].length = 0;
         }
@@ -241,10 +246,18 @@ export class GramMediaRouter {
 
     setCachedEmojiUrl(key: string, url: string): void {
         if (isNoMediaCache()) return;
-        if (this.emojiUrlCache.size >= 100) {
+        if (url && url.startsWith('blob:')) {
+            this.emojiBlobUrls.add(url);
+            while (this.emojiBlobUrls.size > EMOJI_BLOB_URLS_MAX) {
+                const oldest = this.emojiBlobUrls.values().next().value;
+                if (oldest === undefined) break;
+                this.emojiBlobUrls.delete(oldest);
+            }
+        }
+        if (this.emojiUrlCache.size >= 2048) {
             for (const k of this.emojiUrlCache.keys()) {
                 this.emojiUrlCache.delete(k);
-                if (this.emojiUrlCache.size < 80) break;
+                if (this.emojiUrlCache.size < 1600) break;
             }
         }
         this.emojiUrlCache.set(key, url);
@@ -258,14 +271,25 @@ export class GramMediaRouter {
         return Array.from(this.emojiUrlCache.keys());
     }
 
+    isCachedEmojiUrl(url: string): boolean {
+        for (const u of this.emojiUrlCache.values()) {
+            if (u === url) return true;
+        }
+        return false;
+    }
+
     trackBlobUrl(url: string): string {
         if (!url.startsWith('blob:')) return url;
         this.activeBlobUrls.add(url);
-        while (this.activeBlobUrls.size > MAX_ACTIVE_BLOB_URLS) {
+        let scanned = 0;
+        while (this.activeBlobUrls.size > MAX_ACTIVE_BLOB_URLS && scanned < this.activeBlobUrls.size) {
             const oldest = this.activeBlobUrls.values().next().value as string | undefined;
             if (!oldest) break;
-            URL.revokeObjectURL(oldest);
             this.activeBlobUrls.delete(oldest);
+            scanned++;
+            if (this.isCachedEmojiUrl(oldest)) continue;
+            if (this.emojiBlobUrls.has(oldest)) continue;
+            URL.revokeObjectURL(oldest);
             this.notifyEmojiUrlRevoked(oldest);
         }
         return url;
@@ -518,30 +542,12 @@ export class GramMediaRouter {
         return this.visibleMessageIds.has(messageId);
     }
 
-    private prunePhotoQueue(): void {
-        const stillPending: Array<{ photo: any; sizeType: string; messageId: number | string; ctx?: string }> = [];
-        for (const item of this.photoQueue) {
-            if (this.isViewportEligible(item.messageId, item.ctx)) {
-                stillPending.push(item);
-            } else {
-                this.photoQueuedKeys.delete(String(item.messageId) + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
-            }
-        }
-        this.photoQueue = stillPending;
-    }
-
-    private reprocessDocumentQueues(): void {
-        for (const key of Object.keys(this.downloadQueues) as QueueKey[]) {
-            this.scheduleDownloadQueue(key);
-        }
-    }
-
     private processPhotoQueue(): void {
         const stillPending: Array<{ photo: any; sizeType: string; messageId: number | string; ctx?: string }> = [];
         for (let i = this.photoQueue.length - 1; i >= 0; i--) {
             const item = this.photoQueue[i]!;
             if (!this.isViewportEligible(item.messageId, item.ctx)) {
-                this.photoQueuedKeys.delete(String(item.messageId) + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
+                stillPending.push(item);
                 continue;
             }
             const ck = this.getPhotoCacheKey(item.photo, item.sizeType);
@@ -565,6 +571,12 @@ export class GramMediaRouter {
             });
         }
         this.photoQueue = stillPending;
+    }
+
+    private reprocessDocumentQueues(): void {
+        for (const key of Object.keys(this.downloadQueues) as QueueKey[]) {
+            this.scheduleDownloadQueue(key);
+        }
     }
 
     private processAvatarQueue(): void {
@@ -734,10 +746,6 @@ export class GramMediaRouter {
             this.registerStickerDoc(document);
         }
         if (!document || messageId == null) return;
-        if (!this.isViewportEligible(messageId, ctx)) {
-            if (this.debug) log.info('[gram-media] skip tg-download-document (off-viewport) messageId=' + messageId + ' ctx=' + (ctx || 'chat'));
-            return;
-        }
         const isEmoji = typeof messageId === 'string' && this.isEmojiKey(messageId);
         if (isEmoji && document && (document._ === 'documentEmpty' || (!document.file_reference && !document.mime_type && !document.size && !document.dc_id))) {
             if (document.id != null) this.emoji.onEmojiDownloadFailed(String(document.id));
@@ -751,14 +759,19 @@ export class GramMediaRouter {
                 return;
             }
         }
-        if (this.documentPending.has(messageId)) return;
+        if (this.documentPending.has(messageId)) {
+            const pendingSince = this.documentPending.get(messageId) as number;
+            if (Date.now() - pendingSince <= DOC_PENDING_TTL_MS) return;
+            this.documentPending.delete(messageId);
+            if (this.debug) log.warn('[gram-media] documentPending stale, re-queueing messageId=' + messageId + ' age=' + Math.round((Date.now() - pendingSince) / 1000) + 's');
+        }
         const retryTimer = this.documentRetryTimers.get(messageId);
         if (retryTimer) {
             clearTimeout(retryTimer);
             this.documentRetryTimers.delete(messageId);
         }
         if (priority > 0) this.documentRetryCounts.delete(messageId);
-        this.documentPending.add(messageId);
+        this.documentPending.set(messageId, Date.now());
         if (this.debug) log.info('[gram-media] tg-download-document messageId=' + messageId + ' priority=' + priority + ' ctx=' + (ctx || 'chat') + ' docId=' + document.id);
         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
         const mime = (document.mime_type || 'application/octet-stream').toLowerCase();
@@ -793,6 +806,7 @@ export class GramMediaRouter {
                 if (bestIdx === -1) break;
                 items.push(queue.splice(bestIdx, 1)[0]);
             }
+            if (items.length === 0) break;
             this.downloadInProgress[queueKey] += items.length;
             void this.execDownloadsBatch(items, queueKey).finally(() => {
                 this.downloadInProgress[queueKey] -= items.length;
@@ -801,13 +815,26 @@ export class GramMediaRouter {
         }
     }
 
+    private dropBatchOnGenChange(gen: number, items: Array<{ messageId: number | string }>): boolean {
+        if (gen === this.documentDownloadGen) return false;
+        const emojiIds: string[] = [];
+        for (const it of items) {
+            if (typeof it.messageId !== 'string') continue;
+            const k = it.messageId;
+            if (k.startsWith('emojipack-')) emojiIds.push(k.slice('emojipack-'.length));
+            else if (k.startsWith('emoji-')) emojiIds.push(k.slice('emoji-'.length));
+        }
+        if (emojiIds.length > 0) this.emoji.clearEmojiDownloads(emojiIds);
+        return true;
+    }
+
     private async execDownloadsBatch(items: Array<{ document: any; messageId: number | string; mime: string; priority: number }>, queueKey: QueueKey): Promise<void> {
         const gen = this.documentDownloadGen;
         try {
             const isEmoji = (it: { messageId: number | string }): boolean => typeof it.messageId === 'string' && this.isEmojiKey(String(it.messageId));
             const videoItems = items.filter((it) => !isEmoji(it) && it.mime.startsWith('video/'));
             for (const it of videoItems) {
-                if (gen !== this.documentDownloadGen) return;
+                if (this.dropBatchOnGenChange(gen, items)) return;
                 await this.execDownloadBody(it.document, it.messageId, it.mime);
             }
             const rest = items.filter((it) => isEmoji(it) || !it.mime.startsWith('video/'));
@@ -816,35 +843,34 @@ export class GramMediaRouter {
                 await this.execDownloadBody(rest[0].document, rest[0].messageId, rest[0].mime);
                 return;
             }
-            if (gen !== this.documentDownloadGen) return;
+            if (this.dropBatchOnGenChange(gen, items)) return;
             let results: Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }> = [];
             try {
                 results = (await this.transport?.downloadFiles(
                     rest.map((it) => ({ document: it.document, priority: it.priority })),
                 )) || [];
             } catch (err: any) {
-                if (gen !== this.documentDownloadGen) return;
+                if (this.dropBatchOnGenChange(gen, items)) return;
                 if (this.debug) log.info('[gram-media] downloadFiles batch error, falling back per-item:', err?.message, 'items=' + rest.length);
                 for (const it of rest) {
-                    if (gen !== this.documentDownloadGen) return;
+                    if (this.dropBatchOnGenChange(gen, items)) return;
                     await this.execDownloadBody(it.document, it.messageId, it.mime);
                 }
                 return;
             }
             for (const r of results) {
-                if (gen !== this.documentDownloadGen) return;
                 const it = rest[r.index];
                 if (!it) continue;
                 await this.processFileDownloadResult(it, r, gen);
             }
             if (results.length === 0 && rest.length > 0) {
                 for (const it of rest) {
-                    if (gen !== this.documentDownloadGen) return;
+                    if (this.dropBatchOnGenChange(gen, items)) return;
                     await this.processFileDownloadResult(it, { error: 'empty batch result' }, gen);
                 }
             }
         } finally {
-            for (const it of items) this.documentPending.delete(it.messageId as number);
+            for (const it of items) this.documentPending.delete(it.messageId as number | string);
         }
     }
 
@@ -853,14 +879,22 @@ export class GramMediaRouter {
         result: { bytes?: ArrayBuffer; cacheSource?: string; error?: string },
         gen: number,
     ): Promise<void> {
-        if (gen !== this.documentDownloadGen) return;
+        const emojiDocId = typeof item.messageId === 'string' && this.isEmojiKey(item.messageId)
+            ? item.messageId.slice('emojipack-'.length)
+            : null;
         if (result?.bytes && result.bytes.byteLength > 0) {
             const bytes = this.toArrayBuffer(result.bytes);
+            if (emojiDocId) {
+                const { kind, url } = await this.emojiKindAndUrlFor(bytes, item.mime);
+                this.emoji.onEmojiDownloadSuccess(emojiDocId, url, kind);
+                this.notifyEmojiUrlKind(url, kind);
+                this.notifyEmojiUrl(String(item.document.id), url, item.mime, kind);
+                this.dispatchDocumentUrl(item.messageId, url, result.cacheSource);
+                return;
+            }
+            if (gen !== this.documentDownloadGen) return;
             const { kind, url } = await this.emojiKindAndUrlFor(bytes, item.mime);
             if (gen !== this.documentDownloadGen) return;
-            if (typeof item.messageId === 'string' && this.isEmojiKey(item.messageId)) {
-                this.emoji.onEmojiDownloadSuccess(item.messageId.slice('emojipack-'.length), url, kind);
-            }
             this.notifyEmojiUrlKind(url, kind);
             this.notifyEmojiUrl(String(item.document.id), url, item.mime, kind);
             this.dispatchDocumentUrl(item.messageId, url, result.cacheSource);
@@ -1020,6 +1054,18 @@ export class GramMediaRouter {
                 if (result?.bytes) {
                     const bytes = this.toArrayBuffer(result.bytes);
                     if (bytes.byteLength) {
+                        if (gen !== this.documentDownloadGen) {
+                            if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
+                                const url = mime === 'application/x-tgsticker'
+                                    ? await this.tgsToJsonUrl(bytes)
+                                    : this.bytesToBlobUrl(bytes, mime);
+                                const emojiDocId = messageId.slice('emojipack-'.length);
+                                this.emoji.onEmojiDownloadSuccess(emojiDocId, url);
+                                this.notifyEmojiUrl(String(document.id), url, mime);
+                                this.dispatchDocumentUrl(messageId, url, result.cacheSource);
+                            }
+                            return;
+                        }
                         const url = mime === 'application/x-tgsticker'
                             ? await this.tgsToJsonUrl(bytes)
                             : this.bytesToBlobUrl(bytes, mime);
