@@ -2,7 +2,7 @@ import { h } from '@ton-ai/atom/jsx-runtime';
 import { useCallback, useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { fetchEmojiData, getEmojiDocUrl } from './emoji-canvas.js';
 import type { EmojiData } from './emoji-canvas.js';
-import { TgsPlayer, isAnimationCompleted } from './tgs-player.js';
+import { TgsPlayer } from './tgs-player.js';
 import { getSlotLayerSpecs, requestEmojiDownload, subscribeDiceSets, ensureEmojiStickers } from './emoji-store.js';
 import type { SlotLayerRole, SlotLayerSpec } from './emoji-store.js';
 import { SLOT_LOCAL_IDS, getSlotLocalData, getSlotLocalResult, isSlotLocalDoc } from './slot-idle.js';
@@ -12,11 +12,9 @@ const slotLog = getLogger('gram-ui:slot');
 const slotLayerLog = getLogger('gram-ui:slot-layer');
 
 const SLOT_RETRY_MS = 2500;
-const SLOT_LAYER_FINISH_MS = 300;
 const SLOT_FETCH_TIMEOUT_MS = 12000;
-const SPIN_MS = 2600;
-const SLOT_PHASE_MS = 4000;
-const WIN_BG_PROGRESS = 0.66;
+const MIN_SPIN_MS = 2600;
+const WIN_BACKGROUND_DELAY = 700;
 
 const slotMachineDone = new Map<string, boolean>();
 
@@ -126,7 +124,6 @@ function useSlotData(docId: string): EmojiData | undefined {
 
   useEffect(() => {
     if (isSlotLocalDoc(docId)) return;
-    setData(getSlotData(docId));
     const onData = (d: EmojiData) => setData(d);
     const subs = subscribeSlotData(docId, onData);
     if (!getSlotData(docId)) {
@@ -161,33 +158,28 @@ function useSlotLocalData(docId: string | undefined): EmojiData | undefined {
   return data;
 }
 
-function useSlotSetReady(specs: SlotLayerSpec[] | undefined): boolean {
-  const [readyCount, setReadyCount] = useState(0);
+function useSlotResultsReady(results: SlotLayerSpec[]): boolean {
+  const [loadedCount, setLoadedCount] = useState(0);
+  const idsKey = results.map((s) => s.docId).join(',');
 
   useEffect(() => {
-    if (!specs) return;
-    const ids = specs.filter((s) => !isSlotLocalDoc(s.docId)).map((s) => s.docId);
+    const ids = results.filter((s) => !isSlotLocalDoc(s.docId)).map((s) => s.docId);
     if (ids.length === 0) {
-      setReadyCount(1);
+      setLoadedCount(0);
       return;
     }
     let alive = true;
-    const check = () => {
-      if (!alive) return;
-      const ready = ids.filter((id) => getSlotData(id)).length;
-      setReadyCount(ready);
-    };
-    check();
-    const subs = ids.map((id) => subscribeSlotData(id, check));
+    const count = () => ids.filter((id) => getSlotData(id)).length;
+    setLoadedCount(count());
+    const onData = () => { if (alive) setLoadedCount(count()); };
+    const subs = ids.map((id) => subscribeSlotData(id, onData));
     return () => {
       alive = false;
-      for (const s of subs) s.delete(check);
+      for (const s of subs) s.delete(onData);
     };
-  }, [specs]);
+  }, [idsKey]);
 
-  if (!specs) return false;
-  const total = specs.filter((s) => !isSlotLocalDoc(s.docId)).length;
-  return total > 0 && readyCount >= total;
+  return results.length > 0 && loadedCount >= results.length;
 }
 
 const LOCAL_PARTS = [SLOT_LOCAL_IDS.reel0, SLOT_LOCAL_IDS.reel1, SLOT_LOCAL_IDS.reel2];
@@ -211,7 +203,18 @@ function localFallbackId(role: SlotLayerRole, partIndex: number): string | undef
   }
 }
 
-function SlotLayer({ docId, role, partIndex, size, autoplay, loop, playKey, showLastFrame, onEnd, onFrameProgress }: { docId: string; role: SlotLayerRole; partIndex: number; size: number; autoplay: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; onEnd?: () => void; onFrameProgress?: (progress: number) => void }) {
+function localSpecsFor(value: number | null): SlotLayerSpec[] {
+  const specs: SlotLayerSpec[] = [
+    { role: 'bg', docId: SLOT_LOCAL_IDS.back },
+    { role: 'handle', docId: SLOT_LOCAL_IDS.pull },
+    { role: 'spin', docId: SLOT_LOCAL_IDS.reel0 },
+    { role: 'spin', docId: SLOT_LOCAL_IDS.reel1 },
+    { role: 'spin', docId: SLOT_LOCAL_IDS.reel2 },
+  ];
+  return specs;
+}
+
+function SlotLayer({ docId, role, partIndex, size, play, loop, playKey, showLastFrame, onEnd }: { docId: string; role: SlotLayerRole; partIndex: number; size: number; play: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; onEnd?: () => void }) {
   const real = useSlotData(docId);
   const localId = isSlotLocalDoc(docId) ? docId : localFallbackId(role, partIndex);
   const local = useSlotLocalData(localId);
@@ -219,20 +222,8 @@ function SlotLayer({ docId, role, partIndex, size, autoplay, loop, playKey, show
   if (isEnabled('gram-ui:slot-layer')) {
     slotLayerLog.info('[slot-layer]', JSON.stringify({ docId, role, real: !!real, local: !!local, kind: data?.kind }));
   }
-  const firedDataRef = useRef<any>(null);
-
-  useEffect(() => {
-    if (!real || !data || onEnd == null) return;
-    if (data.kind === 'tgs' || data.kind === 'video') return;
-    if (firedDataRef.current === data) return;
-    firedDataRef.current = data;
-    const t = setTimeout(onEnd, SLOT_LAYER_FINISH_MS);
-    return () => clearTimeout(t);
-  }, [real, data, onEnd]);
-
   if (!data) return null;
   if (data.kind === 'tgs') {
-    if (role === 'slot' && !autoplay && !showLastFrame) return null;
     return (
       <TgsPlayer
         className="tgui-slot-layer-player"
@@ -240,14 +231,13 @@ function SlotLayer({ docId, role, partIndex, size, autoplay, loop, playKey, show
         width={size}
         height={size}
         loop={loop ?? false}
-        autoplay={autoplay}
+        autoplay={play}
         cacheKey={(real ? 'emojipack-' : 'slotidle-') + docId}
         playKey={playKey ? playKey + ':' + role + ':' + docId : undefined}
         showLastFrame={showLastFrame}
         onEnd={onEnd}
-        onFrameProgress={onFrameProgress}
         layerOrder={role === 'spin' || role === 'slot' ? 'default' : 'reversed'}
-        hiddenLayers={role === 'spin' && !autoplay ? hideStripLayer : undefined}
+        hiddenLayers={role === 'spin' && !play ? hideStripLayer : undefined}
       />
     );
   }
@@ -261,23 +251,12 @@ function SlotLayer({ docId, role, partIndex, size, autoplay, loop, playKey, show
         loop={loop ?? false}
         muted
         playsinline
-        autoplay={autoplay}
+        autoplay={play}
         onEnded={onEnd}
       />
     );
   }
-  return <img class="tgui-slot-layer-player" src={data.value} style={`width:${size}px;height:${size}px`} />;
-}
-
-function localSpecsFor(value: number | null): SlotLayerSpec[] {
-  const specs: SlotLayerSpec[] = [
-    { role: 'bg', docId: SLOT_LOCAL_IDS.back },
-    { role: 'handle', docId: SLOT_LOCAL_IDS.pull },
-    { role: 'spin', docId: SLOT_LOCAL_IDS.reel0 },
-    { role: 'spin', docId: SLOT_LOCAL_IDS.reel1 },
-    { role: 'spin', docId: SLOT_LOCAL_IDS.reel2 },
-  ];
-  return specs;
+  return <img class="tgui-slot-layer-player" src={data.value} style={{ width: size + 'px', height: size + 'px' }} />;
 }
 
 export function SlotMachineSticker({ value, size = 96, playKey }: { value: number | null; size?: number; playKey?: string }) {
@@ -302,119 +281,74 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
     }
   }, [specs]);
 
-  const setReady = useSlotSetReady(specs);
-  const ready = setReady;
   const layers = specs ? specs : localSpecsFor(value);
-  const realSet = !!specs && setReady;
-  const animated = !!specs && typeof value === 'number' && value > 0;
-
-  const doneBefore = playKey != null && slotMachineDone.get(playKey) === true;
-
   const bg = layers.find((s) => s.role === 'bg');
   const bgWin = layers.find((s) => s.role === 'bgWin');
-  const handle = layers.find((s) => s.role === 'handle');
+  const pull = layers.find((s) => s.role === 'handle');
   const spins = layers.filter((s) => s.role === 'spin');
-  const slots = layers.filter((s) => s.role === 'slot');
+  const results = layers.filter((s) => s.role === 'slot');
 
-  const [handleDone, setHandleDone] = useState(doneBefore);
-  const [spinsDone, setSpinsDone] = useState(doneBefore ? spins.length : 0);
-  const [slotsDone, setSlotsDone] = useState(doneBefore ? slots.length : 0);
-  const [allDone, setAllDone] = useState(doneBefore);
-  const [winReady, setWinReady] = useState(doneBefore);
-  const slotProgressRef = useRef<boolean[]>([false, false, false]);
+  const resultsReady = useSlotResultsReady(results);
+  const isWin = !!bgWin && value === 64;
+
+  const doneBefore = playKey != null && slotMachineDone.get(playKey) === true;
+  const [spinState, setSpinState] = useState<'base' | 'result'>(doneBefore ? 'result' : 'base');
+  const [backgroundState, setBackgroundState] = useState<'base' | 'win'>(doneBefore && isWin ? 'win' : 'base');
+
+  useEffect(() => {
+    if (doneBefore && isWin && backgroundState !== 'win') setBackgroundState('win');
+  }, [doneBefore, isWin, backgroundState]);
+
+  const spinStartRef = useRef(0);
+  useEffect(() => {
+    if (!spinStartRef.current) spinStartRef.current = performance.now();
+  }, []);
+
+  const [spinEndAllowed, setSpinEndAllowed] = useState(false);
+  useEffect(() => {
+    if (!resultsReady || spinEndAllowed) return;
+    const t = setTimeout(() => setSpinEndAllowed(true), Math.max(0, MIN_SPIN_MS - (performance.now() - spinStartRef.current)));
+    return () => clearTimeout(t);
+  }, [resultsReady, spinEndAllowed]);
+
+  const onReelsEnded = useCallback(() => {
+    if (spinState !== 'base') return;
+    setSpinState('result');
+    if (playKey) markSlotMachineDone(playKey);
+    if (isWin) {
+      setTimeout(() => setBackgroundState('win'), WIN_BACKGROUND_DELAY);
+    }
+  }, [spinState, isWin, playKey]);
 
   if (isEnabled('gram-ui:slot')) {
-    const realIds = (specs || []).filter((s) => !isSlotLocalDoc(s.docId)).map((s) => s.docId);
-    slotLog.info('[slot]', JSON.stringify({ value, specs: specs ? specs.length : undefined, setReady, ready, realSet, animated, doneBefore, nLocal: layers.filter((s) => isSlotLocalDoc(s.docId)).length, cached: realIds.filter((id) => slotDataCache.has(String(id))).length, h: handleDone, sp: spinsDone, sl: slotsDone, a: allDone, win: winReady }));
+    slotLog.info('[slot]', JSON.stringify({ value, specs: specs ? specs.length : undefined, results: results.length, resultsReady, spinState, backgroundState, doneBefore, isWin, spinEndAllowed }));
   }
-
-  const progressedRef = useRef(false);
-
-  const onHandleEnd = useCallback(() => {
-    progressedRef.current = true;
-    setHandleDone(true);
-  }, []);
-  const onSpinEnd = useCallback(() => {
-    progressedRef.current = true;
-    setSpinsDone((n) => n + 1);
-  }, []);
-  const onSlotEnd = useCallback(() => {
-    progressedRef.current = true;
-    setSlotsDone((n) => n + 1);
-  }, []);
-  const onSlotProgress = useCallback((index: number) => (p: number) => {
-    if (slotProgressRef.current[index]) return;
-    if (p >= WIN_BG_PROGRESS) {
-      slotProgressRef.current[index] = true;
-      if (slotProgressRef.current.every(Boolean)) setWinReady(true);
-    }
-  }, []);
-
-  const startSpins = animated && handleDone && spins.length > 0;
-  const startSlots = animated && startSpins && spinsDone >= spins.length && slots.length > 0;
-  const spinsOver = animated && spins.length > 0 && spinsDone >= spins.length;
-  const showWinBg = !!bgWin && (allDone || winReady);
-
-  useEffect(() => {
-    if (!startSpins) return;
-    const t = setTimeout(() => setSpinsDone((n) => Math.max(n, spins.length)), SPIN_MS);
-    return () => clearTimeout(t);
-  }, [startSpins, spins.length]);
-
-  useEffect(() => {
-    if (!startSlots) return;
-    const t = setTimeout(() => setSlotsDone((n) => Math.max(n, slots.length)), SLOT_PHASE_MS);
-    return () => clearTimeout(t);
-  }, [startSlots, slots.length]);
-
-  useEffect(() => {
-    if (animated && slots.length > 0 && slotsDone >= slots.length && !allDone) setAllDone(true);
-  }, [animated, slotsDone, slots.length, allDone]);
-
-  useEffect(() => {
-    if (allDone && playKey) markSlotMachineDone(playKey);
-  }, [allDone, playKey]);
-
-  useEffect(() => {
-    if (!playKey || !specs || !setReady) return;
-    if (progressedRef.current) return;
-    const active = specs.filter((s) => s.role === 'handle' || s.role === 'bgWin' || s.role === 'spin' || s.role === 'slot');
-    const keys = active.map((s) => playKey + ':' + s.role + ':' + s.docId);
-    const anyStarted = keys.some((k) => isAnimationCompleted(k));
-    if (!anyStarted) return;
-    const spinCount = specs.filter((s) => s.role === 'spin').length;
-    const slotCount = specs.filter((s) => s.role === 'slot').length;
-    setHandleDone(true);
-    setSpinsDone(spinCount);
-    setSlotsDone(slotCount);
-    setAllDone(true);
-    setWinReady(true);
-    if (keys.every((k) => isAnimationCompleted(k))) markSlotMachineDone(playKey);
-  }, [playKey, specs, setReady]);
-
-  if (!ready) return <span class="tgui-slot-machine" style={{ display: 'inline-block', width: size + 'px', height: size + 'px' }} />;
 
   return (
     <div class="tgui-slot-machine" style={{ position: 'relative', width: size + 'px', height: size + 'px' }}>
-      {bg ? <SlotLayer docId={bg.docId} role="bg" partIndex={0} size={size} autoplay={false} playKey={playKey} showLastFrame={allDone} /> : null}
-      {spins.map((s, i) => (
-        <div key={s.docId} class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={s.docId} role="spin" partIndex={i} size={size} autoplay={startSpins && !spinsOver} loop={true} onEnd={onSpinEnd} playKey={playKey} showLastFrame={allDone || spinsOver} />
-        </div>
-      ))}
-      {slots.map((s, i) => (
-        <div key={s.docId} class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={s.docId} role="slot" partIndex={i} size={size} autoplay={startSlots && !allDone} onEnd={onSlotEnd} onFrameProgress={onSlotProgress(i)} playKey={playKey} showLastFrame={allDone} />
-        </div>
-      ))}
-      {showWinBg ? (
+      {bg && backgroundState === 'base' ? (
         <div class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={bgWin!.docId} role="bgWin" partIndex={0} size={size} autoplay={!allDone} loop={false} playKey={playKey} showLastFrame={allDone} />
+          <SlotLayer docId={bg.docId} role="bg" partIndex={0} size={size} play loop={isSlotLocalDoc(bg.docId)} playKey={playKey} showLastFrame={doneBefore} />
         </div>
       ) : null}
-      {handle ? (
+      {bgWin && backgroundState === 'win' ? (
         <div class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={handle.docId} role="handle" partIndex={0} size={size} autoplay={animated && !handleDone} onEnd={onHandleEnd} playKey={playKey} showLastFrame={allDone || handleDone} />
+          <SlotLayer docId={bgWin.docId} role="bgWin" partIndex={0} size={size} play playKey={playKey} showLastFrame={doneBefore} />
+        </div>
+      ) : null}
+      {spinState === 'base' && spins.length > 0 ? spins.map((s, i) => (
+        <div key={s.docId} class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
+          <SlotLayer docId={s.docId} role="spin" partIndex={i} size={size} play loop={!spinEndAllowed} onEnd={i === spins.length - 1 ? onReelsEnded : undefined} playKey={playKey} showLastFrame={doneBefore} />
+        </div>
+      )) : null}
+      {spinState === 'result' && results.length > 0 ? results.map((s, i) => (
+        <div key={s.docId} class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
+          <SlotLayer docId={s.docId} role="slot" partIndex={i} size={size} play playKey={playKey} showLastFrame={doneBefore} />
+        </div>
+      )) : null}
+      {pull ? (
+        <div class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
+          <SlotLayer docId={pull.docId} role="handle" partIndex={0} size={size} play playKey={playKey} showLastFrame={doneBefore} />
         </div>
       ) : null}
     </div>
