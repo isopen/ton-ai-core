@@ -1,7 +1,7 @@
 {
     "enabled": false,
     "level": "info",
-    "noMediaCache": true,
+    "noMediaCache": false,
     "scopes": {
         "gram-db": {
             "enabled": false,
