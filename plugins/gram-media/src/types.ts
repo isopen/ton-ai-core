@@ -4,6 +4,7 @@ export interface MediaTransport {
     downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>>;
     startPhotoDownload(photo: any, sizeType: string, messageId: number | string, onProgress: (pct: number) => void): Promise<any>;
     startVideoStream(document: any, onChunk: (data: ArrayBuffer | undefined, final: boolean, fileType: string) => void): Promise<{ cacheSource?: string }>;
+    cancelVideoStreams?(): void;
     cancelPhotoDownloads(): Promise<void>;
     batchCheckPhotoCache(requests: Array<{ photo: any; sizeType: string }>): Promise<Record<string, string>>;
     batchCheckDocumentCache(documents: Array<{ id: string | number; thumb_size?: string }>): Promise<Record<string, string>>;

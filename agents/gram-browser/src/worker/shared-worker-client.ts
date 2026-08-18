@@ -164,6 +164,11 @@ export class SharedWorkerClient {
         });
     }
 
+    cancelVideoStreams(): void {
+        if (!this.port) return;
+        try { this.port.postMessage({ type: 'cancelVideoStreams', id: ++this.msgId }); } catch {}
+    }
+
     async startPhotoDownload(photo: any, sizeType: string, messageId: number | string, onProgress: (pct: number) => void): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return new Promise((resolve, reject) => {
             if (!this.port) { reject(new Error('Not started')); return; }

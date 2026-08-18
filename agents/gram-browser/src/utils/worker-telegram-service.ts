@@ -161,6 +161,11 @@ export class WorkerTelegramService extends TelegramService {
         return this.workerClient.startVideoStream(document, onChunk);
     }
 
+    cancelVideoStreams(): void {
+        if (!this.workerClient) return;
+        this.workerClient.cancelVideoStreams();
+    }
+
     async startPhotoDownload(photo: any, sizeType: string, messageId: number | string, onProgress: (pct: number) => void): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         if (!this.workerClient) return { photoUrl: null };
         return this.workerClient.startPhotoDownload(photo, sizeType, messageId, onProgress);

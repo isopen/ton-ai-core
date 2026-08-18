@@ -23,6 +23,7 @@ const EMOJI_IN_FLIGHT_TTL_MS = 15_000;
 const EMOJI_ATTEMPT_TTL = 120_000;
 
 const EMOJI_TRANSIENT_RETRY_MS = 1500;
+const EMOJI_TRANSIENT_MAX_ATTEMPTS = 6;
 
 const UNRESOLVED_EMOJI_RETRY_MS = 25_000;
 const EMOJI_BAD_REDOWNLOAD_MS = 30_000;
@@ -33,7 +34,7 @@ const CUSTOM_EMOJI_RPC_CHUNK = 200;
 const CUSTOM_EMOJI_RPC_CONCURRENCY = 3;
 const ALT_RESOLVE_CONCURRENCY = 6;
 const EMOJI_NO_STICKER_ALT_TTL_MS = 60_000;
-const EMOJI_EXTRA_SETS_DELAY_MS = 3000;
+const DICE_SET_MAX_CONCURRENT = 3;
 
 const SPECIAL_SET_RETRY_MIN_MS = 300;
 const SPECIAL_SET_RETRY_MAX_MS = 600;
@@ -89,6 +90,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiAttemptAt = new Map<string, number>();
     private emojiStaleDocs = new Set<string>();
     private emojiRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    private emojiTransientAttempts = new Map<string, number>();
     private emojiAltRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private fetchedEmojiIds = new Set<string>();
     private unresolvedEmojiIds = new Map<string, number>();
@@ -192,6 +194,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.emojiDocAttempts.delete(id);
         this.emojiAttemptAt.delete(id);
         this.emojiStaleDocs.delete(id);
+        this.emojiTransientAttempts.delete(id);
     }
 
     private scheduleEmojiRetry(id: string, transient = false): void {
@@ -438,9 +441,15 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     onEmojiDownloadFailed(docId: string, error?: string): void {
         this.emojiStaleDocs.add(docId);
         if (isTransientDownloadError(error)) {
-            this.clearEmojiInFlight(docId);
-            this.scheduleEmojiRetry(docId, true);
-            return;
+            const transient = (this.emojiTransientAttempts.get(docId) || 0) + 1;
+            if (transient <= EMOJI_TRANSIENT_MAX_ATTEMPTS) {
+                this.emojiTransientAttempts.set(docId, transient);
+                this.clearEmojiInFlight(docId);
+                this.scheduleEmojiRetry(docId, true);
+                return;
+            }
+            this.emojiTransientAttempts.delete(docId);
+            if (this.debug) log.info('[gram-media] emoji transient retries exhausted, falling back to bounded retry', docId);
         }
         this.markEmojiDocAttempt(docId);
         if (error && error.includes('FILE_REFERENCE_EXPIRED')) {
@@ -457,6 +466,12 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         const diceKey = this.diceKeyForDoc(docId);
         if (diceKey != null) {
             const emoji = this.diceEmojiByKey.get(diceKey) ?? diceKey;
+            const fresh = await this.fetchFreshEmojiDoc(docId);
+            if (fresh?.id && this.canRequestEmojiDoc(docId)) {
+                this.markEmojiDocInFlight(docId);
+                this.downloadEmojiDoc(fresh, docId, 2);
+                return;
+            }
             await this.loadDiceSet(emoji, true);
             const doc = this.findEmojiDoc(docId);
             if (doc?.id && this.canRequestEmojiDoc(docId)) {
@@ -678,7 +693,28 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }, delay));
     }
 
+    private diceSetLoadSlots = 0;
+    private diceSetLoadWaiters: Array<() => void> = [];
+
+    private async withDiceSetLoadSlot<T>(fn: () => Promise<T>): Promise<T> {
+        if (this.diceSetLoadSlots >= DICE_SET_MAX_CONCURRENT) {
+            await new Promise<void>(r => this.diceSetLoadWaiters.push(r));
+        }
+        this.diceSetLoadSlots++;
+        try {
+            return await fn();
+        } finally {
+            this.diceSetLoadSlots--;
+            const next = this.diceSetLoadWaiters.shift();
+            if (next) next();
+        }
+    }
+
     private async loadDiceSet(emoji: string, force = false): Promise<void> {
+        await this.withDiceSetLoadSlot(() => this.loadDiceSetInner(emoji, force));
+    }
+
+    private async loadDiceSetInner(emoji: string, force = false): Promise<void> {
         const key = normalizeEmoji(emoji);
         if (this.diceSetsLoading.has(key)) return;
         if (!force && this.diceSetsByEmoji.has(key)) return;
@@ -816,7 +852,6 @@ export class EmojiPipelineImpl implements EmojiPipeline {
 
     private loadExtraEmojiSets = async (map: Record<string, any>): Promise<void> => {
         try {
-            await new Promise(r => setTimeout(r, EMOJI_EXTRA_SETS_DELAY_MS));
             await Promise.all(['inputStickerSetEmojiGenericAnimations', 'inputStickerSetAnimatedEmojiAnimations'].map(async (inp) => {
                 try {
                     const extra = await this.router.fetchStickerSet(inp, { _: inp });
@@ -965,12 +1000,34 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         const resolved: Array<{ id: string; doc: any; priority: number; ctx?: string }> = [];
         const unknownIds: string[] = [];
         const unknownAlts: Array<{ alt: string; nAlt: string; priority: number; ctx?: string }> = [];
+        const staleDocIds: string[] = [];
+        for (const it of items) {
+            const docId = it.docId != null ? String(it.docId) : null;
+            const doc = docId ? this.findEmojiDoc(docId) : undefined;
+            if (doc && docId && this.emojiStaleDocs.has(docId)) {
+                staleDocIds.push(docId);
+            }
+        }
+        if (staleDocIds.length > 0) {
+            try {
+                const { docs } = await this.fetchCustomEmojiDocsChunked(staleDocIds);
+                let indexDirty = false;
+                for (const d of docs) {
+                    if (!d?.id) continue;
+                    const id = String(d.id);
+                    if (this.emojiCustomDocsById.get(id) !== d) {
+                        this.emojiCustomDocsById.set(id, d);
+                        indexDirty = true;
+                    }
+                }
+                if (indexDirty) this.indexEmojiDocs();
+            } catch (e) {
+                log.error('[gram-media] batch stale emoji refresh error:', (e as Error)?.message || e);
+            }
+        }
         for (const it of items) {
             const docId = it.docId != null ? String(it.docId) : null;
             let doc = docId ? this.findEmojiDoc(docId) : undefined;
-            if (doc && docId && this.emojiStaleDocs.has(docId)) {
-                doc = await this.fetchFreshEmojiDoc(docId) || doc;
-            }
             if (!doc && it.alt != null) {
                 const nAlt = normalizeEmoji(it.alt);
                 doc = nAlt && this.emojiStickerDocs ? this.emojiStickerDocs[nAlt] : undefined;
@@ -1368,9 +1425,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private onEmojiUrlRevoked = (e: Event) => {
         const { url } = (e as CustomEvent).detail || {};
         if (!url || !url.startsWith('blob:')) return;
-        for (const k of this.router.emojiUrlCacheKeys()) {
-            if (this.router.getCachedEmojiUrl(k) === url) this.router.deleteCachedEmojiUrl(k);
-        }
+        for (const k of this.router.emojiKeysForUrl(url)) this.router.deleteCachedEmojiUrl(k);
     };
 
     attach(w: Window): void {

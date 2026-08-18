@@ -49,9 +49,38 @@ function releaseFetch(): void {
   }
 }
 
-export async function fetchEmojiData(url: string): Promise<EmojiData> {
+async function tgsFromResponse(resp: Response): Promise<EmojiData | null> {
+  const ct = (resp.headers.get('content-type') || '').toLowerCase();
+  if (ct.startsWith('text/') || ct.includes('json')) {
+    const text = await resp.text();
+    if (text.trim().startsWith('{')) return { kind: 'tgs', value: text };
+    return null;
+  }
+  const buf = await resp.arrayBuffer();
+  const u8 = new Uint8Array(buf);
+  if (u8.length >= 2 && u8[0] === EMOJI_GZIP_MAGIC[0] && u8[1] === EMOJI_GZIP_MAGIC[1]) {
+    const text = await inflateTgs(u8);
+    if (text.trim().startsWith('{')) return { kind: 'tgs', value: text };
+    return null;
+  }
+  const ascii = new TextDecoder('latin1').decode(u8.slice(0, Math.min(u8.length, 12)));
+  if (ascii.trim().startsWith('{')) return { kind: 'tgs', value: new TextDecoder().decode(u8) };
+  return null;
+}
+
+const emojiDataInflight = new Map<string, Promise<EmojiData>>();
+
+export function fetchEmojiData(url: string): Promise<EmojiData> {
   const cached = emojiDataCache.get(url);
-  if (cached) return cached;
+  if (cached) return Promise.resolve(cached);
+  const inflight = emojiDataInflight.get(url);
+  if (inflight) return inflight;
+  const p = fetchEmojiDataInner(url).finally(() => emojiDataInflight.delete(url));
+  emojiDataInflight.set(url, p);
+  return p;
+}
+
+async function fetchEmojiDataInner(url: string): Promise<EmojiData> {
   const knownKind = urlKinds.get(url);
   if (knownKind === 'video') {
     const data: EmojiData = { kind: 'video', value: url };
@@ -69,8 +98,8 @@ export async function fetchEmojiData(url: string): Promise<EmojiData> {
     await acquireFetch();
     try {
       const resp = await fetch(url);
-      const text = await resp.text();
-      const data: EmojiData = { kind: 'tgs', value: text };
+      const tgs = await tgsFromResponse(resp);
+      const data: EmojiData = tgs ?? { kind: 'img', value: url };
       emojiDataCache.delete(url);
       cacheEmojiData(url, data);
       return data;
@@ -275,6 +304,14 @@ const kindInFlight = new Map<string, Promise<'video' | 'tgs' | 'img' | null>>();
 export function checkEmojiKind(url: string): Promise<'video' | 'tgs' | 'img' | null> {
   if (url.startsWith('blob:')) {
     return Promise.resolve(urlKinds.get(url) || 'img');
+  }
+  const dm = /^data:([^;,]+)/i.exec(url);
+  if (dm) {
+    const ct = dm[1].toLowerCase();
+    if (ct.startsWith('video/')) return Promise.resolve('video');
+    if (ct === 'application/x-tgsticker' || ct.includes('json')) return Promise.resolve('tgs');
+    if (ct.startsWith('image/')) return Promise.resolve('img');
+    return Promise.resolve('img');
   }
   const inFlight = kindInFlight.get(url);
   if (inFlight) return inFlight;

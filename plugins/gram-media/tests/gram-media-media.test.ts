@@ -342,6 +342,8 @@ describe('GramMediaRouter documents', () => {
 
         router.queueDocumentDownload(makeDocument(), 9, 1);
         await flushTicks();
+        await new Promise((r) => setTimeout(r, 1500));
+        await flushTicks();
 
         expect(calls).toBe(3);
         expect(lastOfType(actions, 'UPDATE_MESSAGE_DOCUMENT')!.url).toMatch(/^blob:/);

@@ -68,6 +68,10 @@ export class TelegramWorkerClient {
         return this.client.startVideoStream(document, onChunk);
     }
 
+    cancelVideoStreams(): void {
+        this.client.cancelVideoStreams();
+    }
+
     async startPhotoDownload(photo: any, sizeType: string, messageId: number | string, onProgress: (pct: number) => void): Promise<{ bytes?: ArrayBuffer; mime?: string; photoUrl?: string | null; fileRefExpired?: boolean; photo?: any; cacheSource?: string }> {
         return this.client.startPhotoDownload(photo, sizeType, messageId, onProgress);
     }

@@ -47,14 +47,21 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
         try {
             if (msg.type === 'startVideoStream') {
                 try {
+                    const abortRef = { aborted: false };
+                    TW.registerVideoStream(msg.id, () => { abortRef.aborted = true; });
                     const cacheSource = await TW.downloadFileStream_(msg.document, (ab, final, fileType) => {
                         try { port.postMessage({ type: 'videoChunk', streamId: msg.id, data: ab, final, fileType }, [ab]); } catch {}
-                    });
+                    }, abortRef);
                     try { port.postMessage({ type: 'response', id: msg.id, result: { success: true, cacheSource } }); } catch {}
                 } catch (e: any) {
                     try { port.postMessage({ type: 'videoChunk', streamId: msg.id, error: e.message, final: true }); } catch {}
                     try { port.postMessage({ type: 'response', id: msg.id, error: e.message }); } catch {}
+                } finally {
+                    TW.unregisterVideoStream(msg.id);
                 }
+            } else if (msg.type === 'cancelVideoStreams') {
+                try { TW.cancelVideoStreams(); } catch {}
+                try { port.postMessage({ type: 'response', id: msg.id, result: {} }); } catch {}
             } else if (msg.type === 'startPhotoDownload') {
                 try {
                     const result = await TW.requestPhotoDownload(msg.photo, msg.sizeType, msg.messageId, (pct: number) => {

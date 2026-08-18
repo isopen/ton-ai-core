@@ -304,6 +304,16 @@ export function matchEmojiRuns(text: string): Array<{ start: number; end: number
   const cached = runCache.get(text);
   if (cached) return cached;
   const runs: Array<{ start: number; end: number; emoji: string }> = [];
+  const deadlines = new Map<RegExp, number>();
+  const probe = (re: RegExp, from: number): RegExpExecArray | null => {
+    const dl = deadlines.get(re) || 0;
+    if (from < dl) return null;
+    re.lastIndex = from;
+    const m = re.exec(text);
+    if (!m) deadlines.set(re, text.length);
+    else if (m.index > from) deadlines.set(re, Math.max(dl, m.index));
+    return m && m.index === from ? m : null;
+  };
   EMOJI_START_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = EMOJI_START_RE.exec(text))) {
@@ -311,27 +321,22 @@ export function matchEmojiRuns(text: string): Array<{ start: number; end: number
     let lastWasZWJ = false;
     let riCount = RI_RE.test(m[0]) ? 1 : 0;
     for (;;) {
-      const rest = text.slice(end);
-      if (rest.length === 0) break;
-      EMOJI_SPECIAL_RE.lastIndex = 0;
-      const sp = EMOJI_SPECIAL_RE.exec(rest);
-      const spLen = sp && sp.index === 0 ? sp[0].length : 0;
+      const sp = probe(EMOJI_SPECIAL_RE, end);
+      const spLen = sp ? sp[0].length : 0;
       if (spLen > 0) {
         lastWasZWJ = sp![0].includes('\u200D');
         end += spLen;
         continue;
       }
-      RI_RE.lastIndex = 0;
-      const ri = RI_RE.exec(rest);
-      if (ri && ri.index === 0 && riCount === 1) {
+      const ri = probe(RI_RE, end);
+      if (ri && riCount === 1) {
         riCount = 2;
         end += ri[0].length;
         continue;
       }
       if (lastWasZWJ) {
-        EMOJI_PICT_RE.lastIndex = 0;
-        const pc = EMOJI_PICT_RE.exec(rest);
-        if (pc && pc.index === 0) {
+        const pc = probe(EMOJI_PICT_RE, end);
+        if (pc) {
           lastWasZWJ = false;
           end += pc[0].length;
           continue;
@@ -342,7 +347,10 @@ export function matchEmojiRuns(text: string): Array<{ start: number; end: number
     runs.push({ start: m.index, end, emoji: text.slice(m.index, end) });
     EMOJI_START_RE.lastIndex = end;
   }
-  if (runCache.size >= 500) runCache.clear();
+  if (runCache.size >= 500) {
+    const oldest = runCache.keys().next().value;
+    if (oldest !== undefined) runCache.delete(oldest);
+  }
   runCache.set(text, runs);
   return runs;
 }

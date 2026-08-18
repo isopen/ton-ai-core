@@ -579,7 +579,8 @@ const dcDhInFlightMap = new Map<number, Promise<void>>();
 const dcConnecting = new Map<string, Promise<DcConnection>>();
 
 const DC_STALLED_HOST_TTL_MS = 5 * 60_000;
-const dcStalledHosts = new Map<number, { host: string; until: number }>();
+const dcStalledHosts = new Map<string, { host: string; until: number }>();
+const stalledHostKey = (dcId: number, type: string): string => dcId + ':' + type;
 
 const MAX_DC_PARALLEL_RPC = 64;
 const dcRpcSlots = new Map<number, number>();
@@ -630,11 +631,11 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
         { host: dcOpts.host },
         ...(TELEGRAM_WS_FALLBACKS[dcId] || []),
     ];
-    const stalled = dcStalledHosts.get(dcId);
+    const stalled = dcStalledHosts.get(stalledHostKey(dcId, type));
     if (stalled && stalled.until > Date.now()) {
         hosts.sort((a, b) => (a.host === stalled.host ? 1 : 0) - (b.host === stalled.host ? 1 : 0));
     } else if (stalled) {
-        dcStalledHosts.delete(dcId);
+        dcStalledHosts.delete(stalledHostKey(dcId, type));
     }
     let hostUsed = '';
     for (const entry of hosts) {
@@ -909,8 +910,8 @@ function killDcConnection(entry: DcConnection, err: Error): void {
     if (idx >= 0) dcConnectionPool.splice(idx, 1);
     try { entry.conn.close(); } catch {}
     const msg = String(err?.message || err);
-    if (entry.hostUsed && (msg.includes('read stall') || msg.includes('read loop') || msg.includes('RPC timeout') || msg.includes('send stuck') || msg.includes('socket') || msg.includes('recycling'))) {
-        dcStalledHosts.set(entry.dcId, { host: entry.hostUsed, until: Date.now() + DC_STALLED_HOST_TTL_MS });
+    if (entry.hostUsed && (msg.includes('read stall') || msg.includes('read loop') || msg.includes('RPC timeout') || msg.includes('send stuck') || msg.includes('connection reset') || msg.includes('socket hang') || msg.includes('ECONNRESET') || msg.includes('timeout'))) {
+        dcStalledHosts.set(stalledHostKey(entry.dcId, entry.type), { host: entry.hostUsed, until: Date.now() + DC_STALLED_HOST_TTL_MS });
         wlog('[worker] DC ' + entry.dcId + ' host ' + entry.hostUsed + ' stalled (' + msg + ') — avoiding for ' + (DC_STALLED_HOST_TTL_MS / 1000) + 's');
     }
     rejectDcPending(entry, err);
@@ -3069,13 +3070,15 @@ async function persistDownloadParts(cacheKey: string, parts: Map<number, Buffer>
     try {
         const db = getGramDb();
         if (!db.isReady()) return;
+        const writes: Promise<void>[] = [];
         const indexes: number[] = [];
         for (const [idx, buf] of parts) {
             if (buf.length === partSize) { // only full parts survive resume
-                await db.set(SESSION_PARTS_PREFIX + cacheKey + ':' + idx, { bytes: buf.toString('base64'), updatedAt: Date.now() });
+                writes.push(db.set(SESSION_PARTS_PREFIX + cacheKey + ':' + idx, { bytes: buf.toString('base64'), updatedAt: Date.now() }));
                 indexes.push(idx);
             }
         }
+        await Promise.all(writes);
         await db.set(DLCACHE_PREFIX + cacheKey, { type, bytes: '', partIndexes: indexes, partSize, updatedAt: Date.now() } satisfies DLCacheEntry);
         wlog('[dlc] parts saved key=' + cacheKey + ' parts=' + indexes.length + ' partSize=' + partSize);
     } catch {}
@@ -3112,11 +3115,13 @@ async function clearPersistedParts(cacheKey: string): Promise<void> {
     } catch {}
 }
 
-const downloadQueue: Array<{
+interface QueueItem {
     document: any; photo: any; priority: number; cacheKey: string;
     resolve: (v: DownloadResult) => void;
     reject: (e: any) => void;
-}> = [];
+}
+const downloadQueue: Array<QueueItem> = [];
+const downloadQueueByKey = new Map<string, QueueItem>();
 let downloadInFlight = 0;
 const MAX_PARALLEL_DOWNLOADS = 48;
 
@@ -3323,6 +3328,7 @@ async function processDownloadQueue(): Promise<void> {
             break;
         }
         const item = downloadQueue.splice(bestIdx, 1)[0];
+        if (item.cacheKey && downloadQueueByKey.get(item.cacheKey) === item) downloadQueueByKey.delete(item.cacheKey);
         downloadInFlight++;
         const label = item.photo ? 'photo' : item.document?.thumb_size ? `thumb:${item.document.thumb_size}` : 'document';
         const id = item.document?.id?.toString() || item.photo?.id?.toString() || '?';
@@ -3339,14 +3345,14 @@ async function processDownloadQueue(): Promise<void> {
 }
 
 function enqueueDownload(document?: any, photo?: any, priority = 0): Promise<DownloadResult> {
-    const norm = normalizePriority(priority < 1 ? 1 : Math.min(TDLIB_PRIORITY_MAX, priority + 1));
+    const norm = normalizePriority(priority < 1 ? 1 : priority);
     const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
     const id = document?.id?.toString() || photo?.id?.toString() || '?';
     wlog('[dlq] enqueue id=' + id + ' label=' + label + ' priority=' + priority + ' norm=' + norm + ' queued_before=' + downloadQueue.length);
     const cacheKey = downloadCacheKeyFor(document, photo);
     const inflight = cacheKey ? inflightDownloads.get(cacheKey) : undefined;
     if (inflight) {
-        const queued = downloadQueue.find(q => q.cacheKey === cacheKey);
+        const queued = cacheKey ? downloadQueueByKey.get(cacheKey) : undefined;
         if (queued && norm > queued.priority) {
             queued.priority = norm;
             wlog('[dlq] priority bump id=' + id + ' label=' + label + ' norm=' + norm);
@@ -3356,7 +3362,9 @@ function enqueueDownload(document?: any, photo?: any, priority = 0): Promise<Dow
         return inflight;
     }
     const p = new Promise<DownloadResult>((resolve, reject) => {
-        downloadQueue.push({ document, photo, priority: norm, cacheKey, resolve, reject });
+        const item: QueueItem = { document, photo, priority: norm, cacheKey, resolve, reject };
+        downloadQueue.push(item);
+        if (cacheKey) downloadQueueByKey.set(cacheKey, item);
         processDownloadQueue();
     });
     if (cacheKey) inflightDownloads.set(cacheKey, p);
@@ -3638,6 +3646,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 }
 if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen : photoDownloadGen)) throw new Error('ABORTED');
                 wlog('[dl] part retry id=' + id + ' label=' + label + ' idx=' + partIdx + ' attempt=' + (attempt + 1) + ' err=' + ((lastErr as Error)?.message || lastErr));
+                if (attempt < 4) await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
             }
             throw lastErr;
         };
@@ -3686,7 +3695,16 @@ if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen 
     }
 }
 
-async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, final: boolean, fileType: string) => void): Promise<string | undefined> {
+const videoStreamAborts = new Map<number, () => void>();
+function registerVideoStream(id: number, abort: () => void): void { videoStreamAborts.set(id, abort); }
+function unregisterVideoStream(id: number): void { videoStreamAborts.delete(id); }
+function cancelVideoStreams(): void {
+    const aborts = Array.from(videoStreamAborts.values());
+    videoStreamAborts.clear();
+    for (const a of aborts) { try { a(); } catch {} }
+}
+
+async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, final: boolean, fileType: string) => void, abortRef?: { aborted: boolean }): Promise<string | undefined> {
     const location = buildDownloadLocation(document, null);
     if (!location) throw new Error('No document provided');
     const vlog = (text: string): void => { try { videoStreamLogHandler?.('[stream] ' + text); } catch {} };
@@ -3719,6 +3737,9 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
         vlog('CACHE miss');
     }
 
+    const streamCacheLimit = 20 * 1024 * 1024;
+    const streamSize = Number(document?.size) || 0;
+    const accumulateCacheChunks = cacheKey !== '' && !isNoMediaCache() && (streamSize === 0 || streamSize <= streamCacheLimit);
     const cacheChunks: Buffer[] = [];
     const limit = 1048576;
     let finalType = 'storage.fileUnknown';
@@ -3836,20 +3857,27 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     };
 
     let nextPart = 0;
-    const CONCURRENCY = Math.max(2, Math.min(4, Math.floor(POOL_BUDGET / limit)));
+    const STREAM_CONCURRENCY_MAX = 8;
+    const CONCURRENCY = Math.max(2, Math.min(STREAM_CONCURRENCY_MAX, Math.floor(poolBudgetOf(streamPoolKey(streamDc())) / limit)));
     vlog('BATCHES concurrency=' + CONCURRENCY + ' bucket=stream:' + streamDc());
     while (true) {
+        if (abortRef?.aborted) throw new Error('ABORTED');
         if (BigInt(nextPart) * BigInt(limit) > BigInt(MAX_FILE_SIZE)) throw new Error('File too large (TDLib MAX_FILE_SIZE)');
+        const knownStreamSize = Number(document?.size) || 0;
+        const remainingParts = knownStreamSize > 0 ? Math.max(0, Math.ceil((knownStreamSize - nextPart * limit) / limit)) : CONCURRENCY;
+        if (knownStreamSize > 0 && remainingParts === 0) break;
+        const batchSize = Math.max(1, Math.min(CONCURRENCY, remainingParts));
         const b0 = Date.now();
         const batch = await Promise.all(
-            Array.from({ length: CONCURRENCY }, (_, i) => fetchPart(BigInt(nextPart + i) * BigInt(limit)))
+            Array.from({ length: batchSize }, (_, i) => fetchPart(BigInt(nextPart + i) * BigInt(limit)))
         );
-        vlog('BATCH nextPart=' + nextPart + ' done in ' + (Date.now() - b0) + 'ms');
+        vlog('BATCH nextPart=' + nextPart + ' batchSize=' + batchSize + ' done in ' + (Date.now() - b0) + 'ms');
         let finished = false;
         for (const { chunk, final } of batch) {
+            if (abortRef?.aborted) throw new Error('ABORTED');
             const ab = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
             onChunk(ab, final, finalType);
-            cacheChunks.push(chunk);
+            if (accumulateCacheChunks) cacheChunks.push(chunk);
             nextPart++;
             if (final) { finished = true; break; }
         }
@@ -3860,7 +3888,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     if (cacheKey && !isNoMediaCache() && cacheChunks.length > 0) {
         const allBytes = Buffer.concat(cacheChunks);
         const res = { type: finalType, bytes: allBytes.toString('base64'), cacheSource: serverType };
-        if (res.bytes.length <= 20 * 1024 * 1024) {
+        if (res.bytes.length <= streamCacheLimit) {
             downloadCacheSet(cacheKey, res, document?.mime_type);
             persistDownloadCache(cacheKey, finalType, res.bytes, document?.mime_type);
         }
@@ -3907,74 +3935,97 @@ self.onerror = (e: string | Event) => {
     postMessage({ type: 'error', error: 'Worker unhandled: ' + msg });
 };
 
+const INDEXEDDB_PARALLEL = 8;
+async function runIndexedDbBatch<T>(items: T[], fn: (item: T) => Promise<void>): Promise<void> {
+    if (items.length === 0) return;
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(INDEXEDDB_PARALLEL, items.length) }, async () => {
+        while (cursor < items.length) {
+            const idx = cursor++;
+            await fn(items[idx]);
+        }
+    });
+    await Promise.all(workers);
+}
+
 export async function batchCheckPhotoCache(requests: Array<{ photo: any; sizeType: string }>): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
   if (isNoMediaCache()) return result;
-  for (const { photo, sizeType } of requests) {
+  const withKey = requests.map(({ photo, sizeType }) => {
     const photoWithThumb = { ...photo, thumb_size: sizeType };
     const location = buildDownloadLocation(undefined, photoWithThumb);
-    if (!location) continue;
     const baseKey = photo?.id?.toString() || '';
-
-    const cacheKey = baseKey + '_thumb_' + sizeType;
-    if (!cacheKey) continue;
+    const cacheKey = location ? baseKey + '_thumb_' + sizeType : '';
+    return { cacheKey };
+  }).filter(x => x.cacheKey);
+  for (const { cacheKey } of withKey) {
     if (downloadCache.has(cacheKey)) {
       const cached = downloadCacheGet(cacheKey)!;
       if (cached.type && cached.bytes) {
         result[cacheKey] = 'data:image/jpeg;base64,' + cached.bytes;
-        continue;
       }
     }
-    const persisted = await loadPersistedDownloadCache(cacheKey);
-    if (persisted && persisted.type && persisted.bytes) {
-      downloadCacheSet(cacheKey, persisted);
-      result[cacheKey] = 'data:image/jpeg;base64,' + persisted.bytes;
-    }
   }
+  const persisted = withKey.filter(({ cacheKey }) => !(cacheKey in result));
+  await runIndexedDbBatch(persisted, async ({ cacheKey }) => {
+    const p = await loadPersistedDownloadCache(cacheKey);
+    if (p && p.type && p.bytes) {
+      downloadCacheSet(cacheKey, p);
+      result[cacheKey] = 'data:image/jpeg;base64,' + p.bytes;
+    }
+  });
   return result;
 }
 
 export async function batchCheckDocumentCache(documents: Array<{ id: string | number; thumb_size?: string }>): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
   if (isNoMediaCache()) return result;
-  for (const doc of documents) {
+  const withKey = documents.map((doc) => {
     const baseKey = doc?.id?.toString() || '';
     const thumbSuffix = doc?.thumb_size ? `_thumb_${doc.thumb_size}` : '';
-    const cacheKey = baseKey + thumbSuffix;
-    if (!cacheKey) continue;
+    return { baseKey, cacheKey: baseKey + thumbSuffix };
+  }).filter(x => x.cacheKey);
+  for (const { baseKey, cacheKey } of withKey) {
     if (downloadCache.has(cacheKey)) {
       const cached = downloadCacheGet(cacheKey)!;
       if (cached.type && cached.bytes) {
         result[baseKey] = 'memory';
-        continue;
       }
     }
-    const persisted = await loadPersistedDownloadCache(cacheKey);
-    if (persisted && persisted.type && persisted.bytes) {
-      downloadCacheSet(cacheKey, persisted);
+  }
+  const persisted = withKey.filter(({ baseKey }) => !(baseKey in result));
+  await runIndexedDbBatch(persisted, async ({ baseKey, cacheKey }) => {
+    const p = await loadPersistedDownloadCache(cacheKey);
+    if (p && p.type && p.bytes) {
+      downloadCacheSet(cacheKey, p);
       result[baseKey] = 'persisted';
     }
-  }
+  });
   return result;
 }
 
 async function downloadFiles_(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
     const BATCH_ITEM_WATCHDOG_MS = 8000;
+    const BATCH_ITEM_DEADLINE_MS = 50_000;
     const tasks = (docs || []).map((item, index) =>
         new Promise<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>((resolve) => {
             const watchdog = setTimeout(() => {
                 wlog('[dl] batch item slow index=' + index + ' docId=' + (item?.document?.id?.toString?.() ?? '?') + ' — still downloading, waiting for completion');
             }, BATCH_ITEM_WATCHDOG_MS);
+            const deadline = setTimeout(() => {
+                wlog('[dl] batch item timeout index=' + index + ' docId=' + (item?.document?.id?.toString?.() ?? '?') + ' — resolving with error');
+                resolve({ index, type: '', bytes: new ArrayBuffer(0), error: 'download timeout' });
+            }, BATCH_ITEM_DEADLINE_MS);
             enqueueDownload(item?.document, undefined, item?.priority || 0).then(
-                (r) => { clearTimeout(watchdog); resolve({ index, type: r.type, bytes: r.bytes.slice(0), error: r.error, cacheSource: r.cacheSource }); },
-                (err) => { clearTimeout(watchdog); resolve({ index, type: '', bytes: new ArrayBuffer(0), error: String((err as Error)?.message || err) }); },
+                (r) => { clearTimeout(watchdog); clearTimeout(deadline); resolve({ index, type: r.type, bytes: r.bytes.slice(0), error: r.error, cacheSource: r.cacheSource }); },
+                (err) => { clearTimeout(watchdog); clearTimeout(deadline); resolve({ index, type: '', bytes: new ArrayBuffer(0), error: String((err as Error)?.message || err) }); },
             );
         }),
     );
     return Promise.all(tasks);
 }
 
-export { callRpc, resolvePeer, sendCode, signIn, checkPassword, downloadFile_, downloadFileStream_, requestPhotoDownload, cancelPhotoDownloads, enqueueDownload, downloadFiles_ };
+export { callRpc, resolvePeer, sendCode, signIn, checkPassword, downloadFile_, downloadFileStream_, requestPhotoDownload, cancelPhotoDownloads, enqueueDownload, downloadFiles_, registerVideoStream, unregisterVideoStream, cancelVideoStreams };
 export { handleConnectInternal as handleConnect };
 export { handleDisconnect as disconnect };
 export { handleLogout as logout };

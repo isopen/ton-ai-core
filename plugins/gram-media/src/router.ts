@@ -232,6 +232,8 @@ export class GramMediaRouter {
 
     cancelDocumentDownloads(): void {
         this.documentDownloadGen++;
+        this.videoStreamInflight.clear();
+        this.transport?.cancelVideoStreams?.();
         this.emoji.resetEmojiDownloads();
         this.documentPending.clear();
         for (const key of Object.keys(this.downloadQueues) as QueueKey[]) {
@@ -246,6 +248,11 @@ export class GramMediaRouter {
 
     setCachedEmojiUrl(key: string, url: string): void {
         if (isNoMediaCache()) return;
+        const prev = this.emojiUrlCache.get(key);
+        if (prev === url) return;
+        if (prev) {
+            this.decEmojiUrlRef(prev, key);
+        }
         if (url && url.startsWith('blob:')) {
             this.emojiBlobUrls.add(url);
             while (this.emojiBlobUrls.size > EMOJI_BLOB_URLS_MAX) {
@@ -255,16 +262,51 @@ export class GramMediaRouter {
             }
         }
         if (this.emojiUrlCache.size >= 2048) {
+            const toEvict: string[] = [];
             for (const k of this.emojiUrlCache.keys()) {
+                toEvict.push(k);
+                if (this.emojiUrlCache.size - toEvict.length < 1600) break;
+            }
+            for (const k of toEvict) {
+                const u = this.emojiUrlCache.get(k);
+                if (u) this.decEmojiUrlRef(u, k);
                 this.emojiUrlCache.delete(k);
-                if (this.emojiUrlCache.size < 1600) break;
             }
         }
         this.emojiUrlCache.set(key, url);
+        this.incEmojiUrlRef(url, key);
     }
 
     deleteCachedEmojiUrl(key: string): void {
+        const prev = this.emojiUrlCache.get(key);
+        if (prev) this.decEmojiUrlRef(prev, key);
         this.emojiUrlCache.delete(key);
+    }
+
+    private incEmojiUrlRef(url: string, key: string): void {
+        this.emojiUrlRefs.set(url, (this.emojiUrlRefs.get(url) || 0) + 1);
+        let keys = this.emojiKeysByUrl.get(url);
+        if (!keys) {
+            keys = new Set();
+            this.emojiKeysByUrl.set(url, keys);
+        }
+        keys.add(key);
+    }
+
+    private decEmojiUrlRef(url: string, key: string): void {
+        const n = (this.emojiUrlRefs.get(url) || 0) - 1;
+        if (n <= 0) this.emojiUrlRefs.delete(url);
+        else this.emojiUrlRefs.set(url, n);
+        const keys = this.emojiKeysByUrl.get(url);
+        if (keys) {
+            keys.delete(key);
+            if (keys.size === 0) this.emojiKeysByUrl.delete(url);
+        }
+    }
+
+    emojiKeysForUrl(url: string): string[] {
+        const keys = this.emojiKeysByUrl.get(url);
+        return keys ? Array.from(keys) : [];
     }
 
     emojiUrlCacheKeys(): string[] {
@@ -272,10 +314,7 @@ export class GramMediaRouter {
     }
 
     isCachedEmojiUrl(url: string): boolean {
-        for (const u of this.emojiUrlCache.values()) {
-            if (u === url) return true;
-        }
-        return false;
+        return this.emojiUrlRefs.has(url);
     }
 
     trackBlobUrl(url: string): string {
@@ -730,6 +769,12 @@ export class GramMediaRouter {
         return s.startsWith('emoji-') || s.startsWith('emojipack-');
     }
 
+    private emojiDocIdOf(s: string): string {
+        if (s.startsWith('emojipack-')) return s.slice('emojipack-'.length);
+        if (s.startsWith('emoji-')) return s.slice('emoji-'.length);
+        return s;
+    }
+
     private getQueueKey(mime: string, isAnimated: boolean): QueueKey {
         if (mime.startsWith('video/') && !isAnimated) return 'video_queue';
         if (mime.startsWith('video/') && isAnimated) return 'gif_queue';
@@ -740,7 +785,7 @@ export class GramMediaRouter {
         let document = docParam;
         if (!document) {
             if (messageId != null && typeof messageId === 'string' && this.isEmojiKey(messageId)) {
-                document = this.emoji.findEmojiDoc(messageId.slice('emojipack-'.length));
+                document = this.emoji.findEmojiDoc(this.emojiDocIdOf(messageId));
             }
         } else if (document?.id) {
             this.registerStickerDoc(document);
@@ -775,6 +820,10 @@ export class GramMediaRouter {
         if (this.debug) log.info('[gram-media] tg-download-document messageId=' + messageId + ' priority=' + priority + ' ctx=' + (ctx || 'chat') + ' docId=' + document.id);
         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
         const mime = (document.mime_type || 'application/octet-stream').toLowerCase();
+        if (!isEmoji && mime.startsWith('video/') && this.videoStreamInflight.has(messageId)) {
+            if (this.debug) log.info('[gram-media] video already streaming, skip messageId=' + messageId);
+            return;
+        }
         const attrs = (document.attributes || []) as any[];
         const isAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
         const queueKey = isEmoji ? (ctx === 'dialog' ? 'emoji_dialog_queue' : ctx === 'dice' ? 'dice_queue' : 'emoji_chat_queue') : (mime === 'application/x-tgsticker' ? 'tgs_queue' : this.getQueueKey(mime, isAnimated));
@@ -821,7 +870,7 @@ export class GramMediaRouter {
         for (const it of items) {
             if (typeof it.messageId !== 'string') continue;
             const k = it.messageId;
-            if (k.startsWith('emojipack-')) emojiIds.push(k.slice('emojipack-'.length));
+            if (k.startsWith('emojipack-')) emojiIds.push(this.emojiDocIdOf(k));
             else if (k.startsWith('emoji-')) emojiIds.push(k.slice('emoji-'.length));
         }
         if (emojiIds.length > 0) this.emoji.clearEmojiDownloads(emojiIds);
@@ -858,17 +907,25 @@ export class GramMediaRouter {
                 }
                 return;
             }
+            const seen = new Set<number>();
             for (const r of results) {
-                const it = rest[r.index];
-                if (!it) continue;
-                await this.processFileDownloadResult(it, r, gen);
+                if (r.index >= 0 && r.index < rest.length) seen.add(r.index);
             }
-            if (results.length === 0 && rest.length > 0) {
-                for (const it of rest) {
-                    if (this.dropBatchOnGenChange(gen, items)) return;
-                    await this.processFileDownloadResult(it, { error: 'empty batch result' }, gen);
+            for (let i = 0; i < rest.length; i++) {
+                if (seen.has(i)) continue;
+                const it = rest[i];
+                if (this.dropBatchOnGenChange(gen, items)) return;
+                if (typeof it.messageId === 'string' && this.isEmojiKey(it.messageId)) {
+                    this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(it.messageId), 'batch result missing');
+                } else if (typeof it.messageId === 'number') {
+                    this.scheduleDocumentRetry(it.messageId, it.document);
                 }
             }
+            await Promise.all(results.map(async (r) => {
+                const it = rest[r.index];
+                if (!it) return;
+                await this.processFileDownloadResult(it, r, gen);
+            }));
         } finally {
             for (const it of items) this.documentPending.delete(it.messageId as number | string);
         }
@@ -880,7 +937,7 @@ export class GramMediaRouter {
         gen: number,
     ): Promise<void> {
         const emojiDocId = typeof item.messageId === 'string' && this.isEmojiKey(item.messageId)
-            ? item.messageId.slice('emojipack-'.length)
+            ? this.emojiDocIdOf(item.messageId)
             : null;
         if (result?.bytes && result.bytes.byteLength > 0) {
             const bytes = this.toArrayBuffer(result.bytes);
@@ -902,7 +959,7 @@ export class GramMediaRouter {
         }
         const error = (result?.error || '') as string;
         if (typeof item.messageId === 'string' && this.isEmojiKey(item.messageId)) {
-            this.emoji.onEmojiDownloadFailed(item.messageId.slice('emojipack-'.length), error);
+            this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(item.messageId), error);
             return;
         }
         if (typeof item.messageId !== 'number') return;
@@ -940,7 +997,7 @@ export class GramMediaRouter {
 
     private announceDownloadedUrl(messageId: number | string, document: any, mime: string, url: string, cacheSource?: string): void {
         if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
-            this.emoji.onEmojiDownloadSuccess(messageId.slice('emojipack-'.length), url);
+            this.emoji.onEmojiDownloadSuccess(this.emojiDocIdOf(messageId), url);
         }
         this.notifyEmojiUrlKind(url, this.emojiKindFor(mime));
         this.notifyEmojiUrl(String(document.id), url, mime);
@@ -953,89 +1010,172 @@ export class GramMediaRouter {
         const isAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
 
         if (mime.startsWith('video/') && typeof MediaSource !== 'undefined' && !this.isEmojiKey(String(messageId))) {
-            let doc = document;
-            for (let streamAttempt = 0; streamAttempt < 3; streamAttempt++) {
-                try {
-                    const chunks: ArrayBuffer[] = [];
-                    const totalBytes = Number(doc.size) || 0;
-                    let receivedBytes = 0;
-                    let chunkCount = 0;
-                    let lastProgress = -1;
-
-                    const streamResult = await this.transport!.startVideoStream(doc, (data: ArrayBuffer | undefined, final: boolean, fileType: string) => {
-                        if (gen !== this.documentDownloadGen) return;
-                        if (!data) return;
-                        chunks.push(data);
-                        chunkCount++;
-                        receivedBytes += data.byteLength;
-                        const pct = totalBytes > 0
-                            ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100))
-                            : Math.min(99, chunkCount);
-                        if (pct !== lastProgress) {
-                            lastProgress = pct;
-                            if (pct >= 99 || pct % 10 === 0) {
-                                if (this.debug) log.info('[gram-media] progress dispatch', messageId, pct);
-                                this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
-                            }
-                        }
-                    });
-                    const streamCacheSource = (streamResult as any)?.cacheSource;
-
-                    if (chunkCount === 0) throw new Error('No data received');
-
-                    this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
-
-                    const totalSize = chunks.reduce((s, c) => s + c.byteLength, 0);
-                    const merged = new Uint8Array(totalSize);
-                    let off = 0;
-                    for (const c of chunks) {
-                        merged.set(new Uint8Array(c), off);
-                        off += c.byteLength;
-                    }
-                    const blob = new Blob([merged], { type: mime });
-                    const url = URL.createObjectURL(blob);
-                    if (gen !== this.documentDownloadGen) return;
-                    this.announceDownloadedUrl(messageId, doc, mime, url, streamCacheSource);
-
-                    const u8 = new Uint8Array(chunks[0]);
-                    const magic = Array.from(u8.slice(0, 12)).map(b => b.toString(16).padStart(2, '0')).join(' ');
-                    if (this.debug) log.info('[gram-media] stream done chunks:', chunks.length, 'totalSize:', totalSize, 'magic:', magic);
-                    break;
-                } catch (err: any) {
-                    if (gen !== this.documentDownloadGen) return;
-                    if (err.message?.includes('FILE_REFERENCE_EXPIRED') && streamAttempt < 2) {
-                        const fresh = await this.refreshMessage(Number(messageId));
-                        if (gen !== this.documentDownloadGen) return;
-                        if (fresh?.media?.document) doc = fresh.media.document;
-                        continue;
-                    }
-                    log.error('[gram-media] video stream error:', err.message, messageId);
-                    const fbDoc = doc;
-                    try {
-                        const fb = await this.transport?.downloadFile({ document: fbDoc });
-                        if (gen !== this.documentDownloadGen) return;
-                        if (fb?.bytes) this.announceDownloadedUrl(messageId, fbDoc, mime, this.bytesToBlobUrl(this.toArrayBuffer(fb.bytes), mime), fb.cacheSource);
-                    } catch (e2: any) {
-                        if (gen !== this.documentDownloadGen) return;
-                        log.error('[gram-media] video stream fallback error:', e2.message, messageId);
-                        if (e2.message?.includes('FILE_REFERENCE_EXPIRED')) {
+            this.videoStreamInflight.add(messageId);
+            try {
+                const mseSupported = typeof MediaSource.isTypeSupported === 'function' && MediaSource.isTypeSupported(mime);
+                let doc = document;
+                for (let streamAttempt = 0; streamAttempt < 3; streamAttempt++) {
+                    let mse: MediaSource | null = null;
+                    let sb: SourceBuffer | null = null;
+                    let mseUrl: string | null = null;
+                    let mseOk = false;
+                    let mseFailed = false;
+                    let mseFed = false;
+                    let mseAppending = false;
+                    let mseEndRequested = false;
+                    const mseQueue: ArrayBuffer[] = [];
+                    const pumpMse = (): void => {
+                        if (!sb || !mseOk || mseAppending || mseFailed) return;
+                        if (mseQueue.length > 0) {
+                            const chunk = mseQueue.shift()!;
                             try {
-                                const fresh = await this.refreshMessage(Number(messageId));
-                                if (gen !== this.documentDownloadGen) return;
-                                if (fresh?.media?.document) {
-                                    const fb2 = await this.transport?.downloadFile({ document: fresh.media.document });
-                                    if (gen !== this.documentDownloadGen) return;
-                                    if (fb2?.bytes) this.announceDownloadedUrl(messageId, fresh.media.document, mime, this.bytesToBlobUrl(this.toArrayBuffer(fb2.bytes), mime), fb2.cacheSource);
-                                }
-                            } catch (e3: any) {
-                                if (gen !== this.documentDownloadGen) return;
-                                log.error('[gram-media] video fallback refresh error:', e3.message, messageId);
+                                sb.appendBuffer(chunk);
+                                mseAppending = true;
+                                mseFed = true;
+                            } catch {
+                                mseFailed = true;
                             }
+                            return;
                         }
-                        if (typeof messageId === 'number') this.scheduleDocumentRetry(messageId, fbDoc);
+                        if (mseEndRequested && !sb.updating) {
+                            try { if (sb.buffered.length > 0 && mse) mse.endOfStream(); } catch {}
+                            mseEndRequested = false;
+                        }
+                    };
+                    let urlDispatched = false;
+                    const dispatchEarlyUrl = (): void => {
+                        if (urlDispatched || !mseUrl || !mseOk || mseFailed) return;
+                        if (gen !== this.documentDownloadGen) return;
+                        urlDispatched = true;
+                        this.notifyEmojiUrlKind(mseUrl, this.emojiKindFor(mime));
+                        this.notifyEmojiUrl(String(doc.id), mseUrl, mime);
+                        this.dispatchDocumentUrl(messageId, mseUrl, undefined);
+                    };
+                    try {
+                        if (mseSupported) {
+                            mse = new MediaSource();
+                            mseUrl = URL.createObjectURL(mse);
+                            mse.addEventListener('sourceopen', () => {
+                                if (mseFailed || !mse) return;
+                                try {
+                                    sb = mse.addSourceBuffer(mime);
+                                    sb.addEventListener('updateend', () => {
+                                        mseAppending = false;
+                                        pumpMse();
+                                    });
+                                    mseOk = true;
+                                    for (const c of chunks) mseQueue.push(c);
+                                    pumpMse();
+                                    dispatchEarlyUrl();
+                                } catch {
+                                    mseFailed = true;
+                                }
+                            });
+                        }
+                        const chunks: ArrayBuffer[] = [];
+                        const totalBytes = Number(doc.size) || 0;
+                        let receivedBytes = 0;
+                        let chunkCount = 0;
+                        let lastProgress = -1;
+
+                        const streamResult = await this.transport!.startVideoStream(doc, (data: ArrayBuffer | undefined, final: boolean, fileType: string) => {
+                            if (gen !== this.documentDownloadGen) return;
+                            if (!data) return;
+                            chunks.push(data);
+                            if (mseUrl && mseOk && !mseFailed) {
+                                mseQueue.push(data);
+                                if (!mseEndRequested) pumpMse();
+                            }
+                            chunkCount++;
+                            receivedBytes += data.byteLength;
+                            dispatchEarlyUrl();
+                            const pct = totalBytes > 0
+                                ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100))
+                                : Math.min(99, chunkCount);
+                            if (pct !== lastProgress) {
+                                lastProgress = pct;
+                                if (pct >= 99 || pct % 10 === 0) {
+                                    if (this.debug) log.info('[gram-media] progress dispatch', messageId, pct);
+                                    this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
+                                }
+                            }
+                        });
+                        const streamCacheSource = (streamResult as any)?.cacheSource;
+
+                        if (chunkCount === 0) throw new Error('No data received');
+
+                        this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
+
+                        if (mseFed && !mseFailed) {
+                            mseEndRequested = true;
+                            pumpMse();
+                            if (gen !== this.documentDownloadGen) return;
+                            if (this.debug) log.info('[gram-media] mse stream done', messageId, 'chunks:', chunkCount);
+                            break;
+                        }
+                        if (mseUrl) {
+                            URL.revokeObjectURL(mseUrl);
+                            mseUrl = null;
+                        }
+
+                        const totalSize = chunks.reduce((s, c) => s + c.byteLength, 0);
+                        const merged = new Uint8Array(totalSize);
+                        let off = 0;
+                        for (const c of chunks) {
+                            merged.set(new Uint8Array(c), off);
+                            off += c.byteLength;
+                        }
+                        const blob = new Blob([merged], { type: mime });
+                        const url = URL.createObjectURL(blob);
+                        if (gen !== this.documentDownloadGen) return;
+                        this.announceDownloadedUrl(messageId, doc, mime, url, streamCacheSource);
+
+                        const u8 = new Uint8Array(chunks[0]);
+                        const magic = Array.from(u8.slice(0, 12)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+                        if (this.debug) log.info('[gram-media] stream done chunks:', chunks.length, 'totalSize:', totalSize, 'magic:', magic);
+                        break;
+                    } catch (err: any) {
+                        if (mseUrl) {
+                            URL.revokeObjectURL(mseUrl);
+                            mseUrl = null;
+                        }
+                        if (gen !== this.documentDownloadGen) return;
+                        if (err.message?.includes('FILE_REFERENCE_EXPIRED') && streamAttempt < 2) {
+                            const fresh = await this.refreshMessage(Number(messageId));
+                            if (gen !== this.documentDownloadGen) return;
+                            if (fresh?.media?.document) doc = fresh.media.document;
+                            continue;
+                        }
+                        log.error('[gram-media] video stream error:', err.message, messageId);
+                        const fbDoc = doc;
+                        try {
+                            const fb = await this.transport?.downloadFile({ document: fbDoc });
+                            if (gen !== this.documentDownloadGen) return;
+                            if (fb?.bytes) this.announceDownloadedUrl(messageId, fbDoc, mime, this.bytesToBlobUrl(this.toArrayBuffer(fb.bytes), mime), fb.cacheSource);
+                        } catch (e2: any) {
+                            if (gen !== this.documentDownloadGen) return;
+                            log.error('[gram-media] video stream fallback error:', e2.message, messageId);
+                            if (e2.message?.includes('FILE_REFERENCE_EXPIRED')) {
+                                try {
+                                    const fresh = await this.refreshMessage(Number(messageId));
+                                    if (gen !== this.documentDownloadGen) return;
+                                    if (fresh?.media?.document) {
+                                        const fb2 = await this.transport?.downloadFile({ document: fresh.media.document });
+                                        if (gen !== this.documentDownloadGen) return;
+                                        if (fb2?.bytes) this.announceDownloadedUrl(messageId, fresh.media.document, mime, this.bytesToBlobUrl(this.toArrayBuffer(fb2.bytes), mime), fb2.cacheSource);
+                                    }
+                                } catch (e3: any) {
+                                    if (gen !== this.documentDownloadGen) return;
+                                    log.error('[gram-media] video fallback refresh error:', e3.message, messageId);
+                                }
+                            }
+                            if (typeof messageId === 'number') this.scheduleDocumentRetry(messageId, fbDoc);
+                        }
+                        break;
                     }
-                    break;
                 }
+            } finally {
+                this.videoStreamInflight.delete(messageId);
             }
         } else {
             try {
@@ -1046,7 +1186,10 @@ export class GramMediaRouter {
                         break;
                     } catch (e: any) {
                         if (gen !== this.documentDownloadGen) return;
-                        if (e.message?.includes('timeout') && attempt < 2) continue;
+                        if (e.message?.includes('timeout') && attempt < 2) {
+                            await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+                            continue;
+                        }
                         throw e;
                     }
                 }
@@ -1059,7 +1202,7 @@ export class GramMediaRouter {
                                 const url = mime === 'application/x-tgsticker'
                                     ? await this.tgsToJsonUrl(bytes)
                                     : this.bytesToBlobUrl(bytes, mime);
-                                const emojiDocId = messageId.slice('emojipack-'.length);
+                                const emojiDocId = this.emojiDocIdOf(messageId);
                                 this.emoji.onEmojiDownloadSuccess(emojiDocId, url);
                                 this.notifyEmojiUrl(String(document.id), url, mime);
                                 this.dispatchDocumentUrl(messageId, url, result.cacheSource);
@@ -1071,12 +1214,12 @@ export class GramMediaRouter {
                             : this.bytesToBlobUrl(bytes, mime);
                         this.announceDownloadedUrl(messageId, document, mime, url, result.cacheSource);
                     } else if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
-                        this.emoji.onEmojiDownloadFailed(messageId.slice('emojipack-'.length));
+                        this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(messageId));
                     } else if (typeof messageId === 'number') {
                         this.scheduleDocumentRetry(messageId, document);
                     }
                 } else if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
-                    this.emoji.onEmojiDownloadFailed(messageId.slice('emojipack-'.length));
+                    this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(messageId));
                 } else if (typeof messageId === 'number') {
                     this.scheduleDocumentRetry(messageId, document);
                 }
@@ -1099,12 +1242,12 @@ export class GramMediaRouter {
                             }
                         }
                     } else if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
-                        this.emoji.onEmojiDownloadFailed(messageId.slice('emojipack-'.length));
+                        this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(messageId));
                     }
                 } else {
                     log.error('[gram-media] document download error:', err.message, messageId);
                     if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
-                        this.emoji.onEmojiDownloadFailed(messageId.slice('emojipack-'.length));
+                        this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(messageId));
                     } else if (typeof messageId === 'number') {
                         this.scheduleDocumentRetry(messageId, document);
                     }
@@ -1134,6 +1277,15 @@ export class GramMediaRouter {
     }
 
     private async downloadDocumentThumb(document: any, messageId: number, thumbType: string): Promise<void> {
+        const thumbKey = String(document.id) + ':' + thumbType;
+        if (this.thumbInflight.has(thumbKey)) return;
+        const cachedUrl = this.thumbUrlCache.get(thumbKey);
+        if (cachedUrl) {
+            if (this.debug) log.info('[gram-media] tg-download-document-thumb CACHE_HIT messageId=' + messageId + ' thumbType=' + thumbType + ' docId=' + document.id);
+            this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_THUMB', messageId, thumbType, url: cachedUrl });
+            return;
+        }
+        this.thumbInflight.add(thumbKey);
         if (this.debug) log.info('[gram-media] tg-download-document-thumb START messageId=' + messageId + ' thumbType=' + thumbType + ' docId=' + document.id);
         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
         try {
@@ -1143,17 +1295,30 @@ export class GramMediaRouter {
                 const bytes = this.toArrayBuffer(result.bytes);
                 const url = bytes.byteLength ? this.bytesToBlobUrl(bytes, 'image/jpeg') : '';
                 if (this.debug) log.info('[gram-media] tg-download-document-thumb SUCCESS messageId=' + messageId + ' thumbType=' + thumbType + ' bytesLen=' + bytes.byteLength);
-                if (url) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_THUMB', messageId, thumbType, url });
+                if (url) {
+                    this.thumbUrlCache.set(thumbKey, url);
+                    if (this.thumbUrlCache.size > 512) {
+                        const oldest = this.thumbUrlCache.keys().next().value;
+                        if (oldest !== undefined) this.thumbUrlCache.delete(oldest);
+                    }
+                    this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_THUMB', messageId, thumbType, url });
+                }
             } else {
                 if (this.debug) log.info('[gram-media] tg-download-document-thumb NO_BYTES messageId=' + messageId + ' thumbType=' + thumbType);
             }
         } catch (err) {
             log.error('[gram-media] tg-download-document-thumb ERROR:', err, messageId, thumbType);
         } finally {
+            this.thumbInflight.delete(thumbKey);
             this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
         }
     }
 
     private emojiUrlCache = new Map<string, string>();
+    private emojiUrlRefs = new Map<string, number>();
+    private emojiKeysByUrl = new Map<string, Set<string>>();
+    private thumbUrlCache = new Map<string, string>();
+    private thumbInflight = new Set<string>();
+    private videoStreamInflight = new Set<number | string>();
     private lastEmptyChatUrl: string | null = null;
 }
