@@ -406,7 +406,6 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
   }, [specs]);
 
   const setReady = useSlotSetReady(specs);
-  const handleReady = useSlotRoleReady(specs, 'handle');
   const spinsReady = useSlotRoleReady(specs, 'spin');
   const slotsReady = useSlotRoleReady(specs, 'slot');
   const layers = specs ? specs : localSpecsFor(value);
@@ -430,7 +429,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
 
   if (isEnabled('gram-ui:slot')) {
     const realIds = (specs || []).filter((s) => !isSlotLocalDoc(s.docId)).map((s) => s.docId);
-    slotLog.info('[slot]', JSON.stringify({ value, specs: specs ? specs.length : undefined, setReady, realSet, animated, doneBefore, handleReady, spinsReady, slotsReady, nLocal: layers.filter((s) => isSlotLocalDoc(s.docId)).length, cached: realIds.filter((id) => cachedSlotData(id)).length, h: handleDone, sp: spinsDone, sl: slotsDone, a: allDone, win: winReady }));
+    slotLog.info('[slot]', JSON.stringify({ value, specs: specs ? specs.length : undefined, setReady, realSet, animated, doneBefore, spinsReady, slotsReady, nLocal: layers.filter((s) => isSlotLocalDoc(s.docId)).length, cached: realIds.filter((id) => cachedSlotData(id)).length, h: handleDone, sp: spinsDone, sl: slotsDone, a: allDone, win: winReady }));
   }
 
   const progressedRef = useRef(false);
@@ -474,9 +473,9 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
 
   const startSpins = animated && handleDone && spinsReady && spins.length > 0;
   const startSlots = animated && startSpins && spinsDone >= spins.length && slotsReady && slots.length > 0;
-  const spinsOver = animated && spins.length > 0 && spinsDone >= spins.length;
+  const spinsOver = animated && spins.length > 0 && spinsDone >= spins.length && (slots.length === 0 || slotsReady);
   const showWinBg = !!bgWin && (allDone || winReady);
-  const reelsLive = !spinsOver && (animated || !allDone);
+  const reelsLive = !spinsOver && (animated ? handleDone : !allDone);
 
   useEffect(() => {
     if (!startSpins) return;
@@ -509,10 +508,10 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
   }, [allDone, playKey]);
 
   useEffect(() => {
-    if (!inView || !animated || handleDone || !handleReady || allDone) return;
+    if (!inView || !animated || handleDone || allDone) return;
     const t = setTimeout(() => setHandleDone(true), SLOT_HANDLE_TIMEOUT_MS);
     return () => clearTimeout(t);
-  }, [inView, animated, handleDone, handleReady, allDone]);
+  }, [inView, animated, handleDone, allDone]);
 
   useEffect(() => {
     if (!inView || !animated || allDone) return;
@@ -543,10 +542,15 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
     if (progressedRef.current) return;
     const active = specs.filter((s) => s.role === 'handle' || s.role === 'spin' || s.role === 'slot');
     const keys = active.map((s) => playKey + ':' + s.role + ':' + s.docId);
-    const anyStarted = keys.some((k) => isAnimationCompleted(k));
-    if (!anyStarted) return;
-    const spinCount = specs.filter((s) => s.role === 'spin').length;
+    const completed = (role: string) => {
+      const ks = active.filter((s) => s.role === role);
+      return ks.length > 0 && ks.every((s) => isAnimationCompleted(playKey + ':' + s.role + ':' + s.docId));
+    };
+    const handleDoneAny = completed('handle');
     const slotCount = specs.filter((s) => s.role === 'slot').length;
+    const slotsDoneAny = slotCount === 0 || completed('slot');
+    if (!handleDoneAny || !slotsDoneAny) return;
+    const spinCount = specs.filter((s) => s.role === 'spin').length;
     setHandleDone(true);
     setSpinsDone(spinCount);
     setSlotsDone(slotCount);
@@ -575,7 +579,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
       ) : null}
       {handle ? (
         <div class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={handle.docId} role="handle" partIndex={0} size={size} autoplay={animated && !handleDone && handleReady} onEnd={onHandleEnd} playKey={playKey} showLastFrame={allDone || handleDone} />
+          <SlotLayer docId={handle.docId} role="handle" partIndex={0} size={size} autoplay={animated && !handleDone} onEnd={onHandleEnd} playKey={playKey} showLastFrame={allDone || handleDone} />
         </div>
       ) : null}
     </div>
