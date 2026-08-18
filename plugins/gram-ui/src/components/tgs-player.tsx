@@ -62,6 +62,7 @@ export interface TgsPlayerProps {
     playKey?: string;
     showLastFrame?: boolean;
     onEnd?: () => void;
+    onLoopDone?: () => void;
     onFrameProgress?: (progress: number) => void;
     layerOrder?: LayerOrder;
     hiddenLayers?: (name?: string) => boolean;
@@ -80,6 +81,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
         playKey,
         showLastFrame,
         onEnd,
+        onLoopDone,
         onFrameProgress,
         layerOrder,
         hiddenLayers,
@@ -100,6 +102,8 @@ export function TgsPlayer(props: TgsPlayerProps) {
     const ioRef = useRef<IntersectionObserver | null>(null);
     const onEndRef = useRef(onEnd);
     onEndRef.current = onEnd;
+    const onLoopDoneRef = useRef(onLoopDone);
+    onLoopDoneRef.current = onLoopDone;
     const onFrameProgressRef = useRef(onFrameProgress);
     onFrameProgressRef.current = onFrameProgress;
     const endFiredRef = useRef(false);
@@ -240,7 +244,9 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 let forceDraw = false;
                 if (frame >= animRef.current.outFrame) {
                     if (loop) {
+                        const passed = Math.floor((frame - animRef.current.inFrame) / totalFrames);
                         frame = animRef.current.inFrame + ((frame - animRef.current.inFrame) % totalFrames);
+                        if (passed > 0) onLoopDoneRef.current?.();
                     } else {
                         if (!endFiredRef.current) {
                             endFiredRef.current = true;

@@ -14,18 +14,54 @@ export interface EmojiData {
 
 const emojiDataCache = new Map<string, EmojiData>();
 
+const EMOJI_CACHE_MAX = 150;
+const EMOJI_CACHE_MIN = 100;
+
+const emojiDataSubs = new Map<string, Set<(data: EmojiData | undefined) => void>>();
+
+export function getCachedEmojiData(url: string): EmojiData | undefined {
+  return emojiDataCache.get(url);
+}
+
+function notifyEmojiData(url: string, data: EmojiData | undefined): void {
+  const subs = emojiDataSubs.get(url);
+  if (!subs || subs.size === 0) return;
+  for (const cb of subs) cb(data);
+}
+
+export function subscribeEmojiData(url: string, cb: (data: EmojiData | undefined) => void): () => void {
+  let subs = emojiDataSubs.get(url);
+  if (!subs) {
+    subs = new Set();
+    emojiDataSubs.set(url, subs);
+  }
+  subs.add(cb);
+  const cached = emojiDataCache.get(url);
+  if (cached) cb(cached);
+  return () => {
+    subs.delete(cb);
+    if (subs.size === 0) emojiDataSubs.delete(url);
+  };
+}
+
 export function releaseEmojiCache(urls: string[]) {
-  for (const u of urls) emojiDataCache.delete(u);
+  for (const u of urls) {
+    emojiDataCache.delete(u);
+    notifyEmojiData(u, undefined);
+  }
 }
 
 function cacheEmojiData(url: string, data: EmojiData) {
-  if (emojiDataCache.size >= 150) {
+  if (emojiDataCache.size >= EMOJI_CACHE_MAX) {
     for (const k of emojiDataCache.keys()) {
+      if (k === url) continue;
       emojiDataCache.delete(k);
-      if (emojiDataCache.size < 100) break;
+      notifyEmojiData(k, undefined);
+      if (emojiDataCache.size < EMOJI_CACHE_MIN) break;
     }
   }
   emojiDataCache.set(url, data);
+  notifyEmojiData(url, data);
 }
 
 let activeFetches = 0;

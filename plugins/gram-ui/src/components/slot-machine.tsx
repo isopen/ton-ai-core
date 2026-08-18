@@ -1,11 +1,12 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useCallback, useEffect, useRef, useState } from '@ton-ai/atom/hooks';
-import { fetchEmojiData, getEmojiDocUrl } from './emoji-canvas.js';
+import { fetchEmojiData, getCachedEmojiData, getEmojiDocUrl, subscribeEmojiData } from './emoji-canvas.js';
 import type { EmojiData } from './emoji-canvas.js';
 import { TgsPlayer, isAnimationCompleted } from './tgs-player.js';
 import { getSlotLayerSpecs, requestEmojiDownload, subscribeDiceSets, ensureEmojiStickers } from './emoji-store.js';
 import type { SlotLayerRole, SlotLayerSpec } from './emoji-store.js';
-import { SLOT_LOCAL_IDS, getSlotLocalData, getSlotLocalResult, isSlotLocalDoc } from './slot-idle.js';
+import { SLOT_LOCAL_IDS } from './slot-local-assets.js';
+import { getSlotLocalData, isSlotLocalDoc } from './slot-idle.js';
 import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 
 const slotLog = getLogger('gram-ui:slot');
@@ -13,23 +14,28 @@ const slotLayerLog = getLogger('gram-ui:slot-layer');
 
 const SLOT_RETRY_MS = 2500;
 const SLOT_LAYER_FINISH_MS = 300;
-const SLOT_FETCH_TIMEOUT_MS = 12000;
-const SPIN_MS = 2600;
+const SLOT_FETCH_MAX_ATTEMPTS = 4;
+const SPIN_MS = 3200;
+const SLOT_SPIN_MIN_MS = 1200;
 const SLOT_PHASE_MS = 4000;
 const WIN_BG_PROGRESS = 0.66;
+const SLOT_HANDLE_TIMEOUT_MS = 3000;
+const SLOT_MASTER_TIMEOUT_MS = 16000;
+const SLOT_SET_TIMEOUT_MS = 6000;
+
+const SLOT_DONE_KEY = 'tg-slot-done-v1';
+const SLOT_DONE_MAX = 512;
 
 const slotMachineDone = new Map<string, boolean>();
 
 function markSlotMachineDone(key: string): void {
   slotMachineDone.set(key, true);
-  if (slotMachineDone.size > 1024) {
+  if (slotMachineDone.size > SLOT_DONE_MAX) {
     const oldest = slotMachineDone.keys().next().value;
     if (oldest != null) slotMachineDone.delete(oldest);
   }
 }
 
-const SLOT_DONE_KEY = 'tg-slot-done-v1';
-const SLOT_DONE_MAX = 512;
 let slotDoneSet: Set<string> | null = null;
 
 function loadSlotDoneSet(): Set<string> {
@@ -79,118 +85,90 @@ function sameSpecs(a: SlotLayerSpec[] | undefined, b: SlotLayerSpec[] | undefine
   return true;
 }
 
-const slotDataCache = new Map<string, EmojiData>();
-const slotDataInFlight = new Map<string, Promise<void>>();
-const slotDataSubs = new Map<string, Set<(data: EmojiData) => void>>();
-const slotRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-function emitSlotData(docId: string, data: EmojiData): void {
-  const subs = slotDataSubs.get(docId);
-  if (!subs) return;
-  for (const cb of subs) cb(data);
-}
-
-function scheduleSlotRetry(docId: string): void {
-  if (slotRetryTimers.has(docId)) return;
-  slotRetryTimers.set(docId, setTimeout(() => {
-    slotRetryTimers.delete(docId);
-    const url = getEmojiDocUrl(docId);
-    if (url) {
-      ensureSlotData(docId, url);
-    } else if (!slotDataCache.has(String(docId))) {
-      requestEmojiDownload(docId, undefined, 2);
-    }
-  }, SLOT_RETRY_MS));
-}
-
-function ensureSlotData(docId: string, url: string): void {
-  const did = String(docId);
-  if (slotDataCache.has(did) || slotDataInFlight.has(did)) return;
-  const p = (async () => {
-    try {
-      const data = await Promise.race([
-        fetchEmojiData(url),
-        new Promise<EmojiData>((_, reject) => setTimeout(() => reject(new Error('fetch timeout')), SLOT_FETCH_TIMEOUT_MS)),
-      ]);
-      if (slotDataCache.has(did)) return;
-      slotDataCache.set(did, data);
-      emitSlotData(did, data);
-    } catch (err) {
-      slotLog.warn('[slot] slot data fetch failed', did, (err as Error)?.message || err);
-      scheduleSlotRetry(did);
-    } finally {
-      slotDataInFlight.delete(did);
-    }
-  })();
-  slotDataInFlight.set(did, p);
-}
-
-window.addEventListener('tg-emoji-url', (e) => {
-  const d = (e as CustomEvent).detail;
-  if (!d || d.docId == null || !d.url) return;
-  const did = String(d.docId);
-  if (typeof d.json === 'string' && d.json.trim().startsWith('{')) {
-    slotDataInFlight.delete(did);
-    if (!slotDataCache.has(did)) {
-      slotDataCache.set(did, { kind: 'tgs', value: d.json });
-      emitSlotData(did, { kind: 'tgs', value: d.json });
-    }
-    slotLog.info('[slot] tg-emoji-url', did, 'cached:', slotDataCache.has(did), 'inflight:', slotDataInFlight.has(did), 'viaJson:true');
-    return;
-  }
-  slotLog.info('[slot] tg-emoji-url', did, 'cached:', slotDataCache.has(did), 'inflight:', slotDataInFlight.has(did));
-  ensureSlotData(did, String(d.url));
-});
-
-function getSlotData(docId: string): EmojiData | undefined {
-  return slotDataCache.get(String(docId));
-}
-
-function subscribeSlotData(docId: string, cb: (data: EmojiData) => void): Set<(data: EmojiData) => void> {
-  const did = String(docId);
-  let subs = slotDataSubs.get(did);
-  if (!subs) {
-    subs = new Set();
-    slotDataSubs.set(did, subs);
-  }
-  subs.add(cb);
-  const data = slotDataCache.get(did);
-  if (data) cb(data);
-  return subs;
+function cachedSlotData(docId: string): EmojiData | undefined {
+  const url = getEmojiDocUrl(docId);
+  return url ? getCachedEmojiData(url) : undefined;
 }
 
 function useSlotData(docId: string): EmojiData | undefined {
-  const [data, setData] = useState<EmojiData | undefined>(() => getSlotData(docId));
+  const [data, setData] = useState<EmojiData | undefined>(() => cachedSlotData(docId));
 
   useEffect(() => {
     if (isSlotLocalDoc(docId)) return;
-    setData(getSlotData(docId));
-    const onData = (d: EmojiData) => setData(d);
-    const subs = subscribeSlotData(docId, onData);
-    if (!getSlotData(docId)) {
+    let alive = true;
+    let urlUnsub: (() => void) | undefined;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let currentUrl: string | undefined;
+
+    const tryFetch = (attempt: number): void => {
       const url = getEmojiDocUrl(docId);
-      if (url) {
-        ensureSlotData(docId, url);
-      } else {
-        requestEmojiDownload(docId, undefined, 2);
+      if (!url) return;
+      if (getCachedEmojiData(url)) return;
+      fetchEmojiData(url)
+        .then(() => {
+          if (!alive) return;
+          const d = getCachedEmojiData(url);
+          if (d) setData(d);
+        })
+        .catch(() => {
+          if (!alive || attempt >= SLOT_FETCH_MAX_ATTEMPTS) return;
+          retryTimer = setTimeout(() => {
+            retryTimer = undefined;
+            tryFetch(attempt + 1);
+          }, SLOT_RETRY_MS);
+        });
+    };
+
+    const apply = (): void => {
+      const url = getEmojiDocUrl(docId);
+      if (url !== currentUrl) {
+        urlUnsub?.();
+        urlUnsub = url
+          ? subscribeEmojiData(url, (d) => {
+              if (!alive) return;
+              setData(d);
+              if (!d) tryFetch(1);
+            })
+          : undefined;
+        currentUrl = url;
       }
-    }
-    return () => { subs.delete(onData); };
+      const d = url ? getCachedEmojiData(url) : undefined;
+      if (alive) setData(d);
+      if (url && !d) tryFetch(1);
+    };
+
+    const onUrlEvent = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (!d || d.docId == null || String(d.docId) !== String(docId)) return;
+      queueMicrotask(() => {
+        if (!alive) return;
+        apply();
+      });
+    };
+
+    apply();
+    if (!getEmojiDocUrl(docId)) requestEmojiDownload(docId, undefined, 2);
+    window.addEventListener('tg-emoji-url', onUrlEvent);
+
+    return () => {
+      alive = false;
+      if (retryTimer != null) clearTimeout(retryTimer);
+      urlUnsub?.();
+      window.removeEventListener('tg-emoji-url', onUrlEvent);
+    };
   }, [docId]);
 
   return data;
 }
 
 function useSlotLocalData(docId: string | undefined): EmojiData | undefined {
-  const [data, setData] = useState<EmojiData | undefined>(() => (docId ? getSlotLocalResult(docId) : undefined));
+  const [data, setData] = useState<EmojiData | undefined>(undefined);
 
   useEffect(() => {
-    setData(docId ? getSlotLocalResult(docId) : undefined);
-    if (!docId) return;
     let alive = true;
-    const p = getSlotLocalData(docId);
-    if (!p) return;
-    p.then((d) => {
+    setData(undefined);
+    if (!docId) return;
+    getSlotLocalData(docId).then((d) => {
       if (alive && d) setData(d);
     });
     return () => { alive = false; };
@@ -210,16 +188,37 @@ function useSlotSetReady(specs: SlotLayerSpec[] | undefined): boolean {
       return;
     }
     let alive = true;
+    const unsubs: Array<() => void> = [];
     const check = () => {
       if (!alive) return;
-      const ready = ids.filter((id) => getSlotData(id)).length;
+      const ready = ids.filter((id) => cachedSlotData(id)).length;
       setReadyCount(ready);
     };
+    const watch = () => {
+      for (const u of unsubs) u();
+      unsubs.length = 0;
+      for (const id of ids) {
+        const url = getEmojiDocUrl(id);
+        if (!url) continue;
+        unsubs.push(subscribeEmojiData(url, () => {
+          if (alive) check();
+        }));
+      }
+    };
+    const onUrlEvent = () => {
+      queueMicrotask(() => {
+        if (!alive) return;
+        check();
+        watch();
+      });
+    };
     check();
-    const subs = ids.map((id) => subscribeSlotData(id, check));
+    watch();
+    window.addEventListener('tg-emoji-url', onUrlEvent);
     return () => {
       alive = false;
-      for (const s of subs) s.delete(check);
+      window.removeEventListener('tg-emoji-url', onUrlEvent);
+      for (const u of unsubs) u();
     };
   }, [specs]);
 
@@ -242,15 +241,36 @@ function useSlotRoleReady(specs: SlotLayerSpec[] | undefined, role: SlotLayerRol
       return;
     }
     let alive = true;
+    const unsubs: Array<() => void> = [];
     const check = () => {
       if (!alive) return;
-      setReady(ids.every((id) => getSlotData(id)));
+      setReady(ids.every((id) => cachedSlotData(id) != null));
+    };
+    const watch = () => {
+      for (const u of unsubs) u();
+      unsubs.length = 0;
+      for (const id of ids) {
+        const url = getEmojiDocUrl(id);
+        if (!url) continue;
+        unsubs.push(subscribeEmojiData(url, () => {
+          if (alive) check();
+        }));
+      }
+    };
+    const onUrlEvent = () => {
+      queueMicrotask(() => {
+        if (!alive) return;
+        check();
+        watch();
+      });
     };
     check();
-    const subs = ids.map((id) => subscribeSlotData(id, check));
+    watch();
+    window.addEventListener('tg-emoji-url', onUrlEvent);
     return () => {
       alive = false;
-      for (const s of subs) s.delete(check);
+      window.removeEventListener('tg-emoji-url', onUrlEvent);
+      for (const u of unsubs) u();
     };
   }, [specs, role]);
 
@@ -278,7 +298,7 @@ function localFallbackId(role: SlotLayerRole, partIndex: number): string | undef
   }
 }
 
-function SlotLayer({ docId, role, partIndex, size, autoplay, loop, playKey, showLastFrame, onEnd, onFrameProgress }: { docId: string; role: SlotLayerRole; partIndex: number; size: number; autoplay: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; onEnd?: () => void; onFrameProgress?: (progress: number) => void }) {
+function SlotLayer({ docId, role, partIndex, size, autoplay, loop, playKey, showLastFrame, onEnd, onLoopDone, onFrameProgress }: { docId: string; role: SlotLayerRole; partIndex: number; size: number; autoplay: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; onEnd?: () => void; onLoopDone?: () => void; onFrameProgress?: (progress: number) => void }) {
   const real = useSlotData(docId);
   const localId = isSlotLocalDoc(docId) ? docId : localFallbackId(role, partIndex);
   const local = useSlotLocalData(localId);
@@ -312,6 +332,7 @@ function SlotLayer({ docId, role, partIndex, size, autoplay, loop, playKey, show
         playKey={playKey ? playKey + ':' + role + ':' + docId : undefined}
         showLastFrame={showLastFrame}
         onEnd={onEnd}
+        onLoopDone={onLoopDone}
         onFrameProgress={onFrameProgress}
         layerOrder={role === 'spin' || role === 'slot' ? 'default' : 'reversed'}
         hiddenLayers={role === 'spin' && !autoplay ? hideStripLayer : undefined}
@@ -369,6 +390,11 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
     }
   }, [specs]);
 
+  useEffect(() => {
+    if (!specs) return;
+    slotLog.info('[slot] spec shape', JSON.stringify({ n: specs.length, roles: specs.map((s) => s.role + ':' + String(s.docId).slice(0, 16)) }));
+  }, [specs]);
+
   const setReady = useSlotSetReady(specs);
   const handleReady = useSlotRoleReady(specs, 'handle');
   const spinsReady = useSlotRoleReady(specs, 'spin');
@@ -394,7 +420,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
 
   if (isEnabled('gram-ui:slot')) {
     const realIds = (specs || []).filter((s) => !isSlotLocalDoc(s.docId)).map((s) => s.docId);
-    slotLog.info('[slot]', JSON.stringify({ value, specs: specs ? specs.length : undefined, setReady, ready: setReady, realSet, animated, doneBefore, handleReady, spinsReady, slotsReady, nLocal: layers.filter((s) => isSlotLocalDoc(s.docId)).length, cached: realIds.filter((id) => slotDataCache.has(String(id))).length, h: handleDone, sp: spinsDone, sl: slotsDone, a: allDone, win: winReady }));
+    slotLog.info('[slot]', JSON.stringify({ value, specs: specs ? specs.length : undefined, setReady, realSet, animated, doneBefore, handleReady, spinsReady, slotsReady, nLocal: layers.filter((s) => isSlotLocalDoc(s.docId)).length, cached: realIds.filter((id) => cachedSlotData(id)).length, h: handleDone, sp: spinsDone, sl: slotsDone, a: allDone, win: winReady }));
   }
 
   const progressedRef = useRef(false);
@@ -402,10 +428,6 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
   const onHandleEnd = useCallback(() => {
     progressedRef.current = true;
     setHandleDone(true);
-  }, []);
-  const onSpinEnd = useCallback(() => {
-    progressedRef.current = true;
-    setSpinsDone((n) => n + 1);
   }, []);
   const onSlotEnd = useCallback(() => {
     progressedRef.current = true;
@@ -419,6 +441,26 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
     }
   }, []);
 
+  const spinStartRef = useRef(0);
+  const spinPassesRef = useRef<number[]>([]);
+  const spinsFinishedRef = useRef(false);
+
+  const finishSpins = useCallback(() => {
+    progressedRef.current = true;
+    if (spinsFinishedRef.current) return;
+    spinsFinishedRef.current = true;
+    setSpinsDone(spins.length);
+  }, [spins.length]);
+
+  const onSpinLoopDone = useCallback((index: number) => () => {
+    const passes = spinPassesRef.current;
+    if (index >= passes.length) return;
+    passes[index]++;
+    if (Date.now() - spinStartRef.current >= SLOT_SPIN_MIN_MS && passes.every((n) => n > 0)) {
+      finishSpins();
+    }
+  }, [finishSpins]);
+
   const startSpins = animated && handleDone && spinsReady && spins.length > 0;
   const startSlots = animated && startSpins && spinsDone >= spins.length && slotsReady && slots.length > 0;
   const spinsOver = animated && spins.length > 0 && spinsDone >= spins.length;
@@ -427,9 +469,16 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
 
   useEffect(() => {
     if (!startSpins) return;
-    const t = setTimeout(() => setSpinsDone((n) => Math.max(n, spins.length)), SPIN_MS);
-    return () => clearTimeout(t);
+    spinStartRef.current = Date.now();
+    spinPassesRef.current = new Array(spins.length).fill(0);
+    spinsFinishedRef.current = false;
   }, [startSpins, spins.length]);
+
+  useEffect(() => {
+    if (!startSpins) return;
+    const t = setTimeout(finishSpins, SPIN_MS);
+    return () => clearTimeout(t);
+  }, [startSpins, finishSpins]);
 
   useEffect(() => {
     if (!startSlots) return;
@@ -446,9 +495,50 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
   }, [allDone, playKey]);
 
   useEffect(() => {
+    if (!animated || handleDone || !handleReady || allDone) return;
+    const t = setTimeout(() => setHandleDone(true), SLOT_HANDLE_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [animated, handleDone, handleReady, allDone]);
+
+  useEffect(() => {
+    if (!animated || allDone) return;
+    const t = setTimeout(() => {
+      setSpinsDone(spins.length);
+      setSlotsDone(slots.length);
+      setAllDone(true);
+    }, SLOT_MASTER_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [animated, allDone, spins.length, slots.length]);
+
+  useEffect(() => {
+    if (specs || allDone) return;
+    if (value == null || value <= 0) return;
+    const t = setTimeout(() => {
+      setSpinsDone(spins.length);
+      setSlotsDone(slots.length);
+      setAllDone(true);
+    }, SLOT_SET_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [specs, allDone, value, spins.length, slots.length]);
+
+  useEffect(() => {
+    if (!animated || !specs || allDone) return;
+    const noHandle = !handle;
+    const noSpins = spins.length === 0;
+    if (!noHandle && !noSpins) return;
+    if (noHandle && !noSpins) setHandleDone(true);
+    if (noSpins) {
+      setSpinsDone(0);
+      setSlotsDone(slots.length);
+      setAllDone(true);
+    }
+    slotLog.warn('[slot] incomplete set', JSON.stringify({ noHandle, noSpins, n: specs.length }));
+  }, [animated, specs, allDone, handle, spins.length, slots.length]);
+
+  useEffect(() => {
     if (!playKey || !specs || !setReady) return;
     if (progressedRef.current) return;
-    const active = specs.filter((s) => s.role === 'handle' || s.role === 'bgWin' || s.role === 'spin' || s.role === 'slot');
+    const active = specs.filter((s) => s.role === 'handle' || s.role === 'spin' || s.role === 'slot');
     const keys = active.map((s) => playKey + ':' + s.role + ':' + s.docId);
     const anyStarted = keys.some((k) => isAnimationCompleted(k));
     if (!anyStarted) return;
@@ -467,7 +557,7 @@ export function SlotMachineSticker({ value, size = 96, playKey }: { value: numbe
       {bg ? <SlotLayer docId={bg.docId} role="bg" partIndex={0} size={size} autoplay={!allDone} playKey={playKey} showLastFrame={allDone} /> : null}
       {spins.map((s, i) => (
         <div key={s.docId} class="tgui-slot-layer" style={{ position: 'absolute', inset: 0 }}>
-          <SlotLayer docId={s.docId} role="spin" partIndex={i} size={size} autoplay={reelsLive} loop={true} onEnd={onSpinEnd} playKey={playKey} showLastFrame={allDone || spinsOver} />
+          <SlotLayer docId={s.docId} role="spin" partIndex={i} size={size} autoplay={reelsLive} loop={true} onEnd={finishSpins} onLoopDone={onSpinLoopDone(i)} playKey={playKey} showLastFrame={allDone || spinsOver} />
         </div>
       ))}
       {slots.map((s, i) => (
