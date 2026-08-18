@@ -296,6 +296,7 @@ export function requestEmojiDownload(docId?: string, alt?: string, priority = 0,
 const EMOJI_START_RE = /\p{Emoji_Presentation}|\p{Extended_Pictographic}|\d(?=\uFE0F\u20E3)|[#*](?=\uFE0F\u20E3)/gu;
 const EMOJI_SPECIAL_RE = /[\uFE00-\uFE0F\u200D\u20E3\u200B\u2642\u2640]|\p{Emoji_Modifier}/gu;
 const EMOJI_PICT_RE = /\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu;
+const RI_RE = /\p{Regional_Indicator}/u;
 
 const runCache = new Map<string, Array<{ start: number; end: number; emoji: string }>>();
 
@@ -308,6 +309,7 @@ export function matchEmojiRuns(text: string): Array<{ start: number; end: number
   while ((m = EMOJI_START_RE.exec(text))) {
     let end = m.index + m[0].length;
     let lastWasZWJ = false;
+    let riCount = RI_RE.test(m[0]) ? 1 : 0;
     for (;;) {
       const rest = text.slice(end);
       if (rest.length === 0) break;
@@ -317,6 +319,13 @@ export function matchEmojiRuns(text: string): Array<{ start: number; end: number
       if (spLen > 0) {
         lastWasZWJ = sp![0].includes('\u200D');
         end += spLen;
+        continue;
+      }
+      RI_RE.lastIndex = 0;
+      const ri = RI_RE.exec(rest);
+      if (ri && ri.index === 0 && riCount === 1) {
+        riCount = 2;
+        end += ri[0].length;
         continue;
       }
       if (lastWasZWJ) {

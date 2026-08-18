@@ -59,6 +59,25 @@ export async function fetchEmojiData(url: string): Promise<EmojiData> {
     cacheEmojiData(url, data);
     return data;
   }
+  if (knownKind === 'img') {
+    const data: EmojiData = { kind: 'img', value: url };
+    emojiDataCache.delete(url);
+    cacheEmojiData(url, data);
+    return data;
+  }
+  if (knownKind === 'tgs') {
+    await acquireFetch();
+    try {
+      const resp = await fetch(url);
+      const text = await resp.text();
+      const data: EmojiData = { kind: 'tgs', value: text };
+      emojiDataCache.delete(url);
+      cacheEmojiData(url, data);
+      return data;
+    } finally {
+      releaseFetch();
+    }
+  }
   await acquireFetch();
   try {
     const resp = await fetch(url);
@@ -180,11 +199,19 @@ const resolvedKinds = new Map<string, 'video' | 'tgs' | 'img'>();
 const RESOLVED_KINDS_MAX = 512;
 
 window.addEventListener('tg-emoji-url', (e) => {
-  const { docId, url, kind } = (e as CustomEvent).detail || {};
+  const { docId, url, kind, json } = (e as CustomEvent).detail || {};
   if (!docId || !url) return;
   const did = String(docId);
+  revokedUrls.delete(url);
   const k = (kind === 'video' || kind === 'img' || kind === 'tgs') ? kind : 'img';
   urlKinds.set(url, k);
+  const knownJson = typeof json === 'string' && json.trim().startsWith('{');
+  if (!emojiDataCache.has(url)) {
+    const data: EmojiData | null = k === 'tgs'
+      ? (knownJson ? { kind: 'tgs', value: json } : null)
+      : { kind: k, value: url };
+    if (data) cacheEmojiData(url, data);
+  }
   if (!resolvedKinds.has(did)) {
     resolvedKinds.set(did, k);
     while (resolvedKinds.size > RESOLVED_KINDS_MAX) {
@@ -435,28 +462,19 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
       for (const docId of Object.keys(strikes)) {
         if (!stillMissing.has(docId)) delete strikes[docId];
       }
-      let anyRequested = false;
+      // download re-requests are cheap and deduped — keep re-requesting forever;
+      // the strike limit only bounds the RPC resolve dispatch (unknown custom emoji)
+      const customIds: string[] = [];
       for (const s of missing) {
         const n = (strikes[s.docId] || 0) + 1;
         strikes[s.docId] = n;
-        // known docs: keep re-requesting forever (queue downloads are cheap and deduped server-side)
-        // only the RPC resolve path (unknown custom emoji) is bounded by the strike limit
-        if (s.custom && n > MISSING_EMOJI_STRIKE_LIMIT) continue;
-        anyRequested = true;
         requestEmojiDownload(s.docId, s.value, 1);
+        if (s.custom && n <= MISSING_EMOJI_STRIKE_LIMIT) customIds.push(s.docId);
       }
-      if (anyRequested) {
-        const customIds = missing
-          .filter((s) => s.custom && (strikes[s.docId] || 0) <= MISSING_EMOJI_STRIKE_LIMIT)
-          .map((s) => s.docId);
-        if (customIds.length > 0) {
-          window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...new Set(customIds)] } }));
-        }
-      } else if (timer) {
-        window.clearInterval(timer);
-        timer = 0;
+      if (customIds.length > 0) {
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...new Set(customIds)] } }));
       }
-      return anyRequested;
+      return missing.length > 0;
     };
     if (requestMissing()) {
       timer = window.setInterval(requestMissing, 3000);

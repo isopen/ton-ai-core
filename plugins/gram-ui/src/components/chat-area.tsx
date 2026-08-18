@@ -20,7 +20,6 @@ import { S } from '../strings.js';
 import { flushEmojiBatch, getEmojiDocId, getDiceDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeDiceSets, ensureEmojiStickers } from './emoji-store.js';
 import { SlotMachineSticker, resetSlotMachineDone } from './slot-machine.js';
 import { resetCompletedAnimations } from './tgs-player.js';
-import { releaseEmojiCache } from './emoji-canvas.js';
 import { observeVisibility } from './emoji-canvas.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
 import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText } from '../utils.js';
@@ -678,13 +677,8 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   }, [peer?.id, state.messages, visRange]);
 
   useEffect(() => {
-    const urls = (state.documentUrls || {}) as Record<string, string>;
-    const url = urls['empty-chat'];
-    if (!url) return;
+    if (!(state.documentUrls || {})['empty-chat']) return;
     dispatch({ type: 'CLEAR_EMOJI_DOCUMENTS', keys: ['empty-chat'] });
-    releaseEmojiCache([url]);
-    window.dispatchEvent(new CustomEvent('tg-emoji-url-revoked', { detail: { url } }));
-    try { URL.revokeObjectURL(url); } catch {}
   }, [peer?.id]);
 
   const msgs = Array.isArray(state.messages) ? state.messages : [];
@@ -724,13 +718,6 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
     }
     if (drop.length === 0) return;
     dispatch({ type: 'CLEAR_EMOJI_DOCUMENTS', keys: drop });
-    for (const k of drop) {
-      const u = urls[k];
-      if (!u) continue;
-      releaseEmojiCache([u]);
-      window.dispatchEvent(new CustomEvent('tg-emoji-url-revoked', { detail: { url: u } }));
-      try { URL.revokeObjectURL(u); } catch {}
-    }
   }, [visRange, state.messages, state.documentUrls]);
 
   if (state.activeSkill) {
