@@ -90,14 +90,14 @@ export function TgsPlayer(props: TgsPlayerProps) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [playing, setPlaying] = useState(() => (playKey != null && completedAnims.get(playKey)) || showLastFrame ? false : autoplay);
-    const [inView, setInView] = useState(true);
+    const [inView, setInView] = useState(false);
     const [animVersion, setAnimVersion] = useState(0);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const animRef = useRef<ParsedAnimation | null>(null);
     const frameRef = useRef(0);
     const rafRef = useRef<number | null>(null);
     const lastTimeRef = useRef(0);
-    const lastDrawRef = useRef(0);
+    const lastDrawRef = useRef(performance.now() - Math.random() * 33.33);
     const yieldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const ioRef = useRef<IntersectionObserver | null>(null);
     const onEndRef = useRef(onEnd);
@@ -110,8 +110,11 @@ export function TgsPlayer(props: TgsPlayerProps) {
 
     useEffect(() => {
         const el = rootRef.current;
-        if (!el || typeof IntersectionObserver === 'undefined') return;
-        const io = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), { rootMargin: '80px' });
+        if (!el || typeof IntersectionObserver === 'undefined') {
+            setInView(true);
+            return;
+        }
+        const io = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), { rootMargin: '0px' });
         ioRef.current = io;
         io.observe(el);
         return () => {
