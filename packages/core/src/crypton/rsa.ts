@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer';
-import { modPowConstantTime } from './utils';
+import { modPowBranchless } from './utils';
 import { sha1Sync } from './sha1';
 
 function extractPemBody(pem: string): string {
@@ -65,7 +65,7 @@ export interface RsaPublicPEM {
 }
 
 function derReadInteger(der: Uint8Array, offset: number): { value: bigint; newOffset: number } {
-  if (der[offset] !== 0x02) {
+  if (offset >= der.length || der[offset] !== 0x02) {
     throw new Error('Expected INTEGER tag in DER');
   }
   offset++;
@@ -73,6 +73,9 @@ function derReadInteger(der: Uint8Array, offset: number): { value: bigint; newOf
   let len = der[offset];
   if (len & 0x80) {
     const numLenBytes = len & 0x7f;
+    if (numLenBytes === 0 || offset + numLenBytes >= der.length) {
+      throw new Error('Malformed DER INTEGER length');
+    }
     len = 0;
     for (let i = 0; i < numLenBytes; i++) {
       offset++;
@@ -82,6 +85,9 @@ function derReadInteger(der: Uint8Array, offset: number): { value: bigint; newOf
     lenBytes = 1 + numLenBytes;
   } else {
     offset++;
+  }
+  if (offset + len > der.length) {
+    throw new Error('DER INTEGER extends past end of data');
   }
   const value = der.slice(offset, offset + len);
   offset += len;
@@ -99,8 +105,14 @@ export function pemToBigInts(pem: string): { modulus: bigint; exponent: bigint }
   let offset = 0;
 
   function readTagLength(): number {
+    if (offset >= der.length) {
+      throw new Error('Malformed DER: unexpected end of data');
+    }
     if (der[offset] & 0x80) {
       const numLenBytes = der[offset] & 0x7f;
+      if (numLenBytes === 0 || offset + numLenBytes >= der.length) {
+        throw new Error('Malformed DER length');
+      }
       offset++;
       let len = 0;
       for (let i = 0; i < numLenBytes; i++) {
@@ -195,7 +207,9 @@ export function rsaEncryptRaw(data: Buffer, modulus: bigint, exponent: bigint): 
   if (x >= modulus) {
     throw new Error('RSA plaintext too large for modulus');
   }
-  const encrypted = modPowConstantTime(x, exponent, modulus);
+  // Loop length covers exactly the exponent's bits: e=65537 needs 17
+  // iterations, not the full 2048-bit default sized for DH private exponents.
+  const encrypted = modPowBranchless(x, exponent, modulus, exponent.toString(2).length);
   const result = Buffer.alloc(256);
   const hex = encrypted.toString(16).padStart(512, '0');
   for (let i = 0; i < 256; i++) {

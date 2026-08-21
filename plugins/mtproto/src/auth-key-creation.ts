@@ -114,7 +114,8 @@ export class AuthKeyCreator {
 
                 const keyNum = this.bufferToBigIntBE(keyAesEncrypted);
                 if (keyNum < modulus) {
-                    const encrypted = crypton.modPowConstantTime(keyNum, BigInt('0x10001'), modulus);
+                    const e = BigInt('0x10001');
+                    const encrypted = crypton.modPowConstantTime(keyNum, e, modulus, e.toString(2).length);
                     return this.bigIntToBufferBE(encrypted, 256);
                 }
             } finally {

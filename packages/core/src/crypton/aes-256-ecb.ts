@@ -72,6 +72,11 @@ export class AES256ECB {
   private key: Buffer;
   private useNative: boolean;
   private roundKeys: Buffer[] = [];
+  // Cached native cipher contexts: ECB has no chaining, so a single streaming
+  // cipheriv instance can serve repeated independent single-block updates.
+  // final() is deferred to destroy().
+  private nativeEnc: any = null;
+  private nativeDec: any = null;
 
   constructor(key: Uint8Array) {
     if (!key) throw new Error('Key must not be null or undefined');
@@ -84,9 +89,34 @@ export class AES256ECB {
   }
 
   destroy(): void {
+    for (const ctx of [this.nativeEnc, this.nativeDec]) {
+      if (ctx) {
+        try { ctx.final(); } catch {}
+      }
+    }
+    this.nativeEnc = null;
+    this.nativeDec = null;
     this.key.fill(0);
     for (const rk of this.roundKeys) rk.fill(0);
     this.roundKeys = [];
+  }
+
+  private getNativeEnc(): any {
+    if (!this.nativeEnc) {
+      const crypto = require('crypto');
+      this.nativeEnc = crypto.createCipheriv('aes-256-ecb', this.key, null);
+      this.nativeEnc.setAutoPadding(false);
+    }
+    return this.nativeEnc;
+  }
+
+  private getNativeDec(): any {
+    if (!this.nativeDec) {
+      const crypto = require('crypto');
+      this.nativeDec = crypto.createDecipheriv('aes-256-ecb', this.key, null);
+      this.nativeDec.setAutoPadding(false);
+    }
+    return this.nativeDec;
   }
 
   private keyExpansion(key: Buffer): void {
@@ -118,10 +148,7 @@ export class AES256ECB {
     if (!block) throw new Error('Block must not be null or undefined');
     if (block.length !== 16) throw new Error('Block must be 16 bytes');
     if (this.useNative) {
-      const crypto = require('crypto');
-      const cipher = crypto.createCipheriv('aes-256-ecb', this.key, null);
-      cipher.setAutoPadding(false);
-      return Buffer.concat([cipher.update(Buffer.from(block)), cipher.final()]);
+      return Buffer.from(this.getNativeEnc().update(block));
     }
     const s = Buffer.from(block);
     let i: number;
@@ -146,10 +173,7 @@ export class AES256ECB {
     if (!block) throw new Error('Block must not be null or undefined');
     if (block.length !== 16) throw new Error('Block must be 16 bytes');
     if (this.useNative) {
-      const crypto = require('crypto');
-      const decipher = crypto.createDecipheriv('aes-256-ecb', this.key, null);
-      decipher.setAutoPadding(false);
-      return Buffer.concat([decipher.update(Buffer.from(block)), decipher.final()]);
+      return Buffer.from(this.getNativeDec().update(block));
     }
     const s = Buffer.from(block);
     let i: number;

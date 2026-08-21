@@ -23,6 +23,9 @@ export function bufferToBigInt(buf: Buffer): bigint {
 }
 
 export function bigIntToBuffer(num: bigint, length: number): Buffer {
+  if (num < 0n) {
+    throw new Error(`Negative numbers are not supported (got ${num})`);
+  }
   const maxVal = 1n << BigInt(length * 8);
   if (num >= maxVal) {
     throw new Error(`Number too large for ${length}-byte buffer (max 0x${(maxVal - 1n).toString(16)})`);
@@ -99,6 +102,7 @@ export function hexToBytes(hex: string): Uint8Array {
 
 export function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
   if (modulus <= 0n) throw new Error('Modulus must be positive');
+  if (base < 0n) throw new Error('Negative base is not supported');
   if (modulus === 1n) return 0n;
   let result = 1n;
   let b = base % modulus;
@@ -111,7 +115,12 @@ export function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint 
   return result;
 }
 
-export function modPowConstantTime(base: bigint, exponent: bigint, modulus: bigint, bitLength: number = 2048): bigint {
+// Branchless modular exponentiation. NOTE: this does NOT provide real
+// constant-time guarantees — JS bigint arithmetic itself varies in time with
+// operand magnitude. It only removes the data-dependent branch of the square-
+// and-multiply loop, which narrows (but does not eliminate) timing leakage.
+// Do not rely on it as a side-channel defense for secret exponents.
+export function modPowBranchless(base: bigint, exponent: bigint, modulus: bigint, bitLength: number = 2048): bigint {
   if (modulus <= 0n) throw new Error('Modulus must be positive');
   if (modulus === 1n) return 0n;
 
@@ -128,7 +137,30 @@ export function modPowConstantTime(base: bigint, exponent: bigint, modulus: bigi
   return result;
 }
 
+/** @deprecated Name overstates the guarantee — use {@link modPowBranchless}. */
+export const modPowConstantTime = modPowBranchless;
+
+// Validated primes are cached: validating a 2048-bit candidate with 40
+// Miller-Rabin rounds costs ~seconds, and DH code re-validates the same p/q
+// on every operation (TDLib caches this too). Bounded to avoid unbounded growth.
+// NOTE: the cache key is n only — results are computed and reused with the
+// default round count k=40; a custom k is not part of the cache identity.
+const primeCache = new Map<bigint, boolean>();
+const PRIME_CACHE_MAX = 32;
+
 export function isProbablyPrime(n: bigint, k: number = 40): boolean {
+  const cached = primeCache.get(n);
+  if (cached !== undefined) return cached;
+  const result = isProbablyPrimeUncached(n, k);
+  if (primeCache.size >= PRIME_CACHE_MAX) {
+    const oldest = primeCache.keys().next().value;
+    if (oldest !== undefined) primeCache.delete(oldest);
+  }
+  primeCache.set(n, result);
+  return result;
+}
+
+function isProbablyPrimeUncached(n: bigint, k: number): boolean {
   if (n < 2n) return false;
   if (n === 2n || n === 3n) return true;
   if (n % 2n === 0n) return false;
@@ -173,6 +205,9 @@ export function isProbablyPrime(n: bigint, k: number = 40): boolean {
 }
 
 export function bigIntToBufferLE(value: bigint, length: number): Buffer {
+  if (value < 0n) {
+    throw new Error(`Negative numbers are not supported (got ${value})`);
+  }
   const maxVal = 1n << BigInt(length * 8);
   if (value >= maxVal) {
     throw new Error(`Number too large for ${length}-byte buffer`);

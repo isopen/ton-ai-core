@@ -24,6 +24,7 @@ import {
   hkdfExpand,
   hkdfSha512,
   pbkdf2Sha256,
+  modPowBranchless,
 } from './utils';
 
 import { sha1, sha1Sync } from './sha1';
@@ -103,6 +104,7 @@ export const crypton = {
   rsaFingerprint,
   rsaEncryptRaw,
   modPow,
+  modPowBranchless,
   modPowConstantTime,
   isProbablyPrime,
   bigIntToBuffer,

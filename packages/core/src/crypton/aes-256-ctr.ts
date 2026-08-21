@@ -14,6 +14,18 @@ function counterAdd(iv: Buffer, add: number): Buffer {
   return c;
 }
 
+const CTR_MAX_START_COUNTER = 0xFFFFFFFF;
+
+function assertCtrRange(startCounter: number, dataLength: number): void {
+  if (!Number.isFinite(startCounter) || startCounter < 0 || startCounter > CTR_MAX_START_COUNTER) {
+    throw new Error(`CTR start counter out of range: ${startCounter}`);
+  }
+  const blocks = Math.ceil(dataLength / 16);
+  if (startCounter + blocks > CTR_MAX_START_COUNTER + 1) {
+    throw new Error('CTR counter overflow: data spans past 2^32 blocks');
+  }
+}
+
 export class AES256CTR {
   private static readonly BLOCK_SIZE = 16;
   private static readonly KEY_SIZE = 32;
@@ -26,6 +38,7 @@ export class AES256CTR {
     if (iv.length !== this.IV_SIZE) {
       throw new Error(`Invalid IV length: expected ${this.IV_SIZE}, got ${iv.length}`);
     }
+    assertCtrRange(startCounter, data.length);
 
     const result = Buffer.alloc(data.length);
     let offset = 0;
@@ -96,6 +109,7 @@ export class AES256CTR {
     if (iv.length !== this.IV_SIZE) {
       throw new Error(`Invalid IV length: expected ${this.IV_SIZE}, got ${iv.length}`);
     }
+    assertCtrRange(startCounter, data.length);
 
     const gCrypto = (globalThis as any).crypto;
     if (gCrypto?.subtle && typeof gCrypto.subtle.encrypt === 'function') {
@@ -126,5 +140,9 @@ export class AesCtrCipher {
     const result = AES256CTR.process(Buffer.from(data), this.key, this.iv, this.blockCounter);
     this.blockCounter += (data.length + 15) >>> 4;
     return new Uint8Array(result);
+  }
+
+  get counter(): number {
+    return this.blockCounter;
   }
 }
