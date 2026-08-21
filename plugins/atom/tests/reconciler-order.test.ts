@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { createDOM, patch } from '../src/reconciler.js';
+import { createDOM, patch, flushPendingRefs } from '../src/reconciler.js';
 import { TEXT } from '../src/vdom.js';
 import type { VNode } from '../src/vdom.js';
 
@@ -202,8 +202,22 @@ describe('reconciler: prop diffing', () => {
       h('span', { ref: holder }),
     ]);
     const el = mount(outer);
+    // Refs are deferred to commit time (after insertion) so that mount-time
+    // measurement reads real layout.
+    flushPendingRefs();
     expect(seen.length).toBe(1);
     expect(seen[0]).toBe(el.firstChild);
     expect(holder.current).toBe(el.lastChild);
+  });
+
+  test('deferred refs see connected elements', () => {
+    const heights: number[] = [];
+    const outer = h('div', {}, [h('div', { ref: (e: Element) => heights.push((e as HTMLElement).offsetHeight), style: 'height:40px' })]);
+    const el = mount(outer);
+    // jsdom has no layout engine: emulate a measured element to prove refs
+    // fire post-insert, against the connected node.
+    Object.defineProperty(el.firstElementChild, 'offsetHeight', { value: 40, configurable: true });
+    flushPendingRefs();
+    expect(heights).toEqual([40]);
   });
 });

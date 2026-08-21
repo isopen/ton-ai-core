@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { createDOM, patch } from '../src/reconciler.js';
+import { createDOM, patch, flushPendingRefs } from '../src/reconciler.js';
 import {
   TEXT, FRAGMENT, SLOT, SLOTTABLE, currentInstance,
 } from '../src/vdom.js';
@@ -148,18 +148,21 @@ describe('createDOM', () => {
     expect(child.dom).toBe(el.firstChild);
   });
 
-  test('applies ref callback', () => {
+  test('applies ref callback after flush', () => {
     const refFn = jest.fn();
     const vnode = h('div', { ref: refFn });
     createDOM(vnode);
+    // Refs are queued during creation and fire on flushPendingRefs (commit).
+    flushPendingRefs();
     expect(refFn).toHaveBeenCalledTimes(1);
     expect(refFn.mock.calls[0][0].tagName).toBe('DIV');
   });
 
-  test('applies ref object', () => {
+  test('applies ref object after flush', () => {
     const ref = { current: null };
     const vnode = h('div', { ref });
     createDOM(vnode);
+    flushPendingRefs();
     expect(ref.current).not.toBeNull();
     expect((ref.current as HTMLElement).tagName).toBe('DIV');
   });

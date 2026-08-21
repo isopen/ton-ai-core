@@ -1,7 +1,7 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { ComponentInstance, setMountRoot, type VNode, type ComponentType } from './vdom.js';
 import { __setReroot, flushAllEffects } from './hooks.js';
-import { createDOM, patch } from './reconciler.js';
+import { createDOM, patch, flushPendingRefs } from './reconciler.js';
 
 const log = getLogger('atom');
 
@@ -89,6 +89,7 @@ function flushRenderInternal(rd: RootData) {
     if (rootDom && oldVNode) {
       setMountRoot(rd);
       rd.rootDom = patch(rootDom, oldVNode, newVNode);
+      flushPendingRefs();
     }
   } catch (e) {
     // Keep the pre-error oldVNode: the next successful render re-diffs
@@ -131,6 +132,7 @@ export function render(component: ComponentType, container: HTMLElement): Node {
     setMountRoot(null);
   }
   container.appendChild(dom);
+  flushPendingRefs();
   rd.rootDom = dom;
   roots.set(container, rd);
   // Last rendered root is the default target for rootless setState calls —

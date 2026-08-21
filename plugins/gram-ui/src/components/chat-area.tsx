@@ -74,6 +74,24 @@ interface AlbumRow {
 
 const rowKeyOf = (row: AlbumRow) => row.key;
 
+// Rough per-type height estimates for the virtual list: sharp guesses keep
+// spacer corrections small while scrolling into unmeasured content.
+function estimateRowHeight(row: AlbumRow): number {
+  const m = row.msgs[0];
+  if (!m) return 52;
+  if (row.msgs.length > 1) return 320;
+  const t = getMediaType(m.media);
+  if (t === 'photo') return 380;
+  if (t === 'sticker') return 220;
+  if (t === 'dice') return 240;
+  if (t === 'video') return 340;
+  if (t === 'document') return 80;
+  if (m.media?.webpage) return 130;
+  const len = (m.message || '').length;
+  if (!len) return 52;
+  return Math.min(300, 52 + Math.ceil(len / 60) * 22);
+}
+
 function isAlbumMedia(m: any): boolean {
   const t = getMediaType(m.media);
   return t === 'photo' || t === 'video';
@@ -801,6 +819,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
           className="tgui-msg-list"
           data={rows}
           estimatedItemHeight={48}
+          estimateItem={estimateRowHeight}
           startAtBottom={!hasUnread}
           keyExtractor={rowKeyOf}
           scrollToKey={hasUnread ? rows[firstUnreadRowIdx]?.key : undefined}

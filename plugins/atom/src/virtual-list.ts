@@ -18,6 +18,10 @@ export interface VirtualListProps<T> {
   startAtBottom?: boolean;
   scrollToKey?: string | number;
   topLoader?: VNode;
+  /** Per-row height estimate used until the row is measured; sharp
+   *  estimates (e.g. by message type) minimize spacer corrections while
+   *  scrolling into unmeasured content. */
+  estimateItem?: (item: T, index: number) => number;
   className?: string;
   style?: Record<string, any>;
   id?: string;
@@ -41,6 +45,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     startAtBottom,
     scrollToKey,
     topLoader,
+    estimateItem,
     className,
     style,
     id,
@@ -80,6 +85,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     prefixLen: number;
     prefixVersion: number;
     anchor?: { key: string; top: number };
+    wasAtBottom: boolean;
   }>({
     heights: [],
     prevLen: 0,
@@ -91,6 +97,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     prefixLen: -1,
     prefixVersion: -1,
     anchor: undefined,
+    wasAtBottom: true,
   });
 
   const containerHeight = ch ?? measuredH;
@@ -171,9 +178,23 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         const anchor = st.current.anchor;
         const oldSH = st.current.lastSH;
         const oldST = st.current.lastST;
+        const wasAtBottom = st.current.wasAtBottom;
         queueMicrotask(() => {
           const el = containerRef.current;
           if (!el) return;
+          // Deterministic bottom-follow: when the user was at the bottom,
+          // appended content keeps the view pinned — no scroll-event races.
+          if (wasAtBottom && el.scrollTop === oldST) {
+            suppressScrollRef.current = true;
+            el.scrollTop = el.scrollHeight;
+            st.current.lastST = el.scrollTop;
+            st.current.lastSH = el.scrollHeight;
+            atBottomRef.current = true;
+            st.current.wasAtBottom = true;
+            setScrollTop(el.scrollTop);
+            updateThumb();
+            return;
+          }
           if (anchor && anchor.key && el.scrollTop === oldST) {
             const node = el.querySelector<HTMLElement>('[data-vl-key="' + anchor.key + '"]');
             if (node) {
@@ -208,9 +229,15 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
   function getHeight(i: number): number {
     if (!dynamicMode) return itemHeight!;
-    return i < st.current.heights.length && st.current.heights[i] > 0
-      ? st.current.heights[i]
-      : estH;
+    if (i < st.current.heights.length && st.current.heights[i] > 0) {
+      return st.current.heights[i];
+    }
+    const item = data[i];
+    if (item !== undefined && estimateItem) {
+      const est = estimateItem(item, i);
+      if (Number.isFinite(est) && est > 0) return est;
+    }
+    return estH;
   }
 
   function ensurePrefix(): Float64Array {
@@ -301,20 +328,15 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
     if (suppressScrollRef.current) {
       suppressScrollRef.current = false;
-      st.current.lastST = el.scrollTop;
-      st.current.lastSH = el.scrollHeight;
     } else {
       userScrolledRef.current = true;
-      if (newSH !== st.current.lastSH && st.current.lastSH > 0) {
-        const diff = newSH - st.current.lastSH;
-        const nearBottom = st.current.lastST > 50 && st.current.lastST + el.clientHeight >= st.current.lastSH - 50;
-        if (nearBottom) {
-          el.scrollTop = newSH;
-        } else {
-          el.scrollTop = st.current.lastST + diff;
-        }
-      }
     }
+    // Pure tracking — never mutate scrollTop here. Reactive compensation on
+    // scroll events fought the user's gesture: height deltas include content
+    // growing below the viewport (lazy media), and near-bottom pinning yanked
+    // the view against the scroll direction. Bottom-following happens
+    // deterministically in the itemsAdded microtask instead.
+    st.current.wasAtBottom = el.scrollTop + el.clientHeight >= newSH - 2;
 
     st.current.lastST = el.scrollTop;
     st.current.lastSH = el.scrollHeight;
@@ -380,6 +402,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     st.current.lastST = maxTop;
     st.current.lastSH = el.scrollHeight;
     atBottomRef.current = true;
+    st.current.wasAtBottom = true;
     setScrollTop(maxTop);
     updateThumb();
   }, [data.length, startAtBottom, measTick, vh, containerHeight]);
@@ -411,6 +434,8 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     el.scrollTop = target;
     st.current.lastST = el.scrollTop;
     st.current.lastSH = el.scrollHeight;
+    atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+    st.current.wasAtBottom = atBottomRef.current;
     setScrollTop(el.scrollTop);
     updateThumb();
     requestAnimationFrame(() => {
@@ -574,12 +599,14 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       queueMicrotask(() => {
         st.current.lastST = el.scrollTop;
         st.current.lastSH = el.scrollHeight;
+        st.current.wasAtBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
         if (startAtBottom && data.length > 0 && el.scrollTop === 0 && el.scrollHeight > 0) {
           suppressScrollRef.current = true;
           el.scrollTop = el.scrollHeight;
           st.current.lastST = el.scrollTop;
           st.current.lastSH = el.scrollHeight;
           atBottomRef.current = true;
+          st.current.wasAtBottom = true;
           setScrollTop(el.scrollTop);
         }
         updateThumb();

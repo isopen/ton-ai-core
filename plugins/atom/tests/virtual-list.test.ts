@@ -637,7 +637,7 @@ describe('VirtualList', () => {
       });
     });
 
-    test('scroll height growth shifts scrollTop (not near bottom and near bottom)', (done) => {
+    test('scroll height growth never mutates scrollTop mid-scroll (no fighting the gesture)', (done) => {
       const items = generateItems(100);
       Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 200 });
 
@@ -662,26 +662,18 @@ describe('VirtualList', () => {
         listEl.scrollTop = 500;
         listEl.dispatchEvent(new Event('scroll'));
         afterScroll(() => {
+          // Content grows below the viewport while scrolling: scrollTop must
+          // stay where the user put it — no reactive compensation.
           Object.defineProperty(listEl, 'scrollHeight', { value: 3000, configurable: true });
           listEl.scrollTop = 500;
           listEl.dispatchEvent(new Event('scroll'));
           afterScroll(() => {
-            expect(listEl.scrollTop).toBe(1500);
-            listEl.scrollTop = 3000;
-            listEl.dispatchEvent(new Event('scroll'));
-            afterScroll(() => {
-              Object.defineProperty(listEl, 'scrollHeight', { value: 4000, configurable: true });
-              listEl.scrollTop = 3000;
-              listEl.dispatchEvent(new Event('scroll'));
-              afterScroll(() => {
-                expect(listEl.scrollTop).toBe(4000);
-                done();
-              });
-            });
+            expect(listEl.scrollTop).toBe(500);
+            done();
           });
         });
       });
-    });
+    }, 10000);
 
     test('multiple scroll events in the same frame batch into one update', (done) => {
       const items = generateItems(100);

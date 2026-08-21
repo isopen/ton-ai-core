@@ -64,9 +64,29 @@ function styleObjToCss(style: Record<string, any>): string {
   return parts.join(';');
 }
 
+// Refs fire at commit time (after insertion) so measurement reads real layout:
+// invoking them during createDOM — while nodes are still detached — yields
+// offsetHeight 0 and silently breaks mount-time measuring.
+const pendingRefCalls: Array<{ el: Element; ref: any }> = [];
+
+export function flushPendingRefs(): void {
+  if (pendingRefCalls.length === 0) return;
+  const list = pendingRefCalls.splice(0, pendingRefCalls.length);
+  for (const { el, ref } of list) {
+    try {
+      if (typeof ref === 'function') ref(el);
+      else if (ref && typeof ref === 'object') ref.current = el;
+    } catch (e) { log.error('[recon] ref callback error:', e); }
+  }
+}
+
 function setProp(el: Element, key: string, value: any) {
   if (key === 'key' || key === 'children') return;
   if (key === 'ref') {
+    if (!el.isConnected) {
+      pendingRefCalls.push({ el, ref: value });
+      return;
+    }
     if (typeof value === 'function') value(el);
     else if (value && typeof value === 'object') value.current = el;
     return;
