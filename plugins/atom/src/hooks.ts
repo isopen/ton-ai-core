@@ -3,11 +3,11 @@ import { currentInstance, type ComponentInstance } from './vdom.js';
 
 const log = getLogger('atom');
 
-let reroot: (() => void) | null = null;
+let reroot: ((inst?: ComponentInstance) => void) | null = null;
 
 const pendingEffects: Array<{ inst: ComponentInstance; fn: () => (() => void) | void; oldCleanup?: (() => void); cleanupIdx: number }> = [];
 
-export function __setReroot(fn: () => void) {
+export function __setReroot(fn: (inst?: ComponentInstance) => void) {
   reroot = fn;
 }
 
@@ -29,7 +29,7 @@ export function useState<T>(initial: T | (() => T)): [T, (v: T | ((prev: T) => T
     if (newVal !== inst.hookStates[idx]) {
       inst.hookStates[idx] = newVal;
       inst._dirty = true;
-      if (reroot) reroot();
+      reroot?.(inst);
     }
   };
 

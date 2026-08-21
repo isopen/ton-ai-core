@@ -1,5 +1,5 @@
 import { getLogger } from '@ton-ai/gram-debug';
-import { TEXT, FRAGMENT, SLOT, SLOTTABLE, ComponentInstance, setCurrentInstance, type VNode, type ComponentType } from './vdom.js';
+import { TEXT, FRAGMENT, SLOT, SLOTTABLE, ComponentInstance, setCurrentInstance, getMountRoot, type VNode, type ComponentType } from './vdom.js';
 
 const log = getLogger('atom');
 
@@ -91,7 +91,13 @@ function setProp(el: Element, key: string, value: any) {
   }
   if (isEventProp(key)) {
     const eventName = eventNameFromProp(key);
-    el.addEventListener(eventName, value);
+    // Non-blocking by default for high-frequency scroll-family events; none of
+    // the framework's own handlers call preventDefault on them.
+    if (eventName === 'scroll' || eventName === 'wheel' || eventName === 'touchstart' || eventName === 'touchmove') {
+      el.addEventListener(eventName, value, { passive: true });
+    } else {
+      el.addEventListener(eventName, value);
+    }
     return;
   }
   if (typeof value === 'boolean') {
@@ -248,6 +254,7 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
     if (typeof vnode.type === 'function') {
       const component = vnode.type as ComponentType;
       const instance = reuseInstance ?? new ComponentInstance(component, vnode.props);
+      if (instance.rootRef === undefined) instance.rootRef = getMountRoot();
       if (reuseInstance) {
         reuseInstance.props = vnode.props;
         reuseInstance._mounted = true;
@@ -382,6 +389,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
     let instance = oldVNode.componentInstance;
     if (!instance) {
       instance = new ComponentInstance(component, newVNode.props);
+      if (instance.rootRef === undefined) instance.rootRef = getMountRoot();
     } else {
       instance.props = newVNode.props;
       instance._mounted = true;
@@ -466,13 +474,22 @@ function reconcileChildren(
         const nodes = newDom === oldDom ? oldEntry.nodes : findAllDomNodes(newChild);
         patches.push({ nodes });
       } else {
-        log.warn('[recon] DUPLICATE-MOUNT key=' + String(key) + ' parent=' + (parentEl as HTMLElement).className + ' oldNodes=' + oldEntry.nodes.length);
+        // Matched key whose DOM went missing or partially detached: drop every
+        // stale node before mounting fresh, otherwise orphaned duplicates
+        // linger in the tree (the key counts as used, so the removal pass
+        // below would skip them).
+        for (const node of oldEntry.nodes) {
+          if (node.parentNode) node.parentNode.removeChild(node);
+        }
         const newDom = createDOM(newChild);
         newChild.dom = newDom;
         patches.push({ nodes: findAllDomNodes(newChild) });
       }
     } else if (oldEntry) {
       log.warn('[recon] DUP-KEY key=' + String(key) + ' parent=' + (parentEl as HTMLElement).className + ' oldNodes=' + oldEntry.nodes.length);
+      for (const node of oldEntry.nodes) {
+        if (node.parentNode) node.parentNode.removeChild(node);
+      }
       const newDom = createDOM(newChild);
       newChild.dom = newDom;
       patches.push({ nodes: findAllDomNodes(newChild) });
@@ -493,32 +510,24 @@ function reconcileChildren(
     }
   }
 
-  const parent = parentEl as HTMLElement;
   if (patches.length === 0) return;
 
-  let cursor = parent.firstChild;
-
-  firstOf: if (cursor) {
-    for (const p of patches) {
-      if (p.nodes.length && p.nodes[0].parentNode === parent) {
-        while (cursor && cursor !== p.nodes[0]) cursor = cursor.nextSibling;
-        break firstOf;
-      }
-    }
-    cursor = null;
-  }
-
-  for (let i = 0; i < newLen; i++) {
+  // Enforce final order with a forward cursor walk (preact-style):
+  // `cur` points at the node that must FOLLOW whatever we are placing.
+  // A node already sitting exactly at `cur` costs nothing — stable lists
+  // produce zero DOM moves, so canvases/CSS animations/lazy images are never
+  // disturbed. A misplaced node is moved before `cur`; `cur` itself stays as
+  // the boundary for the next node.
+  let cur = parentEl.firstChild;
+  for (let i = 0; i < patches.length; i++) {
     const nodes = patches[i].nodes;
-    if (nodes.length === 0) continue;
-
-    const first = nodes[0];
-    if (first !== cursor) {
-      for (const node of nodes) {
-        parent.insertBefore(node, cursor);
+    for (let j = 0; j < nodes.length; j++) {
+      const node = nodes[j];
+      if (node === cur) {
+        cur = cur!.nextSibling;
+      } else {
+        parentEl.insertBefore(node, cur);
       }
     }
-
-    cursor = nodes[nodes.length - 1].nextSibling;
   }
 }

@@ -224,24 +224,23 @@ describe('ComponentInstance', () => {
     expect(inst.displayName).toBe('Dummy');
   });
 
-  test('render() sets currentInstance and resets hookIndex', () => {
+  test('render() resets hookIndex and clears currentInstance', () => {
     const inst = new ComponentInstance(Dummy, {});
     setCurrentInstance(null);
     expect(currentInstance).toBeNull();
 
     const vnode = inst.render();
 
-    expect(currentInstance).toBe(inst);
+    // Hooks outside a render must never silently attach to this instance.
+    expect(currentInstance).toBeNull();
     expect(inst.hookIndex).toBe(0);
     expect(vnode.type).toBe('div');
   });
 
-  test('render() restores previous instance', () => {
-    const prev = currentInstance;
+  test('render() does not leak the instance into global currentInstance', () => {
     const inst = new ComponentInstance(Dummy, {});
     inst.render();
-    expect(currentInstance).toBe(inst);
-    setCurrentInstance(prev);
+    expect(currentInstance).toBeNull();
   });
 
   test('displayName for anonymous arrow function', () => {

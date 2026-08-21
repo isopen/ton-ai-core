@@ -917,7 +917,7 @@ describe('patch - edge paths', () => {
     expect(el.textContent).toBe('A');
   });
 
-  test('keyed fragment child with detached first node leaves cursor null', () => {
+  test('keyed fragment child with detached first node is replaced cleanly', () => {
     const inner1 = h('span', {}, '1');
     const inner2 = h('span', {}, '2');
     const frag = { type: FRAGMENT, props: {}, children: [inner1, inner2], key: 'f' };
@@ -929,7 +929,9 @@ describe('patch - edge paths', () => {
 
     const newOuter = h('div', {}, h('span', { key: 'f' }, '3'));
     patch(el, oldOuter, newOuter);
-    expect(el.textContent).toBe('23');
+    // The matched fragment is fully replaced by the new subtree: stale
+    // siblings of a detached node must not survive into the new tree.
+    expect(el.textContent).toBe('3');
   });
 
   test('keyed child whose old dom is detached is recreated', () => {
