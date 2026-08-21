@@ -19,6 +19,7 @@ const PHOTO_DOWNLOAD_DEADLINE_MS = 60_000;
 const PHOTO_REFRESH_TIMEOUT_MS = 20_000;
 const PHOTO_QUEUED_KEYS_MAX = 512;
 const AVATAR_REDISPATCH_DELAY_MS = 10_000;
+const AVATAR_REQUEUE_MAX = 5;
 
 function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -70,6 +71,7 @@ export class GramMediaRouter {
     private downloadQueueMicrotasks = new Set<QueueKey>();
     private documentRetryCounts = new Map<number, number>();
     private documentRetryTimers = new Map<number, ReturnType<typeof setTimeout>>();
+    private retryPendingDocs = new Set<number | string>();
 
     readonly emoji: EmojiPipeline;
 
@@ -236,6 +238,16 @@ export class GramMediaRouter {
         this.transport?.cancelVideoStreams?.();
         this.emoji.resetEmojiDownloads();
         this.documentPending.clear();
+        // Photo/avatar queues hold viewport-gated items that can never become
+        // eligible after a peer switch — drop them instead of letting them
+        // linger through every processing pass.
+        this.photoQueue.length = 0;
+        this.avatarQueue.length = 0;
+        this.photoQueuedKeys.clear();
+        this.avatarQueuedKeys.clear();
+        this.retryPendingDocs.clear();
+        for (const t of this.documentRetryTimers.values()) clearTimeout(t);
+        this.documentRetryTimers.clear();
         for (const key of Object.keys(this.downloadQueues) as QueueKey[]) {
             this.downloadQueues[key].length = 0;
         }
@@ -328,6 +340,9 @@ export class GramMediaRouter {
             scanned++;
             if (this.isCachedEmojiUrl(oldest)) continue;
             if (this.emojiBlobUrls.has(oldest)) continue;
+            // Drop cache entries pointing at the dying URL first, otherwise
+            // the caches keep serving a dead blob on every hit forever.
+            this.dropCacheEntriesForUrl(oldest);
             URL.revokeObjectURL(oldest);
             this.notifyEmojiUrlRevoked(oldest);
         }
@@ -336,10 +351,20 @@ export class GramMediaRouter {
 
     revokeBlobUrl(url?: string): boolean {
         if (!url || !url.startsWith('blob:')) return false;
+        this.dropCacheEntriesForUrl(url);
         URL.revokeObjectURL(url);
         this.activeBlobUrls.delete(url);
         this.notifyEmojiUrlRevoked(url);
         return true;
+    }
+
+    private dropCacheEntriesForUrl(url: string): void {
+        for (const [k, v] of this.photoUrlCache) {
+            if (v === url) this.photoUrlCache.delete(k);
+        }
+        for (const [k, v] of this.thumbUrlCache) {
+            if (v === url) this.thumbUrlCache.delete(k);
+        }
     }
 
     notifyEmojiUrlRevoked(url: string): void {
@@ -510,6 +535,15 @@ export class GramMediaRouter {
 
     async tgsToJsonUrl(bytes: ArrayBuffer | Uint8Array): Promise<string> {
         const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        // Content-addressed dedupe: the same sticker bytes must map to one
+        // shared JSON blob instead of piling up duplicates.
+        const contentKey = await this.tgsContentKey(u8);
+        const existing = contentKey ? this.tgsJsonUrlByKey.get(contentKey) : undefined;
+        if (existing && this.tgsJsonByUrl.has(existing.url)) {
+            existing.ts = Date.now();
+            this.tgsJsonByUrlTs.set(existing.url, existing.ts);
+            return existing.url;
+        }
         let jsonStr: string;
         if (u8.length > 2 && u8[0] === 0x1f && u8[1] === 0x8b) {
             try {
@@ -535,18 +569,41 @@ export class GramMediaRouter {
         }
         this.tgsJsonByUrl.set(url, jsonStr);
         this.tgsJsonByUrlTs.set(url, now);
+        if (contentKey) {
+            this.tgsJsonUrlByKey.set(contentKey, { url, ts: now });
+            this.tgsJsonKeyByUrl.set(url, contentKey);
+        }
         if (this.tgsJsonByUrl.size >= 64 && now >= this.tgsJsonSweepAt) {
             this.tgsJsonSweepAt = now + 120_000;
             const cutoff = now - TGS_JSON_TTL_MS;
             for (const [u, ts] of this.tgsJsonByUrlTs) {
                 if (ts < cutoff) {
                     this.revokeBlobUrl(u);
+                    const k = this.tgsJsonKeyByUrl.get(u);
+                    if (k) {
+                        this.tgsJsonUrlByKey.delete(k);
+                        this.tgsJsonKeyByUrl.delete(u);
+                    }
                     this.tgsJsonByUrl.delete(u);
                     this.tgsJsonByUrlTs.delete(u);
                 }
             }
         }
         return url;
+    }
+
+    private tgsJsonUrlByKey = new Map<string, { url: string; ts: number }>();
+    private tgsJsonKeyByUrl = new Map<string, string>();
+
+    private async tgsContentKey(u8: Uint8Array): Promise<string | null> {
+        try {
+            const subtle = globalThis.crypto?.subtle;
+            if (!subtle) return null;
+            const digest = await subtle.digest('SHA-1', u8 as unknown as BufferSource);
+            return 'sha1:' + Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+        } catch {
+            return null;
+        }
     }
 
     private getPhotoCacheKey(photo: any, sizeType: string): string {
@@ -691,6 +748,7 @@ export class GramMediaRouter {
 
                 if (result?.bytes?.byteLength && result.mime) {
                     const ck2 = this.getPhotoCacheKey(currentPhoto, sizeType);
+                    if (isAvatar) this.avatarRequeueCounts.delete(String(messageId));
                     const url = this.bytesToBlobUrl(result.bytes, result.mime);
                     this.photoUrlCacheSet(ck2, url);
                     this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url, cacheSource: result.cacheSource || 'home-server' });
@@ -700,6 +758,7 @@ export class GramMediaRouter {
                 if (result?.photoUrl) {
                     const ck2 = this.getPhotoCacheKey(currentPhoto, sizeType);
                     this.photoUrlCacheSet(ck2, result.photoUrl);
+                    if (isAvatar) this.avatarRequeueCounts.delete(String(messageId));
                     this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: result.photoUrl, cacheSource: result.cacheSource || 'home-server' });
                     return;
                 }
@@ -767,7 +826,17 @@ export class GramMediaRouter {
         this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_FAILED', messageId, sizeType });
         this.emitWindow('tg-photo-download-failed', { messageId, sizeType });
         if (requeuePhoto) {
-            if (this.debug) log.info('[gram-media] avatar download exhausted, re-queueing', messageId, sizeType);
+            // Bounded re-dispatch loop: a permanently broken peer photo must
+            // not retry every 10s forever.
+            const key = String(messageId);
+            const count = (this.avatarRequeueCounts.get(key) || 0) + 1;
+            if (count > AVATAR_REQUEUE_MAX) {
+                this.avatarRequeueCounts.delete(key);
+                if (this.debug) log.info('[gram-media] avatar requeue limit reached, giving up', messageId, sizeType);
+                return;
+            }
+            this.avatarRequeueCounts.set(key, count);
+            if (this.debug) log.info('[gram-media] avatar download exhausted, re-queueing', messageId, sizeType, 'cycle', count);
             setTimeout(() => {
                 this.emitWindow('tg-download-photo', { photo: requeuePhoto, sizeType, messageId });
             }, AVATAR_REDISPATCH_DELAY_MS);
@@ -936,7 +1005,15 @@ export class GramMediaRouter {
                 await this.processFileDownloadResult(it, r, gen);
             }));
         } finally {
-            for (const it of items) this.documentPending.delete(it.messageId as number | string);
+            for (const it of items) {
+                // Keep documentPending alive for items that scheduled a retry:
+                // the pending flag must dedupe requests until the retry timer
+                // actually re-dispatches, otherwise a duplicate download can
+                // race the timer.
+                if (!this.retryPendingDocs.has(it.messageId)) {
+                    this.documentPending.delete(it.messageId);
+                }
+            }
         }
     }
 
@@ -975,7 +1052,7 @@ export class GramMediaRouter {
         if (error.includes('FILE_REFERENCE_EXPIRED')) {
             if (this.debug) log.info('[gram-media] batch FILE_REFERENCE_EXPIRED, re-fetching message', item.messageId);
             try {
-                const freshMsg = await this.refreshMessage(item.messageId);
+                const freshMsg = await withDeadline(this.refreshMessage(item.messageId), PHOTO_REFRESH_TIMEOUT_MS, 'batch document refresh exceeded');
                 if (gen !== this.documentDownloadGen) return;
                 if (freshMsg?.media?.document) {
                     const retry = await this.transport?.downloadFile({ document: freshMsg.media.document });
@@ -1270,13 +1347,19 @@ export class GramMediaRouter {
         if ((this.documentRetryCounts.get(messageId) || 0) >= 5) {
             if (this.debug) log.info('[gram-media] document give up retries messageId=' + messageId);
             this.documentRetryCounts.delete(messageId);
+            this.retryPendingDocs.delete(messageId);
+            this.documentPending.delete(messageId);
             window.dispatchEvent(new CustomEvent('tg-document-download-failed', { detail: { messageId } }));
             return;
         }
         const attempts = this.documentRetryCounts.get(messageId) || 0;
         const delay = Math.min(10000, 600 * Math.pow(2, attempts));
+        // documentPending stays occupied for the whole backoff window.
+        this.retryPendingDocs.add(messageId);
         this.documentRetryTimers.set(messageId, setTimeout(() => {
             this.documentRetryTimers.delete(messageId);
+            this.retryPendingDocs.delete(messageId);
+            this.documentPending.delete(messageId);
             this.documentRetryCounts.set(messageId, attempts + 1);
             if (this.debug) log.info('[gram-media] document retry messageId=' + messageId + ' attempt=' + (attempts + 1));
             window.dispatchEvent(new CustomEvent('tg-download-document', {
@@ -1297,29 +1380,49 @@ export class GramMediaRouter {
         this.thumbInflight.add(thumbKey);
         if (this.debug) log.info('[gram-media] tg-download-document-thumb START messageId=' + messageId + ' thumbType=' + thumbType + ' docId=' + document.id);
         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
-        try {
-            const doc = { ...document, thumb_size: thumbType };
-            const result = await this.transport?.downloadFile({ document: doc });
-            if (result?.bytes) {
-                const bytes = this.toArrayBuffer(result.bytes);
-                const url = bytes.byteLength ? this.bytesToBlobUrl(bytes, 'image/jpeg') : '';
-                if (this.debug) log.info('[gram-media] tg-download-document-thumb SUCCESS messageId=' + messageId + ' thumbType=' + thumbType + ' bytesLen=' + bytes.byteLength);
-                if (url) {
-                    this.thumbUrlCache.set(thumbKey, url);
-                    if (this.thumbUrlCache.size > 512) {
-                        const oldest = this.thumbUrlCache.keys().next().value;
-                        if (oldest !== undefined) {
-                            this.revokeBlobUrl(this.thumbUrlCache.get(oldest));
-                            this.thumbUrlCache.delete(oldest);
-                        }
-                    }
-                    this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_THUMB', messageId, thumbType, url });
+        const commit = (bytes: ArrayBuffer, freshDoc?: any): void => {
+            if (!bytes.byteLength) return;
+            const url = this.bytesToBlobUrl(bytes, 'image/jpeg');
+            if (!url) return;
+            if (this.debug) log.info('[gram-media] tg-download-document-thumb SUCCESS messageId=' + messageId + ' thumbType=' + thumbType + ' bytesLen=' + bytes.byteLength);
+            this.thumbUrlCache.set(thumbKey, url);
+            if (this.thumbUrlCache.size > 512) {
+                const oldest = this.thumbUrlCache.keys().next().value;
+                if (oldest !== undefined) {
+                    this.revokeBlobUrl(this.thumbUrlCache.get(oldest));
+                    this.thumbUrlCache.delete(oldest);
                 }
+            }
+            if (freshDoc?.id) this.registerStickerDoc(freshDoc);
+            this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_THUMB', messageId, thumbType, url });
+        };
+        try {
+            const result = await this.transport?.downloadFile({ document: { ...document, thumb_size: thumbType } });
+            if (result?.bytes) {
+                commit(this.toArrayBuffer(result.bytes));
             } else {
                 if (this.debug) log.info('[gram-media] tg-download-document-thumb NO_BYTES messageId=' + messageId + ' thumbType=' + thumbType);
             }
-        } catch (err) {
-            log.error('[gram-media] tg-download-document-thumb ERROR:', err, messageId, thumbType);
+        } catch (err: any) {
+            const msg = String(err?.message || err);
+            // Expired refs are a normal lifecycle event: re-fetch the source
+            // message once and retry with the fresh document.
+            if (msg.includes('FILE_REFERENCE_EXPIRED')) {
+                try {
+                    const freshMsg = await withDeadline(this.refreshMessage(messageId), PHOTO_REFRESH_TIMEOUT_MS, 'thumb message refresh exceeded');
+                    const freshDoc = freshMsg?.media?.document;
+                    if (freshDoc?.id) {
+                        const result2 = await this.transport?.downloadFile({ document: { ...freshDoc, thumb_size: thumbType } });
+                        if (result2?.bytes) {
+                            commit(this.toArrayBuffer(result2.bytes), freshDoc);
+                        }
+                    }
+                } catch (e2: any) {
+                    log.error('[gram-media] tg-download-document-thumb refresh error:', e2?.message || e2, messageId, thumbType);
+                }
+            } else {
+                log.error('[gram-media] tg-download-document-thumb ERROR:', err, messageId, thumbType);
+            }
         } finally {
             this.thumbInflight.delete(thumbKey);
             this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
@@ -1331,6 +1434,7 @@ export class GramMediaRouter {
     private emojiKeysByUrl = new Map<string, Set<string>>();
     private thumbUrlCache = new Map<string, string>();
     private thumbInflight = new Set<string>();
+    private avatarRequeueCounts = new Map<string, number>();
     private videoStreamInflight = new Set<number | string>();
     private lastEmptyChatUrl: string | null = null;
 }

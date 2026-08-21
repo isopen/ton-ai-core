@@ -1682,7 +1682,9 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
     }
     if (result.error === 'ABORTED') {
         wlog('[worker] requestPhotoDownload: ABORTED', 'sizeType:', sizeType);
-        return null;
+        // Throw (not null) so the caller's catch treats it as a cancellation
+        // and skips the retry loop entirely.
+        throw new Error('ABORTED');
     }
     if (result.error) {
         log.error('[worker] requestPhotoDownload error:', result.error, 'sizeType:', sizeType);
