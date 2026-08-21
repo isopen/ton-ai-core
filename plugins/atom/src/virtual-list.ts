@@ -369,17 +369,20 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     if (!startAtBottom || data.length === 0) return;
     const el = containerRef.current;
     if (!el || userScrolledRef.current) return;
-
-    if (el.scrollTop !== 0 && !atBottomRef.current) return;
     const maxTop = el.scrollHeight - el.clientHeight;
     if (maxTop <= 0) return;
+    // While the user hasn't scrolled, keep the view pinned to the bottom.
+    // Re-runs as batches arrive and row heights settle from estimates to
+    // measured, so the chat opens already at the bottom with no visible
+    // intermediate scroll positions.
     suppressScrollRef.current = true;
     el.scrollTop = maxTop;
     st.current.lastST = maxTop;
     st.current.lastSH = el.scrollHeight;
+    atBottomRef.current = true;
     setScrollTop(maxTop);
     updateThumb();
-  }, [data.length, startAtBottom]);
+  }, [data.length, startAtBottom, measTick, vh, containerHeight]);
 
   useEffect(() => {
     if (scrollToKey == null || scrollToFiredRef.current) return;
@@ -572,8 +575,11 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         st.current.lastST = el.scrollTop;
         st.current.lastSH = el.scrollHeight;
         if (startAtBottom && data.length > 0 && el.scrollTop === 0 && el.scrollHeight > 0) {
+          suppressScrollRef.current = true;
           el.scrollTop = el.scrollHeight;
-
+          st.current.lastST = el.scrollTop;
+          st.current.lastSH = el.scrollHeight;
+          atBottomRef.current = true;
           setScrollTop(el.scrollTop);
         }
         updateThumb();

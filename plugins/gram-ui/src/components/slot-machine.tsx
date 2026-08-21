@@ -246,6 +246,7 @@ function SlotLayer({ docId, role, partIndex, size, play, loop, playKey, showLast
   if (data.kind === 'video') {
     return (
       <video
+        key={showLastFrame ? 'lf' : 'run'}
         class="tgui-slot-layer-player"
         src={data.value}
         width={size}
@@ -253,7 +254,13 @@ function SlotLayer({ docId, role, partIndex, size, play, loop, playKey, showLast
         loop={loop ?? false}
         muted
         playsinline
-        autoplay={play}
+        autoplay={play && !showLastFrame}
+        onLoadedMetadata={(e: any) => {
+          if (!showLastFrame) return;
+          const v = e.currentTarget as HTMLVideoElement;
+          const d = v.duration;
+          if (Number.isFinite(d) && d > 0) v.currentTime = Math.max(0, d - 0.05);
+        }}
         onEnded={onEnd}
       />
     );

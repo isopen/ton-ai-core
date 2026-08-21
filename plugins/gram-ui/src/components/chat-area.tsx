@@ -507,7 +507,7 @@ function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: numb
   if (!docId || !url) {
     return <span class="tgui-dice-loading" style={{ display: 'inline-block', width: DICE_SIZE + 'px', height: DICE_SIZE + 'px' }} />;
   }
-  return <AnimatedEmoji docId={docId} url={url} alt="" size={DICE_SIZE} autoplay={false} loop={value == null} playKey={'dice-' + msgId} showLastFrame={value != null} />;
+  return <AnimatedEmoji docId={docId} url={url} alt="" size={DICE_SIZE} autoplay={value == null} loop={value == null} playKey={'dice-' + msgId} showLastFrame={value != null} />;
 }
 
 function DiceBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {

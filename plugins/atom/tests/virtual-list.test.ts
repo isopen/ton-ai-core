@@ -1793,7 +1793,7 @@ describe('VirtualList edge branches', () => {
     });
   });
 
-  test('startAtBottom effect bails when the list is already anchored at the bottom', (done) => {
+  test('startAtBottom keeps the list pinned to the bottom while the user has not scrolled', (done) => {
     let setData: ((v: { id: number; label: string }[]) => void) | null = null;
     const items = generateItems(20);
     let sh = 1000;
@@ -1825,7 +1825,7 @@ describe('VirtualList edge branches', () => {
       sh = 1500;
       setData!(generateItems(30));
       queueMicrotask(() => {
-        expect(listEl.scrollTop).toBe(800);
+        expect(listEl.scrollTop).toBe(1300);
         done();
       });
     });
