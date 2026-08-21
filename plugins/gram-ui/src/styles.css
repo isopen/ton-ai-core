@@ -4983,3 +4983,9 @@ body {
     font-size: 14px;
   }
 }
+
+/* Slot machine: layers are always mounted (telegram-tt pattern); visibility
+   is toggled by class so state transitions never rebuild the DOM. */
+.tgui-slot-layer.tgui-slot-layer-hidden {
+  display: none;
+}
