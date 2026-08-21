@@ -2,7 +2,6 @@ import type { AnimatedRendererParams, AnimatedRendererView, IAnimatedRenderer } 
 import { getMediaWorkers, MAX_WORKERS, respawnWorker } from './media-workers.js';
 import type { MediaWorker } from './media-workers.js';
 import { isPageFocused } from './page-focus.js';
-import { inflateTgs } from '@ton-ai/tgs';
 import { resetDrawBudgetIfExpired, tryAcquireDrawCall } from './draw-budget.js';
 import { getLogger } from '@ton-ai/gram-debug';
 
@@ -13,7 +12,9 @@ const HIGH_PRIORITY_QUALITY = 1;
 const LOW_PRIORITY_QUALITY = 0.75;
 const LOW_PRIORITY_QUALITY_SIZE_THRESHOLD = 24;
 const HIGH_PRIORITY_CACHE_MODULO = 4;
-const LOW_PRIORITY_CACHE_MODULO = 0;
+const LOW_PRIORITY_CACHE_MODULO = 2;
+const CACHE_WINDOW_HIGH_PRIORITY = 8;
+const CACHE_WINDOW_LOW_PRIORITY = 4;
 const CANVAS_CLASS = 'tgui-animated-sticker-canvas';
 
 const WAITING = Symbol('WAITING') as unknown as undefined;
@@ -30,7 +31,7 @@ const PARK_TTL_MS = 30_000;
 const MAX_PARKED = 48;
 const TGS_JSON_CACHE_MAX = 256;
 
-const tgsJsonCache = new Map<string, string>();
+const tgsJsonCache = new Map<string, string | Uint8Array>();
 const tgsJsonCacheTs = new Map<string, number>();
 let tgsJsonSweepAt = 0;
 const TGS_JSON_TTL_MS = 30 * 60 * 1000;
@@ -45,7 +46,7 @@ const sweepTgsJsonCache = (now: number) => {
     }
   }
 };
-const setTgsJsonCached = (url: string, text: string) => {
+const setTgsJsonCached = (url: string, text: string | Uint8Array) => {
   if (tgsJsonCache.size >= TGS_JSON_CACHE_MAX) {
     const oldest = tgsJsonCache.keys().next().value;
     if (oldest !== undefined) {
@@ -74,7 +75,7 @@ if (typeof document !== 'undefined') {
   });
 }
 
-async function getTgsJson(url: string): Promise<string | undefined> {
+async function getTgsJson(url: string): Promise<string | Uint8Array | undefined> {
   if (!url) return undefined;
   const cached = tgsJsonCache.get(url);
   if (cached) {
@@ -85,12 +86,11 @@ async function getTgsJson(url: string): Promise<string | undefined> {
     const resp = await fetch(url);
     if (!resp.ok) return undefined;
     const ct = (resp.headers.get('content-type') || '').toLowerCase();
-    const text = ct.startsWith('text/') || ct.includes('json')
-      ? await resp.text()
-      : await inflateTgs(new Uint8Array(await resp.arrayBuffer()));
-    if (!text) return undefined;
-    setTgsJsonCached(url, text);
-    return text;
+    const isText = ct.startsWith('text/') || ct.includes('json');
+    const raw = new Uint8Array(await resp.arrayBuffer());
+    const data: string | Uint8Array = isText ? new TextDecoder().decode(raw) : raw;
+    setTgsJsonCached(url, data);
+    return data;
   } catch {
     return undefined;
   }
@@ -167,7 +167,7 @@ export class TgsRenderer implements IAnimatedRenderer {
       this.lastPaintAt = now;
       return;
     }
-    if (now - this.lastPaintAt < 4000) return;
+    if (now - this.lastPaintAt < 6000) return;
     const loadedFrames = this.frames.filter((f) => f && f !== WAITING).length;
     log.warn(
       '[AnimatedRenderer] anim frozen (no paint for ' + Math.round((now - this.lastPaintAt) / 1000) + 's):',
@@ -208,7 +208,7 @@ export class TgsRenderer implements IAnimatedRenderer {
       return;
     }
     this.heartbeatFrozenStalls++;
-    if (this.heartbeatFrozenStalls >= 2) {
+    if (this.heartbeatFrozenStalls >= 3) {
       debugLog.warn('[tgs] frozen twice, failViews', this.renderId);
       respawnWorker(this.worker);
       this.failViews();
@@ -438,6 +438,7 @@ export class TgsRenderer implements IAnimatedRenderer {
   private park() {
     this.isAnimating = false;
     this.stopLoop();
+    this.releaseFrames();
     if (this.destroyTimer) return;
     if (!parkOrder.includes(this.renderId)) parkOrder.push(this.renderId);
 
@@ -452,6 +453,23 @@ export class TgsRenderer implements IAnimatedRenderer {
       unpark(this.renderId);
       if (instancesByRenderId.get(this.renderId) === this) this.destroy();
     }, PARK_TTL_MS);
+  }
+
+  private releaseFrames() {
+    for (const frame of this.frames) {
+      if (frame && frame !== WAITING) frame.close();
+    }
+    this.frames = [];
+    this.framesCount = undefined;
+    this.prevFrameIndex = -1;
+    this.approxFrameIndex = 0;
+    this.lastPaintAt = 0;
+    this.lastRenderAt = undefined;
+    this.isEnded = false;
+    this.isRendererInited = false;
+    this.isAnimating = false;
+    this.isWaiting = true;
+    this.playRequested = false;
   }
 
   isPlaying() {
@@ -494,13 +512,11 @@ export class TgsRenderer implements IAnimatedRenderer {
     } else {
       this.isAnimating = false;
     }
-    if (!this.params.isLowPriority) {
-      this.frames = this.frames.map((frame, i) => {
-        if (i === this.prevFrameIndex) return frame;
-        if (frame && frame !== WAITING) frame.close();
-        return undefined;
-      });
-    }
+    this.frames = this.frames.map((frame, i) => {
+      if (i === this.prevFrameIndex) return frame;
+      if (frame && frame !== WAITING) frame.close();
+      return undefined;
+    });
   }
 
   setSpeed(speed: number) {
@@ -776,6 +792,7 @@ export class TgsRenderer implements IAnimatedRenderer {
     if (this.cacheModulo && frameIndex % this.cacheModulo === 0) {
       this.cleanupPrevFrame(frameIndex);
     }
+    this.sweepOldFrames(frameIndex);
 
     const frameChanged = frameIndex !== this.prevFrameIndex;
 
@@ -987,6 +1004,32 @@ export class TgsRenderer implements IAnimatedRenderer {
     const prev = this.frames[prevFrameIndex];
     if (prev && prev !== WAITING) prev.close();
     this.frames[prevFrameIndex] = undefined;
+  }
+
+  private sweepOldFrames(frameIndex: number) {
+    const count = this.framesCount;
+    if (!count || count <= 1) return;
+    const window = this.params.isLowPriority ? CACHE_WINDOW_LOW_PRIORITY : CACHE_WINDOW_HIGH_PRIORITY;
+    const center = cycleRestrict(count, frameIndex);
+    const maxKeep = window * 2 + 1;
+    let loaded = 0;
+    for (let i = 0; i < count; i++) {
+      if (this.frames[i] && this.frames[i] !== WAITING) loaded++;
+    }
+    if (loaded <= maxKeep) return;
+    const far = Math.floor(count / 2);
+    for (let i = 0; i < count; i++) {
+      if (i === center) continue;
+      let dist = Math.abs(cycleRestrict(count, i - center));
+      if (dist > far) dist = count - dist;
+      if (dist > window) {
+        const f = this.frames[i];
+        if (f && f !== WAITING) {
+          f.close();
+          this.frames[i] = undefined;
+        }
+      }
+    }
   }
 
   private onFrameLoad(frameIndex: number, imageBitmap: ImageBitmap) {

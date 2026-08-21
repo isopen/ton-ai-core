@@ -7,5 +7,6 @@ export type { MediaCollageItem } from './components/media-collage.js';
 export { MediaViewer } from './components/media-viewer.js';
 export { TgsPlayer } from './components/tgs-player.js';
 export { FpsMeter } from './components/fps-meter.js';
+export { startFpsLogging } from './utils/fps-log.js';
 export { setStrings, t, tpl } from './locale.js';
 export { S, TLG_KEYS, LANG_FALLBACKS } from './strings.js';

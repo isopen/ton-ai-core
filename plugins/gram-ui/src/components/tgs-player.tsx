@@ -8,9 +8,23 @@ import { getLogger } from '@ton-ai/gram-debug';
 const tgsLog = getLogger('gram-ui:tgs');
 
 let activePlayers = 0;
-const MAX_ACTIVE_PLAYERS = 64;
+const MAX_ACTIVE_PLAYERS = 8;
 const MAX_PLAYER_TIME = 12000;
 const playerWaiters = new Set<() => void>();
+
+const SCROLL_SETTLE_MS = 90;
+let lastScrollAt = 0;
+let scrollTrackingAttached = false;
+function trackScrollActivity(): void {
+    if (scrollTrackingAttached || typeof document === 'undefined') return;
+    scrollTrackingAttached = true;
+    document.addEventListener('scroll', () => { lastScrollAt = performance.now(); }, true);
+}
+trackScrollActivity();
+
+function scrollSettled(): boolean {
+    return performance.now() - lastScrollAt >= SCROLL_SETTLE_MS;
+}
 
 const completedAnims = new Map<string, boolean>();
 
@@ -66,6 +80,8 @@ export interface TgsPlayerProps {
     onFrameProgress?: (progress: number) => void;
     layerOrder?: LayerOrder;
     hiddenLayers?: (name?: string) => boolean;
+    disableClick?: boolean;
+    bypassPlayerLimit?: boolean;
 }
 
 export function TgsPlayer(props: TgsPlayerProps) {
@@ -85,11 +101,13 @@ export function TgsPlayer(props: TgsPlayerProps) {
         onFrameProgress,
         layerOrder,
         hiddenLayers,
+        disableClick = false,
+        bypassPlayerLimit = false,
     } = props;
 
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [playing, setPlaying] = useState(() => (playKey != null && completedAnims.get(playKey)) || showLastFrame ? false : autoplay);
+    const [playing, setPlaying] = useState(() => showLastFrame ? false : autoplay);
     const [inView, setInView] = useState(false);
     const [animVersion, setAnimVersion] = useState(0);
     const rootRef = useRef<HTMLDivElement | null>(null);
@@ -98,6 +116,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
     const rafRef = useRef<number | null>(null);
     const lastTimeRef = useRef(0);
     const lastDrawRef = useRef(performance.now() - Math.random() * 33.33);
+    const lastDrawnFrameRef = useRef(-1);
     const yieldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const ioRef = useRef<IntersectionObserver | null>(null);
     const onEndRef = useRef(onEnd);
@@ -134,7 +153,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 if (cancelled) return;
                 animRef.current = parsed;
                 setError(null);
-                const done = (playKey != null && completedAnims.get(playKey) === true) || showLastFrame;
+                const done = showLastFrame;
                 if (done && parsed.outFrame - parsed.inFrame > 0) {
                     frameRef.current = parsed.outFrame - 1;
                     endFiredRef.current = true;
@@ -162,18 +181,27 @@ export function TgsPlayer(props: TgsPlayerProps) {
         const canvas = canvasRef.current;
         const anim = animRef.current;
         if (!canvas || !anim) return;
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const dpr = Math.min(window.devicePixelRatio || 1, width <= 128 ? 1.5 : 2);
         renderFrame(canvas, anim, frame, dpr, undefined, undefined, layerOrder, hiddenLayers);
-    }, [layerOrder, hiddenLayers]);
+    }, [layerOrder, hiddenLayers, width]);
 
     useEffect(() => {
         if (!inView) return;
         const anim = animRef.current;
         if (!anim) return;
-        const total = anim.outFrame - anim.inFrame;
-        const frame = endFiredRef.current && total > 0 ? anim.outFrame - 1 : anim.inFrame;
-        drawFrame(frame);
-    }, [animationData, inView, animVersion, drawFrame]);
+        const drawNow = () => {
+            if (!inView) return;
+            const total = anim.outFrame - anim.inFrame;
+            const frame = (showLastFrame || (endFiredRef.current && total > 0)) ? anim.outFrame - 1 : anim.inFrame;
+            drawFrame(frame);
+        };
+        if (scrollSettled()) {
+            drawNow();
+        } else {
+            const t = setTimeout(drawNow, SCROLL_SETTLE_MS);
+            return () => clearTimeout(t);
+        }
+    }, [animationData, inView, animVersion, drawFrame, showLastFrame]);
 
     useEffect(() => {
         if (!inView || loop || !onEndRef.current) return;
@@ -188,9 +216,33 @@ export function TgsPlayer(props: TgsPlayerProps) {
     }, [inView, loop, animVersion, playKey]);
 
     useEffect(() => {
-        if ((playKey != null && completedAnims.get(playKey)) || showLastFrame) return;
+        if (showLastFrame) {
+            setPlaying(false);
+            return;
+        }
         setPlaying(autoplay);
     }, [autoplay, animationData, playKey, showLastFrame]);
+
+    useEffect(() => {
+        const onPlaybackReset = () => {
+            if (showLastFrame) {
+                const anim = animRef.current;
+                if (anim && anim.outFrame - anim.inFrame > 0) {
+                    frameRef.current = anim.outFrame - 1;
+                    endFiredRef.current = true;
+                }
+                setPlaying(false);
+                return;
+            }
+            endFiredRef.current = false;
+            frameRef.current = animRef.current ? animRef.current.inFrame : 0;
+            lastDrawnFrameRef.current = -1;
+            lastTimeRef.current = 0;
+            setPlaying(autoplay);
+        };
+        window.addEventListener('tg-playback-reset', onPlaybackReset);
+        return () => window.removeEventListener('tg-playback-reset', onPlaybackReset);
+    }, [autoplay, showLastFrame]);
 
     useEffect(() => {
         if (!playing || !inView) {
@@ -210,6 +262,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
         const frameDuration = 1000 / anim.fps / speed;
 
         let started = false;
+        let acquired = false;
         const stopRaf = () => {
             if (yieldTimerRef.current != null) {
                 clearTimeout(yieldTimerRef.current);
@@ -221,7 +274,10 @@ export function TgsPlayer(props: TgsPlayerProps) {
             }
             if (started) {
                 started = false;
-                releasePlayerSlot();
+                if (acquired) {
+                    acquired = false;
+                    releasePlayerSlot();
+                }
             }
         };
 
@@ -235,7 +291,14 @@ export function TgsPlayer(props: TgsPlayerProps) {
             function tick(timestamp: number) {
                 if (!animRef.current) {
                     started = false;
-                    releasePlayerSlot();
+                    if (acquired) {
+                        acquired = false;
+                        releasePlayerSlot();
+                    }
+                    return;
+                }
+                if (document.hidden) {
+                    stopRaf();
                     return;
                 }
                 if (lastTimeRef.current === 0) {
@@ -273,14 +336,20 @@ export function TgsPlayer(props: TgsPlayerProps) {
                     onFrameProgressRef.current(progress);
                 }
                 const el = canvasRef.current;
-                if (forceDraw || !el || timestamp - lastDrawRef.current >= 33.33) {
+                const drawInterval = activePlayers > 12 ? 100 : activePlayers > 8 ? 66 : activePlayers > 4 ? 50 : 33.33;
+                const drawFrameIndex = Math.floor(frame);
+                if (forceDraw || !el || (drawFrameIndex !== lastDrawnFrameRef.current && timestamp - lastDrawRef.current >= drawInterval)) {
                     try {
                         drawFrame(frame);
+                        lastDrawnFrameRef.current = drawFrameIndex;
                         lastDrawRef.current = timestamp;
                     } catch (e) {
                         tgsLog.info('[TGS_LOG] draw error', e);
                         started = false;
-                        releasePlayerSlot();
+                        if (acquired) {
+                            acquired = false;
+                            releasePlayerSlot();
+                        }
                         if (!loop && !endFiredRef.current) {
                             endFiredRef.current = true;
                             onEndRef.current?.();
@@ -290,14 +359,13 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 }
                 if (timestamp - playStart > MAX_PLAYER_TIME) {
                     started = false;
-                    releasePlayerSlot();
+                    if (acquired) {
+                        acquired = false;
+                        releasePlayerSlot();
+                    }
                     yieldTimerRef.current = setTimeout(() => {
                         yieldTimerRef.current = null;
-                        if (!acquirePlayerSlot()) {
-                            playerWaiters.add(start);
-                        } else {
-                            start();
-                        }
+                        maybeStart();
                     }, 0);
                     return;
                 }
@@ -306,27 +374,65 @@ export function TgsPlayer(props: TgsPlayerProps) {
             rafRef.current = requestAnimationFrame(tick);
         };
 
-        if (!acquirePlayerSlot()) {
-            playerWaiters.add(start);
-        } else {
+        let deferredStartTimer: ReturnType<typeof setTimeout> | null = null;
+        let acquireRetryTimer: ReturnType<typeof setTimeout> | null = null;
+        const maybeStart = () => {
+            if (started || !playing || !inView) return;
+            if (!scrollSettled()) {
+                if (deferredStartTimer == null) {
+                    deferredStartTimer = setTimeout(() => {
+                        deferredStartTimer = null;
+                        maybeStart();
+                    }, 40);
+                }
+                return;
+            }
+            if (!bypassPlayerLimit) {
+                if (!acquirePlayerSlot()) {
+                    if (acquireRetryTimer == null) {
+                        acquireRetryTimer = setTimeout(() => {
+                            acquireRetryTimer = null;
+                            maybeStart();
+                        }, 200);
+                    }
+                    return;
+                }
+                acquired = true;
+            }
             start();
-        }
+        };
+
+        maybeStart();
+
+        const onVisibilityChange = () => {
+            if (!document.hidden && !started && playing && inView && scrollSettled()) {
+                maybeStart();
+            }
+        };
+        document.addEventListener('visibilitychange', onVisibilityChange);
 
         return () => {
+            document.removeEventListener('visibilitychange', onVisibilityChange);
+            if (deferredStartTimer != null) {
+                clearTimeout(deferredStartTimer);
+                deferredStartTimer = null;
+            }
+            if (acquireRetryTimer != null) {
+                clearTimeout(acquireRetryTimer);
+                acquireRetryTimer = null;
+            }
             playerWaiters.delete(start);
             stopRaf();
         };
-    }, [playing, inView, loop, speed, animVersion, drawFrame]);
+    }, [playing, inView, loop, speed, animVersion, drawFrame, bypassPlayerLimit]);
 
     const togglePlay = useCallback(() => {
-        if ((playKey != null && completedAnims.get(playKey)) || showLastFrame) return;
-        setPlaying(v => !v);
-        if (rafRef.current != null) {
-            cancelAnimationFrame(rafRef.current);
-            rafRef.current = null;
-        }
+        const anim = animRef.current;
+        frameRef.current = anim ? anim.inFrame : 0;
+        endFiredRef.current = false;
         lastTimeRef.current = 0;
-    }, [playKey, showLastFrame]);
+        setPlaying(true);
+    }, []);
 
     if (error) {
         return (
@@ -343,7 +449,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
             ref={rootRef}
             class={'TgsPlayer' + (className ? ' ' + className : '')}
             style={{ width: width + 'px', height: height + 'px' }}
-            onClick={togglePlay}
+            onClick={disableClick ? undefined : togglePlay}
         >
             <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
         </div>

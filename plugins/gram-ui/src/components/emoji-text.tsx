@@ -14,7 +14,7 @@ const SINGLE_EMOJI_SIZE = 96;
 
 export { releaseEmojiCache } from './emoji-canvas.js';
 
-function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, playKey }: { docId?: string; url: string; alt?: string; size: number; autoplay?: boolean; loop?: boolean; playKey?: string }) {
+function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, playKey, showLastFrame }: { docId?: string; url: string; alt?: string; size: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean }) {
   const [data, setData] = useState<any>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoIoRef = useRef<IntersectionObserver | null>(null);
@@ -62,7 +62,7 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
   }, [url, docId, alt]);
 
   if (data?.kind === 'tgs') {
-    return <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={size} height={size} loop={loop} autoplay={autoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} playKey={playKey} />;
+    return <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={size} height={size} loop={loop} autoplay={autoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} playKey={playKey} showLastFrame={showLastFrame} />;
   }
   if (data?.kind === 'video') {
     return (
@@ -89,7 +89,7 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
   return <span class="tgui-emoji-placeholder" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle`} />;
 }
 
-export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loop = true, playKey }: { docId?: string; url: string; alt?: string; size?: number; autoplay?: boolean; loop?: boolean; playKey?: string }) {
+export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loop = true, playKey, showLastFrame }: { docId?: string; url: string; alt?: string; size?: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean }) {
   useEffect(() => {
     if (!url) {
       requestEmojiDownload(docId, alt, 2);
@@ -98,7 +98,7 @@ export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loo
   if (!docId && !url) {
     return <span class="tgui-emoji-inline" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle`} />;
   }
-  return <EmojiInline docId={docId} url={url} alt={alt} size={size} autoplay={autoplay} loop={loop} playKey={playKey} />;
+  return <EmojiInline docId={docId} url={url} alt={alt} size={size} autoplay={autoplay} loop={loop} playKey={playKey} showLastFrame={showLastFrame} />;
 }
 
 function appendMappedRuns(segments: EmojiSegment[], value: string): void {

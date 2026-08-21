@@ -120,14 +120,16 @@ function bumpGeneration(renderId: string): number {
   return gen;
 }
 
-async function load(renderId: string, tgsUrl: string, tgsJson: string | undefined, imgSize: number, isLowPriority: boolean, gen: number): Promise<void> {
+async function load(renderId: string, tgsUrl: string, tgsJson: string | Uint8Array | undefined, imgSize: number, isLowPriority: boolean, gen: number): Promise<void> {
   const key = renderId + '\u0000' + gen;
   const pending = loading.get(key);
   if (pending) return pending;
   const p = (async () => {
     let json: string;
-    if (tgsJson) {
+    if (typeof tgsJson === 'string') {
       json = tgsJson;
+    } else if (tgsJson instanceof Uint8Array) {
+      json = await inflateTgs(tgsJson);
     } else {
       const resp = await fetch(tgsUrl);
       const ct = (resp.headers.get('content-type') || '').toLowerCase();
@@ -175,7 +177,7 @@ async function load(renderId: string, tgsUrl: string, tgsJson: string | undefine
   }
 }
 
-async function ensureAnimsEntry(renderId: string, tgsUrl: string, tgsJson: string | undefined, imgSize: number, isLowPriority: boolean): Promise<WorkerAnim> {
+async function ensureAnimsEntry(renderId: string, tgsUrl: string, tgsJson: string | Uint8Array | undefined, imgSize: number, isLowPriority: boolean): Promise<WorkerAnim> {
   const gen = generation(renderId);
   const existing = anims.get(renderId);
   if (existing && generation(renderId) === gen) return existing;

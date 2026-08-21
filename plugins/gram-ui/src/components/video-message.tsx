@@ -123,6 +123,20 @@ export function VideoMessage(props: VideoMessageProps) {
   const playingRef = useRef(false);
   const wasLoadingRef = useRef(false);
   const autoPlayFlagRef = useRef(false);
+  const lastStepAtRef = useRef(0);
+
+  const [inView, setInView] = useState(true);
+  const inViewRef = useRef(true);
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(([entry]) => {
+      inViewRef.current = entry.isIntersecting;
+      setInView(entry.isIntersecting);
+    }, { rootMargin: '150px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
 
   const [uiState, setUiState] = useState<'ready' | 'loading' | 'playing' | 'error'>('ready');
   const [ct, setCt] = useState(0);
@@ -170,11 +184,14 @@ export function VideoMessage(props: VideoMessageProps) {
     const step = (ts: number) => {
       if (!playingRef.current) return;
       if (data.t0 != null) {
-        setCt(c => {
-          const next = c + (ts - data.t0!) / 1000;
-          if (next >= duration) { playingRef.current = false; setUiState('ready'); return 0; }
-          return next;
-        });
+        if (ts - lastStepAtRef.current >= 250) {
+          lastStepAtRef.current = ts;
+          setCt(c => {
+            const next = c + (ts - data.t0!) / 1000;
+            if (next >= duration) { playingRef.current = false; setUiState('ready'); return 0; }
+            return next;
+          });
+        }
       }
       data.t0 = ts;
       rafRef.current = requestAnimationFrame(step);
@@ -190,10 +207,11 @@ export function VideoMessage(props: VideoMessageProps) {
       if (v) {
         v.muted = videoMuted;
         v.volume = volume;
-        v.play().catch(startRaf);
+        v.play().catch(() => {});
         return;
       }
     }
+    lastStepAtRef.current = 0;
     startRaf();
   }, [isRealVideo, duration, startRaf, videoMuted, volume]);
 
@@ -203,6 +221,39 @@ export function VideoMessage(props: VideoMessageProps) {
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
     if (isRealVideo) videoRef.current?.pause();
   }, [isRealVideo]);
+
+  useEffect(() => {
+    if (!inView && playingRef.current) pause();
+  }, [inView, pause]);
+
+  const visibilityPausedRef = useRef(false);
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') {
+        if (playingRef.current) {
+          visibilityPausedRef.current = true;
+          pause();
+        }
+      } else if (visibilityPausedRef.current) {
+        visibilityPausedRef.current = false;
+        if (inViewRef.current) {
+          play();
+        } else {
+          autoPlayFlagRef.current = false;
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [pause, play]);
+
+  useEffect(() => {
+    if (inView && autoPlayFlagRef.current && !playingRef.current && url) {
+      setForceAutoplay(true);
+      setUiState('playing');
+      playingRef.current = true;
+    }
+  }, [inView, url]);
 
   useEffect(() => {
     if (!url) {
@@ -217,14 +268,18 @@ export function VideoMessage(props: VideoMessageProps) {
       wasLoadingRef.current = false;
       autoPlayFlagRef.current = true;
       setVideoMuted(true);
-      setForceAutoplay(true);
-      setUiState('playing');
-      playingRef.current = true;
       setLoaded(true);
+      if (inView) {
+        setForceAutoplay(true);
+        setUiState('playing');
+        playingRef.current = true;
+      } else {
+        setUiState('ready');
+      }
     } else {
       setUiState('ready');
     }
-  }, [url, progress]);
+  }, [url, progress, inView]);
 
   useEffect(() => {
     if (!isRealVideo || !videoRef.current) return;
@@ -243,6 +298,7 @@ export function VideoMessage(props: VideoMessageProps) {
     const onTime = () => { setCt(v.currentTime); };
     const onEnd = () => {
       setCt(0);
+      autoPlayFlagRef.current = false;
     };
     const onPlaying = () => {
       if (autoPlayFlagRef.current) {
@@ -367,7 +423,7 @@ export function VideoMessage(props: VideoMessageProps) {
               if (el) { el.muted = videoMuted; el.volume = volume; }
             }} class="video-message__thumb" src={url}
               poster={thumb?.url || undefined}
-              autoplay={forceAutoplay} loop playsinline preload="auto"
+              autoplay={forceAutoplay} playsinline preload="metadata"
               style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000"
               onTimeUpdate={onTimeUpdate}
               onCanPlay={() => setLoaded(true)} />

@@ -12,28 +12,28 @@
             "level": "info"
         },
         "telegram": {
-            "enabled": true,
-            "level": "debug"
+            "enabled": false,
+            "level": "info"
         },
         "tgs": {
             "enabled": false,
             "level": "info"
         },
         "atom": {
-            "enabled": true,
-            "level": "debug"
+            "enabled": false,
+            "level": "info"
         },
         "gram-media": {
-            "enabled": true,
-            "level": "debug"
+            "enabled": false,
+            "level": "info"
         },
         "gram-browser": {
-            "enabled": true,
-            "level": "debug"
+            "enabled": false,
+            "level": "info"
         },
         "gram-ui": {
-            "enabled": true,
-            "level": "debug"
+            "enabled": false,
+            "level": "info"
         },
         "gram-ui:slot": {
             "enabled": false,
@@ -52,16 +52,16 @@
             "level": "debug"
         },
         "gram-ui:ani-sticker": {
-            "enabled": true,
-            "level": "debug"
+            "enabled": false,
+            "level": "info"
         },
         "gram-ui:emoji-text": {
-            "enabled": true,
-            "level": "debug"
+            "enabled": false,
+            "level": "info"
         },
         "gram-ui:photo": {
-            "enabled": true,
-            "level": "debug"
+            "enabled": false,
+            "level": "info"
         },
         "gram-ui:media-source-badge": {
             "enabled": false,
@@ -74,6 +74,10 @@
         "gram-ui:telegram-image": {
             "enabled": false,
             "level": "debug"
+        },
+        "fps": {
+            "enabled": true,
+            "level": "info"
         }
     }
 }

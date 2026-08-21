@@ -30,8 +30,42 @@ export function GifPlayer(props: GifPlayerProps) {
   const containerStyle = displayW && displayH ? `width:${displayW}px;height:${displayH}px` : displayW ? `width:${displayW}px` : '';
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const obsRef = useRef<IntersectionObserver | null>(null);
   const visibleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wasPlayingRef = useRef(false);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        if (wasPlayingRef.current && videoRef.current) videoRef.current.play().catch(() => {});
+        wasPlayingRef.current = false;
+      } else {
+        const v = videoRef.current;
+        if (v && !v.paused) {
+          wasPlayingRef.current = true;
+          v.pause();
+        }
+      }
+    }, { rootMargin: '150px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState !== 'hidden') return;
+      const v = videoRef.current;
+      if (v && !v.paused) {
+        wasPlayingRef.current = true;
+        v.pause();
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
 
   const triggerDownload = () => {
     if (url) return;
@@ -84,7 +118,7 @@ export function GifPlayer(props: GifPlayerProps) {
   };
 
   return (
-    <div class="tgui-media-gif-wrapper" style={containerStyle}>
+    <div ref={wrapRef} class="tgui-media-gif-wrapper" style={containerStyle}>
       {url ? (
         <>
           {isVideoGif ? (

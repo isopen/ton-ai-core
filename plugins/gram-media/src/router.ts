@@ -556,7 +556,10 @@ export class GramMediaRouter {
         if (this.photoUrlCache.has(key)) this.photoUrlCache.delete(key);
         this.photoUrlCache.set(key, url);
         while (this.photoUrlCache.size > PHOTO_URL_CACHE_MAX) {
-            this.photoUrlCache.delete(this.photoUrlCache.keys().next().value as string);
+            const evictedKey = this.photoUrlCache.keys().next().value as string;
+            const evicted = this.photoUrlCache.get(evictedKey);
+            this.photoUrlCache.delete(evictedKey);
+            this.revokeBlobUrl(evicted);
         }
     }
 
@@ -726,6 +729,10 @@ export class GramMediaRouter {
                     log.error('[gram-media] photo download failed for message', messageId, 'size', sizeType, 'after', MAX_RETRIES, 'retries');
                 }
             } catch (err: any) {
+                if (String(err?.message || err).includes('ABORTED')) {
+                    if (this.debug) log.info('[gram-media] photo download aborted, no retry', messageId, sizeType);
+                    return;
+                }
                 if (err.message?.includes('FILE_REFERENCE_EXPIRED')) {
                     log.warn('[gram-media] FILE_REFERENCE_EXPIRED (catch), re-fetching message', messageId, 'attempt', attempt);
                     let freshMsg: MediaMessageLike | null | undefined;

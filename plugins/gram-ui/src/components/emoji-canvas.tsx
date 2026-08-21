@@ -535,12 +535,16 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
       for (const docId of Object.keys(strikes)) {
         if (!stillMissing.has(docId)) delete strikes[docId];
       }
-      // download re-requests are cheap and deduped — keep re-requesting forever;
-      // the strike limit only bounds the RPC resolve dispatch (unknown custom emoji)
+      // re-requests are cheap and deduped on the media side; bound by strike limit
+      // so permanently missing docs stop churning the download pipeline
       const customIds: string[] = [];
       for (const s of missing) {
         const n = (strikes[s.docId] || 0) + 1;
         strikes[s.docId] = n;
+        if (n > MISSING_EMOJI_STRIKE_LIMIT) {
+          delete strikes[s.docId];
+          continue;
+        }
         requestEmojiDownload(s.docId, s.value, 1);
         if (s.custom && n <= MISSING_EMOJI_STRIKE_LIMIT) customIds.push(s.docId);
       }

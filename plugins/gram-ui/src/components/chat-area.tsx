@@ -455,7 +455,7 @@ const DICE_SIZE = 208;
 function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: number | null; msgId: number | string }) {
   const isSlot = normalizeEmoji(emoticon) === '🎰';
   if (isSlot) {
-    return <SlotMachineSticker value={value} size={DICE_SIZE} playKey={'slot-' + msgId} />;
+    return <SlotMachineSticker value={value} size={DICE_SIZE} playKey={'slot-' + msgId} shouldPlay={value == null} />;
   }
   const [docId, setDocId] = useState<string | undefined>(undefined);
   const [url, setUrl] = useState<string | undefined>(undefined);
@@ -507,7 +507,7 @@ function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: numb
   if (!docId || !url) {
     return <span class="tgui-dice-loading" style={{ display: 'inline-block', width: DICE_SIZE + 'px', height: DICE_SIZE + 'px' }} />;
   }
-  return <AnimatedEmoji docId={docId} url={url} alt="" size={DICE_SIZE} autoplay loop={value == null} playKey={'dice-' + msgId} />;
+  return <AnimatedEmoji docId={docId} url={url} alt="" size={DICE_SIZE} autoplay={false} loop={value == null} playKey={'dice-' + msgId} showLastFrame={value != null} />;
 }
 
 function DiceBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {
@@ -594,6 +594,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
     playbackResetPeerRef.current = handlerPeerKey;
     resetCompletedAnimations();
     resetSlotMachineDone();
+    window.dispatchEvent(new CustomEvent('tg-playback-reset'));
   }
   useEffect(() => {
     handlerCacheRef.current = new Map();

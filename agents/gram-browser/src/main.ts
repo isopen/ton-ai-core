@@ -1,4 +1,5 @@
 import { getLogger } from '@ton-ai/gram-debug';
+import { startFpsLogging } from '@ton-ai/gram-ui';
 import { GramApp } from './app/gram-app';
 
 const log = getLogger('gram-browser');
@@ -8,6 +9,8 @@ let initialized = false;
 function initApp() {
   if (initialized) return;
   initialized = true;
+
+  startFpsLogging();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
