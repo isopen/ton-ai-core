@@ -83,7 +83,8 @@ describe('Utils', () => {
     test('isProbablyPrime for known composites', () => {
         assert.ok(!isProbablyPrime(1n));
         assert.ok(!isProbablyPrime(4n));
-        assert.ok(isProbablyPrime((1n << 13n) - 1n));
+        // 2^11 - 1 = 2047 = 23 * 89 — composite Mersenne number
+        assert.ok(!isProbablyPrime((1n << 11n) - 1n));
         assert.ok(!isProbablyPrime(1000000000000000000n));
     });
 
@@ -131,6 +132,20 @@ describe('Utils', () => {
 
     test('hexToBytes odd length throws', () => {
         assert.throws(() => hexToBytes('abc'), /even length/);
+    });
+
+    test('hexToBytes invalid characters throw', () => {
+        assert.throws(() => hexToBytes('zz'), /Invalid hex byte at position 0/);
+        assert.throws(() => hexToBytes('a0z1'), /Invalid hex byte at position 2/);
+    });
+
+    test('bigIntToBuffer rejects negative numbers', () => {
+        assert.throws(() => bigIntToBuffer(-1n, 8), /Negative/);
+        assert.throws(() => bigIntToBuffer(-12345n, 256), /Negative/);
+    });
+
+    test('bigIntToBufferLE rejects negative numbers', () => {
+        assert.throws(() => bigIntToBufferLE(-1n, 8), /Negative/);
     });
 
     test('xorInto writes result to output buffer', () => {

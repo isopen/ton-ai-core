@@ -48,6 +48,18 @@ describe('AES-256-CTR', () => {
     test('wrong IV length throws', () => {
       assert.throws(() => AES256CTR.process(Buffer.alloc(16), key, Buffer.alloc(8), 0), /Invalid IV length/);
     });
+
+    test('counter overflow throws', () => {
+      // startCounter + blocks must fit into 2^32 counters
+      assert.throws(() => AES256CTR.process(Buffer.alloc(32), key, iv, 0xFFFFFFFF), /overflow|range/i);
+      assert.throws(() => AES256CTR.process(Buffer.alloc(16), key, iv, 0xFFFFFFFF + 1), /out of range/i);
+      // exactly the last usable counter is still valid
+      assert.doesNotThrow(() => AES256CTR.process(Buffer.alloc(16), key, iv, 0xFFFFFFFF));
+    });
+
+    test('negative startCounter throws', () => {
+      assert.throws(() => AES256CTR.process(Buffer.alloc(16), key, iv, -1), /out of range/i);
+    });
   });
 
   describe('processAsync', () => {

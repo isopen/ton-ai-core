@@ -95,7 +95,11 @@ export function hexToBytes(hex: string): Uint8Array {
   }
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+    const byte = parseInt(hex.substring(i, i + 2), 16);
+    if (Number.isNaN(byte)) {
+      throw new Error(`Invalid hex byte at position ${i}: "${hex.substring(i, i + 2)}"`);
+    }
+    bytes[i / 2] = byte;
   }
   return bytes;
 }
