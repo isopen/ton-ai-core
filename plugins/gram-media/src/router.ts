@@ -528,6 +528,7 @@ export class GramMediaRouter {
         if (this.tgsJsonByUrl.size >= 300) {
             const oldest = this.tgsJsonByUrl.keys().next().value;
             if (oldest !== undefined) {
+                this.revokeBlobUrl(oldest);
                 this.tgsJsonByUrl.delete(oldest);
                 this.tgsJsonByUrlTs.delete(oldest);
             }
@@ -539,6 +540,7 @@ export class GramMediaRouter {
             const cutoff = now - TGS_JSON_TTL_MS;
             for (const [u, ts] of this.tgsJsonByUrlTs) {
                 if (ts < cutoff) {
+                    this.revokeBlobUrl(u);
                     this.tgsJsonByUrl.delete(u);
                     this.tgsJsonByUrlTs.delete(u);
                 }
@@ -1306,7 +1308,10 @@ export class GramMediaRouter {
                     this.thumbUrlCache.set(thumbKey, url);
                     if (this.thumbUrlCache.size > 512) {
                         const oldest = this.thumbUrlCache.keys().next().value;
-                        if (oldest !== undefined) this.thumbUrlCache.delete(oldest);
+                        if (oldest !== undefined) {
+                            this.revokeBlobUrl(this.thumbUrlCache.get(oldest));
+                            this.thumbUrlCache.delete(oldest);
+                        }
                     }
                     this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_THUMB', messageId, thumbType, url });
                 }

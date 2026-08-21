@@ -1674,7 +1674,12 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
     if (!totalSize && Array.isArray(sizeEntry?.sizes)) {
         totalSize = Math.max(...sizeEntry.sizes);
     }
-    const result = await downloadFile_(undefined, photoWithThumb, genRef, onProgress, totalSize, TDLIB_PRIORITY_MAX, locationOverride, isAvatarMsg ? 'avatar' : null);
+    let result: DownloadResult;
+    try {
+        result = await enqueueDownload(undefined, photoWithThumb, TDLIB_PRIORITY_MAX, genRef, onProgress, totalSize, locationOverride, isAvatarMsg ? 'avatar' : null);
+    } catch (e: any) {
+        result = { type: '', bytes: new ArrayBuffer(0), error: String(e?.message || e) };
+    }
     if (result.error === 'ABORTED') {
         wlog('[worker] requestPhotoDownload: ABORTED', 'sizeType:', sizeType);
         return null;
@@ -3119,6 +3124,11 @@ interface QueueItem {
     document: any; photo: any; priority: number; cacheKey: string;
     resolve: (v: DownloadResult) => void;
     reject: (e: any) => void;
+    genRef?: { value: number; counter: 'photo' | 'avatar' };
+    onProgress?: (pct: number) => void;
+    totalSize?: number;
+    locationOverride?: Record<string, any> | null;
+    bucket?: string | null;
 }
 const downloadQueue: Array<QueueItem> = [];
 const downloadQueueByKey = new Map<string, QueueItem>();
@@ -3237,9 +3247,13 @@ function dcAndSize(document?: any, photo?: any): { dc: number; size: number } {
 
 const MAX_PART_COUNT = IS_PREMIUM ? 8000 : 4000;
 const MAX_FILE_SIZE = (512 << 10) * MAX_PART_COUNT;
+const PART_SIZE_MAX = 1 << 20;
+const PART_SIZE_MID = 512 << 10;
 function selectPartSize(size: number): number {
-    const maxPart = 1 << 20;
-    return maxPart;
+    if (!Number.isFinite(size) || size <= 0) return PART_SIZE_MAX;
+    if (size <= PART_SIZE_MAX) return PART_SIZE_MAX;
+    if (size <= (32 << 20)) return PART_SIZE_MID;
+    return PART_SIZE_MAX;
 }
 
 const SMALL_FILE_LIMIT = 1 << 20;
@@ -3333,7 +3347,7 @@ async function processDownloadQueue(): Promise<void> {
         const label = item.photo ? 'photo' : item.document?.thumb_size ? `thumb:${item.document.thumb_size}` : 'document';
         const id = item.document?.id?.toString() || item.photo?.id?.toString() || '?';
         wlog('[dlq] dequeue id=' + id + ' label=' + label + ' priority=' + item.priority + ' inflight=' + downloadInFlight + ' queued=' + downloadQueue.length);
-        downloadFile_(item.document, item.photo, undefined, undefined, undefined, item.priority).then(item.resolve, item.reject).finally(() => {
+        downloadFile_(item.document, item.photo, item.genRef, item.onProgress, item.totalSize, item.priority, item.locationOverride, item.bucket).then(item.resolve, item.reject).finally(() => {
             downloadInFlight--;
             wlog('[dlq] done id=' + id + ' label=' + label + ' inflight=' + downloadInFlight);
             processDownloadQueue();
@@ -3344,7 +3358,7 @@ async function processDownloadQueue(): Promise<void> {
     }
 }
 
-function enqueueDownload(document?: any, photo?: any, priority = 0): Promise<DownloadResult> {
+function enqueueDownload(document?: any, photo?: any, priority = 0, genRef?: QueueItem['genRef'], onProgress?: (pct: number) => void, totalSize?: number, locationOverride?: Record<string, any> | null, bucket?: string | null): Promise<DownloadResult> {
     const norm = normalizePriority(priority < 1 ? 1 : priority);
     const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
     const id = document?.id?.toString() || photo?.id?.toString() || '?';
@@ -3362,7 +3376,7 @@ function enqueueDownload(document?: any, photo?: any, priority = 0): Promise<Dow
         return inflight;
     }
     const p = new Promise<DownloadResult>((resolve, reject) => {
-        const item: QueueItem = { document, photo, priority: norm, cacheKey, resolve, reject };
+        const item: QueueItem = { document, photo, priority: norm, cacheKey, resolve, reject, genRef, onProgress, totalSize, locationOverride, bucket };
         downloadQueue.push(item);
         if (cacheKey) downloadQueueByKey.set(cacheKey, item);
         processDownloadQueue();
@@ -3382,8 +3396,17 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
     try {
         let refRefreshed = false;
         let location: Record<string, any> | null = null;
+        // messages.getCustomEmojiDocuments can only refresh refs of custom emoji docs.
+        // Everything else (stickers, photos, message documents) is refreshed by the
+        // caller via re-fetching the source message (router.refreshMessage), like
+        // TDLib's FileReferenceManager routing through the file's source peer.
+        const isCustomEmojiDoc = (): boolean => {
+            const attrs = Array.isArray(document?.attributes) ? document.attributes : [];
+            return attrs.some((a: any) => a?._ === 'documentAttributeCustomEmoji');
+        };
         const refreshDocumentRef = async (): Promise<boolean> => {
             if (!document?.id || refRefreshed) return false;
+            if (!isCustomEmojiDoc()) return false;
             try {
                 const res = await callRpc('messages.getCustomEmojiDocuments', {
                     document_id: [BigInt(String(document.id))],
