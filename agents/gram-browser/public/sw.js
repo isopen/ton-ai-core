@@ -1,4 +1,4 @@
-const CACHE = 'gram-v4';
+const CACHE = 'gram-v5';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
