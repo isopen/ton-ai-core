@@ -4,6 +4,9 @@ import type { ImageSpec } from '../types.js';
 
 interface AvatarProps {
   url?: string;
+  /** Inline low-res preview (data URI): blurred underlay shown while the full
+   *  avatar downloads. Telegram Android pattern. */
+  blurUrl?: string;
   initial: string;
   color: string;
   size?: 'small' | 'medium' | 'large';
@@ -14,7 +17,7 @@ function dimFromSize(size: string): number {
   return size === 'small' ? 40 : size === 'large' ? 56 : 48;
 }
 
-export function Avatar({ url, initial, color, size = 'medium', className = '' }: AvatarProps) {
+export function Avatar({ url, blurUrl, initial, color, size = 'medium', className = '' }: AvatarProps) {
   let cls = 'Avatar Avatar_size_' + size;
   if (className) cls += ' ' + className;
   const dim = dimFromSize(size);
@@ -28,6 +31,9 @@ export function Avatar({ url, initial, color, size = 'medium', className = '' }:
   return (
     <div class={cls} style={`background:${color}`}>
       <span class={initialCls}>{initial}</span>
+      {/* Blurred inline preview sits above the tint/initials and below the
+          sharp image; TelegramImage fades in over it once loaded. */}
+      {blurUrl ? <img class="Avatar__blur" src={blurUrl} alt="" /> : null}
       {imageSpec && <TelegramImage image={imageSpec} width={dim} lazy={false} />}
     </div>
   );

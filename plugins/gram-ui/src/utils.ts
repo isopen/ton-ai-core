@@ -152,8 +152,52 @@ function thumbUrl(s: any): string {
   return url;
 }
 
-export function buildDocumentThumb(doc: any): { url: string; width: number; height: number; isDownloading?: boolean } | null {
-  if (doc?.thumbs?.length) {
+/**
+ * Instant blurred-preview source from the inline photoStrippedSize embedded in
+ * TL Photo objects (delivered with dialogs/users responses, zero network).
+ * Returns '' when the peer has no inline thumb.
+ *
+ * Tolerates every wire format seen on this path: bytes as Uint8Array, hex
+ * string (worker deepConvert), or index-object (after JSON round-trip).
+ */
+export function buildPeerBlurThumb(photo: any): string {
+  if (!photo || typeof photo !== 'object') return '';
+  const sizes = photo.sizes;
+  if (!Array.isArray(sizes)) return '';
+  const toBytes = (raw: any): Uint8Array | null => {
+    try {
+      if (!raw) return null;
+      if (raw instanceof Uint8Array) return raw;
+      if (typeof raw === 'string') return hexToBytes(raw);
+      if (Array.isArray(raw)) return new Uint8Array(raw);
+      if (typeof raw === 'object' && typeof raw.length === 'number') {
+        return new Uint8Array(Object.values(raw));
+      }
+    } catch {}
+    return null;
+  };
+  // Prefer explicit stripped sizes; fall back to any thumb carrying inline bytes.
+  let best: Uint8Array | null = null;
+  for (const s of sizes) {
+    if (!s || typeof s !== 'object') continue;
+    if (s._ === 'photoStrippedSize' || s.type === 'i') {
+      const b = toBytes(s.bytes);
+      if (b && b.length > 3 && b[0] === 0x01) { best = b; break; }
+    }
+  }
+  if (!best) {
+    for (const s of sizes) {
+      if (!s || typeof s !== 'object') continue;
+      const b = toBytes(s.bytes);
+      if (b && b.length > 40 && b[0] === 0x01) { best = b; break; }
+      if (b && b.length > 40 && b[0] !== 0x01 && b[1] === 0x5a) { best = b; break; } // some exports omit type byte
+    }
+  }
+  if (!best) return '';
+  try { return strippedToDataUrl(best); } catch { return ''; }
+}
+
+export function buildDocumentThumb(doc: any): { url: string; width: number; height: number; isDownloading?: boolean } | null {  if (doc?.thumbs?.length) {
     let best: any = null;
     const prio = ['m', 'x', 'y', 'w', 'v', 'u'];
     for (const t of prio) {

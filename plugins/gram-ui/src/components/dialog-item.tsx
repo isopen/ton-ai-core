@@ -6,7 +6,7 @@ import { Badge } from '../primitives/badge.js';
 import { TypingIndicator } from './typing-indicator.js';
 import { EmojiText } from './emoji-text.js';
 import type { Dialog } from '../types.js';
-import { getPeerName, formatDialogDate, getInitials } from '../utils.js';
+import { getPeerName, formatDialogDate, getInitials, buildPeerBlurThumb } from '../utils.js';
 
 interface DialogItemProps {
   d: Dialog;
@@ -21,10 +21,18 @@ export function DialogItem(props: DialogItemProps) {
   const { d, selected, collapsed, typingText, selfUserId, onClick } = props;
   const avatarBg = d.peer.avatarUrl ? 'transparent' : (d.peer.type === 'user' ? '#1a4d8c' : '#2d5a27');
   const initial = getInitials(d.peer);
+  // Split avatar sources Telegram-style:
+  //   blur — inline stripped-size preview (computed in the worker, zero network)
+  //   url  — full downloaded file (blob:), fades in over the blur
+  const rawUrl = d.peer.avatarUrl || '';
+  const isFullFile = rawUrl.startsWith('blob:') || /^https?:/.test(rawUrl);
+  const blurThumb = d.peer.blurUrl || buildPeerBlurThumb(d.peer.photo)
+    || (/^data:image/.test(rawUrl) ? rawUrl : '');
+  const fullUrl = isFullFile ? rawUrl : '';
 
   const before = (
     <div style="position:relative">
-      <Avatar url={d.peer.avatarUrl} initial={initial} color={avatarBg} size="medium" />
+      <Avatar url={fullUrl} blurUrl={blurThumb} initial={initial} color={avatarBg} size="medium" />
       {collapsed && d.unreadCount > 0
         ? <Badge key={d.unreadCount} count={d.unreadCount} variant="circle" max={9} />
         : null}

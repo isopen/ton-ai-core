@@ -1,5 +1,5 @@
 import { getLogger } from '@ton-ai/gram-debug';
-import { tpl } from '@ton-ai/gram-ui';
+import { tpl, buildPeerBlurThumb } from '@ton-ai/gram-ui';
 import type { Dialog, Message } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbGetMany, dbKeys } from '@/utils/db';
 import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, ORPHANED_KEY } from './gram-constants';
@@ -53,6 +53,13 @@ export function dispatchAvatarDownload(peerType: string, peerId: string, photo: 
 export function setDialogsFromServer(s: GramState, raw: any) {
   const dialogs = raw.dialogs || raw;
   const merged = mergeOrphanedDialogs(s, dialogs);
+  // Ensure every peer with a photo carries the inline blur preview, even if
+  // the worker-side field was missing (older cached payloads).
+  for (const d of merged) {
+    if (d.peer?.photo && !d.peer.blurUrl) {
+      d.peer.blurUrl = buildPeerBlurThumb(d.peer.photo) || undefined;
+    }
+  }
   s.dialogsRef.current = merged;
   s.dialogsLoadedRef.current = true;
   s.tgui.current!.setDialogs(merged);
@@ -72,6 +79,11 @@ export async function loadCachedDialogs(s: GramState) {
       if (s.dialogsLoadedRef.current) { log.info('[cache] loadCachedDialogs skipped - race'); return; }
       for (const d of merged) {
         if (d.peer?.avatarUrl) d.peer.avatarUrl = undefined;
+        // Cached payloads predate blurUrl: derive the inline preview from the
+        // persisted photo so avatars show blurred immediately on cold start.
+        if (d.peer?.photo && !d.peer.blurUrl) {
+          d.peer.blurUrl = buildPeerBlurThumb(d.peer.photo) || undefined;
+        }
       }
       log.info(`[cache] loadCachedDialogs: ${merged.length} dialogs, avatars served by worker`);
       s.dialogsRef.current = merged;
