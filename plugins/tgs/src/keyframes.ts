@@ -61,9 +61,11 @@ export function parseValue(v: any): ParsedProperty {
     const keyframes = buildKeyframes(v.k, undefined);
     const isAnimated = keyframes.length > 0;
     const hasSplit = !!(v.x || v.y);
+    // Keep the static k even for split dimensions: it carries the components
+    // (y, z) that the animated sub-properties do not drive.
     const prop: ParsedProperty = {
         animated: isAnimated,
-        value: isAnimated ? keyframes[0].s : (hasSplit ? undefined : v.k),
+        value: isAnimated ? keyframes[0].s : v.k,
     };
     if (isAnimated) prop.keyframes = keyframes;
     if (v.x && typeof v.x === 'object') prop.x = parseValue(v.x);
@@ -138,19 +140,22 @@ function clamp01(v: number): number {
 
 function resolveSplitDimensions(prop: ParsedProperty, value: any, frame: number): any {
     if (!prop.x && !prop.y) return value;
-    const xv = prop.x ? interpolateKeyframes(prop.x, frame) : undefined;
-    const x0 = prop.x
-        ? (isNumericArray(xv) ? xv[0] : typeof xv === 'number' ? xv : undefined)
-        : undefined;
-    const out = x0 === undefined
-        ? (isNumericArray(value) ? value.slice() : [])
-        : [x0, ...(isNumericArray(value) ? value : [])];
+    // Start from the static base (carries y/z components the sub-props do not
+    // drive), then override driven axes in place.
+    const base = isNumericArray(value)
+        ? value.slice()
+        : [0, 0];
+    while (base.length < 2) base.push(0);
+    if (prop.x) {
+        const xv = interpolateKeyframes(prop.x, frame);
+        const x0 = isNumericArray(xv) ? xv[0] : typeof xv === 'number' ? xv : undefined;
+        if (x0 !== undefined) base[0] = x0;
+    }
     if (prop.y) {
         const yv = interpolateKeyframes(prop.y, frame);
-        const y0 = isNumericArray(yv) ? yv[0] : typeof yv === 'number' ? yv : 0;
-        out[1] = y0;
+        base[1] = isNumericArray(yv) ? yv[0] : typeof yv === 'number' ? yv : 0;
     }
-    return out;
+    return base;
 }
 
 export function interpolateKeyframes(property: ParsedProperty, frame: number): any {

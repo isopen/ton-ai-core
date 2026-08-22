@@ -30,12 +30,14 @@ export class CubicBezier {
     private readonly sampleValues: Float64Array | null;
 
     constructor(x1: number, y1: number, x2: number, y2: number) {
-        this.x1 = x1;
+        // x control points must stay within [0,1]: x(t) has to be monotonic
+        // for the inverse lookup to exist. rlottie/lottie-web clamp too.
+        this.x1 = clamp01(x1);
         this.y1 = y1;
-        this.x2 = x2;
+        this.x2 = clamp01(x2);
         this.y2 = y2;
         this.sampleValues =
-            x1 === y1 && x2 === y2 ? null : this.calcSampleValues();
+            this.x1 === this.y1 && this.x2 === this.y2 ? null : this.calcSampleValues();
     }
 
     value(aX: number): number {
@@ -62,9 +64,11 @@ export class CubicBezier {
         }
         currentSample--;
 
-        const dist =
-            (aX - samples[currentSample]) /
-            (samples[currentSample + 1] - samples[currentSample]);
+        const denom = samples[currentSample + 1] - samples[currentSample];
+        // Degenerate flat x-interval (possible with duplicated control xs
+        // before clamping): fall back to the interval start instead of
+        // propagating NaN into rendered output.
+        const dist = denom === 0 ? 0 : (aX - samples[currentSample]) / denom;
         let guessForT = intervalStart + dist * SAMPLE_STEP_SIZE;
 
         const initialSlope = getSlope(guessForT, this.x1, this.x2);
@@ -114,6 +118,10 @@ export function buildEasing(o?: TgsEasing, i?: TgsEasing): CubicBezierEasing | u
     const y2 = Number(i?.y?.[0] ?? 0);
     if (![x1, y1, x2, y2].every(Number.isFinite)) return undefined;
     return { x1, y1, x2, y2 };
+}
+
+function clamp01(v: number): number {
+    return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
 export function easingValue(easing: CubicBezierEasing, t: number): number {

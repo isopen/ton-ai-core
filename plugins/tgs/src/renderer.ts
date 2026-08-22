@@ -926,6 +926,44 @@ function applyTrim(trim: TrimRec, frame: number) {
             p.current = trimPath(p.original, localStart, localEnd);
             curLen += len;
         }
+        return;
+    }
+
+    // Wrapped range (start > end): the visible part is [0..end] ++ [start..1]
+    // stitched across the seam. Previously this case silently did nothing,
+    // leaving stale paths from the previous frame on screen.
+    let acc = 0;
+    for (const p of trim.paths) {
+        const len = pathLength(p.original);
+        if (len <= 0) {
+            acc += len;
+            continue;
+        }
+        const segStart = acc;
+        const segEnd = acc + len;
+        acc = segEnd;
+
+        const pieces: Array<[number, number]> = [];
+        if (endLen > 0) {
+            const a = Math.max(segStart, 0);
+            const b = Math.min(segEnd, endLen);
+            if (b > a) pieces.push([a - segStart, b - segStart]);
+        }
+        if (segEnd > startLen && startLen <= totalLength) {
+            const a = Math.max(segStart, startLen);
+            const b = Math.min(segEnd, totalLength);
+            if (b > a) pieces.push([a - segStart, b - segStart]);
+        }
+        if (pieces.length === 0) {
+            p.current = [];
+            continue;
+        }
+        let cmds: PathCmd[] = [];
+        for (const [ls, le] of pieces) {
+            if (le - ls <= 0) continue;
+            cmds.push(...trimPath(p.original, ls / len, le / len));
+        }
+        p.current = cmds;
     }
 }
 
@@ -1087,6 +1125,8 @@ function layerCombinedMatrix(layer: ParsedLayer, frame: number, layerById: Map<n
 }
 
 const bufferPool = new Map<string, HTMLCanvasElement>();
+// Active matte-pair nesting depth, used to scope buffer pool tags.
+let matteDepth = 0;
 const MAX_BUFFER_POOL_PIXELS = 12_000_000;
 let bufferPoolPixels = 0;
 
@@ -1225,43 +1265,54 @@ function renderMattePair(
     const localClip = rectOf(0, 0, w, h);
     const shifted = matMul(matTranslate(-clipRect.x, -clipRect.y), base);
 
-    const srcCanvas = getBuffer(w, h, 'matte-src');
-    const srcCtx = srcCanvas.getContext('2d')!;
-    srcCtx.setTransform(1, 0, 0, 1, 0, 0);
-    srcCtx.clearRect(0, 0, w, h);
-    srcCtx.save();
-    srcCtx.beginPath();
-    srcCtx.rect(0, 0, w, h);
-    srcCtx.clip();
-    renderLayer(srcCtx, src, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder);
-    srcCtx.restore();
+    // Depth-scoped pool tags: a src/matte content subtree can contain its own
+    // precomp with another matte pair of the same size — without the depth
+    // suffix the inner pair would grab and clear the outer pair's buffers
+    // mid-flight.
+    ++matteDepth;
+    let srcCanvas: HTMLCanvasElement;
+    let matteCanvas: HTMLCanvasElement;
+    try {
+        srcCanvas = getBuffer(w, h, 'matte-src#' + matteDepth);
+        const srcCtx = srcCanvas.getContext('2d')!;
+        srcCtx.setTransform(1, 0, 0, 1, 0, 0);
+        srcCtx.clearRect(0, 0, w, h);
+        srcCtx.save();
+        srcCtx.beginPath();
+        srcCtx.rect(0, 0, w, h);
+        srcCtx.clip();
+        renderLayer(srcCtx, src, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder);
+        srcCtx.restore();
 
-    const matteCanvas = getBuffer(w, h, 'matte-layer');
-    const matteCtx = matteCanvas.getContext('2d')!;
-    matteCtx.setTransform(1, 0, 0, 1, 0, 0);
-    matteCtx.clearRect(0, 0, w, h);
-    matteCtx.save();
-    matteCtx.beginPath();
-    matteCtx.rect(0, 0, w, h);
-    matteCtx.clip();
-    renderLayer(matteCtx, matte, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder);
-    matteCtx.restore();
+        matteCanvas = getBuffer(w, h, 'matte-layer#' + matteDepth);
+        const matteCtx = matteCanvas.getContext('2d')!;
+        matteCtx.setTransform(1, 0, 0, 1, 0, 0);
+        matteCtx.clearRect(0, 0, w, h);
+        matteCtx.save();
+        matteCtx.beginPath();
+        matteCtx.rect(0, 0, w, h);
+        matteCtx.clip();
+        renderLayer(matteCtx, matte, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder);
+        matteCtx.restore();
 
-    const type = matte.matteType ?? MatteType.None;
-    if (type === MatteType.Luma || type === MatteType.LumaInv) {
-        applyLuma(srcCanvas);
+        const type = matte.matteType ?? MatteType.None;
+        if (type === MatteType.Luma || type === MatteType.LumaInv) {
+            applyLuma(srcCanvas);
+        }
+
+        matteCtx.globalCompositeOperation = (type === MatteType.Alpha || type === MatteType.Luma)
+            ? 'destination-in'
+            : 'destination-out';
+        matteCtx.drawImage(srcCanvas, 0, 0);
+        matteCtx.globalCompositeOperation = 'source-over';
+
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(matteCanvas, clipRect.x, clipRect.y);
+        ctx.restore();
+    } finally {
+        --matteDepth;
     }
-
-    matteCtx.globalCompositeOperation = (type === MatteType.Alpha || type === MatteType.Luma)
-        ? 'destination-in'
-        : 'destination-out';
-    matteCtx.drawImage(srcCanvas, 0, 0);
-    matteCtx.globalCompositeOperation = 'source-over';
-
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(matteCanvas, clipRect.x, clipRect.y);
-    ctx.restore();
 }
 
 function precompChildren(layer: ParsedLayer, assets: ParsedAsset[]): ParsedLayer[] {

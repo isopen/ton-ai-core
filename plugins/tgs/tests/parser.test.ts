@@ -712,8 +712,25 @@ describe('interpolateKeyframes', () => {
     });
     it('uses split dimension keyframes for x', () => {
         const p: any = {
+            animated: false,
+            value: [0, 80],
+            x: {
+                animated: true,
+                value: [0],
+                keyframes: [
+                    { t: 0, s: [500] },
+                    { t: 10, s: [500] },
+                ],
+            },
+        };
+        // Realistic split-dim: static base carries y, animated x overrides axis 0.
+        expect(interpolateKeyframes(p, 5)).toEqual([500, 80]);
+    });
+
+    it('animated one-component main track maps to axis 0; axis 1 defaults to 0', () => {
+        const p: any = {
             animated: true,
-            value: [0, 0],
+            value: [0],
             keyframes: [
                 { t: 0, s: [0] },
                 { t: 10, s: [100] },
@@ -727,7 +744,7 @@ describe('interpolateKeyframes', () => {
                 ],
             },
         };
-        expect(interpolateKeyframes(p, 5)).toEqual([500, 50]);
+        expect(interpolateKeyframes(p, 5)).toEqual([500, 0]);
     });
 });
 describe('model cache', () => {
