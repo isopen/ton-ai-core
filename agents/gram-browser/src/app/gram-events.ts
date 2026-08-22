@@ -65,74 +65,88 @@ export function setupEventListeners(s: GramState): void {
   };
   window.addEventListener('tg-clear-cache', onClearCache);
   const onInspectCache = async () => {
+    // Every section is independently guarded and the data event ALWAYS
+    // dispatches — a single failing section (avatars, _7a, binlog) must not
+    // leave the cache view hanging on an empty spinner.
+    let entries: Array<{ key: string; value: string }> = [];
     try {
       const keys = await dbKeys('');
-      const entries: Array<{ key: string; value: string }> = [];
       for (const key of keys) {
         try {
           const val = await dbGet(key);
           if (val !== undefined) entries.push({ key, value: JSON.stringify(val, null, 2) });
         } catch {}
       }
-      const dir = await navigator.storage.getDirectory();
-      const opfsRoot: Array<{ name: string; size: number }> = [];
-      for await (const [name] of (dir as any).entries()) {
+    } catch (e) {
+      log.error('[gram-app] inspect cache: db section error:', e);
+    }
+    const opfsRoot: Array<{ name: string; size: number }> = [];
+    try {
+      const dir0 = await navigator.storage.getDirectory();
+      for await (const [name] of (dir0 as any).entries()) {
         try {
-          const h = await dir.getFileHandle(name);
+          const h = await dir0.getFileHandle(name);
           const f = await h.getFile();
           opfsRoot.push({ name, size: f.size });
         } catch {}
       }
-      let opfs7a: Array<{ name: string; size: number }> = [];
-      try {
-        const d7a = await dir.getDirectoryHandle('_7a');
-        for await (const [name] of (d7a as any).entries()) {
-          try {
-            const h = await d7a.getFileHandle(name);
-            const f = await h.getFile();
-            opfs7a.push({ name, size: f.size });
-          } catch {}
-        }
-      } catch {}
-      let binlogInfo: { size: number; exists: boolean; events?: any[] } = { size: 0, exists: false };
-      try {
-        const bh = await dir.getFileHandle('binlog');
-        const bf = await bh.getFile();
-        const raw = new Uint8Array(await bf.arrayBuffer());
-        const events: any[] = [];
-        let off = 0;
-        const EVENT_HEADER_SIZE = 28;
-        const EVENT_TAIL_SIZE = 4;
-        const EVENT_MIN_SIZE = EVENT_HEADER_SIZE + EVENT_TAIL_SIZE;
-        while (off + EVENT_MIN_SIZE <= raw.length) {
-          const hdr = parseEventHeader(raw, off);
-          if (!hdr) break;
-          const payload = raw.subarray(off + EVENT_HEADER_SIZE, off + hdr.size - EVENT_TAIL_SIZE);
-          let key: string | undefined;
-          let value: string | undefined;
-          if (hdr.type > 0) {
-            const kv = decodeKvPayload(hdr.type, payload);
-            if (kv) { key = kv.key; if (kv.value !== undefined) value = kv.value; }
-          } else if (hdr.type === -3) {
-            const enc = parseEncryptionEvent(payload);
-            if (enc) key = 'keyHash=' + Array.from(enc.keyHash.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
-          }
-          events.push({
-            off, size: hdr.size, type: hdr.type, id: hdr.id.toString(), flags: hdr.flags,
-            typeName: ({ 1: 'SET', 2: 'DEL', [-1]: 'HEADER', [-2]: 'EMPTY', [-3]: 'AES_CTR', [-4]: 'NO_ENCR' } as any)[hdr.type] ?? 'UNKNOWN',
-            key, value,
-          });
-          off += hdr.size;
-        }
-        binlogInfo = { size: raw.length, exists: true, events };
-      } catch {}
-      const avatars = await dbListAvatars();
-      window.dispatchEvent(new CustomEvent('tg-inspect-cache-data', {
-        detail: { dbKeys: entries, opfsRoot, opfs7a, binlogInfo, avatars },
-      }));
     } catch (e) {
-      log.error('[gram-app] inspect cache error:', e);
+      log.error('[gram-app] inspect cache: opfs root section error:', e);
     }
+    let opfs7a: Array<{ name: string; size: number }> = [];
+    try {
+      const dir = await navigator.storage.getDirectory();
+      const d7a = await dir.getDirectoryHandle('_7a');
+      for await (const [name] of (d7a as any).entries()) {
+        try {
+          const h = await d7a.getFileHandle(name);
+          const f = await h.getFile();
+          opfs7a.push({ name, size: f.size });
+        } catch {}
+      }
+    } catch {}
+    let binlogInfo: { size: number; exists: boolean; events?: any[] } = { size: 0, exists: false };
+    try {
+      const dir = await navigator.storage.getDirectory();
+      const bh = await dir.getFileHandle('binlog');
+      const bf = await bh.getFile();
+      const raw = new Uint8Array(await bf.arrayBuffer());
+      const events: any[] = [];
+      let off = 0;
+      const EVENT_HEADER_SIZE = 28;
+      const EVENT_TAIL_SIZE = 4;
+      const EVENT_MIN_SIZE = EVENT_HEADER_SIZE + EVENT_TAIL_SIZE;
+      while (off + EVENT_MIN_SIZE <= raw.length) {
+        const hdr = parseEventHeader(raw, off);
+        if (!hdr) break;
+        const payload = raw.subarray(off + EVENT_HEADER_SIZE, off + hdr.size - EVENT_TAIL_SIZE);
+        let key: string | undefined;
+        let value: string | undefined;
+        if (hdr.type > 0) {
+          const kv = decodeKvPayload(hdr.type, payload);
+          if (kv) { key = kv.key; if (kv.value !== undefined) value = kv.value; }
+        } else if (hdr.type === -3) {
+          const enc = parseEncryptionEvent(payload);
+          if (enc) key = 'keyHash=' + Array.from(enc.keyHash.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+        events.push({
+          off, size: hdr.size, type: hdr.type, id: hdr.id.toString(), flags: hdr.flags,
+          typeName: ({ 1: 'SET', 2: 'DEL', [-1]: 'HEADER', [-2]: 'EMPTY', [-3]: 'AES_CTR', [-4]: 'NO_ENCR' } as any)[hdr.type] ?? 'UNKNOWN',
+          key, value,
+        });
+        off += hdr.size;
+      }
+      binlogInfo = { size: raw.length, exists: true, events };
+    } catch {}
+    let avatars: Array<{ opfsName: string; dataUri: string }> = [];
+    try {
+      avatars = await dbListAvatars() || [];
+    } catch (e) {
+      log.error('[gram-app] inspect cache: avatars section error:', e);
+    }
+    window.dispatchEvent(new CustomEvent('tg-inspect-cache-data', {
+      detail: { dbKeys: entries, opfsRoot, opfs7a, binlogInfo, avatars },
+    }));
   };
   window.addEventListener('tg-inspect-cache', onInspectCache);
   const onReadBinlog = async () => {

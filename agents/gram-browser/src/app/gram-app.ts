@@ -155,11 +155,11 @@ export class GramApp {
       s.tgui.current!.setConnectionStatus('connected');
       s.tgui.current!.setPage('dialogs');
       try {
+        await fetchSelfUserId(s);
         const dialogsResult = await service.fetchDialogs();
         if (dialogsResult) {
           setDialogsFromServer(s, dialogsResult);
         }
-        await fetchSelfUserId(s);
       } catch (e: any) {
         addLog(s, tpl(S.LOG_GET_DIALOGS_ERROR, { error: e.message }));
       }
