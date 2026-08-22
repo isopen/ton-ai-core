@@ -1770,7 +1770,8 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
             return {
                 type: 'user', id, accessHash: u?.access_hash,
                 firstName: u?.first_name, lastName: u?.last_name, username: u?.username,
-                avatarUrl: inlineThumb, photoId: u?.photo?.photo_id ? String(u.photo.photo_id) : undefined,
+                avatarUrl: inlineThumb, blurUrl: inlineThumb || undefined,
+                photoId: u?.photo?.photo_id ? String(u.photo.photo_id) : undefined,
                 photo: u?.photo,
             };
         }
@@ -1779,7 +1780,8 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
             const inlineThumb = c?.photo ? getInlineThumb(c.photo) : null;
             return {
                 type: 'chat', id, title: c?.title,
-                avatarUrl: inlineThumb, photoId: c?.photo?.photo_id ? String(c.photo.photo_id) : undefined,
+                avatarUrl: inlineThumb, blurUrl: inlineThumb || undefined,
+                photoId: c?.photo?.photo_id ? String(c.photo.photo_id) : undefined,
                 photo: c?.photo,
             };
         }
@@ -1788,7 +1790,8 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
             const inlineThumb = c?.photo ? getInlineThumb(c.photo) : null;
             return {
                 type: 'channel', id, accessHash: c?.access_hash, title: c?.title, username: c?.username,
-                avatarUrl: inlineThumb, photoId: c?.photo?.photo_id ? String(c.photo.photo_id) : undefined,
+                avatarUrl: inlineThumb, blurUrl: inlineThumb || undefined,
+                photoId: c?.photo?.photo_id ? String(c.photo.photo_id) : undefined,
                 photo: c?.photo,
             };
         }
