@@ -41,6 +41,24 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
       </div>
 
       <div class="tgui-settings-section">
+        <div class="tgui-settings-section-label">Качество фото</div>
+        <div class="tgui-settings-card">
+          <div class="tgui-settings-row" style="flex-direction:column;align-items:stretch;gap:6px">
+            <span class="tgui-settings-label">Загружать и открывать изображения в</span>
+            <div style="display:flex;gap:6px">
+              {(['min', 'medium', 'max'] as const).map(q => (
+                <button
+                  key={q}
+                  class={'tgui-quality-btn' + (state.imageQuality === q ? ' tgui-quality-btn_active' : '')}
+                  onClick={() => dispatch({ type: 'SET_IMAGE_QUALITY', quality: q })}
+                >{q === 'min' ? 'Мин' : q === 'medium' ? 'Сред' : 'Макс'}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tgui-settings-section">
         <div class="tgui-settings-section-label">{t(S.SETTINGS_ACTIONS)}</div>
         <div class="tgui-settings-actions">
           <div

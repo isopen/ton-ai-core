@@ -32,7 +32,7 @@ import { MediaCollage, type MediaCollageItem } from './media-collage.js';
 import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
 import { AnimatedEmoji } from './emoji-text.js';
 import { MediaCaption } from './media-caption.js';
-import { buildImageSpec, firstMissingSizeType, CHAT_PHOTO_PRIO, isInlinePhotoSize } from './photo-spec.js';
+import { buildImageSpec, firstMissingSizeType, chatPhotoPrio, isInlinePhotoSize } from './photo-spec.js';
 import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 
 const photoLog = getLogger('gram-ui:photo');
@@ -272,7 +272,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
       const obs = new IntersectionObserver(([entry]) => {
         if (entry.isIntersecting) {
           if (m.media?.photo?.failed === true) return;
-          const need = firstMissingSizeType(m.media?.photo, CHAT_PHOTO_PRIO);
+          const need = firstMissingSizeType(m.media?.photo, chatPhotoPrio());
           photoLog.info('[PhotoBubble] obs intersect', m.id, 'need:', need?.sizeType || null);
           if (need) {
             window.dispatchEvent(new CustomEvent('tg-download-photo', {
@@ -300,7 +300,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   const failed = m.media?.photo?.failed === true;
 
   const retryPhoto = () => {
-    const need = firstMissingSizeType(m.media?.photo, CHAT_PHOTO_PRIO);
+    const need = firstMissingSizeType(m.media?.photo, chatPhotoPrio());
     if (!need) return;
     window.dispatchEvent(new CustomEvent('tg-download-photo', {
       detail: { photo: m.media.photo, sizeType: need.sizeType, messageId: m.id },

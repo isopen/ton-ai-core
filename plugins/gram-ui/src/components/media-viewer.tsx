@@ -1,7 +1,7 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
-import { buildImageSpec, largestMissingSizeType, VIEWER_PHOTO_PRIO } from './photo-spec.js';
+import { buildImageSpec, largestMissingSizeType, VIEWER_PHOTO_PRIO, getPhotoQuality } from './photo-spec.js';
 
 export interface MediaViewerPhotoItem {
   kind: 'photo';
@@ -59,6 +59,11 @@ export function MediaViewer({
   const isPhoto = item?.kind === 'photo';
   const image = isPhoto && item ? item.image : null;
 
+  // Build marker: lets us verify in the console that the browser is running
+  // the current bundle (SharedWorker/service-worker caches can serve stale
+  // chunks after rebuilds).
+  if (!(window as any).__MV_BUILD__) (window as any).__MV_BUILD__ = 'mv3-hqgate';
+
   const liveM = isPhoto && item && getMessage
     ? getMessage(Number(item.m?.id) || Number(item.image?.id))
     : null;
@@ -69,8 +74,32 @@ export function MediaViewer({
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [src, setSrc] = useState('');
+
+  // Fullscreen tier follows the user's photo-quality setting:
+  //   max    — original/medium, wait for HQ bytes if pending (maxSizeDownloaded)
+  //   medium — medium/thumb only, never spins on HQ
+  //   min    — thumbnail (inline stripped preview)
+  const quality = getPhotoQuality();
+  const hqReady = !!activeImage && activeImage.maxSizeDownloaded !== false;
+  // Safety valve for 'max': if HQ hasn't arrived in 4s, fall back to the best
+  // available source instead of an endless spinner.
+  const [hqGraceExpired, setHqGraceExpired] = useState(false);
+  useEffect(() => {
+    setHqGraceExpired(false);
+    if (hqReady || quality !== 'max') return;
+    const t = setTimeout(() => setHqGraceExpired(true), 4000);
+    return () => clearTimeout(t);
+  }, [hqReady, quality, activeImage?.id]);
+  const bestSrc = (() => {
+    if (!activeImage) return '';
+    const im = activeImage;
+    if (quality === 'min') return im.thumbnail?.url || im.medium?.url || im.original?.url || '';
+    if (quality === 'medium') return im.medium?.url || im.thumbnail?.url || im.original?.url || '';
+    return im.original?.url || im.medium?.url || im.thumbnail?.url || '';
+  })();
+  const showFrame = quality !== 'max'
+    ? !!bestSrc
+    : (hqReady || (hqGraceExpired && !!bestSrc));
 
   const dragRef = useRef({ startX: 0, startY: 0, offX: 0, offY: 0 });
   const touchRef = useRef<{ x: number; y: number } | null>(null);
@@ -94,26 +123,6 @@ export function MediaViewer({
   }, [isPhoto, activeImage?.id, activeKey]);
 
   useEffect(() => {
-    if (!activeImage) return;
-    const urls = [activeImage.original?.url, activeImage.medium?.url, activeImage.thumbnail?.url].filter(Boolean) as string[];
-    if (urls.length === 0) return;
-    const ac = new AbortController();
-    (async () => {
-      for (const url of urls) {
-        try {
-          await preloadImage(url, ac.signal);
-          if (!ac.signal.aborted) {
-            setSrc(url);
-            setLoaded(true);
-            return;
-          }
-        } catch {}
-      }
-    })();
-    return () => ac.abort();
-  }, [activeKey]);
-
-  useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
       if (e.key === 'ArrowLeft' && index > 0 && onNavigate) onNavigate(index - 1);
@@ -126,8 +135,6 @@ export function MediaViewer({
   useEffect(() => {
     setScale(1);
     setOffset({ x: 0, y: 0 });
-    setLoaded(false);
-    setSrc('');
   }, [isPhoto ? (activeImage?.id || image?.id) : item && item.kind === 'video' ? (item as any).m?.id : undefined]);
 
   function handleWheel(e: WheelEvent) {
@@ -232,13 +239,13 @@ export function MediaViewer({
           onMouseUp={handleMouseUp}
           onDblClick={handleDoubleClick}
         >
-          {!loaded && activeImage && activeImage.thumbnail?.url ? (
-            <img class="MediaViewer__thumb" src={activeImage.thumbnail.url} />
-          ) : null}
-          {src ? (
+          {showFrame && bestSrc ? (
+            // Single final-geometry frame from the first paint: best available
+            // source now (browser-cached blob paints instantly), upgraded in
+            // place when HQ finishes. No placeholder swap - nothing flashes.
             <img
-              class={'MediaViewer__img' + (loaded ? ' MediaViewer__img_loaded' : '')}
-              src={src}
+              class="MediaViewer__img MediaViewer__img_loaded"
+              src={bestSrc}
               style={`transform: translate(${offset.x}px, ${offset.y}px) scale(${scale})`}
             />
           ) : (

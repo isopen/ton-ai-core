@@ -9,6 +9,7 @@ import { SkillPlugin } from './plugin/skill-plugin.js';
 import { PluginManager } from '@ton-ai/core';
 import { defaultState, reducer } from './state.js';
 import { injectStyles } from './styles.js';
+import { setPhotoQuality } from './components/photo-spec.js';
 
 const log = getLogger('gram-ui');
 import { render, setUseRafBatching } from '@ton-ai/atom/render';
@@ -64,7 +65,18 @@ export class TelegramUI {
     setStrings(LANG_FALLBACKS.ru || {});
     injectStyles();
 
-    const merged = { ...defaultState(), ...initialState };
+    const storedQuality = (() => {
+      try {
+        const v = localStorage.getItem('tg_imageQuality');
+        return v === 'min' || v === 'medium' || v === 'max' ? v as 'min' | 'medium' | 'max' : null;
+      } catch { return null; }
+    })();
+    const merged = {
+      ...defaultState(),
+      ...(storedQuality ? { imageQuality: storedQuality } : {}),
+      ...initialState,
+    };
+    setPhotoQuality(merged.imageQuality);
     document.documentElement.setAttribute('data-theme', merged.theme);
 
     const self = this;
@@ -142,6 +154,12 @@ export class TelegramUI {
           self.callbacks.logout();
         }
       };
+
+      // Photo quality: apply to the download pipeline and persist on change.
+      useEffect(() => {
+        setPhotoQuality(state.imageQuality);
+        try { localStorage.setItem('tg_imageQuality', state.imageQuality); } catch {}
+      }, [state.imageQuality]);
 
       return (
         <Panel>
@@ -224,6 +242,11 @@ export class TelegramUI {
   setTypingText(text: string) { this.dispatch({ type: 'SET_TYPING_TEXT', text }); }
   setDialogTyping(peerKey: string, text: string) { this.dispatch({ type: 'SET_DIALOG_TYPING', peerKey, text }); }
   setSelfUserId(userId: string) { this.dispatch({ type: 'SET_SELF_USER_ID', userId }); }
+  setImageQuality(q: 'min' | 'medium' | 'max') {
+    setPhotoQuality(q);
+    try { localStorage.setItem('tg_imageQuality', q); } catch {}
+    this.dispatch({ type: 'SET_IMAGE_QUALITY', quality: q });
+  }
   setLangOptions(options: Array<{ code: string; label: string }>) { this.dispatch({ type: 'SET_LANG_OPTIONS', options }); }
 
   private registerBuiltinSkills() {

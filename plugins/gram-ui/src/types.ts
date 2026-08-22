@@ -7,6 +7,9 @@ export interface PeerInfo {
     lastName?: string;
     username?: string;
     avatarUrl?: string;
+    /** Inline stripped-size preview (data URI): blurred underlay while the
+     *  full avatar downloads. Computed once in the worker. */
+    blurUrl?: string;
     photoId?: string;
     photo?: any;
 }
@@ -62,6 +65,7 @@ export interface AppState {
     typingText: string;
     typingByPeer: Record<string, string>;
     renderTick: number;
+    imageQuality: 'min' | 'medium' | 'max';
     loadingMessages: boolean;
     connectionStatus: 'disconnected' | 'connecting' | 'connected';
     langCode: string;
@@ -101,6 +105,10 @@ export interface ImageSpec {
   original?: ImageSource;
   width: number;
   height: number;
+  /** True when the largest size the server has for this photo is already
+   *  downloaded (i.e. showing `medium`/`original` is final quality, not a
+   *  placeholder for pending HQ bytes). */
+  maxSizeDownloaded?: boolean;
 }
 
 export interface TelegramImageProps {
@@ -144,6 +152,7 @@ export type UIAction =
     | { type: 'SET_PHONE_CODE_HASH'; hash: string }
     | { type: 'SET_SELF_USER_ID'; userId: string }
     | { type: 'SET_PLUGIN_SKILLS'; skills: Array<{ id: string; label: string }> }
+    | { type: 'SET_IMAGE_QUALITY'; quality: 'min' | 'medium' | 'max' }
     | { type: 'SET_ACTIVE_SKILL'; id: string | null }
     | { type: 'SET_LANG_OPTIONS'; options: Array<{ code: string; label: string }> }
     | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number | string; sizeType: string; url: string; cacheSource?: string }

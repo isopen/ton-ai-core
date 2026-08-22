@@ -2737,10 +2737,12 @@ body {
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  filter: blur(12px);
-  transform: scale(1.05);
-  opacity: 0.85;
+  /* Same fit as MediaViewer__img: placeholder geometry must match the final
+     HQ frame exactly, so the swap reads as a sharpness fade - not a
+     crop-to-fit "grow" jump. */
+  object-fit: contain;
+  filter: blur(10px);
+  opacity: 0.9;
 }
 
 .MediaViewer__spinner {
@@ -4988,4 +4990,40 @@ body {
    is toggled by class so state transitions never rebuild the DOM. */
 .tgui-slot-layer.tgui-slot-layer-hidden {
   display: none;
+}
+
+/* Avatar blurred inline preview (photoStrippedSize): sits above the tint and
+   initials, below the sharp TelegramImage which fades in over it. */
+.Avatar {
+  overflow: hidden;
+}
+.Avatar__blur {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(10px);
+  transform: scale(1.15);
+}
+
+/* Settings: photo quality selector */
+.tgui-quality-btn {
+  flex: 1;
+  padding: 7px 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface, transparent);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.tgui-quality-btn:hover {
+  background: var(--bg-hover);
+}
+.tgui-quality-btn_active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }

@@ -3,6 +3,21 @@ import { hexToBytes, hexToDataUrl, strippedToDataUrl } from '../utils.js';
 
 export const CHAT_PHOTO_PRIO = ['m'];
 
+// User-selectable photo quality (Settings). Drives which size the chat
+// prefetches and which tier the fullscreen viewer opens at.
+export type PhotoQuality = 'min' | 'medium' | 'max';
+let photoQuality: PhotoQuality = 'max';
+export function setPhotoQuality(q: PhotoQuality): void {
+    if (q === 'min' || q === 'medium' || q === 'max') photoQuality = q;
+}
+export function getPhotoQuality(): PhotoQuality { return photoQuality; }
+/** Size-download priority for chat bubbles under the current quality. */
+export function chatPhotoPrio(): string[] {
+    return photoQuality === 'max'
+        ? ['y', 'w', 'x', 'v', 'u', 'm']
+        : ['m'];
+}
+
 export const VIEWER_PHOTO_PRIO = ['y', 'w', 'x', 'v', 'u', 'm'];
 
 const INLINE_PHOTO_SIZES = new Set(['photoStrippedSize', 'photoCachedSize']);
@@ -81,6 +96,19 @@ export function buildImageSpec(m: any): ImageSpec | null {
   }
   if (!original && medium) original = medium;
 
+  // HQ-readiness: has the largest size the server offers already been
+  // downloaded? Distinguishes "original is final quality" from "only the 'm'
+  // placeholder is here while HQ bytes are still in flight".
+  let maxSizeDim = 0;
+  let downloadedMaxDim = 0;
+  for (const s of sizes) {
+    const { w: sw, h: sh } = sizeDim(s);
+    const d = Math.max(sw, sh);
+    if (d > maxSizeDim) maxSizeDim = d;
+    if ((s.url || s.src) && d > downloadedMaxDim) downloadedMaxDim = d;
+  }
+  const maxSizeDownloaded = maxSizeDim > 0 && downloadedMaxDim >= maxSizeDim;
+
   return {
     id: String(photo.id || m.id),
     thumbnail: thumb,
@@ -88,6 +116,7 @@ export function buildImageSpec(m: any): ImageSpec | null {
     original,
     width: w,
     height: h,
+    maxSizeDownloaded,
   };
 }
 

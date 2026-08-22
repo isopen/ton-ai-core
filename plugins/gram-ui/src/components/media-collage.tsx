@@ -7,7 +7,7 @@ import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import type { ImageSpec } from '../types.js';
 import { calculateAlbumLayout } from './photo-album-layout.js';
-import { firstMissingSizeType, CHAT_PHOTO_PRIO, isInlinePhotoSize } from './photo-spec.js';
+import { firstMissingSizeType, chatPhotoPrio, isInlinePhotoSize } from './photo-spec.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
 
@@ -40,7 +40,7 @@ function fmt(s: number): string {
 }
 
 function photoNeed(photo: any): { sizeType: string; id: number } | null {
-  return firstMissingSizeType(photo, CHAT_PHOTO_PRIO);
+  return firstMissingSizeType(photo, chatPhotoPrio());
 }
 
 export function MediaCollage({
@@ -150,7 +150,7 @@ export function MediaCollage({
         const fileSize = toFileSize(photo?.size);
 
         const retryPhoto = () => {
-          const need = firstMissingSizeType(photo, CHAT_PHOTO_PRIO);
+          const need = firstMissingSizeType(photo, chatPhotoPrio());
           if (!need) return;
           window.dispatchEvent(new CustomEvent('tg-download-photo', {
             detail: { photo, sizeType: need.sizeType, messageId: item.m?.id },

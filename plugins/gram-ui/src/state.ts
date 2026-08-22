@@ -32,6 +32,7 @@ export function defaultState(): AppState {
     typingText: '',
     typingByPeer: {},
     renderTick: 0,
+    imageQuality: 'max',
     loadingMessages: false,
     connectionStatus: 'disconnected',
     langCode: detectBrowserLang(),
@@ -93,6 +94,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_PHONE_CODE_HASH': return { ...state, phoneCodeHash: action.hash };
     case 'SET_SELF_USER_ID': return { ...state, selfUserId: action.userId };
     case 'SET_PLUGIN_SKILLS': return { ...state, pluginSkills: action.skills };
+    case 'SET_IMAGE_QUALITY': return { ...state, imageQuality: action.quality };
     case 'SET_ACTIVE_SKILL': return { ...state, activeSkill: action.id, ...(action.id ? { selectedPeer: null } : {}) };
     case 'SET_LANG_OPTIONS': return { ...state, langOptions: action.options };
     case 'UPDATE_MESSAGE_PHOTO': {

@@ -10,3 +10,4 @@ export { FpsMeter } from './components/fps-meter.js';
 export { startFpsLogging } from './utils/fps-log.js';
 export { setStrings, t, tpl } from './locale.js';
 export { S, TLG_KEYS, LANG_FALLBACKS } from './strings.js';
+export { buildPeerBlurThumb } from './utils.js';
