@@ -207,12 +207,19 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
 
   const renderId = 'sticker-' + String(doc?.id || m.id);
   const showTgs = isTgs && !!url && !animFailed;
-  const showImg = !isTgs && url;
-  const staticThumb = !showTgs ? buildDocumentThumb(doc) : null;
+  const showImg = !isTgs && !!url;
+  // Instant LQIP from the embedded TL thumbnail: shown while bytes load and
+  // kept underneath the TGS canvas (transparent until first paint), so the
+  // sticker appears without any placeholder flash.
+  const staticThumb = buildDocumentThumb(doc);
+  const downloadFailed = downloadAttempts >= STICKER_DOWNLOAD_MAX_ATTEMPTS;
 
   return (
     <div class="tgui-sticker" ref={handleRef}>
       <div class="tgui-sticker-preview" style={{ width: '150px', height: '150px', position: 'relative' }}>
+        {staticThumb?.url ? (
+          <img class="tgui-sticker-thumb" src={staticThumb.url} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+        ) : null}
         {showTgs
           ? <AnimatedSticker tgsUrl={url} renderId={renderId} size={150} noPlay={!playing} onError={() => setAnimFailed(true)} />
           : showImg
@@ -221,9 +228,9 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
               ? <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
                   <div style={`width:${progress}%;height:4px;background:#fff;border-radius:2px`} />
                 </div>
-              : staticThumb?.url
-                ? <img src={staticThumb.url} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                : <span class="tgui-sticker-emoji">{emoji || t(S.STICKER_FALLBACK)}</span>
+              : downloadFailed && !staticThumb?.url
+                ? <span class="tgui-sticker-emoji">{emoji || t(S.STICKER_FALLBACK)}</span>
+                : null
         }
       </div>
       <div class="tgui-sticker-meta">
