@@ -570,7 +570,11 @@ interface DcConnection {
     encQueue: Promise<void>;
     lastDataAt: number;
     suspect: boolean;
-    hostUsed: string;
+    hostUsed?: string;
+    // In-flight RPC count maintained by callRpcOnDcInner; used for spreading
+    // file downloads across parallel connections (conn.pending is not
+    // populated on this path).
+    inflight: number;
 }
 
 const dcConnectionPool: DcConnection[] = [];
@@ -764,6 +768,7 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
         encQueue: Promise.resolve(),
         lastDataAt: Date.now(),
         suspect: false,
+        inflight: 0,
         hostUsed,
     };
 
@@ -824,6 +829,9 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
     return entry;
 }
 
+const MAX_DOWNLOAD_CONNS_PER_DC = 4;
+const DC_SPREAD_PENDING = 2;
+
 async function acquireDcConnection(dcId: number, type: 'video' | 'download'): Promise<DcConnection> {
     let best: DcConnection | null = null;
     let bestSuspect: DcConnection | null = null;
@@ -839,13 +847,18 @@ async function acquireDcConnection(dcId: number, type: 'video' | 'download'): Pr
         }
         aliveSameKind++;
         if (c.suspect) {
-            if (!bestSuspect || c.pending.size < bestSuspect.pending.size) bestSuspect = c;
-        } else if (!best || c.pending.size < best.pending.size) {
+            if (!bestSuspect || c.inflight < bestSuspect.inflight) bestSuspect = c;
+        } else if (!best || c.inflight < best.inflight) {
             best = c;
         }
     }
-    if (best) return best;
-    if (bestSuspect && aliveSameKind >= 3) return bestSuspect;
+    // File downloads pipeline over a single TCP connection get serialized
+    // server-side (responses trickle back one-by-one). Spread them across
+    // several connections once the least-loaded one has a couple of RPCs in
+    // flight, up to a per-DC cap.
+    const canSpread = type === 'download' && aliveSameKind < MAX_DOWNLOAD_CONNS_PER_DC;
+    if (best && (!canSpread || best.inflight < DC_SPREAD_PENDING)) return best;
+    if (bestSuspect && !canSpread) return bestSuspect;
     const key = dcId + ':' + type;
     let connecting = dcConnecting.get(key);
     if (!connecting) {
@@ -1270,7 +1283,13 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
             }
         };
         const call = async (conn: DcConnection): Promise<any> => {
-            const rawResult = await sendDcRpc(conn, methodName, params);
+            conn.inflight++;
+            let rawResult: Buffer;
+            try {
+                rawResult = await sendDcRpc(conn, methodName, params);
+            } finally {
+                conn.inflight--;
+            }
             conn.initialized = true;
             const registry = getSchemaRegistry();
             const d = new SchemaDeserializer(rawResult, registry);
@@ -1674,9 +1693,17 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
     if (!totalSize && Array.isArray(sizeEntry?.sizes)) {
         totalSize = Math.max(...sizeEntry.sizes);
     }
+    if (!totalSize && locationOverride) {
+        // Peer-photo locations carry no size metadata. Profile pictures are
+        // tiny; a realistic estimate keeps each queue claim at ~192 KB so the
+        // whole sidebar burst fits into the pool concurrently (unknown-size
+        // fallback would claim a full 1 MiB and cap concurrency at 8).
+        totalSize = 192 * 1024;
+    }
     let result: DownloadResult;
     try {
-        result = await enqueueDownload(undefined, photoWithThumb, TDLIB_PRIORITY_MAX, genRef, onProgress, totalSize, locationOverride, isAvatarMsg ? 'avatar' : null);
+        const dlPriority = isAvatarMsg ? AVATAR_DL_PRIORITY : TDLIB_PRIORITY_MAX;
+        result = await enqueueDownload(undefined, photoWithThumb, dlPriority, genRef, onProgress, totalSize, locationOverride, isAvatarMsg ? 'avatar' : null);
     } catch (e: any) {
         result = { type: '', bytes: new ArrayBuffer(0), error: String(e?.message || e) };
     }
@@ -3141,6 +3168,10 @@ const IS_PREMIUM = false;
 const POOL_BUDGET = (IS_PREMIUM ? 16 : 8) << 20;
 const SMALL_POOL_BUDGET = (IS_PREMIUM ? 8 : 4) << 20;
 const STREAM_POOL_BUDGET = (IS_PREMIUM ? 16 : 8) << 20;
+// Avatars download through their own pool KEY ('avatar'), which keeps their
+// burst accounted separately from chat-media dc pools - media slots can
+// never be occupied by avatars. Budget stays full-size so avatars themselves
+// load at full concurrency.
 const UNKNOWN_DC = 0;
 const poolInFlight = new Map<string, number>();
 const poolWaiters = new Map<string, PoolWaiter[]>();
@@ -3266,6 +3297,9 @@ const smallUploadQueue: Array<() => void> = [];
 
 const TDLIB_PRIORITY_MIN = 1;
 const TDLIB_PRIORITY_MAX = 32;
+// Avatars sit just below opened-chat media: still front-of-line when nothing
+// competes, but the chat you open always wins the tie.
+const AVATAR_DL_PRIORITY = 24;
 function normalizePriority(p: number): number {
     if (!Number.isFinite(p)) return TDLIB_PRIORITY_MIN;
     return Math.min(TDLIB_PRIORITY_MAX, Math.max(TDLIB_PRIORITY_MIN, Math.round(p)));
@@ -3326,13 +3360,21 @@ async function processDownloadQueue(): Promise<void> {
         let bestIdx = -1;
         let bestPriority = -Infinity;
         for (let i = 0; i < downloadQueue.length; i++) {
-            const { dc, size } = dcAndSize(downloadQueue[i].document, downloadQueue[i].photo);
-            const small = size < SMALL_FILE_LIMIT;
-            const partSize = selectPartSize(size);
-            const effSize = size > 0 ? Math.min(partSize, size) : Math.min(partSize, SMALL_FILE_LIMIT);
-            if (poolFree(poolKey(dc, small)) < effSize) continue;
-            if (downloadQueue[i].priority >= bestPriority) {
-                bestPriority = downloadQueue[i].priority;
+            const item = downloadQueue[i];
+            const { dc, size } = dcAndSize(item.document, item.photo);
+            // TL Photo carries no top-level size; prefer the caller-supplied
+            // totalSize so tiny files (avatars, thumbs) claim tiny slots
+            // instead of a full PART_SIZE each.
+            const knownSize = item.totalSize ?? size;
+            const small = knownSize < SMALL_FILE_LIMIT;
+            const partSize = selectPartSize(knownSize);
+            const effSize = knownSize > 0 ? Math.min(partSize, knownSize) : Math.min(partSize, SMALL_FILE_LIMIT);
+            // Mirror downloadFile_'s pool selection (explicit bucket wins) so
+            // admission control matches the pool that will actually be used.
+            const effPoolKey = item.bucket || poolKey(dc, small);
+            if (poolFree(effPoolKey) < effSize) continue;
+            if (item.priority >= bestPriority) {
+                bestPriority = item.priority;
                 bestIdx = i;
             }
         }
@@ -3436,6 +3478,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         const baseKey = document?.id?.toString() || photo?.id?.toString() || '';
         const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : photo?.thumb_size ? `_thumb_${photo.thumb_size}` : '';
         const cacheKey = baseKey + thumbSuffix;
+        const knownSizeEarly = totalSize || Number(document?.size || photo?.size || 0);
         if (cacheKey && !isNoMediaCache()) {
             if (downloadCache.has(cacheKey)) {
                 const cached = downloadCacheGet(cacheKey)!;
@@ -3443,11 +3486,16 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 if (cached.type && cached.bytes && cached.bytes.length > 0) return { type: cached.type, bytes: b64ToAb(cached.bytes), cacheSource: 'memory' };
             }
 
-            const persisted = await loadPersistedDownloadCache(cacheKey);
-            if (persisted && persisted.type && persisted.bytes && persisted.bytes.length > 0) {
-                wlog('[dl] gram-db cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey + ' bytesLen=' + persisted.bytes.length);
-                downloadCacheSet(cacheKey, persisted, document?.mime_type);
-                return { type: persisted.type, bytes: b64ToAb(persisted.bytes), cacheSource: 'persisted' };
+            // Tiny files (avatars, thumbs): the OPFS read is serialized behind
+            // every pending write in gram-db and routinely costs more than a
+            // home-server round trip - fetch straight from the network instead.
+            if (knownSizeEarly > SMALL_FILE_LIMIT) {
+                const persisted = await loadPersistedDownloadCache(cacheKey);
+                if (persisted && persisted.type && persisted.bytes && persisted.bytes.length > 0) {
+                    wlog('[dl] gram-db cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey + ' bytesLen=' + persisted.bytes.length);
+                    downloadCacheSet(cacheKey, persisted, document?.mime_type);
+                    return { type: persisted.type, bytes: b64ToAb(persisted.bytes), cacheSource: 'persisted' };
+                }
             }
         }
         wlog('[dl] cache MISS id=' + id + ' label=' + label + ' cacheKey=' + cacheKey);
@@ -3549,7 +3597,12 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 return result;
             }
             const p = { precise, location, offset: ofs, limit: lim };
-            if (targetDc > 0) return await runWithSem(() => callRpcOnDc(targetDc, 'upload.getFile', p), fileSmall);
+            // Small files on the home DC ride the warm main-session connection:
+            // it is already authenticated and connected, while a freshly created
+            // 'download' connection may still be handshaking - requests pushed
+            // into it at startup end up completing last.
+            const warmHomeRoute = fileSmall && targetDc > 0 && ses?.dcId === targetDc;
+            if (targetDc > 0 && !warmHomeRoute) return await runWithSem(() => callRpcOnDc(targetDc, 'upload.getFile', p), fileSmall);
             try {
                 return await runWithSem(() => callRpc('upload.getFile', p, { noMigrate: true }), fileSmall);
             } catch (e: any) {

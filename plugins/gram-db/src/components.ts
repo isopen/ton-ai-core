@@ -53,14 +53,15 @@ class OpfsEngine implements StorageEngine {
   }
 
   async getItem(key: string): Promise<string | null> {
-    return this.serialized(async () => {
-      try {
-        const fh = await this.root.getFileHandle(key);
-        const file = await fh.getFile();
-        if (file.size === 0) return null;
-        return await file.text();
-      } catch { return null; }
-    });
+    // Reads are parallel-safe: they never mutate shared state and each opens
+    // its own handle. Serializing them behind writes stalled bursts of small
+    // cache lookups (avatars/thumbs) for hundreds of milliseconds.
+    try {
+      const fh = await this.root.getFileHandle(key);
+      const file = await fh.getFile();
+      if (file.size === 0) return null;
+      return await file.text();
+    } catch { return null; }
   }
 
   async setItem(key: string, value: string): Promise<void> {
@@ -84,9 +85,7 @@ class OpfsEngine implements StorageEngine {
       keys.push(name);
     }
     return keys;
-  }
-
-  async clear(): Promise<void> {
+  }  async clear(): Promise<void> {
     const names: string[] = [];
     for await (const [name] of this.root.entries()) {
       names.push(name);
