@@ -41,19 +41,34 @@ export async function inflateTgs(data: Uint8Array): Promise<string> {
         throw new Error('DecompressionStream not available in this environment');
     }
     const ds = new DecompressionStream('gzip');
-    const writer = ds.writable.getWriter();
-    await writer.write(data);
-    await writer.close();
     const reader = ds.readable.getReader();
-    const decoder = new TextDecoder();
-    let out = '';
+    const writer = ds.writable.getWriter();
+    // Pump the writer concurrently with reads: awaiting write() of a large
+    // chunk before reading anything deadlocks on backpressure once the
+    // internal queue exceeds its high-water mark (~64 KiB).
+    const writeDone = (async () => {
+        await writer.ready;
+        await writer.write(data);
+        await writer.close();
+    })();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
     for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        out += decoder.decode(value, { stream: true });
+        if (value && value.length > 0) {
+            chunks.push(value);
+            total += value.length;
+        }
     }
-    out += decoder.decode();
-    return out;
+    await writeDone;
+    const merged = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) {
+        merged.set(c, off);
+        off += c.length;
+    }
+    return new TextDecoder().decode(merged);
 }
 
 export async function loadTgs(data: string | Uint8Array, options?: ParseOptions): Promise<ParsedAnimation> {
