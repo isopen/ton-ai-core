@@ -172,16 +172,16 @@ export class TdBinlog {
       while (offset + EVENT_MIN_SIZE <= fileSize) {
         const chunk = new Uint8Array(await file.slice(offset, offset + EVENT_MIN_SIZE).arrayBuffer());
         const hdr = parseEventHeader(chunk, 0);
-        if (!hdr) { log.info('[td-binlog] replay: bad header at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
-        if (offset + hdr.size > fileSize) { log.info('[td-binlog] replay: event exceeds file at offset=' + offset + ' size=' + hdr.size + ' fileSize=' + fileSize + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
+        if (!hdr) { log.info('[td-binlog] replay: bad header at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncateFileOnly(lastGoodOffset); return; }
+        if (offset + hdr.size > fileSize) { log.info('[td-binlog] replay: event exceeds file at offset=' + offset + ' size=' + hdr.size + ' fileSize=' + fileSize + ' truncating to ' + lastGoodOffset); await this.truncateFileOnly(lastGoodOffset); return; }
 
         const eventBuf = new Uint8Array(await file.slice(offset, offset + hdr.size).arrayBuffer());
-        if (!validateEventCrc(eventBuf, 0, hdr.size)) { log.info('[td-binlog] replay: CRC fail at offset=' + offset + ' size=' + hdr.size + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
+        if (!validateEventCrc(eventBuf, 0, hdr.size)) { log.info('[td-binlog] replay: CRC fail at offset=' + offset + ' size=' + hdr.size + ' truncating to ' + lastGoodOffset); await this.truncateFileOnly(lastGoodOffset); return; }
         const payload = eventBuf.subarray(EVENT_HEADER_SIZE, hdr.size - EVENT_TAIL_SIZE);
 
         if (hdr.type === SERVICE_TYPE_AES_CTR) {
           const parsed = parseEncryptionEvent(payload);
-          if (!parsed) { log.info('[td-binlog] replay: bad encryption event at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncate(lastGoodOffset); return; }
+          if (!parsed) { log.info('[td-binlog] replay: bad encryption event at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncateFileOnly(lastGoodOffset); return; }
 
           const encKey = Buffer.from(await crypton.pbkdf2Sha256(
             this.sessionBytes!, parsed.salt, KDF_ITERATIONS, KEY_SIZE,
@@ -190,8 +190,10 @@ export class TdBinlog {
             encKey, new TextEncoder().encode(KEY_HASH_LABEL),
           );
           if (!Buffer.from(computedHash).equals(Buffer.from(parsed.keyHash))) {
+            // Wrong session credentials: the encrypted tail is unreadable, but
+            // the validated unencrypted prefix stays committed in memory.
             log.info('[td-binlog] replay: keyHash mismatch truncating to ' + lastGoodOffset);
-            await this.truncate(lastGoodOffset);
+            await this.truncateFileOnly(lastGoodOffset);
             return;
           }
           this.encKey = encKey;
@@ -241,7 +243,7 @@ export class TdBinlog {
         }
 
         if (hdr.type > 0) {
-          if (!this.commitEvent(hdr, payload)) { log.info('[td-binlog] replay: commitEvent failed for unencrypted event type=' + hdr.type); await this.truncate(offset); return; }
+          if (!this.commitEvent(hdr, payload)) { log.info('[td-binlog] replay: commitEvent failed for unencrypted event type=' + hdr.type); await this.truncateFileOnly(offset); return; }
         }
 
         eventCount++;
@@ -531,11 +533,25 @@ export class TdBinlog {
     }
     await w.close();
 
+    // Swap atomically when the platform supports rename; otherwise stream-copy
+    // into a fresh 'binlog'. The old file is never removed before its
+    // replacement is in place — a failed swap leaves the previous binlog fully
+    // intact and this.* untouched (callers see the rejection, next append
+    // retries reindex).
     const oldName = BINLOG_FILE;
-    await dir.removeEntry(oldName);
-    try {
-      await tempHandle.move(oldName);
-    } catch {}
+    const swapped: boolean = await tempHandle.move(oldName).then(() => true).catch(() => false);
+    if (!(await swapped)) {
+      const dest = await dir.getFileHandle(oldName, { create: true });
+      const dw = await dest.createWritable();
+      try {
+        const src = await tempHandle.getFile();
+        await src.stream().pipeTo(dw);
+      } catch (e) {
+        try { await dw.abort(); } catch {}
+        throw e;
+      }
+      try { await dir.removeEntry(BINLOG_FILE + '.new'); } catch {}
+    }
     this.fileHandle = await dir.getFileHandle(oldName);
 
     this.encKey = encKey;
@@ -546,6 +562,19 @@ export class TdBinlog {
     this.totalEventsSize = newTotalEventsSize;
     this.deletedCount = 0;
     this.nextId = runningId;
+  }
+
+  /**
+   * Cut the file at offset while preserving every event already committed to
+   * memory during replay. Full memory reset lives in truncate().
+   */
+  private async truncateFileOnly(offset: number): Promise<void> {
+    this.fileSize = offset;
+    try {
+      const w = await this.fileHandle!.createWritable({ keepExistingData: true });
+      await w.truncate(offset);
+      await w.close();
+    } catch {}
   }
 
   private async truncate(offset: number): Promise<void> {
