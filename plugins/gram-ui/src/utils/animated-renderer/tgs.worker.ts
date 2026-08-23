@@ -1,5 +1,5 @@
-import { getLogger } from '@ton-ai/gram-debug';
-import { loadTgs, renderFrame, inflateTgs, hasAnimatedProperties } from '@ton-ai/tgs';
+import { getLogger, isEnabled } from '@ton-ai/gram-debug';
+import { loadTgs, renderFrame, inflateTgs, hasAnimatedProperties, analyzeTgsFeatures } from '@ton-ai/tgs';
 import type { ParsedAnimation } from '@ton-ai/tgs';
 
 const log = getLogger('gram-ui');
@@ -146,6 +146,12 @@ async function load(renderId: string, tgsUrl: string, tgsJson: string | Uint8Arr
       anim = await loadTgs(json);
     } catch (err: any) {
       throw new Error('parse-fail ' + tgsUrl + ' body=' + JSON.stringify(json.slice(0, 80)) + ': ' + String(err?.message || err));
+    }
+    if (isEnabled('gram-ui', 'info')) {
+      try {
+        const feats = analyzeTgsFeatures(JSON.parse(json));
+        log.info('[tgs-features]', renderId, tgsUrl.slice(0, 60), JSON.stringify(feats));
+      } catch { }
     }
     rawJsonByAnim.set(anim, json);
     const maxFps = isLowPriority ? 30 : 60;

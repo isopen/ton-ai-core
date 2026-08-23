@@ -386,4 +386,75 @@ export function layerInfo(animation: ParsedAnimation): LayerInfo[] {
     }));
 }
 
+const LAYER_TYPE_NAMES: Record<number, string> = {
+    0: 'precomp',
+    1: 'solid',
+    2: 'image',
+    3: 'null',
+    4: 'shape',
+    5: 'text',
+};
+
+export interface TgsFeatureReport {
+    layers: Record<string, number>;
+    shapes: Record<string, number>;
+    flags: Record<string, number>;
+}
+
+function bump(map: Record<string, number>, key: string, n = 1): void {
+    map[key] = (map[key] || 0) + n;
+}
+
+function layerTypeName(ty: any): string {
+    if (typeof ty === 'number') return LAYER_TYPE_NAMES[ty] ?? String(ty);
+    return String(ty ?? '?');
+}
+
+export function analyzeTgsFeatures(data: any): TgsFeatureReport {
+    const rep: TgsFeatureReport = { layers: {}, shapes: {}, flags: {} };
+    if (!data || !Array.isArray(data.layers)) return rep;
+
+    const scanShapeTree = (list: unknown): void => {
+        if (!Array.isArray(list)) return;
+        for (const sh of list) {
+            if (!sh || typeof sh !== 'object') continue;
+            const s = sh as Record<string, unknown>;
+            bump(rep.shapes, String(s.ty ?? '?'));
+            if (s.hd) bump(rep.shapes, 'hidden');
+            if (Array.isArray(s.it)) scanShapeTree(s.it);
+        }
+    };
+
+    const scanLayer = (l: any): void => {
+        if (!l) return;
+        bump(rep.layers, 'ty:' + layerTypeName(l.ty));
+        if (l.bm) bump(rep.flags, 'layerBlend');
+        if (l.tt != null) bump(rep.flags, 'matteTarget');
+        if (l.td != null) bump(rep.flags, 'matteSource');
+        if (Array.isArray(l.masksProperties)) bump(rep.flags, 'masks:' + l.masksProperties.length);
+        if (l.tm != null) bump(rep.flags, 'timeRemap');
+        if (l.parent != null) bump(rep.flags, 'parented');
+        if (Array.isArray(l.ef) && l.ef.length) bump(rep.flags, 'effects');
+        const sc = l.ks?.s;
+        let sv: unknown = sc?.k;
+        if (Array.isArray(sv) && sv.length && typeof sv[0] === 'object' && !Array.isArray(sv[0])) sv = sv[0]?.s;
+        else if (Array.isArray(sv) && sv.length && Array.isArray(sv[0])) sv = sv[0];
+        if (Array.isArray(sv)) {
+            if (Number(sv[0]) < 0) bump(rep.flags, 'negScaleX');
+            if (Number(sv[1]) < 0) bump(rep.flags, 'negScaleY');
+        }
+        scanShapeTree(l.shapes);
+    };
+
+    for (const l of data.layers) scanLayer(l);
+    if (Array.isArray(data.assets)) {
+        for (const a of data.assets) {
+            if (!a || !Array.isArray(a.layers)) continue;
+            bump(rep.flags, 'assetPrecompLayers', a.layers.length);
+            for (const l of a.layers) scanLayer(l);
+        }
+    }
+    return rep;
+}
+
 export { parseValue };

@@ -32,7 +32,7 @@
             "level": "debug"
         },
         "gram-ui": {
-            "enabled": false,
+            "enabled": true,
             "level": "info"
         },
         "gram-ui:slot": {

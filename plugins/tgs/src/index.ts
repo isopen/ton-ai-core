@@ -16,8 +16,9 @@ export type {
 export type { ParseOptions } from './parser.js';
 export type { FrameInfo, PropertyValue } from './keypath.js';
 export {
-    parseTgs, configureModelCacheSize, layerInfo,
+    parseTgs, configureModelCacheSize, layerInfo, analyzeTgsFeatures,
 } from './parser.js';
+export type { TgsFeatureReport } from './parser.js';
 export { interpolateKeyframes, lerpValue, parseValue } from './keyframes.js';
 export { hasAnimatedProperties } from './static-check.js';
 export { setValue, matchKeyPath, getOverride, Property } from './keypath.js';

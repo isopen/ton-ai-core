@@ -4,7 +4,8 @@ import { buildEasing, easingValue } from './easing.js';
 import type {
     ParsedAnimation, ParsedLayer, ParsedShape, ParsedAsset, ParsedTransform, ParsedProperty, ParsedText, TextKeyframe,
 } from './types.js';
-import { MatteType, LayerType } from './types.js';
+import { MatteType, LayerType, MaskMode } from './types.js';
+import type { ParsedMask } from './types.js';
 
 const EPSILON = 0.000001;
 const DASH_TOLERANCE = 0.1;
@@ -724,27 +725,26 @@ function trimPath(cmds: PathCmd[], start: number, end: number): PathCmd[] {
 }
 
 interface CapturedPath {
-    original: PathCmd[];
-    current: PathCmd[];
+    cmds: PathCmd[];
+    matrix: Mat3;
+}
+
+interface PaintItem {
+    cmds: PathCmd[];
     matrix: Mat3;
 }
 
 interface PaintRec {
     shape: ParsedShape;
-    paths: CapturedPath[];
+    items: PaintItem[];
+    trims: ParsedShape[];
     matrix: Mat3;
     alpha: number;
-}
-
-interface TrimRec {
-    shape: ParsedShape;
-    paths: CapturedPath[];
 }
 
 interface WalkState {
     paths: CapturedPath[];
     paints: PaintRec[];
-    trims: TrimRec[];
     repeatCopies: RepeatCopyRec[];
 }
 
@@ -802,9 +802,8 @@ function renderRepeatCopies(ctx: CanvasRenderingContext2D, rec: RepeatCopyRec, f
         if (i >= visible) alpha = 0;
         if (alpha <= 0) continue;
         const copyMat = matMul(rec.mat, repeaterMatrix(tr, frame, i + offset));
-        const w: WalkState = { paths: [], paints: [], trims: [], repeatCopies: [] };
+        const w: WalkState = { paths: [], paints: [], repeatCopies: [] };
         walkShapeGroup(rec.content, frame, copyMat, alpha, w, 0);
-        for (const t of w.trims) applyTrim(t, frame);
         for (const c of w.repeatCopies) renderRepeatCopies(ctx, c, frame);
         drawPaints(ctx, w.paints, frame);
     }
@@ -819,9 +818,8 @@ function walkShapeGroup(shapes: ParsedShape[], frame: number, mat: Mat3, alpha: 
         return;
     }
 
-    const ownIndices: number[] = [];
-    const pendingPaints: { shape: ParsedShape; matrix: Mat3; alpha: number }[] = [];
-    const pendingTrims: { shape: ParsedShape }[] = [];
+    const pendingPaints: { shape: ParsedShape; matrix: Mat3; alpha: number; cutoff: number }[] = [];
+    const trimEntries: { shape: ParsedShape; geomCount: number }[] = [];
 
     for (const shape of shapes) {
         const type = shape.type;
@@ -845,13 +843,13 @@ function walkShapeGroup(shapes: ParsedShape[], frame: number, mat: Mat3, alpha: 
         }
 
         if (type === 'trim') {
-            pendingTrims.push({ shape });
+            trimEntries.push({ shape, geomCount: walk.paths.length - start });
             continue;
         }
 
         if (type === 'fill' || type === 'stroke' || type === 'gradientFill' || type === 'gradientStroke') {
             const paintAlpha = alpha * (toNumber(resolveProp(shape.opacity, frame, 100)) / 100);
-            pendingPaints.push({ shape, matrix: mat, alpha: paintAlpha });
+            pendingPaints.push({ shape, matrix: mat, alpha: paintAlpha, cutoff: walk.paths.length });
             continue;
         }
 
@@ -859,62 +857,64 @@ function walkShapeGroup(shapes: ParsedShape[], frame: number, mat: Mat3, alpha: 
 
         const cmds = shapeCmds(shape, frame);
         if (cmds) {
-            ownIndices.push(walk.paths.length);
-            walk.paths.push({ original: cmds, current: cmds, matrix: mat });
+            walk.paths.push({ cmds, matrix: mat });
         }
     }
 
-    const groupPaths = ownIndices.map((i) => walk.paths[i]);
     for (const p of pendingPaints) {
-        walk.paints.push({ shape: p.shape, paths: groupPaths, matrix: p.matrix, alpha: p.alpha });
-    }
-    for (const t of pendingTrims) {
-        walk.trims.push({ shape: t.shape, paths: groupPaths });
+        const ownCount = p.cutoff - start;
+        const items: PaintItem[] = [];
+        for (let i = 0; i < ownCount; i++) {
+            items.push({ cmds: walk.paths[start + i].cmds.slice(), matrix: walk.paths[start + i].matrix });
+        }
+        for (const te of trimEntries) {
+            if (te.geomCount <= 0) continue;
+            applyTrimToItems(items, te.shape, frame, Math.min(te.geomCount, ownCount));
+        }
+        walk.paints.push({ shape: p.shape, items, trims: [], matrix: p.matrix, alpha: p.alpha });
     }
 }
 
-function applyTrim(trim: TrimRec, frame: number) {
-    const sRaw = toNumber(resolveProp(trim.shape.start, frame, 0));
-    const eRaw = toNumber(resolveProp(trim.shape.end, frame, 100));
-    const oRaw = toNumber(resolveProp(trim.shape.offset, frame, 0));
+function applyTrimToItems(items: PaintItem[], trim: ParsedShape, frame: number, limit: number): void {
+    const sRaw = toNumber(resolveProp(trim.start, frame, 0));
+    const eRaw = toNumber(resolveProp(trim.end, frame, 100));
+    const oRaw = toNumber(resolveProp(trim.offset, frame, 0));
     const [start, end] = trimSegment(sRaw, eRaw, oRaw);
+    const scope = items.slice(0, limit);
 
     if (vCompare(start, end)) {
-        for (const p of trim.paths) p.current = [];
+        for (const it of scope) it.cmds = [];
         return;
     }
-    if (vCompare(Math.abs(start - end), 1)) {
-        for (const p of trim.paths) p.current = p.original;
-        return;
-    }
+    if (vCompare(Math.abs(start - end), 1)) return;
 
-    if (trim.shape.trimMode !== 'individually') {
-        for (const p of trim.paths) {
-            p.current = trimPath(p.original, start, end);
+    if (trim.trimMode !== 'individually') {
+        for (const it of scope) {
+            it.cmds = trimPath(it.cmds, start, end);
         }
         return;
     }
 
     let totalLength = 0;
-    for (const p of trim.paths) totalLength += pathLength(p.original);
+    for (const it of scope) totalLength += pathLength(it.cmds);
     const startLen = totalLength * start;
     const endLen = totalLength * end;
 
     if (startLen < endLen) {
         let curLen = 0;
-        for (const p of trim.paths) {
+        for (const it of scope) {
             if (curLen > endLen) {
-                p.current = [];
+                it.cmds = [];
                 continue;
             }
-            const len = pathLength(p.original);
+            const len = pathLength(it.cmds);
             if (len <= 0) {
                 curLen += len;
                 continue;
             }
             if (curLen < startLen && curLen + len < startLen) {
                 curLen += len;
-                p.current = [];
+                it.cmds = [];
                 continue;
             }
             if (startLen <= curLen && endLen >= curLen + len) {
@@ -923,15 +923,15 @@ function applyTrim(trim: TrimRec, frame: number) {
             }
             const localStart = (startLen > curLen ? startLen - curLen : 0) / len;
             const localEnd = (curLen + len < endLen ? len : endLen - curLen) / len;
-            p.current = trimPath(p.original, localStart, localEnd);
+            it.cmds = trimPath(it.cmds, localStart, localEnd);
             curLen += len;
         }
         return;
     }
 
     let acc = 0;
-    for (const p of trim.paths) {
-        const len = pathLength(p.original);
+    for (const it of scope) {
+        const len = pathLength(it.cmds);
         if (len <= 0) {
             acc += len;
             continue;
@@ -952,15 +952,15 @@ function applyTrim(trim: TrimRec, frame: number) {
             if (b > a) pieces.push([a - segStart, b - segStart]);
         }
         if (pieces.length === 0) {
-            p.current = [];
+            it.cmds = [];
             continue;
         }
         let cmds: PathCmd[] = [];
         for (const [ls, le] of pieces) {
             if (le - ls <= 0) continue;
-            cmds.push(...trimPath(p.original, ls / len, le / len));
+            cmds.push(...trimPath(it.cmds, ls / len, le / len));
         }
-        p.current = cmds;
+        it.cmds = cmds;
     }
 }
 
@@ -1019,10 +1019,12 @@ function drawPaints(ctx: CanvasRenderingContext2D, paints: PaintRec[], frame: nu
         const paint = paints[i];
         const type = paint.shape.type;
 
+        const items: PaintItem[] = paint.items.map((it) => ({ cmds: it.cmds.slice(), matrix: it.matrix }));
+
         const cmds: PathCmd[] = [];
-        for (const p of paint.paths) {
-            if (p.current.length === 0) continue;
-            cmds.push(...transformCmds(p.current, p.matrix));
+        for (const it of items) {
+            if (it.cmds.length === 0) continue;
+            cmds.push(...transformCmds(it.cmds, it.matrix));
         }
         if (cmds.length === 0) continue;
 
@@ -1093,9 +1095,8 @@ function drawPaints(ctx: CanvasRenderingContext2D, paints: PaintRec[], frame: nu
 }
 
 function renderShapes(ctx: CanvasRenderingContext2D, shapes: ParsedShape[], frame: number, mat: Mat3) {
-    const walk: WalkState = { paths: [], paints: [], trims: [], repeatCopies: [] };
+    const walk: WalkState = { paths: [], paints: [], repeatCopies: [] };
     walkShapeGroup(shapes, frame, mat, 1, walk, 0);
-    for (const trim of walk.trims) applyTrim(trim, frame);
     for (const copy of walk.repeatCopies) renderRepeatCopies(ctx, copy, frame);
     drawPaints(ctx, walk.paints, frame);
 }
@@ -1555,7 +1556,244 @@ function renderText(ctx: CanvasRenderingContext2D, layer: ParsedLayer, m: Mat3, 
     ctx.restore();
 }
 
+const BLEND_MAP: Record<number, GlobalCompositeOperation> = {
+    1: 'multiply',
+    2: 'screen',
+    3: 'overlay',
+    4: 'darken',
+    5: 'lighten',
+    6: 'color-dodge',
+    7: 'color-burn',
+    8: 'hard-light',
+    9: 'soft-light',
+    10: 'difference',
+    11: 'exclusion',
+    12: 'hue',
+    13: 'saturation',
+    14: 'color',
+    15: 'luminosity',
+    16: 'lighter',
+};
+
+function maskPathCmds(mk: ParsedMask, frame: number): PathCmd[] | null {
+    const raw = resolveProp(mk.path, frame);
+    if (!raw || typeof raw === 'string') return null;
+    const contours: any[] = Array.isArray(raw) ? raw : [raw];
+    const verts: any[] = [];
+    let closed = true;
+    for (const ct of contours) {
+        if (!ct || ct.v === undefined) continue;
+        closed = ct.c !== false;
+        const varr = ct.v;
+        const iarr = ct.i;
+        const oarr = ct.o;
+        if (!Array.isArray(varr)) continue;
+        for (let j = 0; j < varr.length; j++) {
+            if (!iarr?.[j] || !oarr?.[j]) continue;
+            verts.push({ v: varr[j], i: iarr[j], o: oarr[j] });
+        }
+    }
+    if (verts.length === 0) return null;
+    return vertsToCmds(verts, closed);
+}
+
+function fillMaskOp(
+    mctx: CanvasRenderingContext2D,
+    cmds: PathCmd[],
+    w: number,
+    h: number,
+    alpha: number,
+): void {
+    mctx.globalCompositeOperation = 'source-over';
+    mctx.globalAlpha = alpha;
+    mctx.fillStyle = '#fff';
+    mctx.beginPath();
+    drawCmds(mctx, cmds);
+    mctx.fill();
+    mctx.globalAlpha = 1;
+}
+
+function eraseMaskOp(
+    mctx: CanvasRenderingContext2D,
+    cmds: PathCmd[],
+    w: number,
+    h: number,
+): void {
+    mctx.globalCompositeOperation = 'destination-out';
+    mctx.globalAlpha = 1;
+    mctx.beginPath();
+    drawCmds(mctx, cmds);
+    mctx.fill();
+    mctx.globalAlpha = 1;
+    mctx.globalCompositeOperation = 'source-over';
+}
+
+function seedFullMask(mctx: CanvasRenderingContext2D, w: number, h: number): void {
+    mctx.globalCompositeOperation = 'source-over';
+    mctx.globalAlpha = 1;
+    mctx.fillStyle = '#fff';
+    mctx.fillRect(0, 0, w, h);
+}
+
+function intersectMaskOp(
+    mctx: CanvasRenderingContext2D,
+    cmds: PathCmd[],
+    alpha: number,
+): void {
+    mctx.globalCompositeOperation = 'destination-in';
+    mctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+    mctx.fillStyle = '#fff';
+    mctx.beginPath();
+    drawCmds(mctx, cmds);
+    mctx.fill();
+    mctx.globalAlpha = 1;
+    mctx.globalCompositeOperation = 'source-over';
+}
+
+function renderLayerWithMasks(
+    ctx: CanvasRenderingContext2D,
+    layer: ParsedLayer,
+    masks: ParsedMask[],
+    frame: number,
+    base: Mat3,
+    parentAlpha: number,
+    clipRect: Rect,
+    assets: ParsedAsset[],
+    layerById: Map<number, ParsedLayer>,
+    anim: ParsedAnimation,
+    layerOrder: LayerOrder,
+) {
+    const w = Math.max(1, Math.ceil(clipRect.w));
+    const h = Math.max(1, Math.ceil(clipRect.h));
+    const localClip = rectOf(0, 0, w, h);
+    const shifted = matMul(matTranslate(-clipRect.x, -clipRect.y), base);
+
+    const tagSuffix = maskNestingDepth > 0 ? '#' + maskNestingDepth : '';
+    maskNestingDepth++;
+    try {
+        renderLayerWithMasksInner(
+            ctx, layer, masks, frame, base, parentAlpha, clipRect,
+            assets, layerById, anim, layerOrder,
+            w, h, localClip, shifted, tagSuffix,
+        );
+    } finally {
+        maskNestingDepth--;
+    }
+}
+
+let maskNestingDepth = 0;
+
+function renderLayerWithMasksInner(
+    ctx: CanvasRenderingContext2D,
+    layer: ParsedLayer,
+    masks: ParsedMask[],
+    frame: number,
+    base: Mat3,
+    parentAlpha: number,
+    clipRect: Rect,
+    assets: ParsedAsset[],
+    layerById: Map<number, ParsedLayer>,
+    anim: ParsedAnimation,
+    layerOrder: LayerOrder,
+    w: number,
+    h: number,
+    localClip: Rect,
+    shifted: Mat3,
+    tagSuffix: string,
+) {
+    const content = getBuffer(w, h, 'mask-src' + tagSuffix);
+    const cctx = content.getContext('2d')!;
+    cctx.setTransform(1, 0, 0, 1, 0, 0);
+    cctx.clearRect(0, 0, w, h);
+    cctx.save();
+    cctx.beginPath();
+    cctx.rect(0, 0, w, h);
+    cctx.clip();
+    renderLayerInner(cctx, layer, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder);
+    cctx.restore();
+
+    const maskCanvas = getBuffer(w, h, 'mask-layer' + tagSuffix);
+    const mctx = maskCanvas.getContext('2d')!;
+    mctx.setTransform(1, 0, 0, 1, 0, 0);
+    mctx.clearRect(0, 0, w, h);
+
+    let seeded = false;
+    const layerMat = layerCombinedMatrix(layer, frame, layerById, base);
+    const maskShifted = matMul(matTranslate(-clipRect.x, -clipRect.y), layerMat);
+    for (const mk of masks) {
+        const raw = maskPathCmds(mk, frame);
+        if (!raw || raw.length === 0) continue;
+        const cmds = transformCmds(raw, maskShifted);
+        if (cmds.length === 0) continue;
+        const inv = mk.inverted === true;
+
+        if (mk.mode === MaskMode.Subtract) {
+            if (inv) {
+                if (seeded) eraseMaskOp(mctx, cmds, w, h);
+            } else {
+                if (!seeded) { seedFullMask(mctx, w, h); seeded = true; }
+                eraseMaskOp(mctx, cmds, w, h);
+            }
+        } else if (mk.mode === MaskMode.Intersect) {
+            if (inv) {
+                if (!seeded) { seedFullMask(mctx, w, h); seeded = true; }
+                eraseMaskOp(mctx, cmds, w, h);
+            } else if (!seeded) {
+                fillMaskOp(mctx, cmds, w, h, toNumber(resolveProp(mk.opacity, frame, 100)) / 100);
+                seeded = true;
+            } else {
+                intersectMaskOp(mctx, cmds, toNumber(resolveProp(mk.opacity, frame, 100)) / 100);
+            }
+        } else {
+            if (inv) {
+                if (!seeded) { seedFullMask(mctx, w, h); seeded = true; }
+                eraseMaskOp(mctx, cmds, w, h);
+            } else {
+                fillMaskOp(mctx, cmds, w, h, toNumber(resolveProp(mk.opacity, frame, 100)) / 100);
+                seeded = true;
+            }
+        }
+    }
+
+    if (seeded) {
+        cctx.setTransform(1, 0, 0, 1, 0, 0);
+        cctx.globalCompositeOperation = 'destination-in';
+        cctx.drawImage(maskCanvas, 0, 0);
+        cctx.globalCompositeOperation = 'source-over';
+
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(content, clipRect.x, clipRect.y);
+        ctx.restore();
+    } else {
+        renderLayerInner(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+    }
+}
+
 function renderLayer(
+    ctx: CanvasRenderingContext2D,
+    layer: ParsedLayer,
+    frame: number,
+    base: Mat3,
+    parentAlpha: number,
+    clipRect: Rect,
+    assets: ParsedAsset[],
+    layerById: Map<number, ParsedLayer>,
+    anim: ParsedAnimation,
+    layerOrder: LayerOrder = 'default',
+) {
+    if (!layerVisible(layer, frame)) return;
+
+    const masks = (layer.masks || []).filter(mk => mk.mode !== MaskMode.None);
+    if (masks.length > 0 && (layer.type === LayerType.Shape || layer.type === LayerType.Precomp)) {
+        renderLayerWithMasks(ctx, layer, masks, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+        return;
+    }
+
+    renderLayerInner(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+}
+
+function renderLayerInner(
     ctx: CanvasRenderingContext2D,
     layer: ParsedLayer,
     frame: number,
@@ -1574,36 +1812,43 @@ function renderLayer(
     const opacity = parentAlpha * (toNumber(resolveProp(layer.transform.opacity, frame, 100)) / 100);
     if (vIsZero(opacity)) return;
 
-    if (layer.type === LayerType.Shape) {
-        if (vCompare(opacity, 1)) {
-            renderShapes(ctx, layer.shapes || [], frame, m);
-        } else {
-            const w = Math.max(1, Math.ceil(clipRect.w));
-            const h = Math.max(1, Math.ceil(clipRect.h));
-        const buf = getBuffer(w, h, 'shape');
-            const bctx = buf.getContext('2d')!;
-            bctx.setTransform(1, 0, 0, 1, 0, 0);
-            bctx.clearRect(0, 0, w, h);
-            bctx.save();
-            bctx.beginPath();
-            bctx.rect(0, 0, w, h);
-            bctx.clip();
-            renderShapes(bctx, layer.shapes || [], frame, matMul(matTranslate(-clipRect.x, -clipRect.y), m));
-            bctx.restore();
-            ctx.save();
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.globalAlpha = opacity;
-            ctx.drawImage(buf, clipRect.x, clipRect.y);
-            ctx.restore();
+    const mappedBlend = layer.blendMode ? BLEND_MAP[layer.blendMode] : undefined;
+    const prevGco = mappedBlend ? ctx.globalCompositeOperation : null;
+    if (mappedBlend) ctx.globalCompositeOperation = mappedBlend;
+    try {
+        if (layer.type === LayerType.Shape) {
+            if (vCompare(opacity, 1)) {
+                renderShapes(ctx, layer.shapes || [], frame, m);
+            } else {
+                const w = Math.max(1, Math.ceil(clipRect.w));
+                const h = Math.max(1, Math.ceil(clipRect.h));
+                const buf = getBuffer(w, h, 'shape');
+                const bctx = buf.getContext('2d')!;
+                bctx.setTransform(1, 0, 0, 1, 0, 0);
+                bctx.clearRect(0, 0, w, h);
+                bctx.save();
+                bctx.beginPath();
+                bctx.rect(0, 0, w, h);
+                bctx.clip();
+                renderShapes(bctx, layer.shapes || [], frame, matMul(matTranslate(-clipRect.x, -clipRect.y), m));
+                bctx.restore();
+                ctx.save();
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.globalAlpha = opacity;
+                ctx.drawImage(buf, clipRect.x, clipRect.y);
+                ctx.restore();
+            }
+        } else if (layer.type === LayerType.Precomp) {
+            renderPrecomp(ctx, layer, frame, m, opacity, clipRect, assets, layerById, anim, layerOrder);
+        } else if (layer.type === LayerType.Solid) {
+            renderSolid(ctx, layer, m, opacity);
+        } else if (layer.type === LayerType.Text) {
+            renderText(ctx, layer, m, opacity, frame);
+        } else if (layer.type === LayerType.Image) {
+            renderImage(ctx, layer, m, opacity, clipRect, assets);
         }
-    } else if (layer.type === LayerType.Precomp) {
-        renderPrecomp(ctx, layer, frame, m, opacity, clipRect, assets, layerById, anim, layerOrder);
-    } else if (layer.type === LayerType.Solid) {
-        renderSolid(ctx, layer, m, opacity);
-    } else if (layer.type === LayerType.Text) {
-        renderText(ctx, layer, m, opacity, frame);
-    } else if (layer.type === LayerType.Image) {
-        renderImage(ctx, layer, m, opacity, clipRect, assets);
+    } finally {
+        if (prevGco !== null && mappedBlend) ctx.globalCompositeOperation = prevGco;
     }
 }
 
