@@ -980,7 +980,7 @@ function paintGradient(ctx: CanvasRenderingContext2D, paint: PaintRec, frame: nu
     let grad: CanvasGradient;
     if (g.type === 2) {
         const r = Math.hypot(e[0] - s[0], e[1] - s[1]);
-        grad = ctx.createRadialGradient(s[0], s[1], 0, e[0], e[1], r);
+        grad = ctx.createRadialGradient(s[0], s[1], 0, s[0], s[1], r);
     } else {
         grad = ctx.createLinearGradient(s[0], s[1], e[0], e[1]);
     }
@@ -991,23 +991,67 @@ function paintGradient(ctx: CanvasRenderingContext2D, paint: PaintRec, frame: nu
         if (flat) {
             for (const entry of stops) {
                 const off = toNumber(entry[0]);
-                grad.addColorStop(Math.max(0, Math.min(1, off)), `rgba(${Math.round(entry[1] * 255)},${Math.round(entry[2] * 255)},${Math.round(entry[3] * 255)},${alpha})`);
+                const a = entry.length > 4 ? toNumber(entry[4]) * alpha : alpha;
+                grad.addColorStop(Math.max(0, Math.min(1, off)), `rgba(${Math.round(entry[1] * 255)},${Math.round(entry[2] * 255)},${Math.round(entry[3] * 255)},${a})`);
             }
         } else {
             const pointCount = g.colorPoints && g.colorPoints > 0 ? g.colorPoints : 0;
-            let channels = 4;
-            if (pointCount > 0 && stops.length % pointCount === 0) {
-                const perPoint = stops.length / pointCount;
-                if (perPoint === 4 || perPoint === 5) channels = perPoint;
+            const total = stops.length;
+            let colorLen = -1;
+            if (pointCount > 0) {
+                if (total === pointCount * 4) colorLen = total;
+                else if (total === pointCount * 5) colorLen = -2;
+                else if (total > pointCount * 4 && (total - pointCount * 4) % 2 === 0) colorLen = pointCount * 4;
             }
-            const hasAlpha = channels === 5;
-            for (let i = 0; i + 3 < stops.length; i += channels) {
-                const off = toNumber(stops[i]);
-                const r = Math.round(toNumber(stops[i + 1]) * 255);
-                const g2 = Math.round(toNumber(stops[i + 2]) * 255);
-                const b = Math.round(toNumber(stops[i + 3]) * 255);
-                const a = hasAlpha ? toNumber(stops[i + 4]) * alpha : alpha;
-                grad.addColorStop(Math.max(0, Math.min(1, off)), `rgba(${r},${g2},${b},${a})`);
+            if (colorLen === -2) {
+                for (let i = 0; i + 4 < total; i += 5) {
+                    const off = toNumber(stops[i]);
+                    const r = Math.round(toNumber(stops[i + 1]) * 255);
+                    const g2 = Math.round(toNumber(stops[i + 2]) * 255);
+                    const b = Math.round(toNumber(stops[i + 3]) * 255);
+                    const a = toNumber(stops[i + 4]) * alpha;
+                    grad.addColorStop(Math.max(0, Math.min(1, off)), `rgba(${r},${g2},${b},${a})`);
+                }
+            } else if (colorLen > 0) {
+                const alphaStops: Array<[number, number]> = [];
+                for (let i = colorLen; i + 1 < total; i += 2) {
+                    alphaStops.push([toNumber(stops[i]), toNumber(stops[i + 1])]);
+                }
+                const sampleAlpha = (pos: number): number => {
+                    if (alphaStops.length === 0) return 1;
+                    if (pos <= alphaStops[0][0]) return alphaStops[0][1];
+                    const last = alphaStops[alphaStops.length - 1];
+                    if (pos >= last[0]) return last[1];
+                    for (let i = 1; i < alphaStops.length; i++) {
+                        const prev = alphaStops[i - 1];
+                        const next = alphaStops[i];
+                        if (pos <= next[0]) return prev[1] + (next[1] - prev[1]) * ((pos - prev[0]) / (next[0] - prev[0]));
+                    }
+                    return last[1];
+                };
+                for (let i = 0; i + 3 < colorLen; i += 4) {
+                    const off = toNumber(stops[i]);
+                    const r = Math.round(toNumber(stops[i + 1]) * 255);
+                    const g2 = Math.round(toNumber(stops[i + 2]) * 255);
+                    const b = Math.round(toNumber(stops[i + 3]) * 255);
+                    const a = Math.max(0, Math.min(1, sampleAlpha(off))) * alpha;
+                    grad.addColorStop(Math.max(0, Math.min(1, off)), `rgba(${r},${g2},${b},${a})`);
+                }
+            } else {
+                let channels = 4;
+                if (pointCount > 0 && stops.length % pointCount === 0) {
+                    const perPoint = stops.length / pointCount;
+                    if (perPoint === 4 || perPoint === 5) channels = perPoint;
+                }
+                const hasAlpha = channels === 5;
+                for (let i = 0; i + 3 < stops.length; i += channels) {
+                    const off = toNumber(stops[i]);
+                    const r = Math.round(toNumber(stops[i + 1]) * 255);
+                    const g2 = Math.round(toNumber(stops[i + 2]) * 255);
+                    const b = Math.round(toNumber(stops[i + 3]) * 255);
+                    const a = hasAlpha ? toNumber(stops[i + 4]) * alpha : alpha;
+                    grad.addColorStop(Math.max(0, Math.min(1, off)), `rgba(${r},${g2},${b},${a})`);
+                }
             }
         }
     }

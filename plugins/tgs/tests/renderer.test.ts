@@ -374,7 +374,7 @@ describe('renderFrame', () => {
             t: 2,
         };
         const c = render({ layers: [shapeLayer(0, [RECT, GF])] });
-        expect(c.ctx.calls).toContain('createRadialGradient(0,0,0,100,100,141.421)');
+        expect(c.ctx.calls).toContain('createRadialGradient(0,0,0,0,0,141.421)');
     });
     it('walks gradient stops with the 4-channel stride', () => {
         const GF = {
