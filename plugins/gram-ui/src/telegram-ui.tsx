@@ -10,6 +10,7 @@ import { PluginManager } from '@ton-ai/core';
 import { defaultState, reducer } from './state.js';
 import { injectStyles } from './styles.js';
 import { setPhotoQuality } from './components/photo-spec.js';
+import { attachEmojiBurst } from './components/emoji-burst.js';
 
 const log = getLogger('gram-ui');
 import { render, setUseRafBatching } from '@ton-ai/atom/render';
@@ -189,6 +190,7 @@ export class TelegramUI {
     this._rootDom = render(App, container);
     this.registerBuiltinSkills();
     this.setupListeners();
+    attachEmojiBurst();
   }
 
   private setupListeners() {

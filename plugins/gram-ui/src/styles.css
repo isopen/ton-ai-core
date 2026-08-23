@@ -5027,3 +5027,12 @@ body {
   border-color: var(--accent);
   color: #fff;
 }
+
+/* Emoji tap-burst flying particles */
+.tg-emoji-burst-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1200;
+  overflow: hidden;
+}
