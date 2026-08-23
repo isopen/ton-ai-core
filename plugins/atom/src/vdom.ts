@@ -26,8 +26,7 @@ export class ComponentInstance {
   displayName: string;
   _dirty: boolean = false;
   _mounted: boolean = true;
-  // Root this instance belongs to (assigned by render.ts for top-level
-  // instances; nested instances fall back to the default root on setState).
+
   rootRef?: unknown;
 
   constructor(component: ComponentType, props: Record<string, any>) {
@@ -42,8 +41,6 @@ export class ComponentInstance {
     try {
       return this.component(this.props);
     } finally {
-      // Hooks called outside a render must never silently attach to the last
-      // rendered component.
       setCurrentInstance(null);
     }
   }
@@ -55,9 +52,6 @@ export function setCurrentInstance(inst: ComponentInstance | null) {
   currentInstance = inst;
 }
 
-// Root currently being mounted/patched. The reconciler stamps every newly
-// created ComponentInstance with it so setState inside nested components
-// schedules the correct root in multi-root setups.
 let mountRoot: unknown = null;
 
 export function setMountRoot(root: unknown): void {

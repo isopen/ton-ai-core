@@ -59,9 +59,6 @@ export function MediaViewer({
   const isPhoto = item?.kind === 'photo';
   const image = isPhoto && item ? item.image : null;
 
-  // Build marker: lets us verify in the console that the browser is running
-  // the current bundle (SharedWorker/service-worker caches can serve stale
-  // chunks after rebuilds).
   if (!(window as any).__MV_BUILD__) (window as any).__MV_BUILD__ = 'mv3-hqgate';
 
   const liveM = isPhoto && item && getMessage
@@ -75,14 +72,9 @@ export function MediaViewer({
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
 
-  // Fullscreen tier follows the user's photo-quality setting:
-  //   max    — original/medium, wait for HQ bytes if pending (maxSizeDownloaded)
-  //   medium — medium/thumb only, never spins on HQ
-  //   min    — thumbnail (inline stripped preview)
   const quality = getPhotoQuality();
   const hqReady = !!activeImage && activeImage.maxSizeDownloaded !== false;
-  // Safety valve for 'max': if HQ hasn't arrived in 4s, fall back to the best
-  // available source instead of an endless spinner.
+
   const [hqGraceExpired, setHqGraceExpired] = useState(false);
   useEffect(() => {
     setHqGraceExpired(false);
@@ -240,9 +232,6 @@ export function MediaViewer({
           onDblClick={handleDoubleClick}
         >
           {showFrame && bestSrc ? (
-            // Single final-geometry frame from the first paint: best available
-            // source now (browser-cached blob paints instantly), upgraded in
-            // place when HQ finishes. No placeholder swap - nothing flashes.
             <img
               class="MediaViewer__img MediaViewer__img_loaded"
               src={bestSrc}

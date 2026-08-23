@@ -61,8 +61,7 @@ export function parseValue(v: any): ParsedProperty {
     const keyframes = buildKeyframes(v.k, undefined);
     const isAnimated = keyframes.length > 0;
     const hasSplit = !!(v.x || v.y);
-    // Keep the static k even for split dimensions: it carries the components
-    // (y, z) that the animated sub-properties do not drive.
+
     const prop: ParsedProperty = {
         animated: isAnimated,
         value: isAnimated ? keyframes[0].s : v.k,
@@ -140,8 +139,7 @@ function clamp01(v: number): number {
 
 function resolveSplitDimensions(prop: ParsedProperty, value: any, frame: number): any {
     if (!prop.x && !prop.y) return value;
-    // Start from the static base (carries y/z components the sub-props do not
-    // drive), then override driven axes in place.
+
     const base = isNumericArray(value)
         ? value.slice()
         : [0, 0];

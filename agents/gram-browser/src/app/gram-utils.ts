@@ -53,8 +53,7 @@ export function dispatchAvatarDownload(peerType: string, peerId: string, photo: 
 export function setDialogsFromServer(s: GramState, raw: any) {
   const dialogs = raw.dialogs || raw;
   const merged = mergeOrphanedDialogs(s, dialogs);
-  // Ensure every peer with a photo carries the inline blur preview, even if
-  // the worker-side field was missing (older cached payloads).
+
   for (const d of merged) {
     if (d.peer?.photo && !d.peer.blurUrl) {
       d.peer.blurUrl = buildPeerBlurThumb(d.peer.photo) || undefined;
@@ -79,8 +78,7 @@ export async function loadCachedDialogs(s: GramState) {
       if (s.dialogsLoadedRef.current) { log.info('[cache] loadCachedDialogs skipped - race'); return; }
       for (const d of merged) {
         if (d.peer?.avatarUrl) d.peer.avatarUrl = undefined;
-        // Cached payloads predate blurUrl: derive the inline preview from the
-        // persisted photo so avatars show blurred immediately on cold start.
+
         if (d.peer?.photo && !d.peer.blurUrl) {
           d.peer.blurUrl = buildPeerBlurThumb(d.peer.photo) || undefined;
         }

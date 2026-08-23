@@ -119,11 +119,6 @@ export function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint 
   return result;
 }
 
-// Branchless modular exponentiation. NOTE: this does NOT provide real
-// constant-time guarantees — JS bigint arithmetic itself varies in time with
-// operand magnitude. It only removes the data-dependent branch of the square-
-// and-multiply loop, which narrows (but does not eliminate) timing leakage.
-// Do not rely on it as a side-channel defense for secret exponents.
 export function modPowBranchless(base: bigint, exponent: bigint, modulus: bigint, bitLength: number = 2048): bigint {
   if (modulus <= 0n) throw new Error('Modulus must be positive');
   if (modulus === 1n) return 0n;
@@ -144,11 +139,6 @@ export function modPowBranchless(base: bigint, exponent: bigint, modulus: bigint
 /** @deprecated Name overstates the guarantee — use {@link modPowBranchless}. */
 export const modPowConstantTime = modPowBranchless;
 
-// Validated primes are cached: validating a 2048-bit candidate with 40
-// Miller-Rabin rounds costs ~seconds, and DH code re-validates the same p/q
-// on every operation (TDLib caches this too). Bounded to avoid unbounded growth.
-// NOTE: the cache key is n only — results are computed and reused with the
-// default round count k=40; a custom k is not part of the cache identity.
 const primeCache = new Map<bigint, boolean>();
 const PRIME_CACHE_MAX = 32;
 

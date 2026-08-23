@@ -86,8 +86,6 @@ export class DiffieHellman {
     return bigIntToBuffer(shared, 256);
   }
 
-  // Best-effort wipe only: JS bigints are immutable, so the previous value
-  // remains reachable from the heap until GC reclaims it.
   static wipePrivateKey(keys: DHKeys): void {
     if (keys.privateKeyBuf) keys.privateKeyBuf.fill(0);
     keys.privateKey = 0n;

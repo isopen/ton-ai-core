@@ -30,8 +30,6 @@ export class CubicBezier {
     private readonly sampleValues: Float64Array | null;
 
     constructor(x1: number, y1: number, x2: number, y2: number) {
-        // x control points must stay within [0,1]: x(t) has to be monotonic
-        // for the inverse lookup to exist. rlottie/lottie-web clamp too.
         this.x1 = clamp01(x1);
         this.y1 = y1;
         this.x2 = clamp01(x2);
@@ -65,9 +63,7 @@ export class CubicBezier {
         currentSample--;
 
         const denom = samples[currentSample + 1] - samples[currentSample];
-        // Degenerate flat x-interval (possible with duplicated control xs
-        // before clamping): fall back to the interval start instead of
-        // propagating NaN into rendered output.
+
         const dist = denom === 0 ? 0 : (aX - samples[currentSample]) / denom;
         let guessForT = intervalStart + dist * SAMPLE_STEP_SIZE;
 

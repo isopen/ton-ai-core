@@ -53,9 +53,6 @@ class OpfsEngine implements StorageEngine {
   }
 
   async getItem(key: string): Promise<string | null> {
-    // Reads are parallel-safe: they never mutate shared state and each opens
-    // its own handle. Serializing them behind writes stalled bursts of small
-    // cache lookups (avatars/thumbs) for hundreds of milliseconds.
     try {
       const fh = await this.root.getFileHandle(key);
       const file = await fh.getFile();

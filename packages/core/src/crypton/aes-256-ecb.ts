@@ -72,9 +72,7 @@ export class AES256ECB {
   private key: Buffer;
   private useNative: boolean;
   private roundKeys: Buffer[] = [];
-  // Cached native cipher contexts: ECB has no chaining, so a single streaming
-  // cipheriv instance can serve repeated independent single-block updates.
-  // final() is deferred to destroy().
+
   private nativeEnc: any = null;
   private nativeDec: any = null;
 

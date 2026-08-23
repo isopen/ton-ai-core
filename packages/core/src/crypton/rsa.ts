@@ -207,8 +207,7 @@ export function rsaEncryptRaw(data: Buffer, modulus: bigint, exponent: bigint): 
   if (x >= modulus) {
     throw new Error('RSA plaintext too large for modulus');
   }
-  // Loop length covers exactly the exponent's bits: e=65537 needs 17
-  // iterations, not the full 2048-bit default sized for DH private exponents.
+
   const encrypted = modPowBranchless(x, exponent, modulus, exponent.toString(2).length);
   const result = Buffer.alloc(256);
   const hex = encrypted.toString(16).padStart(512, '0');

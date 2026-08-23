@@ -10,9 +10,6 @@ function imageLoad(url: string, signal: AbortSignal): Promise<string> {
     if (signal.aborted) return reject(new DOMException('Aborted'));
     const img = new window.Image();
     img.onload = () => {
-      // Wait for decode so the src swap paints the final pixels immediately —
-      // committing on onload alone can show a blank frame while the browser
-      // decodes, which reads as a visible jerk during progressive upgrades.
       const d = (img as HTMLImageElement & { decode?: () => Promise<void> }).decode;
       if (typeof d === 'function') {
         d.call(img).catch(() => {}).then(() => resolve(url));
@@ -95,9 +92,7 @@ export function TelegramImage(props: {
           if (!ac.signal.aborted) {
             imgLog.info('[TelegramImage] loaded', image.id, 'len:', url.length);
             setCurrentSrc(url);
-            // Full-size commits unlock the fade-in; the blurred thumb keeps
-            // rendering underneath until this point, so the swap never shows
-            // a blank frame.
+
             if (url !== image.thumbnail?.url) setLoaded(true);
             setError(false);
             onLoad?.();
@@ -151,9 +146,6 @@ export function TelegramImage(props: {
     );
   }
 
-  // The blurred thumb underlay stays mounted until a full-size src is
-  // committed, so the progressive upgrade is a crossfade instead of a
-  // remove-then-decode blank flash.
   const usingFullSrc = currentSrc !== '' && currentSrc !== image.thumbnail?.url;
   const showThumb = !!image.thumbnail?.url && !usingFullSrc;
 

@@ -12,8 +12,6 @@ interface RootData {
   rootDom: Node;
 }
 
-// Multiple roots are supported: each container gets its own RootData, and
-// setState inside a component schedules a flush of the root that owns it.
 const roots = new Map<HTMLElement, RootData>();
 let defaultRoot: RootData | null = null;
 let pendingRoots: Set<RootData> | null = null;
@@ -21,9 +19,6 @@ let renderScheduled = false;
 let rafId: number | null = null;
 let useRafBatching = false;
 
-// Runaway-render guard: renders triggered within the same macrotask window
-// (setState inside effects) are bounded so a buggy component logs an error
-// instead of hanging the tab forever.
 const MAX_SAME_TASK_RENDERS = 500;
 const SAME_TASK_WINDOW_MS = 1000;
 let sameTaskRenders = 0;
@@ -92,8 +87,6 @@ function flushRenderInternal(rd: RootData) {
       flushPendingRefs();
     }
   } catch (e) {
-    // Keep the pre-error oldVNode: the next successful render re-diffs
-    // against it, and prop updates are idempotent, so the tree converges.
     log.error('[atom] patch error in ' + instance.displayName + ' — keeping previous tree:', e);
     return;
   } finally {
@@ -135,8 +128,7 @@ export function render(component: ComponentType, container: HTMLElement): Node {
   flushPendingRefs();
   rd.rootDom = dom;
   roots.set(container, rd);
-  // Last rendered root is the default target for rootless setState calls —
-  // mirrors the previous single-root semantics.
+
   defaultRoot = rd;
 
   __setReroot((inst) => {
@@ -155,8 +147,7 @@ export function render(component: ComponentType, container: HTMLElement): Node {
   }
 
   const handle = { rerender: () => scheduleFlush(rd), unmount: () => unmountRoot(container), container };
-  // Control handle attached to the returned node; the node itself remains the
-  // public return value for backwards compatibility.
+
   (dom as any).__atomRoot = handle;
   return dom;
 }
@@ -181,8 +172,7 @@ function runUnmountTree(vnode: VNode | null): void {
       try { fn(); } catch (e) { log.error('[atom] unmount cleanup error:', e); }
     }
     inst.unmountCleanups.length = 0;
-    // Descend into rendered children only — inst.vnode === vnode here, so
-    // recursing into it directly would loop forever.
+
     if (inst.vnode) {
       for (const child of inst.vnode.children) runUnmountTree(child);
     }

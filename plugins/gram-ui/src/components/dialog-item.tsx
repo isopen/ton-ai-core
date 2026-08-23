@@ -21,9 +21,7 @@ export function DialogItem(props: DialogItemProps) {
   const { d, selected, collapsed, typingText, selfUserId, onClick } = props;
   const avatarBg = d.peer.avatarUrl ? 'transparent' : (d.peer.type === 'user' ? '#1a4d8c' : '#2d5a27');
   const initial = getInitials(d.peer);
-  // Split avatar sources Telegram-style:
-  //   blur — inline stripped-size preview (computed in the worker, zero network)
-  //   url  — full downloaded file (blob:), fades in over the blur
+
   const rawUrl = d.peer.avatarUrl || '';
   const isFullFile = rawUrl.startsWith('blob:') || /^https?:/.test(rawUrl);
   const blurThumb = d.peer.blurUrl || buildPeerBlurThumb(d.peer.photo)

@@ -156,7 +156,6 @@ export class TelegramUI {
         }
       };
 
-      // Photo quality: apply to the download pipeline and persist on change.
       useEffect(() => {
         setPhotoQuality(state.imageQuality);
         try { localStorage.setItem('tg_imageQuality', state.imageQuality); } catch {}

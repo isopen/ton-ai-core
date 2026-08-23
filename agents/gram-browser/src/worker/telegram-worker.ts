@@ -571,9 +571,7 @@ interface DcConnection {
     lastDataAt: number;
     suspect: boolean;
     hostUsed?: string;
-    // In-flight RPC count maintained by callRpcOnDcInner; used for spreading
-    // file downloads across parallel connections (conn.pending is not
-    // populated on this path).
+
     inflight: number;
 }
 
@@ -852,10 +850,7 @@ async function acquireDcConnection(dcId: number, type: 'video' | 'download'): Pr
             best = c;
         }
     }
-    // File downloads pipeline over a single TCP connection get serialized
-    // server-side (responses trickle back one-by-one). Spread them across
-    // several connections once the least-loaded one has a couple of RPCs in
-    // flight, up to a per-DC cap.
+
     const canSpread = type === 'download' && aliveSameKind < MAX_DOWNLOAD_CONNS_PER_DC;
     if (best && (!canSpread || best.inflight < DC_SPREAD_PENDING)) return best;
     if (bestSuspect && !canSpread) return bestSuspect;
@@ -1694,10 +1689,6 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
         totalSize = Math.max(...sizeEntry.sizes);
     }
     if (!totalSize && locationOverride) {
-        // Peer-photo locations carry no size metadata. Profile pictures are
-        // tiny; a realistic estimate keeps each queue claim at ~192 KB so the
-        // whole sidebar burst fits into the pool concurrently (unknown-size
-        // fallback would claim a full 1 MiB and cap concurrency at 8).
         totalSize = 192 * 1024;
     }
     let result: DownloadResult;
@@ -1709,8 +1700,7 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
     }
     if (result.error === 'ABORTED') {
         wlog('[worker] requestPhotoDownload: ABORTED', 'sizeType:', sizeType);
-        // Throw (not null) so the caller's catch treats it as a cancellation
-        // and skips the retry loop entirely.
+
         throw new Error('ABORTED');
     }
     if (result.error) {
@@ -1820,7 +1810,6 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
     }
     return { dialogs };
 }
-
 
 let resolveReadLoopEnd: (() => void) | null = null;
 
@@ -3171,10 +3160,7 @@ const IS_PREMIUM = false;
 const POOL_BUDGET = (IS_PREMIUM ? 16 : 8) << 20;
 const SMALL_POOL_BUDGET = (IS_PREMIUM ? 8 : 4) << 20;
 const STREAM_POOL_BUDGET = (IS_PREMIUM ? 16 : 8) << 20;
-// Avatars download through their own pool KEY ('avatar'), which keeps their
-// burst accounted separately from chat-media dc pools - media slots can
-// never be occupied by avatars. Budget stays full-size so avatars themselves
-// load at full concurrency.
+
 const UNKNOWN_DC = 0;
 const poolInFlight = new Map<string, number>();
 const poolWaiters = new Map<string, PoolWaiter[]>();
@@ -3300,8 +3286,7 @@ const smallUploadQueue: Array<() => void> = [];
 
 const TDLIB_PRIORITY_MIN = 1;
 const TDLIB_PRIORITY_MAX = 32;
-// Avatars sit just below opened-chat media: still front-of-line when nothing
-// competes, but the chat you open always wins the tie.
+
 const AVATAR_DL_PRIORITY = 24;
 function normalizePriority(p: number): number {
     if (!Number.isFinite(p)) return TDLIB_PRIORITY_MIN;
@@ -3365,15 +3350,12 @@ async function processDownloadQueue(): Promise<void> {
         for (let i = 0; i < downloadQueue.length; i++) {
             const item = downloadQueue[i];
             const { dc, size } = dcAndSize(item.document, item.photo);
-            // TL Photo carries no top-level size; prefer the caller-supplied
-            // totalSize so tiny files (avatars, thumbs) claim tiny slots
-            // instead of a full PART_SIZE each.
+
             const knownSize = item.totalSize ?? size;
             const small = knownSize < SMALL_FILE_LIMIT;
             const partSize = selectPartSize(knownSize);
             const effSize = knownSize > 0 ? Math.min(partSize, knownSize) : Math.min(partSize, SMALL_FILE_LIMIT);
-            // Mirror downloadFile_'s pool selection (explicit bucket wins) so
-            // admission control matches the pool that will actually be used.
+
             const effPoolKey = item.bucket || poolKey(dc, small);
             if (poolFree(effPoolKey) < effSize) continue;
             if (item.priority >= bestPriority) {
@@ -3443,10 +3425,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
     try {
         let refRefreshed = false;
         let location: Record<string, any> | null = null;
-        // messages.getCustomEmojiDocuments can only refresh refs of custom emoji docs.
-        // Everything else (stickers, photos, message documents) is refreshed by the
-        // caller via re-fetching the source message (router.refreshMessage), like
-        // TDLib's FileReferenceManager routing through the file's source peer.
+
         const isCustomEmojiDoc = (): boolean => {
             const attrs = Array.isArray(document?.attributes) ? document.attributes : [];
             return attrs.some((a: any) => a?._ === 'documentAttributeCustomEmoji');
@@ -3489,9 +3468,6 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 if (cached.type && cached.bytes && cached.bytes.length > 0) return { type: cached.type, bytes: b64ToAb(cached.bytes), cacheSource: 'memory' };
             }
 
-            // Tiny files (avatars, thumbs): the OPFS read is serialized behind
-            // every pending write in gram-db and routinely costs more than a
-            // home-server round trip - fetch straight from the network instead.
             if (knownSizeEarly > SMALL_FILE_LIMIT) {
                 const persisted = await loadPersistedDownloadCache(cacheKey);
                 if (persisted && persisted.type && persisted.bytes && persisted.bytes.length > 0) {
@@ -3600,10 +3576,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 return result;
             }
             const p = { precise, location, offset: ofs, limit: lim };
-            // Small files on the home DC ride the warm main-session connection:
-            // it is already authenticated and connected, while a freshly created
-            // 'download' connection may still be handshaking - requests pushed
-            // into it at startup end up completing last.
+
             const warmHomeRoute = fileSmall && targetDc > 0 && ses?.dcId === targetDc;
             if (targetDc > 0 && !warmHomeRoute) return await runWithSem(() => callRpcOnDc(targetDc, 'upload.getFile', p), fileSmall);
             try {

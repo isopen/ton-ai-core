@@ -65,9 +65,6 @@ export function setupEventListeners(s: GramState): void {
   };
   window.addEventListener('tg-clear-cache', onClearCache);
   const onInspectCache = async () => {
-    // Every section is independently guarded and the data event ALWAYS
-    // dispatches — a single failing section (avatars, _7a, binlog) must not
-    // leave the cache view hanging on an empty spinner.
     let entries: Array<{ key: string; value: string }> = [];
     try {
       const keys = await dbKeys('');

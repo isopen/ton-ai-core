@@ -43,9 +43,7 @@ export async function inflateTgs(data: Uint8Array): Promise<string> {
     const ds = new DecompressionStream('gzip');
     const reader = ds.readable.getReader();
     const writer = ds.writable.getWriter();
-    // Pump the writer concurrently with reads: awaiting write() of a large
-    // chunk before reading anything deadlocks on backpressure once the
-    // internal queue exceeds its high-water mark (~64 KiB).
+
     const writeDone = (async () => {
         await writer.ready;
         await writer.write(data);

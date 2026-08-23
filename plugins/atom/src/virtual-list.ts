@@ -182,8 +182,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         queueMicrotask(() => {
           const el = containerRef.current;
           if (!el) return;
-          // Deterministic bottom-follow: when the user was at the bottom,
-          // appended content keeps the view pinned — no scroll-event races.
+
           if (wasAtBottom && el.scrollTop === oldST) {
             suppressScrollRef.current = true;
             el.scrollTop = el.scrollHeight;
@@ -331,11 +330,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     } else {
       userScrolledRef.current = true;
     }
-    // Pure tracking — never mutate scrollTop here. Reactive compensation on
-    // scroll events fought the user's gesture: height deltas include content
-    // growing below the viewport (lazy media), and near-bottom pinning yanked
-    // the view against the scroll direction. Bottom-following happens
-    // deterministically in the itemsAdded microtask instead.
+
     st.current.wasAtBottom = el.scrollTop + el.clientHeight >= newSH - 2;
 
     st.current.lastST = el.scrollTop;
@@ -393,10 +388,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     if (!el || userScrolledRef.current) return;
     const maxTop = el.scrollHeight - el.clientHeight;
     if (maxTop <= 0) return;
-    // While the user hasn't scrolled, keep the view pinned to the bottom.
-    // Re-runs as batches arrive and row heights settle from estimates to
-    // measured, so the chat opens already at the bottom with no visible
-    // intermediate scroll positions.
+
     suppressScrollRef.current = true;
     el.scrollTop = maxTop;
     st.current.lastST = maxTop;

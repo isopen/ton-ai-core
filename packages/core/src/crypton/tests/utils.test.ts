@@ -83,7 +83,7 @@ describe('Utils', () => {
     test('isProbablyPrime for known composites', () => {
         assert.ok(!isProbablyPrime(1n));
         assert.ok(!isProbablyPrime(4n));
-        // 2^11 - 1 = 2047 = 23 * 89 — composite Mersenne number
+
         assert.ok(!isProbablyPrime((1n << 11n) - 1n));
         assert.ok(!isProbablyPrime(1000000000000000000n));
     });

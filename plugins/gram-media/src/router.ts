@@ -238,9 +238,7 @@ export class GramMediaRouter {
         this.transport?.cancelVideoStreams?.();
         this.emoji.resetEmojiDownloads();
         this.documentPending.clear();
-        // Photo/avatar queues hold viewport-gated items that can never become
-        // eligible after a peer switch — drop them instead of letting them
-        // linger through every processing pass.
+
         this.photoQueue.length = 0;
         this.avatarQueue.length = 0;
         this.photoQueuedKeys.clear();
@@ -340,8 +338,7 @@ export class GramMediaRouter {
             scanned++;
             if (this.isCachedEmojiUrl(oldest)) continue;
             if (this.emojiBlobUrls.has(oldest)) continue;
-            // Drop cache entries pointing at the dying URL first, otherwise
-            // the caches keep serving a dead blob on every hit forever.
+
             this.dropCacheEntriesForUrl(oldest);
             URL.revokeObjectURL(oldest);
             this.notifyEmojiUrlRevoked(oldest);
@@ -535,8 +532,7 @@ export class GramMediaRouter {
 
     async tgsToJsonUrl(bytes: ArrayBuffer | Uint8Array): Promise<string> {
         const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-        // Content-addressed dedupe: the same sticker bytes must map to one
-        // shared JSON blob instead of piling up duplicates.
+
         const contentKey = await this.tgsContentKey(u8);
         const existing = contentKey ? this.tgsJsonUrlByKey.get(contentKey) : undefined;
         if (existing && this.tgsJsonByUrl.has(existing.url)) {
@@ -826,8 +822,6 @@ export class GramMediaRouter {
         this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_FAILED', messageId, sizeType });
         this.emitWindow('tg-photo-download-failed', { messageId, sizeType });
         if (requeuePhoto) {
-            // Bounded re-dispatch loop: a permanently broken peer photo must
-            // not retry every 10s forever.
             const key = String(messageId);
             const count = (this.avatarRequeueCounts.get(key) || 0) + 1;
             if (count > AVATAR_REQUEUE_MAX) {
@@ -1006,10 +1000,6 @@ export class GramMediaRouter {
             }));
         } finally {
             for (const it of items) {
-                // Keep documentPending alive for items that scheduled a retry:
-                // the pending flag must dedupe requests until the retry timer
-                // actually re-dispatches, otherwise a duplicate download can
-                // race the timer.
                 if (!this.retryPendingDocs.has(it.messageId)) {
                     this.documentPending.delete(it.messageId);
                 }
@@ -1354,7 +1344,7 @@ export class GramMediaRouter {
         }
         const attempts = this.documentRetryCounts.get(messageId) || 0;
         const delay = Math.min(10000, 600 * Math.pow(2, attempts));
-        // documentPending stays occupied for the whole backoff window.
+
         this.retryPendingDocs.add(messageId);
         this.documentRetryTimers.set(messageId, setTimeout(() => {
             this.documentRetryTimers.delete(messageId);
@@ -1405,8 +1395,7 @@ export class GramMediaRouter {
             }
         } catch (err: any) {
             const msg = String(err?.message || err);
-            // Expired refs are a normal lifecycle event: re-fetch the source
-            // message once and retry with the fresh document.
+
             if (msg.includes('FILE_REFERENCE_EXPIRED')) {
                 try {
                     const freshMsg = await withDeadline(this.refreshMessage(messageId), PHOTO_REFRESH_TIMEOUT_MS, 'thumb message refresh exceeded');

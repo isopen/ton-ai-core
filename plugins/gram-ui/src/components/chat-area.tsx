@@ -74,8 +74,6 @@ interface AlbumRow {
 
 const rowKeyOf = (row: AlbumRow) => row.key;
 
-// Rough per-type height estimates for the virtual list: sharp guesses keep
-// spacer corrections small while scrolling into unmeasured content.
 function estimateRowHeight(row: AlbumRow): number {
   const m = row.msgs[0];
   if (!m) return 52;
@@ -208,9 +206,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
   const renderId = 'sticker-' + String(doc?.id || m.id);
   const showTgs = isTgs && !!url && !animFailed;
   const showImg = !isTgs && !!url;
-  // Instant LQIP from the embedded TL thumbnail: shown while bytes load and
-  // kept underneath the TGS canvas (transparent until first paint), so the
-  // sticker appears without any placeholder flash.
+
   const staticThumb = buildDocumentThumb(doc);
   const downloadFailed = downloadAttempts >= STICKER_DOWNLOAD_MAX_ATTEMPTS;
 

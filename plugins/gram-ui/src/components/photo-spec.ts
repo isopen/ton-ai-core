@@ -3,8 +3,6 @@ import { hexToBytes, hexToDataUrl, strippedToDataUrl } from '../utils.js';
 
 export const CHAT_PHOTO_PRIO = ['m'];
 
-// User-selectable photo quality (Settings). Drives which size the chat
-// prefetches and which tier the fullscreen viewer opens at.
 export type PhotoQuality = 'min' | 'medium' | 'max';
 let photoQuality: PhotoQuality = 'max';
 export function setPhotoQuality(q: PhotoQuality): void {
@@ -96,9 +94,6 @@ export function buildImageSpec(m: any): ImageSpec | null {
   }
   if (!original && medium) original = medium;
 
-  // HQ-readiness: has the largest size the server offers already been
-  // downloaded? Distinguishes "original is final quality" from "only the 'm'
-  // placeholder is here while HQ bytes are still in flight".
   let maxSizeDim = 0;
   let downloadedMaxDim = 0;
   for (const s of sizes) {

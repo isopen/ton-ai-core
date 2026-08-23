@@ -535,8 +535,7 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
       for (const docId of Object.keys(strikes)) {
         if (!stillMissing.has(docId)) delete strikes[docId];
       }
-      // re-requests are cheap and deduped on the media side; bound by strike limit
-      // so permanently missing docs stop churning the download pipeline
+
       const customIds: string[] = [];
       for (const s of missing) {
         const n = (strikes[s.docId] || 0) + 1;

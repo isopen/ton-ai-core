@@ -929,9 +929,6 @@ function applyTrim(trim: TrimRec, frame: number) {
         return;
     }
 
-    // Wrapped range (start > end): the visible part is [0..end] ++ [start..1]
-    // stitched across the seam. Previously this case silently did nothing,
-    // leaving stale paths from the previous frame on screen.
     let acc = 0;
     for (const p of trim.paths) {
         const len = pathLength(p.original);
@@ -1125,7 +1122,7 @@ function layerCombinedMatrix(layer: ParsedLayer, frame: number, layerById: Map<n
 }
 
 const bufferPool = new Map<string, HTMLCanvasElement>();
-// Active matte-pair nesting depth, used to scope buffer pool tags.
+
 let matteDepth = 0;
 const MAX_BUFFER_POOL_PIXELS = 12_000_000;
 let bufferPoolPixels = 0;
@@ -1265,10 +1262,6 @@ function renderMattePair(
     const localClip = rectOf(0, 0, w, h);
     const shifted = matMul(matTranslate(-clipRect.x, -clipRect.y), base);
 
-    // Depth-scoped pool tags: a src/matte content subtree can contain its own
-    // precomp with another matte pair of the same size — without the depth
-    // suffix the inner pair would grab and clear the outer pair's buffers
-    // mid-flight.
     ++matteDepth;
     let srcCanvas: HTMLCanvasElement;
     let matteCanvas: HTMLCanvasElement;

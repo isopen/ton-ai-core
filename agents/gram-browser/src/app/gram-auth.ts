@@ -55,8 +55,7 @@ export function createAuthCallbacks(
         await dbDel('authInvalidated').catch(() => {});
         s.tgui.current!.setConnectionStatus('connected');
         s.tgui.current!.setPage('dialogs');
-        // Self id must be known before dialogs render: Saved Messages naming,
-        // positioning and bubble sides all depend on it.
+
         await fetchSelfUserId(s);
         const dialogsResult = await svc()!.fetchDialogs();
         if (dialogsResult) {
@@ -80,8 +79,7 @@ export function createAuthCallbacks(
         await dbDel('authInvalidated').catch(() => {});
         s.tgui.current!.setConnectionStatus('connected');
         s.tgui.current!.setPage('dialogs');
-        // Self id must be known before dialogs render: Saved Messages naming,
-        // positioning and bubble sides all depend on it.
+
         await fetchSelfUserId(s);
         const dialogsResult = await svc()!.fetchDialogs();
         if (dialogsResult) {
@@ -124,8 +122,7 @@ export function createAuthCallbacks(
         await dbDel('authInvalidated').catch(() => {});
         s.tgui.current!.setConnectionStatus('connected');
         s.tgui.current!.setPage('dialogs');
-        // Self id must be known before dialogs render: Saved Messages naming,
-        // positioning and bubble sides all depend on it.
+
         await fetchSelfUserId(s);
         const dialogsResult = await svc()!.fetchDialogs();
         if (dialogsResult) {

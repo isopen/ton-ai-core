@@ -44,7 +44,7 @@ function resolveDrawableValue(node: Element, px: number, py: number): string {
     if (node instanceof HTMLImageElement && node.src) {
         return node.src;
     }
-    // Video stickers: snapshot the currently displayed frame.
+
     const vid = node.querySelector('video');
     if (vid instanceof HTMLVideoElement && vid.videoWidth > 0) {
         try {
@@ -70,7 +70,7 @@ function snapshotCanvasAt(cv: HTMLCanvasElement, px: number, py: number, tileSiz
         const r = cv.getBoundingClientRect();
         const scaleX = cv.width / (r.width || cv.width);
         const scaleY = cv.height / (r.height || cv.height);
-        // Tile size: explicit (mapped slot rect) or the full smaller dimension.
+
         const size = Math.max(1, Math.round(tileSize ?? Math.min(cv.width, cv.height)));
         let sx = Math.round((px - r.left) * scaleX - size / 2);
         let sy = Math.round((py - r.top) * scaleY - size / 2);
@@ -111,8 +111,6 @@ function spawnParticle(
     node.style.cssText += ';position:fixed;left:' + x + 'px;top:' + y + 'px;width:auto;height:auto;'
         + 'margin-left:-15px;margin-top:-15px;pointer-events:none;will-change:transform,opacity';
 
-    // Upward fan: angle around -90 deg with wide spread; farther layers fly
-    // higher and wider.
     const angleDeg = rand(-155, -25);
     const angle = (angleDeg * Math.PI) / 180;
     const distScale = 0.85 + layer * 0.22;
@@ -161,7 +159,6 @@ export function spawnEmojiBurst(x: number, y: number, source: { kind: 'image' | 
     for (let l = 0; l < layers; l++) {
         const n = Math.ceil(perLayer / layers);
         for (let i = 0; i < n; i++) {
-            // Small stagger between layers so consecutive taps read as waves.
             setTimeout(() => spawnParticle(x + rand(-10, 10), y + rand(-8, 8), source, l), l * 90 + i * 12);
         }
     }
@@ -179,14 +176,9 @@ export function attachEmojiBurst(): void {
         const x = e.clientX;
         const y = e.clientY;
 
-        // Scope: the chat bubble that was tapped. Every emoji-bearing drawable
-        // lives inside it (animated canvases, custom-emoji slots, webp imgs).
         const bubble = target.closest('.MessageBubble');
         if (!bubble) return;
 
-        // A) Custom-emoji slots: shared-canvas or own-canvas rendering.
-        //    The slot reserves inline space; pixels live either in its own
-        //    canvas or in one shared canvas overlaying the whole wrap.
         const slotEl = (target.closest('.tgui-emoji-slot'))
             ?? ((document.elementFromPoint(x, y) as Element | null)?.closest('.tgui-emoji-slot') ?? null);
         if (slotEl) {
@@ -198,8 +190,7 @@ export function attachEmojiBurst(): void {
                 spawnEmojiBurst(x, y, { kind: 'image', value: own.src }, slotEl);
                 return;
             }
-            // Shared-canvas mode: locate the overlaying canvas that contains
-            // this slot's rect, and crop the tile at the slot's center.
+
             const sr = slotEl.getBoundingClientRect();
             const scopeForCanvas = slotEl.closest('.tgui-emoji-canvas-wrap') ?? bubble;
             let scv: HTMLCanvasElement | null = null;
@@ -213,9 +204,7 @@ export function attachEmojiBurst(): void {
             }
             if (scv) {
                 const cr = scv.getBoundingClientRect();
-                // Map the SLOT rect into shared-canvas pixel space and crop
-                // exactly that region: the sheet contains every emoji view of
-                // the message, so a generic square crop would grab neighbors.
+
                 const scaleX = scv.width / (cr.width || 1);
                 const scaleY = scv.height / (cr.height || 1);
                 const cxp = (sr.left + sr.width / 2 - cr.left) * scaleX;
@@ -238,10 +227,6 @@ export function attachEmojiBurst(): void {
             }
         }
 
-        // Resolve THE emoji drawable under the finger:
-        //   a) the tap target itself when it is an emoji drawable;
-        //   b) whatever elementFromPoint resolves to inside the bubble;
-        //   c) otherwise the nearest-by-center emoji drawable in the bubble.
         let node: Element | null = null;
         const isEmojiDrawable = (n: Element): boolean =>
             (n instanceof HTMLCanvasElement && n.classList.contains('tgui-animated-sticker'))
@@ -265,8 +250,6 @@ export function attachEmojiBurst(): void {
             }
         }
         if (!node) {
-            // No canvas/img here - this is a plain unicode emoji rendered as
-            // text. Use the character itself as the flying content.
             const under = document.elementFromPoint(x, y);
             const glyphEl = (under && bubble.contains(under)) ? under : target;
             const glyphMatch = ((glyphEl.textContent || '') + '')
@@ -279,7 +262,6 @@ export function attachEmojiBurst(): void {
 
         const value = resolveDrawableValue(node, x, y);
         if (!value) {
-            // No drawable bytes under the tap: fall back to the glyph itself.
             const glyphEl = node || target;
             const glyphMatch = ((glyphEl.textContent || '') + '')
                 .match(/\p{Extended_Pictographic}/u);
@@ -288,8 +270,6 @@ export function attachEmojiBurst(): void {
             return;
         }
 
-        // Tap session is per-drawable: every emoji counts taps separately and
-        // bursts strictly from its own position.
         spawnEmojiBurst(x, y, { kind: 'image', value }, node);
     }, { passive: true });
 }

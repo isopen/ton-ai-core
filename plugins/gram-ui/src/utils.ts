@@ -176,7 +176,7 @@ export function buildPeerBlurThumb(photo: any): string {
     } catch {}
     return null;
   };
-  // Prefer explicit stripped sizes; fall back to any thumb carrying inline bytes.
+
   let best: Uint8Array | null = null;
   for (const s of sizes) {
     if (!s || typeof s !== 'object') continue;
@@ -190,7 +190,7 @@ export function buildPeerBlurThumb(photo: any): string {
       if (!s || typeof s !== 'object') continue;
       const b = toBytes(s.bytes);
       if (b && b.length > 40 && b[0] === 0x01) { best = b; break; }
-      if (b && b.length > 40 && b[0] !== 0x01 && b[1] === 0x5a) { best = b; break; } // some exports omit type byte
+      if (b && b.length > 40 && b[0] !== 0x01 && b[1] === 0x5a) { best = b; break; }
     }
   }
   if (!best) return '';

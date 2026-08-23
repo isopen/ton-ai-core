@@ -190,8 +190,6 @@ export class TdBinlog {
             encKey, new TextEncoder().encode(KEY_HASH_LABEL),
           );
           if (!Buffer.from(computedHash).equals(Buffer.from(parsed.keyHash))) {
-            // Wrong session credentials: the encrypted tail is unreadable, but
-            // the validated unencrypted prefix stays committed in memory.
             log.info('[td-binlog] replay: keyHash mismatch truncating to ' + lastGoodOffset);
             await this.truncateFileOnly(lastGoodOffset);
             return;
@@ -533,11 +531,6 @@ export class TdBinlog {
     }
     await w.close();
 
-    // Swap atomically when the platform supports rename; otherwise stream-copy
-    // into a fresh 'binlog'. The old file is never removed before its
-    // replacement is in place — a failed swap leaves the previous binlog fully
-    // intact and this.* untouched (callers see the rejection, next append
-    // retries reindex).
     const oldName = BINLOG_FILE;
     const swapped: boolean = await tempHandle.move(oldName).then(() => true).catch(() => false);
     if (!(await swapped)) {

@@ -13,11 +13,9 @@ const slotLayerLog = getLogger('gram-ui:slot-layer');
 
 const SLOT_RETRY_MS = 2500;
 const SLOT_FETCH_TIMEOUT_MS = 12000;
-// telegram-tt parity: the machine appears all at once, only after its core
-// assets are loaded plus this delay — no partial layers popping in.
+
 const STICKER_RENDER_DELAY = 100;
-// If the real dice set never arrives, fall back to bundled idle assets so the
-// message is not blank forever (degraded, static-only mode).
+
 const FALLBACK_RENDER_MS = 5000;
 const WIN_BACKGROUND_DELAY = 700;
 
@@ -320,15 +318,12 @@ export function SlotMachineSticker({ value, size = 96, playKey, shouldPlay = tru
   const [spinState, setSpinState] = useState<'base' | 'result'>(shouldSkipToEnd ? 'result' : 'base');
   const [backgroundState, setBackgroundState] = useState<'base' | 'win'>(shouldSkipToEnd && isWin ? 'win' : 'base');
 
-  // Render gate: nothing is shown until every layer needed for the current
-  // mode has its data, plus STICKER_RENDER_DELAY — the machine appears whole,
-  // already at the correct frame (kills first-paint frame flashing).
   const coreIds = [bg?.docId, pull?.docId, ...spins.map((s) => s.docId)].filter((id): id is string => !!id);
   const resultIds = results.map((s) => s.docId);
   const gateIds = shouldSkipToEnd ? [...coreIds, ...resultIds] : coreIds;
   const gateKey = gateIds.join(',');
   const [renderGateOpen, setRenderGateOpen] = useState(false);
-  // Re-check the gate whenever any needed doc finishes loading.
+
   const [dataTick, setDataTick] = useState(0);
   useEffect(() => {
     const ids = gateIds.filter((id) => !isSlotLocalDoc(id));
@@ -357,12 +352,6 @@ export function SlotMachineSticker({ value, size = 96, playKey, shouldPlay = tru
 
   useEffect(() => clearWinTimer, [clearWinTimer]);
 
-  // telegram-tt parity: reels loop while the result assets are missing, and
-  // stop only after the running cycle finishes naturally (onEnd of the last
-  // reel). A full revolution is also enforced via onLoopDone so pre-cached
-  // results can't cut the spin to a twitch.
-  // NOTE: no shouldSkipToEnd here — if the dice value arrives mid-spin
-  // (own live roll), the machine must still stop and land on the result.
   const [reelCyclesDone, setReelCyclesDone] = useState(0);
   const [spinEndAllowed, setSpinEndAllowed] = useState(false);
   useEffect(() => {
@@ -372,7 +361,6 @@ export function SlotMachineSticker({ value, size = 96, playKey, shouldPlay = tru
   }, [spinEndAllowed, resultsReady, reelCyclesDone]);
   const onReelCycleDone = useCallback(() => setReelCyclesDone((v) => v + 1), []);
 
-  // Safety net: with no reel layers to fire onEnd, settle straight to result.
   useEffect(() => {
     if (!renderGateOpen || spinState !== 'base') return;
     if (spins.length === 0 && resultsReady) {
@@ -408,7 +396,7 @@ export function SlotMachineSticker({ value, size = 96, playKey, shouldPlay = tru
   }, [spinState, isWin, playKey, clearWinTimer]);
 
   const [runId, setRunId] = useState(0);
-  // Clicking a settled machine replays the full sequence: pull -> spinning -> result.
+
   const replay = useCallback(() => {
     if (spinState !== 'result') return;
     clearWinTimer();
@@ -424,17 +412,12 @@ export function SlotMachineSticker({ value, size = 96, playKey, shouldPlay = tru
   }
 
   const showStatic = spinState === 'result';
-  // Stable per-layer DOM keys: the reconciler never mounts/unmounts layer
-  // nodes after the gate opens. Replay is expressed through playKey instead,
-  // which cleanly restarts each TgsPlayer (parse effect resets frames).
+
   const runPlayKey = (playKey ? playKey + ':' : '') + 'r' + runId;
 
   return (
     <div class="tgui-slot-machine" style={{ position: 'relative', width: size + 'px', height: size + 'px' }} onClick={replay}>
       {!renderGateOpen ? null : bg && pull ? (
-        // telegram-tt pattern: every layer stays mounted; visibility is a
-        // class flip, so state transitions never rebuild the DOM and no
-        // animation keeps running behind the static result.
         [
           <div key={'bg'} class={'tgui-slot-layer' + (backgroundState === 'base' ? '' : ' tgui-slot-layer-hidden')} style={{ position: 'absolute', inset: 0 }}>
             <SlotLayer docId={bg.docId} role="bg" partIndex={0} size={size} play={backgroundState === 'base' && !showStatic} loop={!showStatic} playKey={runPlayKey} showLastFrame={showStatic} disableClick />

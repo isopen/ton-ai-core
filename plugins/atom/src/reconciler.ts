@@ -64,9 +64,6 @@ function styleObjToCss(style: Record<string, any>): string {
   return parts.join(';');
 }
 
-// Refs fire at commit time (after insertion) so measurement reads real layout:
-// invoking them during createDOM — while nodes are still detached — yields
-// offsetHeight 0 and silently breaks mount-time measuring.
 const pendingRefCalls: Array<{ el: Element; ref: any }> = [];
 
 export function flushPendingRefs(): void {
@@ -111,8 +108,7 @@ function setProp(el: Element, key: string, value: any) {
   }
   if (isEventProp(key)) {
     const eventName = eventNameFromProp(key);
-    // Non-blocking by default for high-frequency scroll-family events; none of
-    // the framework's own handlers call preventDefault on them.
+
     if (eventName === 'scroll' || eventName === 'wheel' || eventName === 'touchstart' || eventName === 'touchmove') {
       el.addEventListener(eventName, value, { passive: true });
     } else {
@@ -494,10 +490,6 @@ function reconcileChildren(
         const nodes = newDom === oldDom ? oldEntry.nodes : findAllDomNodes(newChild);
         patches.push({ nodes });
       } else {
-        // Matched key whose DOM went missing or partially detached: drop every
-        // stale node before mounting fresh, otherwise orphaned duplicates
-        // linger in the tree (the key counts as used, so the removal pass
-        // below would skip them).
         for (const node of oldEntry.nodes) {
           if (node.parentNode) node.parentNode.removeChild(node);
         }
@@ -532,12 +524,6 @@ function reconcileChildren(
 
   if (patches.length === 0) return;
 
-  // Enforce final order with a forward cursor walk (preact-style):
-  // `cur` points at the node that must FOLLOW whatever we are placing.
-  // A node already sitting exactly at `cur` costs nothing — stable lists
-  // produce zero DOM moves, so canvases/CSS animations/lazy images are never
-  // disturbed. A misplaced node is moved before `cur`; `cur` itself stays as
-  // the boundary for the next node.
   let cur = parentEl.firstChild;
   for (let i = 0; i < patches.length; i++) {
     const nodes = patches[i].nodes;
