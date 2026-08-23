@@ -10,7 +10,8 @@ const log = getLogger('gram-ui:emoji-text');
 
 const INLINE_EMOJI_SIZE = 19;
 const EMOJI_ONLY_SIZE = 30;
-const SINGLE_EMOJI_SIZE = 96;
+// Standalone emoji-only messages render big, like stickers (8x inline size).
+const SINGLE_EMOJI_SIZE = INLINE_EMOJI_SIZE * 8;
 
 export { releaseEmojiCache } from './emoji-canvas.js';
 
@@ -274,7 +275,11 @@ export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EM
 
   const emojiOnly = isEmojiOnlyText(text, entities);
   const isDialog = ctx === 'dialog';
-  const size = isDialog ? inlineSize : (singleEmoji ? SINGLE_EMOJI_SIZE : (emojiOnly ? EMOJI_ONLY_SIZE : inlineSize));
+  // A lone emoji renders big, like stickers - regardless of whether it is a
+  // regular Unicode emoji or a custom document emoji.
+  const loneEmoji = singleEmoji !== undefined
+    || (emojiOnly && segments.filter((s) => s.type === 'emoji').length === 1);
+  const size = isDialog ? inlineSize : (loneEmoji ? SINGLE_EMOJI_SIZE : (emojiOnly ? EMOJI_ONLY_SIZE : inlineSize));
   const hasEmoji = segments.some((s) => s.type === 'emoji');
   if (!hasEmoji) {
     if (matchEmojiRuns(text).length > 0) {
