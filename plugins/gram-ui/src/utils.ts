@@ -210,7 +210,8 @@ export function buildDocumentThumb(doc: any): { url: string; width: number; heig
   }
 
   if (doc?.video_thumbs?.length) {
-    const vt = doc.video_thumbs[0];
+    const vt = doc.video_thumbs.find((v: any) => v.type !== 'f');
+    if (!vt) return null;
     const u = thumbUrl(vt);
     if (u) return { url: u, width: vt.w || 0, height: vt.h || 0 };
 

@@ -6,7 +6,7 @@ import { Avatar } from '../primitives/avatar.js';
 import { Flex } from '../primitives/flex.js';
 import { Button } from '../primitives/button.js';
 import { Text } from '../primitives/text.js';
-import { AnimatedSticker } from './animated-sticker.js';
+import { AnimatedSticker, playStickerFxOverlay } from './animated-sticker.js';
 import { MessageBubble } from './message-bubble.js';
 import { Checkmark } from './checkmark.js';
 import { TypingIndicator } from './typing-indicator.js';
@@ -210,11 +210,59 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
   const staticThumb = buildDocumentThumb(doc);
   const downloadFailed = downloadAttempts >= STICKER_DOWNLOAD_MAX_ATTEMPTS;
 
+  const effectVt = doc?.video_thumbs?.find((v: any) => v.type === 'f');
+  const effectUrl = effectVt?.url || '';
+  const fxUrlRef = useRef('');
+  useEffect(() => { fxUrlRef.current = effectUrl; }, [effectUrl]);
+
+  useEffect(() => {
+    const onFx = (e: Event) => {
+      const mid = (e as CustomEvent).detail?.messageId;
+      const match = mid === m.id || String(mid) === String(m.id);
+      if (match && fxUrlRef.current && rootRef.current) {
+        playStickerFxOverlay('fx' + m.id, fxUrlRef.current, rootRef.current.getBoundingClientRect());
+      }
+    };
+    window.addEventListener('tg-sticker-fx', onFx);
+    return () => window.removeEventListener('tg-sticker-fx', onFx);
+  }, [m.id]);
+
+  useEffect(() => {
+    if (!visible) return;
+    if (!effectVt || effectVt.url) return;
+    if (!doc?.id || m.id == null) return;
+    window.dispatchEvent(new CustomEvent('tg-download-document-thumb', {
+      detail: { document: doc, messageId: m.id, thumbType: 'f' },
+    }));
+  }, [visible, effectVt?.url, doc?.id, m.id]);
+
+  const downloadStickerSource = useCallback(async (e: MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!url || !isTgs) return;
+    try {
+      const res = await fetch(url);
+      const text = await res.text();
+      const blob = new Blob([text], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      const base = String(doc?.file_name || doc?.id || m.id).replace(/\.tgs$/i, '');
+      a.download = base + '.tgs.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch { /* noop */ }
+  }, [url, isTgs, doc?.file_name, doc?.id, m.id]);
+
   return (
-    <div class="tgui-sticker" ref={handleRef}>
+    <div class="tgui-sticker" ref={handleRef} style="position:relative">
       <div class="tgui-sticker-preview" style={{ width: '150px', height: '150px', position: 'relative' }}>
         {staticThumb?.url ? (
           <img class="tgui-sticker-thumb" src={staticThumb.url} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+        ) : null}
+        {isTgs && url ? (
+          <button class="tgui-sticker-dl" type="button" title="Download TGS source" onClick={downloadStickerSource}>⤓</button>
         ) : null}
         {showTgs
           ? <AnimatedSticker tgsUrl={url} renderId={renderId} size={150} noPlay={!playing} onError={() => setAnimFailed(true)} />

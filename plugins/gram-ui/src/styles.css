@@ -1673,6 +1673,36 @@ body {
   max-width: 200px;
 }
 
+.tgui-sticker-dl {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 3;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: rgba(0, 0, 0, .45);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: .45;
+  transition: opacity .15s ease, background .15s ease;
+}
+
+.tgui-sticker:hover .tgui-sticker-dl,
+.tgui-sticker-dl:focus-visible {
+  opacity: 1;
+}
+
+.tgui-sticker-dl:hover {
+  background: rgba(0, 0, 0, .7);
+}
+
 .tgui-sticker-preview {
   width: 150px;
   height: 150px;

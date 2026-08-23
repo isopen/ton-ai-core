@@ -216,6 +216,12 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     this.stopLoop();
   }
 
+  restart(viewId?: string) {
+    if (viewId) this.startTimes.delete(viewId);
+    else this.startTimes.clear();
+    this.play(viewId);
+  }
+
   setSpeed(_speed: number) {}
 
   setNoLoop(_noLoop?: boolean) {}

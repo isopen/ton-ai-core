@@ -476,6 +476,16 @@ export class TgsRenderer implements IAnimatedRenderer {
     return this.isAnimating || this.isWaiting;
   }
 
+  private clearOwnViews() {
+    for (const [, view] of this.views) {
+      if (view.isSharedCanvas) continue;
+      const w = view.canvas.width;
+      const h = view.canvas.height;
+      if (!w || !h) continue;
+      try { view.ctx.clearRect(0, 0, w, h); } catch { }
+    }
+  }
+
   private playRequested = false;
 
   play(viewId?: string, forceRestart = false) {
@@ -491,6 +501,22 @@ export class TgsRenderer implements IAnimatedRenderer {
     if (this.isEnded && forceRestart) {
       this.approxFrameIndex = Math.floor(0);
     }
+    this.stopFrameIndex = undefined;
+    this.direction = 1;
+    this.doPlay();
+  }
+
+  restart(viewId?: string) {
+    if (viewId) {
+      const view = this.views.get(viewId);
+      if (view) view.isPaused = false;
+    }
+    if (!this.isRendererInited || !this.framesCount) {
+      this.playRequested = true;
+      return;
+    }
+    this.approxFrameIndex = 0;
+    this.isEnded = false;
     this.stopFrameIndex = undefined;
     this.direction = 1;
     this.doPlay();
@@ -864,6 +890,7 @@ export class TgsRenderer implements IAnimatedRenderer {
       if (this.params.noLoop) {
         this.isAnimating = false;
         this.isEnded = true;
+        this.clearOwnViews();
         return false;
       }
       this.approxFrameIndex = 0;
@@ -871,6 +898,7 @@ export class TgsRenderer implements IAnimatedRenderer {
       if (this.params.noLoop) {
         this.isAnimating = false;
         this.isEnded = true;
+        this.clearOwnViews();
         return false;
       }
       this.approxFrameIndex = this.framesCount! - 1;

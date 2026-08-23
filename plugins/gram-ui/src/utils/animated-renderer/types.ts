@@ -24,6 +24,7 @@ export interface IAnimatedRenderer {
   isPlaying(): boolean;
   play(viewId?: string): void;
   pause(viewId?: string): void;
+  restart?(viewId?: string): void;
   setSpeed(speed: number): void;
   setNoLoop(noLoop?: boolean): void;
   setSharedCanvasCoords(viewId: string, coords: { x: number; y: number }): void;

@@ -1372,7 +1372,7 @@ export class GramMediaRouter {
         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
         const commit = (bytes: ArrayBuffer, freshDoc?: any): void => {
             if (!bytes.byteLength) return;
-            const url = this.bytesToBlobUrl(bytes, 'image/jpeg');
+            const url = this.bytesToBlobUrl(bytes, thumbType === 'f' ? 'application/x-tgsticker' : 'image/jpeg');
             if (!url) return;
             if (this.debug) log.info('[gram-media] tg-download-document-thumb SUCCESS messageId=' + messageId + ' thumbType=' + thumbType + ' bytesLen=' + bytes.byteLength);
             this.thumbUrlCache.set(thumbKey, url);

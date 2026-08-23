@@ -93,7 +93,7 @@ export function MediaCollage({
         const v = item.video;
         if (v) {
           const doc = item.m?.media?.document;
-          const vt = doc?.video_thumbs?.[0];
+          const vt = doc?.video_thumbs?.find((x: any) => x.type !== 'f');
           if (doc && vt && !v.thumbUrl && !requestedThumbs.has(item.m.id)) {
             requestedThumbs.add(item.m.id);
             window.dispatchEvent(new CustomEvent('tg-download-document-thumb', {

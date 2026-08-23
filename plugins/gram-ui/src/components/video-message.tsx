@@ -163,7 +163,8 @@ export function VideoMessage(props: VideoMessageProps) {
   useEffect(() => {
     if (thumb && !thumb.url && doc?.video_thumbs?.length && m.id && !thumbReqSentRef.current) {
       thumbReqSentRef.current = true;
-      const vt = doc.video_thumbs[0];
+      const vt = doc.video_thumbs.find((v: any) => v.type !== 'f');
+      if (!vt) return;
       window.dispatchEvent(new CustomEvent('tg-download-document-thumb', {
         detail: { document: doc, messageId: m.id, thumbType: vt.type },
       }));

@@ -13,6 +13,57 @@ function useUniqueId(): string {
   return useRef(`animated-view-${++uidCounter}`).current;
 }
 
+const canvasPlayers = new WeakMap<HTMLCanvasElement, { renderer: IAnimatedRenderer; viewId: string }>();
+
+export function replayAnimatedCanvas(canvas: Element): boolean {
+  const entry = canvasPlayers.get(canvas as HTMLCanvasElement);
+  if (!entry) return false;
+  entry.renderer.restart?.(entry.viewId);
+  return true;
+}
+
+const FX_OVERLAY_SIZE = 300;
+const FX_OVERLAY_TTL_MS = 3400;
+
+const activeFxOverlays = new Map<string, { host: HTMLDivElement; renderer: IAnimatedRenderer; timer: number }>();
+
+export function disposeStickerFxOverlay(key: string): void {
+  const active = activeFxOverlays.get(key);
+  if (!active) return;
+  activeFxOverlays.delete(key);
+  clearTimeout(active.timer);
+  try { active.renderer.destroy(); } catch { }
+  active.host.remove();
+}
+
+export function playStickerFxOverlay(key: string, tgsUrl: string, anchor: DOMRect): void {
+  const existing = activeFxOverlays.get(key);
+  if (existing && existing.host.isConnected) {
+    existing.renderer.restart?.();
+    clearTimeout(existing.timer);
+    existing.timer = window.setTimeout(() => disposeStickerFxOverlay(key), FX_OVERLAY_TTL_MS);
+    return;
+  }
+  const host = document.createElement('div');
+  host.className = 'tgui-sticker-fx-overlay';
+  host.style.cssText = 'position:fixed;z-index:1150;pointer-events:none;'
+    + 'width:' + FX_OVERLAY_SIZE + 'px;height:' + FX_OVERLAY_SIZE + 'px;'
+    + 'left:' + Math.round(anchor.left + anchor.width / 2 - FX_OVERLAY_SIZE / 2) + 'px;'
+    + 'top:' + Math.round(anchor.top + anchor.height / 2 - FX_OVERLAY_SIZE / 2) + 'px;';
+  document.body.appendChild(host);
+  const renderer = initAnimatedRenderer(
+    tgsUrl,
+    host,
+    'sticker-fx-' + key,
+    { size: FX_OVERLAY_SIZE, noLoop: true },
+    'fx-' + key,
+    undefined,
+    undefined,
+  );
+  const timer = window.setTimeout(() => disposeStickerFxOverlay(key), FX_OVERLAY_TTL_MS);
+  activeFxOverlays.set(key, { host, renderer, timer });
+}
+
 export interface AnimatedStickerProps {
   tgsUrl: string;
   renderId: string;
@@ -79,6 +130,7 @@ export function AnimatedSticker({
     }));
     rendererRef.current = r;
     setRenderer(r);
+    if (canvasNode && !sharedCanvas) canvasPlayers.set(canvasNode, { renderer: r, viewId });
   }, [tgsUrl, container, renderId, size, viewId]);
   useEffect(() => {
     if (!coords) return;
@@ -96,6 +148,7 @@ export function AnimatedSticker({
     return () => {
       const r = rendererRef.current;
       rendererRef.current = null;
+      if (canvasNode) canvasPlayers.delete(canvasNode);
       aniLog.info('[ani-sticker] unmount', renderId, 'vid=' + viewId);
       if (r) r.removeView(viewId);
     };
