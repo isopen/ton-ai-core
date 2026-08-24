@@ -158,12 +158,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
   removeView(viewId: string) {
     const view = this.views.get(viewId);
     if (!view) return;
-    if (view.isSharedCanvas) {
-      const c = this.getScaledCoords(view);
-      view.ctx.clearRect(c.x, c.y, this.imgSize, this.imgSize);
-    } else {
-      view.ctx.clearRect(0, 0, view.canvas.width, view.canvas.height);
-    }
+    // Keep the last painted frame (see tgs-renderer.removeView).
     this.views.delete(viewId);
     if (!this.views.size) {
       this.park();

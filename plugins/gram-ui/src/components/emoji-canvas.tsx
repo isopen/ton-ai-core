@@ -372,6 +372,8 @@ function renderIdFor(docId: string, size: number): string {
   return 'emojipack-' + docId + ':' + size;
 }
 
+const everPaintedDocs = new Set<string>();
+
 export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = false, vAlign = 'top' }: { segments: EmojiSegment[]; documentUrls: Record<string, string>; size?: number; singleLine?: boolean; vAlign?: 'top' | 'middle' }) {
   const emojiSegs: Array<{ docId: string; value?: string; custom?: boolean }> = [];
   for (const s of segments) {
@@ -390,7 +392,11 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
       urlKinds.set(url, k);
       resolvedKinds.set(did, k);
       trackLastUrl(did, url);
-      setFailedDocs((prev) => (prev[did] ? { ...prev, [did]: false } : prev));
+      if (revokedUrls.has(url)) console.log('[gram-app] emoji-received-revoked-url doc=' + did);
+      setFailedDocs((prev) => {
+        if (prev[did]) console.log('[gram-app] emoji-recovered doc=' + did);
+        return prev[did] ? { ...prev, [did]: false } : prev;
+      });
       setKinds((prev) => (prev[did] === k ? prev : { ...prev, [did]: k }));
       setLive((prev) => {
         const cur = prev[did];
@@ -497,6 +503,7 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
     return () => window.clearInterval(timer);
   }, [slotsKey, urlsKey, kinds, failedDocs, loadedDocs, stuckDocs, inView, everShown, positions, shared]);
   const onSlotLoaded = (docId: string) => {
+    everPaintedDocs.add(docId);
     setLoadedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
     setStuckDocs((prev) => (prev[docId] ? { ...prev, [docId]: false } : prev));
   };
@@ -700,7 +707,11 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
         const renderId = renderIdFor(docId, size);
         const failed = !!failedDocs[docId];
         const onError = () => {
-          setFailedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
+          const hadPainted = everPaintedDocs.has(docId);
+          // Renderer death must not blank a visible emoji: keep the last
+          // painted frame while tg-emoji-bad -> redownload -> new url runs.
+          console.log('[gram-app] emoji-slot-error doc=' + docId + ' keptFrame=' + hadPainted);
+          if (!hadPainted) setFailedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
           requestEmojiDownload(docId, s.value, 2);
         };
         const tgsActive = kind === 'tgs' && url && !failed && tgsPaintable(docId);

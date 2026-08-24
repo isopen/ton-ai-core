@@ -408,13 +408,9 @@ export class TgsRenderer implements IAnimatedRenderer {
   removeView(viewId: string) {
     const view = this.views.get(viewId);
     if (!view) return;
-    const { canvas, ctx, isSharedCanvas, coords } = view;
-    if (isSharedCanvas) {
-      const c = this.getScaledCoords(view);
-      ctx.clearRect(c.x, c.y, this.imgSize, this.imgSize);
-    } else {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
+    // Keep the last painted frame: rows get remounted on background updates
+    // and clearing here produced visible blank flashes ("emoji disappears").
+    // The next view for this slot repaints over the stale pixels anyway.
     this.views.delete(viewId);
     if (!this.views.size) {
       this.park();
@@ -427,7 +423,9 @@ export class TgsRenderer implements IAnimatedRenderer {
     const colon = this.renderId.lastIndexOf(':');
     const docPart = colon > 0 ? this.renderId.slice(0, colon) : this.renderId;
     const docId = docPart.startsWith('emojipack-') ? docPart.slice('emojipack-'.length) : docPart;
-    if (typeof window !== 'undefined' && docId) {
+    // FX overlay renderers ('sticker-fx-*') are not emoji docs: reporting them
+    // as bad would revoke a perfectly good anim-pack url on every failed tap.
+    if (typeof window !== 'undefined' && docId && !docPart.startsWith('sticker-fx-')) {
       window.dispatchEvent(new CustomEvent('tg-emoji-bad', { detail: { docId, url: this.tgsUrl } }));
     }
     for (const view of this.views.values()) {
