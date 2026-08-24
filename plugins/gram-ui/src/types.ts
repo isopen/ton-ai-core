@@ -37,6 +37,7 @@ export interface Message {
     action?: any;
     entities?: any[];
     groupedId?: number | string;
+    fwdFrom?: any;
 }
 
 export interface Country {

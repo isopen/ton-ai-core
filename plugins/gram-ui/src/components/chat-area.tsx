@@ -597,6 +597,17 @@ function DiceBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out:
   );
 }
 
+function fwdFromLabel(fwd: any): string {
+  if (!fwd) return '';
+  if (fwd.from_name) return String(fwd.from_name);
+  if (fwd.post_author) return String(fwd.post_author);
+  const fid = fwd.from_id;
+  if (fid?._ === 'peerChannel') return 'канала';
+  if (fid?._ === 'peerChat') return 'чата';
+  if (fid?._ === 'peerUser' && fid.user_id != null) return 'пользователя';
+  return 'скрытого автора';
+}
+
 function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, selfPeer, reactions, onReact, onOpenPhoto }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; selfPeer?: boolean; reactions?: MessageReaction[]; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
   const timeStr = formatMessageTime(m.date);
   const out = selfPeer ? true : m.out;
@@ -612,6 +623,8 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
 
   const marginBottom = sameSenderPrev ? 2 : 8;
 
+  const fwdLabel = fwdFromLabel(m.fwdFrom);
+
   if (isGiftMessage(m.action)) {
     return (
       <div
@@ -623,6 +636,9 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
       </div>
     );
   }
+  const fwdHeader = fwdLabel ? (
+    <div class="tgui-fwd-header">Переслано от <b>{fwdLabel}</b></div>
+  ) : null;
   return (
     <div
       id={`msg-${m.id}`}
@@ -632,6 +648,7 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
       {isGroup && !out && !sameSenderPrev
         ? <div class="tgui-msg-sender" style={`color:${color}`}>{m.sender}</div>
         : null}
+      {fwdHeader}
       {mediaType === 'sticker'
         ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} documentUrls={rowUrls} documentProgress={rowProgress} />
         : mediaType === 'dice'
