@@ -14,6 +14,217 @@ let mediaRouter: GramMediaRouter | null = null;
 
 let emojiStickersEagerFetched = false;
 
+const normalizeEmoticon = (s: string): string => (s || '').replace(/\uFE0F/g, '');
+
+type EmojiAnimSet = { packs?: any[]; documents?: any[] };
+let emojiAnimSet: EmojiAnimSet | null = null;
+let emojiAnimSetPromise: Promise<EmojiAnimSet | null> | null = null;
+const pendingAnimDownloads = new Map<string, Promise<string>>();
+const ANIM_DOWNLOAD_TIMEOUT_MS = 20000;
+
+async function ensureEmojiAnimSet(): Promise<EmojiAnimSet | null> {
+  if (emojiAnimSet) return emojiAnimSet;
+  if (!mediaRouter) return null;
+  if (!emojiAnimSetPromise) {
+    log.info('[gram-app] emoji anim set: fetching...');
+    emojiAnimSetPromise = Promise.race([
+      mediaRouter
+        // Same cache key the gram-media pipeline uses for this set, so we hit
+        // its already-fetched copy instead of issuing our own hung RPC.
+        .fetchStickerSet('inputStickerSetAnimatedEmojiAnimations', { _: 'inputStickerSetAnimatedEmojiAnimations' })
+        .then((res) => {
+          log.info('[gram-app] emoji anim set response: _=' + (res as any)?._ + ' docs=' + (Array.isArray(res?.documents) ? res.documents.length : 'none') + ' packs=' + (Array.isArray((res as any)?.packs) ? (res as any).packs.length : 'none'));
+          if (res && Array.isArray(res.documents) && res.documents.length > 0) {
+            emojiAnimSet = res as EmojiAnimSet;
+            return emojiAnimSet;
+          }
+          return null;
+        })
+        .catch((err: any) => {
+          log.error('[gram-app] emoji anim set fetch error:', err?.message || err);
+          return null;
+        }),
+      new Promise<null>((resolve) => setTimeout(() => {
+        log.warn('[gram-app] emoji anim set fetch TIMEOUT (rpc hung?)');
+        resolve(null);
+      }, 15000)),
+    ]).finally(() => { emojiAnimSetPromise = null; });
+  }
+  return emojiAnimSetPromise;
+}
+
+function findAnimPack(emoticon: string): any[] | null {
+  const set = emojiAnimSet;
+  if (!set || !Array.isArray(set.packs)) return null;
+  const key = normalizeEmoticon(emoticon);
+  const pack = set.packs.find((p: any) => p?.emoticon && normalizeEmoticon(p.emoticon) === key);
+  return pack && Array.isArray(pack.documents) && pack.documents.length > 0 ? pack.documents : null;
+}
+
+function emitPlayEmojiFx(messageId: string, url: string, key: string, x?: number, y?: number): void {
+  log.info('[gram-app] emit tg-play-emoji-fx: msg=' + messageId + ' key=' + key + ' url=' + url.slice(0, 60));
+  window.dispatchEvent(new CustomEvent('tg-play-emoji-fx', { detail: { messageId, url, key, x, y } }));
+}
+
+function emitFxFallback(messageId: string, x?: number, y?: number): void {
+  window.dispatchEvent(new CustomEvent('tg-emoji-fx-fallback', { detail: { messageId, x, y } }));
+}
+
+function downloadAnimDoc(docId: string, doc: any): Promise<string> {
+  let p = pendingAnimDownloads.get(docId);
+  if (p) return p;
+  p = new Promise<string>((resolve, reject) => {
+    const onUrl = (e: Event) => {
+      const d = ((e as CustomEvent).detail || {}) as { docId?: string; url?: string };
+      if (String(d.docId) === docId && d.url) finish(d.url);
+    };
+    const cleanup = () => {
+      window.removeEventListener('tg-emoji-url', onUrl);
+      clearTimeout(timer);
+    };
+    const finish = (url: string) => { cleanup(); resolve(url); };
+    const timer = setTimeout(() => { cleanup(); reject(new Error('emoji anim download timeout')); }, ANIM_DOWNLOAD_TIMEOUT_MS);
+    window.addEventListener('tg-emoji-url', onUrl);
+    window.dispatchEvent(new CustomEvent('tg-download-document', {
+      detail: { document: doc, messageId: 'emojipack-' + docId, priority: 1 },
+    }));
+  }).finally(() => { pendingAnimDownloads.delete(docId); });
+  pendingAnimDownloads.set(docId, p);
+  return p;
+}
+
+async function playAnimSegment(emoticon: string, index: number, messageId: string, seqKey: string, x?: number, y?: number): Promise<boolean> {
+  const ids = findAnimPack(emoticon);
+  if (!ids || index < 1 || index > ids.length) {
+    log.warn('[gram-app] emoji anim segment unresolved: emoticon=' + JSON.stringify(emoticon) + ' index=' + index + ' setLoaded=' + !!emojiAnimSet);
+    emitFxFallback(messageId, x, y);
+    return false;
+  }
+  const docId = String(ids[index - 1]);
+  const doc = Array.isArray(emojiAnimSet?.documents)
+    ? emojiAnimSet!.documents!.find((d: any) => d && String(d.id) === docId)
+    : undefined;
+  if (!doc) {
+    log.warn('[gram-app] emoji anim doc not found in set documents: ' + docId);
+    emitFxFallback(messageId, x, y);
+    return false;
+  }
+  const cached = mediaRouter?.getCachedEmojiUrl('emojipack-' + docId);
+  if (cached) {
+    emitPlayEmojiFx(messageId, cached, seqKey, x, y);
+    return true;
+  }
+  try {
+    const url = await downloadAnimDoc(docId, doc);
+    emitPlayEmojiFx(messageId, url, seqKey, x, y);
+    return true;
+  } catch (err: any) {
+    log.warn('[gram-app] emoji anim download failed:', docId, err?.message || err);
+    emitFxFallback(messageId, x, y);
+    return false;
+  }
+}
+
+function extractEmoticons(text: string): string[] {
+  const out: string[] = [];
+  const re = /\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/gu;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) out.push(m[0]);
+  return out;
+}
+
+function currentPeerKey(s: GramState): string {
+  const peer = s.selectedPeerRef.current;
+  return peer ? `${peer.type}_${peer.id}` : '';
+}
+
+async function processLocalEmojiClick(s: GramState, messageId: string, x?: number, y?: number, slotIndex?: number): Promise<void> {
+  log.info('[gram-app] local emoji click enter: msg=' + messageId + (x != null ? ' xy=' + Math.round(x) + ',' + Math.round(y!) : '') + ' slot=' + slotIndex);
+  const set = await ensureEmojiAnimSet();
+  log.info('[gram-app] local emoji click: setLoaded=' + !!set);
+  const cache = s.messagesCache.current.get(currentPeerKey(s));
+  const msg = cache?.find((m: Message) => String(m.id) === messageId);
+  let text = msg?.message || '';
+  if (!text && mediaRouter && /^\d+$/.test(messageId)) {
+    try {
+      const fresh = await mediaRouter.refreshMessage(Number(messageId));
+      text = fresh?.message || '';
+    } catch { }
+  }
+  // Each emoji in the message gets its own animation pack - pick the one
+  // under the click by its slot position among the message's emoji slots.
+  const emots = extractEmoticons(text);
+  let emoticon = '';
+  if (emots.length > 0) {
+    emoticon = slotIndex != null && slotIndex >= 0 && slotIndex < emots.length
+      ? emots[slotIndex]
+      : emots[0];
+  }
+  const ids = emoticon ? findAnimPack(emoticon) : null;
+  if (!ids) {
+    log.warn('[gram-app] local emoji click unresolved: msg=' + messageId + ' emoticons=' + JSON.stringify(emots) + ' slot=' + slotIndex + ' setLoaded=' + !!set);
+    emitFxFallback(messageId, x, y);
+    return;
+  }
+  const index = 1 + Math.floor(Math.random() * ids.length);
+  log.info('[gram-app] local emoji click: msg=' + messageId + ' emoticon=' + JSON.stringify(emoticon) + ' (' + (slotIndex != null ? slotIndex : 0) + '/' + emots.length + ') animIndex=' + index + '/' + ids.length);
+  const interaction = { v: 1, a: [{ t: 0, i: index }] };
+  s.tgService.current?.sendTyping(s.selectedPeerRef.current!, {
+    _: 'sendMessageEmojiInteraction',
+    emoticon,
+    msg_id: Number(messageId),
+    interaction: { _: 'dataJSON', data: JSON.stringify(interaction) },
+  } as any).catch((err: any) => log.warn('[gram-app] sendEmojiInteraction failed:', err?.message || err));
+  await playAnimSegment(emoticon, index, messageId, 'l' + Date.now(), x, y);
+}
+
+const recentInteractions = new Map<string, number>();
+
+function isDuplicateInteraction(emoticon: string, messageId: string, index: number): boolean {
+  const key = emoticon + '|' + messageId + '|' + index;
+  const now = Date.now();
+  if (recentInteractions.size > 200) {
+    for (const [k, ts] of recentInteractions) {
+      if (now - ts > 10000) recentInteractions.delete(k);
+    }
+  }
+  const prev = recentInteractions.get(key);
+  if (prev != null && now - prev < 2500) return true;
+  recentInteractions.set(key, now);
+  return false;
+}
+
+async function onRemoteEmojiInteraction(s: GramState, detail: { kind?: string; emoticon?: string; messageId?: string; interaction?: string; fromUserId?: string }): Promise<void> {
+  if (detail.kind !== 'interaction') return;
+  // Our own clicks echo back from the server as typing updates - skip them,
+  // the local click already played the animation.
+  const selfId = s.tgui.current?.state?.selfUserId;
+  if (selfId && detail.fromUserId && String(detail.fromUserId) === String(selfId)) {
+    log.info('[gram-app] emoji interaction skipped (self echo): msg=' + detail.messageId);
+    return;
+  }
+  let taps: Array<{ t?: number; i?: number }> = [];
+  try {
+    const parsed = JSON.parse(detail.interaction || '{}');
+    if (Array.isArray(parsed?.a)) taps = parsed.a;
+  } catch { }
+  if (taps.length === 0) taps = [{ t: 0, i: 1 }];
+  await ensureEmojiAnimSet();
+  let delayMs = 0;
+  for (let k = 0; k < taps.length; k++) {
+    const tap = taps[k];
+    delayMs += Math.max(0, Number(tap.t || 0)) * 1000;
+    const index = Math.max(1, Math.round(Number(tap.i || 1)));
+    if (isDuplicateInteraction(detail.emoticon || '', detail.messageId || '', index)) {
+      log.info('[gram-app] duplicate interaction skipped: msg=' + detail.messageId + ' i=' + index);
+      continue;
+    }
+    const run = () => void playAnimSegment(detail.emoticon || '', index, detail.messageId || '', 'r' + Date.now() + '_' + k);
+    if (delayMs <= 30) run();
+    else setTimeout(run, delayMs);
+  }
+}
+
 export async function injectCachedDocumentSources(s: GramState, msgs: Message[]): Promise<void> {
   return mediaRouter?.injectCachedDocumentSources(msgs) ?? Promise.resolve();
 }
@@ -315,6 +526,22 @@ export function setupEventListeners(s: GramState): void {
   };
   window.addEventListener('tg-fetch-greeting-sticker', onFetchGreetingSticker);
 
+  const onEmojiInteraction = (e: Event) => {
+    void onRemoteEmojiInteraction(s, ((e as CustomEvent).detail || {}) as any);
+  };
+  window.addEventListener('tg-emoji-interaction', onEmojiInteraction);
+  const onLocalEmojiClick = (e: Event) => {
+    const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; x?: number; y?: number; slotIndex?: number };
+    log.info('[gram-app] tg-local-emoji-click received: messageId=' + detail?.messageId);
+    if (detail.messageId == null || !s.selectedPeerRef.current) {
+      log.warn('[gram-app] tg-local-emoji-click dropped: messageId=' + detail?.messageId + ' peer=' + JSON.stringify(s.selectedPeerRef.current));
+      return;
+    }
+    void processLocalEmojiClick(s, String(detail.messageId), detail.x, detail.y, detail.slotIndex);
+  };
+  window.addEventListener('tg-local-emoji-click', onLocalEmojiClick);
+  void ensureEmojiAnimSet();
+
   s.cleanupFns.push(() => {
     window.removeEventListener('tg-auth-set-lang', onSetLang);
     window.removeEventListener('tg-auth-set-step', onSetStep);
@@ -330,5 +557,7 @@ export function setupEventListeners(s: GramState): void {
     window.removeEventListener('tg-theme-changed', onThemeChanged);
     window.removeEventListener('tg-fetch-premium-gift', onFetchPremiumGift);
     window.removeEventListener('tg-fetch-greeting-sticker', onFetchGreetingSticker);
+    window.removeEventListener('tg-emoji-interaction', onEmojiInteraction);
+    window.removeEventListener('tg-local-emoji-click', onLocalEmojiClick);
   });
 }

@@ -7,7 +7,7 @@
  * effect can never flood the main thread.
  */
 
-import { replayAnimatedCanvas } from './animated-sticker.js';
+import { replayAnimatedCanvas, playStickerFxOverlay } from './animated-sticker.js';
 
 const LAYER_CAP = 4;
 const PARTICLES_PER_LAYER_BASE = 7;
@@ -89,6 +89,40 @@ function snapshotCanvasAt(cv: HTMLCanvasElement, px: number, py: number, tileSiz
         return tmp.toDataURL();
     } catch {
         return null;
+    }
+}
+
+/** Crop a canvas region matching a slot rect (shared multi-emoji canvases). */
+export function snapshotSlotFromCanvas(slotRect: DOMRect, scopeForCanvas: Element): string {
+    let scv: HTMLCanvasElement | null = null;
+    for (const c of Array.from(scopeForCanvas.querySelectorAll<HTMLCanvasElement>('canvas'))) {
+        const r = c.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        if (slotRect.left >= r.left - 2 && slotRect.right <= r.right + 2 && slotRect.top >= r.top - 2 && slotRect.bottom <= r.bottom + 2) {
+            scv = c;
+            break;
+        }
+    }
+    if (!scv) return '';
+    try {
+        const cr = scv.getBoundingClientRect();
+        const scaleX = scv.width / (cr.width || 1);
+        const scaleY = scv.height / (cr.height || 1);
+        const tmp = document.createElement('canvas');
+        tmp.width = Math.max(1, Math.round(slotRect.width * scaleX));
+        tmp.height = Math.max(1, Math.round(slotRect.height * scaleY));
+        const tctx = tmp.getContext('2d');
+        if (!tctx) return '';
+        tctx.drawImage(
+            scv,
+            Math.round((slotRect.left + slotRect.width / 2 - cr.left) * scaleX - tmp.width / 2),
+            Math.round((slotRect.top + slotRect.height / 2 - cr.top) * scaleY - tmp.height / 2),
+            tmp.width, tmp.height,
+            0, 0, tmp.width, tmp.height,
+        );
+        return tmp.toDataURL();
+    } catch {
+        return '';
     }
 }
 
@@ -216,9 +250,19 @@ export function spawnEmojiBurst(x: number, y: number, source: { kind: 'image' | 
     void layerNode;
 }
 
+/** Forward a tap on an animated emoji message to the agent for server-side resolution. */
+function dispatchLocalEmojiClick(messageId: string, x?: number, y?: number, slotIndex?: number): void {
+    if (!messageId) return;
+    window.dispatchEvent(new CustomEvent('tg-local-emoji-click', { detail: { messageId, x, y, slotIndex } }));
+}
+
+let burstAttached = false;
+let interactionsAttached = false;
+
 /** Delegated click handler: attach once per app lifetime. */
 export function attachEmojiBurst(): void {
-    if (typeof document === 'undefined') return;
+    if (typeof document === 'undefined' || burstAttached) return;
+    burstAttached = true;
     document.addEventListener('click', (e: MouseEvent) => {
         if (document.hidden) return;
         const target = e.target instanceof Element ? e.target : null;
@@ -241,6 +285,18 @@ export function attachEmojiBurst(): void {
 
         const slotEl = (target.closest('.tgui-emoji-slot'))
             ?? ((document.elementFromPoint(x, y) as Element | null)?.closest('.tgui-emoji-slot') ?? null);
+
+        // Animated-emoji taps inside chat messages play the server-provided
+        // interaction animation (inputStickerSetAnimatedEmojiAnimations).
+        const row = bubble.closest('[id^="msg-"]') as HTMLElement | null;
+        const rowId = row ? row.id.slice(4) : '';
+        if (rowId && !target.closest('.tgui-reaction')) {
+            const slots = Array.from(bubble.querySelectorAll('.tgui-emoji-slot'));
+            const slotIdx = slotEl ? slots.indexOf(slotEl) : -1;
+            dispatchLocalEmojiClick(rowId, x, y, slotIdx >= 0 ? slotIdx : undefined);
+            return;
+        }
+
         if (slotEl) {
             const own = slotEl.querySelector('canvas, img');
             if (own instanceof HTMLCanvasElement) {
@@ -253,38 +309,8 @@ export function attachEmojiBurst(): void {
 
             const sr = slotEl.getBoundingClientRect();
             const scopeForCanvas = slotEl.closest('.tgui-emoji-canvas-wrap') ?? bubble;
-            let scv: HTMLCanvasElement | null = null;
-            for (const c of Array.from(scopeForCanvas.querySelectorAll<HTMLCanvasElement>('canvas'))) {
-                const r = c.getBoundingClientRect();
-                if (r.width <= 0 || r.height <= 0) continue;
-                if (sr.left >= r.left - 2 && sr.right <= r.right + 2 && sr.top >= r.top - 2 && sr.bottom <= r.bottom + 2) {
-                    scv = c;
-                    break;
-                }
-            }
-            if (scv) {
-                const cr = scv.getBoundingClientRect();
-
-                const scaleX = scv.width / (cr.width || 1);
-                const scaleY = scv.height / (cr.height || 1);
-                const cxp = (sr.left + sr.width / 2 - cr.left) * scaleX;
-                const cyp = (sr.top + sr.height / 2 - cr.top) * scaleY;
-                const halfW = Math.max(1, Math.round(sr.width * scaleX / 2));
-                const halfH = Math.max(1, Math.round(sr.height * scaleY / 2));
-                const tmp = document.createElement('canvas');
-                tmp.width = Math.round(sr.width * scaleX);
-                tmp.height = Math.round(sr.height * scaleY);
-                const tctx = tmp.getContext('2d');
-                if (!tctx) return;
-                tctx.drawImage(
-                    scv,
-                    Math.round(cxp - tmp.width / 2), Math.round(cyp - tmp.height / 2),
-                    tmp.width, tmp.height,
-                    0, 0, tmp.width, tmp.height,
-                );
-                const val = tmp.toDataURL();
-                if (val) { spawnEmojiBurst(x, y, { kind: 'image', value: val }, slotEl); return; }
-            }
+            const val = snapshotSlotFromCanvas(sr, scopeForCanvas);
+            if (val) { spawnEmojiBurst(x, y, { kind: 'image', value: val }, slotEl); return; }
         }
 
         let node: Element | null = null;
@@ -332,4 +358,84 @@ export function attachEmojiBurst(): void {
 
         spawnEmojiBurst(x, y, { kind: 'image', value }, node);
     }, { passive: true });
+}
+
+/**
+ * Animated-emoji click effects. The agent resolves the real animation document
+ * from Telegram's inputStickerSetAnimatedEmojiAnimations set and hands us a
+ * playable URL via `tg-play-emoji-fx` (peer taps arrive as
+ * sendMessageEmojiInteraction typing actions, local taps are forwarded too).
+ */
+function pickEmojiAnchor(bubble: Element, x?: number, y?: number): Element | null {
+    const candidates = Array.from(bubble.querySelectorAll<Element>('.tgui-emoji-slot, canvas.tgui-animated-sticker'))
+        .filter((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 2 && r.height > 2 && r.bottom > 0 && r.top < window.innerHeight;
+        });
+    if (candidates.length === 0) return null;
+    if (x != null && y != null) {
+        let best = candidates[0];
+        let bestD = Infinity;
+        for (const el of candidates) {
+            const r = el.getBoundingClientRect();
+            const d = Math.hypot(r.left + r.width / 2 - x, r.top + r.height / 2 - y);
+            if (d < bestD) { bestD = d; best = el; }
+        }
+        return best;
+    }
+    return candidates[candidates.length - 1];
+}
+
+/** Old-style local burst used when no server animation exists for an emoji. */
+function playBurstFallback(bubble: HTMLElement, x?: number, y?: number): void {
+    const el = pickEmojiAnchor(bubble, x, y);
+    let px: number;
+    let py: number;
+    if (el) {
+        const r = el.getBoundingClientRect();
+        px = r.left + r.width / 2;
+        py = r.top + r.height / 2;
+    } else {
+        const r = bubble.getBoundingClientRect();
+        px = r.left + r.width / 2;
+        py = r.top + Math.min(r.height / 2, 60);
+    }
+    let node: Element | null = null;
+    if (el instanceof HTMLCanvasElement || el instanceof HTMLImageElement || el instanceof HTMLVideoElement) node = el;
+    else if (el) node = el.querySelector('canvas, img');
+    if (node) {
+        const value = resolveDrawableValue(node, px, py);
+        if (value) { spawnEmojiBurst(px, py, { kind: 'image', value }, node); return; }
+    }
+    if (el) {
+        const v = snapshotSlotFromCanvas(el.getBoundingClientRect(), el.closest('.tgui-emoji-canvas-wrap') ?? bubble);
+        if (v) { spawnEmojiBurst(px, py, { kind: 'image', value: v }, bubble); return; }
+    }
+    const m = (bubble.textContent || '').match(/\p{Extended_Pictographic}/u);
+    if (m) spawnEmojiBurst(px, py, { kind: 'text', value: m[0] }, bubble);
+}
+
+export function attachEmojiInteractions(): void {
+    if (typeof window === 'undefined' || interactionsAttached) return;
+    interactionsAttached = true;
+    window.addEventListener('tg-play-emoji-fx', (e: Event) => {
+        if (document.hidden) return;
+        const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; url?: string; key?: string; x?: number; y?: number };
+        if (!detail.url || detail.messageId == null) return;
+        const bubble = document.getElementById('msg-' + detail.messageId);
+        if (!bubble) return;
+
+        // Anchor the effect to the emoji itself, not the whole bubble.
+        const anchorEl = pickEmojiAnchor(bubble, detail.x, detail.y);
+        const anchorRect = anchorEl ? anchorEl.getBoundingClientRect() : bubble.getBoundingClientRect();
+        playStickerFxOverlay('emoji-fx-' + (detail.key || String(detail.messageId)), detail.url, anchorRect);
+    });
+    window.addEventListener('tg-emoji-fx-fallback', (e: Event) => {
+        if (document.hidden) return;
+        const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; x?: number; y?: number };
+        if (detail.messageId == null) return;
+        const bubble = document.getElementById('msg-' + detail.messageId);
+        if (!bubble) return;
+        playBurstFallback(bubble, detail.x, detail.y);
+    });
 }

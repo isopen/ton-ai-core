@@ -130,9 +130,10 @@ export class WorkerTelegramService extends TelegramService {
         await this.workerClient.readHistory(serializePeer(peer), maxId);
     }
 
-    async sendTyping(peer: PeerInfo, action = 'sendMessageTypingAction'): Promise<any> {
+    async sendTyping(peer: PeerInfo, action: string | Record<string, unknown> = 'sendMessageTypingAction'): Promise<any> {
         if (!this.workerClient) throw new Error('not connected');
-        return this.workerClient.callRpc('messages.setTyping', { peer: serializePeer(peer), action: { _: action } });
+        const actionObj = typeof action === 'string' ? { _: action } : action;
+        return this.workerClient.callRpc('messages.setTyping', { peer: serializePeer(peer), action: actionObj });
     }
 
     async sendTypingCancel(peer: PeerInfo): Promise<any> {

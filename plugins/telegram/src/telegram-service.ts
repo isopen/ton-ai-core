@@ -146,10 +146,10 @@ export class TelegramService {
         this.config.onLog?.('← messages.readHistory ok');
     }
 
-    async sendTyping(peer: PeerInfo, action = 'sendMessageTypingAction'): Promise<any> {
-        this.config.onLog?.('→ messages.setTyping action=' + action);
+    async sendTyping(peer: PeerInfo, action: string | Record<string, unknown> = 'sendMessageTypingAction'): Promise<any> {
+        this.config.onLog?.('→ messages.setTyping action=' + (typeof action === 'string' ? action : action._));
         const inputPeer = serializePeer(peer);
-        const actionObj = { _: action };
+        const actionObj = typeof action === 'string' ? { _: action } : action;
         const r = await this.rpcPostRaw('/api/telegram/rpc', {
             method: 'messages.setTyping',
             params: { peer: inputPeer, action: actionObj },

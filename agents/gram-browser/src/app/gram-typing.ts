@@ -39,6 +39,19 @@ export function isTypingUpdate(upd: any): boolean {
   return upd._ === 'updateUserTyping' || upd._ === 'updateChatUserTyping' || upd._ === 'updateChannelUserTyping';
 }
 
+function dispatchEmojiInteraction(upd: any, actionName: string, uid: string): void {
+  const action = upd.action || {};
+  window.dispatchEvent(new CustomEvent('tg-emoji-interaction', {
+    detail: {
+      kind: actionName === 'sendMessageEmojiInteraction' ? 'interaction' : 'seen',
+      emoticon: action.emoticon || '',
+      messageId: action.msg_id != null ? String(action.msg_id) : '',
+      interaction: action.interaction?.data || '',
+      fromUserId: uid,
+    },
+  }));
+}
+
 export function handleTypingUpdate(upd: any, deps: TypingDeps): void {
   const uid = upd.user_id?.toString() || upd.from_id?.user_id?.toString() || '';
   if (!uid) return;
@@ -47,6 +60,11 @@ export function handleTypingUpdate(upd: any, deps: TypingDeps): void {
   const pkey = `${pType}_${pid}`;
   const uname = deps.userNameMap.get(uid) || `${t(S.SENDER_USER)} ${uid}`;
   const actionName = upd.action?._ || 'sendMessageTypingAction';
+
+  if (actionName === 'sendMessageEmojiInteraction' || actionName === 'sendMessageEmojiInteractionSeen') {
+    dispatchEmojiInteraction(upd, actionName, uid);
+    return;
+  }
 
   const timerKey = `${pkey}_${uid}`;
 
