@@ -5092,3 +5092,9 @@ body {
 .MessageBubble_emojiOnly .tgui-fwd-header {
   margin-bottom: 1px;
 }
+.tgui-fwd-header_link {
+  cursor: pointer;
+}
+.tgui-fwd-header_link:hover b {
+  text-decoration: underline;
+}

@@ -4,6 +4,7 @@ import type { GramState } from './gram-state';
 import {
   addLog, setMessageCache, getMaxLoadedMsgId,
   applyReadReceipt, attachScrollRead, addOrphanedDialog,
+  resolveFwdHeader,
 } from './gram-utils';
 import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
 import { getLogger } from '@ton-ai/gram-debug';
@@ -159,6 +160,7 @@ export function createCallbacks(
             date: m.date || 0, message: m.message || '',
             out: !!m.out, peerId: null, media: m.media, action: m.action, entities: m.entities,
             groupedId: m.grouped_id, fwdFrom: m.fwd_from,
+            ...resolveFwdHeader(s, m.fwd_from, data.users, data.chats),
           })).reverse();
           let result: Message[];
           if (msgs.length === 0 && maxId === 0) {

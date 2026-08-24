@@ -4,7 +4,7 @@ import type { GramState } from './gram-state';
 import {
   addLog, setMessageCache, deleteMessageCache, scheduleDialogsFlush,
   scheduleMessagesFlush, applyReadReceipt, addOrphanedDialog,
-  fetchPeerInfo, dispatchAvatarDownload,
+  fetchPeerInfo, dispatchAvatarDownload, resolveFwdHeader,
 } from './gram-utils';
 import { isTypingUpdate, handleTypingUpdate } from './gram-typing';
 import { getLogger } from '@ton-ai/gram-debug';
@@ -70,6 +70,7 @@ export function createHandleUpdate(s: GramState) {
             date: msg.date || 0, message: msg.message || '',
             out: !!msg.out, peerId: msg.peer_id, media: msg.media, action: msg.action, entities: msg.entities,
             groupedId: msg.grouped_id, fwdFrom: msg.fwd_from,
+            ...resolveFwdHeader(s, msg.fwd_from, u.users, u.chats),
           };
           if (fromType === 'peerUser' && uid && !s.userNameMap.current.has(uid)) {
             fetchPeerInfo(s, 'user', uid);

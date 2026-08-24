@@ -38,6 +38,11 @@ export interface Message {
     entities?: any[];
     groupedId?: number | string;
     fwdFrom?: any;
+    /** Resolved display name of the original sender of a forwarded message. */
+    fwdName?: string;
+    /** Openable peer when privacy settings allow attribution (has access_hash
+     *  for users/channels; chats need none). Null → not clickable. */
+    fwdPeer?: PeerInfo | null;
 }
 
 export interface Country {

@@ -10,7 +10,7 @@ import { AnimatedSticker, playStickerFxOverlay } from './animated-sticker.js';
 import { MessageBubble } from './message-bubble.js';
 import { Checkmark } from './checkmark.js';
 import { TypingIndicator } from './typing-indicator.js';
-import type { AppState, Message, MessageReaction } from '../types.js';
+import type { AppState, Message, MessageReaction, PeerInfo } from '../types.js';
 import type { Dispatch } from '../state.js';
 import type { SkillDef } from '../plugin/types.js';
 import { TelegramImage } from '../primitives/telegram-image.js';
@@ -612,7 +612,7 @@ function fwdFromLabel(fwd: any): string {
   return 'скрытого автора';
 }
 
-function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, selfPeer, reactions, onReact, onOpenPhoto }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; selfPeer?: boolean; reactions?: MessageReaction[]; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
+function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, selfPeer, reactions, onReact, onOpenPhoto, onOpenPeer }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; selfPeer?: boolean; reactions?: MessageReaction[]; onOpenPeer?: (peer: PeerInfo) => void; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
   const timeStr = formatMessageTime(m.date);
   const out = selfPeer ? true : m.out;
   const status = msgStatus(m, readOutboxMaxId);
@@ -627,7 +627,7 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
 
   const marginBottom = sameSenderPrev ? 2 : 8;
 
-  const fwdLabel = fwdFromLabel(m.fwdFrom);
+  const fwdLabel = m.fwdName || fwdFromLabel(m.fwdFrom);
 
   if (isGiftMessage(m.action)) {
     return (
@@ -641,7 +641,10 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
     );
   }
   const fwdHeader = fwdLabel ? (
-    <div class="tgui-fwd-header">Переслано от <b>{fwdLabel}</b></div>
+    <div
+      class={m.fwdPeer ? 'tgui-fwd-header tgui-fwd-header_link' : 'tgui-fwd-header'}
+      onClick={m.fwdPeer && onOpenPeer ? () => onOpenPeer(m.fwdPeer!) : undefined}
+    >Переслано от <b>{fwdLabel}</b></div>
   ) : null;
   return (
     <div
@@ -679,7 +682,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   const [viewer, setViewer] = useState<{ items: MediaViewerItem[]; index: number } | null>(null);
   const rowsRef = useRef<AlbumRow[]>([]);
 
-  const handlerCacheRef = useRef(new Map<string, { onReact: (emoji: string, adding: boolean) => void; onOpenPhoto: (image: ImageSpec) => void }>());
+  const handlerCacheRef = useRef(new Map<string, { onReact: (emoji: string, adding: boolean) => void; onOpenPhoto: (image: ImageSpec) => void; onOpenPeer: (peer: PeerInfo) => void }>());
   const handlerPeerKey = peer?.id != null ? String(peer.id) : '';
   const playbackResetPeerRef = useRef<string>('__init__');
   if (playbackResetPeerRef.current !== handlerPeerKey) {
@@ -691,7 +694,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
   useEffect(() => {
     handlerCacheRef.current = new Map();
   }, [handlerPeerKey]);
-  const getRowHandlers = (msgId: number): { onReact: (emoji: string, adding: boolean) => void; onOpenPhoto: (image: ImageSpec) => void } => {
+  const getRowHandlers = (msgId: number): { onReact: (emoji: string, adding: boolean) => void; onOpenPhoto: (image: ImageSpec) => void; onOpenPeer: (peer: PeerInfo) => void } => {
     const key = handlerPeerKey + ':' + msgId;
     let h = handlerCacheRef.current.get(key);
     if (!h) {
@@ -701,6 +704,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
           window.dispatchEvent(new CustomEvent('tg-emoji-reaction', { detail: { messageId: msgId, emoji, adding } }));
         },
         onOpenPhoto: (image) => setViewer({ items: [{ kind: 'photo', m: null, image }], index: 0 }),
+        onOpenPeer: (peer) => dispatch({ type: 'SET_SELECTED_PEER', peer }),
       };
       handlerCacheRef.current.set(key, h);
     }
@@ -910,7 +914,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
             const showDaySep = !!m.date && (i === 0 || !prevM?.date || new Date(m.date * 1000).toDateString() !== new Date(prevM.date * 1000).toDateString());
             const emojiUrls = state.documentUrls || {};
             const msgReactions = state.reactions?.[m.id];
-            const { onReact, onOpenPhoto } = getRowHandlers(m.id);
+            const { onReact, onOpenPhoto, onOpenPeer } = getRowHandlers(m.id);
             const daySep = showDaySep ? <div key={`day-${m.id}`} class="tgui-day-sep"><Text variant="caption" className="tgui-day-sep-text">{formatDaySeparator(m.date)}</Text></div> : null;
             if (isAlbum) {
               const items: MediaCollageItem[] = row.msgs.map(mm => {
@@ -963,7 +967,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
             return (
               <div>
                 {daySep}
-                <MessageItemMemo m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrl={state.documentUrls?.[m.id] || ''} progress={state.documentProgress?.[m.id]} documentSource={state.documentSources?.[m.id]} photoSource={state.photoSources?.[m.id]} emojiUrls={emojiUrls} selfPeer={selfPeer} reactions={msgReactions} onReact={onReact} onOpenPhoto={onOpenPhoto} />
+                <MessageItemMemo m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrl={state.documentUrls?.[m.id] || ''} progress={state.documentProgress?.[m.id]} documentSource={state.documentSources?.[m.id]} photoSource={state.photoSources?.[m.id]} emojiUrls={emojiUrls} selfPeer={selfPeer} reactions={msgReactions} onReact={onReact} onOpenPhoto={onOpenPhoto} onOpenPeer={onOpenPeer} />
               </div>
             );
           }}

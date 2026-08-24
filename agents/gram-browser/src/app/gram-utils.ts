@@ -1,6 +1,6 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { tpl, buildPeerBlurThumb } from '@ton-ai/gram-ui';
-import type { Dialog, Message } from '@ton-ai/gram-ui';
+import type { Dialog, Message, PeerInfo } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbGetMany, dbKeys } from '@/utils/db';
 import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, ORPHANED_KEY } from './gram-constants';
 import type { GramState } from './gram-state';
@@ -294,4 +294,50 @@ function mergeOrphanedDialogs(s: GramState, serverDialogs: Dialog[]): Dialog[] {
   }
   merged.sort((a, b) => (b.date || 0) - (a.date || 0));
   return merged;
+}
+
+/** Resolves a messageFwdHeader into a display name and, when privacy allows
+ *  (i.e. the header carries from_id and we know the peer's access_hash),
+ *  an openable PeerInfo. users/chats are the referenced objects that arrived
+ *  in the same fetchHistory/updates response. */
+export function resolveFwdHeader(
+  s: GramState,
+  fwd: any,
+  users?: any[],
+  chats?: any[],
+): { fwdName: string; fwdPeer: PeerInfo | null } {
+  if (!fwd) return { fwdName: '', fwdPeer: null };
+  const fid = fwd.from_id;
+  const uid = fid?.user_id?.toString() || '';
+  const chId = fid?.channel_id?.toString() || '';
+  const chatId = fid?.chat_id?.toString() || '';
+  let name = '';
+  let peer: PeerInfo | null = null;
+  if (fid?._ === 'peerUser' && uid) {
+    const u = users?.find((x: any) => x && String(x.id) === uid);
+    const nm = u ? ([u.first_name, u.last_name].filter(Boolean).join(' ') || u.username || '') : (s.userNameMap.current.get(uid) || '');
+    if (nm) name = nm;
+    if (u && u.access_hash != null) {
+      peer = { type: 'user', id: uid, accessHash: String(u.access_hash), firstName: u.first_name, lastName: u.last_name, username: u.username };
+      if (!name) name = nm || uid;
+    }
+  } else if (fid?._ === 'peerChannel' && chId) {
+    const c = chats?.find((x: any) => x && String(x.id) === chId);
+    const pinfo = s.peerInfoMap.current.get(`channel_${chId}`);
+    const nm = c?.title || pinfo?.title || pinfo?.username || '';
+    if (nm) name = nm;
+    if (c && c.access_hash != null) {
+      peer = { type: 'channel', id: chId, accessHash: String(c.access_hash), title: c.title, username: c.username };
+      if (!name) name = c.title || c.username || chId;
+    }
+  } else if (fid?._ === 'peerChat' && chatId) {
+    const c = chats?.find((x: any) => x && String(x.id) === chatId);
+    const pinfo = s.peerInfoMap.current.get(`chat_${chatId}`);
+    const nm = c?.title || pinfo?.title || '';
+    if (nm) name = nm;
+    peer = { type: 'chat', id: chatId, title: nm };
+    if (!name) name = chatId;
+  }
+  if (!name) name = String(fwd.from_name || fwd.post_author || '');
+  return { fwdName: name, fwdPeer: peer };
 }
