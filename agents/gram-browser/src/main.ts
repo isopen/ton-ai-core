@@ -1,5 +1,6 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { startFpsLogging } from '@ton-ai/gram-ui';
+import { initWasmCrypton } from '@ton-ai/core';
 import { GramApp } from './app/gram-app';
 
 const log = getLogger('gram-browser');
@@ -9,6 +10,8 @@ let initialized = false;
 function initApp() {
   if (initialized) return;
   initialized = true;
+
+  initWasmCrypton().catch((e) => log.error('crypton WASM init failed:', e));
 
   startFpsLogging();
 

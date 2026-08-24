@@ -5,6 +5,9 @@ dist/
 build/
 out/
 lib/
+target/
+pkg/
+wasm/
 
 *.log
 npm-debug.log*
@@ -44,3 +47,7 @@ tdlib_data/
 tdlib_files/
 libtdjson.*
 .next/
+
+# crypton-rs WASM build output
+packages/core/src/crypton/wasm/
+packages/crypton-rs/target/
