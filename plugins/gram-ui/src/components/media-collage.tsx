@@ -212,7 +212,7 @@ export function MediaCollage({
       {!caption ? (
         <div class="MessageBubble__meta MessageBubble__meta_overlay MediaCollage__meta">
           <span class="MessageBubble__time">{timeStr}</span>
-          <Checkmark status={status} className="MessageBubble__status" />
+          {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
         </div>
       ) : null}
     </div>
