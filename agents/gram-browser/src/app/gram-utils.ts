@@ -1,4 +1,4 @@
-import { getLogger } from '@ton-ai/gram-debug';
+import { getLogger, isNoDialogsCache } from '@ton-ai/gram-debug';
 import { tpl, buildPeerBlurThumb } from '@ton-ai/gram-ui';
 import type { Dialog, Message, PeerInfo } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbGetMany, dbKeys } from '@/utils/db';
@@ -62,7 +62,11 @@ export function setDialogsFromServer(s: GramState, raw: any) {
   s.dialogsRef.current = merged;
   s.dialogsLoadedRef.current = true;
   s.tgui.current!.setDialogs(merged);
-  dbSet(DIALOG_CACHE_KEY, merged).catch((e: any) => log.error('[dialog-cache] SAVE error', e?.message));
+  if (isNoDialogsCache()) {
+    log.info('[dialog-cache] disabled via gram-debug (noDialogsCache) - skip SAVE');
+  } else {
+    dbSet(DIALOG_CACHE_KEY, merged).catch((e: any) => log.error('[dialog-cache] SAVE error', e?.message));
+  }
   for (const d of merged) {
     if (d.peer?.photo?.photo_id) dispatchAvatarDownload(d.peer.type, d.peer.id, d.peer.photo);
   }
@@ -70,6 +74,7 @@ export function setDialogsFromServer(s: GramState, raw: any) {
 
 export async function loadCachedDialogs(s: GramState) {
   if (s.dialogsLoadedRef.current) { log.info('[cache] loadCachedDialogs skipped - already loaded'); return; }
+  if (isNoDialogsCache()) { log.info('[cache] loadCachedDialogs skipped - noDialogsCache (always from Telegram)'); return; }
   const cached = await dbGet<Dialog[]>(DIALOG_CACHE_KEY);
   if (!cached) { log.info('[cache] loadCachedDialogs - no cached dialogs'); return; }
   try {

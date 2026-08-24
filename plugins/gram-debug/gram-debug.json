@@ -2,6 +2,7 @@
     "enabled": false,
     "level": "info",
     "noMediaCache": true,
+    "noDialogsCache": true,
     "scopes": {
         "gram-db": {
             "enabled": false,

@@ -33,6 +33,10 @@ export function isNoMediaCache(): boolean {
     return components.isNoMediaCache();
 }
 
+export function isNoDialogsCache(): boolean {
+    return components.isNoDialogsCache();
+}
+
 export function loadConfigFile(file?: string): GramDebugConfig {
     return loadConfig(file);
 }

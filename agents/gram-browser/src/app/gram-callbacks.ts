@@ -7,7 +7,7 @@ import {
   resolveFwdHeader,
 } from './gram-utils';
 import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
-import { getLogger } from '@ton-ai/gram-debug';
+import { getLogger, isNoDialogsCache } from '@ton-ai/gram-debug';
 
 export function createCallbacks(
   s: GramState,
@@ -220,13 +220,14 @@ export function createCallbacks(
       }
     },
     selectPeer: (peer: PeerInfo) => {
+      const noCache = isNoDialogsCache();
       s.tgService.current?.cancelPhotoDownloads().catch(() => {});
       s.cancelDocumentDownloads();
       s.selectedPeerRef.current = peer;
       s.lastHeaderTyping.current = '';
       s.tgui.current?.setTypingText('');
       const peerKey = `${peer.type}_${peer.id}`;
-      const cached = s.messagesCache.current.get(peerKey);
+      const cached = noCache ? null : s.messagesCache.current.get(peerKey);
       const rawMsgs = Array.isArray(cached) ? cached : [];
       prefetchPhotoCaches(s, rawMsgs).catch(() => {});
       injectCachedDocumentSources(s, rawMsgs);
@@ -234,7 +235,12 @@ export function createCallbacks(
       const cachedSources: Record<number, string> = {};
       for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
       s.tgui.current!.dispatch({ type: 'SET_MESSAGES', messages: cachedMsgs, photoSources: cachedSources });
-      if (!s.historyInitRef.current.has(peerKey)) {
+      if (!s.historyInitRef.current.has(peerKey) || noCache) {
+        if (noCache) {
+          s.historyInitRef.current.delete(peerKey);
+          s.maxFetchedIdRef.current.delete(peerKey);
+          s.messagesCache.current.delete(peerKey);
+        }
         s.tgui.current!.setLoadingMessages(true);
         getCallbacks().loadHistory();
       } else {

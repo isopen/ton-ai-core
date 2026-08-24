@@ -143,6 +143,10 @@ export class DebugComponents {
         return this.config.noMediaCache === true;
     }
 
+    isNoDialogsCache(): boolean {
+        return this.config.noDialogsCache === true;
+    }
+
     loadConfig(file?: string): GramDebugConfig {
         this.config = loadConfig(file);
         return this.config;

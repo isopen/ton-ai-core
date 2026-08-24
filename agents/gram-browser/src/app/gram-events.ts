@@ -1,4 +1,4 @@
-import { getLogger, isEnabled } from '@ton-ai/gram-debug';
+import { getLogger, isEnabled, isNoDialogsCache } from '@ton-ai/gram-debug';
 import { parseEventHeader, parseEncryptionEvent } from '@ton-ai/gram-db';
 import { decodeKvPayload } from '@ton-ai/tl-language';
 import { dbGet, dbSet, dbDel, dbKeys, dbClearCacheKeepSession, dbDeleteAvatarByOpfsName, dbListAvatars } from '@/utils/db';
@@ -443,9 +443,11 @@ export function setupEventListeners(s: GramState): void {
               ? { ...d, peer: { ...d.peer, avatarUrl: action.url } }
               : d
           );
-          dbSet(DIALOG_CACHE_KEY, s.dialogsRef.current.map(d =>
-            d.peer.avatarUrl ? { ...d, peer: { ...d.peer, avatarUrl: undefined } } : d
-          )).catch(() => {});
+          if (!isNoDialogsCache()) {
+            dbSet(DIALOG_CACHE_KEY, s.dialogsRef.current.map(d =>
+              d.peer.avatarUrl ? { ...d, peer: { ...d.peer, avatarUrl: undefined } } : d
+            )).catch(() => {});
+          }
         }
       }
       s.tgui.current?.dispatch(action);
