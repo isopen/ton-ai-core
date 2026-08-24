@@ -10,7 +10,6 @@ const PHOTO_URL_CACHE_MAX = 200;
 const PROBE_MSG_LIMIT = 60;
 const PROBE_LRU_MAX = 600;
 const MAX_ACTIVE_BLOB_URLS = 4096;
-const EMOJI_BLOB_URLS_MAX = 8192;
 const TGS_JSON_TTL_MS = 30 * 60 * 1000;
 const STICKER_SET_TTL_MS = 30 * 60 * 1000;
 const MAX_PARALLEL_PHOTOS = 16;
@@ -264,12 +263,9 @@ export class GramMediaRouter {
             this.decEmojiUrlRef(prev, key);
         }
         if (url && url.startsWith('blob:')) {
+            // No cap/trim here: membership protects the blob from sweep
+            // revocation for the lifetime of the page.
             this.emojiBlobUrls.add(url);
-            while (this.emojiBlobUrls.size > EMOJI_BLOB_URLS_MAX) {
-                const oldest = this.emojiBlobUrls.values().next().value;
-                if (oldest === undefined) break;
-                this.emojiBlobUrls.delete(oldest);
-            }
         }
         if (this.emojiUrlCache.size >= 2048) {
             const toEvict: string[] = [];
@@ -334,11 +330,12 @@ export class GramMediaRouter {
         while (this.activeBlobUrls.size > MAX_ACTIVE_BLOB_URLS && scanned < this.activeBlobUrls.size) {
             const oldest = this.activeBlobUrls.values().next().value as string | undefined;
             if (!oldest) break;
-            this.activeBlobUrls.delete(oldest);
             scanned++;
-            if (this.isCachedEmojiUrl(oldest)) continue;
-            if (this.emojiBlobUrls.has(oldest)) continue;
-
+            // Emoji/sticker media must stay alive for the whole page session:
+            // revoking those blobs blanks already-rendered emojis with no cheap
+            // way to recover (bytes are gone), so never sweep them.
+            if (this.isCachedEmojiUrl(oldest) || this.emojiBlobUrls.has(oldest)) continue;
+            this.activeBlobUrls.delete(oldest);
             this.dropCacheEntriesForUrl(oldest);
             URL.revokeObjectURL(oldest);
             this.notifyEmojiUrlRevoked(oldest);
