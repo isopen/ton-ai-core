@@ -2458,27 +2458,14 @@ body {
   height: 64px;
 }
 
-.PhotoLoader__ring {
+.PhotoLoader__spinner {
   position: absolute;
   inset: 0;
-  transform: rotate(-90deg);
-}
-
-.PhotoLoader__ring-bg {
-  fill: none;
-  stroke: rgba(255,255,255,.28);
-  stroke-width: 4;
-}
-
-.PhotoLoader__ring-fg {
-  fill: none;
-  stroke: #fff;
-  stroke-width: 4;
-  stroke-linecap: round;
-  stroke-dasharray: 120;
-  stroke-dashoffset: 0;
-  animation: PhotoLoader-rotate 1.5s linear infinite;
-  transform-origin: center;
+  border-radius: 50%;
+  border: 4px solid rgba(255,255,255,0.18);
+  border-top-color: #fff;
+  animation: PhotoLoader-spin 1s linear infinite;
+  will-change: transform;
 }
 
 .PhotoLoader__icon {
@@ -2491,16 +2478,29 @@ body {
   color: #fff;
 }
 
+.tgui-photo-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.PhotoLoader__status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  margin-top: 8px;
+}
+
 .PhotoLoader__percent {
   font-size: 14px;
   font-weight: 600;
-  margin-top: 8px;
+  font-variant-numeric: tabular-nums;
 }
 
 .PhotoLoader__dots {
   display: flex;
   gap: 3px;
-  margin-top: 10px;
 }
 .PhotoLoader__dot {
   width: 4px;
@@ -2522,10 +2522,8 @@ body {
   color: rgba(255,255,255,.8);
 }
 
-@keyframes PhotoLoader-rotate {
-  0%   { stroke-dashoffset: 120; }
-  50%  { stroke-dashoffset: 0; }
-  100% { stroke-dashoffset: -120; }
+@keyframes PhotoLoader-spin {
+  to { transform: rotate(360deg); }
 }
 
 .MediaCollage {

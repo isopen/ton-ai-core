@@ -93,6 +93,7 @@ export function MediaCollage({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [attachTick, setAttachTick] = useState(0);
   const handleRef = useCallback((el: HTMLDivElement | null) => {
+    if (rootRef.current === el) return;
     rootRef.current = el;
     setAttachTick(t => t + 1);
   }, []);
@@ -205,19 +206,17 @@ export function MediaCollage({
                 ) : (
                   <div class="MediaCollage__placeholder" />
                 )}
-                {isPreloading ? (
-                  failed ? (
-                    <div class="tgui-photo-error">
-                      <div class="tgui-photo-error-text">{t(S.PHOTO_LOAD_FAILED)}</div>
-                      <button class="tgui-photo-error-retry" type="button" onClick={retryPhoto}>{t(S.PHOTO_RETRY)}</button>
-                    </div>
-                  ) : (
-                    <>
-                      <div class="tgui-photo-scrim" />
-                      <PhotoLoader percent={progress} fileSize={fileSize} hidePercent={cell.width < 140} />
-                    </>
-                  )
-                ) : null}
+              {isPreloading ? (
+                failed ? (
+                  <div class="tgui-photo-error">
+                    <div class="tgui-photo-error-text">{t(S.PHOTO_LOAD_FAILED)}</div>
+                    <button class="tgui-photo-error-retry" type="button" onClick={retryPhoto}>{t(S.PHOTO_RETRY)}</button>
+                  </div>
+                ) : (<>
+                  <div class="tgui-photo-scrim" />
+                  <PhotoLoader percent={progress} fileSize={fileSize} hidePercent={cell.width < 140} />
+                </>)
+              ) : null}
               </div>
             )}
             {isMoreCell ? (

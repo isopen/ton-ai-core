@@ -221,6 +221,7 @@ export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EM
   const [mapVersion, setMapVersion] = useState(0);
   const [settledVersion, setSettledVersion] = useState(0);
   const settleTimer = useRef(0);
+  const lastEmojiSigRef = useRef('');
   const hasPotentialEmoji = emojiEntities.length > 0 || matchEmojiRuns(text).length > 0;
   useEffect(() => {
     if (!hasPotentialEmoji) return;
@@ -237,7 +238,12 @@ export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EM
         setMapVersion((v) => v + 1);
         return;
       }
-      if (changed.some((c) => customIds.has(c.docId) || runAlts.has(c.alt) || runAlts.has(normalizeEmoji(c.alt)))) setMapVersion((v) => v + 1);
+      const relevant = changed.filter((c) => customIds.has(c.docId) || runAlts.has(c.alt) || runAlts.has(normalizeEmoji(c.alt)));
+      if (relevant.length === 0) return;
+      const sig = relevant.map((c) => c.docId + ':' + c.alt).sort().join('|');
+      if (sig === lastEmojiSigRef.current) return;
+      lastEmojiSigRef.current = sig;
+      setMapVersion((v) => v + 1);
     });
   }, [emojiIdsKey, hasPotentialEmoji]);
 

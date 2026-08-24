@@ -160,6 +160,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
   const [attachTick, setAttachTick] = useState(0);
 
   const handleRef = useCallback((el: HTMLDivElement | null) => {
+    if (rootRef.current === el) return;
     rootRef.current = el;
     setAttachTick(t => t + 1);
   }, []);
@@ -433,6 +434,7 @@ function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrl
     const fetchRef = useRef(false);
 
     const handleRef = useCallback((el: HTMLDivElement | null) => {
+      if (rootRef.current === el) return;
       rootRef.current = el;
       setAttachTick(t => t + 1);
     }, []);

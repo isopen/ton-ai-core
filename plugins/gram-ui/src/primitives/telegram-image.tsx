@@ -48,6 +48,7 @@ export function TelegramImage(props: {
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   const handleRef = useCallback((el: HTMLDivElement | null) => {
+    if (rootRef.current === el) return;
     rootRef.current = el;
     setAttachTick(t => t + 1);
   }, []);
