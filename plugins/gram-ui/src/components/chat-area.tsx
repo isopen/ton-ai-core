@@ -36,6 +36,7 @@ import { buildImageSpec, firstMissingSizeType, chatPhotoPrio, isInlinePhotoSize 
 import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 
 const photoLog = getLogger('gram-ui:photo');
+const fxLog = getLogger('gram-ui:sticker-fx');
 
 const STICKER_DOWNLOAD_RETRY_MS = 2500;
 const STICKER_DOWNLOAD_MAX_ATTEMPTS = 8;
@@ -220,7 +221,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
       const mid = (e as CustomEvent).detail?.messageId;
       const match = mid === m.id || String(mid) === String(m.id);
       if (match && fxUrlRef.current && rootRef.current) {
-        console.log('[gram-app] sticker-fx overlay for msg=' + m.id + ' (tg-sticker-fx)');
+        fxLog.info('[gram-app] sticker-fx overlay for msg=' + m.id + ' (tg-sticker-fx)');
         playStickerFxOverlay('fx' + m.id, fxUrlRef.current, rootRef.current.getBoundingClientRect());
       }
     };

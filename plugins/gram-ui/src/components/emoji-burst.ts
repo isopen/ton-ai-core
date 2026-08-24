@@ -7,7 +7,11 @@
  * effect can never flood the main thread.
  */
 
-import { replayAnimatedCanvas, playStickerFxOverlay } from './animated-sticker.js';
+import { playStickerFxOverlay } from './animated-sticker.js';
+import { scheduleStickerClickFx } from './sticker-click-fx.js';
+import { getLogger } from '@ton-ai/gram-debug';
+
+const log = getLogger('gram-ui:emoji-burst');
 
 const LAYER_CAP = 4;
 const PARTICLES_PER_LAYER_BASE = 7;
@@ -228,7 +232,10 @@ export function attachEmojiBurst(): void {
 
         if (stickerEl) {
             const mainCv = stickerEl.querySelector(':scope > .tgui-sticker-preview canvas.tgui-animated-sticker');
-            if (mainCv) replayAnimatedCanvas(mainCv);
+            if (mainCv instanceof HTMLCanvasElement) {
+                const rowId0 = stickerEl.closest('[id^="msg-"]')?.id || '';
+                scheduleStickerClickFx(stickerEl, mainCv, rowId0.slice(4), x, y);
+            }
             const rowId = stickerEl.closest('[id^="msg-"]')?.id || '';
             window.dispatchEvent(new CustomEvent('tg-sticker-fx', { detail: { messageId: rowId.slice(4) } }));
             return;
@@ -257,7 +264,7 @@ export function attachEmojiBurst(): void {
             }
         }
         if (!rowId || target.closest('.tgui-reaction') || (!emojiHit && !glyphHit)) {
-            if (rowId) console.log('[gram-app] tap ignored (not an emoji element): msg=' + rowId + ' target=' + (target.className || target.tagName));
+            if (rowId) log.info('[gram-app] tap ignored (not an emoji element): msg=' + rowId + ' target=' + (target.className || target.tagName));
             return;
         }
         {

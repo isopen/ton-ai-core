@@ -37,8 +37,8 @@ export function disposeStickerFxOverlay(key: string): void {
 }
 
 export function playStickerFxOverlay(key: string, tgsUrl: string, anchor: DOMRect): void {
-    // Direct console (not logger) so it always passes the quiet filter.
-    console.log('[gram-app] playStickerFxOverlay key=' + key + ' url=' + String(tgsUrl).slice(0, 70));
+    aniLog.info('[gram-app] playStickerFxOverlay key=' + key + ' url=' + String(tgsUrl).slice(0, 70));
+    try { window.dispatchEvent(new CustomEvent('tg-sticker-fx-overlay-started', { detail: { key } })); } catch {}
     const existing = activeFxOverlays.get(key);
   if (existing && existing.host.isConnected) {
     existing.renderer.restart?.();
@@ -155,6 +155,29 @@ export function AnimatedSticker({
       if (r) r.removeView(viewId);
     };
   }, [viewId]);
+
+  // Diagnostics (enable: localStorage['tg-debug-sticker-dom']='1'):
+  // logs any external move/removal/attribute change of this sticker's canvas.
+  useEffect(() => {
+    if (!canvasNode || typeof MutationObserver === 'undefined') return;
+    let enabled = false;
+    try { enabled = typeof localStorage !== 'undefined' && localStorage.getItem('tg-debug-sticker-dom') === '1'; } catch {}
+    if (!enabled) return;
+    const report = (msg: string) => aniLog.info('[gram-app] sticker-dom', msg, 'rid=' + renderId);
+    const mo = new MutationObserver((muts) => {
+      for (const mu of muts) {
+        if (mu.type === 'childList') {
+          const removedHere = Array.from(mu.removedNodes).includes(canvasNode);
+          report('childList target=' + ((mu.target as Element)?.className || '') + ' removedCanvas=' + removedHere + ' added=' + mu.addedNodes.length);
+        } else {
+          report('attr=' + mu.attributeName + ' val=' + String((mu.target as HTMLElement)?.getAttribute?.(mu.attributeName || '') || '').slice(0, 100));
+        }
+      }
+    });
+    if (canvasNode.parentElement) mo.observe(canvasNode.parentElement, { childList: true });
+    mo.observe(canvasNode, { attributes: true, attributeFilter: ['style', 'class', 'width', 'height'] });
+    return () => mo.disconnect();
+  }, [canvasNode, renderId]);
 
   if (sharedCanvas) return <span class="tgui-emoji-shared-anim" data-vid={viewId} style="display:none" />;
 
