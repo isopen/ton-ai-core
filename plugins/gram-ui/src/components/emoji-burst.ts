@@ -14,8 +14,6 @@ const PARTICLES_PER_LAYER_BASE = 7;
 const TOTAL_PARTICLE_CAP = 60;
 const TAP_SESSION_MS = 2200;
 
-const TEXT_WORDS = ['HAHA', 'HEH', 'LOL', 'WOW', 'NICE', 'OOH', 'YAY', 'PFFT'];
-
 let layerEl: HTMLDivElement | null = null;
 let liveParticles = 0;
 
@@ -180,47 +178,6 @@ function spawnParticle(
     layerEl!.appendChild(node);
 }
 
-function spawnTextParticle(x: number, y: number, layer: number): void {
-    if (liveParticles >= TOTAL_PARTICLE_CAP) return;
-    const node = document.createElement('span');
-    node.textContent = TEXT_WORDS[(Math.random() * TEXT_WORDS.length) | 0];
-    const fontSize = rand(13, 18);
-    node.style.cssText = 'position:fixed;left:' + x.toFixed(1) + 'px;top:' + y.toFixed(1) + 'px;'
-        + 'margin-left:-24px;margin-top:-10px;pointer-events:none;will-change:transform,opacity;'
-        + 'font-weight:800;font-size:' + fontSize.toFixed(1) + 'px;line-height:1;'
-        + 'letter-spacing:.5px;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.45);white-space:nowrap';
-
-    const angleDeg = rand(-155, -25);
-    const angle = (angleDeg * Math.PI) / 180;
-    const dist = rand(110, 220) * (0.85 + layer * 0.22);
-    const dx = Math.cos(angle) * dist;
-    const dyUp = Math.sin(angle) * dist;
-    const drift = rand(-40, 40);
-    const rot = rand(-30, 30);
-    const duration = rand(850, 1250) + layer * 120;
-
-    const animation = node.animate([
-        { transform: 'translate(0px, 0px) rotate(' + (rot * -0.5).toFixed(1) + 'deg)', opacity: 0 },
-        { opacity: 1, offset: 0.15 },
-        { transform: `translate(${dx * 0.55}px, ${dyUp * 0.75}px) rotate(${rot * 0.4}deg)`, opacity: 1, offset: 0.55 },
-        { transform: `translate(${dx + drift}px, ${dyUp * 0.35 + 80}px) rotate(${rot}deg) scale(0.6)`, opacity: 0 },
-    ], {
-        duration,
-        easing: 'cubic-bezier(.17,.67,.4,1)',
-        fill: 'forwards',
-    });
-    liveParticles++;
-    animation.finished.then(() => {
-        node.remove();
-        liveParticles--;
-    }).catch(() => {
-        node.remove();
-        liveParticles--;
-    });
-
-    layerEl!.appendChild(node);
-}
-
 export function spawnEmojiBurst(x: number, y: number, source: { kind: 'image' | 'text'; value: string }, key: object): void {
     if (document.hidden) return;
     const layerNode = ensureLayer();
@@ -239,12 +196,6 @@ export function spawnEmojiBurst(x: number, y: number, source: { kind: 'image' | 
         const n = Math.ceil(perLayer / layers);
         for (let i = 0; i < n; i++) {
             setTimeout(() => spawnParticle(x + rand(-10, 10), y + rand(-8, 8), source, l), l * 90 + i * 12);
-        }
-    }
-    if (Math.random() < 0.75) {
-        const textCount = Math.random() < 0.35 ? 2 : 1;
-        for (let t = 0; t < textCount; t++) {
-            setTimeout(() => spawnTextParticle(x + rand(-26, 26), y + rand(-14, 4), rand(0, 1.5)), rand(40, 180));
         }
     }
     void layerNode;
@@ -288,9 +239,13 @@ export function attachEmojiBurst(): void {
 
         // Animated-emoji taps inside chat messages play the server-provided
         // interaction animation (inputStickerSetAnimatedEmojiAnimations).
+        // Only actual emoji elements qualify - photos, videos and plain text
+        // bubbles share the same MessageBubble class and must not trigger it.
         const row = bubble.closest('[id^="msg-"]') as HTMLElement | null;
         const rowId = row ? row.id.slice(4) : '';
-        if (rowId && !target.closest('.tgui-reaction')) {
+        const emojiHit = !!target.closest('.tgui-emoji-slot, .tgui-emoji-canvas-wrap')
+            || (target instanceof HTMLCanvasElement && target.classList.contains('tgui-animated-sticker'));
+        if (rowId && emojiHit && !target.closest('.tgui-reaction')) {
             const slots = Array.from(bubble.querySelectorAll('.tgui-emoji-slot'));
             const slotIdx = slotEl ? slots.indexOf(slotEl) : -1;
             dispatchLocalEmojiClick(rowId, x, y, slotIdx >= 0 ? slotIdx : undefined);
