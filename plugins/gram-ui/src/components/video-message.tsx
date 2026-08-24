@@ -119,6 +119,7 @@ export function VideoMessage(props: VideoMessageProps) {
 
   const frameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoRefCb = useRef((el: any) => { videoRef.current = el; }).current;
   const rafRef = useRef<number | null>(null);
   const playingRef = useRef(false);
   const wasLoadingRef = useRef(false);
@@ -126,6 +127,8 @@ export function VideoMessage(props: VideoMessageProps) {
   const lastStepAtRef = useRef(0);
 
   const [inView, setInView] = useState(true);
+  const [isHover, setIsHover] = useState(false);
+  const [volHover, setVolHover] = useState(false);
   const inViewRef = useRef(true);
   useEffect(() => {
     const el = frameRef.current;
@@ -277,7 +280,7 @@ export function VideoMessage(props: VideoMessageProps) {
       } else {
         setUiState('ready');
       }
-    } else {
+    } else if (!playingRef.current) {
       setUiState('ready');
     }
   }, [url, progress, inView]);
@@ -409,7 +412,7 @@ export function VideoMessage(props: VideoMessageProps) {
       <div class="tgui-media-container" style={containerStyle}>
         <div
           ref={frameRef}
-          class="video-message__frame"
+          class={'video-message__frame' + (isHover ? ' is-hover' : '')}
           style={displayW && displayH ? undefined : 'aspect-ratio:16/9'}
           data-state={uiState}
           data-duration={duration}
@@ -417,12 +420,11 @@ export function VideoMessage(props: VideoMessageProps) {
           data-muted={muted ? 'true' : 'false'}
           data-loaded={loaded ? 'true' : 'false'}
           onClick={frameClick}
+          onMouseEnter={() => setIsHover(true)}
+          onMouseLeave={() => setIsHover(false)}
         >
           {isRealVideo && url ? (
-            <video ref={(el: any) => {
-              videoRef.current = el;
-              if (el) { el.muted = videoMuted; el.volume = volume; }
-            }} class="video-message__thumb" src={url}
+            <video ref={videoRefCb} class="video-message__thumb" src={url}
               poster={thumb?.url || undefined}
               autoplay={forceAutoplay} playsinline preload="metadata"
               style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000"
@@ -440,7 +442,9 @@ export function VideoMessage(props: VideoMessageProps) {
           <div class="video-message__top">
             <div class="video-message__top-left">
               <span class="badge badge--duration">{uiState === 'playing' ? fmt(ct) : durLabel}</span>
-              <div class="volume-control">
+              <div class={'volume-control' + (volHover ? ' is-hover' : '')}
+                onMouseEnter={() => setVolHover(true)}
+                onMouseLeave={() => setVolHover(false)}>
                 <button type="button" class="badge badge--icon" data-action="mute" onClick={(e: any) => { e.stopPropagation(); toggleMute(); }}>
                   <IconVolume />
                   <IconMute />
