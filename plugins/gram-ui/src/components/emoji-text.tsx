@@ -195,18 +195,13 @@ function EmojiPendingRuns({ text, size }: { text: string; size: number }) {
 function isEmojiOnlyText(text: string, entities?: any[]): boolean {
   if (!text) return false;
   const spans: Array<{ start: number; end: number }> = [];
-  const customSpans: Array<{ start: number; end: number }> = [];
   for (const e of entities || []) {
     if (e?._ !== 'messageEntityCustomEmoji' || typeof e.offset !== 'number' || typeof e.length !== 'number' || e.length <= 0) continue;
-    customSpans.push({ start: e.offset, end: e.offset + e.length });
+    spans.push({ start: e.offset, end: e.offset + e.length });
   }
-  if (customSpans.length > 0) {
-    for (const s of customSpans) spans.push(s);
-  } else {
-    const runs = matchEmojiRuns(text);
-    if (runs.length === 0) return false;
-    for (const r of runs) spans.push({ start: r.start, end: r.end });
-  }
+  const runs = matchEmojiRuns(text);
+  if (spans.length === 0 && runs.length === 0) return false;
+  for (const r of runs) spans.push({ start: r.start, end: r.end });
   spans.sort((a, b) => a.start - b.start || a.end - b.end);
   let pos = 0;
   for (const s of spans) {
@@ -279,6 +274,12 @@ export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EM
   const loneEmoji = singleEmoji !== undefined
     || (emojiOnly && segments.filter((s) => s.type === 'emoji').length === 1);
   const size = isDialog ? inlineSize : (loneEmoji ? SINGLE_EMOJI_SIZE : (emojiOnly ? EMOJI_ONLY_SIZE : inlineSize));
+  // Diagnostics (enable: localStorage['tg-debug-emoji']='1')
+  if (typeof localStorage !== 'undefined' && localStorage.getItem('tg-debug-emoji') === '1' && !isDialog) {
+    console.log('[gram-app] EmojiText:', JSON.stringify(text), 'len=' + text.length,
+      'ents=' + (entities || []).filter((e: any) => e?._ === 'messageEntityCustomEmoji').length,
+      'segs=' + segments.map((s) => s.type).join(','), 'emojiOnly=' + emojiOnly, 'lone=' + loneEmoji, 'size=' + size);
+  }
   const hasEmoji = segments.some((s) => s.type === 'emoji');
   if (!hasEmoji) {
     if (matchEmojiRuns(text).length > 0) {

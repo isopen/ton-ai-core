@@ -534,7 +534,10 @@ export function setupEventListeners(s: GramState): void {
     void processLocalEmojiClick(s, String(detail.messageId), detail.x, detail.y, detail.slotIndex);
   };
   window.addEventListener('tg-local-emoji-click', onLocalEmojiClick);
-  void ensureEmojiAnimSet();
+  // NOTE: no eager ensureEmojiAnimSet() here - an RPC fired before the
+  // transport connects hangs forever and can starve the worker's RPC queue,
+  // which blocked emoji document downloads (tiny glyphs bug). The set is
+  // fetched lazily on first click and then hits the gram-media cache.
 
   s.cleanupFns.push(() => {
     window.removeEventListener('tg-auth-set-lang', onSetLang);
