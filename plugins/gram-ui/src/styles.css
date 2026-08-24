@@ -5058,3 +5058,21 @@ body {
   z-index: 1200;
   overflow: hidden;
 }
+
+/* Pointer cursor over stickers and emojis */
+.tgui-sticker,
+.tgui-emoji-slot,
+.tgui-emoji-slot *,
+.tgui-emoji-canvas-wrap canvas,
+.tgui-animated-sticker,
+.tgui-emoji-inline,
+.tgui-emoji-placeholder {
+  cursor: pointer;
+}
+
+/* Dice stickers */
+.tgui-dice-loading,
+.tgui-slot-machine,
+.tgui-slot-machine * {
+  cursor: pointer;
+}

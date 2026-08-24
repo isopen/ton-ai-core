@@ -276,7 +276,7 @@ export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EM
   const size = isDialog ? inlineSize : (loneEmoji ? SINGLE_EMOJI_SIZE : (emojiOnly ? EMOJI_ONLY_SIZE : inlineSize));
   // Diagnostics (enable: localStorage['tg-debug-emoji']='1')
   if (typeof localStorage !== 'undefined' && localStorage.getItem('tg-debug-emoji') === '1' && !isDialog) {
-    console.log('[gram-app] EmojiText:', JSON.stringify(text), 'len=' + text.length,
+    log.info('[gram-app] EmojiText:', JSON.stringify(text), 'len=' + text.length,
       'ents=' + (entities || []).filter((e: any) => e?._ === 'messageEntityCustomEmoji').length,
       'segs=' + segments.map((s) => s.type).join(','), 'emojiOnly=' + emojiOnly, 'lone=' + loneEmoji, 'size=' + size);
   }
