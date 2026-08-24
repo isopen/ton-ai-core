@@ -1170,6 +1170,7 @@ export class GramMediaRouter {
                         let receivedBytes = 0;
                         let chunkCount = 0;
                         let lastProgress = -1;
+                        let lastProgressAt = 0;
 
                         const streamResult = await this.transport!.startVideoStream(doc, (data: ArrayBuffer | undefined, final: boolean, fileType: string) => {
                             if (gen !== this.documentDownloadGen) return;
@@ -1186,8 +1187,10 @@ export class GramMediaRouter {
                                 ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100))
                                 : Math.min(99, chunkCount);
                             if (pct !== lastProgress) {
-                                lastProgress = pct;
-                                if (pct >= 99 || pct % 10 === 0) {
+                                const now = Date.now();
+                                if (pct >= 99 || now - lastProgressAt >= 150) {
+                                    lastProgress = pct;
+                                    lastProgressAt = now;
                                     if (this.debug) log.info('[gram-media] progress dispatch', messageId, pct);
                                     if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
                                 }
