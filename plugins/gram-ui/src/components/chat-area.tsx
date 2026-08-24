@@ -220,6 +220,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
       const mid = (e as CustomEvent).detail?.messageId;
       const match = mid === m.id || String(mid) === String(m.id);
       if (match && fxUrlRef.current && rootRef.current) {
+        console.log('[gram-app] sticker-fx overlay for msg=' + m.id + ' (tg-sticker-fx)');
         playStickerFxOverlay('fx' + m.id, fxUrlRef.current, rootRef.current.getBoundingClientRect());
       }
     };

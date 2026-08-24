@@ -37,7 +37,9 @@ export function disposeStickerFxOverlay(key: string): void {
 }
 
 export function playStickerFxOverlay(key: string, tgsUrl: string, anchor: DOMRect): void {
-  const existing = activeFxOverlays.get(key);
+    // Direct console (not logger) so it always passes the quiet filter.
+    console.log('[gram-app] playStickerFxOverlay key=' + key + ' url=' + String(tgsUrl).slice(0, 70));
+    const existing = activeFxOverlays.get(key);
   if (existing && existing.host.isConnected) {
     existing.renderer.restart?.();
     clearTimeout(existing.timer);

@@ -188,6 +188,23 @@ export class DebugComponents {
     }
 
     private writeConsole(scope: string, level: LogLevel, args: unknown[]): void {
+        // Quiet console: by default only errors and [gram-app] click-flow logs
+        // are printed. Set localStorage['tg-debug-all'] = '1' (or add ?debugAll)
+        // to restore full verbose logging.
+        let verbose = false;
+        try {
+            const ls = typeof localStorage !== 'undefined' ? localStorage : null;
+            verbose = !!ls && ls.getItem('tg-debug-all') === '1';
+            if (!verbose && typeof location !== 'undefined') {
+                verbose = new URLSearchParams(location.search).has('debugAll');
+            }
+        } catch {
+            verbose = false;
+        }
+        if (!verbose && level !== 'error') {
+            const text = args.map((a) => typeof a === 'string' ? a : '').join(' ');
+            if (!text.includes('[gram-app]')) return;
+        }
         const prefix = `[${scope}] ${level.toUpperCase()}`;
         switch (level) {
             case 'error':

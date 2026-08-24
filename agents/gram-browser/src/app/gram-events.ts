@@ -26,14 +26,12 @@ async function ensureEmojiAnimSet(): Promise<EmojiAnimSet | null> {
   if (emojiAnimSet) return emojiAnimSet;
   if (!mediaRouter) return null;
   if (!emojiAnimSetPromise) {
-    log.info('[gram-app] emoji anim set: fetching...');
     emojiAnimSetPromise = Promise.race([
       mediaRouter
         // Same cache key the gram-media pipeline uses for this set, so we hit
         // its already-fetched copy instead of issuing our own hung RPC.
         .fetchStickerSet('inputStickerSetAnimatedEmojiAnimations', { _: 'inputStickerSetAnimatedEmojiAnimations' })
         .then((res) => {
-          log.info('[gram-app] emoji anim set response: _=' + (res as any)?._ + ' docs=' + (Array.isArray(res?.documents) ? res.documents.length : 'none') + ' packs=' + (Array.isArray((res as any)?.packs) ? (res as any).packs.length : 'none'));
           if (res && Array.isArray(res.documents) && res.documents.length > 0) {
             emojiAnimSet = res as EmojiAnimSet;
             return emojiAnimSet;
@@ -139,16 +137,14 @@ function currentPeerKey(s: GramState): string {
 }
 
 async function processLocalEmojiClick(s: GramState, messageId: string, x?: number, y?: number, slotIndex?: number): Promise<void> {
-  log.info('[gram-app] local emoji click enter: msg=' + messageId + (x != null ? ' xy=' + Math.round(x) + ',' + Math.round(y!) : '') + ' slot=' + slotIndex);
   const set = await ensureEmojiAnimSet();
-  log.info('[gram-app] local emoji click: setLoaded=' + !!set);
   const cache = s.messagesCache.current.get(currentPeerKey(s));
-  const msg = cache?.find((m: Message) => String(m.id) === messageId);
+  let msg = cache?.find((m: Message) => String(m.id) === messageId);
   let text = msg?.message || '';
-  if (!text && mediaRouter && /^\d+$/.test(messageId)) {
+  if ((!msg || !text) && mediaRouter && /^\d+$/.test(messageId)) {
     try {
       const fresh = await mediaRouter.refreshMessage(Number(messageId));
-      text = fresh?.message || '';
+      if (fresh) { msg = fresh as unknown as Message; text = fresh.message || ''; }
     } catch { }
   }
   // Each emoji in the message gets its own animation pack - pick the one
@@ -200,7 +196,6 @@ async function onRemoteEmojiInteraction(s: GramState, detail: { kind?: string; e
   // the local click already played the animation.
   const selfId = s.tgui.current?.state?.selfUserId;
   if (selfId && detail.fromUserId && String(detail.fromUserId) === String(selfId)) {
-    log.info('[gram-app] emoji interaction skipped (self echo): msg=' + detail.messageId);
     return;
   }
   let taps: Array<{ t?: number; i?: number }> = [];
@@ -216,7 +211,6 @@ async function onRemoteEmojiInteraction(s: GramState, detail: { kind?: string; e
     delayMs += Math.max(0, Number(tap.t || 0)) * 1000;
     const index = Math.max(1, Math.round(Number(tap.i || 1)));
     if (isDuplicateInteraction(detail.emoticon || '', detail.messageId || '', index)) {
-      log.info('[gram-app] duplicate interaction skipped: msg=' + detail.messageId + ' i=' + index);
       continue;
     }
     const run = () => void playAnimSegment(detail.emoticon || '', index, detail.messageId || '', 'r' + Date.now() + '_' + k);

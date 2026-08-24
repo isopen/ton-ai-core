@@ -239,79 +239,32 @@ export function attachEmojiBurst(): void {
 
         // Animated-emoji taps inside chat messages play the server-provided
         // interaction animation (inputStickerSetAnimatedEmojiAnimations).
-        // Only actual emoji elements qualify - photos, videos and plain text
-        // bubbles share the same MessageBubble class and must not trigger it.
         const row = bubble.closest('[id^="msg-"]') as HTMLElement | null;
         const rowId = row ? row.id.slice(4) : '';
+        // Dispatch only when the pointer actually hit an emoji: a slot/wrap,
+        // an animated canvas, or a text leaf containing an emoji glyph.
+        // Clicks on photos/videos (TelegramImage__img etc.) stay inert even
+        // when the message has a caption with emojis.
         const emojiHit = !!target.closest('.tgui-emoji-slot, .tgui-emoji-canvas-wrap')
             || (target instanceof HTMLCanvasElement && target.classList.contains('tgui-animated-sticker'));
-        if (rowId && emojiHit && !target.closest('.tgui-reaction')) {
+        let glyphHit = false;
+        if (!emojiHit) {
+            const under = document.elementFromPoint(x, y);
+            const el = under && bubble.contains(under) ? under : null;
+            if (el && el.children.length === 0
+                && !(el instanceof HTMLImageElement) && !(el instanceof HTMLCanvasElement) && !(el instanceof HTMLVideoElement)) {
+                glyphHit = /\p{Extended_Pictographic}/u.test(el.textContent || '');
+            }
+        }
+        if (!rowId || target.closest('.tgui-reaction') || (!emojiHit && !glyphHit)) {
+            if (rowId) console.log('[gram-app] tap ignored (not an emoji element): msg=' + rowId + ' target=' + (target.className || target.tagName));
+            return;
+        }
+        {
             const slots = Array.from(bubble.querySelectorAll('.tgui-emoji-slot'));
             const slotIdx = slotEl ? slots.indexOf(slotEl) : -1;
             dispatchLocalEmojiClick(rowId, x, y, slotIdx >= 0 ? slotIdx : undefined);
-            return;
         }
-
-        if (slotEl) {
-            const own = slotEl.querySelector('canvas, img');
-            if (own instanceof HTMLCanvasElement) {
-                const v = resolveDrawableValue(own, x, y);
-                if (v) { spawnEmojiBurst(x, y, { kind: 'image', value: v }, slotEl); return; }
-            } else if (own instanceof HTMLImageElement && own.src) {
-                spawnEmojiBurst(x, y, { kind: 'image', value: own.src }, slotEl);
-                return;
-            }
-
-            const sr = slotEl.getBoundingClientRect();
-            const scopeForCanvas = slotEl.closest('.tgui-emoji-canvas-wrap') ?? bubble;
-            const val = snapshotSlotFromCanvas(sr, scopeForCanvas);
-            if (val) { spawnEmojiBurst(x, y, { kind: 'image', value: val }, slotEl); return; }
-        }
-
-        let node: Element | null = null;
-        const isEmojiDrawable = (n: Element): boolean =>
-            (n instanceof HTMLCanvasElement && n.classList.contains('tgui-animated-sticker'))
-            || !!n.closest('.tgui-emoji-slot, .tgui-emoji-canvas-wrap, .tgui-sticker-preview');
-
-        if (isEmojiDrawable(target)) {
-            node = target;
-        }
-        if (!node) {
-            const under = document.elementFromPoint(x, y);
-            if (under && bubble.contains(under) && isEmojiDrawable(under)) {
-                node = under;
-            }
-        }
-        if (!node) {
-            let bestD = Infinity;
-            for (const c of Array.from(bubble.querySelectorAll<HTMLCanvasElement | HTMLImageElement | HTMLVideoElement>('canvas, img, video'))) {
-                if (!isEmojiDrawable(c)) continue;
-                const d = centerDistance(c, x, y);
-                if (d < bestD) { bestD = d; node = c; }
-            }
-        }
-        if (!node) {
-            const under = document.elementFromPoint(x, y);
-            const glyphEl = (under && bubble.contains(under)) ? under : target;
-            const glyphMatch = ((glyphEl.textContent || '') + '')
-                .match(/\p{Extended_Pictographic}/u)
-                || (bubble.textContent || '').match(/\p{Extended_Pictographic}/u);
-            if (!glyphMatch) return;
-            spawnEmojiBurst(x, y, { kind: 'text', value: glyphMatch[0] }, bubble);
-            return;
-        }
-
-        const value = resolveDrawableValue(node, x, y);
-        if (!value) {
-            const glyphEl = node || target;
-            const glyphMatch = ((glyphEl.textContent || '') + '')
-                .match(/\p{Extended_Pictographic}/u);
-            if (!glyphMatch) return;
-            spawnEmojiBurst(x, y, { kind: 'text', value: glyphMatch[0] }, node);
-            return;
-        }
-
-        spawnEmojiBurst(x, y, { kind: 'image', value }, node);
     }, { passive: true });
 }
 
