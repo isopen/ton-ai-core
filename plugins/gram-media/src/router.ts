@@ -749,8 +749,8 @@ export class GramMediaRouter {
                 const result = await withDeadline(
                     this.transport?.startPhotoDownload(currentPhoto, sizeType, messageId, (pct: number) => {
                         const now = Date.now();
-                        if (pct === lastProgress) return;
-                        if (pct < lastProgress + 5 && now - lastProgressAt < 100) return;
+                        if (pct <= lastProgress) return;
+                        if (pct < 100 && now - lastProgressAt < 200) return;
                         lastProgress = pct;
                         lastProgressAt = now;
                         this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_PROGRESS', messageId, progress: pct });
