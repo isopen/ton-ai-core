@@ -425,11 +425,21 @@ export class GramMediaRouter {
         });
     }
 
+    private isSyntheticDocId(messageId: any): boolean {
+        return typeof messageId === 'string'
+            && (messageId.startsWith('emojipack-') || messageId.startsWith('emoji-'));
+    }
+
     dispatchDocumentUrl(messageId: any, url: string, cacheSource?: string): void {
         if (String(messageId) === EMPTY_CHAT_MSG_ID) {
             this.lastEmptyChatUrl = url;
         }
-        this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url, cacheSource });
+        // Synthetic ids ('emojipack-*', 'emoji-*') are not chat messages;
+        // dispatching them churns the whole messages store on every emoji
+        // click which can remount rows mid-interaction.
+        if (!this.isSyntheticDocId(messageId)) {
+            this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url, cacheSource });
+        }
     }
 
     get lastEmptyChatUrlValue(): string | null {
@@ -878,7 +888,7 @@ export class GramMediaRouter {
         if (isEmoji) {
             const cachedUrl = isNoMediaCache() ? undefined : this.emojiUrlCache.get(messageId);
             if (cachedUrl) {
-                this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
+                if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
                 this.dispatchDocumentUrl(messageId, cachedUrl);
                 return;
             }
@@ -897,7 +907,7 @@ export class GramMediaRouter {
         if (priority > 0) this.documentRetryCounts.delete(messageId);
         this.documentPending.set(messageId, Date.now());
         if (this.debug) log.info('[gram-media] tg-download-document messageId=' + messageId + ' priority=' + priority + ' ctx=' + (ctx || 'chat') + ' docId=' + document.id);
-        this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
+        if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
         const mime = (document.mime_type || 'application/octet-stream').toLowerCase();
         if (!isEmoji && mime.startsWith('video/') && this.videoStreamInflight.has(messageId)) {
             if (this.debug) log.info('[gram-media] video already streaming, skip messageId=' + messageId);
@@ -1179,7 +1189,7 @@ export class GramMediaRouter {
                                 lastProgress = pct;
                                 if (pct >= 99 || pct % 10 === 0) {
                                     if (this.debug) log.info('[gram-media] progress dispatch', messageId, pct);
-                                    this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
+                                    if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
                                 }
                             }
                         });
@@ -1187,7 +1197,7 @@ export class GramMediaRouter {
 
                         if (chunkCount === 0) throw new Error('No data received');
 
-                        this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
+                        if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
 
                         if (mseFed && !mseFailed) {
                             mseEndRequested = true;
@@ -1376,7 +1386,7 @@ export class GramMediaRouter {
         }
         this.thumbInflight.add(thumbKey);
         if (this.debug) log.info('[gram-media] tg-download-document-thumb START messageId=' + messageId + ' thumbType=' + thumbType + ' docId=' + document.id);
-        this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
+        if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
         const commit = (bytes: ArrayBuffer, freshDoc?: any): void => {
             if (!bytes.byteLength) return;
             const url = this.bytesToBlobUrl(bytes, thumbType === 'f' ? 'application/x-tgsticker' : 'image/jpeg');
@@ -1421,7 +1431,7 @@ export class GramMediaRouter {
             }
         } finally {
             this.thumbInflight.delete(thumbKey);
-            this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
+            if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
         }
     }
 

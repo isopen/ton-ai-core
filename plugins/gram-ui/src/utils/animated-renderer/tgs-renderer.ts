@@ -120,6 +120,11 @@ export class TgsRenderer implements IAnimatedRenderer {
   private worker!: MediaWorker;
 
   private frames: Frame[] = [];
+  // Frames that rendered fully transparent. Painting them over already
+  // visible content blanks the emoji/sticker (loop wrap or restart at an
+  // empty frame 0) — those paints are skipped instead.
+  private emptyFrameIndexes = new Set<number>();
+  private hasVisiblePaint = false;
 
   private framesCount?: number;
 
@@ -831,6 +836,13 @@ export class TgsRenderer implements IAnimatedRenderer {
         return;
       }
       view.isDirty = false;
+      if (this.emptyFrameIndexes.has(frameIndex) && this.hasVisiblePaint) {
+        // Fully transparent frame with content already on the canvas:
+        // keep the last painted pixels instead of blanking the slot.
+        onFrame?.(frameIndex);
+        this.lastPaintAt = Date.now();
+        return;
+      }
       if (view.isSharedCanvas) {
         const c = this.getScaledCoords(view);
         const prev = view.prevScaledCoords;
@@ -844,6 +856,7 @@ export class TgsRenderer implements IAnimatedRenderer {
         ctx.clearRect(0, 0, this.imgSize, this.imgSize);
         ctx.drawImage(frame, 0, 0);
       }
+      this.hasVisiblePaint = true;
       onFrame?.(frameIndex);
       this.lastPaintAt = Date.now();
       this.heartbeatFrozenReinit = false;
@@ -941,7 +954,7 @@ export class TgsRenderer implements IAnimatedRenderer {
           this.frameStallTimer = 0;
         }
         this.consecutiveFrameErrors = 0;
-        this.onFrameLoad(res.frameIndex, res.imageBitmap);
+        this.onFrameLoad(res.frameIndex, res.imageBitmap, !!res.empty);
       })
       .catch((err: Error) => {
         if (this.frameStallTimer) {
@@ -1058,7 +1071,9 @@ export class TgsRenderer implements IAnimatedRenderer {
     }
   }
 
-  private onFrameLoad(frameIndex: number, imageBitmap: ImageBitmap) {
+  private onFrameLoad(frameIndex: number, imageBitmap: ImageBitmap, empty = false) {
+    if (empty) this.emptyFrameIndexes.add(frameIndex);
+    else this.emptyFrameIndexes.delete(frameIndex);
     if (this.frames[frameIndex] !== WAITING) {
       debugLog.info('[tgs] frame CLOSED', this.renderId, 'idx=' + frameIndex, 'slot=' + String(this.frames[frameIndex]));
       imageBitmap.close();

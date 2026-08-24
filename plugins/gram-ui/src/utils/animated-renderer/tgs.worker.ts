@@ -206,7 +206,7 @@ function inflateAndDecode(buf: Uint8Array): Promise<string> {
   return inflateTgs(buf);
 }
 
-async function renderFrames(renderId: string, frameIndex: number): Promise<{ frameIndex: number; imageBitmap: ImageBitmap }> {
+async function renderFrames(renderId: string, frameIndex: number): Promise<{ frameIndex: number; imageBitmap: ImageBitmap; empty?: boolean }> {
   const entry = (await waitForLoads(renderId));
   if (!entry) throw new Error('TGS anim not found: ' + renderId);
   const t0 = Date.now();
@@ -218,9 +218,14 @@ async function renderFrames(renderId: string, frameIndex: number): Promise<{ fra
     const ms = Date.now() - t0;
     const imageData = off.getContext('2d')!.getImageData(0, 0, entry.imgSize, entry.imgSize);
     logFrameDiff(entry.anim, frameIndex, entry.framesCount, imageData);
+    const d = imageData.data;
+    let empty = true;
+    for (let i = 3; i < d.length; i += 4) {
+      if (d[i] !== 0) { empty = false; break; }
+    }
     const bitmap = await createImageBitmap(imageData);
     log.info('[tgs-worker] render done', renderId, 'idx=' + frameIndex, ms + 'ms');
-    return { frameIndex, imageBitmap: bitmap };
+    return { frameIndex, imageBitmap: bitmap, empty };
   } catch (err) {
     log.error('[tgs-worker] render FAILED', renderId, 'idx=' + frameIndex, 'srcFr=' + srcFrame, (err as Error)?.message || err);
     throw err;

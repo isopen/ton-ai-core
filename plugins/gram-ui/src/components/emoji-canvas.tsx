@@ -3,6 +3,9 @@ import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedSticker } from './animated-sticker.js';
 import { matchEmojiRuns, requestEmojiDownload } from './emoji-store.js';
 import { inflateTgs } from '@ton-ai/tgs';
+import { getLogger } from '@ton-ai/gram-debug';
+
+const log = getLogger('gram-ui:emoji-canvas');
 
 const EMOJI_GZIP_MAGIC: [number, number] = [0x1f, 0x8b];
 const MISSING_EMOJI_STRIKE_LIMIT = 8;
@@ -392,9 +395,9 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
       urlKinds.set(url, k);
       resolvedKinds.set(did, k);
       trackLastUrl(did, url);
-      if (revokedUrls.has(url)) console.log('[gram-app] emoji-received-revoked-url doc=' + did);
+      if (revokedUrls.has(url)) log.info('[gram-app] emoji-received-revoked-url doc=' + did);
       setFailedDocs((prev) => {
-        if (prev[did]) console.log('[gram-app] emoji-recovered doc=' + did);
+        if (prev[did]) log.info('[gram-app] emoji-recovered doc=' + did);
         return prev[did] ? { ...prev, [did]: false } : prev;
       });
       setKinds((prev) => (prev[did] === k ? prev : { ...prev, [did]: k }));
@@ -710,7 +713,7 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
           const hadPainted = everPaintedDocs.has(docId);
           // Renderer death must not blank a visible emoji: keep the last
           // painted frame while tg-emoji-bad -> redownload -> new url runs.
-          console.log('[gram-app] emoji-slot-error doc=' + docId + ' keptFrame=' + hadPainted);
+          log.info('[gram-app] emoji-slot-error doc=' + docId + ' keptFrame=' + hadPainted);
           if (!hadPainted) setFailedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
           requestEmojiDownload(docId, s.value, 2);
         };
