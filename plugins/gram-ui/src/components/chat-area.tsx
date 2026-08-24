@@ -140,7 +140,9 @@ function GreetingSticker({ documentUrls }: { documentUrls: Record<number, string
 function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; documentUrls: Record<number, string>; documentProgress?: Record<number, number> }) {
   const doc = m.media?.document;
   const emoji = getStickerEmoji(doc);
-  const isTgs = (doc?.mime_type || '').toLowerCase() === 'application/x-tgsticker';
+  const mimeLc = (doc?.mime_type || '').toLowerCase();
+  const isTgs = mimeLc === 'application/x-tgsticker';
+  const isVideoSticker = mimeLc.startsWith('video/');
   const url = documentUrls[m.id] || '';
   const progress = documentProgress?.[m.id] ?? -1;
   const isLoading = !url && progress >= 0 && progress < 100;
@@ -268,15 +270,17 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
         ) : null}
         {showTgs
           ? <AnimatedSticker tgsUrl={url} renderId={renderId} size={150} noPlay={!playing} onError={() => setAnimFailed(true)} />
-          : showImg
-            ? <img src={url} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-            : isLoading
-              ? <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
-                  <div style={`width:${progress}%;height:4px;background:#fff;border-radius:2px`} />
-                </div>
-              : downloadFailed && !staticThumb?.url
-                ? <span class="tgui-sticker-emoji">{emoji || t(S.STICKER_FALLBACK)}</span>
-                : null
+          : showImg && isVideoSticker
+            ? <video src={url} autoplay loop muted playsinline preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            : showImg
+              ? <img src={url} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              : isLoading
+                ? <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+                    <div style={`width:${progress}%;height:4px;background:#fff;border-radius:2px`} />
+                  </div>
+                : downloadFailed && !staticThumb?.url
+                  ? <span class="tgui-sticker-emoji">{emoji || t(S.STICKER_FALLBACK)}</span>
+                  : null
         }
       </div>
       <div class="tgui-sticker-meta">
