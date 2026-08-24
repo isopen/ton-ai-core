@@ -515,19 +515,29 @@ export class GramMediaRouter {
     }
 
     async refreshMessage(messageId: number | string): Promise<any> {
-        if (typeof messageId !== 'number' || !Number.isFinite(messageId)) return null;
+        const id = typeof messageId === 'string' && /^\d+$/.test(messageId.trim()) ? Number(messageId) : messageId;
+        if (typeof id !== 'number' || !Number.isFinite(id)) return null;
         const peer = this.host.selectedPeerRef.current;
         if (peer?.type === 'channel' && peer.accessHash) {
-            const chResult = await this.transport?.callRpc('channels.getMessages', {
-                channel: { _: 'inputChannel', channel_id: BigInt(peer.id), access_hash: BigInt(peer.accessHash) },
-                id: [{ _: 'inputMessageID', id: messageId }],
-            });
-            return (chResult?.messages || []).find((m: any) => Number(m.id) === Number(messageId));
+            try {
+                const chResult = await this.transport?.callRpc('channels.getMessages', {
+                    channel: { _: 'inputChannel', channel_id: BigInt(peer.id), access_hash: BigInt(peer.accessHash) },
+                    id: [{ _: 'inputMessageID', id }],
+                });
+                const hit = (chResult?.messages || []).find((m: any) => Number(m.id) === Number(id));
+                if (hit) return hit;
+            } catch {
+                // fall through to the common message box lookup
+            }
         }
-        const msgsResult = await this.transport?.callRpc('messages.getMessages', {
-            id: [{ _: 'inputMessageID', id: messageId }],
-        });
-        return (msgsResult?.messages || []).find((m: any) => Number(m.id) === Number(messageId));
+        try {
+            const msgsResult = await this.transport?.callRpc('messages.getMessages', {
+                id: [{ _: 'inputMessageID', id }],
+            });
+            return (msgsResult?.messages || []).find((m: any) => Number(m.id) === Number(id)) || null;
+        } catch {
+            return null;
+        }
     }
 
     async tgsToJsonUrl(bytes: ArrayBuffer | Uint8Array): Promise<string> {
