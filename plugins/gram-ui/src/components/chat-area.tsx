@@ -947,6 +947,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
               const out = m.out;
               const status = msgStatus(last, readOutboxMaxId);
               const timeStr = formatMessageTime(last.date || m.date);
+              const capMsg = last;
               const openAlbum = (at: number) => {
                 if (viewerItems.length > 0) setViewer({ items: viewerItems, index: Math.min(at, viewerItems.length - 1) });
               };
@@ -958,7 +959,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
                       ? <div class="tgui-msg-sender" style={`color:${senderColor(m.sender || 'U')}`}>{m.sender}</div>
                       : null}
                     <div class="MessageBubble MessageBubble_photo MessageBubble_album">
-                      <MediaCollage items={items} timeStr={timeStr} status={status} caption={last.message || ''} captionEntities={last.entities} captionDocumentUrls={emojiUrls} onOpenAt={openAlbum} />
+                      <MediaCollage items={items} timeStr={timeStr} status={status} caption={capMsg.message || ''} captionEntities={capMsg.entities} captionDocumentUrls={emojiUrls} onOpenAt={openAlbum} out={out} />
                     </div>
                   </div>
                 </div>

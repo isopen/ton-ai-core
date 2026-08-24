@@ -5098,3 +5098,13 @@ body {
 .tgui-fwd-header_link:hover b {
   text-decoration: underline;
 }
+
+/* Album caption sits on the same bubble background as text messages */
+.MediaCollage__caption {
+  background: var(--bubble-in);
+  border-radius: 0 0 16px 4px;
+}
+.MediaCollage__caption_out {
+  background: var(--bubble-out);
+  border-radius: 0 0 4px 16px;
+}

@@ -51,14 +51,16 @@ export function MediaCollage({
   captionEntities,
   captionDocumentUrls,
   onOpenAt,
+  out = false,
 }: {
   items: MediaCollageItem[];
   timeStr: string;
   status: 'pending' | 'sent' | 'delivered' | 'read';
   caption?: string;
   captionEntities?: any[];
-  captionDocumentUrls?: Record<number, string>;
+  captionDocumentUrls?: Record<number | string, string>;
   onOpenAt?: (index: number) => void;
+  out?: boolean;
 }) {
   const n = items.length;
   const visible = items.slice(0, MAX_VISIBLE);
@@ -214,7 +216,11 @@ export function MediaCollage({
         </div>
       ) : null}
     </div>
-    <MediaCaption text={caption} entities={captionEntities} documentUrls={captionDocumentUrls || {}} timeStr={timeStr} out={true} status={status} />
+    {caption ? (
+      <div class={'MediaCollage__caption' + (out ? ' MediaCollage__caption_out' : '')} style={`max-width:${layout.width}px`}>
+        <MediaCaption text={caption} entities={captionEntities} documentUrls={captionDocumentUrls || {}} timeStr={timeStr} out={out} status={status} />
+      </div>
+    ) : null}
   </Fragment>
   );
 }
