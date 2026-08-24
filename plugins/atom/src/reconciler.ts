@@ -473,7 +473,7 @@ function reconcileChildren(
   }
 
   const usedKeys = new Set<string | number>();
-  interface PatchEntry { nodes: Node[] }
+  interface PatchEntry { nodes: Node[]; isNew: boolean }
   const patches: PatchEntry[] = [];
 
   for (let i = 0; i < newLen; i++) {
@@ -488,14 +488,14 @@ function reconcileChildren(
         const newDom = patch(oldDom, oldEntry.vnode, newChild);
         newChild.dom = newDom;
         const nodes = newDom === oldDom ? oldEntry.nodes : findAllDomNodes(newChild);
-        patches.push({ nodes });
+        patches.push({ nodes, isNew: false });
       } else {
         for (const node of oldEntry.nodes) {
           if (node.parentNode) node.parentNode.removeChild(node);
         }
         const newDom = createDOM(newChild);
         newChild.dom = newDom;
-        patches.push({ nodes: findAllDomNodes(newChild) });
+        patches.push({ nodes: findAllDomNodes(newChild), isNew: true });
       }
     } else if (oldEntry) {
       log.warn('[recon] DUP-KEY key=' + String(key) + ' parent=' + (parentEl as HTMLElement).className + ' oldNodes=' + oldEntry.nodes.length);
@@ -504,11 +504,11 @@ function reconcileChildren(
       }
       const newDom = createDOM(newChild);
       newChild.dom = newDom;
-      patches.push({ nodes: findAllDomNodes(newChild) });
+      patches.push({ nodes: findAllDomNodes(newChild), isNew: true });
     } else {
       const newDom = createDOM(newChild);
       newChild.dom = newDom;
-      patches.push({ nodes: findAllDomNodes(newChild) });
+      patches.push({ nodes: findAllDomNodes(newChild), isNew: true });
     }
   }
 
@@ -523,6 +523,13 @@ function reconcileChildren(
   }
 
   if (patches.length === 0) return;
+
+  // When all children were patched in place (no new nodes), their DOM
+  // positions are already correct — reordering against parentEl.firstChild
+  // would move patched nodes past non-patched siblings (e.g. elements
+  // rendered before this fragment), destroying CSS animations.
+  const hasNewNodes = patches.some(p => p.isNew);
+  if (!hasNewNodes) return;
 
   let cur = parentEl.firstChild;
   for (let i = 0; i < patches.length; i++) {
