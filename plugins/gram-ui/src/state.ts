@@ -137,7 +137,8 @@ export function reducer(state: AppState, action: UIAction): AppState {
         };
         const photo = updPhoto(media.photo);
         const webpage = media.webpage ? { ...media.webpage, photo: updPhoto(media.webpage.photo) } : media.webpage;
-        return { ...m, media: { ...media, photo, webpage } };
+        const attachedMedia = media.attached_media ? { ...media.attached_media, photo: updPhoto(media.attached_media.photo) } : media.attached_media;
+        return { ...m, media: { ...media, photo, webpage, attached_media: attachedMedia } };
       });
       if (!targetFound || !changed) return state;
       return {

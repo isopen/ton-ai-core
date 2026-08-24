@@ -31,12 +31,16 @@ import { WebPageBubble } from './link-preview.js';
 import { MediaCollage, type MediaCollageItem } from './media-collage.js';
 import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
 import { AnimatedEmoji } from './emoji-text.js';
+import { PollBubble } from './poll-bubble.js';
 import { MediaCaption } from './media-caption.js';
 import { buildImageSpec, firstMissingSizeType, chatPhotoPrio, isInlinePhotoSize } from './photo-spec.js';
 import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 
 const photoLog = getLogger('gram-ui:photo');
 const fxLog = getLogger('gram-ui:sticker-fx');
+const fallbackLog = getLogger('gram-ui:fallback');
+
+const loggedMsgTypes = new Set<string>();
 
 const STICKER_DOWNLOAD_RETRY_MS = 2500;
 const STICKER_DOWNLOAD_MAX_ATTEMPTS = 8;
@@ -83,6 +87,7 @@ function estimateRowHeight(row: AlbumRow): number {
   if (t === 'photo') return 380;
   if (t === 'sticker') return 220;
   if (t === 'dice') return 240;
+  if (t === 'poll') return 220;
   if (t === 'video') return 340;
   if (t === 'document') return 80;
   if (m.media?.webpage) return 130;
@@ -617,6 +622,10 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
   const out = selfPeer ? true : m.out;
   const status = msgStatus(m, readOutboxMaxId);
   const mediaType = getMediaType(m.media);
+  if (!loggedMsgTypes.has(String(m.id))) {
+    loggedMsgTypes.add(String(m.id));
+    fallbackLog.info('[msg-json] msg=' + m.id + ' ' + JSON.stringify(m));
+  }
   const senderStr = m.sender || 'U';
   const color = senderColor(senderStr);
   const isLinkMsg = mediaType === 'webpage' || isUrlMessage(m);
@@ -656,10 +665,18 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
         ? <div class="tgui-msg-sender" style={`color:${color}`}>{m.sender}</div>
         : null}
       {fwdHeader}
+      {(() => {
+        if (m.media && !['sticker', 'dice', 'poll', 'photo', 'image', 'video', 'webpage'].includes(mediaType)) {
+          fallbackLog.info('[fallback] msg=' + m.id + ' mediaType=' + mediaType + ' media=' + JSON.stringify(m.media).slice(0, 400));
+        }
+        return null;
+      })()}
       {mediaType === 'sticker'
         ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} documentUrls={rowUrls} documentProgress={rowProgress} />
         : mediaType === 'dice'
           ? <DiceBubble m={m} timeStr={timeStr} out={out} status={status} />
+          : mediaType === 'poll'
+            ? <PollBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} onOpenPhoto={onOpenPhoto} documentUrls={emojiUrls} />
           : mediaType === 'photo' || mediaType === 'image'
           ? <PhotoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} cacheSource={photoSource} entities={m.entities} documentUrls={rowUrls} onOpenPhoto={onOpenPhoto} />
           : mediaType === 'video' && isAnimatedMedia(m.media)
@@ -917,6 +934,10 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
             const { onReact, onOpenPhoto, onOpenPeer } = getRowHandlers(m.id);
             const daySep = showDaySep ? <div key={`day-${m.id}`} class="tgui-day-sep"><Text variant="caption" className="tgui-day-sep-text">{formatDaySeparator(m.date)}</Text></div> : null;
             if (isAlbum) {
+              if (!loggedMsgTypes.has('album:' + m.id)) {
+                loggedMsgTypes.add('album:' + m.id);
+                fallbackLog.info('[types] album row=' + m.id + ' msgs=[' + row.msgs.map((mm: any) => mm.id + ':' + getMediaType(mm.media) + ':' + (mm.media?._ || '-') + ':sizes=' + (mm.media?.photo?.sizes?.length || 0)).join(', ') + ']');
+              }
               const items: MediaCollageItem[] = row.msgs.map(mm => {
                 if (getMediaType(mm.media) === 'video') {
                   const doc = mm.media?.document;

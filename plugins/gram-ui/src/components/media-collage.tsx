@@ -10,6 +10,11 @@ import { calculateAlbumLayout } from './photo-album-layout.js';
 import { firstMissingSizeType, chatPhotoPrio, isInlinePhotoSize } from './photo-spec.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
+import { getLogger } from '@ton-ai/gram-debug';
+
+const collageLog = getLogger('gram-ui:fallback');
+
+const collageSigSeen = new Set<string>();
 
 export interface MediaCollageItem {
   m: any;
@@ -75,6 +80,16 @@ export function MediaCollage({
   });
   const layout = calculateAlbumLayout(ratios, ALBUM_MAX_WIDTH, GUTTER);
 
+  const stateSig = visible.map((item) => {
+    const p = item.m?.media?.photo;
+    const urls = (p?.sizes || []).filter((s: any) => s.url || s.src).map((s: any) => s.type).join(',');
+    return item.m?.id + '[urls=' + (urls || '-') + ',spec=' + (item.image ? (item.image.original ? 'orig' : item.image.medium ? 'med' : 'thumb') : 'null') + ']';
+  }).join(' | ');
+  if (!collageSigSeen.has(stateSig)) {
+    collageSigSeen.add(stateSig);
+    collageLog.info('[collage-state] ' + stateSig);
+  }
+
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [attachTick, setAttachTick] = useState(0);
   const handleRef = useCallback((el: HTMLDivElement | null) => {
@@ -91,6 +106,7 @@ export function MediaCollage({
     const requestedThumbs = new Set<number>();
 
     const requestMissing = () => {
+      const lines: string[] = [];
       for (const item of visible) {
         const v = item.video;
         if (v) {
@@ -107,12 +123,14 @@ export function MediaCollage({
         const photo = item.m?.media?.photo;
         if (!photo) continue;
         const need = photoNeed(photo);
+        lines.push(item.m.id + ':need=' + (need ? need.sizeType : 'null') + ':urls=' + (photo.sizes || []).filter((s: any) => s.url || s.src).length + '/' + (photo.sizes || []).length);
         if (need) {
           window.dispatchEvent(new CustomEvent('tg-download-photo', {
             detail: { photo, sizeType: need.sizeType, messageId: item.m.id },
           }));
         }
       }
+      if (lines.length > 0) collageLog.info('[collage-req] ' + lines.join(' | '));
     };
 
     const obs = new IntersectionObserver(([entry]) => {

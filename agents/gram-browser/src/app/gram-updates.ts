@@ -4,7 +4,7 @@ import type { GramState } from './gram-state';
 import {
   addLog, setMessageCache, deleteMessageCache, scheduleDialogsFlush,
   scheduleMessagesFlush, applyReadReceipt, addOrphanedDialog,
-  fetchPeerInfo, dispatchAvatarDownload, resolveFwdHeader,
+  fetchPeerInfo, dispatchAvatarDownload, resolveFwdHeader, applyUpdateMessagePoll,
 } from './gram-utils';
 import { isTypingUpdate, handleTypingUpdate } from './gram-typing';
 import { getLogger } from '@ton-ai/gram-debug';
@@ -136,6 +136,7 @@ export function createHandleUpdate(s: GramState) {
         if (pushMsg) {
           processNewMsg(pushMsg);
         }
+        if (u._ === 'updateShort' && u.update?._ === 'updateMessagePoll') applyUpdateMessagePoll(s, u.update);
         if (u._ === 'updateShort' && u.update?._ === 'updateNewMessage') processNewMsg(u.update.message);
         if (u._ === 'updateShort' && u.update?._ === 'updateNewChannelMessage') processNewMsg(u.update.message);
         if (u._ === 'updateShort' && u.update?._ === 'updateEditMessage') processNewMsg(u.update.message);
@@ -183,6 +184,7 @@ export function createHandleUpdate(s: GramState) {
         if (u._ === 'updateShort' && u.update?._ === 'updateReadHistoryInbox') { handleReadHistoryInbox(u.update); }
         if ((u._ === 'updates' || u._ === 'updatesCombined') && Array.isArray(u.updates)) {
           for (const upd of u.updates) {
+            if (upd._ === 'updateMessagePoll') applyUpdateMessagePoll(s, upd);
             if (upd._ === 'updateNewMessage' || upd._ === 'updateNewChannelMessage') processNewMsg(upd.message);
             if (upd._ === 'updateEditMessage' || upd._ === 'updateEditChannelMessage') processNewMsg(upd.message);
             const applyMsgDeletions = (peerKey: string, deletedIds: Set<number>): boolean => {

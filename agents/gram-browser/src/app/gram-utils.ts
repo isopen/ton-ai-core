@@ -22,6 +22,30 @@ export function deleteMessageCache(s: GramState, peerKey: string) {
   dbDel(MESSAGE_CACHE_PREFIX + peerKey).catch(() => {});
 }
 
+/** Blob URLs are valid only within the page session that created them.
+ *  Cached messages may carry dead ones - strip them so the download
+ *  pipeline refetches fresh bytes instead of showing broken images. */
+function scrubSessionMedia(msgs: Message[]): Message[] {
+  return msgs.map((m: any) => {
+    const photo = m?.media?.photo;
+    if (!photo?.sizes) return m;
+    return {
+      ...m,
+      media: {
+        ...m.media,
+        photo: {
+          ...photo,
+          progress: undefined,
+          failed: undefined,
+          sizes: photo.sizes.map((s: any) =>
+            s && (s.url || s.src) ? { ...s, url: undefined, src: undefined } : s
+          ),
+        },
+      },
+    };
+  });
+}
+
 export async function loadMessageCache(s: GramState) {
   const keys = await dbKeys(MESSAGE_CACHE_PREFIX);
   if (keys.length === 0) return;
@@ -33,9 +57,10 @@ export async function loadMessageCache(s: GramState) {
     }
     try {
       const peerKey = k.slice(MESSAGE_CACHE_PREFIX.length);
-      s.messagesCache.current.set(peerKey, msgs);
+      const cleaned = scrubSessionMedia(msgs);
+      s.messagesCache.current.set(peerKey, cleaned);
       s.historyInitRef.current.add(peerKey);
-      const positiveIds = msgs.filter(m => Number(m.id) > 0).map(m => Number(m.id));
+      const positiveIds = cleaned.filter(m => Number(m.id) > 0).map(m => Number(m.id));
       if (positiveIds.length > 0) s.maxFetchedIdRef.current.set(peerKey, Math.min(...positiveIds));
     } catch {
       await dbDel(k);
@@ -345,4 +370,33 @@ export function resolveFwdHeader(
   }
   if (!name) name = String(fwd.from_name || fwd.post_author || '');
   return { fwdName: name, fwdPeer: peer };
+}
+
+/** Applies an updateMessagePoll (from sendVote response or live updates) to the
+ *  matching cached message of the currently open chat. */
+export function applyUpdateMessagePoll(s: GramState, upd: any): boolean {
+  if (!upd || upd._ !== 'updateMessagePoll') return false;
+  const p = s.selectedPeerRef.current;
+  if (!p) return false;
+  const key = `${p.type}_${p.id}`;
+  const msgs = s.messagesCache.current.get(key);
+  if (!Array.isArray(msgs)) return false;
+  let changed = false;
+  const next = msgs.map((mm) => {
+    if (mm.media?._ !== 'messageMediaPoll') return mm;
+    if (String(mm.media?.poll?.id || '') !== String(upd.poll_id ?? '')) return mm;
+    changed = true;
+    return {
+      ...mm,
+      media: {
+        ...mm.media,
+        ...(upd.poll ? { poll: upd.poll } : {}),
+        ...(upd.results ? { results: upd.results } : {}),
+      },
+    };
+  });
+  if (!changed) return false;
+  setMessageCache(s, key, next as Message[]);
+  scheduleMessagesFlush(s);
+  return true;
 }

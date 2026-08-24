@@ -25,15 +25,15 @@
             "level": "info"
         },
         "gram-media": {
-            "enabled": true,
+            "enabled": false,
             "level": "debug"
         },
         "gram-browser": {
-            "enabled": true,
+            "enabled": false,
             "level": "debug"
         },
         "gram-ui": {
-            "enabled": true,
+            "enabled": false,
             "level": "info"
         },
         "gram-ui:slot": {
@@ -76,8 +76,12 @@
             "enabled": false,
             "level": "debug"
         },
+        "gram-ui:fallback": {
+            "enabled": false,
+            "level": "info"
+        },
         "fps": {
-            "enabled": true,
+            "enabled": false,
             "level": "info"
         }
     }

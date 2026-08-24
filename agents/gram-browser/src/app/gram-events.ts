@@ -7,6 +7,9 @@ import type { MediaMessageLike } from '@ton-ai/gram-media';
 import type { GramState } from './gram-state';
 import { DIALOG_CACHE_KEY } from './gram-constants';
 import type { Message } from '@ton-ai/gram-ui';
+import { applyUpdateMessagePoll } from './gram-utils';
+
+const fallbackLog = getLogger('gram-ui:fallback');
 
 const log = getLogger('gram-browser');
 
@@ -269,6 +272,34 @@ export function setupEventListeners(s: GramState): void {
     });
   };
   window.addEventListener('tg-clear-cache', onClearCache);
+  const hexToBuf = (hex: string): Buffer => {
+    const out = new Uint8Array(Math.floor(hex.length / 2));
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    return Buffer.from(out);
+  };
+  const onSendPollVote = async (ev: Event) => {
+    const d: any = (ev as CustomEvent).detail || {};
+    const p = s.selectedPeerRef.current;
+    if (!p || !d.messageId || !Array.isArray(d.options) || d.options.length === 0) return;
+    try {
+      const inputPeer = p.type === 'user'
+        ? { _: 'inputPeerUser', user_id: BigInt(p.id), access_hash: BigInt(p.accessHash || '0') }
+        : p.type === 'channel'
+          ? { _: 'inputPeerChannel', channel_id: BigInt(p.id), access_hash: BigInt(p.accessHash || '0') }
+          : { _: 'inputPeerChat', chat_id: BigInt(p.id) };
+      const res: any = await s.tgService.current?.callRpc('messages.sendVote', {
+        peer: inputPeer,
+        msg_id: Number(d.messageId),
+        options: (d.options as string[]).map(hexToBuf),
+      });
+      if (Array.isArray(res?.updates)) {
+        for (const u of res.updates) applyUpdateMessagePoll(s, u);
+      }
+    } catch (e: any) {
+      log.error('[poll] sendVote error:', e?.message);
+    }
+  };
+  window.addEventListener('tg-send-poll-vote', onSendPollVote);
   const onInspectCache = async () => {
     let entries: Array<{ key: string; value: string }> = [];
     try {
@@ -433,6 +464,9 @@ export function setupEventListeners(s: GramState): void {
   mediaRouter = new GramMediaRouter({
     tgService: s.tgService,
     dispatch: (action: any) => {
+      if (action?.type === 'UPDATE_MESSAGE_PHOTO' && typeof action.messageId === 'number') {
+        fallbackLog.info('[photo-upd] msg=' + action.messageId + ' sizeType=' + action.sizeType + ' url=' + (action.url ? 'len' + String(action.url).length : 'EMPTY') + (action.failed ? ' FAILED' : ''));
+      }
       if (action?.type === 'UPDATE_MESSAGE_PHOTO' && typeof action.messageId === 'string' && action.messageId.startsWith('avatar_') && action.url) {
         const m = /^avatar_(user|chat|channel)_(\d+)$/.exec(action.messageId);
         if (m) {

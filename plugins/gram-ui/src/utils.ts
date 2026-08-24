@@ -45,6 +45,7 @@ export function formatDaySeparator(date?: number): string {
 export function getMediaType(media: any): string {
     if (!media) return 'none';
     if (media._ === 'messageMediaDice') return 'dice';
+    if (media._ === 'messageMediaPoll') return 'poll';
     if (media._ === 'messageMediaPhoto') {
         if (media.photo?._ === 'photoEmpty' || !media.photo) return 'none';
         return 'photo';
