@@ -434,12 +434,10 @@ export class GramMediaRouter {
         if (String(messageId) === EMPTY_CHAT_MSG_ID) {
             this.lastEmptyChatUrl = url;
         }
-        // Synthetic ids ('emojipack-*', 'emoji-*') are not chat messages;
-        // dispatching them churns the whole messages store on every emoji
-        // click which can remount rows mid-interaction.
-        if (!this.isSyntheticDocId(messageId)) {
-            this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url, cacheSource });
-        }
+        // Synthetic ids ('emojipack-*', 'emoji-*') are legitimate documentUrls
+        // keys consumed by the emoji pipeline; the store reducer dedupes
+        // no-op updates and never touches the messages array for them.
+        this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url, cacheSource });
     }
 
     get lastEmptyChatUrlValue(): string | null {
@@ -750,7 +748,7 @@ export class GramMediaRouter {
                     this.transport?.startPhotoDownload(currentPhoto, sizeType, messageId, (pct: number) => {
                         const now = Date.now();
                         if (pct <= lastProgress) return;
-                        if (pct < 100 && now - lastProgressAt < 200) return;
+                        if (pct < lastProgress + 5 && now - lastProgressAt < 200) return;
                         lastProgress = pct;
                         lastProgressAt = now;
                         this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_PROGRESS', messageId, progress: pct });
@@ -1170,7 +1168,6 @@ export class GramMediaRouter {
                         let receivedBytes = 0;
                         let chunkCount = 0;
                         let lastProgress = -1;
-                        let lastProgressAt = 0;
 
                         const streamResult = await this.transport!.startVideoStream(doc, (data: ArrayBuffer | undefined, final: boolean, fileType: string) => {
                             if (gen !== this.documentDownloadGen) return;
@@ -1187,10 +1184,8 @@ export class GramMediaRouter {
                                 ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100))
                                 : Math.min(99, chunkCount);
                             if (pct !== lastProgress) {
-                                const now = Date.now();
-                                if (pct >= 99 || now - lastProgressAt >= 150) {
+                                if (pct >= 99 || pct % 10 === 0) {
                                     lastProgress = pct;
-                                    lastProgressAt = now;
                                     if (this.debug) log.info('[gram-media] progress dispatch', messageId, pct);
                                     if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
                                 }
