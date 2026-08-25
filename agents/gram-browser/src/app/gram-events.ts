@@ -63,12 +63,12 @@ function findAnimPack(emoticon: string): any[] | null {
 }
 
 function emitPlayEmojiFx(messageId: string, url: string, key: string, x?: number, y?: number): void {
-  log.info('[gram-app] emit tg-play-emoji-fx: msg=' + messageId + ' key=' + key + ' url=' + url.slice(0, 60));
-  window.dispatchEvent(new CustomEvent('tg-play-emoji-fx', { detail: { messageId, url, key, x, y } }));
+  log.info('[gram-app] emit tg-interaction-server-fx: msg=' + messageId + ' key=' + key + ' url=' + url.slice(0, 60));
+  window.dispatchEvent(new CustomEvent('tg-interaction-server-fx', { detail: { messageId, url, key, x, y } }));
 }
 
 function emitFxFallback(messageId: string, x?: number, y?: number): void {
-  window.dispatchEvent(new CustomEvent('tg-emoji-fx-fallback', { detail: { messageId, x, y } }));
+  window.dispatchEvent(new CustomEvent('tg-interaction-local', { detail: { messageId, x, y } }));
 }
 
 function downloadAnimDoc(docId: string, doc: any): Promise<string> {
@@ -561,15 +561,16 @@ export function setupEventListeners(s: GramState): void {
   };
   window.addEventListener('tg-emoji-interaction', onEmojiInteraction);
   const onLocalEmojiClick = (e: Event) => {
-    const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; x?: number; y?: number; slotIndex?: number };
-    log.info('[gram-app] tg-local-emoji-click received: messageId=' + detail?.messageId);
+    const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; mediaType?: string; x?: number; y?: number; slotIndex?: number };
+    if (detail.mediaType !== 'emoji') return;
+    log.info('[gram-app] tg-interaction-request received: messageId=' + detail?.messageId);
     if (detail.messageId == null || !s.selectedPeerRef.current) {
-      log.warn('[gram-app] tg-local-emoji-click dropped: messageId=' + detail?.messageId + ' peer=' + JSON.stringify(s.selectedPeerRef.current));
+      log.warn('[gram-app] tg-interaction-request dropped: messageId=' + detail?.messageId + ' peer=' + JSON.stringify(s.selectedPeerRef.current));
       return;
     }
     void processLocalEmojiClick(s, String(detail.messageId), detail.x, detail.y, detail.slotIndex);
   };
-  window.addEventListener('tg-local-emoji-click', onLocalEmojiClick);
+  window.addEventListener('tg-interaction-request', onLocalEmojiClick);
   // NOTE: no eager ensureEmojiAnimSet() here - an RPC fired before the
   // transport connects hangs forever and can starve the worker's RPC queue,
   // which blocked emoji document downloads (tiny glyphs bug). The set is
@@ -591,6 +592,6 @@ export function setupEventListeners(s: GramState): void {
     window.removeEventListener('tg-fetch-premium-gift', onFetchPremiumGift);
     window.removeEventListener('tg-fetch-greeting-sticker', onFetchGreetingSticker);
     window.removeEventListener('tg-emoji-interaction', onEmojiInteraction);
-    window.removeEventListener('tg-local-emoji-click', onLocalEmojiClick);
+    window.removeEventListener('tg-interaction-request', onLocalEmojiClick);
   });
 }

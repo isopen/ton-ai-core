@@ -255,10 +255,23 @@ export function spawnEmojiBurst(x: number, y: number, source: BurstSource, key: 
     void layerNode;
 }
 
-/** Forward a tap on an animated emoji message to the agent for server-side resolution. */
-function dispatchLocalEmojiClick(messageId: string, x?: number, y?: number, slotIndex?: number): void {
-    if (!messageId) return;
-    window.dispatchEvent(new CustomEvent('tg-local-emoji-click', { detail: { messageId, x, y, slotIndex } }));
+/**
+ * Unified interaction pipeline: every tap on an emoji / sticker / video
+ * emits exactly one request; resolvers (agent for emoji, chat-area sticker
+ * effect thumbs) answer with either a server fx or an explicit local
+ * hand-off. The local renderer runs ONLY from that hand-off branch, which
+ * structurally guarantees a single animation per click.
+ */
+function dispatchInteractionRequest(detail: {
+    messageId: string;
+    mediaType: 'emoji' | 'sticker';
+    x?: number;
+    y?: number;
+    slotIndex?: number;
+    hasCanvasFx?: boolean;
+}): void {
+    if (!detail.messageId) return;
+    window.dispatchEvent(new CustomEvent('tg-interaction-request', { detail }));
 }
 
 /** Short scale-pop of the tapped emoji itself (Telegram-style bounce). */
@@ -276,7 +289,7 @@ function popEmojiSlot(el: Element, big = false): void {
  * Fully local animated click effect for video custom emoji: live video
  * particles fly out of the tap point while the emoji itself pops. Runs only
  * after the server answered that it has no interaction animation for this
- * emoji (tg-emoji-fx-fallback).
+ * after the resolver answered that there is no server animation for it.
  */
 export function playVideoEmojiFx(anchor: Element, vid: HTMLVideoElement, x?: number, y?: number, big = false): void {
     if (document.hidden) return;
@@ -310,8 +323,8 @@ export function attachEmojiBurst(): void {
             const rowId0 = stickerEl.closest('[id^="msg-"]')?.id || '';
             const mainCv = stickerEl.querySelector(':scope > .tgui-sticker-preview canvas.tgui-animated-sticker');
 
-            // Schedule the local canvas fx BEFORE notifying chat-area: the
-            // server overlay (when one exists) synchronously fires
+            // Schedule the local canvas fx BEFORE the request: the server
+            // overlay (when one exists) synchronously fires
             // tg-sticker-fx-overlay-started, which cancels this pending
             // effect. Reversed order would let the local fx survive and run
             // alongside the server animation.
@@ -319,14 +332,12 @@ export function attachEmojiBurst(): void {
                 scheduleStickerClickFx(stickerEl, mainCv, rowId0.slice(4), x, y);
             }
 
-            // Server effect first: chat-area plays video_thumbs['f'] overlay
-            // for this message when one exists. When it does not, chat-area
-            // hands off to tg-emoji-fx-fallback UNLESS the canvas local pixel
-            // fx above already owns this sticker's fallback (strictly one
-            // animation per click).
-            window.dispatchEvent(new CustomEvent('tg-sticker-fx', {
-                detail: { messageId: rowId0.slice(4), x, y, hasCanvasFx: mainCv instanceof HTMLCanvasElement },
-            }));
+            dispatchInteractionRequest({
+                messageId: rowId0.slice(4),
+                mediaType: 'sticker',
+                x, y,
+                hasCanvasFx: mainCv instanceof HTMLCanvasElement,
+            });
             return;
         }
 
@@ -359,22 +370,26 @@ export function attachEmojiBurst(): void {
         {
             const slots = Array.from(bubble.querySelectorAll('.tgui-emoji-slot'));
             const slotIdx = slotEl ? slots.indexOf(slotEl) : -1;
-            // Server-first for every emoji kind: the agent resolves the
-            // AnimatedEmojiAnimations pack (tg-play-emoji-fx) or answers with
-            // tg-emoji-fx-fallback, which runs the local animated burst.
-            dispatchLocalEmojiClick(rowId, x, y, slotIdx >= 0 ? slotIdx : undefined);
+            dispatchInteractionRequest({
+                messageId: rowId,
+                mediaType: 'emoji',
+                x, y,
+                slotIndex: slotIdx >= 0 ? slotIdx : undefined,
+            });
         }
     }, { passive: true });
 }
 
 /**
  * Animated-emoji click effects. The agent resolves the real animation document
- * from Telegram's inputStickerSetAnimatedEmojiAnimations set and hands us a
- * playable URL via `tg-play-emoji-fx` (peer taps arrive as
- * sendMessageEmojiInteraction typing actions, local taps are forwarded too).
+ * from Telegram's inputStickerSetAnimatedEmojiAnimations set and answers the
+ * unified request with either a server fx (tg-interaction-server-fx) or a
+ * local hand-off (tg-interaction-local). Peer taps arrive as
+ * sendMessageEmojiInteraction typing actions and reuse the same response
+ * events without a request.
  */
-function pickEmojiAnchor(bubble: Element, x?: number, y?: number): Element | null {
-    const candidates = Array.from(bubble.querySelectorAll<Element>('.tgui-emoji-slot, canvas.tgui-animated-sticker'))
+function pickInteractionAnchor(bubble: Element, x?: number, y?: number): Element | null {
+    const candidates = Array.from(bubble.querySelectorAll<Element>('.tgui-emoji-slot, .tgui-sticker-preview, canvas.tgui-animated-sticker'))
         .filter((el) => {
             const r = el.getBoundingClientRect();
             return r.width > 2 && r.height > 2 && r.bottom > 0 && r.top < window.innerHeight;
@@ -393,10 +408,56 @@ function pickEmojiAnchor(bubble: Element, x?: number, y?: number): Element | nul
     return candidates[candidates.length - 1];
 }
 
+/**
+ * Sole entry point of the local animation. Runs only from the
+ * tg-interaction-local hand-off (the resolver answered "no server fx").
+ */function runLocalInteractionFx(messageId: string, x?: number, y?: number): void {
+    const bubble = document.getElementById('msg-' + messageId);
+    if (!bubble) return;
+
+    // Canvas TGS stickers: their pixel fx was already scheduled at click
+    // time and is the sole local animation for them - nothing to add.
+    if (bubble.querySelector('.tgui-sticker-preview canvas.tgui-animated-sticker')) return;
+
+    // Video stickers: live video burst anchored to the preview box itself
+    // (they have neither emoji slots nor canvases).
+    const stickerVid = bubble.querySelector('.tgui-sticker-preview video') as HTMLVideoElement | null;
+    if (stickerVid && stickerVid.src) {
+        playVideoEmojiFx(stickerVid.parentElement ?? stickerVid, stickerVid, x, y, true);
+        return;
+    }
+    playBurstFallback(bubble, x, y);
+}
+
+export function attachEmojiInteractions(): void {
+    if (typeof window === 'undefined' || interactionsAttached) return;
+    interactionsAttached = true;
+
+    window.addEventListener('tg-interaction-server-fx', (e: Event) => {
+        if (document.hidden) return;
+        const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; url?: string; key?: string; x?: number; y?: number };
+        if (!detail.url || detail.messageId == null) return;
+        const bubble = document.getElementById('msg-' + detail.messageId);
+        if (!bubble) return;
+
+        // Anchor the effect to the emoji/sticker itself, not the whole bubble.
+        const anchorEl = pickInteractionAnchor(bubble, detail.x, detail.y);
+        const anchorRect = anchorEl ? anchorEl.getBoundingClientRect() : bubble.getBoundingClientRect();
+        playStickerFxOverlay('emoji-fx-' + (detail.key || String(detail.messageId)), detail.url, anchorRect);
+    });
+
+    window.addEventListener('tg-interaction-local', (e: Event) => {
+        if (document.hidden) return;
+        const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; x?: number; y?: number };
+        if (detail.messageId == null) return;
+        runLocalInteractionFx(detail.messageId, detail.x, detail.y);
+    });
+}
+
 /** Old-style local burst used when no server animation exists for an emoji. */
 function playBurstFallback(bubble: HTMLElement, x?: number, y?: number): void {
     const big = isStandaloneMedia(bubble);
-    const el = pickEmojiAnchor(bubble, x, y);
+    const el = pickInteractionAnchor(bubble, x, y);
     let px: number;
     let py: number;
     if (el) {
@@ -427,37 +488,4 @@ function playBurstFallback(bubble: HTMLElement, x?: number, y?: number): void {
     }
     const m = (bubble.textContent || '').match(/\p{Extended_Pictographic}/u);
     if (m) spawnEmojiBurst(px, py, { kind: 'text', value: m[0] }, bubble, undefined, big);
-}
-
-export function attachEmojiInteractions(): void {
-    if (typeof window === 'undefined' || interactionsAttached) return;
-    interactionsAttached = true;
-    window.addEventListener('tg-play-emoji-fx', (e: Event) => {
-        if (document.hidden) return;
-        const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; url?: string; key?: string; x?: number; y?: number };
-        if (!detail.url || detail.messageId == null) return;
-        const bubble = document.getElementById('msg-' + detail.messageId);
-        if (!bubble) return;
-
-        // Anchor the effect to the emoji itself, not the whole bubble.
-        const anchorEl = pickEmojiAnchor(bubble, detail.x, detail.y);
-        const anchorRect = anchorEl ? anchorEl.getBoundingClientRect() : bubble.getBoundingClientRect();
-        playStickerFxOverlay('emoji-fx-' + (detail.key || String(detail.messageId)), detail.url, anchorRect);
-    });
-    window.addEventListener('tg-emoji-fx-fallback', (e: Event) => {
-        if (document.hidden) return;
-        const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; x?: number; y?: number };
-        if (detail.messageId == null) return;
-        const bubble = document.getElementById('msg-' + detail.messageId);
-        if (!bubble) return;
-
-        // Video sticker without a server effect: burst anchored to the
-        // sticker preview itself (it has neither emoji slots nor canvases).
-        const stickerVid = bubble.querySelector('.tgui-sticker-preview video') as HTMLVideoElement | null;
-        if (stickerVid && stickerVid.src) {
-            playVideoEmojiFx(stickerVid.parentElement ?? stickerVid, stickerVid, detail.x, detail.y, true);
-            return;
-        }
-        playBurstFallback(bubble, detail.x, detail.y);
-    });
 }
