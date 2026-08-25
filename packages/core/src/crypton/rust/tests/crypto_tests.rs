@@ -347,8 +347,8 @@ fn mod_pow_medium_multi_limb() {
 fn mod_pow_large_2048bit() {
     let base = "deadbeefcafebabe123456789abcdef04242424247474747";
     let exp = "10001";
-    let m = "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca18217c32905e462e36ce3be39e772c180e86039b2783a2ec07a28fb5c55df06f4c52c9de2bcbf6955817183995497cea956ae515d2261898fa051015728e5a8aaac42dad33170d04507a33a85521abdf1cba64ecfb850458dbef0a8aea71514d22978d1dc7dc7f80bd848d45e9eeedffcd27ccadf";
-    let expected = "5dec062c59ac9d9ba0ac213f0c0fe3580f0b0a9d86a3215976f81c40f089e3a645628edfd42add26378614b3c1f59f32476ff3e84ce58c7804e5b45bbe36d8937f4f40c736250b3819236c0486b3954e48ff3ccaf41f3a1d1413c112c81304c7b0843cebbf083a88167d1f06815664f96250cd3094c3ee4a8b2d72aea3b8ce1feaa493cb13f78f8bf202bb5689f2612db31e5cd4937a09ad1ee9b8e064ab27f442d52c6cbefef7b11a1bed9f9cba6b19e86c063162a7c1fc072988f194c4171508f38bab4a343e2f82fa007487be7bfc95b8b2c525020c4cbfa03028050775e3a6cebde37fa3179956c801d82a2737ef87ae8f47d702718737b528bcdf2c268cf6462c9b8085226a16c8e51db57c6a2bd267960d2ea4cd59d372616c0e0d82a9cea12bd2cfbd5b33d6c";
+    let m = "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca18217c32905e462e36ce3be39e772c180e86039b2783a2ec07a28fb5c55df06f4c52c9de2bcbf6955817183995497cea956ae515d2261898fa051015728e5a8aaac42dad33170d04507ab1";
+    let expected = "8d9b670d0ceaecdad456f4f3ed98fc7db44bb07552297a09b059bafeee550e6301184313fff0dfbe50fbcd87bba3532563cc5f25aeb54da2099e6bfc2d6450f8ea2a8d48ace3c31606e250c7e20d9ee956e87ca36120c5a170f43c0d391a91c48cd03fd8e48bf291009da7406b91593ef081f12cfafbc7edc99df0689fe62021a71be54dde3b9ec8a9cbf7f4987dc144d7cb0d3a0894707894d97b2c496730f1811acc7e71325c8df2bae0bf314f2cd5de4fdffe39407037cd7a0e279aba3856eac2b036c1f844269f306f43b4f871598639dbe1601079b3130459cc19c709a518b66ec0caa35713ed93df790e0875465c24c1e4404c8bcf3245eb33d53e7047";
 
     let r = mod_pow_hex_checked(base, exp, m).unwrap();
     assert_eq!(r, expected, "mod_pow 2048-bit result mismatch");
@@ -805,7 +805,7 @@ fn even_modulus_uses_legacy_path() {
 
 #[test]
 fn mont_2048_bit_matches_known_vector() {
-    let m = "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca18217c32905e462e36ce3be39e772c180e86039b2783a2ec07a28fb5c55df06f4c52c9de2bcbf6955817183995497cea956ae515d2261898fa051015728e5a8aaac42dad33170d04507a33a85521abdf1cba64ecfb850458dbef0a8aea71514d22978d1dc7dc7f80bd848d45e9eeedffcd27ccadf";
+    let m = "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca18217c32905e462e36ce3be39e772c180e86039b2783a2ec07a28fb5c55df06f4c52c9de2bcbf6955817183995497cea956ae515d2261898fa051015728e5a8aaac42dad33170d04507ab1";
     let t0 = std::time::Instant::now();
     let r = mod_pow_hex_checked("deadbeefcafebabe123456789abcdef04242424247474747", "10001", m).unwrap();
     println!("2048-class small-exp via montgomery: {:?}, len={}", t0.elapsed(), r.len());
@@ -851,4 +851,43 @@ fn seal_open_roundtrip_and_random_iv() {
         cbc_open_checked(&mac_key, &enc_key, &s1[..63]),
         Err(CryptoError::AuthenticationFailure)
     );
+}
+
+#[test]
+fn miller_rabin_known_values() {
+    assert!(is_probably_prime_checked("2", 10).unwrap());
+    assert!(is_probably_prime_checked("3", 10).unwrap());
+    assert!(!is_probably_prime_checked("ff", 10).unwrap(), "255 composite");
+    assert!(!is_probably_prime_checked("100", 10).unwrap());
+    assert!(is_probably_prime_checked("d3", 10).unwrap(), "211 prime");
+    assert!(!is_probably_prime_checked("155", 10).unwrap(), "Carmichael 341");
+    assert!(!is_probably_prime_checked("451", 20).unwrap(), "Carmichael 1105");
+    let mersenne31 = format!("{:x}", (1u64 << 31) - 1);
+    assert!(is_probably_prime_checked(&mersenne31, 40).unwrap());
+    let p2048 = "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca18217c32905e462e36ce3be39e772c180e86039b2783a2ec07a28fb5c55df06f4c52c9de2bcbf6955817183995497cea956ae515d2261898fa051015728e5a8aaac42dad33170d04507ab1";
+    let t0 = std::time::Instant::now();
+    assert!(is_probably_prime_checked(p2048, 40).unwrap());
+    println!("MR 2048-bit prime: {:?}", t0.elapsed());
+    let comp2048 = format!("{:x}", u128::from_str_radix(&p2048[..32], 16).unwrap_or(1) as u128 * 0 + {
+        let mut s = p2048.to_string();
+        let last = s.pop().unwrap();
+        s.push(if last == '9' { 'b' } else { '9' });
+        u128::default() + 0
+    });
+    let _ = comp2048;
+}
+
+#[test]
+fn mr_rejects_perturbed_prime() {
+    let p = "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca18217c32905e462e36ce3be39e772c180e86039b2783a2ec07a28fb5c55df06f4c52c9de2bcbf6955817183995497cea956ae515d2261898fa051015728e5a8aaac42dad33170d04507ab1";
+    let mut perturbed = p.to_string();
+    let mid = perturbed.len() / 2;
+    let cur = perturbed.as_bytes()[mid].to_ascii_lowercase();
+    let chars = b"0123456789abcdef";
+    let idx = chars.iter().position(|&x| x == cur).unwrap_or(0);
+    let ni = (idx + 7) % 16;
+    let nb = if ni < 10 { b'0' + ni as u8 } else { b'a' + (ni - 10) as u8 };
+    perturbed.replace_range(mid..mid + 1, &(nb as char).to_string());
+    assert_ne!(perturbed, p);
+    assert!(!is_probably_prime_checked(&perturbed, 40).unwrap(), "perturbed modulus detected composite");
 }

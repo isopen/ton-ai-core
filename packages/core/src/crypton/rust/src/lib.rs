@@ -1,5 +1,6 @@
 use wasm_bindgen::prelude::*;
 use std::fmt;
+use bigint::{Limb, MontCtx, divmod, mont_mod_pow};
 pub mod aes;
 pub mod hashes;
 pub mod bigint;
@@ -8,6 +9,7 @@ const MAX_RANDOM_CHUNK: usize = 65_536;
 const MAX_RANDOM_BYTES: usize = 1 << 20;
 const MAX_DERIVED_LEN: usize = 255 * 64;
 const MAX_MODPOW_LIMBS: usize = 128;
+const MAX_PBKDF2_ITERATIONS: usize = 10_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CryptoError {
@@ -19,12 +21,15 @@ pub enum CryptoError {
     DivisionByZero,
     ModulusIsZero,
     ZeroIterations,
+    TooManyIterations,
     DerivedKeyTooLong,
     RandomTooLarge,
     AuthenticationFailure,
     NoModularInverse,
     BlindingExhausted,
     OperandTooLarge,
+    EntropyFailure,
+    InvalidRounds,
 }
 
 impl fmt::Display for CryptoError {
@@ -38,12 +43,15 @@ impl fmt::Display for CryptoError {
             CryptoError::DivisionByZero => "division by zero",
             CryptoError::ModulusIsZero => "modulus must be non-zero",
             CryptoError::ZeroIterations => "PBKDF2 iteration count must be greater than zero",
+            CryptoError::TooManyIterations => "PBKDF2 iteration count exceeds the allowed maximum",
             CryptoError::DerivedKeyTooLong => "derived output length exceeds 255 * 64 bytes",
             CryptoError::RandomTooLarge => "random length exceeds 1 MiB limit",
             CryptoError::AuthenticationFailure => "authentication failed: MAC mismatch",
             CryptoError::NoModularInverse => "input has no modular inverse for the given modulus",
             CryptoError::BlindingExhausted => "unable to select a blinding factor for the given modulus",
             CryptoError::OperandTooLarge => "mod_pow operand exceeds 8192 bits",
+            CryptoError::EntropyFailure => "secure entropy source is unavailable",
+            CryptoError::InvalidRounds => "Miller-Rabin round count must be greater than zero",
         };
         f.write_str(s)
     }
@@ -103,28 +111,25 @@ pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn random_bytes(n: usize) -> Vec<u8> {
+fn random_bytes(n: usize) -> Result<Vec<u8>, CryptoError> {
     let mut v = vec![0u8; n];
     js_get_random_values(&mut v);
-    v
+    Ok(v)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn random_bytes(n: usize) -> Vec<u8> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let mut state = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x9E3779B97F4A7C15)
-        | 1;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn random_bytes(n: usize) -> Result<Vec<u8>, CryptoError> {
+    use std::io::Read;
     let mut v = vec![0u8; n];
-    for b in v.iter_mut() {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        *b = (state >> 24) as u8;
-    }
-    v
+    if n == 0 { return Ok(v); }
+    let mut f = std::fs::File::open("/dev/urandom").map_err(|_| CryptoError::EntropyFailure)?;
+    f.read_exact(&mut v).map_err(|_| CryptoError::EntropyFailure)?;
+    Ok(v)
+}
+
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
+fn random_bytes(_n: usize) -> Result<Vec<u8>, CryptoError> {
+    Err(CryptoError::EntropyFailure)
 }
 
 pub fn mul_mod(a: &[u64], b: &[u64], m: &[u64]) -> Result<Vec<u64>, CryptoError> {
@@ -149,32 +154,29 @@ pub fn mod_pow_blind_with(base: &[u64], exp: &[u64], modulus: &[u64], blinder: &
     out
 }
 
-#[allow(unused_variables)]
 pub fn mod_pow_auto(base: &[u64], exp: &[u64], modulus: &[u64]) -> Result<Vec<u64>, CryptoError> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let exp_wide = exp.len() * 64 > 32;
-        if exp_wide {
-            for _ in 0..128 {
-                let mut raw = random_bytes(modulus.len() * 8);
-                let mut cand = bigint::bytes_to_limbs_be(&raw);
-                crate::wipe(&mut raw);
-                let ok = !bigint::is_zero(&cand)
-                    && bigint::divmod(&cand, modulus).map(|(_, r)| !bigint::is_zero(&r)).unwrap_or(false);
-                if ok {
-                    match mod_pow_blind_with(base, exp, modulus, &cand) {
-                        Ok(v) => return Ok(v),
-                        Err(CryptoError::NoModularInverse) => {
-                            crate::wipe(&mut cand);
-                            continue;
-                        }
-                        Err(e) => return Err(e),
+    if bigint::is_zero(modulus) { return Err(CryptoError::ModulusIsZero); }
+    let exp_wide = exp.len() * 64 > 32;
+    if exp_wide {
+        for _ in 0..128 {
+            let mut raw = random_bytes(modulus.len() * 8)?;
+            let mut cand = bigint::bytes_to_limbs_be(&raw);
+            crate::wipe(&mut raw);
+            let ok = !bigint::is_zero(&cand)
+                && bigint::divmod(&cand, modulus).map(|(_, r)| !bigint::is_zero(&r)).unwrap_or(false);
+            if ok {
+                match mod_pow_blind_with(base, exp, modulus, &cand) {
+                    Ok(v) => return Ok(v),
+                    Err(CryptoError::NoModularInverse) => {
+                        crate::wipe(&mut cand);
+                        continue;
                     }
+                    Err(e) => return Err(e),
                 }
-                crate::wipe(&mut cand);
             }
-            return Err(CryptoError::BlindingExhausted);
+            crate::wipe(&mut cand);
         }
+        return Err(CryptoError::BlindingExhausted);
     }
     bigint::mod_pow(base, exp, modulus)
 }
@@ -212,7 +214,7 @@ pub fn cbc_decrypt_etm_checked(mac_key: &[u8], enc_key: &[u8], iv: &[u8], data: 
 
 pub fn cbc_seal_checked(mac_key: &[u8], enc_key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
     require_key(mac_key)?;
-    let iv = random_bytes(16);
+    let iv = random_bytes(16)?;
     let mut out = cbc_encrypt_etm_checked(mac_key, enc_key, &iv, plaintext)?;
     let mut sealed = Vec::with_capacity(16 + out.len());
     sealed.extend_from_slice(&iv);
@@ -496,6 +498,7 @@ pub fn hkdf_expand_checked(prk: &[u8], info: &[u8], len: usize) -> Result<Vec<u8
 
 pub fn pbkdf2_sha256_checked(password: &[u8], salt: &[u8], iterations: usize, dk_len: usize) -> Result<Vec<u8>, CryptoError> {
     if iterations == 0 { return Err(CryptoError::ZeroIterations); }
+    if iterations > MAX_PBKDF2_ITERATIONS { return Err(CryptoError::TooManyIterations); }
     if dk_len > MAX_DERIVED_LEN { return Err(CryptoError::DerivedKeyTooLong); }
     let mut out = Vec::with_capacity(dk_len);
     let mut block_index: u32 = 1;
@@ -531,6 +534,99 @@ pub fn mod_pow_hex_checked(base_hex: &str, exp_hex: &str, mod_hex: &str) -> Resu
     wipe(&mut modulus);
     Ok(bigint::limbs_to_hex(&r))
 }
+
+const SMALL_PRIMES: [u64; 25] = [
+    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
+];
+
+fn eq_limb(v: &[Limb], w: Limb) -> bool {
+    let mut t = v.to_vec();
+    bigint::trim_pub(&mut t);
+    t.len() == 1 && t[0] == w
+}
+
+fn sub_one(n: &[Limb]) -> Vec<Limb> {
+    let mut out = n.to_vec();
+    for i in 0..out.len() {
+        if out[i] != 0 { out[i] -= 1; break; }
+        out[i] = Limb::MAX;
+    }
+    bigint::trim_pub(&mut out);
+    out
+}
+
+fn shr1(n: &[Limb]) -> Vec<Limb> {
+    let mut out = vec![0u64; n.len()];
+    let mut carry = 0u64;
+    for i in (0..n.len()).rev() {
+        out[i] = (n[i] >> 1) | (carry << 63);
+        carry = n[i] & 1;
+    }
+    bigint::trim_pub(&mut out);
+    out
+}
+
+fn random_in_range_2_to_nm1(n: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
+    let span = sub_one(&sub_one(n));
+    if bigint::is_zero(&span) { return Err(CryptoError::ModulusIsZero); }
+    for _ in 0..256 {
+        let mut raw = random_bytes(n.len() * 8)?;
+        let reduced = divmod(&bigint::bytes_to_limbs_be(&raw), &span)?.1;
+        crate::wipe(&mut raw);
+        let cand = bigint::add(&reduced, &[2]);
+        if bigint::cmp_lt(&cand, &sub_one(n)) {
+            return Ok(cand);
+        }
+    }
+    Ok(vec![2])
+}
+
+pub fn miller_rabin(n: &[Limb], rounds: u32) -> Result<bool, CryptoError> {
+    if rounds == 0 { return Err(CryptoError::InvalidRounds); }
+    if bigint::is_zero(n) || eq_limb(n, 1) { return Ok(false); }
+    for &p in SMALL_PRIMES.iter() {
+        if eq_limb(n, p) { return Ok(true); }
+        let (_, r) = divmod(n, &[p])?;
+        if bigint::is_zero(&r) { return Ok(false); }
+    }
+    if n[0] & 1 == 0 { return Ok(false); }
+
+    let nm1 = sub_one(n);
+    let mut d = nm1.clone();
+    let mut s = 0u32;
+    while d[0] & 1 == 0 {
+        d = shr1(&d);
+        s += 1;
+    }
+
+    let ctx = match MontCtx::new(n) { Some(c) => c, None => return Ok(false) };
+    let rounds_eff = rounds.clamp(1, 200);
+    for _ in 0..rounds_eff {
+        let a = random_in_range_2_to_nm1(n)?;
+        let mut x = mont_mod_pow(&a, &d, &ctx)?;
+        if eq_limb(&x, 1) || x == nm1 { continue; }
+        let mut composite = true;
+        for _ in 0..s.saturating_sub(1) {
+            x = mont_mod_pow(&x, &[2], &ctx)?;
+            if x == nm1 { composite = false; break; }
+            if eq_limb(&x, 1) { break; }
+        }
+        if composite { return Ok(false); }
+    }
+    Ok(true)
+}
+
+#[wasm_bindgen]
+pub fn is_probably_prime(n_hex: &str, rounds: u32) -> Result<bool, JsError> {
+    is_probably_prime_checked(n_hex, rounds).map_err(|e| JsError::new(&e.to_string()))
+}
+
+pub fn is_probably_prime_checked(n_hex: &str, rounds: u32) -> Result<bool, CryptoError> {
+    let n = bigint::hex_to_limbs(n_hex)?;
+    require_modpow_size(&[&n])?;
+    miller_rabin(&n, rounds)
+}
+
 
 #[wasm_bindgen]
 pub fn aes256_ecb_encrypt(key: &[u8], data: &[u8]) -> Result<Vec<u8>, JsError> {

@@ -1,8 +1,16 @@
 use crate::CryptoError;
 use std::cmp::Ordering;
 
-type Limb = u64;
+pub type Limb = u64;
 type Dlimb = u128;
+
+pub fn cmp_lt(a: &[Limb], b: &[Limb]) -> bool {
+    cmp(a, b) == Ordering::Less
+}
+
+pub fn trim_pub(v: &mut Vec<Limb>) {
+    trim(v);
+}
 
 pub fn is_zero(v: &[Limb]) -> bool {
     v.iter().fold(0u64, |acc, x| acc | x) == 0
@@ -64,29 +72,16 @@ pub fn mul_schoolbook(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
             carry = cur >> 64;
         }
         let mut k = i + b.len();
-        while carry > 0 {
+        while k < c.len() {
             let cur = c[k] as Dlimb + carry;
             c[k] = cur as Limb;
             carry = cur >> 64;
             k += 1;
-            if k >= c.len() { break; }
         }
+        debug_assert!(carry == 0);
     }
     trim(&mut c);
     c
-}
-
-fn mul_by_limb(v: &[Limb], k: Limb) -> Vec<Limb> {
-    let mut out = vec![0u64; v.len() + 1];
-    let mut carry: Dlimb = 0;
-    for i in 0..v.len() {
-        let cur = (v[i] as Dlimb) * (k as Dlimb) + carry;
-        out[i] = cur as Limb;
-        carry = cur >> 64;
-    }
-    out[v.len()] = carry as Limb;
-    trim(&mut out);
-    out
 }
 
 fn add_shifted_into(acc: &mut Vec<Limb>, x: &[Limb], sh: usize) {
@@ -99,13 +94,14 @@ fn add_shifted_into(acc: &mut Vec<Limb>, x: &[Limb], sh: usize) {
         carry = cur >> 64;
     }
     let mut pos = x.len() + sh;
-    while carry > 0 {
-        if pos >= acc.len() { acc.resize(pos + 1, 0); }
+    let end = acc.len();
+    while pos < end {
         let cur = (acc[pos] as Dlimb) + carry;
         acc[pos] = cur as Limb;
         carry = cur >> 64;
         pos += 1;
     }
+    debug_assert!(carry == 0);
 }
 
 fn karatsuba(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
@@ -295,7 +291,7 @@ pub struct MontCtx {
 impl MontCtx {
     pub fn new(m_raw: &[Limb]) -> Option<MontCtx> {
         if m_raw.is_empty() || is_zero(m_raw) { return None; }
-        if m_raw[m_raw.len() - 1] == 0 { return None; }
+        if m_raw[0] & 1 == 0 { return None; }
         let m = m_raw.to_vec();
         let n = m.len();
         let mut inv: Limb = 1;
@@ -317,8 +313,8 @@ impl MontCtx {
 
     pub fn mont_mul(&self, a_in: &[Limb], b_in: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
         let n = self.n;
-        let a = zpad(a_in, n);
-        let b = zpad(b_in, n);
+        let mut a = zpad(a_in, n);
+        let mut b = zpad(b_in, n);
         let mut t = vec![0u64; n * 2 + 2];
         for i in 0..n {
             let ai = a[i];
@@ -328,13 +324,12 @@ impl MontCtx {
                 t[i + j] = cur as u64;
                 carry = cur >> 64;
             }
-            let mut idx = i + n;
-            while carry > 0 && idx < t.len() {
+            for idx in (i + n)..t.len() {
                 let cur = (t[idx] as u128) + carry;
                 t[idx] = cur as u64;
                 carry = cur >> 64;
-                idx += 1;
             }
+            debug_assert!(carry == 0);
         }
         for i in 0..n {
             let k = t[i].wrapping_mul(self.n0);
@@ -344,13 +339,12 @@ impl MontCtx {
                 t[i + j] = cur as u64;
                 carry = cur >> 64;
             }
-            let mut idx = i + n;
-            while carry > 0 && idx < t.len() {
+            for idx in (i + n)..t.len() {
                 let cur = (t[idx] as u128) + carry;
                 t[idx] = cur as u64;
                 carry = cur >> 64;
-                idx += 1;
             }
+            debug_assert!(carry == 0);
         }
         let extra = t[2 * n];
         let out: Vec<Limb> = t[n..2 * n].to_vec();
@@ -371,13 +365,11 @@ impl MontCtx {
         for j in 0..n {
             res[j] = (w[j] & mask) | (out[j] & !mask);
         }
+        crate::wipe(&mut a);
+        crate::wipe(&mut b);
+        crate::wipe(&mut t);
+        crate::wipe(&mut w);
         Ok(res)
-    }
-
-    fn from_mont_trimmed(&self, a: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
-        let mut v = self.from_mont(a)?;
-        trim(&mut v);
-        Ok(v)
     }
 
     pub fn to_mont(&self, a: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
@@ -389,9 +381,11 @@ impl MontCtx {
     }
 }
 
-fn mont_mod_pow(base_red: &[Limb], exp: &[Limb], ctx: &MontCtx) -> Result<Vec<Limb>, CryptoError> {
+pub fn mont_mod_pow(base_red: &[Limb], exp: &[Limb], ctx: &MontCtx) -> Result<Vec<Limb>, CryptoError> {
     if ctx.m == vec![1] { return Ok(vec![0]); }
-    let mut base_m = ctx.to_mont(&zpad(base_red, ctx.n))?;
+    let mut padded = zpad(base_red, ctx.n);
+    let mut base_m = ctx.to_mont(&padded)?;
+    crate::wipe(&mut padded);
     let mut result = ctx.r1.clone();
     let nbits = exp.len() * 64;
     for i in (0..nbits).rev() {

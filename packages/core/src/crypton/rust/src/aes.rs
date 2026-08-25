@@ -40,33 +40,9 @@ const INV_SBOX: [u8; 256] = {
     t
 };
 
-fn rol(x: u8, r: usize) -> u8 {
-    ((x << r) | (x >> (8 - r))) & 0xff
-}
 
-fn gf_inv(a: u8) -> u8 {
-    let a2 = gmul(a, a);
-    let a4 = gmul(a2, a2);
-    let a8 = gmul(a4, a4);
-    let a16 = gmul(a8, a8);
-    let a32 = gmul(a16, a16);
-    let a64 = gmul(a32, a32);
-    let a128 = gmul(a64, a64);
-    let mut acc = gmul(a2, a4);
-    acc = gmul(acc, a8);
-    acc = gmul(acc, a16);
-    acc = gmul(acc, a32);
-    acc = gmul(acc, a64);
-    gmul(acc, a128)
-}
 
-fn affine_fwd(v: u8) -> u8 {
-    v ^ rol(v, 1) ^ rol(v, 2) ^ rol(v, 3) ^ rol(v, 4) ^ 0x63
-}
 
-fn affine_inv(v: u8) -> u8 {
-    rol(v, 1) ^ rol(v, 3) ^ rol(v, 6)
-}
 
 pub fn sbox_byte(b: u8) -> u8 {
     SBOX[b as usize]

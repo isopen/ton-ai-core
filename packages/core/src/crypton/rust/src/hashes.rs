@@ -1,32 +1,41 @@
 const H: [u32; 5] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
 
+fn sha1_compress(h: &mut [u32; 5], block: &[u8]) {
+    let mut w = [0u32; 80];
+    for i in 0..16 {
+        w[i] = u32::from_be_bytes([block[i*4],block[i*4+1],block[i*4+2],block[i*4+3]]);
+    }
+    for i in 16..80 { w[i] = (w[i-3]^w[i-8]^w[i-14]^w[i-16]).rotate_left(1); }
+    let (mut a, mut b, mut c, mut d, mut e) = (h[0],h[1],h[2],h[3],h[4]);
+    for i in 0..80 {
+        let (f,k) = match i {
+            0..=19 => ((b&c)|(!b&d), 0x5A827999),
+            20..=39 => (b^c^d, 0x6ED9EBA1),
+            40..=59 => ((b&c)|(b&d)|(c&d), 0x8F1BBCDC),
+            _ => (b^c^d, 0xCA62C1D6),
+        };
+        let tmp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[i]);
+        e=d; d=c; c=b.rotate_left(30); b=a; a=tmp;
+    }
+    h[0]=h[0].wrapping_add(a); h[1]=h[1].wrapping_add(b);
+    h[2]=h[2].wrapping_add(c); h[3]=h[3].wrapping_add(d); h[4]=h[4].wrapping_add(e);
+}
+
 pub fn sha1(data: &[u8]) -> [u8; 20] {
     let mut h = H;
     let bit_len = (data.len() as u64) * 8;
-    let mut msg = data.to_vec();
-    msg.push(0x80);
-    while msg.len() % 64 != 56 { msg.push(0); }
-    msg.extend_from_slice(&bit_len.to_be_bytes());
-
-    let mut w = [0u32; 80];
-    for chunk in msg.chunks(64) {
-        for i in 0..16 {
-            w[i] = u32::from_be_bytes([chunk[i*4],chunk[i*4+1],chunk[i*4+2],chunk[i*4+3]]);
-        }
-        for i in 16..80 { w[i] = (w[i-3]^w[i-8]^w[i-14]^w[i-16]).rotate_left(1); }
-        let (mut a, mut b, mut c, mut d, mut e) = (h[0],h[1],h[2],h[3],h[4]);
-        for i in 0..80 {
-            let (f,k) = match i {
-                0..=19 => ((b&c)|(!b&d), 0x5A827999),
-                20..=39 => (b^c^d, 0x6ED9EBA1),
-                40..=59 => ((b&c)|(b&d)|(c&d), 0x8F1BBCDC),
-                _ => (b^c^d, 0xCA62C1D6),
-            };
-            let tmp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[i]);
-            e=d; d=c; c=b.rotate_left(30); b=a; a=tmp;
-        }
-        h[0]=h[0].wrapping_add(a); h[1]=h[1].wrapping_add(b);
-        h[2]=h[2].wrapping_add(c); h[3]=h[3].wrapping_add(d); h[4]=h[4].wrapping_add(e);
+    for block in data.chunks_exact(64) {
+        sha1_compress(&mut h, block);
+    }
+    let rem = data.len() % 64;
+    let tail_len = if rem + 9 <= 64 { 64 } else { 128 };
+    let mut tail = [0u8; 128];
+    tail[..rem].copy_from_slice(&data[data.len() - rem..]);
+    tail[rem] = 0x80;
+    tail[tail_len - 8..tail_len].copy_from_slice(&bit_len.to_be_bytes());
+    sha1_compress(&mut h, &tail[..64]);
+    if tail_len == 128 {
+        sha1_compress(&mut h, &tail[64..]);
     }
     let mut out=[0u8;20];
     for i in 0..5 { out[i*4..(i+1)*4].copy_from_slice(&h[i].to_be_bytes()); }
@@ -44,39 +53,48 @@ const K256: [u32; 64] = [
     0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
 ];
 
+fn sha256_compress(h: &mut [u32; 8], block: &[u8]) {
+    let mut w = [0u32; 64];
+    for i in 0..16 {
+        w[i] = u32::from_be_bytes([block[i*4],block[i*4+1],block[i*4+2],block[i*4+3]]);
+    }
+    for i in 16..64 {
+        let s0 = w[i-15].rotate_right(7)^w[i-15].rotate_right(18)^(w[i-15]>>3);
+        let s1 = w[i-2].rotate_right(17)^w[i-2].rotate_right(19)^(w[i-2]>>10);
+        w[i] = w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1);
+    }
+    let mut v = *h;
+    for i in 0..64 {
+        let s1 = v[4].rotate_right(6)^v[4].rotate_right(11)^v[4].rotate_right(25);
+        let ch = (v[4]&v[5])|(!v[4]&v[6]);
+        let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(K256[i]).wrapping_add(w[i]);
+        let s0 = v[0].rotate_right(2)^v[0].rotate_right(13)^v[0].rotate_right(22);
+        let maj = (v[0]&v[1])|(v[0]&v[2])|(v[1]&v[2]);
+        let t2 = s0.wrapping_add(maj);
+        v[7]=v[6]; v[6]=v[5]; v[5]=v[4]; v[4]=v[3].wrapping_add(t1);
+        v[3]=v[2]; v[2]=v[1]; v[1]=v[0]; v[0]=t1.wrapping_add(t2);
+    }
+    for i in 0..8 { h[i] = h[i].wrapping_add(v[i]); }
+}
+
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     let mut h: [u32; 8] = [
         0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
         0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19
     ];
     let bit_len = (data.len() as u64) * 8;
-    let mut msg = data.to_vec();
-    msg.push(0x80);
-    while msg.len() % 64 != 56 { msg.push(0); }
-    msg.extend_from_slice(&bit_len.to_be_bytes());
-
-    let mut w = [0u32; 64];
-    for chunk in msg.chunks(64) {
-        for i in 0..16 {
-            w[i] = u32::from_be_bytes([chunk[i*4],chunk[i*4+1],chunk[i*4+2],chunk[i*4+3]]);
-        }
-        for i in 16..64 {
-            let s0 = w[i-15].rotate_right(7)^w[i-15].rotate_right(18)^(w[i-15]>>3);
-            let s1 = w[i-2].rotate_right(17)^w[i-2].rotate_right(19)^(w[i-2]>>10);
-            w[i] = w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1);
-        }
-        let mut v = h;
-        for i in 0..64 {
-            let s1 = v[4].rotate_right(6)^v[4].rotate_right(11)^v[4].rotate_right(25);
-            let ch = (v[4]&v[5])|(!v[4]&v[6]);
-            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(K256[i]).wrapping_add(w[i]);
-            let s0 = v[0].rotate_right(2)^v[0].rotate_right(13)^v[0].rotate_right(22);
-            let maj = (v[0]&v[1])|(v[0]&v[2])|(v[1]&v[2]);
-            let t2 = s0.wrapping_add(maj);
-            v[7]=v[6]; v[6]=v[5]; v[5]=v[4]; v[4]=v[3].wrapping_add(t1);
-            v[3]=v[2]; v[2]=v[1]; v[1]=v[0]; v[0]=t1.wrapping_add(t2);
-        }
-        for i in 0..8 { h[i] = h[i].wrapping_add(v[i]); }
+    for block in data.chunks_exact(64) {
+        sha256_compress(&mut h, block);
+    }
+    let rem = data.len() % 64;
+    let tail_len = if rem + 9 <= 64 { 64 } else { 128 };
+    let mut tail = [0u8; 128];
+    tail[..rem].copy_from_slice(&data[data.len() - rem..]);
+    tail[rem] = 0x80;
+    tail[tail_len - 8..tail_len].copy_from_slice(&bit_len.to_be_bytes());
+    sha256_compress(&mut h, &tail[..64]);
+    if tail_len == 128 {
+        sha256_compress(&mut h, &tail[64..]);
     }
     let mut out=[0u8;32];
     for i in 0..8 { out[i*4..(i+1)*4].copy_from_slice(&h[i].to_be_bytes()); }
@@ -107,38 +125,47 @@ const K512: [W64; 80] = [
     0x4cc5d4becb3e42b6,0x597f299cfc657e2a,0x5fcb6fab3ad6faec,0x6c44198c4a475817,
 ];
 
+fn sha512_compress(h: &mut [W64; 8], block: &[u8]) {
+    let mut w = [0u64; 80];
+    for i in 0..16 {
+        w[i] = u64::from_be_bytes(block[i*8..(i+1)*8].try_into().unwrap());
+    }
+    for i in 16..80 {
+        let s0 = w[i-15].rotate_right(1)^w[i-15].rotate_right(8)^(w[i-15]>>7);
+        let s1 = w[i-2].rotate_right(19)^w[i-2].rotate_right(61)^(w[i-2]>>6);
+        w[i] = w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1);
+    }
+    let mut v = *h;
+    for i in 0..80 {
+        let s1 = v[4].rotate_right(14)^v[4].rotate_right(18)^v[4].rotate_right(41);
+        let ch = (v[4]&v[5])|(!v[4]&v[6]);
+        let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(K512[i]).wrapping_add(w[i]);
+        let s0 = v[0].rotate_right(28)^v[0].rotate_right(34)^v[0].rotate_right(39);
+        let maj = (v[0]&v[1])|(v[0]&v[2])|(v[1]&v[2]);
+        let t2 = s0.wrapping_add(maj);
+        v[7]=v[6]; v[6]=v[5]; v[5]=v[4]; v[4]=v[3].wrapping_add(t1);
+        v[3]=v[2]; v[2]=v[1]; v[1]=v[0]; v[0]=t1.wrapping_add(t2);
+    }
+    for i in 0..8 { h[i] = h[i].wrapping_add(v[i]); }
+}
+
 pub fn sha512(data: &[u8]) -> [u8; 64] {
     let mut h: [W64; 8] = [
         0x6a09e667f3bcc908,0xbb67ae8584caa73b,0x3c6ef372fe94f82b,0xa54ff53a5f1d36f1,
         0x510e527fade682d1,0x9b05688c2b3e6c1f,0x1f83d9abfb41bd6b,0x5be0cd19137e2179
     ];
-    let mut msg = data.to_vec();
-    msg.push(0x80);
-    while msg.len() % 128 != 112 { msg.push(0); }
-    msg.extend_from_slice(&(data.len() as u128).wrapping_mul(8).to_be_bytes());
-
-    let mut w = [0u64; 80];
-    for chunk in msg.chunks(128) {
-        for i in 0..16 {
-            w[i] = u64::from_be_bytes(chunk[i*8..(i+1)*8].try_into().unwrap());
-        }
-        for i in 16..80 {
-            let s0 = w[i-15].rotate_right(1)^w[i-15].rotate_right(8)^(w[i-15]>>7);
-            let s1 = w[i-2].rotate_right(19)^w[i-2].rotate_right(61)^(w[i-2]>>6);
-            w[i] = w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1);
-        }
-        let mut v = h;
-        for i in 0..80 {
-            let s1 = v[4].rotate_right(14)^v[4].rotate_right(18)^v[4].rotate_right(41);
-            let ch = (v[4]&v[5])|(!v[4]&v[6]);
-            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(K512[i]).wrapping_add(w[i]);
-            let s0 = v[0].rotate_right(28)^v[0].rotate_right(34)^v[0].rotate_right(39);
-            let maj = (v[0]&v[1])|(v[0]&v[2])|(v[1]&v[2]);
-            let t2 = s0.wrapping_add(maj);
-            v[7]=v[6]; v[6]=v[5]; v[5]=v[4]; v[4]=v[3].wrapping_add(t1);
-            v[3]=v[2]; v[2]=v[1]; v[1]=v[0]; v[0]=t1.wrapping_add(t2);
-        }
-        for i in 0..8 { h[i] = h[i].wrapping_add(v[i]); }
+    for block in data.chunks_exact(128) {
+        sha512_compress(&mut h, block);
+    }
+    let rem = data.len() % 128;
+    let tail_len = if rem + 17 <= 128 { 128 } else { 256 };
+    let mut tail = [0u8; 256];
+    tail[..rem].copy_from_slice(&data[data.len() - rem..]);
+    tail[rem] = 0x80;
+    tail[tail_len - 16..tail_len].copy_from_slice(&(data.len() as u128).wrapping_mul(8).to_be_bytes());
+    sha512_compress(&mut h, &tail[..128]);
+    if tail_len == 256 {
+        sha512_compress(&mut h, &tail[128..]);
     }
     let mut out=[0u8;64];
     for i in 0..8 { out[i*8..(i+1)*8].copy_from_slice(&h[i].to_be_bytes()); }
