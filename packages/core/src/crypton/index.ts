@@ -2,6 +2,7 @@ import { AES256IGE } from './aes-256-ige';
 import { AES256ECB } from './aes-256-ecb';
 import { AES256CTR, AesCtrCipher } from './aes-256-ctr';
 import { AES256CBC } from './aes-256-cbc';
+import { AES256CBC_ETM } from './aes-256-cbc-etm';
 import { MTProtoKDF } from './kdf';
 import { DiffieHellman } from './diffie-hellman';
 
@@ -64,6 +65,7 @@ export { AesCtrCipher } from './aes-256-ctr';
 
 import { initWasm, wasmGetRandomBytes, wasmAes256EcbEncrypt, wasmAes256EcbDecrypt,
          wasmAes256CbcEncrypt, wasmAes256CbcDecrypt,
+         wasmAes256CbcEncryptEtm, wasmAes256CbcDecryptEtm,
          wasmAes256IgeEncrypt, wasmAes256IgeDecrypt,
          wasmAes256CtrProcess, wasmSha1, wasmSha256,
          wasmHmacSha256, wasmModPow } from './wasm-adapter';
@@ -104,6 +106,11 @@ export function initWasmCrypton(): Promise<void> {
     AES256CBC.decrypt = ((ct: Buffer, key: Buffer, iv: Buffer) =>
       wasmAes256CbcDecrypt(key, iv, ct)!) as any;
 
+    AES256CBC_ETM.encrypt = ((macKey: Buffer, encKey: Buffer, iv: Buffer, pt: Buffer) =>
+      Promise.resolve(wasmAes256CbcEncryptEtm(macKey, encKey, iv, pt)!)) as any;
+    AES256CBC_ETM.decrypt = ((macKey: Buffer, encKey: Buffer, iv: Buffer, data: Buffer) =>
+      Promise.resolve(wasmAes256CbcDecryptEtm(macKey, encKey, iv, data)!)) as any;
+
     const ecbProto = AES256ECB.prototype as any;
     ecbProto.encryptBlock = function(block: Uint8Array): Buffer {
       return wasmAes256EcbEncrypt(this.key, Buffer.from(block))!;
@@ -120,6 +127,7 @@ export const crypton = {
   AesCtrCipher,
   AES256ECB,
   AES256CBC,
+  AES256CBC_ETM,
   MTProtoKDF,
   DiffieHellman,
   sha256,

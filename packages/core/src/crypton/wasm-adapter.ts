@@ -62,6 +62,18 @@ export function wasmAes256CbcEncrypt(key: Buffer, iv: Buffer, data: Buffer): Buf
   return Buffer.from(w('aes256_cbc_encrypt').aes256_cbc_encrypt(key, iv, data));
 }
 
+export function wasmAes256CbcEncryptEtm(macKey: Buffer, encKey: Buffer, iv: Buffer, plaintext: Buffer): Buffer | null {
+  if (!wasmInstance) return null;
+  log('aes_cbc_etm_encrypt', `data=${plaintext.length}B`);
+  return Buffer.from(w('aes256_cbc_encrypt_etm').aes256_cbc_encrypt_etm(macKey, encKey, iv, plaintext));
+}
+
+export function wasmAes256CbcDecryptEtm(macKey: Buffer, encKey: Buffer, iv: Buffer, data: Buffer): Buffer | null {
+  if (!wasmInstance) return null;
+  log('aes_cbc_etm_decrypt', `data=${data.length}B`);
+  return Buffer.from(w('aes256_cbc_decrypt_etm').aes256_cbc_decrypt_etm(macKey, encKey, iv, data));
+}
+
 export function wasmAes256CbcDecrypt(key: Buffer, iv: Buffer, data: Buffer): Buffer | null {
   if (!wasmInstance) return null;
   log('aes_cbc_decrypt', `data=${data.length}B`);

@@ -1,20 +1,51 @@
+use crate::CryptoError;
+use std::cmp::Ordering;
+
 type Limb = u64;
 type Dlimb = u128;
+
+pub fn is_zero(v: &[Limb]) -> bool {
+    v.iter().fold(0u64, |acc, x| acc | x) == 0
+}
 
 fn trim(v: &mut Vec<Limb>) {
     while v.len() > 1 && *v.last().unwrap() == 0 { v.pop(); }
 }
 
-fn cmp(a: &[Limb], b: &[Limb]) -> std::cmp::Ordering {
+fn cmp(a: &[Limb], b: &[Limb]) -> Ordering {
     if a.len() != b.len() { return a.len().cmp(&b.len()); }
-    for i in (0..a.len()).rev() {
-        if a[i] != b[i] { return a[i].cmp(&b[i]); }
+    let mut gt = 0u64;
+    let mut lt = 0u64;
+    let mut i = a.len();
+    while i > 0 {
+        i -= 1;
+        let agt = (a[i] > b[i]) as u64;
+        let alt = (a[i] < b[i]) as u64;
+        let undecided = (gt | lt) ^ 1;
+        gt |= undecided & agt;
+        lt |= undecided & alt;
     }
-    std::cmp::Ordering::Equal
+    if gt == 1 { Ordering::Greater } else if lt == 1 { Ordering::Less } else { Ordering::Equal }
 }
 
+pub fn add(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
+    let n = a.len().max(b.len());
+    let mut out = Vec::with_capacity(n + 1);
+    let mut carry = 0u64;
+    for i in 0..n {
+        let x = if i < a.len() { a[i] } else { 0 };
+        let y = if i < b.len() { b[i] } else { 0 };
+        let s = x as Dlimb + y as Dlimb + carry as Dlimb;
+        out.push(s as Limb);
+        carry = (s >> 64) as Limb;
+    }
+    if carry > 0 { out.push(carry); }
+    if out.is_empty() { out.push(0); }
+    trim(&mut out);
+    out
+}
 
-fn mul(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
+pub fn mul(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
     let mut c = vec![0u64; a.len() + b.len()];
     for i in 0..a.len() {
         let mut carry: Dlimb = 0;
@@ -36,95 +67,208 @@ fn mul(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
     c
 }
 
-fn divmod(a: &[Limb], b: &[Limb]) -> (Vec<Limb>, Vec<Limb>) {
-    if cmp(a, b) == std::cmp::Ordering::Less {
-        return (vec![0], a.to_vec());
-    }
-    if b.len() == 1 && b[0] == 0 { return (vec![0], vec![0]); }
+pub fn divmod(a: &[Limb], b: &[Limb]) -> Result<(Vec<Limb>, Vec<Limb>), CryptoError> {
+    if is_zero(b) { return Err(CryptoError::DivisionByZero); }
 
-    let total_bits = a.len() * 64;
-    let mut q = vec![0u64; a.len()];
-    let mut rem: Vec<Limb> = Vec::new();
+    let n = a.len();
+    let bn = b.len();
+    let width = bn + 1;
+    let mut q = vec![0u64; n.max(1)];
+    let mut rem = vec![0u64; width];
+    let mut t = vec![0u64; width];
 
-    for i in (0..total_bits).rev() {
+    for i in (0..n * 64).rev() {
         let mut carry = 0u64;
-        for j in 0..rem.len() {
+        for j in 0..width {
             let nb = rem[j] >> 63;
             rem[j] = (rem[j] << 1) | carry;
             carry = nb;
         }
-        if carry > 0 && rem.len() < b.len() + 1 { rem.push(carry); }
+        rem[0] |= (a[i / 64] >> (i % 64)) & 1;
 
-        if (a[i / 64] >> (i % 64)) & 1 == 1 {
-            if rem.is_empty() { rem.push(0); }
-            rem[0] |= 1;
+        let mut brw = 0u64;
+        for j in 0..width {
+            let bv = if j < bn { b[j] } else { 0 };
+            let (r1, u1) = rem[j].overflowing_sub(bv);
+            let (r2, u2) = r1.overflowing_sub(brw);
+            t[j] = r2;
+            brw = (u1 as u64) | (u2 as u64);
         }
 
-        if cmp(&rem, b) != std::cmp::Ordering::Less {
-            let mut brw = 0u64;
-            for j in 0..rem.len() {
-                let bv = if j < b.len() { b[j] } else { 0 };
-                let (r1, u1) = rem[j].overflowing_sub(bv);
-                let (r2, u2) = r1.overflowing_sub(brw);
-                rem[j] = r2;
-                brw = if u1 || u2 { 1 } else { 0 };
-            }
-            trim(&mut rem);
-            q[i / 64] |= 1 << (i % 64);
+        let mask = brw.wrapping_neg();
+        for j in 0..width {
+            rem[j] = (t[j] & !mask) | (rem[j] & mask);
         }
+        q[i / 64] |= (!brw & 1) << (i % 64);
     }
 
     trim(&mut q);
     trim(&mut rem);
-    (q, rem)
+    Ok((q, rem))
 }
 
+pub fn sub(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
+    sub_abs(a, b)
+}
 
-
-pub fn mod_pow(base: &[Limb], exp: &[Limb], modulus: &[Limb]) -> Vec<Limb> {
-    let one = vec![1];
-    if modulus.len() == 1 && modulus[0] == 1 { return vec![0]; }
-    let mut result = mod_reduce(&one.to_vec(), modulus);
-    let base_mod = mod_reduce(base, modulus);
-
-    let exp_bits: Vec<bool> = {
-        let mut bits = Vec::new();
-        for i in (0..exp.len()).rev() {
-            for j in (0..64).rev() {
-                bits.push((exp[i] >> j) & 1 == 1);
-            }
-        }
-        while bits.len() > 1 && !bits[0] { bits.remove(0); }
-        bits
-    };
-
-    for bit in exp_bits {
-        result = mod_reduce(&mul(&result, &result), modulus);
-        if bit {
-            result = mod_reduce(&mul(&result, &base_mod), modulus);
-        }
+fn sub_abs(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
+    let mut out = vec![0u64; a.len()];
+    let mut brw = 0u64;
+    for i in 0..a.len() {
+        let bv = if i < b.len() { b[i] } else { 0 };
+        let (r1, u1) = a[i].overflowing_sub(bv);
+        let (r2, u2) = r1.overflowing_sub(brw);
+        out[i] = r2;
+        brw = (u1 as u64) | (u2 as u64);
     }
-    result
+    trim(&mut out);
+    out
 }
 
-fn mod_reduce(a: &[Limb], m: &[Limb]) -> Vec<Limb> {
-    let (_, r) = divmod(a, m);
-    r
+fn sub_signed(a: &[Limb], aneg: bool, b: &[Limb], bneg: bool) -> (Vec<Limb>, bool) {
+    if aneg == bneg {
+        if cmp(a, b) == Ordering::Less {
+            (sub_abs(b, a), !aneg)
+        } else {
+            (sub_abs(a, b), aneg)
+        }
+    } else {
+        let mut mag = add(a, b);
+        trim(&mut mag);
+        (mag, aneg)
+    }
 }
 
-pub fn hex_to_limbs(hex: &str) -> Vec<Limb> {
-    let clean = hex.trim_start_matches("0x");
-    let padded = if clean.len() % 16 != 0 {
-        format!("{}{}", "0".repeat(16 - clean.len() % 16), clean)
-    } else { clean.to_string() };
-    let mut limbs = Vec::new();
-    let chunks: Vec<&str> = padded.as_bytes().chunks(16).map(|c| std::str::from_utf8(c).unwrap()).collect();
-    for chunk in chunks.into_iter().rev() {
-        limbs.push(u64::from_str_radix(chunk, 16).unwrap_or(0));
+pub fn mod_inv(a: &[Limb], m: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
+    if is_zero(m) { return Err(CryptoError::ModulusIsZero); }
+    if m.len() == 1 && m[0] == 1 { return Ok(vec![0]); }
+
+    let mut t: Vec<Limb> = vec![0];
+    let mut t_neg = false;
+    let mut new_t: Vec<Limb> = vec![1];
+    let mut new_t_neg = false;
+
+    let mut r: Vec<Limb> = m.to_vec();
+    let mut new_r: Vec<Limb> = divmod(a, m)?.1;
+
+    while !is_zero(&new_r) {
+        let mut q = divmod(&r, &new_r)?.0;
+        let mut qnt = mul(&q, &new_t);
+        let (diff, diff_neg) = sub_signed(&t, t_neg, &qnt, new_t_neg);
+        crate::wipe(&mut qnt);
+        std::mem::swap(&mut t, &mut new_t);
+        std::mem::swap(&mut t_neg, &mut new_t_neg);
+        new_t = diff;
+        new_t_neg = diff_neg;
+
+        let mut qr = mul(&q, &new_r);
+        let (rsum, _) = sub_signed(&r, false, &qr, false);
+        crate::wipe(&mut q);
+        crate::wipe(&mut qr);
+        std::mem::swap(&mut r, &mut new_r);
+        new_r = rsum;
+    }
+
+    crate::wipe(&mut new_t);
+    crate::wipe(&mut new_r);
+
+    if r != vec![1] { return Err(CryptoError::NoModularInverse); }
+    if t_neg {
+        let mag = sub_abs(m, &t);
+        crate::wipe(&mut t);
+        Ok(mod_reduce_owned(mag, m))
+    } else {
+        Ok(mod_reduce_owned(t, m))
+    }
+}
+
+fn mod_reduce_owned(a: Vec<Limb>, m: &[Limb]) -> Vec<Limb> {
+    divmod(&a, m).map(|(_, r)| r).unwrap_or_else(|_| a)
+}
+
+pub fn bytes_to_limbs_be(bytes: &[u8]) -> Vec<Limb> {
+    let mut limbs = Vec::with_capacity(bytes.len().div_ceil(8));
+    let pad = (8 - bytes.len() % 8) % 8;
+    let mut acc: Limb = 0;
+    let mut filled = 0usize;
+    for _ in 0..pad {
+        acc = (acc << 8) | 0;
+        filled += 1;
+        if filled == 8 { limbs.push(acc); acc = 0; filled = 0; }
+    }
+    for &b in bytes {
+        acc = (acc << 8) | b as Limb;
+        filled += 1;
+        if filled == 8 { limbs.push(acc); acc = 0; filled = 0; }
     }
     if limbs.is_empty() { limbs.push(0); }
     trim(&mut limbs);
     limbs
+}
+
+fn select(bit: bool, a: &[Limb], b: &[Limb]) -> Vec<Limb> {
+    let mask = (bit as u64).wrapping_neg();
+    let n = a.len().max(b.len());
+    (0..n).map(|i| {
+        let x = if i < a.len() { a[i] } else { 0 };
+        let y = if i < b.len() { b[i] } else { 0 };
+        (x & mask) | (y & !mask)
+    }).collect()
+}
+
+pub fn mod_pow(base: &[Limb], exp: &[Limb], modulus: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
+    if is_zero(modulus) { return Err(CryptoError::ModulusIsZero); }
+    if modulus.len() == 1 && modulus[0] == 1 { return Ok(vec![0]); }
+    let mut result = mod_reduce(&[1], modulus)?;
+    let mut base_mod = mod_reduce(base, modulus)?;
+
+    let nbits = exp.len() * 64;
+    for i in (0..nbits).rev() {
+        let bit = (exp[i / 64] >> (i % 64)) & 1;
+        let mut sq = mod_reduce(&mul(&result, &result), modulus)?;
+        let mut cand = mod_reduce(&mul(&sq, &base_mod), modulus)?;
+        result = select(bit == 1, &cand, &sq);
+        crate::wipe(&mut sq);
+        crate::wipe(&mut cand);
+    }
+    crate::wipe(&mut base_mod);
+    Ok(result)
+}
+
+fn mod_reduce(a: &[Limb], m: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
+    divmod(a, m).map(|(_, r)| r)
+}
+
+fn nibble(c: u8) -> Option<u64> {
+    match c {
+        b'0'..=b'9' => Some((c - b'0') as u64),
+        b'a'..=b'f' => Some((c - b'a' + 10) as u64),
+        b'A'..=b'F' => Some((c - b'A' + 10) as u64),
+        _ => None,
+    }
+}
+
+pub fn hex_to_limbs(hex: &str) -> Result<Vec<Limb>, CryptoError> {
+    let clean = hex.strip_prefix("0x").or_else(|| hex.strip_prefix("0X")).unwrap_or(hex);
+    if clean.is_empty() { return Err(CryptoError::EmptyHex); }
+    let mut digits = Vec::with_capacity(clean.len());
+    for c in clean.bytes() {
+        match nibble(c) {
+            Some(v) => digits.push(v),
+            None => return Err(CryptoError::InvalidHexChar),
+        }
+    }
+    while digits.len() % 16 != 0 { digits.insert(0, 0); }
+    let mut limbs = Vec::with_capacity(digits.len() / 16);
+    for chunk in digits.chunks(16) {
+        let mut acc: u64 = 0;
+        for &d in chunk { acc = (acc << 4) | d; }
+        limbs.push(acc);
+    }
+    limbs.reverse();
+    if limbs.is_empty() { limbs.push(0); }
+    trim(&mut limbs);
+    Ok(limbs)
 }
 
 pub fn limbs_to_hex(limbs: &[Limb]) -> String {
