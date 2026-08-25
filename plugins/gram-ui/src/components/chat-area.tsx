@@ -226,11 +226,18 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
 
   useEffect(() => {
     const onFx = (e: Event) => {
-      const mid = (e as CustomEvent).detail?.messageId;
+      const detail = (e as CustomEvent).detail || {};
+      const mid = detail.messageId;
       const match = mid === m.id || String(mid) === String(m.id);
-      if (match && fxUrlRef.current && rootRef.current) {
+      if (!match || !rootRef.current) return;
+      if (fxUrlRef.current) {
         fxLog.info('[gram-app] sticker-fx overlay for msg=' + m.id + ' (tg-sticker-fx)');
         playStickerFxOverlay('fx' + m.id, fxUrlRef.current, rootRef.current.getBoundingClientRect());
+      } else if (!detail.hasCanvasFx) {
+        // No server effect for this sticker AND no local canvas pixel fx
+        // owns the fallback (TGS stickers run their own): hand off to the
+        // local animated fallback, forwarding the original click coordinates.
+        window.dispatchEvent(new CustomEvent('tg-emoji-fx-fallback', { detail: { messageId: String(mid), x: detail.x, y: detail.y } }));
       }
     };
     window.addEventListener('tg-sticker-fx', onFx);

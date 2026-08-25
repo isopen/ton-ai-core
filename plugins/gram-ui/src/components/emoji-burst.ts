@@ -18,6 +18,15 @@ const PARTICLES_PER_LAYER_BASE = 7;
 const TOTAL_PARTICLE_CAP = 60;
 const TAP_SESSION_MS = 2200;
 
+/** Standalone media (a lone sticker or a single-emoji message) gets a
+ *  proportionally larger click effect than inline text emoji particles. */
+function isStandaloneMedia(bubble: HTMLElement): boolean {
+    if (bubble.querySelector('.tgui-sticker')) return true;
+    const slots = bubble.querySelectorAll('.tgui-emoji-slot').length;
+    const textLen = (bubble.textContent || '').trim().length;
+    return slots === 1 && textLen <= 4;
+}
+
 let layerEl: HTMLDivElement | null = null;
 let liveParticles = 0;
 
@@ -41,6 +50,22 @@ function rand(min: number, max: number): number {
  * under the tap for shared multi-emoji canvases), img src, or descend into
  * wrappers (slot/span/div) that merely contain a drawable.
  */
+function snapshotVideoFrame(vid: HTMLVideoElement): string {
+    try {
+        if (!(vid.videoWidth > 0)) return '';
+        // Cap the snapshot size: these are tiny flying particles, and PNG
+        // keeps the alpha channel (JPEG would bake a black frame around
+        // transparent video emoji).
+        const maxSide = 96;
+        const scale = Math.min(1, maxSide / Math.max(vid.videoWidth, vid.videoHeight));
+        const tmp = document.createElement('canvas');
+        tmp.width = Math.max(1, Math.round(vid.videoWidth * scale));
+        tmp.height = Math.max(1, Math.round(vid.videoHeight * scale));
+        tmp.getContext('2d')!.drawImage(vid, 0, 0, tmp.width, tmp.height);
+        return tmp.toDataURL();
+    } catch { /* cross-origin or not ready */ return ''; }
+}
+
 function resolveDrawableValue(node: Element, px: number, py: number): string {
     if (node instanceof HTMLCanvasElement && node.width > 0) {
         const cropped = snapshotCanvasAt(node, px, py);
@@ -53,13 +78,8 @@ function resolveDrawableValue(node: Element, px: number, py: number): string {
 
     const vid = node.querySelector('video');
     if (vid instanceof HTMLVideoElement && vid.videoWidth > 0) {
-        try {
-            const tmp = document.createElement('canvas');
-            tmp.width = vid.videoWidth;
-            tmp.height = vid.videoHeight;
-            tmp.getContext('2d')!.drawImage(vid, 0, 0);
-            return tmp.toDataURL('image/jpeg', 0.92);
-        } catch { /* cross-origin or not ready - fall through */ }
+        const frame = snapshotVideoFrame(vid);
+        if (frame) return frame;
     }
     return '';
 }
@@ -128,38 +148,64 @@ export function snapshotSlotFromCanvas(slotRect: DOMRect, scopeForCanvas: Elemen
     }
 }
 
+export type BurstSource = { kind: 'image' | 'text' | 'video'; value: string };
+
+const VIDEO_PARTICLE_CAP = 6;
+let liveVideoParticles = 0;
+
 function spawnParticle(
     x: number,
     y: number,
-    source: { kind: 'image' | 'text'; value: string },
+    source: BurstSource,
     layer: number,
+    staticFrame?: string,
+    size = 30,
+    spread = 1,
 ): void {
     if (liveParticles >= TOTAL_PARTICLE_CAP) return;
-    const node = source.kind === 'image'
-        ? document.createElement('img')
-        : document.createElement('span');
-    if (source.kind === 'image') {
-        (node as HTMLImageElement).src = source.value;
-        node.style.width = '30px';
-        node.style.height = '30px';
-        node.style.objectFit = 'contain';
-    } else {
+    let node: HTMLElement;
+    let isVideoParticle = false;
+    if (source.kind === 'video' && liveVideoParticles < VIDEO_PARTICLE_CAP && !document.hidden) {
+        const v = document.createElement('video');
+        v.src = source.value;
+        v.muted = true;
+        v.loop = true;
+        v.autoplay = true;
+        v.playsInline = true;
+        node = v;
+        isVideoParticle = true;
+        liveVideoParticles++;
+    } else if (source.kind === 'text') {
+        node = document.createElement('span');
         node.textContent = source.value;
-        node.style.fontSize = '30px';
-        node.style.lineHeight = '1';
+    } else {
+        if (source.kind === 'video' && !staticFrame) return;
+        node = document.createElement('img');
+        (node as HTMLImageElement).src = source.kind === 'video'
+            ? staticFrame!
+            : source.value;
     }
-    node.style.cssText += ';position:fixed;left:' + x + 'px;top:' + y + 'px;width:auto;height:auto;'
-        + 'margin-left:-15px;margin-top:-15px;pointer-events:none;will-change:transform,opacity';
+    // Single cssText assignment: appending later would silently override
+    // the particle box (width:auto made video particles render at their
+    // native size, detaching the burst from the tapped emoji).
+    const half = Math.round(size / 2);
+    const baseCss = 'position:fixed;left:' + x + 'px;top:' + y + 'px;'
+        + 'margin-left:-' + half + 'px;margin-top:-' + half + 'px;pointer-events:none;'
+        + 'will-change:transform,opacity;'
+        + (source.kind === 'text'
+            ? 'font-size:' + size + 'px;line-height:1;'
+            : 'width:' + size + 'px;height:' + size + 'px;object-fit:contain;');
+    node.style.cssText = baseCss;
 
     const angleDeg = rand(-155, -25);
     const angle = (angleDeg * Math.PI) / 180;
     const distScale = 0.85 + layer * 0.22;
-    const dist = rand(130, 300) * distScale;
+    const dist = rand(130, 300) * distScale * spread;
     const dx = Math.cos(angle) * dist;
     const dyUp = Math.sin(angle) * dist;
     const drift = rand(-60, 60);
-    const rot = rand(-220, 220);
-    const duration = rand(900, 1400) + layer * 140;
+    const rot = rand(-220, 220) * spread;
+    const duration = (rand(900, 1400) + layer * 140) * (spread > 1 ? 1.15 : 1);
 
     const animation = node.animate([
         { transform: 'translate(0px, 0px) rotate(0deg) scale(1)', opacity: 1 },
@@ -171,18 +217,20 @@ function spawnParticle(
         fill: 'forwards',
     });
     liveParticles++;
-    animation.finished.then(() => {
+    const cleanup = () => {
         node.remove();
         liveParticles--;
-    }).catch(() => {
-        node.remove();
-        liveParticles--;
-    });
+        if (isVideoParticle) liveVideoParticles = Math.max(0, liveVideoParticles - 1);
+    };
+    animation.finished.then(cleanup).catch(cleanup);
 
     layerEl!.appendChild(node);
+    if (isVideoParticle) {
+        (node as HTMLVideoElement).play().catch(() => {});
+    }
 }
 
-export function spawnEmojiBurst(x: number, y: number, source: { kind: 'image' | 'text'; value: string }, key: object): void {
+export function spawnEmojiBurst(x: number, y: number, source: BurstSource, key: object, staticFrame?: string, big = false): void {
     if (document.hidden) return;
     const layerNode = ensureLayer();
 
@@ -195,11 +243,13 @@ export function spawnEmojiBurst(x: number, y: number, source: { kind: 'image' | 
 
     const layers = session.count;
     const perLayer = PARTICLES_PER_LAYER_BASE + layers * 2;
+    const size = big ? 56 : 30;
+    const spread = big ? 1.35 : 1;
 
     for (let l = 0; l < layers; l++) {
         const n = Math.ceil(perLayer / layers);
         for (let i = 0; i < n; i++) {
-            setTimeout(() => spawnParticle(x + rand(-10, 10), y + rand(-8, 8), source, l), l * 90 + i * 12);
+            setTimeout(() => spawnParticle(x + rand(-10, 10), y + rand(-8, 8), source, l, staticFrame, size, spread), l * 90 + i * 12);
         }
     }
     void layerNode;
@@ -209,6 +259,32 @@ export function spawnEmojiBurst(x: number, y: number, source: { kind: 'image' | 
 function dispatchLocalEmojiClick(messageId: string, x?: number, y?: number, slotIndex?: number): void {
     if (!messageId) return;
     window.dispatchEvent(new CustomEvent('tg-local-emoji-click', { detail: { messageId, x, y, slotIndex } }));
+}
+
+/** Short scale-pop of the tapped emoji itself (Telegram-style bounce). */
+function popEmojiSlot(el: Element, big = false): void {
+    try {
+        el.animate([
+            { transform: 'scale(1)' },
+            { transform: 'scale(' + (big ? 1.6 : 1.35) + ')', offset: 0.4 },
+            { transform: 'scale(1)' },
+        ], { duration: big ? 380 : 320, easing: 'cubic-bezier(.34,1.56,.64,1)' });
+    } catch { /* animate() unsupported */ }
+}
+
+/**
+ * Fully local animated click effect for video custom emoji: live video
+ * particles fly out of the tap point while the emoji itself pops. Runs only
+ * after the server answered that it has no interaction animation for this
+ * emoji (tg-emoji-fx-fallback).
+ */
+export function playVideoEmojiFx(anchor: Element, vid: HTMLVideoElement, x?: number, y?: number, big = false): void {
+    if (document.hidden) return;
+    popEmojiSlot(anchor, big);
+    const r = anchor.getBoundingClientRect();
+    const px = x != null && r.width > 0 ? Math.max(r.left, Math.min(x, r.right)) : r.left + r.width / 2;
+    const py = y != null && r.height > 0 ? Math.max(r.top, Math.min(y, r.bottom)) : r.top + r.height / 2;
+    spawnEmojiBurst(px, py, { kind: 'video', value: vid.src }, vid, snapshotVideoFrame(vid), big);
 }
 
 let burstAttached = false;
@@ -231,13 +307,26 @@ export function attachEmojiBurst(): void {
         if (!bubble) return;
 
         if (stickerEl) {
+            const rowId0 = stickerEl.closest('[id^="msg-"]')?.id || '';
             const mainCv = stickerEl.querySelector(':scope > .tgui-sticker-preview canvas.tgui-animated-sticker');
+
+            // Schedule the local canvas fx BEFORE notifying chat-area: the
+            // server overlay (when one exists) synchronously fires
+            // tg-sticker-fx-overlay-started, which cancels this pending
+            // effect. Reversed order would let the local fx survive and run
+            // alongside the server animation.
             if (mainCv instanceof HTMLCanvasElement) {
-                const rowId0 = stickerEl.closest('[id^="msg-"]')?.id || '';
                 scheduleStickerClickFx(stickerEl, mainCv, rowId0.slice(4), x, y);
             }
-            const rowId = stickerEl.closest('[id^="msg-"]')?.id || '';
-            window.dispatchEvent(new CustomEvent('tg-sticker-fx', { detail: { messageId: rowId.slice(4) } }));
+
+            // Server effect first: chat-area plays video_thumbs['f'] overlay
+            // for this message when one exists. When it does not, chat-area
+            // hands off to tg-emoji-fx-fallback UNLESS the canvas local pixel
+            // fx above already owns this sticker's fallback (strictly one
+            // animation per click).
+            window.dispatchEvent(new CustomEvent('tg-sticker-fx', {
+                detail: { messageId: rowId0.slice(4), x, y, hasCanvasFx: mainCv instanceof HTMLCanvasElement },
+            }));
             return;
         }
 
@@ -270,6 +359,9 @@ export function attachEmojiBurst(): void {
         {
             const slots = Array.from(bubble.querySelectorAll('.tgui-emoji-slot'));
             const slotIdx = slotEl ? slots.indexOf(slotEl) : -1;
+            // Server-first for every emoji kind: the agent resolves the
+            // AnimatedEmojiAnimations pack (tg-play-emoji-fx) or answers with
+            // tg-emoji-fx-fallback, which runs the local animated burst.
             dispatchLocalEmojiClick(rowId, x, y, slotIdx >= 0 ? slotIdx : undefined);
         }
     }, { passive: true });
@@ -303,6 +395,7 @@ function pickEmojiAnchor(bubble: Element, x?: number, y?: number): Element | nul
 
 /** Old-style local burst used when no server animation exists for an emoji. */
 function playBurstFallback(bubble: HTMLElement, x?: number, y?: number): void {
+    const big = isStandaloneMedia(bubble);
     const el = pickEmojiAnchor(bubble, x, y);
     let px: number;
     let py: number;
@@ -317,17 +410,23 @@ function playBurstFallback(bubble: HTMLElement, x?: number, y?: number): void {
     }
     let node: Element | null = null;
     if (el instanceof HTMLCanvasElement || el instanceof HTMLImageElement || el instanceof HTMLVideoElement) node = el;
-    else if (el) node = el.querySelector('canvas, img');
+    else if (el) node = el.querySelector('canvas, img, video');
+
+    const vid = node instanceof HTMLVideoElement ? node : (node?.querySelector('video') as HTMLVideoElement | null);
+    if (vid && vid.src) {
+        playVideoEmojiFx(el ?? vid, vid, x, y, big);
+        return;
+    }
     if (node) {
         const value = resolveDrawableValue(node, px, py);
-        if (value) { spawnEmojiBurst(px, py, { kind: 'image', value }, node); return; }
+        if (value) { spawnEmojiBurst(px, py, { kind: 'image', value }, node, undefined, big); return; }
     }
     if (el) {
         const v = snapshotSlotFromCanvas(el.getBoundingClientRect(), el.closest('.tgui-emoji-canvas-wrap') ?? bubble);
-        if (v) { spawnEmojiBurst(px, py, { kind: 'image', value: v }, bubble); return; }
+        if (v) { spawnEmojiBurst(px, py, { kind: 'image', value: v }, bubble, undefined, big); return; }
     }
     const m = (bubble.textContent || '').match(/\p{Extended_Pictographic}/u);
-    if (m) spawnEmojiBurst(px, py, { kind: 'text', value: m[0] }, bubble);
+    if (m) spawnEmojiBurst(px, py, { kind: 'text', value: m[0] }, bubble, undefined, big);
 }
 
 export function attachEmojiInteractions(): void {
@@ -351,6 +450,14 @@ export function attachEmojiInteractions(): void {
         if (detail.messageId == null) return;
         const bubble = document.getElementById('msg-' + detail.messageId);
         if (!bubble) return;
+
+        // Video sticker without a server effect: burst anchored to the
+        // sticker preview itself (it has neither emoji slots nor canvases).
+        const stickerVid = bubble.querySelector('.tgui-sticker-preview video') as HTMLVideoElement | null;
+        if (stickerVid && stickerVid.src) {
+            playVideoEmojiFx(stickerVid.parentElement ?? stickerVid, stickerVid, detail.x, detail.y, true);
+            return;
+        }
         playBurstFallback(bubble, detail.x, detail.y);
     });
 }
