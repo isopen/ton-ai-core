@@ -64,10 +64,12 @@ fn divmod(a: &[Limb], b: &[Limb]) -> (Vec<Limb>, Vec<Limb>) {
             let mut brw = 0u64;
             for j in 0..rem.len() {
                 let bv = if j < b.len() { b[j] } else { 0 };
-                let sub = (rem[j] as u64).wrapping_sub(bv).wrapping_sub(brw);
-                rem[j] = sub;
-                brw = if rem[j] > sub { 1 } else { 0 };
+                let (r1, u1) = rem[j].overflowing_sub(bv);
+                let (r2, u2) = r1.overflowing_sub(brw);
+                rem[j] = r2;
+                brw = if u1 || u2 { 1 } else { 0 };
             }
+            trim(&mut rem);
             q[i / 64] |= 1 << (i % 64);
         }
     }
