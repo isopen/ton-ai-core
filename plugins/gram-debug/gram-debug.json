@@ -83,6 +83,10 @@
         "fps": {
             "enabled": false,
             "level": "info"
+        },
+        "crypton": {
+            "enabled": false,
+            "level": "debug"
         }
     }
 }

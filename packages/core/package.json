@@ -6,7 +6,7 @@
   "types": "dist/index.d.ts",
   "license": "Boost Software License 1.0",
   "scripts": {
-    "build": "tsc && cp -r src/crypton/wasm dist/crypton/wasm 2>/dev/null || true",
+    "build": "tsc && rm -rf dist/crypton/wasm && cp -r src/crypton/wasm dist/crypton/wasm",
     "clean": "rm -rf dist"
   },
   "dependencies": {

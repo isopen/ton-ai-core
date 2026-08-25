@@ -1,4 +1,7 @@
 import * as TW from './telegram-worker';
+import { initWasmCrypton } from '@ton-ai/core';
+
+initWasmCrypton().catch(() => {});
 
 interface PortLike {
     postMessage(msg: any, transfer?: ArrayBuffer[]): void;
@@ -116,6 +119,20 @@ function collectTransferables(result: any): ArrayBuffer[] {
 }
 
 async function handleMessage(msg: Record<string, any>): Promise<any> {
+    const t0 = Date.now();
+    console.log(`[worker] → ${msg.type} @${t0 % 100000}`);
+    try {
+        const result = await _handleMessage(msg);
+        console.log(`[worker] ← ${msg.type} OK (${Date.now() - t0}ms)`);
+        return result;
+    } catch (e: any) {
+        console.error(`[worker] ← ${msg.type} ERROR (${Date.now() - t0}ms):`, e?.message || e);
+        if (e?.stack) console.error(e.stack.split('\n').slice(0, 5).join('\n'));
+        throw e;
+    }
+}
+
+async function _handleMessage(msg: Record<string, any>): Promise<any> {
     switch (msg.type) {
         case 'connect':
             lastSessionId = msg.sessionId;

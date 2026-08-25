@@ -13,6 +13,9 @@ const envKeys = Object.keys(env).reduce((acc, key) => {
 
 module.exports = {
   mode: 'production',
+  experiments: {
+    asyncWebAssembly: true,
+  },
   entry: {
     main: './src/main.ts',
     'shared-worker': './src/worker/shared-worker.ts',
@@ -41,6 +44,10 @@ module.exports = {
   },
   module: {
     rules: [
+      {
+        test: /\.wasm$/,
+        type: 'asset/resource',
+      },
       {
         test: /\.ts$/,
         use: {

@@ -11,7 +11,9 @@ function initApp() {
   if (initialized) return;
   initialized = true;
 
-  initWasmCrypton().catch((e) => log.error('crypton WASM init failed:', e));
+  initWasmCrypton().catch((e: any) => {
+    console.error('[crypton] init failed:', e);
+  });
 
   startFpsLogging();
 
