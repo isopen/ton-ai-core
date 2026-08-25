@@ -152,10 +152,16 @@ export const modPowConstantTime = modPowBranchless;
 const primeCache = new Map<bigint, boolean>();
 const PRIME_CACHE_MAX = 32;
 
+type IsPrimeFn = (n: bigint, k: number) => boolean;
+let isPrimeImpl: IsPrimeFn = (n, k) => isProbablyPrimeUncached(n, k);
+export function setIsProbablyPrimeImplementation(fn: IsPrimeFn): void {
+  isPrimeImpl = fn;
+}
+
 export function isProbablyPrime(n: bigint, k: number = 40): boolean {
   const cached = primeCache.get(n);
   if (cached !== undefined) return cached;
-  const result = isProbablyPrimeUncached(n, k);
+  const result = isPrimeImpl(n, k);
   if (primeCache.size >= PRIME_CACHE_MAX) {
     const oldest = primeCache.keys().next().value;
     if (oldest !== undefined) primeCache.delete(oldest);

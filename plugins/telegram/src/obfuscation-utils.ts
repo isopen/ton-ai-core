@@ -15,7 +15,7 @@ export function aes256CtrProcess(data: Buffer, key: Buffer, iv: Buffer, startCou
     const result = Buffer.alloc(data.length);
     let offset = 0;
     let counter = startCounter >>> 0;
-    const aesEcb = new crypton.AES256ECB(key);
+    const aesEcb = crypton.createObfuscationCipher(key);
     const counterBlock = Buffer.alloc(16);
     try {
         while (offset < data.length) {

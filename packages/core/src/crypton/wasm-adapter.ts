@@ -158,6 +158,12 @@ export function wasmHmacSha256(key: Buffer, data: Buffer): Buffer | null {
   return Buffer.from(w('hmac_sha256').hmac_sha256(key, data));
 }
 
+export function wasmIsProbablyPrime(nHex: string, rounds: number): boolean | null {
+  if (!wasmInstance) return null;
+  log('is_probably_prime', `n=${nHex.length}hex rounds=${rounds}`);
+  return w('is_probably_prime').is_probably_prime(nHex, rounds);
+}
+
 export function wasmModPow(baseHex: string, expHex: string, modHex: string): string | null {
   if (!wasmInstance) return null;
   const clean = (s: string) => s.startsWith('0x') ? s.slice(2) : s;

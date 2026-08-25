@@ -3,9 +3,10 @@ import { AES256ECB } from './aes-256-ecb';
 import { AES256CTR, AesCtrCipher } from './aes-256-ctr';
 import { AES256CBC } from './aes-256-cbc';
 import { AES256CBC_ETM } from './aes-256-cbc-etm';
+import { createObfuscationCipher } from './aes-256-ecb';
 import { MTProtoKDF } from './kdf';
 import { setKdfSha256Implementation } from './kdf';
-import { setModPowImplementation } from './utils';
+import { setModPowImplementation, setIsProbablyPrimeImplementation } from './utils';
 import { DiffieHellman } from './diffie-hellman';
 
 import {
@@ -72,7 +73,7 @@ import { initWasm, isWasmAvailable, isWasmLoggingEnabled,
          wasmAes256CbcEncryptEtm, wasmAes256CbcDecryptEtm,
          wasmAes256CbcSeal, wasmAes256CbcOpen,
          wasmAes256IgeEncrypt, wasmAes256IgeDecrypt,
-         wasmAes256CtrProcess, wasmSha1, wasmSha256,
+         wasmAes256CtrProcess, wasmSha1, wasmSha256, wasmIsProbablyPrime,
          wasmHmacSha256, wasmModPow } from './wasm-adapter';
 
 let _wasmReady = false;
@@ -85,7 +86,8 @@ const OVERRIDDEN_OPS = [
   'AES256ECB.encryptBlock/decryptBlock',
 ] as const;
 
-export function initWasmCrypton(): Promise<void> {
+export function initWasmCrypton(options?: { legacySha1?: boolean }): Promise<void> {
+  const legacySha1 = options?.legacySha1 ?? true;
   if (_wasmReady) return Promise.resolve();
   return initWasm().then(ok => {
     if (!ok) return;
@@ -141,6 +143,12 @@ export function initWasmCrypton(): Promise<void> {
       return BigInt('0x' + r);
     });
 
+    setIsProbablyPrimeImplementation((n: bigint, k: number): boolean => {
+      const r = wasmIsProbablyPrime(n.toString(16), k);
+      if (r === null) throw new Error('crypton-rs is_probably_prime unavailable');
+      return r;
+    });
+
     const ecbProto = AES256ECB.prototype as any;
     ecbProto.encryptBlock = function(block: Uint8Array): Buffer {
       return wasmAes256EcbEncrypt(this.key, Buffer.from(block))!;
@@ -148,6 +156,12 @@ export function initWasmCrypton(): Promise<void> {
     ecbProto.decryptBlock = function(block: Uint8Array): Buffer {
       return wasmAes256EcbDecrypt(this.key, Buffer.from(block))!;
     };
+
+    if (!legacySha1) {
+      const deny = (): never => { throw new Error('SHA-1 disabled: initWasmCrypton({ legacySha1: false })'); };
+      c.sha1Sync = deny as any;
+      c.sha1 = (() => Promise.reject(deny())) as any;
+    }
 
     if (isWasmLoggingEnabled()) {
       console.log('[crypton-rs] WASM active — Telegram crypto routed through Rust:', OVERRIDDEN_OPS.join(', '));
@@ -232,6 +246,7 @@ export const crypton = {
   hkdfExpand,
   hkdfSha512,
   pbkdf2Sha256,
+  createObfuscationCipher,
   isCryptonWasmActive,
   getWasmCallStats,
   resetWasmCallStats,

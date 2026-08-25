@@ -246,3 +246,17 @@ function invMixColumns(s: Buffer): void {
     s[i+3] = M3[a0] ^ M4[a1] ^ M2[a2] ^ M5[a3];
   }
 }
+
+export interface ObfuscationCipher {
+    encryptBlock(block: Uint8Array | Buffer): Buffer;
+    destroy(): void;
+}
+
+export function createObfuscationCipher(key: Buffer): ObfuscationCipher {
+    if (key.length !== 32) throw new Error(`Obfuscation cipher key must be 32 bytes, got ${key.length}`);
+    const inst = new AES256ECB(key);
+    return {
+        encryptBlock: (block) => inst.encryptBlock(Buffer.from(block)),
+        destroy: () => inst.destroy(),
+    };
+}
