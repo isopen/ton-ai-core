@@ -70,6 +70,7 @@ import { initWasm, isWasmAvailable, isWasmLoggingEnabled,
          wasmGetRandomBytes, wasmAes256EcbEncrypt, wasmAes256EcbDecrypt,
          wasmAes256CbcEncrypt, wasmAes256CbcDecrypt,
          wasmAes256CbcEncryptEtm, wasmAes256CbcDecryptEtm,
+         wasmAes256CbcSeal, wasmAes256CbcOpen,
          wasmAes256IgeEncrypt, wasmAes256IgeDecrypt,
          wasmAes256CtrProcess, wasmSha1, wasmSha256,
          wasmHmacSha256, wasmModPow } from './wasm-adapter';
@@ -80,7 +81,7 @@ const OVERRIDDEN_OPS = [
   'getRandomBytes', 'sha1', 'sha1Sync', 'sha256', 'sha256_sync',
   'hmacSha256', 'modPow',
   'AES256CTR.process', 'AES256IGE.encrypt/decrypt',
-  'AES256CBC.encrypt/decrypt', 'AES256CBC_ETM.encrypt/decrypt',
+  'AES256CBC.encrypt/decrypt', 'AES256CBC_ETM.encrypt/decrypt/seal/open',
   'AES256ECB.encryptBlock/decryptBlock',
 ] as const;
 
@@ -123,13 +124,22 @@ export function initWasmCrypton(): Promise<void> {
       Promise.resolve(wasmAes256CbcEncryptEtm(macKey, encKey, iv, pt)!)) as any;
     AES256CBC_ETM.decrypt = ((macKey: Buffer, encKey: Buffer, iv: Buffer, data: Buffer) =>
       Promise.resolve(wasmAes256CbcDecryptEtm(macKey, encKey, iv, data)!)) as any;
+    AES256CBC_ETM.seal = ((macKey: Buffer, encKey: Buffer, pt: Buffer) =>
+      Promise.resolve(wasmAes256CbcSeal(macKey, encKey, pt)!)) as any;
+    AES256CBC_ETM.open = ((macKey: Buffer, encKey: Buffer, sealed: Buffer) =>
+      Promise.resolve(wasmAes256CbcOpen(macKey, encKey, sealed)!)) as any;
 
     setKdfSha256Implementation((data: Buffer) => {
       const out = wasmSha256(data);
       if (!out) throw new Error('crypton-rs sha256 unavailable');
       return Promise.resolve(Buffer.from(out));
     });
-    void setModPowImplementation;
+
+    setModPowImplementation((b: bigint, e: bigint, m: bigint): bigint => {
+      const hex = (v: bigint) => v.toString(16);
+      const r = wasmModPow(hex(b), hex(e), hex(m))!;
+      return BigInt('0x' + r);
+    });
 
     const ecbProto = AES256ECB.prototype as any;
     ecbProto.encryptBlock = function(block: Uint8Array): Buffer {
@@ -141,7 +151,6 @@ export function initWasmCrypton(): Promise<void> {
 
     if (isWasmLoggingEnabled()) {
       console.log('[crypton-rs] WASM active — Telegram crypto routed through Rust:', OVERRIDDEN_OPS.join(', '));
-      console.log('[crypton-rs] note: DiffieHellman modpow stays on JS bigint fast path (wasm mod_pow opt-in via setModPowImplementation)');
     } else {
       console.info('[crypton-rs] WASM active (per-op logs off). Enable: enableWasmLogging(true)');
     }

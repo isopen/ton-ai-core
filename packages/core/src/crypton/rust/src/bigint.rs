@@ -45,7 +45,16 @@ pub fn add(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
     out
 }
 
+const KARATSUBA_THRESHOLD: usize = 24;
+
 pub fn mul(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
+    if a.len().min(b.len()) >= KARATSUBA_THRESHOLD {
+        return karatsuba(a, b);
+    }
+    mul_schoolbook(a, b)
+}
+
+pub fn mul_schoolbook(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
     let mut c = vec![0u64; a.len() + b.len()];
     for i in 0..a.len() {
         let mut carry: Dlimb = 0;
@@ -65,6 +74,65 @@ pub fn mul(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
     }
     trim(&mut c);
     c
+}
+
+fn mul_by_limb(v: &[Limb], k: Limb) -> Vec<Limb> {
+    let mut out = vec![0u64; v.len() + 1];
+    let mut carry: Dlimb = 0;
+    for i in 0..v.len() {
+        let cur = (v[i] as Dlimb) * (k as Dlimb) + carry;
+        out[i] = cur as Limb;
+        carry = cur >> 64;
+    }
+    out[v.len()] = carry as Limb;
+    trim(&mut out);
+    out
+}
+
+fn add_shifted_into(acc: &mut Vec<Limb>, x: &[Limb], sh: usize) {
+    let mut carry: Dlimb = 0;
+    for i in 0..x.len() {
+        let pos = i + sh;
+        if pos >= acc.len() { acc.resize(pos + 1, 0); }
+        let cur = (acc[pos] as Dlimb) + (x[i] as Dlimb) + carry;
+        acc[pos] = cur as Limb;
+        carry = cur >> 64;
+    }
+    let mut pos = x.len() + sh;
+    while carry > 0 {
+        if pos >= acc.len() { acc.resize(pos + 1, 0); }
+        let cur = (acc[pos] as Dlimb) + carry;
+        acc[pos] = cur as Limb;
+        carry = cur >> 64;
+        pos += 1;
+    }
+}
+
+fn karatsuba(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
+    let n = a.len().max(b.len());
+    if n < KARATSUBA_THRESHOLD || a.len().min(b.len()) < KARATSUBA_THRESHOLD / 2 {
+        return mul_schoolbook(a, b);
+    }
+    let half = (n + 1) / 2;
+    let pa = zpad(a, half * 2);
+    let pb = zpad(b, half * 2);
+    let (a0, a1) = (&pa[..half], &pa[half..]);
+    let (b0, b1) = (&pb[..half], &pb[half..]);
+
+    let z0 = karatsuba(a0, b0);
+    let z2 = karatsuba(a1, b1);
+    let sa = add(a0, a1);
+    let sb = add(b0, b1);
+    let mut z1 = karatsuba(&sa, &sb);
+    z1 = sub_abs(&z1, &z0);
+    z1 = sub_abs(&z1, &z2);
+
+    let mut acc = vec![0u64; half * 4];
+    add_shifted_into(&mut acc, &z0, 0);
+    add_shifted_into(&mut acc, &z1, half);
+    add_shifted_into(&mut acc, &z2, half * 2);
+    trim(&mut acc);
+    acc
 }
 
 pub fn divmod(a: &[Limb], b: &[Limb]) -> Result<(Vec<Limb>, Vec<Limb>), CryptoError> {
@@ -216,17 +284,159 @@ fn select(bit: bool, a: &[Limb], b: &[Limb]) -> Vec<Limb> {
     }).collect()
 }
 
+pub struct MontCtx {
+    n: usize,
+    m: Vec<Limb>,
+    n0: Limb,
+    r1: Vec<Limb>,
+    r2: Vec<Limb>,
+}
+
+impl MontCtx {
+    pub fn new(m_raw: &[Limb]) -> Option<MontCtx> {
+        if m_raw.is_empty() || is_zero(m_raw) { return None; }
+        if m_raw[m_raw.len() - 1] == 0 { return None; }
+        let m = m_raw.to_vec();
+        let n = m.len();
+        let mut inv: Limb = 1;
+        let m0 = m[0];
+        for _ in 0..6 {
+            inv = inv.wrapping_mul(2u64.wrapping_sub(m0.wrapping_mul(inv)));
+        }
+        let n0 = inv.wrapping_neg();
+        let mut r_val = vec![0u64; n + 1];
+        r_val[n] = 1;
+        let (_, rr) = divmod(&r_val, &m).ok()?;
+        let mut r1t = rr;
+        trim(&mut r1t);
+        let r1t = zpad(&r1t, n);
+        let r2_raw = divmod(&mul(&r1t, &r1t), &m).ok()?.1;
+        let r2 = zpad(&r2_raw, n);
+        Some(MontCtx { n, m: m.to_vec(), n0, r1: r1t, r2 })
+    }
+
+    pub fn mont_mul(&self, a_in: &[Limb], b_in: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
+        let n = self.n;
+        let a = zpad(a_in, n);
+        let b = zpad(b_in, n);
+        let mut t = vec![0u64; n * 2 + 2];
+        for i in 0..n {
+            let ai = a[i];
+            let mut carry: u128 = 0;
+            for j in 0..n {
+                let cur = (t[i + j] as u128) + (ai as u128) * (b[j] as u128) + carry;
+                t[i + j] = cur as u64;
+                carry = cur >> 64;
+            }
+            let mut idx = i + n;
+            while carry > 0 && idx < t.len() {
+                let cur = (t[idx] as u128) + carry;
+                t[idx] = cur as u64;
+                carry = cur >> 64;
+                idx += 1;
+            }
+        }
+        for i in 0..n {
+            let k = t[i].wrapping_mul(self.n0);
+            let mut carry: u128 = 0;
+            for j in 0..n {
+                let cur = (t[i + j] as u128) + (k as u128) * (self.m[j] as u128) + carry;
+                t[i + j] = cur as u64;
+                carry = cur >> 64;
+            }
+            let mut idx = i + n;
+            while carry > 0 && idx < t.len() {
+                let cur = (t[idx] as u128) + carry;
+                t[idx] = cur as u64;
+                carry = cur >> 64;
+                idx += 1;
+            }
+        }
+        let extra = t[2 * n];
+        let out: Vec<Limb> = t[n..2 * n].to_vec();
+        let mut w: Vec<Limb> = vec![0u64; n + 1];
+        w[..n].copy_from_slice(&out);
+        w[n] = extra & 1;
+        let mut brw = 0u64;
+        for j in 0..=n {
+            let mv = if j < n { self.m[j] } else { 0 };
+            let (s1, u1) = w[j].overflowing_sub(mv);
+            let (s2, u2) = s1.overflowing_sub(brw);
+            w[j] = s2;
+            brw = (u1 as u64) | (u2 as u64);
+        }
+        let ge = (extra & 1) == 1 || brw == 0;
+        let mask = (ge as u64).wrapping_neg();
+        let mut res: Vec<Limb> = vec![0u64; n];
+        for j in 0..n {
+            res[j] = (w[j] & mask) | (out[j] & !mask);
+        }
+        Ok(res)
+    }
+
+    fn from_mont_trimmed(&self, a: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
+        let mut v = self.from_mont(a)?;
+        trim(&mut v);
+        Ok(v)
+    }
+
+    pub fn to_mont(&self, a: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
+        self.mont_mul(a, &self.r2)
+    }
+
+    pub fn from_mont(&self, a: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
+        self.mont_mul(a, &vec![1u64])
+    }
+}
+
+fn mont_mod_pow(base_red: &[Limb], exp: &[Limb], ctx: &MontCtx) -> Result<Vec<Limb>, CryptoError> {
+    if ctx.m == vec![1] { return Ok(vec![0]); }
+    let mut base_m = ctx.to_mont(&zpad(base_red, ctx.n))?;
+    let mut result = ctx.r1.clone();
+    let nbits = exp.len() * 64;
+    for i in (0..nbits).rev() {
+        let bit = (exp[i / 64] >> (i % 64)) & 1;
+        let mut sq = ctx.mont_mul(&result, &result)?;
+        let mut cand = ctx.mont_mul(&sq, &base_m)?;
+        result = select(bit == 1, &cand, &sq);
+        crate::wipe(&mut sq);
+        crate::wipe(&mut cand);
+    }
+    let mut out_full = ctx.from_mont(&result)?;
+    crate::wipe(&mut base_m);
+    crate::wipe(&mut result);
+    trim(&mut out_full);
+    Ok(out_full)
+}
+
+fn zpad(v: &[Limb], n: usize) -> Vec<Limb> {
+    let mut out = vec![0u64; n];
+    let copy = v.len().min(n);
+    out[..copy].copy_from_slice(&v[..copy]);
+    out
+}
+
 pub fn mod_pow(base: &[Limb], exp: &[Limb], modulus: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
     if is_zero(modulus) { return Err(CryptoError::ModulusIsZero); }
     if modulus.len() == 1 && modulus[0] == 1 { return Ok(vec![0]); }
+    if modulus[0] & 1 == 1 {
+        if let Some(ctx) = MontCtx::new(modulus) {
+            let base_red = divmod(base, modulus)?.1;
+            return mont_mod_pow(&base_red, exp, &ctx);
+        }
+    }
+    legacy_mod_pow(base, exp, modulus)
+}
+
+pub fn legacy_mod_pow(base: &[Limb], exp: &[Limb], modulus: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
     let mut result = mod_reduce(&[1], modulus)?;
     let mut base_mod = mod_reduce(base, modulus)?;
 
     let nbits = exp.len() * 64;
     for i in (0..nbits).rev() {
         let bit = (exp[i / 64] >> (i % 64)) & 1;
-        let mut sq = mod_reduce(&mul(&result, &result), modulus)?;
-        let mut cand = mod_reduce(&mul(&sq, &base_mod), modulus)?;
+        let mut sq = mod_reduce(&mul_schoolbook(&result, &result), modulus)?;
+        let mut cand = mod_reduce(&mul_schoolbook(&sq, &base_mod), modulus)?;
         result = select(bit == 1, &cand, &sq);
         crate::wipe(&mut sq);
         crate::wipe(&mut cand);

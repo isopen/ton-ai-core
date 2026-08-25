@@ -192,7 +192,7 @@ function isProbablyPrimeUncached(n: bigint, k: number): boolean {
 
   for (let i = 0; i < k; i++) {
     const a = getRandomBase(n - 3n);
-    let x = modPow(a, d, n);
+    let x = jsModPow(a, d, n);
     if (x === 1n || x === n - 1n) continue;
     let continueOuter = false;
     for (let j = 0; j < r - 1; j++) {

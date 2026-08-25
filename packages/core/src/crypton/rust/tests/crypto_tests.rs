@@ -774,3 +774,81 @@ fn reject_mod_pow_operand_over_cap() {
         CryptoError::OperandTooLarge
     );
 }
+
+#[test]
+fn differential_montgomery_vs_legacy_mod_pow() {
+    let mut rng = XorShift(0x6364132238844343);
+    for _ in 0..200 {
+        let mlen = 1 + (rng.next() as usize % 4);
+        let mut m = rng.limbs(mlen);
+        m[0] |= 1;
+        if bigint::is_zero(&m) || m == vec![1] { continue; }
+        let blen = 1 + (rng.next() as usize % 3);
+        let base = rng.limbs(blen);
+        let elen = 1 + (rng.next() as usize % 2);
+        let exp = rng.limbs(elen);
+        let via_mont = bigint::mod_pow(&base, &exp, &m).unwrap();
+        let via_legacy = bigint::legacy_mod_pow(&base, &exp, &m).unwrap();
+        assert_eq!(via_mont, via_legacy, "montgomery mismatch: base={:?} e={:?} m={:?}", base, exp, m);
+    }
+}
+
+#[test]
+fn even_modulus_uses_legacy_path() {
+    let m = vec![0x30u64];
+    assert_eq!(bigint::mod_pow(&[2], &[8], &m).unwrap(), vec![16]);
+    let m_even_big = vec![0x1234567890abcdef, 0xfedcba0987654320];
+    let r = bigint::mod_pow(&[3], &[5], &m_even_big).unwrap();
+    let expect = bigint::divmod(&bigint::mul(&bigint::mul(&[3], &[3]), &[27]), &m_even_big).unwrap().1;
+    assert_eq!(r, expect);
+}
+
+#[test]
+fn mont_2048_bit_matches_known_vector() {
+    let m = "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca18217c32905e462e36ce3be39e772c180e86039b2783a2ec07a28fb5c55df06f4c52c9de2bcbf6955817183995497cea956ae515d2261898fa051015728e5a8aaac42dad33170d04507a33a85521abdf1cba64ecfb850458dbef0a8aea71514d22978d1dc7dc7f80bd848d45e9eeedffcd27ccadf";
+    let t0 = std::time::Instant::now();
+    let r = mod_pow_hex_checked("deadbeefcafebabe123456789abcdef04242424247474747", "10001", m).unwrap();
+    println!("2048-class small-exp via montgomery: {:?}, len={}", t0.elapsed(), r.len());
+    let legacy_ref = bigint::legacy_mod_pow(
+        &bigint::hex_to_limbs("deadbeefcafebabe123456789abcdef04242424247474747").unwrap(),
+        &bigint::hex_to_limbs("10001").unwrap(),
+        &bigint::hex_to_limbs(m).unwrap(),
+    ).unwrap();
+    assert_eq!(bigint::limbs_to_hex(&legacy_ref), r);
+
+    let big_exp = "3f2a7c1d9b8e5f40617263748596a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e";
+    let t1 = std::time::Instant::now();
+    let r2 = mod_pow_hex_checked("deadbeefcafebabe123456789abcdef04242424247474747", big_exp, m).unwrap();
+    println!("2048-bit 480-bit-exp via montgomery: {:?}", t1.elapsed());
+    assert!(!r2.is_empty());
+}
+
+#[test]
+fn seal_open_roundtrip_and_random_iv() {
+    let mac_key = hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    let enc_key = hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4");
+    let pt = hex("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e51");
+
+    let s1 = cbc_seal_checked(&mac_key, &enc_key, &pt).unwrap();
+    assert_eq!(s1.len(), 16 + pt.len() + 32);
+    assert_eq!(cbc_open_checked(&mac_key, &enc_key, &s1).unwrap(), pt);
+
+    let s2 = cbc_seal_checked(&mac_key, &enc_key, &pt).unwrap();
+    assert_ne!(s1, s2, "two seals identical -> IV not random");
+
+    for pos in [0usize, 15, 16, s1.len() - 33, s1.len() - 1] {
+        let mut t = s1.clone();
+        t[pos] ^= 0x01;
+        assert_eq!(
+            cbc_open_checked(&mac_key, &enc_key, &t),
+            Err(CryptoError::AuthenticationFailure),
+            "tamper at {} not detected",
+            pos
+        );
+    }
+
+    assert_eq!(
+        cbc_open_checked(&mac_key, &enc_key, &s1[..63]),
+        Err(CryptoError::AuthenticationFailure)
+    );
+}

@@ -1,6 +1,6 @@
 import { Buffer } from 'buffer';
 
-let wlogEnabled = true;
+let wlogEnabled = false;
 export function enableWasmLogging(v: boolean) { wlogEnabled = v; }
 export function isWasmLoggingEnabled() { return wlogEnabled; }
 function log(op: string, detail?: string) {
@@ -94,8 +94,19 @@ export function wasmAes256CbcEncryptEtm(macKey: Buffer, encKey: Buffer, iv: Buff
 export function wasmAes256CbcDecryptEtm(macKey: Buffer, encKey: Buffer, iv: Buffer, data: Buffer): Buffer | null {
   if (!wasmInstance) return null;
   log('aes_cbc_etm_decrypt', `data=${data.length}B`);
-  count('aes_cbc_etm_decrypt');
   return Buffer.from(w('aes256_cbc_decrypt_etm').aes256_cbc_decrypt_etm(macKey, encKey, iv, data));
+}
+
+export function wasmAes256CbcSeal(macKey: Buffer, encKey: Buffer, plaintext: Buffer): Buffer | null {
+  if (!wasmInstance) return null;
+  log('aes_cbc_seal', `data=${plaintext.length}B`);
+  return Buffer.from(w('aes256_cbc_seal').aes256_cbc_seal(macKey, encKey, plaintext));
+}
+
+export function wasmAes256CbcOpen(macKey: Buffer, encKey: Buffer, sealed: Buffer): Buffer | null {
+  if (!wasmInstance) return null;
+  log('aes_cbc_open', `data=${sealed.length}B`);
+  return Buffer.from(w('aes256_cbc_open').aes256_cbc_open(macKey, encKey, sealed));
 }
 
 export function wasmAes256CbcDecrypt(key: Buffer, iv: Buffer, data: Buffer): Buffer | null {

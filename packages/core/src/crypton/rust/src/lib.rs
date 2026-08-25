@@ -109,6 +109,24 @@ fn random_bytes(n: usize) -> Vec<u8> {
     v
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn random_bytes(n: usize) -> Vec<u8> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut state = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E3779B97F4A7C15)
+        | 1;
+    let mut v = vec![0u8; n];
+    for b in v.iter_mut() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        *b = (state >> 24) as u8;
+    }
+    v
+}
+
 pub fn mul_mod(a: &[u64], b: &[u64], m: &[u64]) -> Result<Vec<u64>, CryptoError> {
     bigint::divmod(&bigint::mul(a, b), m).map(|(_, r)| r)
 }
@@ -190,6 +208,25 @@ pub fn cbc_decrypt_etm_checked(mac_key: &[u8], enc_key: &[u8], iv: &[u8], data: 
         return Err(CryptoError::AuthenticationFailure);
     }
     cbc_decrypt_checked(enc_key, iv, &data[..split])
+}
+
+pub fn cbc_seal_checked(mac_key: &[u8], enc_key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    require_key(mac_key)?;
+    let iv = random_bytes(16);
+    let mut out = cbc_encrypt_etm_checked(mac_key, enc_key, &iv, plaintext)?;
+    let mut sealed = Vec::with_capacity(16 + out.len());
+    sealed.extend_from_slice(&iv);
+    sealed.append(&mut out);
+    Ok(sealed)
+}
+
+pub fn cbc_open_checked(mac_key: &[u8], enc_key: &[u8], sealed: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    require_key(mac_key)?;
+    if sealed.len() < 16 + 16 + 32 {
+        return Err(CryptoError::AuthenticationFailure);
+    }
+    let (iv, rest) = sealed.split_at(16);
+    cbc_decrypt_etm_checked(mac_key, enc_key, iv, rest)
 }
 
 pub fn ecb_encrypt_checked(key: &[u8], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
@@ -518,6 +555,16 @@ pub fn aes256_cbc_encrypt_etm(mac_key: &[u8], enc_key: &[u8], iv: &[u8], plainte
 #[wasm_bindgen]
 pub fn aes256_cbc_decrypt_etm(mac_key: &[u8], enc_key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, JsError> {
     cbc_decrypt_etm_checked(mac_key, enc_key, iv, data).map_err(|e| JsError::new(&e.to_string()))
+}
+
+#[wasm_bindgen]
+pub fn aes256_cbc_seal(mac_key: &[u8], enc_key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, JsError> {
+    cbc_seal_checked(mac_key, enc_key, plaintext).map_err(|e| JsError::new(&e.to_string()))
+}
+
+#[wasm_bindgen]
+pub fn aes256_cbc_open(mac_key: &[u8], enc_key: &[u8], sealed: &[u8]) -> Result<Vec<u8>, JsError> {
+    cbc_open_checked(mac_key, enc_key, sealed).map_err(|e| JsError::new(&e.to_string()))
 }
 
 #[wasm_bindgen]
