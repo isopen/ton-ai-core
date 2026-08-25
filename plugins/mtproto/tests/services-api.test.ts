@@ -14,7 +14,7 @@ function createTestContext(config?: Record<string, any>) {
 describe('MTCryptoServices API', () => {
     test('encrypt string via simple API', async () => {
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.initialize(createTestContext({ mode: 'client' }));
         await plugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -33,7 +33,7 @@ describe('MTCryptoServices API', () => {
 
     test('encrypt Buffer via simple API', async () => {
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.initialize(createTestContext({ mode: 'client' }));
         await plugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -52,11 +52,11 @@ describe('MTCryptoServices API', () => {
     test('encrypt/decrypt roundtrip via encryptMessage/decryptMessage', async () => {
         const now = Math.floor(Date.now() / 1000);
         const clientPlugin = new MTProtoCryptoPlugin();
-        clientPlugin.initialize(createTestContext({ mode: 'client' }));
+        await clientPlugin.initialize(createTestContext({ mode: 'client' }));
         await clientPlugin.onActivate();
 
         const serverPlugin = new MTProtoCryptoPlugin();
-        serverPlugin.initialize(createTestContext({ mode: 'server' }));
+        await serverPlugin.initialize(createTestContext({ mode: 'server' }));
         await serverPlugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -79,7 +79,7 @@ describe('MTCryptoServices API', () => {
 
     test('encrypt empty string', async () => {
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.initialize(createTestContext({ mode: 'client' }));
         await plugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -96,7 +96,7 @@ describe('MTCryptoServices API', () => {
 
     test('encrypt large string', async () => {
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.initialize(createTestContext({ mode: 'client' }));
         await plugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -115,11 +115,11 @@ describe('MTCryptoServices API', () => {
     test('multiple messages maintain state', async () => {
         const now = Math.floor(Date.now() / 1000);
         const clientPlugin = new MTProtoCryptoPlugin();
-        clientPlugin.initialize(createTestContext({ mode: 'client' }));
+        await clientPlugin.initialize(createTestContext({ mode: 'client' }));
         await clientPlugin.onActivate();
 
         const serverPlugin = new MTProtoCryptoPlugin();
-        serverPlugin.initialize(createTestContext({ mode: 'server' }));
+        await serverPlugin.initialize(createTestContext({ mode: 'server' }));
         await serverPlugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -144,7 +144,7 @@ describe('MTCryptoServices API', () => {
 
     test('string and Buffer inputs both work', async () => {
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.initialize(createTestContext({ mode: 'client' }));
         await plugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -169,7 +169,7 @@ describe('MTCryptoServices API', () => {
             if (event === 'mtproto:encrypted') emitted = true;
         };
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -192,11 +192,11 @@ describe('MTCryptoServices API', () => {
             emittedEvent = event;
         };
         const serverPlugin = new MTProtoCryptoPlugin();
-        serverPlugin.initialize(serverCtx);
+        await serverPlugin.initialize(serverCtx);
         await serverPlugin.onActivate();
 
         const clientPlugin = new MTProtoCryptoPlugin();
-        clientPlugin.initialize(createTestContext({ mode: 'client' }));
+        await clientPlugin.initialize(createTestContext({ mode: 'client' }));
         await clientPlugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -218,11 +218,11 @@ describe('MTCryptoServices API', () => {
 
     test('session-based roundtrip via simple API', async () => {
         const clientPlugin = new MTProtoCryptoPlugin();
-        clientPlugin.initialize(createTestContext({ mode: 'client' }));
+        await clientPlugin.initialize(createTestContext({ mode: 'client' }));
         await clientPlugin.onActivate();
 
         const serverPlugin = new MTProtoCryptoPlugin();
-        serverPlugin.initialize(createTestContext({ mode: 'server' }));
+        await serverPlugin.initialize(createTestContext({ mode: 'server' }));
         await serverPlugin.onActivate();
 
         const key = crypton.getRandomBytes(256);

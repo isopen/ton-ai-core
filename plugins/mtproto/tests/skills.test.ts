@@ -22,7 +22,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('initialize and activate/deactivate lifecycle', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client', testMode: false });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         assert.strictEqual(plugin.isReady(), false, 'not ready before activate');
         await plugin.onActivate();
         assert.ok(plugin.isReady(), 'ready after activate');
@@ -33,7 +33,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('generate DH keys', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         const dh = plugin.generateDHKeys();
         assert.ok(dh.privateKey > 0n, 'private key > 0');
@@ -45,7 +45,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('compute shared secret', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         const dh = plugin.generateDHKeys();
         const peerDh = crypton.DiffieHellman.generateKeys();
@@ -57,7 +57,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('generate auth key', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         const dh = plugin.generateDHKeys();
         const peerDh = crypton.DiffieHellman.generateKeys();
@@ -71,7 +71,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('set/get auth key', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         const dh = plugin.generateDHKeys();
         const peerDh = crypton.DiffieHellman.generateKeys();
@@ -87,7 +87,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('set/get server salt', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         const salt = crypton.getRandomBytes(8);
         plugin.setServerSalt(salt);
@@ -98,12 +98,12 @@ describe('MTProtoCryptoPlugin', () => {
     test('encrypt/decrypt roundtrip via plugin', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
 
         const serverPlugin = new MTProtoCryptoPlugin();
         const serverCtx = createTestContext({ mode: 'server' });
-        serverPlugin.initialize(serverCtx);
+        await serverPlugin.initialize(serverCtx);
         await serverPlugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -132,7 +132,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('metrics', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         const key = crypton.getRandomBytes(256);
         const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
@@ -149,7 +149,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('reset clears all state', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         plugin.setAuthKey({ key: crypton.getRandomBytes(256), id: 1n });
         plugin.setServerSalt(crypton.getRandomBytes(8));
@@ -163,7 +163,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('setPublicRsaKeys', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         plugin.setPublicRsaKeys([]);
         const rsaKey = plugin.getPublicRsaKey();
@@ -174,12 +174,12 @@ describe('MTProtoCryptoPlugin', () => {
     test('session management roundtrip', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
 
         const serverPlugin = new MTProtoCryptoPlugin();
         const serverCtx = createTestContext({ mode: 'server' });
-        serverPlugin.initialize(serverCtx);
+        await serverPlugin.initialize(serverCtx);
         await serverPlugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -214,7 +214,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('setSessionKeys', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         const peerId2 = 'test-peer-2';
         const authKey2 = await plugin.generateAuthKey(crypton.getRandomBytes(256));
@@ -227,7 +227,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('shutdown', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         await plugin.shutdown();
         assert.ok(!plugin.isReady(), 'not ready after shutdown');
@@ -236,7 +236,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('onConfigChange', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         plugin.onConfigChange({ mode: 'server' });
         await plugin.onDeactivate();
@@ -244,11 +244,11 @@ describe('MTProtoCryptoPlugin', () => {
 
     test('works without RSA keys', async () => {
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.initialize(createTestContext({ mode: 'client' }));
         await plugin.onActivate();
 
         const serverPlugin = new MTProtoCryptoPlugin();
-        serverPlugin.initialize(createTestContext({ mode: 'server' }));
+        await serverPlugin.initialize(createTestContext({ mode: 'server' }));
         await serverPlugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -272,7 +272,7 @@ describe('MTProtoCryptoPlugin', () => {
 
     test('plugin.decrypt returns isValid false on bad data', async () => {
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.initialize(createTestContext({ mode: 'client' }));
         await plugin.onActivate();
         const key = crypton.getRandomBytes(256);
         const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
@@ -290,7 +290,7 @@ describe('MTProtoCryptoPlugin', () => {
 
     test('plugin.setSecretAuthKey sets secret key', async () => {
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.initialize(createTestContext({ mode: 'client' }));
         await plugin.onActivate();
         const key = crypton.getRandomBytes(256);
         const id = await crypton.MTProtoKDF.computeAuthKeyId(key);
@@ -301,7 +301,7 @@ describe('MTProtoCryptoPlugin', () => {
 
     test('plugin.createSession creates session', async () => {
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.initialize(createTestContext({ mode: 'client' }));
         await plugin.onActivate();
         const peerId = 'create-session';
         const secret = crypton.getRandomBytes(256);
@@ -313,11 +313,11 @@ describe('MTProtoCryptoPlugin', () => {
 
     test('plugin.encryptForServerSession roundtrip', async () => {
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.initialize(createTestContext({ mode: 'client' }));
         await plugin.onActivate();
 
         const serverPlugin = new MTProtoCryptoPlugin();
-        serverPlugin.initialize(createTestContext({ mode: 'server' }));
+        await serverPlugin.initialize(createTestContext({ mode: 'server' }));
         await serverPlugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -345,11 +345,11 @@ describe('MTProtoCryptoPlugin', () => {
 
     test('plugin.setSecretAuthKey encrypt/decrypt', async () => {
         const plugin = new MTProtoCryptoPlugin();
-        plugin.initialize(createTestContext({ mode: 'client' }));
+        await plugin.initialize(createTestContext({ mode: 'client' }));
         await plugin.onActivate();
 
         const serverPlugin = new MTProtoCryptoPlugin();
-        serverPlugin.initialize(createTestContext({ mode: 'server' }));
+        await serverPlugin.initialize(createTestContext({ mode: 'server' }));
         await serverPlugin.onActivate();
 
         const key = crypton.getRandomBytes(256);
@@ -376,7 +376,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('setTimeOffset via skills', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         plugin.skills.setTimeOffset(42);
         assert.strictEqual(plugin.skills.components.client.getTimeOffset(), 42, 'time offset set via skills');
@@ -391,7 +391,7 @@ describe('MTProtoCryptoPlugin', () => {
             privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
         });
         const ctx = createTestContext({ mode: 'client', publicKeyPems: [pubPem] });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         assert.ok(plugin.getPublicRsaKey() !== undefined, 'RSA key loaded from config');
         await plugin.onDeactivate();
@@ -400,7 +400,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('setPublicRsaKeys drops old keys', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         const { publicKey: pubPem } = require('crypto').generateKeyPairSync('rsa', {
             modulusLength: 2048,
@@ -415,7 +415,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('setPublicRsaKeys when no previous key', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         plugin.setPublicRsaKeys([]);
         assert.ok(plugin.getPublicRsaKey() !== undefined, 'RSA key set even when no previous');
@@ -425,7 +425,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('onConfigChange with authKeyMode', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         plugin.onConfigChange({ authKeyMode: 'telegram' });
         await plugin.onDeactivate();
@@ -434,7 +434,7 @@ describe('MTProtoCryptoPlugin', () => {
     test('onConfigChange with mode', async () => {
         const plugin = new MTProtoCryptoPlugin();
         const ctx = createTestContext({ mode: 'client' });
-        plugin.initialize(ctx);
+        await plugin.initialize(ctx);
         await plugin.onActivate();
         plugin.onConfigChange({ mode: 'server' });
         await plugin.onDeactivate();
