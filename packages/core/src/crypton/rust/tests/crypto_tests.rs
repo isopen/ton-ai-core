@@ -891,3 +891,38 @@ fn mr_rejects_perturbed_prime() {
     assert_ne!(perturbed, p);
     assert!(!is_probably_prime_checked(&perturbed, 40).unwrap(), "perturbed modulus detected composite");
 }
+
+#[test]
+fn mod_pow_auto_blinds_even_modulus() {
+    let base = bigint::hex_to_limbs("123456789abcdef0123456789abcdef0").unwrap();
+    let exp = bigint::hex_to_limbs("1ffffffffffff").unwrap();
+    for m_hex in ["1000002", "10000000000000000000002", "deadc0de"] {
+        let modulus = bigint::hex_to_limbs(m_hex).unwrap();
+        let a = mod_pow_auto(&base, &exp, &modulus).unwrap();
+        let e = mod_pow_hex_checked(
+            &bigint::limbs_to_hex(&base),
+            &bigint::limbs_to_hex(&exp),
+            &bigint::limbs_to_hex(&modulus),
+        )
+        .unwrap();
+        assert_eq!(bigint::limbs_to_hex(&a), e, "even modulus {m_hex}");
+    }
+}
+
+#[test]
+fn hex_operand_length_cap_rejected() {
+    let huge = "ab".repeat(2000);
+    assert!(matches!(
+        bigint::hex_to_limbs(&huge),
+        Err(CryptoError::OperandTooLarge)
+    ));
+    let ok_len = "ab".repeat(1024);
+    assert!(bigint::hex_to_limbs(&ok_len).is_ok());
+}
+
+#[test]
+fn mr_handles_pow2_span_family() {
+    for (n_hex, expected) in [("83", true), ("d3", true), ("211", false), ("283", true), ("449", true)] {
+        assert_eq!(is_probably_prime_checked(n_hex, 40).unwrap(), expected, "n={n_hex}");
+    }
+}

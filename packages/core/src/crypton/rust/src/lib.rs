@@ -8,7 +8,8 @@ pub mod bigint;
 const MAX_RANDOM_CHUNK: usize = 65_536;
 const MAX_RANDOM_BYTES: usize = 1 << 20;
 const MAX_DERIVED_LEN: usize = 255 * 64;
-const MAX_MODPOW_LIMBS: usize = 128;
+pub(crate) const MAX_MODPOW_LIMBS: usize = 128;
+pub(crate) const MAX_HEX_DIGITS: usize = MAX_MODPOW_LIMBS * 16 + 2;
 const MAX_PBKDF2_ITERATIONS: usize = 10_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub enum CryptoError {
     OperandTooLarge,
     EntropyFailure,
     InvalidRounds,
+    ArithmeticViolation,
 }
 
 impl fmt::Display for CryptoError {
@@ -52,6 +54,7 @@ impl fmt::Display for CryptoError {
             CryptoError::OperandTooLarge => "mod_pow operand exceeds 8192 bits",
             CryptoError::EntropyFailure => "secure entropy source is unavailable",
             CryptoError::InvalidRounds => "Miller-Rabin round count must be greater than zero",
+            CryptoError::ArithmeticViolation => "internal bignum arithmetic invariant violated",
         };
         f.write_str(s)
     }
@@ -102,10 +105,11 @@ pub fn get_random_bytes(len: usize) -> Result<Vec<u8>, JsError> {
 }
 
 pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() { return false; }
-    let mut diff = 0u8;
-    for i in 0..a.len() {
-        diff |= a[i] ^ b[i];
+    let mut diff = ((a.len() ^ b.len()) != 0) as u8;
+    for i in 0..a.len().max(b.len()) {
+        let x = if i < a.len() { a[i] } else { 0 };
+        let y = if i < b.len() { b[i] } else { 0 };
+        diff |= x ^ y;
     }
     diff == 0
 }
@@ -482,7 +486,8 @@ pub fn hkdf_expand_checked(prk: &[u8], info: &[u8], len: usize) -> Result<Vec<u8
     let mut okm = Vec::with_capacity(n_blocks * 64);
     let mut t: Vec<u8> = Vec::new();
     for i in 1..=n_blocks {
-        let mut input = t.clone();
+        let mut input = Vec::with_capacity(t.len() + info.len() + 1);
+        input.extend_from_slice(&t);
         input.extend_from_slice(info);
         input.push(i as u8);
         let next = hmac_sha512(prk, &input);
@@ -503,7 +508,8 @@ pub fn pbkdf2_sha256_checked(password: &[u8], salt: &[u8], iterations: usize, dk
     let mut out = Vec::with_capacity(dk_len);
     let mut block_index: u32 = 1;
     while out.len() < dk_len {
-        let mut input = salt.to_vec();
+        let mut input = Vec::with_capacity(salt.len() + 4);
+        input.extend_from_slice(salt);
         input.extend_from_slice(&block_index.to_be_bytes());
         let mut u = hmac_sha256(password, &input);
         let mut acc = u.clone();
@@ -540,9 +546,15 @@ const SMALL_PRIMES: [u64; 25] = [
 ];
 
 fn eq_limb(v: &[Limb], w: Limb) -> bool {
-    let mut t = v.to_vec();
-    bigint::trim_pub(&mut t);
-    t.len() == 1 && t[0] == w
+    let mut hi: Option<usize> = None;
+    for (i, &x) in v.iter().enumerate() {
+        if x != 0 { hi = Some(i); }
+    }
+    match hi {
+        None => w == 0,
+        Some(0) => v[0] == w,
+        Some(_) => false,
+    }
 }
 
 fn sub_one(n: &[Limb]) -> Vec<Limb> {
@@ -567,18 +579,22 @@ fn shr1(n: &[Limb]) -> Vec<Limb> {
 }
 
 fn random_in_range_2_to_nm1(n: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
-    let span = sub_one(&sub_one(n));
+    let span = sub_one(&sub_one(&sub_one(n)));
     if bigint::is_zero(&span) { return Err(CryptoError::ModulusIsZero); }
-    for _ in 0..256 {
-        let mut raw = random_bytes(n.len() * 8)?;
-        let reduced = divmod(&bigint::bytes_to_limbs_be(&raw), &span)?.1;
+    let l = n.len();
+    let mut pow2 = vec![0u64; l + 1];
+    pow2[l] = 1;
+    let rem0 = divmod(&pow2, &span)?.1;
+    let bound = bigint::sub(&pow2, &rem0);
+    for _ in 0..512 {
+        let mut raw = random_bytes(l * 8)?;
+        let cand = bigint::bytes_to_limbs_be(&raw);
         crate::wipe(&mut raw);
-        let cand = bigint::add(&reduced, &[2]);
-        if bigint::cmp_lt(&cand, &sub_one(n)) {
-            return Ok(cand);
-        }
+        if !bigint::cmp_lt(&cand, &bound) { continue; }
+        let reduced = divmod(&cand, &span)?.1;
+        return Ok(bigint::add(&reduced, &[2]));
     }
-    Ok(vec![2])
+    Err(CryptoError::EntropyFailure)
 }
 
 pub fn miller_rabin(n: &[Limb], rounds: u32) -> Result<bool, CryptoError> {
@@ -599,7 +615,7 @@ pub fn miller_rabin(n: &[Limb], rounds: u32) -> Result<bool, CryptoError> {
         s += 1;
     }
 
-    let ctx = match MontCtx::new(n) { Some(c) => c, None => return Ok(false) };
+    let ctx = match MontCtx::new(n) { Some(c) => c, None => return Err(CryptoError::ArithmeticViolation) };
     let rounds_eff = rounds.clamp(1, 200);
     for _ in 0..rounds_eff {
         let a = random_in_range_2_to_nm1(n)?;

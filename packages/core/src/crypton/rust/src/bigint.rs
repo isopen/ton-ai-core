@@ -78,7 +78,7 @@ pub fn mul_schoolbook(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
             carry = cur >> 64;
             k += 1;
         }
-        debug_assert!(carry == 0);
+        assert!(carry == 0, "bignum carry invariant violated");
     }
     trim(&mut c);
     c
@@ -101,7 +101,7 @@ fn add_shifted_into(acc: &mut Vec<Limb>, x: &[Limb], sh: usize) {
         carry = cur >> 64;
         pos += 1;
     }
-    debug_assert!(carry == 0);
+    assert!(carry == 0, "bignum carry invariant violated");
 }
 
 fn karatsuba(a: &[Limb], b: &[Limb]) -> Vec<Limb> {
@@ -240,14 +240,14 @@ pub fn mod_inv(a: &[Limb], m: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
     if t_neg {
         let mag = sub_abs(m, &t);
         crate::wipe(&mut t);
-        Ok(mod_reduce_owned(mag, m))
+        mod_reduce_owned(mag, m)
     } else {
-        Ok(mod_reduce_owned(t, m))
+        mod_reduce_owned(t, m)
     }
 }
 
-fn mod_reduce_owned(a: Vec<Limb>, m: &[Limb]) -> Vec<Limb> {
-    divmod(&a, m).map(|(_, r)| r).unwrap_or_else(|_| a)
+fn mod_reduce_owned(a: Vec<Limb>, m: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
+    divmod(&a, m).map(|(_, r)| r)
 }
 
 pub fn bytes_to_limbs_be(bytes: &[u8]) -> Vec<Limb> {
@@ -305,17 +305,18 @@ impl MontCtx {
         let (_, rr) = divmod(&r_val, &m).ok()?;
         let mut r1t = rr;
         trim(&mut r1t);
-        let r1t = zpad(&r1t, n);
+        let r1t = zpad_checked(&r1t, n).ok()?;
         let r2_raw = divmod(&mul(&r1t, &r1t), &m).ok()?.1;
-        let r2 = zpad(&r2_raw, n);
+        let r2 = zpad_checked(&r2_raw, n).ok()?;
         Some(MontCtx { n, m: m.to_vec(), n0, r1: r1t, r2 })
     }
 
     pub fn mont_mul(&self, a_in: &[Limb], b_in: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
         let n = self.n;
-        let mut a = zpad(a_in, n);
-        let mut b = zpad(b_in, n);
+        let mut a = zpad_checked(a_in, n)?;
+        let mut b = zpad_checked(b_in, n)?;
         let mut t = vec![0u64; n * 2 + 2];
+        let mut overflow = false;
         for i in 0..n {
             let ai = a[i];
             let mut carry: u128 = 0;
@@ -329,7 +330,7 @@ impl MontCtx {
                 t[idx] = cur as u64;
                 carry = cur >> 64;
             }
-            debug_assert!(carry == 0);
+            overflow |= carry != 0;
         }
         for i in 0..n {
             let k = t[i].wrapping_mul(self.n0);
@@ -344,7 +345,13 @@ impl MontCtx {
                 t[idx] = cur as u64;
                 carry = cur >> 64;
             }
-            debug_assert!(carry == 0);
+            overflow |= carry != 0;
+        }
+        if overflow {
+            crate::wipe(&mut a);
+            crate::wipe(&mut b);
+            crate::wipe(&mut t);
+            return Err(crate::CryptoError::ArithmeticViolation);
         }
         let extra = t[2 * n];
         let out: Vec<Limb> = t[n..2 * n].to_vec();
@@ -383,7 +390,7 @@ impl MontCtx {
 
 pub fn mont_mod_pow(base_red: &[Limb], exp: &[Limb], ctx: &MontCtx) -> Result<Vec<Limb>, CryptoError> {
     if ctx.m == vec![1] { return Ok(vec![0]); }
-    let mut padded = zpad(base_red, ctx.n);
+    let mut padded = zpad_checked(base_red, ctx.n)?;
     let mut base_m = ctx.to_mont(&padded)?;
     crate::wipe(&mut padded);
     let mut result = ctx.r1.clone();
@@ -404,10 +411,15 @@ pub fn mont_mod_pow(base_red: &[Limb], exp: &[Limb], ctx: &MontCtx) -> Result<Ve
 }
 
 fn zpad(v: &[Limb], n: usize) -> Vec<Limb> {
+    debug_assert!(v.len() <= n);
     let mut out = vec![0u64; n];
-    let copy = v.len().min(n);
-    out[..copy].copy_from_slice(&v[..copy]);
+    out[..v.len()].copy_from_slice(v);
     out
+}
+
+fn zpad_checked(v: &[Limb], n: usize) -> Result<Vec<Limb>, crate::CryptoError> {
+    if v.len() > n { return Err(crate::CryptoError::OperandTooLarge); }
+    Ok(zpad(v, n))
 }
 
 pub fn mod_pow(base: &[Limb], exp: &[Limb], modulus: &[Limb]) -> Result<Vec<Limb>, CryptoError> {
@@ -455,6 +467,7 @@ fn nibble(c: u8) -> Option<u64> {
 pub fn hex_to_limbs(hex: &str) -> Result<Vec<Limb>, CryptoError> {
     let clean = hex.strip_prefix("0x").or_else(|| hex.strip_prefix("0X")).unwrap_or(hex);
     if clean.is_empty() { return Err(CryptoError::EmptyHex); }
+    if clean.len() > crate::MAX_HEX_DIGITS { return Err(CryptoError::OperandTooLarge); }
     let mut digits = Vec::with_capacity(clean.len());
     for c in clean.bytes() {
         match nibble(c) {
