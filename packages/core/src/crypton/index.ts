@@ -4,6 +4,8 @@ import { AES256CTR, AesCtrCipher } from './aes-256-ctr';
 import { AES256CBC } from './aes-256-cbc';
 import { AES256CBC_ETM } from './aes-256-cbc-etm';
 import { MTProtoKDF } from './kdf';
+import { setKdfSha256Implementation } from './kdf';
+import { setModPowImplementation } from './utils';
 import { DiffieHellman } from './diffie-hellman';
 
 import {
@@ -63,7 +65,9 @@ import {
 export type { KeyPair } from '@ton/crypto';
 export { AesCtrCipher } from './aes-256-ctr';
 
-import { initWasm, wasmGetRandomBytes, wasmAes256EcbEncrypt, wasmAes256EcbDecrypt,
+import { initWasm, isWasmAvailable, isWasmLoggingEnabled,
+         enableWasmLogging, getWasmCallStats, resetWasmCallStats,
+         wasmGetRandomBytes, wasmAes256EcbEncrypt, wasmAes256EcbDecrypt,
          wasmAes256CbcEncrypt, wasmAes256CbcDecrypt,
          wasmAes256CbcEncryptEtm, wasmAes256CbcDecryptEtm,
          wasmAes256IgeEncrypt, wasmAes256IgeDecrypt,
@@ -71,6 +75,14 @@ import { initWasm, wasmGetRandomBytes, wasmAes256EcbEncrypt, wasmAes256EcbDecryp
          wasmHmacSha256, wasmModPow } from './wasm-adapter';
 
 let _wasmReady = false;
+
+const OVERRIDDEN_OPS = [
+  'getRandomBytes', 'sha1', 'sha1Sync', 'sha256', 'sha256_sync',
+  'hmacSha256', 'modPow',
+  'AES256CTR.process', 'AES256IGE.encrypt/decrypt',
+  'AES256CBC.encrypt/decrypt', 'AES256CBC_ETM.encrypt/decrypt',
+  'AES256ECB.encryptBlock/decryptBlock',
+] as const;
 
 export function initWasmCrypton(): Promise<void> {
   if (_wasmReady) return Promise.resolve();
@@ -90,6 +102,7 @@ export function initWasmCrypton(): Promise<void> {
       const r = wasmModPow(hex(b), hex(e), hex(m))!;
       return BigInt('0x' + r);
     };
+    void c;
 
     AES256CTR.process = ((data: Buffer, key: Buffer, iv: Buffer, startCounter: number) =>
       wasmAes256CtrProcess(data, key, iv, startCounter * 16)!) as any;
@@ -111,6 +124,13 @@ export function initWasmCrypton(): Promise<void> {
     AES256CBC_ETM.decrypt = ((macKey: Buffer, encKey: Buffer, iv: Buffer, data: Buffer) =>
       Promise.resolve(wasmAes256CbcDecryptEtm(macKey, encKey, iv, data)!)) as any;
 
+    setKdfSha256Implementation((data: Buffer) => {
+      const out = wasmSha256(data);
+      if (!out) throw new Error('crypton-rs sha256 unavailable');
+      return Promise.resolve(Buffer.from(out));
+    });
+    void setModPowImplementation;
+
     const ecbProto = AES256ECB.prototype as any;
     ecbProto.encryptBlock = function(block: Uint8Array): Buffer {
       return wasmAes256EcbEncrypt(this.key, Buffer.from(block))!;
@@ -118,8 +138,30 @@ export function initWasmCrypton(): Promise<void> {
     ecbProto.decryptBlock = function(block: Uint8Array): Buffer {
       return wasmAes256EcbDecrypt(this.key, Buffer.from(block))!;
     };
+
+    if (isWasmLoggingEnabled()) {
+      console.log('[crypton-rs] WASM active — Telegram crypto routed through Rust:', OVERRIDDEN_OPS.join(', '));
+      console.log('[crypton-rs] note: DiffieHellman modpow stays on JS bigint fast path (wasm mod_pow opt-in via setModPowImplementation)');
+    } else {
+      console.info('[crypton-rs] WASM active (per-op logs off). Enable: enableWasmLogging(true)');
+    }
+
+    const g = globalThis as any;
+    g.__CRYPTON_RS__ = {
+      active: () => _wasmReady,
+      enableLogging: enableWasmLogging,
+      stats: () => getWasmCallStats(),
+      resetStats: resetWasmCallStats,
+      ops: OVERRIDDEN_OPS,
+    };
   });
 }
+
+export function isCryptonWasmActive(): boolean {
+  return _wasmReady && isWasmAvailable();
+}
+
+export { enableWasmLogging, isWasmLoggingEnabled, getWasmCallStats, resetWasmCallStats };
 
 export const crypton = {
   AES256IGE,
@@ -181,4 +223,7 @@ export const crypton = {
   hkdfExpand,
   hkdfSha512,
   pbkdf2Sha256,
+  isCryptonWasmActive,
+  getWasmCallStats,
+  resetWasmCallStats,
 };

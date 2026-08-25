@@ -36,6 +36,9 @@ export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
 
     protected async onInit() {
         this.logger.info('Initializing MTProto Crypto plugin...');
+        const { initWasmCrypton, isCryptonWasmActive } = await import('@ton-ai/core');
+        await initWasmCrypton();
+        this.logger.info(`crypton-rs WASM ${isCryptonWasmActive() ? 'active — MTProto crypto routed through Rust' : 'NOT active — falling back to JS crypto'}`);
         if (this.config.publicKeyPems && this.config.publicKeyPems.length > 0) {
             this.publicRsaKey = new DefaultPublicRsaKey(this.config.publicKeyPems);
             this.logger.info(`Loaded ${this.config.publicKeyPems.length} RSA public keys`);

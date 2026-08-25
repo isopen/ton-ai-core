@@ -1,4 +1,10 @@
-import { sha256 } from '@ton/crypto';
+import { sha256 as defaultSha256 } from '@ton/crypto';
+
+type Sha256Fn = (data: Buffer) => Promise<Buffer>;
+let sha256Impl: Sha256Fn = defaultSha256;
+export function setKdfSha256Implementation(fn: Sha256Fn): void {
+    sha256Impl = fn;
+}
 import { sha1 } from './sha1';
 import { Buffer } from 'buffer';
 import { bigIntToBufferLE } from './utils';
@@ -30,7 +36,7 @@ export class MTProtoKDF {
     const x = isClient ? 0 : 8;
     const authKeyPart = authKey.subarray(88 + x, 88 + x + 32);
     const msgInput = Buffer.concat([authKeyPart, plaintext, randomPadding]);
-    const msgKeyLarge = await sha256(msgInput);
+    const msgKeyLarge = await sha256Impl(msgInput);
     msgInput.fill(0);
     const msgKey = Buffer.from(msgKeyLarge.subarray(8, 24));
     msgKeyLarge.fill(0);
@@ -50,8 +56,8 @@ export class MTProtoKDF {
     }
 
     const x = isClient ? 0 : 8;
-    const sha256_a = await sha256(Buffer.concat([msgKey, authKey.subarray(x, x + 36)]));
-    const sha256_b = await sha256(Buffer.concat([authKey.subarray(40 + x, 40 + x + 36), msgKey]));
+    const sha256_a = await sha256Impl(Buffer.concat([msgKey, authKey.subarray(x, x + 36)]));
+    const sha256_b = await sha256Impl(Buffer.concat([authKey.subarray(40 + x, 40 + x + 36), msgKey]));
 
     const aesKey = Buffer.concat([
       sha256_a.subarray(0, 8),

@@ -104,7 +104,17 @@ export function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
+type ModPowFn = (base: bigint, exponent: bigint, modulus: bigint) => bigint;
+let modPowImpl: ModPowFn = jsModPow;
+export function setModPowImplementation(fn: ModPowFn): void {
+  modPowImpl = fn;
+}
+
 export function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
+  return modPowImpl(base, exponent, modulus);
+}
+
+function jsModPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
   if (modulus <= 0n) throw new Error('Modulus must be positive');
   if (base < 0n) throw new Error('Negative base is not supported');
   if (modulus === 1n) return 0n;

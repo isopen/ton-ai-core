@@ -1,7 +1,17 @@
 import * as TW from './telegram-worker';
-import { initWasmCrypton } from '@ton-ai/core';
+import { initWasmCrypton, isCryptonWasmActive, getWasmCallStats } from '@ton-ai/core';
 
-initWasmCrypton().catch(() => {});
+initWasmCrypton()
+    .then(() => {
+        console.log(`[worker] crypton-rs WASM ${isCryptonWasmActive() ? 'ACTIVE — Telegram crypto routed through Rust' : 'NOT active — JS fallback in use'}`);
+        (self as any).__CRYPTON_RS__ = {
+            ...(self as any).__CRYPTON_RS__,
+            stats: getWasmCallStats,
+        };
+    })
+    .catch((e: any) => {
+        console.error('[worker] crypton-rs WASM init FAILED:', e);
+    });
 
 interface PortLike {
     postMessage(msg: any, transfer?: ArrayBuffer[]): void;
@@ -98,9 +108,16 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
 
 async function ensureConnected(): Promise<void> {
     if (!TW.isConnected() && lastSessionId) {
-        await TW.handleConnect(lastSessionId, lastDcId);
+        if (!connectInFlight) {
+            connectInFlight = TW.handleConnect(lastSessionId, lastDcId)
+                .catch((e: any) => { console.error('[worker] connect failed:', e?.message || e); throw e; })
+                .finally(() => { connectInFlight = null; });
+        }
+        await connectInFlight;
     }
 }
+
+let connectInFlight: Promise<void> | null = null;
 
 function collectTransferables(result: any): ArrayBuffer[] {
     const out: ArrayBuffer[] = [];
@@ -137,7 +154,7 @@ async function _handleMessage(msg: Record<string, any>): Promise<any> {
         case 'connect':
             lastSessionId = msg.sessionId;
             lastDcId = msg.dcId || 2;
-            await TW.handleConnect(msg.sessionId, lastDcId);
+            await ensureConnected();
             return { type: 'connected', authenticated: TW.isAuthenticated() };
         case 'sendCode':
             await ensureConnected();
@@ -159,6 +176,7 @@ async function _handleMessage(msg: Record<string, any>): Promise<any> {
             return { type: 'messageSent', data: sendResult };
         }
         case 'callRpc': {
+            await ensureConnected();
             const result = await TW.callRpc(msg.methodName, msg.params || {});
             return { type: 'rpcResult', result };
         }

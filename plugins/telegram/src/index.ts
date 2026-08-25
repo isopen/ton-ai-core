@@ -61,6 +61,9 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
 
     protected async onInit(): Promise<void> {
         log.info('Initializing Telegram Client plugin...');
+        const { initWasmCrypton, isCryptonWasmActive } = await import('@ton-ai/core');
+        await initWasmCrypton();
+        log.info(`crypton-rs WASM ${isCryptonWasmActive() ? 'active — Telegram crypto routed through Rust' : 'NOT active — falling back to JS crypto'}`);
         if (this.config.authKeyFile) {
             await this.loadAuthKey(this.config.authKeyFile);
         }
