@@ -1,10 +1,13 @@
 /** @jest-environment jsdom */
 
+import { configure } from '@ton-ai/gram-debug';
 import { GramMediaRouter } from '../src/router.js';
 import {
     makeHost, makeTransport, makePhoto, makeDocument, makeBytes,
     flushTicks, actionsOfType, lastOfType,
 } from './helpers.js';
+
+beforeAll(() => configure({ noMediaCache: false }));
 
 function makeRouter(): { router: GramMediaRouter; actions: ReturnType<typeof makeHost>['actions']; setTransport: (t: any) => void } {
     const { host, actions, setTransport } = makeHost();
