@@ -303,3 +303,24 @@ fn sha256_multi_block() {
     assert_eq!(h1.to_vec(), h2.to_vec());
     assert_ne!(h1.to_vec(), sha256_hash(b"a").to_vec());
 }
+
+#[test]
+fn mod_pow_medium_multi_limb() {
+    let r = mod_pow(
+        "deadbeefcafebabe123456789abcdef0fedcbaf09876543210",
+        "deadbeef",
+        "fffffffeffffffffffffffffffffffff"
+    );
+    assert_eq!(r, "e9f5efbc0cd9c5d1655435d0182363f6");
+}
+
+#[test]
+fn mod_pow_large_2048bit() {
+    let base = "deadbeefcafebabe123456789abcdef04242424247474747";
+    let exp = "10001";
+    let m = "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca18217c32905e462e36ce3be39e772c180e86039b2783a2ec07a28fb5c55df06f4c52c9de2bcbf6955817183995497cea956ae515d2261898fa051015728e5a8aaac42dad33170d04507a33a85521abdf1cba64ecfb850458dbef0a8aea71514d22978d1dc7dc7f80bd848d45e9eeedffcd27ccadf";
+    let expected = "5dec062c59ac9d9ba0ac213f0c0fe3580f0b0a9d86a3215976f81c40f089e3a645628edfd42add26378614b3c1f59f32476ff3e84ce58c7804e5b45bbe36d8937f4f40c736250b3819236c0486b3954e48ff3ccaf41f3a1d1413c112c81304c7b0843cebbf083a88167d1f06815664f96250cd3094c3ee4a8b2d72aea3b8ce1feaa493cb13f78f8bf202bb5689f2612db31e5cd4937a09ad1ee9b8e064ab27f442d52c6cbefef7b11a1bed9f9cba6b19e86c063162a7c1fc072988f194c4171508f38bab4a343e2f82fa007487be7bfc95b8b2c525020c4cbfa03028050775e3a6cebde37fa3179956c801d82a2737ef87ae8f47d702718737b528bcdf2c268cf6462c9b8085226a16c8e51db57c6a2bd267960d2ea4cd59d372616c0e0d82a9cea12bd2cfbd5b33d6c";
+
+    let r = mod_pow(base, exp, m);
+    assert_eq!(r, expected, "mod_pow 2048-bit result mismatch");
+}

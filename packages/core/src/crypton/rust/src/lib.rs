@@ -1,14 +1,15 @@
 use wasm_bindgen::prelude::*;
-
 pub mod aes;
 pub mod hashes;
 pub mod bigint;
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(js_namespace = ["window", "crypto"], js_name = getRandomValues)]
+    #[wasm_bindgen(js_namespace = crypto, js_name = getRandomValues)]
     fn js_get_random_values(arr: &mut [u8]);
 }
+
+
 
 #[wasm_bindgen]
 pub fn get_random_bytes(len: usize) -> Vec<u8> {
