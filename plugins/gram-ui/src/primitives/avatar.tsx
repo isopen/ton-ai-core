@@ -1,5 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
-import { TelegramImage } from './telegram-image.js';
+import { Image } from './image.js';
 import type { ImageSpec } from '../types.js';
 
 interface AvatarProps {
@@ -34,7 +34,7 @@ export function Avatar({ url, blurUrl, initial, color, size = 'medium', classNam
       {/* Blurred inline preview sits above the tint/initials and below the
           sharp image; TelegramImage fades in over it once loaded. */}
       {blurUrl ? <img class="Avatar__blur" src={blurUrl} alt="" /> : null}
-      {imageSpec && <TelegramImage image={imageSpec} width={dim} lazy={false} />}
+      {imageSpec && <Image image={imageSpec} width={dim} lazy={false} />}
     </div>
   );
 }

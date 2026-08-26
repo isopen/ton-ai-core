@@ -117,7 +117,7 @@ export interface ImageSpec {
   maxSizeDownloaded?: boolean;
 }
 
-export interface TelegramImageProps {
+export interface ImageProps {
   image: ImageSpec;
   width?: number;
   maxWidth?: number;
@@ -126,6 +126,9 @@ export interface TelegramImageProps {
   rounded?: boolean;
   onOpenViewer?: (id: string) => void;
 }
+
+/** @deprecated legacy name */
+export type TelegramImageProps = ImageProps;
 
 export type UIAction =
     | { type: 'SET_THEME'; theme: AppState['theme'] }

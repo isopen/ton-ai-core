@@ -1,7 +1,8 @@
 export { TelegramUI } from './telegram-ui.js';
 export type { TelegramUICallbacks } from './telegram-ui.js';
-export type { PeerInfo, Dialog, Message, AppState, ImageSpec, ImageSource, TelegramImageProps } from './types.js';
-export { TelegramImage } from './primitives/telegram-image.js';
+export type { PeerInfo, Dialog, Message, AppState, ImageSpec, ImageSource, ImageProps } from './types.js';
+export type { TelegramImageProps } from './types.js';
+export { Image } from './primitives/image.js';
 export { MediaCollage } from './components/media-collage.js';
 export type { MediaCollageItem } from './components/media-collage.js';
 export { MediaViewer } from './components/media-viewer.js';

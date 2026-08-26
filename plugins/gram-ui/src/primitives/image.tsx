@@ -5,18 +5,20 @@ import { getLogger } from '@ton-ai/gram-debug';
 
 const imgLog = getLogger('gram-ui:telegram-image');
 
-function imageLoad(url: string, signal: AbortSignal): Promise<string> {
+function imageLoad(url: string, signal: AbortSignal): Promise<{ url: string; w: number; h: number }> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) return reject(new DOMException('Aborted'));
     const img = new window.Image();
-    img.onload = () => {
+    const finish = () => {
       const d = (img as HTMLImageElement & { decode?: () => Promise<void> }).decode;
+      const done = () => resolve({ url, w: img.naturalWidth, h: img.naturalHeight });
       if (typeof d === 'function') {
-        d.call(img).catch(() => {}).then(() => resolve(url));
+        d.call(img).catch(() => {}).then(done);
       } else {
-        resolve(url);
+        done();
       }
     };
+    img.onload = finish;
     img.onerror = () => reject(new Error('Failed to load'));
     signal.addEventListener('abort', () => {
       img.onload = null;
@@ -27,7 +29,7 @@ function imageLoad(url: string, signal: AbortSignal): Promise<string> {
   });
 }
 
-export function TelegramImage(props: {
+export function Image(props: {
   image: ImageSpec;
   width?: number;
   height?: number;
@@ -44,6 +46,7 @@ export function TelegramImage(props: {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const [currentSrc, setCurrentSrc] = useState(image.thumbnail?.url || '');
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [attachTick, setAttachTick] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -89,10 +92,11 @@ export function TelegramImage(props: {
       for (const url of srcs) {
         if (ac.signal.aborted) return;
         try {
-          await imageLoad(url, ac.signal);
+          const res = await imageLoad(url, ac.signal);
           if (!ac.signal.aborted) {
-            imgLog.info('[TelegramImage] loaded', image.id, 'len:', url.length);
-            setCurrentSrc(url);
+            imgLog.info('[TelegramImage] loaded', image.id, 'len:', url.length, 'natural:', res.w + 'x' + res.h);
+            setCurrentSrc(res.url);
+            if (res.w > 0 && res.h > 0) setNatural({ w: res.w, h: res.h });
 
             if (url !== image.thumbnail?.url) setLoaded(true);
             setError(false);
@@ -120,14 +124,30 @@ export function TelegramImage(props: {
     }
   }, [error, image.thumbnail?.url, image.medium?.url, image.original?.url]);
 
-  const imgW0 = image.width || width || 1;
-  const imgH0 = image.height || imgW0 || 1;
-  const aspect = imgW0 / imgH0;
-  let imgW = width || Math.min(imgW0, maxWidth || 320);
-  let imgH = imgW / aspect;
-  if (height != null && imgH > height) { imgH = height; imgW = imgH * aspect; }
-  if (maxWidth && imgW > maxWidth) { imgW = maxWidth; imgH = imgW / aspect; }
-  if (maxHeight && imgH > maxHeight) { imgH = maxHeight; imgW = imgH * aspect; }
+  // Dimension precedence: natural size of what actually loaded here wins;
+  // declared spec dimensions drive the pre-load placeholder.
+  const srcW = image.width || natural?.w || 0;
+  const srcH = image.height || natural?.h || 0;
+  const hasAspect = srcW > 0 && srcH > 0;
+
+  let imgW: number;
+  let imgH: number;
+  if (width != null && height != null) {
+    imgW = width;
+    imgH = height;
+  } else if (hasAspect) {
+    const aspect = srcW / srcH;
+    imgW = width ?? Math.min(srcW, maxWidth ?? 320);
+    imgH = imgW / aspect;
+    if (height != null && imgH > height) { imgH = height; imgW = imgH * aspect; }
+    if (maxWidth && imgW > maxWidth) { imgW = maxWidth; imgH = imgW / aspect; }
+    if (maxHeight && imgH > maxHeight) { imgH = maxHeight; imgW = imgH * aspect; }
+  } else {
+    // Nothing known yet: reserve a compact strip instead of a wrong-shaped
+    // block; it snaps to the real aspect on first successful load.
+    imgW = width ?? (maxWidth != null ? Math.min(maxWidth, 320) : 320);
+    imgH = height ?? 96;
+  }
   const exactFill = width != null && height != null ? `width:${Math.round(width)}px;height:${Math.round(height)}px` : '';
   const dimStyle = exactFill || 'width:' + Math.round(Math.max(imgW, 1)) + 'px;height:' + Math.round(Math.max(imgH, 1)) + 'px';
 

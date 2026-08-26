@@ -1,6 +1,6 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
-import { TelegramImage } from '../primitives/telegram-image.js';
+import { Image } from '../primitives/image.js';
 import { PhotoLoader } from './photo-loader.js';
 import { Checkmark } from './checkmark.js';
 import { MediaCaption } from './media-caption.js';
@@ -202,7 +202,7 @@ export function MediaCollage({
             ) : (
               <div class={'tgui-photo-preview' + (isPreloading ? ' tgui-photo-preview_loading' : '')}>
                 {item.image ? (
-                  <TelegramImage image={item.image} width={cell.width} height={cell.height} lazy={false} onOpenViewer={onOpenAt ? () => onOpenAt(i) : undefined} />
+                  <Image image={item.image} width={cell.width} height={cell.height} lazy={false} onOpenViewer={onOpenAt ? () => onOpenAt(i) : undefined} />
                 ) : (
                   <div class="MediaCollage__placeholder" />
                 )}

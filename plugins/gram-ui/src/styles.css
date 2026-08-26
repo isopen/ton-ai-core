@@ -2452,10 +2452,17 @@ body {
   color: #fff;
 }
 
+.PhotoLoader {
+  overflow: hidden;
+}
+
 .PhotoLoader__circle {
   position: relative;
-  width: 64px;
-  height: 64px;
+  /* Scale with the host box from the very first paint: the circle is a
+     percentage of the container height (square via aspect-ratio) and never
+     has an intrinsic size that could flash before measurement. */
+  height: min(64px, 42%);
+  aspect-ratio: 1 / 1;
 }
 
 .PhotoLoader__spinner {
@@ -2472,8 +2479,8 @@ body {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 22px;
-  height: 22px;
+  width: 34%;
+  height: 34%;
   transform: translate(-50%,-50%);
   color: #fff;
 }

@@ -2,7 +2,7 @@ import { h } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
 import { EmojiText } from './emoji-text.js';
 import { Checkmark } from './checkmark.js';
-import { TelegramImage } from '../primitives/telegram-image.js';
+import { Image } from '../primitives/image.js';
 import { buildImageSpec, chatPhotoPrio, firstMissingSizeType } from './photo-spec.js';
 import type { ImageSpec } from '../types.js';
 
@@ -90,7 +90,7 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
     <div class={cls} style={(attachSpec || attachVideo) ? 'width:fit-content;max-width:320px' : undefined}>
       {attachSpec ? (
         <div class="tgui-poll-attach">
-          <TelegramImage image={attachSpec} maxWidth={320} lazy={false} onOpenViewer={onOpenPhoto && attachSpec ? () => onOpenPhoto(attachSpec, 0) : undefined} />
+          <Image image={attachSpec} maxWidth={320} lazy={false} onOpenViewer={onOpenPhoto && attachSpec ? () => onOpenPhoto(attachSpec, 0) : undefined} />
         </div>
       ) : attachVideo ? (
         <div class="tgui-poll-attach">

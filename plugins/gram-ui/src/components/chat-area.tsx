@@ -13,7 +13,7 @@ import { TypingIndicator } from './typing-indicator.js';
 import type { AppState, Message, MessageReaction, PeerInfo } from '../types.js';
 import type { Dispatch } from '../state.js';
 import type { SkillDef } from '../plugin/types.js';
-import { TelegramImage } from '../primitives/telegram-image.js';
+import { Image } from '../primitives/image.js';
 import type { ImageSpec } from '../types.js';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
@@ -311,6 +311,13 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   if (sameSenderNext) cls += ' MessageBubble_group_next';
 
   const imgSpec = buildImageSpec(m);
+  if (imgSpec) {
+    const sz = (m.media?.photo?.sizes || []).map((x: any) => {
+      const w = x.w || x.width || 0; const h = x.h || x.height || 0;
+      return (x.type || x._ || '?') + ':' + w + 'x' + h + (x.url || x.src ? '+' : '');
+    }).join(' ');
+    photoLog.info('[PhotoBubble] spec msg=' + m.id, 'declared:', imgSpec.width + 'x' + imgSpec.height, 'sizes:', sz || '-');
+  }
   if (isEnabled('gram-ui:photo')) {
     if (imgSpec) {
       photoLog.info('[PhotoBubble] render', m.id, 'sizes:', m.media?.photo?.sizes?.length, 'hasUrls:', { thumb: !!imgSpec.thumbnail?.url, medium: !!imgSpec.medium?.url, original: !!imgSpec.original?.url });
@@ -377,7 +384,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
     <div class={cls} style={imgWidth ? `width:${imgWidth}px` : ''}>
       <div class={mediaCls}>
         {imgSpec ? (
-          <TelegramImage image={imgSpec} maxWidth={320} lazy={false} onOpenViewer={onOpenPhoto ? () => onOpenPhoto(imgSpec, 0) : undefined} />
+          <Image image={imgSpec} maxWidth={320} lazy={false} onOpenViewer={onOpenPhoto ? () => onOpenPhoto(imgSpec, 0) : undefined} />
         ) : (
           t(S.PHOTO_PLACEHOLDER)
         )}

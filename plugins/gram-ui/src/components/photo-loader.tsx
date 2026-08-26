@@ -9,6 +9,11 @@ interface PhotoLoaderProps {
   hidePercent?: boolean;
 }
 
+/** Pure-CSS sized loader: the spinner circle is a percentage of the host
+ *  media box (min(64px, 42%) of its height, square via aspect-ratio), so it
+ *  renders at the correct scale from the very first paint - there is no
+ *  intrinsic size to flash and no measurement involved. Captions are
+ *  opt-out via props; anything that does not fit is clipped by the host. */
 export const PhotoLoader = memo(function PhotoLoader(props: Record<string, any>) {
   const { percent, fileSize, className = '', hideIcon, hidePercent } = props;
 
