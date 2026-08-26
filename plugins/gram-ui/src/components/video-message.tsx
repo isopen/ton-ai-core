@@ -416,6 +416,7 @@ export function VideoMessage(props: VideoMessageProps) {
           {isRealVideo && url ? (
             <video ref={videoRefCb} class="video-message__thumb" src={url}
               poster={thumb?.url || undefined}
+              loop
               autoplay={forceAutoplay} playsinline preload="metadata"
               style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000"
               onTimeUpdate={onTimeUpdate}
