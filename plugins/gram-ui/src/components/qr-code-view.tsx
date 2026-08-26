@@ -1,5 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
-import { useState, useEffect } from '@ton-ai/atom/hooks';
+import { useState, useEffect, useDomEvent } from '@ton-ai/atom/hooks';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
 import { GramLogo } from './gram-logo.js';
@@ -14,10 +14,8 @@ export function QrCodeView({ dispatch }: QrCodeViewProps) {
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
-    const handler = (e: any) => { setQrDataUrl(e.detail.url); };
-    window.addEventListener('tg-auth-qr-url', handler);
-    return () => window.removeEventListener('tg-auth-qr-url', handler);
   }, []);
+  useDomEvent(window, 'tg-auth-qr-url', (e: any) => setQrDataUrl(e.detail.url), []);
 
   return (
     <div class="login-form" style={{textAlign: 'center'}}>

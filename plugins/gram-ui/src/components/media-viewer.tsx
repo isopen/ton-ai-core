@@ -1,5 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
-import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
+import { useState, useEffect, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
 import { buildImageSpec, largestMissingSizeType, VIEWER_PHOTO_PRIO, getPhotoQuality } from './photo-spec.js';
 
@@ -114,15 +114,12 @@ export function MediaViewer({
     }
   }, [isPhoto, activeImage?.id, activeKey]);
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowLeft' && index > 0 && onNavigate) onNavigate(index - 1);
-      if (e.key === 'ArrowRight' && index < items.length - 1 && onNavigate) onNavigate(index + 1);
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [index, items.length, onClose, onNavigate]);
+  const handler = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') onClose();
+    if (e.key === 'ArrowLeft' && index > 0 && onNavigate) onNavigate(index - 1);
+    if (e.key === 'ArrowRight' && index < items.length - 1 && onNavigate) onNavigate(index + 1);
+  };
+  useDomEvent(window, 'keydown', handler, [index, items.length, onClose, onNavigate]);
 
   useEffect(() => {
     setScale(1);

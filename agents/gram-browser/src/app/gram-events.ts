@@ -1,4 +1,5 @@
 import { getLogger, isEnabled, isNoDialogsCache } from '@ton-ai/gram-debug';
+import { requestOnce } from '@ton-ai/atom';
 import { parseEventHeader, parseEncryptionEvent } from '@ton-ai/gram-db';
 import { decodeKvPayload } from '@ton-ai/tl-language';
 import { dbGet, dbSet, dbDel, dbKeys, dbClearCacheKeepSession, dbDeleteAvatarByOpfsName, dbListAvatars } from '@/utils/db';
@@ -74,22 +75,11 @@ function emitFxFallback(messageId: string, x?: number, y?: number): void {
 function downloadAnimDoc(docId: string, doc: any): Promise<string> {
   let p = pendingAnimDownloads.get(docId);
   if (p) return p;
-  p = new Promise<string>((resolve, reject) => {
-    const onUrl = (e: Event) => {
-      const d = ((e as CustomEvent).detail || {}) as { docId?: string; url?: string };
-      if (String(d.docId) === docId && d.url) finish(d.url);
-    };
-    const cleanup = () => {
-      window.removeEventListener('tg-emoji-url', onUrl);
-      clearTimeout(timer);
-    };
-    const finish = (url: string) => { cleanup(); resolve(url); };
-    const timer = setTimeout(() => { cleanup(); reject(new Error('emoji anim download timeout')); }, ANIM_DOWNLOAD_TIMEOUT_MS);
-    window.addEventListener('tg-emoji-url', onUrl);
-    window.dispatchEvent(new CustomEvent('tg-download-document', {
-      detail: { document: doc, messageId: 'emojipack-' + docId, priority: 1 },
-    }));
-  }).finally(() => { pendingAnimDownloads.delete(docId); });
+  p = requestOnce<{ docId?: string; url?: string }>('tg-download-document', 'tg-emoji-url', {
+    match: (d) => String(d?.docId) === docId && !!d?.url,
+    timeoutMs: ANIM_DOWNLOAD_TIMEOUT_MS,
+    payload: { document: doc, messageId: 'emojipack-' + docId, priority: 1 },
+  }).then((d) => d.url!).finally(() => { pendingAnimDownloads.delete(docId); });
   pendingAnimDownloads.set(docId, p);
   return p;
 }

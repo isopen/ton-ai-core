@@ -1,5 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
-import { useCallback, useEffect, useRef, useState } from '@ton-ai/atom/hooks';
+import { useCallback, useEffect, useRef, useState, useDomEvent } from '@ton-ai/atom/hooks';
 import { fetchEmojiData, getEmojiDocUrl } from './emoji-canvas.js';
 import type { EmojiData } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
@@ -372,18 +372,15 @@ export function SlotMachineSticker({ value, size = 96, playKey, shouldPlay = tru
     }
   }, [renderGateOpen, spinState, spins.length, resultsReady, isWin, clearWinTimer]);
 
-  useEffect(() => {
-    const onPlaybackReset = () => {
-      if (shouldSkipToEndRef.current) return;
-      clearWinTimer();
-      setSpinState('base');
-      setBackgroundState('base');
-      setSpinEndAllowed(false);
-      setReelCyclesDone(0);
-    };
-    window.addEventListener('tg-playback-reset', onPlaybackReset);
-    return () => window.removeEventListener('tg-playback-reset', onPlaybackReset);
-  }, [clearWinTimer]);
+  const onPlaybackReset = () => {
+    if (shouldSkipToEndRef.current) return;
+    clearWinTimer();
+    setSpinState('base');
+    setBackgroundState('base');
+    setSpinEndAllowed(false);
+    setReelCyclesDone(0);
+  };
+  useDomEvent(window, 'tg-playback-reset', onPlaybackReset, [clearWinTimer]);
 
   const onReelsEnded = useCallback(() => {
     if (spinState !== 'base') return;

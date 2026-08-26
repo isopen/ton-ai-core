@@ -1,6 +1,5 @@
-import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
-import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
-import { Checkmark } from './checkmark.js';
+import { h } from '@ton-ai/atom/jsx-runtime';
+import { useState, useEffect, useRef, useCallback, useDomEvent } from '@ton-ai/atom/hooks';
 import { buildDocumentThumb } from '../utils.js';
 import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
@@ -231,25 +230,22 @@ export function VideoMessage(props: VideoMessageProps) {
   }, [inView, pause]);
 
   const visibilityPausedRef = useRef(false);
-  useEffect(() => {
-    const onVis = () => {
-      if (document.visibilityState === 'hidden') {
-        if (playingRef.current) {
-          visibilityPausedRef.current = true;
-          pause();
-        }
-      } else if (visibilityPausedRef.current) {
-        visibilityPausedRef.current = false;
-        if (inViewRef.current) {
-          play();
-        } else {
-          autoPlayFlagRef.current = false;
-        }
+  const onVis = () => {
+    if (document.visibilityState === 'hidden') {
+      if (playingRef.current) {
+        visibilityPausedRef.current = true;
+        pause();
       }
-    };
-    document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
-  }, [pause, play]);
+    } else if (visibilityPausedRef.current) {
+      visibilityPausedRef.current = false;
+      if (inViewRef.current) {
+        play();
+      } else {
+        autoPlayFlagRef.current = false;
+      }
+    }
+  };
+  useDomEvent(document, 'visibilitychange', onVis, [pause, play]);
 
   useEffect(() => {
     if (inView && autoPlayFlagRef.current && !playingRef.current && url) {
@@ -285,44 +281,38 @@ export function VideoMessage(props: VideoMessageProps) {
     }
   }, [url, progress, inView]);
 
-  useEffect(() => {
-    if (!isRealVideo || !videoRef.current) return;
-    const v = videoRef.current;
-    const onErr = () => setUiState('error');
-    const onReady = () => {
-      setLoaded(true);
-      if (playingRef.current) {
-        if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-        const v = videoRef.current;
-        if (v) { v.muted = videoMuted; v.volume = volume; v.play().catch(() => {}); }
-      } else {
-        setUiState('ready');
-      }
-    };
-    const onTime = () => { setCt(v.currentTime); };
-    const onEnd = () => {
-      setCt(0);
+  const onErr = () => setUiState('error');
+  const onReady = () => {
+    setLoaded(true);
+    if (playingRef.current) {
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+      const v = videoRef.current;
+      if (v) { v.muted = videoMuted; v.volume = volume; v.play().catch(() => {}); }
+    } else {
+      setUiState('ready');
+    }
+  };
+  const onTime = () => { setCt(videoRef.current?.currentTime ?? 0); };
+  const onEnd = () => {
+    setCt(0);
+    autoPlayFlagRef.current = false;
+  };
+  const onPlaying = () => {
+    if (autoPlayFlagRef.current) {
       autoPlayFlagRef.current = false;
-    };
-    const onPlaying = () => {
-      if (autoPlayFlagRef.current) {
-        autoPlayFlagRef.current = false;
-        setForceAutoplay(false);
-      }
-    };
-    v.addEventListener('error', onErr);
-    v.addEventListener('canplay', onReady);
-    v.addEventListener('timeupdate', onTime);
-    v.addEventListener('ended', onEnd);
-    v.addEventListener('playing', onPlaying);
+      setForceAutoplay(false);
+    }
+  };
+  useDomEvent(() => videoRef.current, 'error', onErr, [isRealVideo]);
+  useDomEvent(() => videoRef.current, 'canplay', onReady, [isRealVideo]);
+  useDomEvent(() => videoRef.current, 'timeupdate', onTime, [isRealVideo]);
+  useDomEvent(() => videoRef.current, 'ended', onEnd, [isRealVideo]);
+  useDomEvent(() => videoRef.current, 'playing', onPlaying, [isRealVideo]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!isRealVideo || !v) return;
     if (v.readyState >= 2) onReady();
-    return () => {
-      v.removeEventListener('error', onErr);
-      v.removeEventListener('canplay', onReady);
-      v.removeEventListener('timeupdate', onTime);
-      v.removeEventListener('ended', onEnd);
-      v.removeEventListener('playing', onPlaying);
-    };
   }, [isRealVideo]);
 
   useEffect(() => {

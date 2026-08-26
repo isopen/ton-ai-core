@@ -9,6 +9,7 @@
 
 import { playStickerFxOverlay } from './animated-sticker.js';
 import { scheduleStickerClickFx } from './sticker-click-fx.js';
+import { bindLifetimeListeners } from '@ton-ai/atom';
 import { getLogger } from '@ton-ai/gram-debug';
 
 const log = getLogger('gram-ui:emoji-burst');
@@ -433,7 +434,7 @@ export function attachEmojiInteractions(): void {
     if (typeof window === 'undefined' || interactionsAttached) return;
     interactionsAttached = true;
 
-    window.addEventListener('tg-interaction-server-fx', (e: Event) => {
+    const onServerFx = (e: Event) => {
         if (document.hidden) return;
         const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; url?: string; key?: string; x?: number; y?: number };
         if (!detail.url || detail.messageId == null) return;
@@ -444,13 +445,18 @@ export function attachEmojiInteractions(): void {
         const anchorEl = pickInteractionAnchor(bubble, detail.x, detail.y);
         const anchorRect = anchorEl ? anchorEl.getBoundingClientRect() : bubble.getBoundingClientRect();
         playStickerFxOverlay('emoji-fx-' + (detail.key || String(detail.messageId)), detail.url, anchorRect);
-    });
+    };
 
-    window.addEventListener('tg-interaction-local', (e: Event) => {
+    const onLocal = (e: Event) => {
         if (document.hidden) return;
         const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; x?: number; y?: number };
         if (detail.messageId == null) return;
         runLocalInteractionFx(detail.messageId, detail.x, detail.y);
+    };
+
+    bindLifetimeListeners(window, {
+        'tg-interaction-server-fx': onServerFx,
+        'tg-interaction-local': onLocal,
     });
 }
 

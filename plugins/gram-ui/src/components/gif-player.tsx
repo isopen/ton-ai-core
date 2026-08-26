@@ -1,5 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
-import { useEffect, useRef } from '@ton-ai/atom/hooks';
+import { useEffect, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import { buildDocumentThumb } from '../utils.js';
 import { PhotoLoader } from './photo-loader.js';
 import { MediaSourceBadge } from './media-source-badge.js';
@@ -54,18 +54,15 @@ export function GifPlayer(props: GifPlayerProps) {
     return () => io.disconnect();
   }, []);
 
-  useEffect(() => {
-    const onVis = () => {
-      if (document.visibilityState !== 'hidden') return;
-      const v = videoRef.current;
-      if (v && !v.paused) {
-        wasPlayingRef.current = true;
-        v.pause();
-      }
-    };
-    document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
-  }, []);
+  const onVis = () => {
+    if (document.visibilityState !== 'hidden') return;
+    const v = videoRef.current;
+    if (v && !v.paused) {
+      wasPlayingRef.current = true;
+      v.pause();
+    }
+  };
+  useDomEvent(document, 'visibilitychange', onVis, []);
 
   const triggerDownload = () => {
     if (url) return;

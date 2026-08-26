@@ -116,3 +116,26 @@ export function useMemo<T>(fn: () => T, deps: any[]): T {
 export function useCallback<T extends (...args: any[]) => any>(fn: T, deps: any[]): T {
   return useMemo(() => fn, deps);
 }
+
+export type DomEventTarget =
+  | Window | Document | Element
+  | null | undefined
+  | (() => Window | Document | Element | null | undefined);
+
+/** Subscribe to a DOM event for the component's lifetime (or while deps and
+ *  handler stay stable). Returns the cleanup automatically - the ubiquitous
+ *  window/document addEventListener+removeEventListener pair in one call. */
+export function useDomEvent(
+  target: DomEventTarget,
+  type: string,
+  handler: ((e: any) => void) | null | undefined,
+  deps: any[] = [],
+  options?: AddEventListenerOptions,
+): void {
+  useEffect(() => {
+    const t = typeof target === 'function' ? target() : target;
+    if (!t || !handler || typeof (t as any).addEventListener !== 'function') return;
+    t.addEventListener(type, handler, options);
+    return () => t.removeEventListener(type, handler, options);
+  }, deps);
+}

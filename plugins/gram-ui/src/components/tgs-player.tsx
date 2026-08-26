@@ -1,5 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
-import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
+import { useState, useEffect, useRef, useCallback, useDomEvent } from '@ton-ai/atom/hooks';
 import { renderFrame } from '@ton-ai/tgs';
 import type { LayerOrder, ParsedAnimation } from '@ton-ai/tgs';
 import { parseTgsJson } from '../utils/tgs-parse.js';
@@ -223,26 +223,25 @@ export function TgsPlayer(props: TgsPlayerProps) {
         setPlaying(autoplay);
     }, [autoplay, animationData, playKey, showLastFrame]);
 
-    useEffect(() => {
-        const onPlaybackReset = () => {
-            if (showLastFrame) {
-                const anim = animRef.current;
-                if (anim && anim.outFrame - anim.inFrame > 0) {
-                    frameRef.current = anim.outFrame - 1;
-                    endFiredRef.current = true;
-                }
-                setPlaying(false);
-                return;
+    const onPlaybackReset = () => {
+        if (showLastFrame) {
+            const anim = animRef.current;
+            if (anim && anim.outFrame - anim.inFrame > 0) {
+                frameRef.current = anim.outFrame - 1;
+                endFiredRef.current = true;
             }
-            endFiredRef.current = false;
-            frameRef.current = animRef.current ? animRef.current.inFrame : 0;
-            lastDrawnFrameRef.current = -1;
-            lastTimeRef.current = 0;
-            setPlaying(autoplay);
-        };
-        window.addEventListener('tg-playback-reset', onPlaybackReset);
-        return () => window.removeEventListener('tg-playback-reset', onPlaybackReset);
-    }, [autoplay, showLastFrame]);
+            setPlaying(false);
+            return;
+        }
+        endFiredRef.current = false;
+        frameRef.current = animRef.current ? animRef.current.inFrame : 0;
+        lastDrawnFrameRef.current = -1;
+        lastTimeRef.current = 0;
+        setPlaying(autoplay);
+    };
+    useDomEvent(window, 'tg-playback-reset', onPlaybackReset, [autoplay, showLastFrame]);
+
+    const retryOnVisibleRef = useRef<null | (() => void)>(null);
 
     useEffect(() => {
         if (!playing || !inView) {
@@ -404,15 +403,12 @@ export function TgsPlayer(props: TgsPlayerProps) {
 
         maybeStart();
 
-        const onVisibilityChange = () => {
-            if (!document.hidden && !started && playing && inView && scrollSettled()) {
-                maybeStart();
-            }
+        retryOnVisibleRef.current = () => {
+            if (!started) maybeStart();
         };
-        document.addEventListener('visibilitychange', onVisibilityChange);
 
         return () => {
-            document.removeEventListener('visibilitychange', onVisibilityChange);
+            retryOnVisibleRef.current = null;
             if (deferredStartTimer != null) {
                 clearTimeout(deferredStartTimer);
                 deferredStartTimer = null;
@@ -425,6 +421,12 @@ export function TgsPlayer(props: TgsPlayerProps) {
             stopRaf();
         };
     }, [playing, inView, loop, speed, animVersion, drawFrame, bypassPlayerLimit]);
+
+    useDomEvent(document, 'visibilitychange', () => {
+        if (!document.hidden && playing && inView && scrollSettled()) {
+            retryOnVisibleRef.current?.();
+        }
+    }, [playing, inView]);
 
     const togglePlay = useCallback(() => {
         const anim = animRef.current;

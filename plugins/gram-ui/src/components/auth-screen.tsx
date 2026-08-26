@@ -1,7 +1,7 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import type { AppState, UIAction } from '../types.js';
 import type { Dispatch } from '../state.js';
-import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
+import { useState, useEffect, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import { t } from '../locale.js';
 import { S } from '../strings.js';
 import { LangSelector } from './lang-selector.js';
@@ -168,16 +168,11 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
   const phoneMask = pattern.replace(new RegExp(PATTERN_PLACEHOLDER, 'g'), '_');
   const maxDigits = patternDigitCount(pattern);
 
-  useEffect(() => {
-    if (!countryOpen) return;
-    const handler = (e: Event) => {
-      if (countryRef.current && !countryRef.current.contains(e.target as Node)) {
-        setCountryOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [countryOpen]);
+  useDomEvent(document, 'mousedown', countryOpen ? (e: Event) => {
+    if (countryRef.current && !countryRef.current.contains(e.target as Node)) {
+      setCountryOpen(false);
+    }
+  } : null, [countryOpen]);
   const filtered = countrySearch
     ? state.countries.filter(c => (c.name || c.defaultName || '').toLowerCase().includes(countrySearch.toLowerCase()))
     : state.countries;

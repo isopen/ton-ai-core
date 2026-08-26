@@ -1,4 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
+import { bindLifetimeListeners } from '@ton-ai/atom';
 import { getLogger } from '@ton-ai/gram-debug';
 import { Panel } from './primitives/panel.js';
 import { Flex } from './primitives/flex.js';
@@ -49,15 +50,7 @@ export class TelegramUI {
   private _rootDom: Node | null = null;
   private pluginManager = new PluginManager();
   private _pluginSkills: SkillPlugin[] = [];
-  private _onSendCode!: () => void;
-  private _onSignIn!: () => void;
-  private _onCheckPassword!: () => void;
-  private _onSignUp!: () => void;
-  private _onSendMessage!: (e: any) => void;
-  private _onResendCode!: () => void;
-  private _onRequestQr!: () => void;
-  private _onTyping!: () => void;
-  private _onTypingStop!: () => void;
+  private detachInteractionListeners: (() => void) | null = null;
 
   get state(): AppState { return this._state; }
 
@@ -194,28 +187,23 @@ export class TelegramUI {
   }
 
   private setupListeners() {
-    this._onSendCode = () => { this.callbacks.sendCode(this._state.phone); };
-    this._onSignIn = () => { this.callbacks.signIn(this._state.code); };
-    this._onCheckPassword = () => { this.callbacks.checkPassword(this._state.password); };
-    this._onSignUp = () => { this.callbacks.signUp(this._state.signupFirstname, this._state.signupLastname); };
-    this._onSendMessage = (e: any) => { this.callbacks.sendMessage(e.detail.text); };
-    this._onResendCode = () => { this.callbacks.sendCode(this._state.phone); };
-    this._onRequestQr = () => { this.callbacks.requestQrCode(); };
-    this._onTyping = () => { this.callbacks.sendTyping(); };
-    this._onTypingStop = () => { this.callbacks.sendTypingCancel(); };
-    window.addEventListener('tg-auth-send-code', this._onSendCode);
-    window.addEventListener('tg-auth-sign-in', this._onSignIn);
-    window.addEventListener('tg-auth-check-password', this._onCheckPassword);
-    window.addEventListener('tg-auth-sign-up', this._onSignUp);
-    window.addEventListener('tg-send-message', this._onSendMessage);
-    window.addEventListener('tg-typing', this._onTyping);
-    window.addEventListener('tg-typing-stop', this._onTypingStop);
-    window.addEventListener('tg-auth-resend-code', this._onResendCode);
-    window.addEventListener('tg-auth-request-qr', this._onRequestQr);
-    window.addEventListener('tg-auth-set-lang', (e: any) => {
-      this.dispatch({ type: 'SET_LANG_CODE', langCode: e.detail.langCode });
-      const fallback = LANG_FALLBACKS[e.detail.langCode];
-      if (fallback) setStrings(fallback);
+    // Single bound bundle: destroy() previously missed tg-auth-sign-up,
+    // tg-auth-request-qr and the anonymous tg-auth-set-lang handler.
+    this.detachInteractionListeners = bindLifetimeListeners(window, {
+      'tg-auth-send-code': () => { this.callbacks.sendCode(this._state.phone); },
+      'tg-auth-sign-in': () => { this.callbacks.signIn(this._state.code); },
+      'tg-auth-check-password': () => { this.callbacks.checkPassword(this._state.password); },
+      'tg-auth-sign-up': () => { this.callbacks.signUp(this._state.signupFirstname, this._state.signupLastname); },
+      'tg-send-message': (e: any) => { this.callbacks.sendMessage(e.detail.text); },
+      'tg-typing': () => { this.callbacks.sendTyping(); },
+      'tg-typing-stop': () => { this.callbacks.sendTypingCancel(); },
+      'tg-auth-resend-code': () => { this.callbacks.sendCode(this._state.phone); },
+      'tg-auth-request-qr': () => { this.callbacks.requestQrCode(); },
+      'tg-auth-set-lang': (e: any) => {
+        this.dispatch({ type: 'SET_LANG_CODE', langCode: e.detail.langCode });
+        const fallback = LANG_FALLBACKS[e.detail.langCode];
+        if (fallback) setStrings(fallback);
+      },
     });
   }
 
@@ -312,13 +300,8 @@ export class TelegramUI {
 
   destroy() {
     log.info('[TGUI] destroy start, _rootDom=', this._rootDom, '_rootDom.parentNode=', this._rootDom?.parentNode);
-    window.removeEventListener('tg-auth-send-code', this._onSendCode);
-    window.removeEventListener('tg-auth-sign-in', this._onSignIn);
-    window.removeEventListener('tg-auth-check-password', this._onCheckPassword);
-    window.removeEventListener('tg-send-message', this._onSendMessage);
-    window.removeEventListener('tg-typing', this._onTyping);
-    window.removeEventListener('tg-typing-stop', this._onTypingStop);
-    window.removeEventListener('tg-auth-resend-code', this._onResendCode);
+    this.detachInteractionListeners?.();
+    this.detachInteractionListeners = null;
     if (this._rootDom && this._rootDom.parentNode) {
       log.info('[TGUI] destroy: removing rootDom from parent');
       this._rootDom.parentNode.removeChild(this._rootDom);

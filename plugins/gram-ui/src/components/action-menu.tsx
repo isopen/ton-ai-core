@@ -1,5 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
-import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
+import { useRef, useState, useDomEvent } from '@ton-ai/atom/hooks';
 import { t } from '../locale.js';
 import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';
@@ -24,16 +24,11 @@ export function ActionMenu({ state, dispatch }: { state: AppState; dispatch: Dis
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+  useDomEvent(document, 'mousedown', open ? (e: MouseEvent) => {
+    if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      setOpen(false);
     }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [open]);
+  } : null, [open]);
 
   function selectSkill(id: string | null) {
     dispatch({ type: 'SET_ACTIVE_SKILL', id: state.activeSkill === id ? null : id });

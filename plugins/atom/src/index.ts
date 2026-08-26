@@ -1,8 +1,11 @@
 export { jsx, jsx as jsxDEV, jsx as createElement, h, Fragment } from './jsx-runtime.js';
 export { memo } from './vdom.js';
-export { useState, useEffect, useRef, useMemo, useCallback } from './hooks.js';
+export { useState, useEffect, useRef, useMemo, useCallback, useDomEvent } from './hooks.js';
+export type { DomEventTarget } from './hooks.js';
 export { render, setUseRafBatching } from './render.js';
 export { createDOM, patch } from './reconciler.js';
+export { requestOnce, bindLifetimeListeners } from './dom-events.js';
+export type { RequestOnceOptions, LifetimeListenerMap } from './dom-events.js';
 export { VirtualList } from './virtual-list.js';
 export type { VirtualListProps } from './virtual-list.js';
 export {

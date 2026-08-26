@@ -39,12 +39,164 @@ function createElement(tag: string): Element {
   return document.createElement(tag);
 }
 
-function isEventProp(name: string): boolean {
-  return name.startsWith('on');
+const PASSIVE_EVENT_TYPES = new Set(['scroll', 'wheel', 'touchstart', 'touchmove']);
+
+interface EventBinding {
+  type: string;
+  handle: (e: any) => void;
+  capture: boolean;
+  passive: boolean;
+  once: boolean;
+  signal?: AbortSignal;
+  consumed: boolean;
+  swaps: number;
+  warnedChurn: boolean;
+  bound: (e: Event) => void;
 }
 
-function eventNameFromProp(name: string): string {
-  return name.slice(2).toLowerCase();
+// One native listener per element+prop, installed once: handler updates swap
+// a reference instead of rebinding, so inline arrow props stop churning
+// removeEventListener/addEventListener on every render.
+const elementBindings = new WeakMap<Element, Map<string, EventBinding>>();
+
+interface DelegateBinding {
+  type: string;
+  selectors: string[];
+  handlers: Map<string, (e: any, target: Element) => void>;
+  bound: (e: Event) => void;
+}
+
+const delegateBindings = new WeakMap<Element, Map<string, DelegateBinding>>();
+
+/** on:custom-event keeps the name verbatim; onClick maps to 'click'. */
+function eventPropType(key: string): string | null {
+  if (key.startsWith('on:')) return key.length > 3 ? key.slice(3) : null;
+  if (key.startsWith('on') && key.length > 2) return key.slice(2).toLowerCase();
+  return null;
+}
+
+function delegateEventType(key: string): string | null {
+  const m = /^on([A-Za-z]+)Delegate$/.exec(key);
+  return m ? m[1].toLowerCase() : null;
+}
+
+function eventHandlerOf(value: any): ((e: any) => void) | null {
+  if (typeof value === 'function') return value;
+  if (value && typeof value === 'object' && typeof value.handle === 'function') return value.handle;
+  return null;
+}
+
+function setEventBinding(el: Element, key: string, type: string, value: any): void {
+  const handle = eventHandlerOf(value);
+  if (!handle) return;
+
+  const obj = value && typeof value === 'object' ? value : null;
+  const once = !!(obj && obj.once);
+  const wantCapture = !!(obj && obj.capture);
+  const signalRaw = obj ? obj.signal : undefined;
+  const signal = signalRaw instanceof AbortSignal ? signalRaw : undefined;
+  const passive = obj && typeof obj.passive === 'boolean' ? obj.passive : PASSIVE_EVENT_TYPES.has(type);
+
+  let byKey = elementBindings.get(el);
+  if (!byKey) { byKey = new Map(); elementBindings.set(el, byKey); }
+
+  const prev = byKey.get(key);
+  if (!prev) {
+    const binding: EventBinding = {
+      type, handle, capture: wantCapture, passive, once, signal,
+      consumed: false, swaps: 0, warnedChurn: false,
+      bound: (ev: Event) => {
+        if (binding.once && binding.consumed) return;
+        try { binding.handle(ev); } finally { if (binding.once) binding.consumed = true; }
+      },
+    };
+    byKey.set(key, binding);
+    el.addEventListener(type, binding.bound, { capture: wantCapture, passive, signal });
+    return;
+  }
+
+  const handlerChanged = prev.handle !== handle;
+  const needsRebind = prev.type !== type
+    || prev.capture !== wantCapture
+    || prev.passive !== passive
+    || prev.signal !== signal;
+
+  if (!handlerChanged && !needsRebind) return;
+
+  prev.swaps++;
+  if (prev.swaps >= 6 && !prev.warnedChurn) {
+    prev.warnedChurn = true;
+    log.warn('[atom] event handler identity churn on "' + key + '"; wrap it in useCallback');
+  }
+
+  if (needsRebind) {
+    el.removeEventListener(prev.type, prev.bound, { capture: prev.capture });
+    prev.type = type;
+    prev.capture = wantCapture;
+    prev.passive = passive;
+    prev.signal = signal;
+    el.addEventListener(type, prev.bound, { capture: wantCapture, passive, signal });
+  }
+  prev.handle = handle;
+  if (handlerChanged) prev.consumed = false;
+}
+
+function removeEventBinding(el: Element, key: string): boolean {
+  const byKey = elementBindings.get(el);
+  if (!byKey) return false;
+  const b = byKey.get(key);
+  if (!b) return false;
+  el.removeEventListener(b.type, b.bound, { capture: b.capture });
+  byKey.delete(key);
+  if (byKey.size === 0) elementBindings.delete(el);
+  return true;
+}
+
+function setDelegateBinding(el: Element, key: string, type: string, value: any): void {
+  if (!value || typeof value !== 'object') return;
+  let byKey = delegateBindings.get(el);
+  if (!byKey) { byKey = new Map(); delegateBindings.set(el, byKey); }
+  const selectors = Object.keys(value).filter((s) => typeof (value as any)[s] === 'function');
+  const handlers = new Map<string, (e: any, target: Element) => void>();
+  for (const s of selectors) handlers.set(s, (value as any)[s]);
+
+  let entry = byKey.get(key);
+  if (!entry) {
+    entry = {
+      type,
+      selectors,
+      handlers,
+      bound: (ev: Event) => {
+        const target = ev.target as Element | null;
+        if (!target || typeof target.closest !== 'function') return;
+        for (const sel of entry!.selectors) {
+          const handler = entry!.handlers.get(sel);
+          if (!handler) continue;
+          const hit = target.closest(sel);
+          if (hit && el.contains(hit)) {
+            handler(ev, hit);
+            break;
+          }
+        }
+      },
+    };
+    byKey.set(key, entry);
+    el.addEventListener(type, entry.bound);
+    return;
+  }
+  entry.selectors = selectors;
+  entry.handlers = handlers;
+}
+
+function removeDelegateBinding(el: Element, key: string): boolean {
+  const byKey = delegateBindings.get(el);
+  if (!byKey) return false;
+  const e = byKey.get(key);
+  if (!e) return false;
+  el.removeEventListener(e.type, e.bound);
+  byKey.delete(key);
+  if (byKey.size === 0) delegateBindings.delete(el);
+  return true;
 }
 
 function styleObjToCss(style: Record<string, any>): string {
@@ -106,16 +258,18 @@ function setProp(el: Element, key: string, value: any) {
     }
     return;
   }
-  if (isEventProp(key)) {
-    const eventName = eventNameFromProp(key);
-
-    if (eventName === 'scroll' || eventName === 'wheel' || eventName === 'touchstart' || eventName === 'touchmove') {
-      el.addEventListener(eventName, value, { passive: true });
-    } else {
-      el.addEventListener(eventName, value);
-    }
+  const delegateType = delegateEventType(key);
+  if (delegateType) {
+    setDelegateBinding(el, key, delegateType, value);
     return;
   }
+  const eventType = eventPropType(key);
+  if (eventType && eventHandlerOf(value)) {
+    setEventBinding(el, key, eventType, value);
+    return;
+  }
+  // Non-function on* values (and malformed ones) fall through to plain
+  // attribute handling instead of being registered as listeners.
   if (typeof value === 'boolean') {
     if (value) el.setAttribute(key, '');
     else el.removeAttribute(key);
@@ -150,10 +304,12 @@ function removeProp(el: Element, key: string, oldValue: any) {
     return;
   }
   if (key === 'dangerouslySetInnerHTML') return;
-  if (isEventProp(key)) {
-    el.removeEventListener(eventNameFromProp(key), oldValue);
+  if (delegateEventType(key)) {
+    removeDelegateBinding(el, key);
     return;
   }
+  const removedType = eventPropType(key);
+  if (removedType && removeEventBinding(el, key)) return;
   el.removeAttribute(key);
 }
 
@@ -182,8 +338,20 @@ function updateProp(el: Element, key: string, oldValue: any, newValue: any) {
     removeProp(el, key, oldValue);
     return;
   }
-  if (isEventProp(key)) {
-    removeProp(el, key, oldValue);
+  const delegateType = delegateEventType(key);
+  if (delegateType) {
+    setDelegateBinding(el, key, delegateType, newValue);
+    return;
+  }
+  const eventType = eventPropType(key);
+  if (eventType && eventHandlerOf(newValue)) {
+    setEventBinding(el, key, eventType, newValue);
+    return;
+  }
+  // Switching from a handler back to a plain value: drop the listener so a
+  // stale subscription cannot survive next to the attribute replacement.
+  if (eventType && eventHandlerOf(oldValue)) {
+    removeEventBinding(el, key);
   }
   setProp(el, key, newValue);
 }

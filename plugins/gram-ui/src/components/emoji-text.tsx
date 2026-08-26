@@ -1,5 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
-import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
+import { useEffect, useRef, useState, useDomEvent } from '@ton-ai/atom/hooks';
 import { EmojiCanvas, StaticEmojiText, fetchEmojiData } from './emoji-canvas.js';
 import type { EmojiSegment } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
@@ -62,19 +62,24 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
     return () => { cancelled = true; };
   }, [url, docId, alt]);
 
+  const seekToEnd = () => {
+    if (!showLastFrame) return;
+    const v = videoRef.current;
+    if (!v) return;
+    const d = v.duration;
+    if (Number.isFinite(d) && d > 0) v.currentTime = Math.max(0, d - 0.05);
+  };
+
   useEffect(() => {
     if (data?.kind !== 'video') return;
     const v = videoRef.current;
     if (!v) return;
     if (!showLastFrame) return;
     v.pause();
-    const seekToEnd = () => {
-      const d = v.duration;
-      if (Number.isFinite(d) && d > 0) v.currentTime = Math.max(0, d - 0.05);
-    };
     if (v.readyState >= 1) seekToEnd();
-    else v.addEventListener('loadedmetadata', seekToEnd, { once: true });
   }, [data?.kind, data?.value, showLastFrame]);
+  useDomEvent(() => videoRef.current, 'loadedmetadata', seekToEnd,
+    [data?.kind, data?.value, showLastFrame], { once: true });
 
   if (data?.kind === 'tgs') {
     return <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={size} height={size} loop={loop} autoplay={autoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} playKey={playKey} showLastFrame={showLastFrame} />;

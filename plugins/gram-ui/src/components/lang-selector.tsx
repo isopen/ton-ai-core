@@ -1,5 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
-import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
+import { useState, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import { Scrollable } from '../primitives/scrollable.js';
 
 interface LangSelectorProps {
@@ -15,16 +15,11 @@ export function LangSelector({ current, options, onChange, suggestionLang, onAcc
   const ref = useRef<HTMLElement | null>(null);
   const currentLabel = options.find(o => o.code === current)?.label || current;
 
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: Event) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
+  useDomEvent(document, 'mousedown', open ? (e: Event) => {
+    if (ref.current && !ref.current.contains(e.target as Node)) {
+      setOpen(false);
+    }
+  } : null, [open]);
 
   const showSuggestion = suggestionLang && suggestionLang !== current && onAcceptSuggestion;
   const suggestionLabel = showSuggestion ? options.find(o => o.code === suggestionLang)?.label || suggestionLang : '';
