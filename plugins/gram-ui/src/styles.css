@@ -1556,6 +1556,16 @@ body {
   padding-right: 1px;
   gap: 3px;
 }
+.MessageBubble_rich .rich-body { border-radius: 8px 8px 0 0; }
+.MessageBubble_rich .MessageBubble__meta {
+  background: var(--rich-bg);
+  margin-top: 0;
+  padding: 4px 8px 8px;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  justify-content: flex-end;
+}
+.MessageBubble_rich .MessageBubble__time { color: var(--rich-muted); }
 
 .MessageBubble__time {
   font-size: 11px;
@@ -5322,7 +5332,7 @@ body {
 .rich-details, .rich-details summary, .rich-details-title { cursor: pointer; }
 .md-body details, .md-body summary { cursor: pointer; }
 .rich-body > :first-child { margin-top: 0; }
-.rich-body {
+.rich-body, .MessageBubble_rich {
   --rich-bg: #ffffff;
   --rich-border: rgba(0,0,0,.10);
   --rich-text: #1b222b;
@@ -5332,7 +5342,7 @@ body {
   --rich-quote-bg: #e3f0fa;
   --rich-quote-accent: #0b6bff;
 }
-[data-theme='dark'] .rich-body {
+[data-theme='dark'] .rich-body, [data-theme='dark'] .MessageBubble_rich {
   --rich-bg: #1e1e1e;
   --rich-border: rgba(255,255,255,0.12);
   --rich-text: #e8eaed;
