@@ -67,12 +67,14 @@ export function MessageBubble(props: MessageBubbleProps) {
     onRichButton,
   } = props;
 
+  const isTmd = !richMessage && hasTmd(text);
   let cls = 'MessageBubble';
   cls += out ? ' MessageBubble_out' : ' MessageBubble_in';
   if (richMessage) cls += ' MessageBubble_rich';
+  if (isTmd) cls += ' MessageBubble_tmd';
   if (sameSenderPrev) cls += ' MessageBubble_group_prev';
   if (sameSenderNext) cls += ' MessageBubble_group_next';
-  if (isEmojiOnly(text)) cls += ' MessageBubble_emojiOnly';
+  if (isEmojiOnly(text) && !isTmd) cls += ' MessageBubble_emojiOnly';
   if (className) cls += ' ' + className;
 
   return (
@@ -84,8 +86,8 @@ export function MessageBubble(props: MessageBubbleProps) {
               messageId={messageId ?? ''}
               documentUrls={richDocumentUrls || documentUrls || {}}
               onButton={(data: string) => onRichButton?.(data, messageId ?? '')} />
-          : hasTmd(text)
-            ? <TmdView text={text} foreignEntities={entities} documentUrls={documentUrls || {}} />
+          : isTmd
+            ? <TmdView text={text} foreignEntities={entities} documentUrls={documentUrls || {}} time={time} status={status} out={out} />
             : <EmojiText text={text} entities={entities} documentUrls={documentUrls || {}} />}
       </div>
       <InlineKeyboard
@@ -93,10 +95,12 @@ export function MessageBubble(props: MessageBubbleProps) {
         documentUrls={richDocumentUrls || documentUrls || {}}
         onButton={(b) => onKbButton?.(b, messageId ?? '')}
       />
-      <div class="MessageBubble__meta">
-        <span class="MessageBubble__time">{time}</span>
-        {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
-      </div>
+      {isTmd ? null : (
+        <div class="MessageBubble__meta">
+          <span class="MessageBubble__time">{time}</span>
+          {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
+        </div>
+      )}
       {reactions && onReact ? (
         <Reactions reactions={reactions} documentUrls={reactionUrls || {}} onToggle={onReact} />
       ) : null}

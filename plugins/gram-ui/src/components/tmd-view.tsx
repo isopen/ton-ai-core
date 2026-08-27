@@ -5,6 +5,7 @@ import { getLogger } from '@ton-ai/gram-debug';
 import { AnimatedEmoji, EmojiText } from './emoji-text.js';
 import { matchEmojiRuns, getEmojiDocId } from './emoji-store.js';
 import { render } from '@ton-ai/atom/render';
+import { Checkmark } from './checkmark.js';
 
 const tmdLog = getLogger('gram-ui:tmd');
 
@@ -88,11 +89,14 @@ function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, str
   }
 }
 
-export function TmdView({ text, foreignEntities, documentUrls, className = '' }: {
+export function TmdView({ text, foreignEntities, documentUrls, className = '', time, status, out }: {
   text: string;
   foreignEntities?: any[];
   documentUrls?: Record<number, string>;
   className?: string;
+  time?: string;
+  status?: string;
+  out?: boolean;
 }) {
   if (!text) return null;
 
@@ -116,8 +120,18 @@ export function TmdView({ text, foreignEntities, documentUrls, className = '' }:
   }, [text, foreignEntities]);
 
   const ref = useRef<HTMLDivElement | null>(null);
+  const hasTime = typeof time === 'string' && time.length > 0;
 
   if (!html) {
+    if (hasTime) {
+      return h('div', { class: 'tmd-body md-body' + (className ? ' ' + className : '') },
+        h(EmojiText as any, { text, entities: foreignEntities, documentUrls: documentUrls || {} } as any),
+        h('div', { class: 'tmd-body__footer' },
+          h('span', { class: 'tmd-body__time' }, time!),
+          out ? h(Checkmark as any, { status: status || 'sent', className: 'tmd-body__status' } as any) : null
+        )
+      );
+    }
     return h(EmojiText as any, { text, entities: foreignEntities, documentUrls: documentUrls || {} } as any);
   }
 
@@ -136,5 +150,11 @@ export function TmdView({ text, foreignEntities, documentUrls, className = '' }:
     mountStandardEmojis(el, (documentUrls || {}) as any);
   }, [documentUrls]);
 
-  return h('div', { ref: (e: HTMLDivElement | null) => { ref.current = e; }, class: 'tmd-body' + (className ? ' ' + className : ''), dangerouslySetInnerHTML: { __html: html } } as any);
+  return h('div', { class: 'tmd-body md-body' + (className ? ' ' + className : '') },
+    h('div', { ref: (e: HTMLDivElement | null) => { ref.current = e; }, dangerouslySetInnerHTML: { __html: html } } as any),
+    hasTime ? h('div', { class: 'tmd-body__footer' },
+      h('span', { class: 'tmd-body__time' }, time!),
+      out ? h(Checkmark as any, { status: status || 'sent', className: 'tmd-body__status' } as any) : null
+    ) : null
+  );
 }

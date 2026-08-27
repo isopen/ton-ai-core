@@ -2290,9 +2290,15 @@ body {
   background: transparent;
   box-shadow: none;
 }
-.MessageBubble_rich { background: #ffffff; box-shadow: none; padding: 0; max-width: 420px; }
+.MessageBubble_rich { background: transparent; box-shadow: none; padding: 0; max-width: 420px; }
 .MessageBubble_rich .MessageBubble__text { padding: 0; }
-.tmd-body { background: #ffffff; }
+.MessageBubble_tmd { background: transparent; box-shadow: none; padding: 0; }
+.MessageBubble_tmd .MessageBubble__text { padding: 0; }
+.tmd-body { background: var(--bubble-in); border-radius: 12px; padding: 8px 11px 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+.MessageBubble_out .tmd-body { background: var(--bubble-out); }
+.tmd-body__footer { display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: 6px; padding-top: 4px; border-top: 1px solid var(--border); font-size: 11px; color: var(--bubble-meta); }
+.tmd-body__time { font-size: 11px; color: var(--bubble-meta); line-height: 1; }
+.tmd-body__status { display: inline-flex; align-items: center; }
 
 .tgui-photo-preview_loading {
   background: #0b0d12;
@@ -5304,6 +5310,12 @@ body {
 }
 .MessageBubble__kb-btn:hover { background: var(--bg-hover); }
 .MessageBubble__kb-btn:active { background: var(--accent, #369CE8); color: #fff; }
+.MessageBubble__kb-btn .md-strong, .MessageBubble__kb-btn .md-em, .MessageBubble__kb-btn .md-u, .MessageBubble__kb-btn .md-del, .MessageBubble__kb-btn .md-code, .MessageBubble__kb-btn .md-spoiler, .MessageBubble__kb-btn .md-link,
+.MessageBubble__kb-btn strong, .MessageBubble__kb-btn em, .MessageBubble__kb-btn u, .MessageBubble__kb-btn del, .MessageBubble__kb-btn code, .MessageBubble__kb-btn span {
+  color: inherit;
+}
+.MessageBubble__kb-btn .md-link { text-decoration: none; }
+.MessageBubble__kb-btn .md-emoji-custom, .MessageBubble__kb-btn .tmd-emoji-custom { vertical-align: middle; }
 
 .rich-body { line-height: 1.45; background: var(--rich-bg); border-radius: 8px; overflow: hidden; padding: 8px; }
 .rich-body .rich-table_chess, .rich-body .rich-quote, .rich-body .rich-details, .rich-body .rich-buttons { max-width: 360px; margin-left: auto; margin-right: auto; }
@@ -5319,16 +5331,16 @@ body {
   --rich-btn-text: #0b6bff;
   --rich-quote-bg: #e3f0fa;
   --rich-quote-accent: #0b6bff;
-
+}
 [data-theme='dark'] .rich-body {
-  --rich-bg: #ffffff;
-  --rich-border: rgba(0,0,0,.10);
-  --rich-text: #1b222b;
-  --rich-muted: #6b7684;
-  --rich-btn-bg: #e2e8f0;
-  --rich-btn-text: #0b6bff;
-  --rich-quote-bg: #e3f0fa;
-  --rich-quote-accent: #0b6bff;
+  --rich-bg: #1e1e1e;
+  --rich-border: rgba(255,255,255,0.12);
+  --rich-text: #e8eaed;
+  --rich-muted: #9aa0a6;
+  --rich-btn-bg: #2d2d2d;
+  --rich-btn-text: #8ab4f8;
+  --rich-quote-bg: #2d2d2d;
+  --rich-quote-accent: #8ab4f8;
 }
 .rich-table {
   width: 100%;
@@ -5402,6 +5414,12 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.rich-btn .md-strong, .rich-btn .md-em, .rich-btn .md-u, .rich-btn .md-del, .rich-btn .md-code, .rich-btn .md-spoiler, .rich-btn .md-link,
+.rich-btn strong, .rich-btn em, .rich-btn u, .rich-btn del, .rich-btn code, .rich-btn span {
+  color: inherit;
+}
+.rich-btn .md-link { text-decoration: none; }
 }
 .rich-btn:hover { filter: brightness(1.06); }
 .rich-btn:active { filter: brightness(.92); }

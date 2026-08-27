@@ -450,8 +450,48 @@ function ChessTable({ rows, messageId, onButton, documentUrls }: { rows: any[]; 
   const docColorMapRef = useRef<Map<string, 'w' | 'b'>>(new Map());
   updateDocColorMap(rows, docColorMapRef.current);
   const boardMap = buildBoardMap(rows, docColorMapRef.current);
-  const selectedPiece = selected?.sq ? boardMap.get(selected.sq) || null : null;
-  const legalSet: Set<string> = selected && selectedPiece && selected.sq ? generateLegalDests(selected.sq, selectedPiece as any, boardMap as any) : new Set<string>();
+  const serverLegalDots = (() => {
+    const s = new Set<string>();
+    const cols = rows[0]?.cells?.length || 0;
+    for (let ri = 1; ri < rows.length - 1; ri++) {
+      for (let ci = 1; ci < cols - 1; ci++) {
+        const c = rows[ri]?.cells?.[ci];
+        const inner = c?.text?.text;
+        let alt = '';
+        if (inner?._ === 'textCustomEmoji') alt = inner.alt || '';
+        else if (inner?._ === 'textConcat' && Array.isArray(inner.texts)) {
+          const f = inner.texts.find((x: any) => x && x._ === 'textCustomEmoji');
+          if (f) alt = f.alt || '';
+        }
+        if (alt && normalizeEmoji(alt).startsWith('⬛')) {
+          const sq = getSquareName(ri, ci, rows);
+          if (sq) s.add(sq);
+        }
+      }
+    }
+    return s;
+  })();
+  let selectedPiece = selected?.sq ? boardMap.get(selected.sq) || null : null;
+  if (selectedPiece && selectedPiece.type === 'p' && selected?.sq && selectedPiece.docId && !docColorMapRef.current.has(selectedPiece.docId)) {
+    const coord = sqToCoord(selected.sq);
+    if (coord) {
+      const whiteF = coordToSq(coord.file, coord.rank + 1);
+      const blackF = coordToSq(coord.file, coord.rank - 1);
+      const whiteHas = whiteF ? serverLegalDots.has(whiteF) : false;
+      const blackHas = blackF ? serverLegalDots.has(blackF) : false;
+      if (whiteHas && !blackHas) {
+        selectedPiece = { ...selectedPiece, color: 'w' as const };
+        docColorMapRef.current.set(selectedPiece.docId!, 'w');
+      } else if (blackHas && !whiteHas) {
+        selectedPiece = { ...selectedPiece, color: 'b' as const };
+        docColorMapRef.current.set(selectedPiece.docId!, 'b');
+      }
+    }
+  }
+  const legalSet: Set<string> = selected && selectedPiece && selected?.sq ? generateLegalDests(selected.sq, selectedPiece as any, boardMap as any) : new Set<string>();
+  if (selected?.sq === 'a3' && selectedPiece) {
+    log.info('[chess] dbg a3 piece', JSON.stringify(selectedPiece), 'serverDots', Array.from(serverLegalDots).join(','), 'legal', Array.from(legalSet).join(','), 'board a4 hasPiece', hasPieceInCell(rows[5]?.cells?.[1]), 'b4 hasPiece', hasPieceInCell(rows[5]?.cells?.[2]));
+  }
   const handleCellClick = (ri: number, ci: number, c: any) => {
     const sq = getSquareName(ri, ci, rows);
     let data = getCellButtonData(c);
@@ -537,8 +577,9 @@ function ChessTable({ rows, messageId, onButton, documentUrls }: { rows: any[]; 
               const isSelectedPiece = !!(selected && selected.sq === sq);
               const isLegalDest = !!(sq && legalSet.has(sq));
               const dstHasPiece = hasPieceInCell(c);
-              const isPossible = !!(selected && isLegalDest && !dstHasPiece && !isSelectedPiece);
-              const isCapture = !!(selected && isLegalDest && dstHasPiece && !isSelectedPiece);
+              const isPawnCapture = !!(selectedPiece && (selectedPiece as any).type === 'p' && dstHasPiece);
+              const isPossible = !!(selected && isLegalDest && !isSelectedPiece && (!dstHasPiece || isPawnCapture));
+              const isCapture = !!(selected && isLegalDest && dstHasPiece && !isSelectedPiece && !isPawnCapture);
               const possibleCls = isPossible ? ' rich-cell_possible' : isCapture ? ' rich-cell_capture' : '';
 
               const renderCellContent = () => {
