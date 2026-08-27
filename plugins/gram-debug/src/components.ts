@@ -159,6 +159,12 @@ export class DebugComponents {
     }
 
     isScopeEnabled(scope: string): boolean {
+        if (scope === 'gram-ui:media-source-badge') {
+            const scopeEnabled = this.config.scopes?.[scope]?.enabled;
+            if (typeof scopeEnabled === 'boolean') return scopeEnabled;
+            if (typeof this.config.mediaSourceBadge === 'boolean') return this.config.mediaSourceBadge;
+            return true;
+        }
         const scopeEnabled = this.config.scopes?.[scope]?.enabled;
         if (typeof scopeEnabled === 'boolean') return scopeEnabled;
         return this.config.enabled !== false;

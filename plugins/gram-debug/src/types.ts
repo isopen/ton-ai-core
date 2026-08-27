@@ -21,5 +21,6 @@ export interface GramDebugConfig {
     noMediaCache?: boolean;
 
     noDialogsCache?: boolean;
+    mediaSourceBadge?: boolean;
     scopes?: Record<string, ScopeConfig>;
 }

@@ -1,8 +1,9 @@
 {
   "enabled": false,
   "level": "info",
-  "noMediaCache": true,
-  "noDialogsCache": true,
+  "noMediaCache": false,
+  "noDialogsCache": false,
+  "mediaSourceBadge": true,
   "scopes": {
     "gram-db": {
       "enabled": false,
@@ -65,7 +66,7 @@
       "level": "info"
     },
     "gram-ui:media-source-badge": {
-      "enabled": false,
+      "enabled": true,
       "level": "debug"
     },
     "gram-ui:media-collage": {

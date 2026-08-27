@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedEmoji } from './emoji-text.js';
 import { getLogger } from '@ton-ai/gram-debug';
 import { matchEmojiRuns, getEmojiDocId, normalizeEmoji } from './emoji-store.js';
+import { getChessDocColor, setChessDocColor } from './chess-assets.js';
 
 const log = getLogger('gram-ui:tmd');
 
@@ -291,7 +292,7 @@ function getDocIdFromCell(c: any): string | null {
   }
   return null;
 }
-function getPieceInfoFromCell(c: any, docColorMap?: Map<string, 'w' | 'b'>): { type: string; color: 'w' | 'b'; alt: string; docId: string | null } | null {
+function getPieceInfoFromCell(c: any, docColorMap?: Map<string, 'w' | 'b'>, square?: string | null): { type: string; color: 'w' | 'b'; alt: string; docId: string | null } | null {
   if (!c || !c.text || c.text._ !== 'textButton' || !c.text.text) return null;
   const inner = c.text.text;
   let alt = '';
@@ -306,16 +307,22 @@ function getPieceInfoFromCell(c: any, docColorMap?: Map<string, 'w' | 'b'>): { t
   const t = pieceTypeFromAlt(alt);
   if (!t) return null;
   let color: 'w' | 'b' | null = null;
-  if (docId && docColorMap) color = docColorMap.get(docId) || null;
+  if (docId && docColorMap) color = docColorMap.get(docId) || getChessDocColor(docId) || null;
+  if (!color && docId) color = getChessDocColor(docId) || null;
   // fallback: try to infer from alt unicode color if still null
   if (!color) {
     const a = normalizeEmoji(alt);
     const c = a[0];
     if (c === '♔' || c === '♕' || c === '♖' || c === '♗' || c === '♘' || c === '♙') color = 'w';
     else if (c === '♚' || c === '♛' || c === '♜' || c === '♝' || c === '♞' || c === '♟') color = 'b';
-    else color = 'w'; // default for custom set will be resolved via map
+    else if (square) {
+      const rank = parseInt(square[1], 10);
+      if (!Number.isNaN(rank)) color = rank <= 4 ? 'w' : 'b';
+      else color = 'w';
+    } else color = 'w';
   }
   if (!color) return null;
+  if (docId && color) setChessDocColor(docId, color);
   return { type: t, color, alt, docId };
 }
 function sqToCoord(sq: string): { file: number; rank: number } | null {
@@ -338,7 +345,7 @@ function buildBoardMap(rows: any[], docColorMap?: Map<string, 'w' | 'b'>): Map<s
       const c = rows[ri]?.cells?.[ci];
       const sq = getSquareName(ri, ci, rows);
       if (!sq) continue;
-      const info = getPieceInfoFromCell(c, docColorMap);
+      const info = getPieceInfoFromCell(c, docColorMap, sq);
       if (info) m.set(sq, { type: info.type, color: info.color, docId: info.docId });
     }
   }
@@ -360,7 +367,7 @@ function updateDocColorMap(rows: any[], map: Map<string, 'w' | 'b'>): void {
     for (let ci = 1; ci < cols - 1; ci++) {
       const c = rows[ri]?.cells?.[ci];
       const docId = getDocIdFromCell(c);
-      if (!docId || map.has(docId)) continue;
+      if (!docId || map.has(docId) || getChessDocColor(docId)) continue;
       const altRaw = (() => {
         const inner = c?.text?.text;
         if (!inner) return '';
@@ -374,9 +381,21 @@ function updateDocColorMap(rows: any[], map: Map<string, 'w' | 'b'>): void {
       if (isHiddenEmojiAlt(altRaw) || altRaw.startsWith('⬛')) continue;
       const t = pieceTypeFromAlt(altRaw);
       if (!t) continue;
-      // initial ranks: 1-2 white, 7-8 black
-      if (rank === 1 || rank === 2) map.set(docId, 'w');
-      else if (rank === 7 || rank === 8) map.set(docId, 'b');
+      let col: 'w' | 'b' | null = null;
+      if (rank === 1 || rank === 2) col = 'w';
+      else if (rank === 7 || rank === 8) col = 'b';
+      else {
+        // for moved pieces with new docId, try to infer from serverLegalDots or keep white as default for lower half
+        const sq = getSquareName(ri, ci, rows);
+        if (sq) {
+          const r = parseInt(sq[1], 10);
+          if (!Number.isNaN(r)) col = r <= 4 ? 'w' : 'b';
+        }
+      }
+      if (col) {
+        map.set(docId, col);
+        setChessDocColor(docId, col);
+      }
     }
   }
 }
