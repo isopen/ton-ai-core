@@ -429,11 +429,13 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
 }
 
 function onKbButton(button: { kind: 'callback' | 'url' | 'plain'; text?: string; data?: string; url?: string }, messageId: number | string) {
+  console.info('[onKbButton] click msg=' + messageId + ' kind=' + button.kind + ' data=' + String(button.data).slice(0,60));
   if (button.kind === 'url' && button.url) {
     window.open(button.url, '_blank', 'noopener');
     return;
   }
   if (button.kind === 'callback' && button.data) {
+    console.info('[onKbButton] dispatch tg-bot-callback msg=' + messageId + ' data=' + String(button.data).slice(0,60));
     window.dispatchEvent(new CustomEvent('tg-bot-callback', { detail: { messageId, data: button.data, text: button.text } }));
   }
 }

@@ -92,15 +92,22 @@ export class SchemaSerializer {
         this.writeBytes(data);
     }
 
-    writeBytes(data: Buffer): void {
-        const len = data.length;
+    writeBytes(data: Buffer | Uint8Array | string): void {
+        let buf: Buffer;
+        if (typeof data === 'string') {
+            // string from postMessage clone may be base64/hex; treat as utf8 bytes
+            buf = Buffer.from(data, 'utf-8');
+        } else {
+            buf = Buffer.isBuffer(data) ? data : Buffer.from(data as Uint8Array);
+        }
+        const len = buf.length;
         if (len > 0xFFFFFF) throw new Error(`Length ${len} exceeds TL bytes maximum`);
         if (len < 254) {
             const padding = (4 - ((1 + len) % 4)) % 4;
             this.ensureSpace(1 + len + padding);
             this.buffer.writeUInt8(len, this.offset);
             this.offset += 1;
-            data.copy(this.buffer, this.offset);
+            buf.copy(this.buffer, this.offset);
             this.offset += len;
             if (padding > 0) {
                 this.buffer.fill(0, this.offset, this.offset + padding);
@@ -114,7 +121,7 @@ export class SchemaSerializer {
             this.buffer.writeUInt8((len >> 8) & 0xFF, this.offset + 2);
             this.buffer.writeUInt8((len >> 16) & 0xFF, this.offset + 3);
             this.offset += 4;
-            data.copy(this.buffer, this.offset);
+            buf.copy(this.buffer, this.offset);
             this.offset += len;
             if (padding > 0) {
                 this.buffer.fill(0, this.offset, this.offset + padding);

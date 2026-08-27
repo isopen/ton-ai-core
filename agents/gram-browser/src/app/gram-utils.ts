@@ -130,6 +130,7 @@ export function scheduleDialogsFlush(s: GramState) {
 }
 
 export function scheduleMessagesFlush(s: GramState) {
+  console.info('[flush] scheduleMessagesFlush for', s.selectedPeerRef.current ? `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` : '(none)', 'cacheSize', s.selectedPeerRef.current ? (s.messagesCache.current.get(`${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}`)?.length || 0) : 0);
   if (s.messageFlushRef.current !== null) cancelAnimationFrame(s.messageFlushRef.current);
   s.messageFlushRef.current = requestAnimationFrame(() => {
     s.messageFlushRef.current = null;
@@ -139,10 +140,15 @@ export function scheduleMessagesFlush(s: GramState) {
       prefetchPhotoCaches(s, cached).catch(() => {});
       injectCachedDocumentSources(s, cached);
       const { messages: cachedMsgs, cachedIds } = injectCachedPhotoUrls(cached);
+      console.info('[flush] dispatch SET_MESSAGES n=' + cachedMsgs.length + ' cachedIds=' + cachedIds.length);
       if (cachedMsgs !== cached || (cachedIds.length > 0)) {
         const cachedSources: Record<number, string> = {};
         for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
         s.tgui.current?.dispatch({ type: 'SET_MESSAGES', messages: cachedMsgs, photoSources: cachedSources });
+      } else {
+        // force dispatch even if same reference, to ensure rich_message update is visible
+        s.tgui.current?.dispatch({ type: 'SET_MESSAGES', messages: [...cachedMsgs], photoSources: {} });
+        console.info('[flush] forced dispatch for rich_message update');
       }
     }
   });

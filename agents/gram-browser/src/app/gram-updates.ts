@@ -66,7 +66,30 @@ export function createHandleUpdate(s: GramState) {
           } else {
             sender = s.userNameMap.current.get(uid || cid) || uid || cid || t(S.SENDER_USER);
           }
-          console.log('[upd-dbg] processNewMsg id=', msg.id, 'len=', (msg.message || '').length, 'rm=', !!(msg as any).reply_markup, 'media=', msg.media?._ || '-', 'keys=', Object.keys(msg).join(','));
+          const richDbg = (msg as any).rich_message ? JSON.stringify((msg as any).rich_message).slice(0,2000) : '-';
+          console.log('[upd-dbg] processNewMsg id=', msg.id, 'len=', (msg.message || '').length, 'rm=', !!(msg as any).reply_markup, 'media=', msg.media?._ || '-', 'keys=', Object.keys(msg).join(','), 'rich=', richDbg);
+          if ((msg as any).rich_message?.blocks?.[0]?.rows) {
+            try {
+              const rows = (msg as any).rich_message.blocks[0].rows;
+              const sample = rows.slice(1,3).map((r:any)=> r.cells.slice(1,4).map((c:any)=> c.text?._ + ':' + (c.text?.text?.alt || c.text?.text || '').slice(0,5) + ':' + String(c.text?.type?.data || '').slice(0,20)).join('|')).join(' // ');
+              console.log('[upd-dbg] board sample rows1-2:', sample.slice(0,800));
+              const allCells: any[] = [];
+              for (const row of rows) for (const cell of (row.cells||[])) if (cell?.text?.type?.data) allCells.push({sq: (cell.text?.text?.alt || ''), data: String(cell.text.type.data).slice(0,30)});
+              console.log('[upd-dbg] board cells with data:', JSON.stringify(allCells).slice(0,1200));
+              // detailed board dump for chess: log each row's pieces
+              const boardDump = rows.map((row:any, ri:number)=> {
+                const rank = row.cells?.[0]?.text?.text || '?';
+                const cells = (row.cells||[]).slice(1,9).map((c:any)=> {
+                  const alt = c.text?.text?.alt || c.text?.alt || c.text?.text || '?';
+                  const doc = c.text?.document_id || c.text?.text?.document_id || '';
+                  const d = String(c.text?.type?.data || '').slice(0,20);
+                  return `${alt}(${String(doc).slice(-4)}):${d.slice(0,10)}`;
+                }).join(' ');
+                return `r${ri}:${rank}|${cells}`;
+              }).join(' // ');
+              console.log('[upd-dbg] board dump:', boardDump.slice(0,2000));
+            } catch {}
+          }
           const m: Message = {
             id: msg.id || 0, fromId: msg.from_id,
             sender,

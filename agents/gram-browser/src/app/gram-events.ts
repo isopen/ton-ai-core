@@ -562,8 +562,10 @@ export function setupEventListeners(s: GramState): void {
     const detail = ((e as CustomEvent).detail || {}) as { messageId?: number | string; data?: string; text?: string };
     const peer = s.selectedPeerRef.current;
     if (!peer || !detail.data) return;
+    console.info('[bot-cb] click msg=' + detail.messageId + ' data=' + String(detail.data).slice(0,120));
     s.tgService.current?.getBotCallbackAnswer(peer, Number(detail.messageId) || 0, detail.data)
       .then((res: any) => {
+        console.info('[bot-cb] ok msg=' + detail.messageId + ' res=' + JSON.stringify(res).slice(0,1200));
         const upd = res?.updates || res?.result?.updates || res?.update;
         if (upd && s.tgService.current) {
           const h = (s as any).handleUpdate as ((id: number, data: string) => void) | undefined;
@@ -597,7 +599,9 @@ export function setupEventListeners(s: GramState): void {
           }
         }
       })
-      .catch(() => {});
+      .catch((err: any) => {
+        console.error('[bot-cb] failed msg=' + detail.messageId + ' err=' + (err?.message || err));
+      });
   };
   const onRichEmojiDoc = async (e: Event) => {
     const detail = ((e as CustomEvent).detail || {}) as { documentId?: string };

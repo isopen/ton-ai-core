@@ -2,7 +2,6 @@ import { getGramDb } from './gram-db';
 
 const g = () => getGramDb();
 
-export async function migrateFromLocalStorage(): Promise<void> { return g().migrateFromLocalStorage(); }
 export async function setEncryptionKey(sessionId: string | null): Promise<void> { return g().setEncryptionKey(sessionId); }
 
 export async function dbGet<T = any>(key: string): Promise<T | undefined> { return g().get<T>(key); }

@@ -78,7 +78,6 @@ export function MessageBubble(props: MessageBubbleProps) {
   return (
     <div class={cls}>
       <div class="MessageBubble__text">
-        {tmdLog.info('[bubble] msg=', messageId, 'textLen=', (text || '').length, 'md=', hasTmd(text || ''), 'rm=', !!replyMarkup, 'rich=', !!richMessage)}
         {richMessage
           ? <RichMessageView
               richMessage={richMessage}

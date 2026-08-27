@@ -1,7 +1,7 @@
 import { WorkerTelegramService } from '@/utils/worker-telegram-service';
 import { TelegramUI, setStrings, t, tpl, S, LANG_FALLBACKS } from '@ton-ai/gram-ui';
 import type { AppState, TelegramUICallbacks } from '@ton-ai/gram-ui';
-import { dbGet, dbSet, dbDel, dbCompact, migrateFromLocalStorage, setEncryptionKey } from '@/utils/db';
+import { dbGet, dbSet, dbDel, dbCompact, setEncryptionKey } from '@/utils/db';
 import { genId, LANG_CACHE_VERSION } from './gram-constants';
 import type { GramState } from './gram-state';
 import { createGramState } from './gram-state';
@@ -27,7 +27,6 @@ export class GramApp {
   async init(container: HTMLDivElement): Promise<void> {
     const s = this.s;
 
-    await migrateFromLocalStorage();
     const saved = await dbGet<string>('sessionId');
     if (saved) { s.sessionIdRef.current = saved; }
     else {
