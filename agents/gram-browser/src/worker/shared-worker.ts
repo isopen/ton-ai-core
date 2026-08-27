@@ -180,6 +180,13 @@ async function _handleMessage(msg: Record<string, any>): Promise<any> {
             const result = await TW.callRpc(msg.methodName, msg.params || {});
             return { type: 'rpcResult', result };
         }
+        case 'getCustomEmojiDocs': {
+            await ensureConnected();
+            const docs = await TW.callRpc('messages.getCustomEmojiDocuments', {
+                document_id: [BigInt(msg.documentId)],
+            });
+            return { type: 'customEmojiDocs', docs: Array.isArray(docs) ? docs : docs?.documents || [] };
+        }
         case 'getDialogs': {
             const dialogsResult = await TW.callRpc('messages.getDialogs', {
                 offset_date: 0, offset_id: 0,

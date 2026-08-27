@@ -1,5 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
-import { useEffect } from '@ton-ai/atom/hooks';
+import { useEffect, useCallback, useRef } from '@ton-ai/atom/hooks';
 import { CustomScrollbar } from '../primitives/custom-scrollbar.js';
 import { Spinner } from '../primitives/spinner.js';
 import { DialogItem } from './dialog-item.js';
@@ -16,10 +16,27 @@ export function Sidebar({ state, dispatch }: { state: AppState; dispatch: Dispat
     ensureEmojiStickers();
   }, []);
 
+  const onBackdropClick = useCallback(() => dispatch({ type: 'SET_SIDEBAR_COLLAPSED', v: true }), [dispatch]);
+
+  const clickCache = useRef(new Map<string, () => void>());
+  const getDialogClick = (peer: AppState['dialogs'][number]['peer']) => {
+    const key = `${peer.type}_${peer.id}`;
+    let fn = clickCache.current.get(key);
+    if (!fn) {
+      fn = () => {
+        dispatch({ type: 'SET_ACTIVE_SKILL', id: null });
+        dispatch({ type: 'SET_SELECTED_PEER', peer });
+        if (window.innerWidth <= 768) dispatch({ type: 'SET_SIDEBAR_COLLAPSED', v: true });
+      };
+      clickCache.current.set(key, fn);
+    }
+    return fn;
+  };
+
   return (
     <>
       <div class={`tgui-sidebar-backdrop${collapsed ? '' : ' tgui-sidebar-backdrop--visible'}`}
-        onClick={() => dispatch({ type: 'SET_SIDEBAR_COLLAPSED', v: true })}
+        onClick={onBackdropClick}
       />
       <div class={`tgui-sidebar ${collapsed ? 'tgui-sidebar-collapsed' : 'tgui-sidebar-expanded'}`}>
         <div class={`tgui-sidebar-header ${collapsed ? 'tgui-sidebar-header-collapsed' : 'tgui-sidebar-header-expanded'}`}>
@@ -40,11 +57,7 @@ export function Sidebar({ state, dispatch }: { state: AppState; dispatch: Dispat
                   key={`${d.peer.type}_${d.peer.id}`}
                   typingText={state.selectedPeer?.id === d.peer.id && state.selectedPeer?.type === d.peer.type ? '' : (state.typingByPeer[`${d.peer.type}_${d.peer.id}`] || '')}
                   selfUserId={state.selfUserId}
-                  onClick={() => {
-                    dispatch({ type: 'SET_ACTIVE_SKILL', id: null });
-                    dispatch({ type: 'SET_SELECTED_PEER', peer: d.peer });
-                    if (window.innerWidth <= 768) dispatch({ type: 'SET_SIDEBAR_COLLAPSED', v: true });
-                  }}
+                  onClick={getDialogClick(d.peer)}
                 />
               ))
               : null

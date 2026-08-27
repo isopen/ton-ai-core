@@ -19,7 +19,7 @@ export interface GramDebugConfig {
     enabled?: boolean;
     level?: LogLevel;
     noMediaCache?: boolean;
-    /** Skip the IndexedDB dialogs cache: dialog list is always fetched from Telegram. */
+
     noDialogsCache?: boolean;
     scopes?: Record<string, ScopeConfig>;
 }

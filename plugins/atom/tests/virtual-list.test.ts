@@ -662,8 +662,6 @@ describe('VirtualList', () => {
         listEl.scrollTop = 500;
         listEl.dispatchEvent(new Event('scroll'));
         afterScroll(() => {
-          // Content grows below the viewport while scrolling: scrollTop must
-          // stay where the user put it — no reactive compensation.
           Object.defineProperty(listEl, 'scrollHeight', { value: 3000, configurable: true });
           listEl.scrollTop = 500;
           listEl.dispatchEvent(new Event('scroll'));

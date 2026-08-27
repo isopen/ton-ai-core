@@ -120,9 +120,7 @@ export class TgsRenderer implements IAnimatedRenderer {
   private worker!: MediaWorker;
 
   private frames: Frame[] = [];
-  // Frames that rendered fully transparent. Painting them over already
-  // visible content blanks the emoji/sticker (loop wrap or restart at an
-  // empty frame 0) — those paints are skipped instead.
+
   private emptyFrameIndexes = new Set<number>();
   private hasVisiblePaint = false;
 
@@ -413,9 +411,7 @@ export class TgsRenderer implements IAnimatedRenderer {
   removeView(viewId: string) {
     const view = this.views.get(viewId);
     if (!view) return;
-    // Keep the last painted frame: rows get remounted on background updates
-    // and clearing here produced visible blank flashes ("emoji disappears").
-    // The next view for this slot repaints over the stale pixels anyway.
+
     this.views.delete(viewId);
     if (!this.views.size) {
       this.park();
@@ -428,8 +424,7 @@ export class TgsRenderer implements IAnimatedRenderer {
     const colon = this.renderId.lastIndexOf(':');
     const docPart = colon > 0 ? this.renderId.slice(0, colon) : this.renderId;
     const docId = docPart.startsWith('emojipack-') ? docPart.slice('emojipack-'.length) : docPart;
-    // FX overlay renderers ('sticker-fx-*') are not emoji docs: reporting them
-    // as bad would revoke a perfectly good anim-pack url on every failed tap.
+
     if (typeof window !== 'undefined' && docId && !docPart.startsWith('sticker-fx-')) {
       window.dispatchEvent(new CustomEvent('tg-emoji-bad', { detail: { docId, url: this.tgsUrl } }));
     }
@@ -837,8 +832,6 @@ export class TgsRenderer implements IAnimatedRenderer {
       }
       view.isDirty = false;
       if (this.emptyFrameIndexes.has(frameIndex) && this.hasVisiblePaint) {
-        // Fully transparent frame with content already on the canvas:
-        // keep the last painted pixels instead of blanking the slot.
         onFrame?.(frameIndex);
         this.lastPaintAt = Date.now();
         return;

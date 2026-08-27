@@ -22,9 +22,6 @@ export function deleteMessageCache(s: GramState, peerKey: string) {
   dbDel(MESSAGE_CACHE_PREFIX + peerKey).catch(() => {});
 }
 
-/** Blob URLs are valid only within the page session that created them.
- *  Cached messages may carry dead ones - strip them so the download
- *  pipeline refetches fresh bytes instead of showing broken images. */
 function scrubSessionMedia(msgs: Message[]): Message[] {
   return msgs.map((m: any) => {
     const photo = m?.media?.photo;
@@ -326,10 +323,6 @@ function mergeOrphanedDialogs(s: GramState, serverDialogs: Dialog[]): Dialog[] {
   return merged;
 }
 
-/** Resolves a messageFwdHeader into a display name and, when privacy allows
- *  (i.e. the header carries from_id and we know the peer's access_hash),
- *  an openable PeerInfo. users/chats are the referenced objects that arrived
- *  in the same fetchHistory/updates response. */
 export function resolveFwdHeader(
   s: GramState,
   fwd: any,
@@ -372,8 +365,6 @@ export function resolveFwdHeader(
   return { fwdName: name, fwdPeer: peer };
 }
 
-/** Applies an updateMessagePoll (from sendVote response or live updates) to the
- *  matching cached message of the currently open chat. */
 export function applyUpdateMessagePoll(s: GramState, upd: any): boolean {
   if (!upd || upd._ !== 'updateMessagePoll') return false;
   const p = s.selectedPeerRef.current;

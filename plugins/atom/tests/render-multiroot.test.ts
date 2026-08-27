@@ -29,7 +29,7 @@ function makeCounter(): { Component: ComponentType; inc: () => void } {
     api.inc = () => setN((v: number) => v + 1);
     return h('div', { class: 'counter' }, String(n));
   };
-  // Lazy forwarder: api.inc is reassigned during the first render.
+
   return { Component: Counter, inc: () => api.inc() };
 }
 
@@ -43,7 +43,6 @@ describe('multi-root', () => {
     document.body.appendChild(containerA);
     document.body.appendChild(containerB);
 
-    // Wrap in a parent so counters are nested instances (not root-level ones).
     const WrapA: ComponentType = () => h('section', {}, h(a.Component as any));
     const WrapB: ComponentType = () => h('section', {}, h(b.Component as any));
 
@@ -53,7 +52,7 @@ describe('multi-root', () => {
     expect(containerA.textContent).toBe('0');
     expect(containerB.textContent).toBe('0');
 
-    a.inc(); // must schedule root A even though B was rendered last
+    a.inc();
     await flush();
 
     expect(containerA.textContent).toBe('1');
@@ -137,7 +136,7 @@ describe('render error resilience', () => {
     fail = true;
     expect(() => handle.rerender()).not.toThrow();
     await flush();
-    // Previous DOM is preserved verbatim.
+
     expect(container.textContent).toBe('ok-v0');
 
     fail = false;
@@ -165,13 +164,13 @@ describe('render error resilience', () => {
 
     failChild = true;
     const dom = container.firstChild as HTMLElement;
-    // Rerender through the root: patch will hit the throwing child.
+
     const handle = (dom as any).__atomRoot ?? ((container.firstChild as any).__atomRoot);
     if (handle) {
       expect(() => handle.rerender()).not.toThrow();
       await flush();
     }
-    // No unhandled exception escaped; container still attached to body.
+
     expect(container.parentNode).toBe(document.body);
   });
 });

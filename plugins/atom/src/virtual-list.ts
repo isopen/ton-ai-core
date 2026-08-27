@@ -18,9 +18,7 @@ export interface VirtualListProps<T> {
   startAtBottom?: boolean;
   scrollToKey?: string | number;
   topLoader?: VNode;
-  /** Per-row height estimate used until the row is measured; sharp
-   *  estimates (e.g. by message type) minimize spacer corrections while
-   *  scrolling into unmeasured content. */
+
   estimateItem?: (item: T, index: number) => number;
   className?: string;
   style?: Record<string, any>;

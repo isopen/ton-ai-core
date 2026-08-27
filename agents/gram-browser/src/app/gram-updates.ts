@@ -9,6 +9,8 @@ import {
 import { isTypingUpdate, handleTypingUpdate } from './gram-typing';
 import { getLogger } from '@ton-ai/gram-debug';
 
+const updLog = getLogger('gram-browser:updates');
+
 export function createHandleUpdate(s: GramState) {
   return (constructorId: number, data: string) => {
     try {
@@ -64,11 +66,14 @@ export function createHandleUpdate(s: GramState) {
           } else {
             sender = s.userNameMap.current.get(uid || cid) || uid || cid || t(S.SENDER_USER);
           }
+          console.log('[upd-dbg] processNewMsg id=', msg.id, 'len=', (msg.message || '').length, 'rm=', !!(msg as any).reply_markup, 'media=', msg.media?._ || '-', 'keys=', Object.keys(msg).join(','));
           const m: Message = {
             id: msg.id || 0, fromId: msg.from_id,
             sender,
             date: msg.date || 0, message: msg.message || '',
             out: !!msg.out, peerId: msg.peer_id, media: msg.media, action: msg.action, entities: msg.entities,
+            replyMarkup: (msg as any).reply_markup,
+            richMessage: (msg as any).rich_message,
             groupedId: msg.grouped_id, fwdFrom: msg.fwd_from,
             ...resolveFwdHeader(s, msg.fwd_from, u.users, u.chats),
           };
@@ -132,6 +137,7 @@ export function createHandleUpdate(s: GramState) {
             }
           }
         };
+        console.log('[upd-dbg] update', u._, 'msgLen=', (u.message || '').length, 'inner=', u.update?._ || '-', 'msgs=', Array.isArray(u.updates) ? u.updates.map((x: any) => x._).join(',') : '-');
         const pushMsg = u.message || (u.messages?.[0]);
         if (pushMsg) {
           processNewMsg(pushMsg);
@@ -151,10 +157,10 @@ export function createHandleUpdate(s: GramState) {
           userNameMap: s.userNameMap.current,
         });
         if (u._ === 'updateShortMessage') {
-          processNewMsg({ id: u.id, from_id: { _: 'peerUser', user_id: u.user_id }, peer_id: { _: 'peerUser', user_id: u.user_id }, date: u.date, message: u.message, out: !!u.out, media: u.media });
+          processNewMsg({ id: u.id, from_id: { _: 'peerUser', user_id: u.user_id }, peer_id: { _: 'peerUser', user_id: u.user_id }, date: u.date, message: u.message, out: !!u.out, media: u.media, entities: u.entities, replyMarkup: (u as any).reply_markup, richMessage: (u as any).rich_message });
         }
         if (u._ === 'updateShortChatMessage') {
-          processNewMsg({ id: u.id, from_id: { _: 'peerUser', user_id: u.from_id }, peer_id: { _: 'peerChat', chat_id: u.chat_id }, date: u.date, message: u.message, out: !!u.out, media: u.media });
+          processNewMsg({ id: u.id, from_id: { _: 'peerUser', user_id: u.from_id }, peer_id: { _: 'peerChat', chat_id: u.chat_id }, date: u.date, message: u.message, out: !!u.out, media: u.media, entities: u.entities, replyMarkup: (u as any).reply_markup, richMessage: (u as any).rich_message });
         }
         const handleReadHistoryInbox = (upd: any) => {
           const key = upd.peer?.user_id?.toString() || upd.peer?.chat_id?.toString() || upd.peer?.channel_id?.toString();

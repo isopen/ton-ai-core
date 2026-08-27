@@ -1,5 +1,5 @@
 import { crypton } from '@ton-ai/core';
-import { GramDbComponents, KeyManager, EncryptedStore, StorageEngine, DbVersion, currentDbVersion, IV_SIZE, HMAC_LABEL } from './components';
+import { GramDbComponents, KeyManager, EncryptedStore, StorageEngine, DbVersion, currentDbVersion } from './components';
 import type { StoredSession } from './types';
 import { Buffer } from 'buffer';
 
@@ -210,24 +210,6 @@ export class GramDbSkills {
       await EncryptedStore.encryptToBase64(this._masterKey!, JSON.stringify(this._keyIndex)));
   }
 
-  async migrateFromLocalStorage(): Promise<void> {
-    await this.ensureEngine();
-    if (typeof localStorage === 'undefined') return;
-    const val = localStorage.getItem('tg_sessionId');
-    if (val !== null) {
-      const existing = await this.engine.getItem(SESSION_ID_KEY);
-      if (existing === null) {
-        await this.engine.setItem(SESSION_ID_KEY, val);
-      }
-      localStorage.removeItem('tg_sessionId');
-    }
-    for (const legacyKey of ['tg_lang_code', 'tg_worker_mode', 'tg_orphaned_dialogs']) {
-      if (localStorage.getItem(legacyKey) !== null) {
-        localStorage.removeItem(legacyKey);
-      }
-    }
-  }
-
   async init(): Promise<void> {
     await this.components.initialize();
     await this.migrateIfNeeded();
@@ -237,118 +219,7 @@ export class GramDbSkills {
     const rawVer = await this.engine.getItem(VERSION_KEY);
     const ver = rawVer !== null ? parseInt(rawVer, 10) : DbVersion.Initial;
     if (ver >= currentDbVersion()) return;
-
-    if (ver < DbVersion.TDLibStyle) {
-      await this.migrateV0ToV1();
-    }
-
     await this.engine.setItem(VERSION_KEY, String(currentDbVersion()));
-  }
-
-  private async decryptV0GC(key: Buffer, encoded: string): Promise<string | null> {
-    try {
-      const data = Buffer.from(encoded, 'base64');
-      if (data.length < 2 + IV_SIZE + 32 || data[0] !== 0x47 || data[1] !== 0x43) return null;
-      const iv = data.subarray(2, 2 + IV_SIZE);
-      const ciphertext = data.subarray(2 + IV_SIZE, data.length - 32);
-      const storedHmac = data.subarray(data.length - 32);
-      const hmacKey = await crypton.hmacSha256(key, new TextEncoder().encode(HMAC_LABEL));
-      const expectedHmac = await crypton.hmacSha256(hmacKey, new Uint8Array(data.subarray(0, data.length - 32)));
-      if (!crypton.constantTimeEqual(Buffer.from(storedHmac), expectedHmac)) return null;
-      return crypton.AES256CTR.process(ciphertext, key, iv, 0).toString('utf-8');
-    } catch { return null; }
-  }
-
-  private async decryptV0Legacy(sessionId: string, encoded: string): Promise<string | null> {
-    try {
-      const V0_SALT = 16;
-      const data = Buffer.from(encoded, 'base64');
-      if (data.length < V0_SALT + IV_SIZE) return null;
-      const salt = data.subarray(0, V0_SALT);
-      const iv = data.subarray(V0_SALT, V0_SALT + IV_SIZE);
-      const ciphertext = data.subarray(V0_SALT + IV_SIZE);
-      const key = await KeyManager.deriveKey(sessionId, Buffer.from(salt));
-      return crypton.AES256CTR.process(ciphertext, key, iv, 0).toString('utf-8');
-    } catch { return null; }
-  }
-
-  private async decryptV0NoMagic(key: Buffer, encoded: string): Promise<string | null> {
-    try {
-      const data = Buffer.from(encoded, 'base64');
-      if (data.length < IV_SIZE) return null;
-      const iv = data.subarray(0, IV_SIZE);
-      const ciphertext = data.subarray(IV_SIZE);
-      return crypton.AES256CTR.process(ciphertext, key, iv, 0).toString('utf-8');
-    } catch { return null; }
-  }
-
-  private async migrateV0ToV1(): Promise<void> {
-    const sessionId = await this.engine.getItem(SESSION_ID_KEY);
-    if (!sessionId) {
-      await this.engine.clear();
-      return;
-    }
-
-    const oldKey = await KeyManager.deriveMasterKey(sessionId);
-    const indexHk = await KeyManager.hash(sessionId, KEY_INDEX_KEY);
-    const indexRaw = await this.engine.getItem(indexHk);
-    let userKeys: string[] = [];
-    if (indexRaw) {
-      const decIndex = await this.decryptV0GC(oldKey, indexRaw)
-        ?? await this.decryptV0NoMagic(oldKey, indexRaw)
-        ?? await this.decryptV0Legacy(sessionId, indexRaw);
-      if (decIndex) {
-        try { const p = JSON.parse(decIndex); if (Array.isArray(p)) userKeys = p; } catch {}
-      }
-    }
-
-    const migrated: Array<{ userKey: string; plaintext: string }> = [];
-    for (const userKey of userKeys) {
-      const hk = await KeyManager.hash(sessionId, userKey);
-      const raw = await this.engine.getItem(hk);
-      if (!raw) continue;
-      const pt = await this.decryptV0GC(oldKey, raw)
-        ?? await this.decryptV0NoMagic(oldKey, raw)
-        ?? await this.decryptV0Legacy(sessionId, raw);
-      if (pt !== null) migrated.push({ userKey, plaintext: pt });
-    }
-
-    const sessionHk = await KeyManager.hash(sessionId, 'session:' + sessionId);
-    const sessionRaw = await this.engine.getItem(sessionHk);
-    let sessionPlaintext: string | null = null;
-    if (sessionRaw) {
-      sessionPlaintext = await this.decryptV0GC(oldKey, sessionRaw)
-        ?? await this.decryptV0NoMagic(oldKey, sessionRaw)
-        ?? await this.decryptV0Legacy(sessionId, sessionRaw);
-    }
-
-    await this.engine.clear();
-    await this.engine.setItem(SESSION_ID_KEY, sessionId);
-
-    const newSalt = await KeyManager.generateSalt();
-    const newKey = await KeyManager.deriveKey(sessionId, newSalt);
-    const keyHash = await KeyManager.createKeyHash(newKey);
-
-    if (sessionPlaintext) {
-      const hk = await KeyManager.hash(sessionId, 'session:' + sessionId);
-      await this.engine.setItem(hk, await EncryptedStore.encryptToBase64(newKey, sessionPlaintext));
-    }
-
-    const newIndex: string[] = [];
-    for (const { userKey, plaintext } of migrated) {
-      const hk = await KeyManager.hash(sessionId, userKey);
-      await this.engine.setItem(hk, await EncryptedStore.encryptToBase64(newKey, plaintext));
-      newIndex.push(userKey);
-    }
-
-    if (newIndex.length > 0) {
-      const hk = await KeyManager.hash(sessionId, KEY_INDEX_KEY);
-      await this.engine.setItem(hk, await EncryptedStore.encryptToBase64(newKey, JSON.stringify(newIndex)));
-    }
-
-    await this.engine.setItem(SALT_KEY, newSalt.toString('base64'));
-    await this.engine.setItem(KEY_VERIFY_KEY, keyHash.toString('base64'));
-    newSalt.fill(0);
   }
 
   async saveSession(sessionId: string, data: StoredSession): Promise<void> {

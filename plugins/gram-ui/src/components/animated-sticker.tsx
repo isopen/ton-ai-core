@@ -156,8 +156,6 @@ export function AnimatedSticker({
     };
   }, [viewId]);
 
-  // Diagnostics (enable: localStorage['tg-debug-sticker-dom']='1'):
-  // logs any external move/removal/attribute change of this sticker's canvas.
   useEffect(() => {
     if (!canvasNode || typeof MutationObserver === 'undefined') return;
     let enabled = false;

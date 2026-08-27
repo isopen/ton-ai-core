@@ -140,8 +140,7 @@ async function processLocalEmojiClick(s: GramState, messageId: string, x?: numbe
       if (fresh) { msg = fresh as unknown as Message; text = fresh.message || ''; }
     } catch { }
   }
-  // Each emoji in the message gets its own animation pack - pick the one
-  // under the click by its slot position among the message's emoji slots.
+
   const emots = extractEmoticons(text);
   let emoticon = '';
   if (emots.length > 0) {
@@ -185,8 +184,7 @@ function isDuplicateInteraction(emoticon: string, messageId: string, index: numb
 
 async function onRemoteEmojiInteraction(s: GramState, detail: { kind?: string; emoticon?: string; messageId?: string; interaction?: string; fromUserId?: string }): Promise<void> {
   if (detail.kind !== 'interaction') return;
-  // Our own clicks echo back from the server as typing updates - skip them,
-  // the local click already played the animation.
+
   const selfId = s.tgui.current?.state?.selfUserId;
   if (selfId && detail.fromUserId && String(detail.fromUserId) === String(selfId)) {
     return;
@@ -560,11 +558,73 @@ export function setupEventListeners(s: GramState): void {
     }
     void processLocalEmojiClick(s, String(detail.messageId), detail.x, detail.y, detail.slotIndex);
   };
+  const onBotCallback = (e: Event) => {
+    const detail = ((e as CustomEvent).detail || {}) as { messageId?: number | string; data?: string; text?: string };
+    const peer = s.selectedPeerRef.current;
+    if (!peer || !detail.data) return;
+    s.tgService.current?.getBotCallbackAnswer(peer, Number(detail.messageId) || 0, detail.data)
+      .then((res: any) => {
+        const upd = res?.updates || res?.result?.updates || res?.update;
+        if (upd && s.tgService.current) {
+          const h = (s as any).handleUpdate as ((id: number, data: string) => void) | undefined;
+          try {
+            if (Array.isArray(upd)) {
+              for (const u of upd) {
+                if (u._ && u._.startsWith('update')) {
+                  const d = JSON.stringify(u);
+                  const id = 0;
+                  if (h) h(id, d);
+                }
+              }
+            } else if (typeof upd === 'object') {
+              const d = JSON.stringify(upd);
+              if (h) h(0, d);
+            }
+          } catch {}
+        }
+        const msg = res?.message || res?.result?.message || res?.msg || upd?.message;
+        if (msg && msg.rich_message) {
+          const key = `${peer.type}_${peer.id}`;
+          const cur = s.messagesCache.current.get(key);
+          if (Array.isArray(cur)) {
+            const nxt = cur.map((m: any) => Number(m.id) === Number(detail.messageId) ? { ...m, richMessage: msg.rich_message } : m);
+            s.messagesCache.current.set(key, nxt);
+            if (s.selectedPeerRef.current?.id === peer.id) {
+              const curMsgs = s.tgui.current?.state.messages || [];
+              const updMsgs = curMsgs.map((m: any) => Number(m.id) === Number(detail.messageId) ? { ...m, richMessage: msg.rich_message } : m);
+              s.tgui.current?.setMessages(updMsgs);
+            }
+          }
+        }
+      })
+      .catch(() => {});
+  };
+  const onRichEmojiDoc = async (e: Event) => {
+    const detail = ((e as CustomEvent).detail || {}) as { documentId?: string };
+    const docId = detail.documentId;
+    if (!docId || !s.tgService.current) return;
+    try {
+      let docs: any[] = await s.tgService.current.getCustomEmojiDocuments(docId);
+      let doc = docs.find((d: any) => d && String(d.id) === String(docId)) || docs[0];
+      if (!doc) {
+        try {
+          const altRes: any = await (s.tgService.current as any).callRpc?.('messages.getCustomEmojiDocuments', { document_id: [BigInt(docId)] });
+          const aDocs = Array.isArray(altRes) ? altRes : altRes?.documents || [];
+          doc = aDocs.find((d: any) => String(d.id) === String(docId)) || aDocs[0];
+          docs = aDocs;
+        } catch {}
+      }
+      if (!doc) { log.warn('[gram-app] rich emoji doc not found: ' + docId); return; }
+      window.dispatchEvent(new CustomEvent('tg-download-document', {
+        detail: { document: doc, messageId: 'emojipack-' + docId, priority: 1 },
+      }));
+    } catch (err: any) {
+      log.warn('[gram-app] rich emoji doc fetch failed:', err?.message || err);
+    }
+  };
+  window.addEventListener('tg-fetch-rich-emoji-doc', onRichEmojiDoc);
+  window.addEventListener('tg-bot-callback', onBotCallback);
   window.addEventListener('tg-interaction-request', onLocalEmojiClick);
-  // NOTE: no eager ensureEmojiAnimSet() here - an RPC fired before the
-  // transport connects hangs forever and can starve the worker's RPC queue,
-  // which blocked emoji document downloads (tiny glyphs bug). The set is
-  // fetched lazily on first click and then hits the gram-media cache.
 
   s.cleanupFns.push(() => {
     window.removeEventListener('tg-auth-set-lang', onSetLang);
@@ -582,6 +642,8 @@ export function setupEventListeners(s: GramState): void {
     window.removeEventListener('tg-fetch-premium-gift', onFetchPremiumGift);
     window.removeEventListener('tg-fetch-greeting-sticker', onFetchGreetingSticker);
     window.removeEventListener('tg-emoji-interaction', onEmojiInteraction);
+    window.removeEventListener('tg-bot-callback', onBotCallback);
+    window.removeEventListener('tg-fetch-rich-emoji-doc', onRichEmojiDoc);
     window.removeEventListener('tg-interaction-request', onLocalEmojiClick);
   });
 }

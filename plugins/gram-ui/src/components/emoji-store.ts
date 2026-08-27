@@ -254,7 +254,7 @@ export function searchServerEmojis(query: string): string[] {
   return hits;
 }
 
-const BATCH_WINDOW_MS = 50;
+const BATCH_WINDOW_MS = 12;
 const BATCH_MAX_ITEMS = 200;
 const pendingEmojiRequests = new Map<string, { docId?: string; alt?: string; priority: number; ctx?: string }>();
 let emojiBatchTimer: ReturnType<typeof setTimeout> | null = null;

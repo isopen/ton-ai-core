@@ -231,7 +231,6 @@ describe('ComponentInstance', () => {
 
     const vnode = inst.render();
 
-    // Hooks outside a render must never silently attach to this instance.
     expect(currentInstance).toBeNull();
     expect(inst.hookIndex).toBe(0);
     expect(vnode.type).toBe('div');

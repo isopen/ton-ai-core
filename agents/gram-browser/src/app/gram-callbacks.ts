@@ -9,6 +9,15 @@ import {
 import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
 import { getLogger, isNoDialogsCache } from '@ton-ai/gram-debug';
 
+const histLog = getLogger('gram-browser:history');
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(label + ' timeout after ' + ms + 'ms')), ms)),
+  ]);
+}
+
 export function createCallbacks(
   s: GramState,
   getCallbacks: () => TelegramUICallbacks,
@@ -97,6 +106,7 @@ export function createCallbacks(
       const peerKey = `${p.type}_${p.id}`;
       if (s.loadingHistoryRef.current.has(peerKey)) return;
       s.loadingHistoryRef.current.add(peerKey);
+      histLog.info('[history] load start peer=', peerKey, 'maxId=', s.maxFetchedIdRef.current.get(peerKey) || 0);
       s.tgui.current!.setLoadingMessages(true);
       try {
         let existing: Message[] = [];
@@ -106,7 +116,12 @@ export function createCallbacks(
         const count = maxId === 0
           ? Math.ceil((document.getElementById('tg-msg-list')?.clientHeight || window.innerHeight) / 60) + 5
           : 50;
-        const data = await s.tgService.current!.fetchHistory(p, count, maxId);
+        const data = await withTimeout(
+          s.tgService.current!.fetchHistory(p, count, maxId),
+          30000,
+          'messages.getHistory',
+        );
+        histLog.info('[history] fetched peer=', peerKey, 'msgs=', data?.messages?.length ?? 'null');
         if (data) {
           if (data.users && Array.isArray(data.users)) {
             for (const user of data.users) {
@@ -154,11 +169,18 @@ export function createCallbacks(
           return t(S.SENDER_USER);
         };
         if (data?.messages) {
+          for (const raw of data.messages) {
+            if (!(raw.message || '').length) {
+              console.log('[hist-dbg] empty-text msg id=' + raw.id, JSON.stringify(raw).slice(0, 12000));
+            }
+          }
           const msgs = data.messages.map((m: any) => ({
             id: m.id || 0, fromId: m.from_id,
             sender: resolveSenderName(m.from_id, m.sender),
             date: m.date || 0, message: m.message || '',
             out: !!m.out, peerId: null, media: m.media, action: m.action, entities: m.entities,
+            replyMarkup: (m as any).reply_markup,
+            richMessage: (m as any).rich_message,
             groupedId: m.grouped_id, fwdFrom: m.fwd_from,
             ...resolveFwdHeader(s, m.fwd_from, data.users, data.chats),
           })).reverse();
@@ -203,6 +225,7 @@ export function createCallbacks(
           s.historyInitRef.current.add(peerKey);
         }
       } catch (e: any) {
+        histLog.error('[history] FAILED peer=', peerKey, 'error=', e?.message || e);
         addLog(s, tpl(S.LOG_HISTORY_FAILED, { error: e.message, peerKey }));
       } finally {
         s.loadingHistoryRef.current.delete(peerKey);

@@ -723,7 +723,7 @@ describe('interpolateKeyframes', () => {
                 ],
             },
         };
-        // Realistic split-dim: static base carries y, animated x overrides axis 0.
+
         expect(interpolateKeyframes(p, 5)).toEqual([500, 80]);
     });
 

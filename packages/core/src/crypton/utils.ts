@@ -146,7 +146,6 @@ export function modPowBranchless(base: bigint, exponent: bigint, modulus: bigint
   return result;
 }
 
-/** @deprecated Name overstates the guarantee — use {@link modPowBranchless}. */
 export const modPowConstantTime = modPowBranchless;
 
 const primeCache = new Map<bigint, boolean>();

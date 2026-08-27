@@ -74,7 +74,6 @@ describe('T1: split-dimension position keeps base components', () => {
 
 describe('T3: easing control xs are clamped to [0,1]', () => {
     test('wild xs produce bounded output on the whole domain', () => {
-        // x1=5 / x2=-3 previously extrapolated values outside [0,1].
         const cb = new CubicBezier(5, 0.1, -3, 0.9);
         for (let i = 0; i <= 10; i++) {
             const v = cb.value(i / 10);
@@ -140,7 +139,7 @@ describe('T2: wrapped individually-trim renders instead of freezing', () => {
         });
     }
 
-    const FULL_RECT_CMDS = 6; // M + 4 C (incl. closing edge) + Z
+    const FULL_RECT_CMDS = 6;
 
     function renderTrim(trimShape: any, frame: number): MiniCtx {
         const anim = parseTgs(buildLayer(trimShape));
@@ -160,13 +159,11 @@ describe('T2: wrapped individually-trim renders instead of freezing', () => {
     });
 
     test('wrapped range (start>end via offset) produces stitched pieces', () => {
-        // start 95%, end 40%, offset 30° -> normalized [.4833, .0333] descending
         const trim = { ty: 'tm', s: { a: 0, k: 95 }, e: { a: 0, k: 40 }, o: { a: 0, k: 30 }, m: 2 };
         const ctx = renderTrim(trim, 10);
         expect(ctx.fills.length).toBe(1);
         const path = ctx.pathsAtFill[0];
-        // Seam split: at least two sub-path starts instead of the single
-        // closed rectangle contour.
+
         const ms = path.filter((c) => c.startsWith('M')).length;
         expect(ms).toBeGreaterThanOrEqual(2);
     });

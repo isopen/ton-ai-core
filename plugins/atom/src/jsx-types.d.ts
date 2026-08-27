@@ -2,7 +2,6 @@ declare namespace JSX {
   type AtomEventHandler<TEvent extends Event = Event> =
     (event: TEvent, delegatedTarget?: Element) => void;
 
-  /** Object form enabling per-listener options: { handle: fn, once, capture, passive, signal } */
   interface EventHandlerOptions<TEvent extends Event = Event> {
     handle: AtomEventHandler<TEvent>;
     once?: boolean;
@@ -14,7 +13,6 @@ declare namespace JSX {
   type EventProp<TEvent extends Event = Event> =
     AtomEventHandler<TEvent> | EventHandlerOptions<TEvent>;
 
-  /** Container-level delegated handlers: { '.selector': handler } */
   interface DelegateHandlers {
     [selector: string]: AtomEventHandler<any>;
   }
@@ -50,8 +48,6 @@ declare namespace JSX {
     onLoad?: EventProp<Event>;
     onError?: EventProp<Event>;
 
-    /** Verbatim custom events (on:tg-foo) and container delegation
-     *  (onClickDelegate) share one pattern index signature. */
     [special: `on:${string}` | `${string}Delegate`]:
       | EventProp<Event>
       | DelegateHandlers

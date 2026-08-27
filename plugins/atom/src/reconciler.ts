@@ -54,9 +54,6 @@ interface EventBinding {
   bound: (e: Event) => void;
 }
 
-// One native listener per element+prop, installed once: handler updates swap
-// a reference instead of rebinding, so inline arrow props stop churning
-// removeEventListener/addEventListener on every render.
 const elementBindings = new WeakMap<Element, Map<string, EventBinding>>();
 
 interface DelegateBinding {
@@ -68,7 +65,6 @@ interface DelegateBinding {
 
 const delegateBindings = new WeakMap<Element, Map<string, DelegateBinding>>();
 
-/** on:custom-event keeps the name verbatim; onClick maps to 'click'. */
 function eventPropType(key: string): string | null {
   if (key.startsWith('on:')) return key.length > 3 ? key.slice(3) : null;
   if (key.startsWith('on') && key.length > 2) return key.slice(2).toLowerCase();
@@ -124,9 +120,10 @@ function setEventBinding(el: Element, key: string, type: string, value: any): vo
   if (!handlerChanged && !needsRebind) return;
 
   prev.swaps++;
-  if (prev.swaps >= 6 && !prev.warnedChurn) {
+
+  if (prev.swaps >= 20 && !prev.warnedChurn) {
     prev.warnedChurn = true;
-    log.warn('[atom] event handler identity churn on "' + key + '"; wrap it in useCallback');
+    log.debug('[atom] event handler identity churn on "' + key + '"; wrap it in useCallback (swaps=' + prev.swaps + ')');
   }
 
   if (needsRebind) {
@@ -268,8 +265,7 @@ function setProp(el: Element, key: string, value: any) {
     setEventBinding(el, key, eventType, value);
     return;
   }
-  // Non-function on* values (and malformed ones) fall through to plain
-  // attribute handling instead of being registered as listeners.
+
   if (typeof value === 'boolean') {
     if (value) el.setAttribute(key, '');
     else el.removeAttribute(key);
@@ -348,8 +344,7 @@ function updateProp(el: Element, key: string, oldValue: any, newValue: any) {
     setEventBinding(el, key, eventType, newValue);
     return;
   }
-  // Switching from a handler back to a plain value: drop the listener so a
-  // stale subscription cannot survive next to the attribute replacement.
+
   if (eventType && eventHandlerOf(oldValue)) {
     removeEventBinding(el, key);
   }
@@ -692,10 +687,6 @@ function reconcileChildren(
 
   if (patches.length === 0) return;
 
-  // Skip the DOM-move phase when reconciled nodes are already in the desired
-  // relative order (new nodes are never in the parent, so their presence
-  // forces the reorder). This keeps keyed reordering working while avoiding
-  // churn on stable renders where a fragment follows non-reconciled siblings.
   const flat: Node[] = [];
   for (const p of patches) flat.push(...p.nodes);
   {

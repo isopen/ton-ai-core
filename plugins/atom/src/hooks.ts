@@ -122,9 +122,6 @@ export type DomEventTarget =
   | null | undefined
   | (() => Window | Document | Element | null | undefined);
 
-/** Subscribe to a DOM event for the component's lifetime (or while deps and
- *  handler stay stable). Returns the cleanup automatically - the ubiquitous
- *  window/document addEventListener+removeEventListener pair in one call. */
 export function useDomEvent(
   target: DomEventTarget,
   type: string,

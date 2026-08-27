@@ -263,8 +263,6 @@ export class GramMediaRouter {
             this.decEmojiUrlRef(prev, key);
         }
         if (url && url.startsWith('blob:')) {
-            // No cap/trim here: membership protects the blob from sweep
-            // revocation for the lifetime of the page.
             this.emojiBlobUrls.add(url);
         }
         if (this.emojiUrlCache.size >= 2048) {
@@ -331,9 +329,7 @@ export class GramMediaRouter {
             const oldest = this.activeBlobUrls.values().next().value as string | undefined;
             if (!oldest) break;
             scanned++;
-            // Emoji/sticker media must stay alive for the whole page session:
-            // revoking those blobs blanks already-rendered emojis with no cheap
-            // way to recover (bytes are gone), so never sweep them.
+
             if (this.isCachedEmojiUrl(oldest) || this.emojiBlobUrls.has(oldest)) continue;
             this.activeBlobUrls.delete(oldest);
             this.dropCacheEntriesForUrl(oldest);
@@ -434,9 +430,7 @@ export class GramMediaRouter {
         if (String(messageId) === EMPTY_CHAT_MSG_ID) {
             this.lastEmptyChatUrl = url;
         }
-        // Synthetic ids ('emojipack-*', 'emoji-*') are legitimate documentUrls
-        // keys consumed by the emoji pipeline; the store reducer dedupes
-        // no-op updates and never touches the messages array for them.
+
         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url, cacheSource });
     }
 

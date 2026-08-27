@@ -40,10 +40,6 @@ const INV_SBOX: [u8; 256] = {
     t
 };
 
-
-
-
-
 pub fn sbox_byte(b: u8) -> u8 {
     SBOX[b as usize]
 }

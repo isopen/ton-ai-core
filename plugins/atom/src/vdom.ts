@@ -110,6 +110,13 @@ export function normalizeChild(child: any): VNode | null {
   if (typeof child === 'string' || typeof child === 'number') {
     return { type: TEXT, props: { nodeValue: String(child) }, children: [], key: null };
   }
+
+  if (typeof child === 'object' && !child.type) {
+    if (typeof console !== 'undefined') {
+      console.warn('[atom] non-vnode object in children rendered as text:', Object.keys(child).join(','));
+    }
+    return { type: TEXT, props: { nodeValue: String(child.text ?? '') }, children: [], key: null };
+  }
   return child as VNode;
 }
 

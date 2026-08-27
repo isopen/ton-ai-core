@@ -164,6 +164,19 @@ export class TelegramService {
         return this.sendTyping(peer, 'sendMessageCancelAction');
     }
 
+    async getBotCallbackAnswer(peer: PeerInfo, msgId: number, data: string): Promise<any> {
+        this.config.onLog?.('→ messages.getBotCallbackAnswer msg=' + msgId);
+        const inputPeer = serializePeer(peer);
+        const r = await this.rpcPostRaw('/api/telegram/rpc', {
+            method: 'messages.getBotCallbackAnswer',
+            params: { peer: inputPeer, msg_id: msgId, data, cache_time: 0 },
+        });
+        const errData: any = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(errData?.error || r.statusText);
+        this.config.onLog?.('← messages.getBotCallbackAnswer ok');
+        return errData;
+    }
+
     async downloadFile(info: { document?: any; photo?: any }): Promise<{ bytes: string | ArrayBuffer; type: string } | null> {
         this.config.onLog?.('→ downloadFile ' + logJson({ hasDoc: !!info.document, hasPhoto: !!info.photo }));
         const r = await fetch(this.config.baseUrl + '/api/telegram/downloadFile', {

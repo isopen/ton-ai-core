@@ -97,7 +97,6 @@ function flushRenderInternal(rd: RootData) {
   flushAllEffects();
 }
 
-/** Flush a specific root (or the most recently rendered one) immediately. */
 export function flushRender(rd?: RootData): void {
   const target = rd ?? defaultRoot;
   if (!target) return;

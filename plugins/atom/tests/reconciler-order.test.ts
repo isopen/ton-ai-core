@@ -73,8 +73,6 @@ describe('reconciler: DOM move economy', () => {
     ]);
     patch(el, oldOuter, reordered);
 
-    // One relocation is sufficient (either B after C, or C before B);
-    // A must never be touched.
     const moves = getMoves();
     expect(moves).not.toContain('A');
     expect(moves.length).toBeLessThanOrEqual(1);
@@ -89,7 +87,7 @@ describe('reconciler: DOM move economy', () => {
     const grown = h('div', {}, [h('span', { key: 'a' }, 'A'), h('span', { key: 'n' }, 'N')]);
     patch(el, oldOuter, grown);
     expect(el.textContent).toBe('AN');
-    // Attaching the brand-new node is fine; the existing sibling must stay put.
+
     expect(getMoves()).not.toContain('A');
 
     const shrunk = h('div', {}, [h('span', { key: 'a' }, 'A')]);
@@ -108,13 +106,12 @@ describe('reconciler: DOM move economy', () => {
     const oldOuter = h('div', {}, frag);
     const el = mount(oldOuter);
 
-    // External mutation detaches the first node of the fragment group.
     el.removeChild(el.firstChild as Node);
     expect(el.textContent).toBe('2');
 
     const newOuter = h('div', {}, h('span', { key: 'f' }, '3'));
     patch(el, oldOuter, newOuter);
-    // The surviving stale sibling ("2") must not leak into the new tree.
+
     expect(el.textContent).toBe('3');
   });
 });
@@ -196,14 +193,13 @@ describe('reconciler: prop diffing', () => {
       ref: (e: Element) => seen.push(e),
       children: [],
     });
-    // Object ref on a sibling node
+
     const outer = h('div', {}, [
       vnode,
       h('span', { ref: holder }),
     ]);
     const el = mount(outer);
-    // Refs are deferred to commit time (after insertion) so that mount-time
-    // measurement reads real layout.
+
     flushPendingRefs();
     expect(seen.length).toBe(1);
     expect(seen[0]).toBe(el.firstChild);
@@ -214,8 +210,7 @@ describe('reconciler: prop diffing', () => {
     const heights: number[] = [];
     const outer = h('div', {}, [h('div', { ref: (e: Element) => heights.push((e as HTMLElement).offsetHeight), style: 'height:40px' })]);
     const el = mount(outer);
-    // jsdom has no layout engine: emulate a measured element to prove refs
-    // fire post-insert, against the connected node.
+
     Object.defineProperty(el.firstElementChild, 'offsetHeight', { value: 40, configurable: true });
     flushPendingRefs();
     expect(heights).toEqual([40]);

@@ -209,6 +209,10 @@ export class SharedWorkerClient {
         return this.send({ type: 'getDialogs', limit });
     }
 
+    async getCustomEmojiDocuments(documentId: string): Promise<any[]> {
+        return this.send({ type: 'getCustomEmojiDocs', documentId });
+    }
+
     async getHistory(peer: Record<string, any>, limit = 50, offsetId = 0): Promise<any> {
         return this.send({ type: 'getHistory', peer, limit, offsetId });
     }

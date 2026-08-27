@@ -643,7 +643,6 @@ pub fn is_probably_prime_checked(n_hex: &str, rounds: u32) -> Result<bool, Crypt
     miller_rabin(&n, rounds)
 }
 
-
 #[wasm_bindgen]
 pub fn aes256_ecb_encrypt(key: &[u8], data: &[u8]) -> Result<Vec<u8>, JsError> {
     ecb_encrypt_checked(key, data).map_err(|e| JsError::new(&e.to_string()))

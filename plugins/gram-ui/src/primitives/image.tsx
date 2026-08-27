@@ -124,8 +124,6 @@ export function Image(props: {
     }
   }, [error, image.thumbnail?.url, image.medium?.url, image.original?.url]);
 
-  // Dimension precedence: natural size of what actually loaded here wins;
-  // declared spec dimensions drive the pre-load placeholder.
   const srcW = image.width || natural?.w || 0;
   const srcH = image.height || natural?.h || 0;
   const hasAspect = srcW > 0 && srcH > 0;
@@ -143,8 +141,6 @@ export function Image(props: {
     if (maxWidth && imgW > maxWidth) { imgW = maxWidth; imgH = imgW / aspect; }
     if (maxHeight && imgH > maxHeight) { imgH = maxHeight; imgW = imgH * aspect; }
   } else {
-    // Nothing known yet: reserve a compact strip instead of a wrong-shaped
-    // block; it snaps to the real aspect on first successful load.
     imgW = width ?? (maxWidth != null ? Math.min(maxWidth, 320) : 320);
     imgH = height ?? 96;
   }

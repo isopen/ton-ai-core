@@ -229,12 +229,10 @@ describe('GramMediaRouter emoji pipeline', () => {
         const sets = diceSetEvents[0]!.sets as Record<string, { p: string; d: string[] }>;
         expect(sets['🎲'].d).toHaveLength(7);
 
-        // set load indexes docs but does NOT download them; only requested values are downloaded
         const prefetchCalls = downloadFiles.mock.calls.length;
         expect(prefetchCalls).toBe(0);
         expect(customEmojiCalls).toEqual([]);
 
-        // known dice doc requests resolve from cache: exactly one doc downloaded, no custom emoji RPC
         const urlEvents: any[] = [];
         window.addEventListener('tg-emoji-url', (e) => urlEvents.push((e as CustomEvent).detail));
         window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', {
@@ -736,8 +734,6 @@ describe('GramMediaRouter emoji pipeline', () => {
             const retryEvents: any[] = [];
             window.addEventListener('tg-download-emoji', (e) => retryEvents.push((e as CustomEvent).detail));
 
-            // three failures within the 20s cooldown window count as ONE attempt:
-            // retries keep firing on the short backoff instead of exhausting the cap
             router.emoji.onEmojiDownloadFailed('5001');
             await jest.advanceTimersByTimeAsync(5_000);
             router.emoji.onEmojiDownloadFailed('5001');
@@ -746,7 +742,6 @@ describe('GramMediaRouter emoji pipeline', () => {
             await jest.advanceTimersByTimeAsync(5_000);
             expect(retryEvents.length).toBeGreaterThanOrEqual(3);
 
-            // spaced failures (>20s apart) DO count toward the cap
             for (let i = 0; i < 5; i++) {
                 router.emoji.onEmojiDownloadFailed('5001');
                 await jest.advanceTimersByTimeAsync(21_000);
@@ -754,12 +749,10 @@ describe('GramMediaRouter emoji pipeline', () => {
             await jest.advanceTimersByTimeAsync(5_000);
             const capped = retryEvents.length;
 
-            // beyond the cap: no new retries are scheduled (blocked)
             router.emoji.onEmojiDownloadFailed('5001');
             await jest.advanceTimersByTimeAsync(5_000);
             expect(retryEvents.length).toBe(capped);
 
-            // after the cap TTL: attempts reset and a retry fires
             await jest.advanceTimersByTimeAsync(120_000);
             expect(retryEvents.length).toBeGreaterThan(capped);
         } finally {

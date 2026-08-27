@@ -132,10 +132,17 @@ export interface TdSessionState {
   dcAuthKeys?: Record<string, { authKey: Buffer; authKeyId: bigint; serverSalt: bigint; serverTime: number }>;
 }
 
+export interface BinlogInfo {
+  wasCreated: boolean;
+  wrongPassword: boolean;
+  isEncrypted: boolean;
+}
+
 export class TdBinlog {
   private fileHandle: FileSystemFileHandle | null = null;
   private fileSize: number = 0;
   private sessionBytes: Buffer | null = null;
+  private oldSessionBytes: Buffer | null = null;
   private encKey: Buffer | null = null;
   private encIv: Uint8Array | null = null;
   private encDataOffset: number = 0;
@@ -145,16 +152,26 @@ export class TdBinlog {
   private totalEventsSize: number = 0;
   private deletedCount: number = 0;
   private pendingEntries: Array<{ type: EventType; buf: Buffer }> = [];
+  private wasCreated = false;
+  private wrongPassword = false;
 
-  async init(sessionId: string): Promise<void> {
+  async init(sessionId: string, oldSessionId?: string): Promise<BinlogInfo> {
     const dir = await navigator.storage.getDirectory();
     this.fileHandle = await dir.getFileHandle(BINLOG_FILE, { create: true });
 
     this.sessionBytes = Buffer.from(sessionId, 'utf-8');
+    this.oldSessionBytes = oldSessionId ? Buffer.from(oldSessionId, 'utf-8') : null;
+    this.wrongPassword = false;
     const file = await this.fileHandle!.getFile();
+    this.wasCreated = file.size === 0;
     log.info('[td-binlog] init sessionId=' + sessionId + ' fileSize=' + file.size + ' exists=' + (file.size > 0));
     await this.replay();
-    log.info('[td-binlog] init done entries=' + this.entries.length + ' encKey=' + !!this.encKey);
+    log.info('[td-binlog] init done entries=' + this.entries.length + ' encKey=' + !!this.encKey + ' wrongPassword=' + this.wrongPassword);
+    return { wasCreated: this.wasCreated, wrongPassword: this.wrongPassword, isEncrypted: !!this.encKey };
+  }
+
+  getInfo(): BinlogInfo {
+    return { wasCreated: this.wasCreated, wrongPassword: this.wrongPassword, isEncrypted: !!this.encKey };
   }
 
   private async replay(): Promise<void> {
@@ -183,15 +200,21 @@ export class TdBinlog {
           const parsed = parseEncryptionEvent(payload);
           if (!parsed) { log.info('[td-binlog] replay: bad encryption event at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncateFileOnly(lastGoodOffset); return; }
 
-          const encKey = Buffer.from(await crypton.pbkdf2Sha256(
-            this.sessionBytes!, parsed.salt, KDF_ITERATIONS, KEY_SIZE,
-          ));
-          const computedHash = await crypton.hmacSha256(
-            encKey, new TextEncoder().encode(KEY_HASH_LABEL),
-          );
-          if (!Buffer.from(computedHash).equals(Buffer.from(parsed.keyHash))) {
-            log.info('[td-binlog] replay: keyHash mismatch truncating to ' + lastGoodOffset);
-            await this.truncateFileOnly(lastGoodOffset);
+          let encKey: Buffer | null = null;
+          const tryKey = async (sessionBytes: Buffer): Promise<Buffer | null> => {
+            const k = Buffer.from(await crypton.pbkdf2Sha256(sessionBytes, parsed.salt, KDF_ITERATIONS, KEY_SIZE));
+            const h = await crypton.hmacSha256(k, new TextEncoder().encode(KEY_HASH_LABEL));
+            if (Buffer.from(h).equals(Buffer.from(parsed.keyHash))) return k;
+            return null;
+          };
+          encKey = await tryKey(this.sessionBytes!);
+          if (!encKey && this.oldSessionBytes) {
+            encKey = await tryKey(this.oldSessionBytes);
+            if (encKey) log.info('[td-binlog] replay: encryption key matched old_session');
+          }
+          if (!encKey) {
+            this.wrongPassword = true;
+            log.info('[td-binlog] replay: keyHash mismatch wrongPassword=true');
             return;
           }
           this.encKey = encKey;
@@ -557,10 +580,6 @@ export class TdBinlog {
     this.nextId = runningId;
   }
 
-  /**
-   * Cut the file at offset while preserving every event already committed to
-   * memory during replay. Full memory reset lives in truncate().
-   */
   private async truncateFileOnly(offset: number): Promise<void> {
     this.fileSize = offset;
     try {

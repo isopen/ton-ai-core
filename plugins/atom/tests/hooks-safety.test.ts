@@ -111,13 +111,11 @@ describe('hooks safety', () => {
     render(Comp, container);
     expect(computations).toBe(1);
 
-    bump(); // unrelated state changes — memo must hold
+    bump();
     await flush();
     expect(computations).toBe(1);
     expect(container.textContent).toBe('10:aa');
 
-    // deps change is triggered via remount-free path: x never changes here,
-    // so still 1 computation after several unrelated rerenders.
     bump();
     await flush();
     expect(computations).toBe(1);
@@ -134,7 +132,7 @@ describe('hooks safety', () => {
       const cb = useCallback(() => seed, [seed]);
       if (!identities.includes(cb.length)) identities.push(cb.length);
       saved = cb;
-      identities.push(-1); // marker per render
+      identities.push(-1);
       return h('div');
     };
     const container = document.createElement('div');

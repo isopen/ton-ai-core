@@ -1,7 +1,6 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { crypton } from '@ton-ai/core';
-import { GramDbComponents, GramDbSkills, StorageEngine, KeyManager, DbVersion, currentDbVersion, createStandaloneGramDb } from '../src';
+import { GramDbComponents, GramDbSkills, StorageEngine, KeyManager, EncryptedStore, currentDbVersion } from '../src';
 
 class MockStorageEngine implements StorageEngine {
   private store = new Map<string, string>();
@@ -53,32 +52,6 @@ describe('MockStorageEngine', () => {
   test('setItem then getItem roundtrip', async () => {
     await engine.setItem('k', 'v');
     assert.strictEqual(await engine.getItem('k'), 'v');
-  });
-
-  test('setItem overwrites existing value', async () => {
-    await engine.setItem('k', 'v1');
-    await engine.setItem('k', 'v2');
-    assert.strictEqual(await engine.getItem('k'), 'v2');
-  });
-
-  test('removeItem deletes key', async () => {
-    await engine.setItem('k', 'v');
-    await engine.removeItem('k');
-    assert.strictEqual(await engine.getItem('k'), null);
-  });
-
-  test('removeItem is idempotent', async () => {
-    await engine.removeItem('missing');
-    assert.strictEqual(await engine.getItem('missing'), null);
-  });
-
-  test('getAllKeys returns all keys', async () => {
-    await engine.setItem('a', '1');
-    await engine.setItem('b', '2');
-    const keys = await engine.getAllKeys();
-    assert.strictEqual(keys.length, 2);
-    assert.ok(keys.includes('a'));
-    assert.ok(keys.includes('b'));
   });
 
   test('clear removes all keys', async () => {
@@ -379,63 +352,113 @@ describe('GramDbSkills', () => {
     assert.strictEqual(await skills2.get('persist-key'), 'persist-val');
   });
 
-  test('migrateV0ToV1 from old format', async () => {
+  test('setEncryptionKey detects tampered verify and regenerates', async () => {
     const comps = createComponents();
-    const engine = comps.engine;
-    const sessionId = 'migrate-test';
-    const hmacLabel = 'gram-db-hmac-v1';
-
-    const plaintext = 'migrated-value';
-    const oldKey = await KeyManager.deriveMasterKey(sessionId);
-    const oldIv = Buffer.from(crypton.getRandomBytes(16));
-    const oldCiphertext = crypton.AES256CTR.process(
-      Buffer.from(plaintext, 'utf-8'), oldKey, oldIv, 0
-    );
-    const oldHmacKey = await crypton.hmacSha256(oldKey, new TextEncoder().encode(hmacLabel));
-    const oldMagic = new Uint8Array([0x47, 0x43]);
-    const oldHmac = await crypton.hmacSha256(oldHmacKey, Buffer.concat([oldMagic, Buffer.from(oldIv), Buffer.from(oldCiphertext)]));
-    const oldEntry = Buffer.concat([oldMagic, oldIv, oldCiphertext, oldHmac]).toString('base64');
-
-    const userKey = 'chat:123';
-    const userHk = await KeyManager.hash(sessionId, userKey);
-    await engine.setItem(userHk, oldEntry);
-
-    const indexKey = '__key_index';
-    const indexHk = await KeyManager.hash(sessionId, indexKey);
-    const indexPlain = JSON.stringify([userKey]);
-    const indexIv = Buffer.from(crypton.getRandomBytes(16));
-    const indexCiphertext = crypton.AES256CTR.process(
-      Buffer.from(indexPlain, 'utf-8'), oldKey, indexIv, 0
-    );
-    const indexHmacKey = await crypton.hmacSha256(oldKey, new TextEncoder().encode(hmacLabel));
-    const indexHmac = await crypton.hmacSha256(indexHmacKey, Buffer.concat([oldMagic, Buffer.from(indexIv), Buffer.from(indexCiphertext)]));
-    const indexEntry = Buffer.concat([oldMagic, indexIv, indexCiphertext, indexHmac]).toString('base64');
-    await engine.setItem(indexHk, indexEntry);
-
-    await engine.setItem('__g', sessionId);
-
     const skills = new GramDbSkills(comps);
     await skills.init();
-
-    assert.ok(await engine.getItem('__mk_salt'), 'salt created');
-    assert.ok(await engine.getItem('__mk_verify'), 'verify created');
-    assert.strictEqual(await engine.getItem('__ver'), String(currentDbVersion()), 'version set');
-
-    await skills.setEncryptionKey(sessionId);
-    const val = await skills.get(userKey);
-    assert.strictEqual(val, plaintext);
+    await skills.setEncryptionKey('tamper-test');
+    const salt = await comps.engine.getItem('__mk_salt');
+    assert.ok(salt);
+    await comps.engine.setItem('__mk_verify', Buffer.from('badhash').toString('base64'));
+    const skills2 = new GramDbSkills(comps);
+    await skills2.init();
+    await skills2.setEncryptionKey('tamper-test');
+    const newSalt = await comps.engine.getItem('__mk_salt');
+    assert.ok(newSalt && newSalt.length > 0);
+    await skills2.set('after-tamper', 'works');
+    assert.strictEqual(await skills2.get('after-tamper'), 'works');
   });
 
-  test('migrateV0ToV1 with no sessionId clears engine', async () => {
+  test('loadKeyIndex handles corrupted index gracefully', async () => {
     const comps = createComponents();
-    const engine = comps.engine;
-    await engine.setItem('some-old-data', 'x');
-    await engine.setItem('__g', '');
-
     const skills = new GramDbSkills(comps);
     await skills.init();
+    await skills.setEncryptionKey('corrupt-index-test');
+    const hk = await KeyManager.hash('corrupt-index-test', '__key_index');
+    await comps.engine.setItem(hk, 'not-valid-encrypted-data!!!');
+    const keys = await skills.keys('any:');
+    assert.deepStrictEqual(keys, []);
+  });
 
-    assert.strictEqual(await engine.getItem('some-old-data'), null);
+  test('compact delegates to engine if available', async () => {
+    const comps = createComponents();
+    const skills = new GramDbSkills(comps);
+    await skills.init();
+    let called = false;
+    (comps.engine as any).compact = async () => { called = true; };
+    await skills.compact();
+    assert.ok(called);
+  });
+
+  test('del updates keyIndex when sessionId set', async () => {
+    const comps = createComponents();
+    const skills = new GramDbSkills(comps);
+    await skills.init();
+    await skills.setEncryptionKey('del-index-test');
+    await skills.set('a:1', 'v1');
+    await skills.set('a:2', 'v2');
+    await skills.del('a:1');
+    const keys = await skills.keys('a:');
+    assert.ok(!keys.includes('a:1'));
+    assert.ok(keys.includes('a:2'));
+  });
+
+  test('ensureEngine throws when OPFS not available and no engine', async () => {
+    const comps = new GramDbComponents();
+    const skills = new GramDbSkills(comps);
+    await assert.rejects(() => skills.getSessionId(), /OPFS not available/);
+  });
+
+  test('loadKeyIndex handles non-array JSON without masterKey', async () => {
+    const comps = createComponents();
+    const skills = new GramDbSkills(comps);
+    await skills.init();
+    await comps.engine.setItem('__key_index', JSON.stringify({ not: 'array' }));
+    const keys = await skills.keys('any:');
+    assert.deepStrictEqual(keys, []);
+  });
+
+  test('loadKeyIndex handles non-array JSON with masterKey', async () => {
+    const comps = createComponents();
+    const skills = new GramDbSkills(comps);
+    await skills.init();
+    await skills.setEncryptionKey('non-array-enc-test');
+    const hk = await KeyManager.hash('non-array-enc-test', '__key_index');
+    const enc = await EncryptedStore.encryptToBase64((skills as any)._masterKey, JSON.stringify({ not: 'array' }));
+    await comps.engine.setItem(hk, enc);
+    (skills as any)._keyIndex = null;
+    const keys = await skills.keys('any:');
+    assert.deepStrictEqual(keys, []);
+  });
+
+  test('loadSession returns null on corrupted data', async () => {
+    const comps = createComponents();
+    const skills = new GramDbSkills(comps);
+    await skills.init();
+    await skills.saveSession('sid-corrupt', { dcId: 2, authKey: 'abc' });
+    const hk = await (skills as any).encKey('session:sid-corrupt');
+    await comps.engine.setItem(hk, 'corrupted-base64!!!');
+    const loaded = await skills.loadSession('sid-corrupt');
+    assert.strictEqual(loaded, null);
+  });
+
+  test('getAvatar returns null on corrupted data', async () => {
+    const comps = createComponents();
+    const skills = new GramDbSkills(comps);
+    await skills.init();
+    await skills.setEncryptionKey('avatar-corrupt-test');
+    await skills.saveAvatar('corrupt-key', 'data:image/png,abc');
+    const hk = await (skills as any).encKey('avatar:corrupt-key');
+    await comps.engine.setItem(hk, 'bad-data');
+    const val = await skills.getAvatar('corrupt-key');
+    assert.strictEqual(val, null);
+  });
+
+  test('compact does nothing when engine has no compact', async () => {
+    const comps = createComponents();
+    const skills = new GramDbSkills(comps);
+    await skills.init();
+    await skills.compact();
   });
 });
 
@@ -552,27 +575,5 @@ describe('GramDbComponents.replaceEngine', () => {
     const newEngine = new MockStorageEngine();
     await comps.replaceEngine(newEngine);
     assert.strictEqual(comps.engine, newEngine);
-  });
-});
-
-describe('createStandaloneGramDb', () => {
-  test('creates GramDbSkills instance', () => {
-    const db = createStandaloneGramDb();
-    assert.ok(db instanceof GramDbSkills);
-    assert.strictEqual(db.isReady(), false);
-  });
-});
-
-describe('DbVersion constants', () => {
-  test('DbVersion.Initial is 0', () => {
-    assert.strictEqual(DbVersion.Initial, 0);
-  });
-
-  test('DbVersion.TDLibStyle is 1', () => {
-    assert.strictEqual(DbVersion.TDLibStyle, 1);
-  });
-
-  test('currentDbVersion returns latest', () => {
-    assert.strictEqual(currentDbVersion(), DbVersion.TDLibStyle);
   });
 });

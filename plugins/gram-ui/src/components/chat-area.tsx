@@ -66,6 +66,23 @@ function isEmojiKey(k: string): boolean {
   return k.startsWith('emojipack-') || k.startsWith('emoji-');
 }
 
+function collectRichCustomIds(node: any, out: Set<string>, seen = new WeakSet()): void {
+  if (!node || typeof node !== 'object') return;
+  if (seen.has(node)) return;
+  seen.add(node);
+  if (Array.isArray(node)) {
+    for (const v of node) collectRichCustomIds(v, out, seen);
+    return;
+  }
+  if (node._ === 'textCustomEmoji' && node.document_id != null) {
+    out.add(String(node.document_id));
+    return;
+  }
+  for (const v of Object.values(node)) {
+    if (v && typeof v === 'object') collectRichCustomIds(v, out, seen);
+  }
+}
+
 function getAlbumGroupId(m: any): number | string | null {
   if (m == null) return null;
   const id = (m.groupedId ?? m.grouped_id) as number | string | undefined;
@@ -234,9 +251,6 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
         fxLog.info('[gram-app] sticker-fx overlay for msg=' + m.id + ' (interaction server fx)');
         playStickerFxOverlay('fx' + m.id, fxUrlRef.current, rootRef.current.getBoundingClientRect());
       } else if (!detail.hasCanvasFx) {
-        // No server effect for this sticker AND no local canvas pixel fx
-        // owns the fallback (TGS stickers run their own): hand off to the
-        // unified local renderer, forwarding the original click coordinates.
         window.dispatchEvent(new CustomEvent('tg-interaction-local', { detail: { messageId: String(mid), x: detail.x, y: detail.y } }));
       }
     };
@@ -412,6 +426,16 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
       <MediaCaption text={m.message} entities={entities} documentUrls={documentUrls || {}} timeStr={timeStr} out={out} status={status} />
     </div>
   );
+}
+
+function onKbButton(button: { kind: 'callback' | 'url' | 'plain'; text?: string; data?: string; url?: string }, messageId: number | string) {
+  if (button.kind === 'url' && button.url) {
+    window.open(button.url, '_blank', 'noopener');
+    return;
+  }
+  if (button.kind === 'callback' && button.data) {
+    window.dispatchEvent(new CustomEvent('tg-bot-callback', { detail: { messageId, data: button.data, text: button.text } }));
+  }
 }
 
 function msgStatus(m: any, readOutboxMaxId?: number): 'pending' | 'sent' | 'delivered' | 'read' {
@@ -701,7 +725,8 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
             ? <VideoMessage m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} />
           : isLinkMsg
             ? <WebPageBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
-            : <MessageBubble text={m.message || mediaFallbackText(m.media)} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} />
+            : <MessageBubble text={m.message || mediaFallbackText(m.media)} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} messageId={m.id} replyMarkup={m.replyMarkup} richMessage={m.richMessage} richDocumentUrls={emojiUrls}
+              onKbButton={onKbButton} onRichButton={(data, mid) => onKbButton({ kind: 'callback', data }, mid)} />
       }
     </div>
   );
@@ -780,29 +805,55 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
     const from = Math.max(0, rs - EMOJI_KEEP_MARGIN);
     const to = Math.min(rows.length, re + EMOJI_KEEP_MARGIN);
     const customIds: string[] = [];
+    const richIds = new Set<string>();
     for (let i = from; i < to; i++) {
       for (const m of rows[i].msgs) {
         if (!m) continue;
         for (const e of (m.entities || [])) {
           if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) customIds.push(String(e.document_id));
         }
+        if (m.richMessage) collectRichCustomIds(m.richMessage, richIds);
+        if (m.replyMarkup) collectRichCustomIds(m.replyMarkup, richIds);
         const diceEmoji = m.media?.emoticon || m.media?.emoji;
         if (typeof diceEmoji === 'string' && diceEmoji) {
           window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: diceEmoji } }));
         }
       }
     }
+    for (const id of richIds) customIds.push(id);
     if (customIds.length > 0) {
-      for (const id of customIds) emojiFetchAccum.add(id);
-      if (emojiFetchTimer != null) clearTimeout(emojiFetchTimer);
-      emojiFetchTimer = setTimeout(() => {
-        emojiFetchTimer = null;
-        if (emojiFetchAccum.size > 0) {
-          window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...emojiFetchAccum] } }));
-          emojiFetchAccum.clear();
+      const isChessBatch = richIds.size >= 12;
+      if (isChessBatch) {
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...richIds] } }));
+
+        const rest = customIds.filter((id) => !richIds.has(id));
+        if (rest.length > 0) {
+          for (const id of rest) emojiFetchAccum.add(id);
+          if (emojiFetchTimer != null) clearTimeout(emojiFetchTimer);
+          emojiFetchTimer = setTimeout(() => {
+            emojiFetchTimer = null;
+            if (emojiFetchAccum.size > 0) {
+              window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...emojiFetchAccum] } }));
+              emojiFetchAccum.clear();
+            }
+          }, 20);
+        } else {
+          for (const id of richIds) emojiFetchAccum.delete(id);
         }
-      }, 120);
+      } else {
+        for (const id of customIds) emojiFetchAccum.add(id);
+        if (emojiFetchTimer != null) clearTimeout(emojiFetchTimer);
+        emojiFetchTimer = setTimeout(() => {
+          emojiFetchTimer = null;
+          if (emojiFetchAccum.size > 0) {
+            window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...emojiFetchAccum] } }));
+            emojiFetchAccum.clear();
+          }
+        }, 20);
+      }
     }
+
+    if (customIds.length > 0) flushEmojiBatch();
     return flushEmojiBatch;
   }, [peer?.id, state.messages, visRange]);
 
@@ -810,6 +861,30 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
     if (!(state.documentUrls || {})['empty-chat']) return;
     dispatch({ type: 'CLEAR_EMOJI_DOCUMENTS', keys: ['empty-chat'] });
   }, [peer?.id]);
+
+  useEffect(() => {
+    const all = Array.isArray(state.messages) ? state.messages : [];
+    const pre = new Set<string>();
+    for (const m of all) {
+      for (const e of (m.entities || [])) {
+        if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) pre.add(String(e.document_id));
+      }
+      if (m.richMessage) collectRichCustomIds(m.richMessage, pre);
+      if (m.replyMarkup) collectRichCustomIds(m.replyMarkup, pre);
+      if (m.message) {
+        for (const r of matchEmojiRuns(m.message)) {
+          const docId = getEmojiDocId(r.emoji);
+          if (docId) pre.add(docId);
+        }
+      }
+    }
+    if (pre.size > 0) {
+      const ids = [...pre].filter((id) => !emojiFetchAccum.has(id));
+      if (ids.length) window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids } }));
+
+      if (ids.length) flushEmojiBatch();
+    }
+  }, [state.messages]);
 
   const msgs = Array.isArray(state.messages) ? state.messages : [];
   const rows = useMemo(() => buildAlbumRows(msgs), [state.messages]);
@@ -826,6 +901,16 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
         if (!m) continue;
         for (const e of (m.entities || [])) {
           if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) keep.add(String(e.document_id));
+        }
+        if (m.richMessage) {
+          const s = new Set<string>();
+          collectRichCustomIds(m.richMessage, s);
+          for (const id of s) keep.add(id);
+        }
+        if (m.replyMarkup) {
+          const s = new Set<string>();
+          collectRichCustomIds(m.replyMarkup, s);
+          for (const id of s) keep.add(id);
         }
         if (m.message) {
           for (const r of matchEmojiRuns(m.message)) {

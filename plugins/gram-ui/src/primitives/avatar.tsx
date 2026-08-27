@@ -4,8 +4,7 @@ import type { ImageSpec } from '../types.js';
 
 interface AvatarProps {
   url?: string;
-  /** Inline low-res preview (data URI): blurred underlay shown while the full
-   *  avatar downloads. Telegram Android pattern. */
+
   blurUrl?: string;
   initial: string;
   color: string;

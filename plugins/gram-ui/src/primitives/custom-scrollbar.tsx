@@ -1,5 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
-import { useRef, useState, useEffect } from '@ton-ai/atom/hooks';
+import { useRef, useState, useEffect, useCallback } from '@ton-ai/atom/hooks';
 
 interface CustomScrollbarProps {
   id?: string;
@@ -127,12 +127,14 @@ export function CustomScrollbar(props: CustomScrollbarProps) {
     requestAnimationFrame(() => update());
   }
 
-  function handleScroll(e: Event) {
+  const handleScroll = useCallback((e: Event) => {
     const c = s.current.content;
     if (!c) return;
     s.current._lastST = c.scrollTop;
     s.current._lastSH = c.scrollHeight;
-    if (isVirtual) {
+
+    const curVirtual = !!(Array.isArray(virtualItems) && renderVirtualItem);
+    if (curVirtual) {
       const diff = Math.abs(c.scrollTop - s.current._prevST);
       if (diff > s.current._estH / 2 || s.current._prevST < 0) {
         s.current._prevST = c.scrollTop;
@@ -147,7 +149,7 @@ export function CustomScrollbar(props: CustomScrollbarProps) {
     }
     s.current._nearTop = nearTop;
     s.current._onScroll?.(e);
-  }
+  }, []);
 
   function anchor(el: HTMLDivElement) {
     const n = s.current;

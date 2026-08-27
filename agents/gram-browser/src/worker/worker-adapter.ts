@@ -88,6 +88,10 @@ export class TelegramWorkerClient {
         return this.client.getHistory(peer, limit, offsetId);
     }
 
+    async getCustomEmojiDocuments(documentId: string): Promise<any[]> {
+        return this.client.getCustomEmojiDocuments(documentId);
+    }
+
     async cancelPhotoDownloads(): Promise<void> {
         await this.client.cancelPhotoDownloads();
     }

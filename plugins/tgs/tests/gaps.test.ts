@@ -64,8 +64,6 @@ describe('model cache keys', () => {
     });
 
     test('cache lookup is keyed solely by options.key (json ignored)', () => {
-        // Documented sharp edge: two different payloads sharing a key return
-        // the first parsed model. Callers must use unique keys.
         const a = parseTgs(tgs({ layers: [], nm: 'first' }), { key: 'shared' });
         const b = parseTgs(tgs({ layers: [], nm: 'second' }), { key: 'shared' });
         expect(b).toBe(a);

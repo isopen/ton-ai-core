@@ -1,21 +1,13 @@
-/**
- * Shared DOM event utilities: one-shot request/response bridging over the
- * window event bus and lifetime listener binding with guaranteed teardown.
- */
-
 export interface RequestOnceOptions<TDetail> {
-  /** Reject when the response detail does not pass this filter. */
   match?: (detail: any) => boolean;
-  /** Reject after this many ms without a matching response. Default 10000. */
+
   timeoutMs?: number;
-  /** detail for the dispatched CustomEvent(requestEvent). */
+
   payload?: any;
-  /** Dispatch/listen target. Defaults to window. */
+
   target?: Window | Document | Element;
 }
 
-/** Dispatch requestEvent and resolve with the first matching responseEvent
- *  detail (or reject on timeout). The response listener is always removed. */
 export function requestOnce<TDetail = any>(
   requestEvent: string,
   responseEvent: string,
@@ -51,9 +43,6 @@ export function requestOnce<TDetail = any>(
 
 export type LifetimeListenerMap = Record<string, EventListenerOrEventListenerObject>;
 
-/** Attach every [type -> handler] pair to the target and return a detach
- *  function that removes them all. Guarantees add/remove symmetry for
- *  app-lifetime singletons and imperative class lifecycles. */
 export function bindLifetimeListeners(
   target: Window | Document | Element,
   listeners: LifetimeListenerMap,

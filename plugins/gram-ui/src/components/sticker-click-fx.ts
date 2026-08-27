@@ -1,7 +1,3 @@
-// Local click effects for stickers without a server-side animation.
-// One effect is picked at random per tap; all are purely visual and
-// rendered into a fixed body-level layer (no layout, no reflow).
-
 type Sample = { u: number; v: number; color: string };
 
 const rand = (a: number, b: number): number => a + Math.random() * (b - a);
@@ -71,9 +67,6 @@ function removeOnFinish(el: HTMLElement, anim: Animation, fallbackMs: number): v
   window.setTimeout(cleanup, fallbackMs);
 }
 
-// Effects that mutate the sticker canvas itself (hide/morph it) must be
-// exclusive: a new tap force-finishes the previous effect with a proper
-// restore, otherwise overlapping cleanups can leave the canvas hidden.
 const activeCleanups = new WeakMap<HTMLCanvasElement, () => void>();
 function takeover(cv: HTMLCanvasElement, cleanup: () => void): void {
   const prev = activeCleanups.get(cv);
@@ -948,7 +941,6 @@ function fxNeon(cv: HTMLCanvasElement): boolean {
   return true;
 }
 
-
 const KINDS = [
   'pop', 'pixels', 'wave', 'jelly', 'confetti', 'chroma', 'jump',
   'tiles', 'implode', 'bam', 'bolt', 'spin', 'bounce', 'teleport',
@@ -973,14 +965,10 @@ export function notifyStickerFxOverlayStarted(): void {
   cancelPending(undefined);
 }
 
-// A premium server-driven overlay starting means the sticker HAS an fx
-// animation: drop any scheduled local effect for it.
 if (typeof window !== 'undefined') {
   window.addEventListener('tg-sticker-fx-overlay-started', notifyStickerFxOverlayStarted);
 }
 
-/** Schedule a random local effect shortly after the tap; cancelled when a
- *  server-driven premium fx overlay starts for this sticker instead. */
 export function scheduleStickerClickFx(stickerEl: HTMLElement, cv: HTMLCanvasElement, messageId: string, x: number, y: number): void {
   if (typeof document === 'undefined' || document.hidden) return;
   cancelPending(messageId);

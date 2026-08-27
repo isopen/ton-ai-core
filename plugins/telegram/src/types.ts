@@ -34,7 +34,7 @@ export interface IConnection {
 
 export const PROXY = 'socks5://127.0.0.1:7897';
 
-export const API_LAYER = 228;
+export const API_LAYER = 229;
 
 export const INTERMEDIATE_MAGIC = 0xEEEEEEEE;
 export const ABRIDGED_MAGIC = 0xEFEFEFEF;

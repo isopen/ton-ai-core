@@ -56,7 +56,7 @@ describe('atom event bindings', () => {
   test('non-function on* value becomes a plain attribute, not a listener', () => {
     const el = createDOM(h('div', { online: true })) as HTMLElement;
     expect(el.getAttribute('online')).toBe('');
-    // No throw when such an event name fires.
+
     expect(() => el.dispatchEvent(new Event('line'))).not.toThrow();
   });
 
@@ -139,7 +139,6 @@ describe('atom event bindings', () => {
     const ctrl = new AbortController();
     let signalSupported = false;
     beforeAll(() => {
-      // Feature detection: jsdom honours signal since v21.
       const probe = document.createElement('div');
       let fired = false;
       probe.addEventListener('sig-probe', () => { fired = true; }, { signal: ctrl.signal });
@@ -150,7 +149,6 @@ describe('atom event bindings', () => {
 
     test('aborted signal stops delivery', () => {
       if (!signalSupported) {
-        // eslint-disable-next-line no-console
         console.warn('jsdom without AbortSignal listener support - skipping');
         return;
       }

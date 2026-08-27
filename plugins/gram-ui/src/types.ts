@@ -7,8 +7,7 @@ export interface PeerInfo {
     lastName?: string;
     username?: string;
     avatarUrl?: string;
-    /** Inline stripped-size preview (data URI): blurred underlay while the
-     *  full avatar downloads. Computed once in the worker. */
+
     blurUrl?: string;
     photoId?: string;
     photo?: any;
@@ -26,6 +25,9 @@ export interface Dialog {
 }
 
 export interface Message {
+  replyMarkup?: any;
+
+  richMessage?: any;
     id: number;
     fromId: any;
     sender: string;
@@ -38,10 +40,9 @@ export interface Message {
     entities?: any[];
     groupedId?: number | string;
     fwdFrom?: any;
-    /** Resolved display name of the original sender of a forwarded message. */
+
     fwdName?: string;
-    /** Openable peer when privacy settings allow attribution (has access_hash
-     *  for users/channels; chats need none). Null → not clickable. */
+
     fwdPeer?: PeerInfo | null;
 }
 
@@ -111,9 +112,7 @@ export interface ImageSpec {
   original?: ImageSource;
   width: number;
   height: number;
-  /** True when the largest size the server has for this photo is already
-   *  downloaded (i.e. showing `medium`/`original` is final quality, not a
-   *  placeholder for pending HQ bytes). */
+
   maxSizeDownloaded?: boolean;
 }
 
@@ -127,7 +126,6 @@ export interface ImageProps {
   onOpenViewer?: (id: string) => void;
 }
 
-/** @deprecated legacy name */
 export type TelegramImageProps = ImageProps;
 
 export type UIAction =

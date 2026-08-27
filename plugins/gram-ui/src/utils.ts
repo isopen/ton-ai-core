@@ -153,14 +153,6 @@ function thumbUrl(s: any): string {
   return url;
 }
 
-/**
- * Instant blurred-preview source from the inline photoStrippedSize embedded in
- * TL Photo objects (delivered with dialogs/users responses, zero network).
- * Returns '' when the peer has no inline thumb.
- *
- * Tolerates every wire format seen on this path: bytes as Uint8Array, hex
- * string (worker deepConvert), or index-object (after JSON round-trip).
- */
 export function buildPeerBlurThumb(photo: any): string {
   if (!photo || typeof photo !== 'object') return '';
   const sizes = photo.sizes;

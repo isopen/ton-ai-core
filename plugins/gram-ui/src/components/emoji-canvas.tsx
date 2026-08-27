@@ -711,8 +711,7 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
         const failed = !!failedDocs[docId];
         const onError = () => {
           const hadPainted = everPaintedDocs.has(docId);
-          // Renderer death must not blank a visible emoji: keep the last
-          // painted frame while tg-emoji-bad -> redownload -> new url runs.
+
           log.info('[gram-app] emoji-slot-error doc=' + docId + ' keptFrame=' + hadPainted);
           if (!hadPainted) setFailedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
           requestEmojiDownload(docId, s.value, 2);

@@ -9,7 +9,7 @@ export function setPhotoQuality(q: PhotoQuality): void {
     if (q === 'min' || q === 'medium' || q === 'max') photoQuality = q;
 }
 export function getPhotoQuality(): PhotoQuality { return photoQuality; }
-/** Size-download priority for chat bubbles under the current quality. */
+
 export function chatPhotoPrio(): string[] {
     return photoQuality === 'max'
         ? ['y', 'w', 'x', 'v', 'u', 'm']

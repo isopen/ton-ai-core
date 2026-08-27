@@ -15,7 +15,7 @@ import { attachEmojiBurst, attachEmojiInteractions } from './components/emoji-bu
 
 const log = getLogger('gram-ui');
 import { render, setUseRafBatching } from '@ton-ai/atom/render';
-import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
+import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import { Header } from './components/header.js';
 import { AuthScreen } from './components/auth-screen.js';
 import { Sidebar } from './components/sidebar.js';
@@ -78,6 +78,8 @@ export class TelegramUI {
     function App() {
       const [state, setState] = useState<AppState>(merged);
       const firstRun = useRef(true);
+      const setStateRef = useRef(setState);
+      setStateRef.current = setState;
 
       useEffect(() => {
         const root = document.documentElement;
@@ -132,8 +134,8 @@ export class TelegramUI {
         return () => overlay.remove();
       }, [state.theme]);
 
-      self._dispatch = (action: UIAction) => {
-        setState((prev: AppState) => {
+      const dispatch = useCallback((action: UIAction) => {
+        setStateRef.current((prev: AppState) => {
           const next = reducer(prev, action);
           self._state = next;
           return next;
@@ -147,7 +149,8 @@ export class TelegramUI {
         if (action.type === 'LOGOUT') {
           self.callbacks.logout();
         }
-      };
+      }, []);
+      self._dispatch = dispatch;
 
       useEffect(() => {
         setPhotoQuality(state.imageQuality);
@@ -187,8 +190,6 @@ export class TelegramUI {
   }
 
   private setupListeners() {
-    // Single bound bundle: destroy() previously missed tg-auth-sign-up,
-    // tg-auth-request-qr and the anonymous tg-auth-set-lang handler.
     this.detachInteractionListeners = bindLifetimeListeners(window, {
       'tg-auth-send-code': () => { this.callbacks.sendCode(this._state.phone); },
       'tg-auth-sign-in': () => { this.callbacks.signIn(this._state.code); },

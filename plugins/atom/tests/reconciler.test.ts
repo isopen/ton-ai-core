@@ -152,7 +152,7 @@ describe('createDOM', () => {
     const refFn = jest.fn();
     const vnode = h('div', { ref: refFn });
     createDOM(vnode);
-    // Refs are queued during creation and fire on flushPendingRefs (commit).
+
     flushPendingRefs();
     expect(refFn).toHaveBeenCalledTimes(1);
     expect(refFn.mock.calls[0][0].tagName).toBe('DIV');
@@ -932,8 +932,7 @@ describe('patch - edge paths', () => {
 
     const newOuter = h('div', {}, h('span', { key: 'f' }, '3'));
     patch(el, oldOuter, newOuter);
-    // The matched fragment is fully replaced by the new subtree: stale
-    // siblings of a detached node must not survive into the new tree.
+
     expect(el.textContent).toBe('3');
   });
 

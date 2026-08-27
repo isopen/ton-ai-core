@@ -158,14 +158,13 @@ describe('flash probe', () => {
             }],
         }));
         renderFrame(new MockCanvas() as any, anim, 10, 1);
-        // The flash ellipse is 240 wide centered at (192,128) scaled x2 -> spans x=[72..312]
-        // clipped by canvas right edge only. Find gradient fills across ALL contexts.
+
         let found = false;
         for (const c of allCtxs) {
             c.pathsAtFill.forEach((p, i) => {
                 if (!String(c.fills[i]).includes('gradient')) return;
                 const [minX, maxX] = pathExtent(p);
-                // eslint-disable-next-line no-console
+
                 console.log('ctx#' + c.id, 'gradient fill extent x=[' + minX.toFixed(1) + '..' + maxX.toFixed(1) + ']');
                 found = true;
             });
