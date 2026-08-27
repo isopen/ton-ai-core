@@ -90,11 +90,22 @@ export class GramApp {
     s.tgService.current = service;
 
     service.onAuthInvalidated = async () => {
+      const prevPage = s.tgui.current?.state?.page;
+      const curStep = s.tgui.current?.state?.authStep;
+      const wasDialogs = prevPage === 'dialogs' || !!wasAuthenticated;
       s.tgui.current?.dispatch({ type: 'SET_DIALOGS', dialogs: [] });
       s.tgui.current?.setConnectionStatus('disconnected');
       s.tgui.current?.setPage('auth');
-      s.tgui.current?.setAuthStep('phone');
-      s.tgui.current?.setError('Session terminated from another device');
+      // Don't kick out of QR/code flow for fresh auth — let code stay visible and allow retry
+      if (curStep !== 'qr_login' && wasDialogs) {
+        s.tgui.current?.setAuthStep('phone');
+      }
+      // Only show "terminated" if user was previously authenticated/dialogs, otherwise it's a fresh/invalid key
+      if (wasDialogs && curStep !== 'qr_login') {
+        s.tgui.current?.setError('Session terminated from another device');
+      } else {
+        s.tgui.current?.setError('');
+      }
       await dbDel('authenticated').catch(() => {});
       await dbSet('authInvalidated', '1').catch(() => {});
     };

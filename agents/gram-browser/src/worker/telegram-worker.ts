@@ -1839,7 +1839,7 @@ function startReadLoop(): void {
                                 const errCode = reader.readInt32();
                                 const errMsg = reader.readString();
                                 wlog('[worker] unencrypted RPC_ERROR: code=' + errCode + ' msg=' + errMsg);
-                                if (errMsg.includes('AUTH_KEY_UNREGISTERED')) {
+                                if (errMsg.includes('AUTH_KEY_UNREGISTERED') && authenticated) {
                                     wlog('[worker] auth key unregistered detected in unencrypted response');
                                     notifyAuthInvalidated();
                                     break;
@@ -1959,7 +1959,7 @@ async function sendPing(): Promise<void> {
         const m = e.message || '';
         pendingCalls.delete(pingKey);
         pendingCalls.delete(msgIdKey);
-        if (m.includes('AUTH_KEY_UNREGISTERED')) {
+        if (m.includes('AUTH_KEY_UNREGISTERED') && authenticated) {
             wlog('[worker] ping detected AUTH_KEY_UNREGISTERED, invalidating session');
             notifyAuthInvalidated();
         }
@@ -2360,7 +2360,7 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
             }
             if (m.includes('AUTH_KEY_UNREGISTERED')) {
                 pendingCalls.delete(key);
-                notifyAuthInvalidated();
+                if (authenticated) notifyAuthInvalidated();
             }
             throw e;
         }
@@ -2371,43 +2371,53 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
 async function sendCode(phoneNumber: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean }> {
     wlog('[worker] sendCode called phone=' + phoneNumber);
     const result = await call(TL_CONSTRUCTORS.AUTH_SEND_CODE, {
-        phoneNumber,
-        apiId: getApiId(),
-        apiHash: getApiHash(),
+        phone_number: phoneNumber,
+        api_id: getApiId(),
+        api_hash: getApiHash(),
         settings: { _: 'codeSettings', flags: 0 },
     });
     wlog('[worker] sendCode call returned, result.len=' + result.length);
-    const d = new TLDeserializer(result);
-    const id = d.readUint32();
-    if (id !== 0x5e002502) throw new Error('Expected auth.sentCode');
-    const flags = d.readInt32();
-    const typeCtor = d.readUint32();
-    switch (typeCtor) {
-        case 0x3dbb5986: d.readInt32(); break;
-        case 0xc000bba2: d.readInt32(); break;
-        case 0x5353e5a7: d.readInt32(); break;
-        case 0xab03c6d9: d.readString(); break;
-        case 0x82006484: d.readString(); d.readInt32(); break;
-        case 0x6faccd31: d.readString(); d.readInt32(); break;
-        case 0x7e132aac: d.readString(); break;
-        case 0xcd2570c9: d.readString(); d.readString(); break;
-        default: throw new Error('Unknown SentCodeType: 0x' + typeCtor.toString(16));
+    const registry = getSchemaRegistry();
+    const deser = new SchemaDeserializer(result, registry);
+    const boxed = deser.readBoxedObject();
+    if (!boxed) throw new Error('Failed to parse auth.sentCode: empty');
+    wlog('[worker] sendCode parsed ' + boxed.constructorName);
+    // Accept any auth.SentCode variant (sentCode, sentCodeSuccess, sentCodePaymentRequired etc)
+    let phoneCodeHash: string | undefined;
+    let phoneRegistered = false;
+    if (boxed.fields.phone_code_hash) {
+        phoneCodeHash = boxed.fields.phone_code_hash;
+        // phone_registered flag was legacy; derive from presence of next_type etc if needed
+        // In current schema auth.sentCode has no phone_registered, but keep false and let signIn error handle signup
+        // Try to detect legacy flag if present
+        const flags = boxed.fields.flags as number | undefined;
+        if (typeof flags === 'number' && (flags & 0x100)) phoneRegistered = true;
+    } else if (boxed.constructorName === 'auth.sentCodeSuccess' && boxed.fields.authorization) {
+        // Already authorized (e.g., via logged in on other DC) — treat as authenticated
+        wlog('[worker] sendCode got sentCodeSuccess, marking authenticated');
+        authenticated = true;
+        phoneCodeHash = 'already';
+        phoneRegistered = true;
+        if (ses) homeSession = { ...ses };
+        if (curSessionId) await persistSession();
+        return { phoneCodeHash, phoneRegistered };
+    } else {
+        wlog('[worker] sendCode unexpected boxed: ' + JSON.stringify(boxed).slice(0, 500));
+        throw new Error('No phone_code_hash in ' + boxed.constructorName);
     }
-    const phoneCodeHash = d.readString();
-    if (flags & 2) d.readUint32();
-    if (flags & 4) d.readInt32();
-    pendingAuth = { phoneCodeHash, phoneRegistered: !!(flags & 0x100) };
+    if (!phoneCodeHash) throw new Error('Missing phone_code_hash');
+    pendingAuth = { phoneCodeHash, phoneRegistered };
     if (curSessionId) await persistSession();
-    return { phoneCodeHash, phoneRegistered: !!(flags & 0x100) };
+    return { phoneCodeHash, phoneRegistered };
 }
 
 async function signIn(phoneNumber: string, code: string): Promise<void> {
     if (!pendingAuth) throw new Error('No pending auth');
     try {
-        await call(TL_CONSTRUCTORS.AUTH_SIGN_IN, {
-            phoneNumber,
-            phoneCodeHash: pendingAuth.phoneCodeHash,
-            phoneCode: code,
+        await callRpc('auth.signIn', {
+            phone_number: phoneNumber,
+            phone_code_hash: pendingAuth.phoneCodeHash,
+            phone_code: code,
         });
     } catch (e: any) {
         if (e.message?.includes('SESSION_PASSWORD_NEEDED')) {
@@ -2645,7 +2655,7 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
             }
             if (m.includes('AUTH_KEY_UNREGISTERED')) {
                 pendingCalls.delete(key);
-                notifyAuthInvalidated();
+                if (authenticated) notifyAuthInvalidated();
             }
             throw e;
         }
@@ -2764,7 +2774,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
             sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
             seqNo: 0,
         };
-        authenticated = state.authenticated || (!saved.pendingCodeHash && !saved.passwordPending);
+        authenticated = state.authenticated;
         wlog('[worker] handleConnectInternal: session restored, authenticated=' + authenticated);
         if (saved.pendingCodeHash) {
             pendingAuth = { phoneCodeHash: saved.pendingCodeHash };
@@ -3468,7 +3478,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 if (cached.type && cached.bytes && cached.bytes.length > 0) return { type: cached.type, bytes: b64ToAb(cached.bytes), cacheSource: 'memory' };
             }
 
-            if (knownSizeEarly > SMALL_FILE_LIMIT) {
+            {
                 const persisted = await loadPersistedDownloadCache(cacheKey);
                 if (persisted && persisted.type && persisted.bytes && persisted.bytes.length > 0) {
                     wlog('[dl] gram-db cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey + ' bytesLen=' + persisted.bytes.length);

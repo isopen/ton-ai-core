@@ -82,6 +82,14 @@ export class TelegramUI {
       setStateRef.current = setState;
 
       useEffect(() => {
+        const t = setTimeout(() => {
+          try { window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers')); } catch {}
+          try { window.dispatchEvent(new CustomEvent('tg-request-dice-set', { detail: { emoticon: '🎲' } })); } catch {}
+        }, 800);
+        return () => clearTimeout(t);
+      }, []);
+
+      useEffect(() => {
         const root = document.documentElement;
         if (firstRun.current) {
           firstRun.current = false;
@@ -191,10 +199,10 @@ export class TelegramUI {
 
   private setupListeners() {
     this.detachInteractionListeners = bindLifetimeListeners(window, {
-      'tg-auth-send-code': () => { this.callbacks.sendCode(this._state.phone); },
-      'tg-auth-sign-in': () => { this.callbacks.signIn(this._state.code); },
-      'tg-auth-check-password': () => { this.callbacks.checkPassword(this._state.password); },
-      'tg-auth-sign-up': () => { this.callbacks.signUp(this._state.signupFirstname, this._state.signupLastname); },
+      'tg-auth-send-code': (e: any) => { const phone = e?.detail?.phone || this._state.phone; this.callbacks.sendCode(phone); },
+      'tg-auth-sign-in': (e: any) => { const code = e?.detail?.code ?? this._state.code; this.callbacks.signIn(code); },
+      'tg-auth-check-password': (e: any) => { const pw = e?.detail?.password ?? this._state.password; this.callbacks.checkPassword(pw); },
+      'tg-auth-sign-up': (e: any) => { const fn = e?.detail?.firstname ?? this._state.signupFirstname; const ln = e?.detail?.lastname ?? this._state.signupLastname; this.callbacks.signUp(fn, ln); },
       'tg-send-message': (e: any) => { this.callbacks.sendMessage(e.detail.text); },
       'tg-typing': () => { this.callbacks.sendTyping(); },
       'tg-typing-stop': () => { this.callbacks.sendTypingCancel(); },

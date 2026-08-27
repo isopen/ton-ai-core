@@ -50,6 +50,7 @@ export function defaultState(): AppState {
     documentProgress: {},
     photoSources: {},
     documentSources: {},
+    avatarSources: {},
     reactions: {},
   };
 }
@@ -82,6 +83,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
       selectedPeer: state.selectedPeer?.id === action.peerId && state.selectedPeer?.type === action.peerType
         ? { ...state.selectedPeer, avatarUrl: action.url }
         : state.selectedPeer,
+      avatarSources: action.cacheSource ? { ...state.avatarSources, [`${action.peerType}_${action.peerId}`]: action.cacheSource } : state.avatarSources,
     };
     case 'SET_LOADING_MESSAGES': return { ...state, loadingMessages: action.v };
     case 'SET_CONNECTION_STATUS': return { ...state, connectionStatus: action.status };
@@ -103,6 +105,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
         if (!m) return state;
         const peerId = m[2];
         const peerType = m[1];
+        const key = `${peerType}_${peerId}`;
         return {
           ...state,
           renderTick: state.renderTick + 1,
@@ -114,6 +117,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
           selectedPeer: state.selectedPeer?.id === peerId && state.selectedPeer?.type === peerType
             ? { ...state.selectedPeer, avatarUrl: action.url }
             : state.selectedPeer,
+          avatarSources: action.cacheSource ? { ...state.avatarSources, [key]: action.cacheSource } : state.avatarSources,
         };
       }
       let targetFound = false;
@@ -284,7 +288,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
 
     documentProgress: {},
 
-    documentSources: {}, photoSources: {}, reactions: {} };
+    documentSources: {}, photoSources: {}, avatarSources: {}, reactions: {} };
     case 'TICK': return { ...state, renderTick: state.renderTick + 1 };
     default: return state;
   }

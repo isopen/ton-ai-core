@@ -98,17 +98,46 @@ function renderError(err: string) {
   );
 }
 
-function handleSendCode(state: AppState, dispatch: Dispatch) {
-  const country = state.countries.find(c => c.iso2 === state.countryIso2);
+function handleSendCode(state: AppState, dispatch: Dispatch, phoneDigits?: string) {
+  const country = resolveCountry(state);
   const phoneCode = country?.phoneCode || '';
-  const input = document.getElementById('login-phone-input') as HTMLInputElement | null;
-  const raw = input?.value || '';
-  const allDigits = raw.replace(/\D/g, '');
-  const localDigits = allDigits;
-  const prefix = phoneCode ? `+${phoneCode}` : '';
-  const fullPhone = `${prefix}${localDigits}`;
+  const patterns = country?.patterns;
+  let localDigits: string;
+  if (typeof phoneDigits === 'string') {
+    localDigits = phoneDigits.replace(/\D/g, '');
+    const pat = getBestPattern(localDigits, patterns) || DEFAULT_PATTERN;
+    const md = patternDigitCount(pat);
+    if (phoneCode && localDigits.startsWith(phoneCode) && localDigits.length > phoneCode.length + 6 && localDigits.length > md) {
+      localDigits = localDigits.slice(phoneCode.length);
+    }
+  } else {
+    const input = document.getElementById('login-phone-input') as HTMLInputElement | null;
+    const raw = input?.value || '';
+    localDigits = raw.replace(/\D/g, '');
+    const pat = getBestPattern(localDigits, patterns) || DEFAULT_PATTERN;
+    const md = patternDigitCount(pat);
+    if (phoneCode && localDigits.startsWith(phoneCode) && localDigits.length > phoneCode.length + 6 && localDigits.length > md) {
+      localDigits = localDigits.slice(phoneCode.length);
+    }
+  }
+  // Strip trunk prefix (0 for most countries, 8 for RU) for national format (e.g., 06... -> 6..., 8 912... -> 912...)
+  if (localDigits.startsWith('0') && localDigits.length > 1) {
+    localDigits = localDigits.slice(1);
+  } else if (phoneCode === '7' && localDigits.startsWith('8') && localDigits.length === 11) {
+    localDigits = localDigits.slice(1);
+  }
+  if (!phoneCode) {
+    dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_PHONE) });
+    return;
+  }
+  const fullPhone = `+${phoneCode}${localDigits}`;
+  if (!localDigits || localDigits.length < 6) {
+    dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_PHONE) });
+    return;
+  }
+  dispatch({ type: 'SET_ERROR', error: '' });
   dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading', phone: fullPhone });
-  window.dispatchEvent(new CustomEvent('tg-auth-send-code'));
+  window.dispatchEvent(new CustomEvent('tg-auth-send-code', { detail: { phone: fullPhone } }));
 }
 
 function handleRequestQr() {
@@ -117,16 +146,37 @@ function handleRequestQr() {
 
 function handleSignIn(dispatch: Dispatch) {
   const input = document.getElementById('tg-code-input') as HTMLInputElement | null;
-  dispatch({ type: 'SET_CODE', code: input?.value || '' });
+  const code = input?.value || '';
+  dispatch({ type: 'SET_CODE', code });
   dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
-  window.dispatchEvent(new CustomEvent('tg-auth-sign-in'));
+  window.dispatchEvent(new CustomEvent('tg-auth-sign-in', { detail: { code } }));
 }
 
 function handleCheckPassword(dispatch: Dispatch) {
   const input = document.getElementById('tg-password-input') as HTMLInputElement | null;
-  dispatch({ type: 'SET_PASSWORD', password: input?.value || '' });
+  const pw = input?.value || '';
+  dispatch({ type: 'SET_PASSWORD', password: pw });
   dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
-  window.dispatchEvent(new CustomEvent('tg-auth-check-password'));
+  window.dispatchEvent(new CustomEvent('tg-auth-check-password', { detail: { password: pw } }));
+}
+
+const FALLBACK_COUNTRIES: AppState['countries'] = [
+  { iso2: 'RU', phoneCode: '7', patterns: ['XXX XXX-XX-XX'], defaultName: 'Russia', name: 'Russia' },
+  { iso2: 'US', phoneCode: '1', patterns: ['XXX XXX XXXX'], defaultName: 'United States', name: 'United States' },
+  { iso2: 'UA', phoneCode: '380', patterns: ['XX XXX XX XX'], defaultName: 'Ukraine', name: 'Ukraine' },
+  { iso2: 'BY', phoneCode: '375', patterns: ['XX XXX-XX-XX'], defaultName: 'Belarus', name: 'Belarus' },
+  { iso2: 'KZ', phoneCode: '7', patterns: ['XXX XXX-XX-XX'], defaultName: 'Kazakhstan', name: 'Kazakhstan' },
+  { iso2: 'DE', phoneCode: '49', patterns: ['XXX XXXXXXX'], defaultName: 'Germany', name: 'Germany' },
+  { iso2: 'FR', phoneCode: '33', patterns: ['X XX XX XX XX'], defaultName: 'France', name: 'France' },
+  { iso2: 'GB', phoneCode: '44', patterns: ['XXXX XXXXXX'], defaultName: 'United Kingdom', name: 'United Kingdom' },
+];
+
+function resolveCountry(state: AppState) {
+  const effective = state.countries.length > 0 ? state.countries : FALLBACK_COUNTRIES;
+  const found = effective.find(c => c.iso2 === state.countryIso2);
+  if (found) return found;
+  const pref = typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('ru') ? 'RU' : 'US';
+  return effective.find(c => c.iso2 === pref) || effective[0];
 }
 
 const RESEND_DELAY = 30;
@@ -140,24 +190,27 @@ function LoadingView() {
 }
 
 function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
-  const country = state.countries.find(c => c.iso2 === state.countryIso2);
+  const country = resolveCountry(state);
   const phoneCode = country?.phoneCode || '';
   const patterns = country?.patterns;
-  const [phoneDigits, setPhoneDigits] = useState(state.phone ? state.phone.replace(/\D/g, '').slice(phoneCode.length) : '');
+  const [phoneDigits, setPhoneDigits] = useState(() => {
+    const pc = country?.phoneCode || '';
+    return state.phone ? state.phone.replace(/\D/g, '').slice(pc.length) : '';
+  });
+
+  // Ensure global state has countries & countryIso2 soon after mount if empty (fallback)
+  useEffect(() => {
+    if (state.countries.length === 0) {
+      dispatch({ type: 'SET_COUNTRIES', countries: FALLBACK_COUNTRIES });
+      if (!state.countryIso2) {
+        const prefIso2 = typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('ru') ? 'RU' : 'US';
+        dispatch({ type: 'SET_COUNTRY_ISO2', countryIso2: prefIso2 });
+      }
+    }
+  }, []);
 
   const formatted = formatPhoneNumber(phoneDigits, patterns);
   const displayValue = formatted;
-
-  function handleInput(e: any) {
-    const raw = e.target?.value || '';
-    const allDigits = raw.replace(/\D/g, '');
-    const limited = maxDigits > 0 ? allDigits.slice(0, maxDigits) : allDigits;
-    setPhoneDigits(limited);
-    requestAnimationFrame(() => {
-      const el = document.getElementById('login-phone-input') as HTMLInputElement | null;
-      if (el) el.setSelectionRange(el.value.length, el.value.length);
-    });
-  }
 
   const [countryOpen, setCountryOpen] = useState(false);
   const [countrySearch, setCountrySearch] = useState('');
@@ -168,14 +221,56 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
   const phoneMask = pattern.replace(new RegExp(PATTERN_PLACEHOLDER, 'g'), '_');
   const maxDigits = patternDigitCount(pattern);
 
+  function handleInput(e: any) {
+    const raw = e.target?.value || '';
+    let allDigits = raw.replace(/\D/g, '');
+    // Strip duplicated country code if pasted full international number (avoid false strip for local numbers coinciding with code)
+    if (phoneCode && allDigits.startsWith(phoneCode) && allDigits.length > phoneCode.length + 6 && allDigits.length > maxDigits) {
+      allDigits = allDigits.slice(phoneCode.length);
+    }
+    // Strip trunk prefix before limiting (0 or 8 for RU)
+    if (allDigits.startsWith('0') && allDigits.length > 1) {
+      allDigits = allDigits.slice(1);
+    } else if (phoneCode === '7' && allDigits.startsWith('8') && allDigits.length === 11) {
+      allDigits = allDigits.slice(1);
+    }
+    const limited = maxDigits > 0 ? allDigits.slice(0, maxDigits) : allDigits;
+    if (state.error) {
+      dispatch({ type: 'SET_ERROR', error: '' });
+    }
+    setPhoneDigits(limited);
+    requestAnimationFrame(() => {
+      const el = document.getElementById('login-phone-input') as HTMLInputElement | null;
+      if (el) el.setSelectionRange(el.value.length, el.value.length);
+    });
+  }
+
+  // RAG: синхронизация phoneDigits при смене страны/паттерна — обрезка под новый maxDigits
+  useEffect(() => {
+    if (maxDigits > 0 && phoneDigits.length > maxDigits) {
+      setPhoneDigits(prev => prev.slice(0, maxDigits));
+    }
+  }, [maxDigits]);
+
+  useEffect(() => {
+    if (!state.phone || !phoneCode) return;
+    const all = state.phone.replace(/\D/g, '');
+    // Если при первом рендере страны ещё не загружены, phoneDigits содержит полный номер с кодом — исправить
+    if (phoneDigits === all && all.startsWith(phoneCode) && all.length > phoneCode.length) {
+      const local = all.slice(phoneCode.length);
+      setPhoneDigits(maxDigits > 0 ? local.slice(0, maxDigits) : local);
+    }
+  }, [phoneCode, state.phone, maxDigits]);
+
   useDomEvent(document, 'mousedown', countryOpen ? (e: Event) => {
     if (countryRef.current && !countryRef.current.contains(e.target as Node)) {
       setCountryOpen(false);
     }
   } : null, [countryOpen]);
+  const effectiveCountries = state.countries.length > 0 ? state.countries : FALLBACK_COUNTRIES;
   const filtered = countrySearch
-    ? state.countries.filter(c => (c.name || c.defaultName || '').toLowerCase().includes(countrySearch.toLowerCase()))
-    : state.countries;
+    ? effectiveCountries.filter(c => (c.name || c.defaultName || '').toLowerCase().includes(countrySearch.toLowerCase()))
+    : effectiveCountries;
 
   return (
     <div class="login-form">
@@ -201,7 +296,7 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
             onInput={handleInput}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            onKeyDown={(e: any) => { if (e.key === 'Enter') handleSendCode(state, dispatch); }}
+            onKeyDown={(e: any) => { if (e.key === 'Enter') handleSendCode(state, dispatch, phoneDigits); }}
           />
         </div>
         {countryOpen ? (
@@ -234,7 +329,7 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
         ) : null}
       </div>
 
-      <button class="login-btn login-btn-primary" type="button" onClick={() => handleSendCode(state, dispatch)}>
+      <button class="login-btn login-btn-primary" type="button" onClick={() => handleSendCode(state, dispatch, phoneDigits)}>
         <span>{t(S.AUTH_NEXT)}</span>
         <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
           <path d="M1 7H17M17 7L11 1M17 7L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -247,7 +342,7 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
         <span class="login-divider-line"></span>
       </div>
 
-      <button class="login-btn login-btn-secondary" type="button" onClick={handleRequestQr}>
+      <button class="login-btn login-btn-secondary" type="button" onClick={() => { handleRequestQr(); dispatch({ type: 'SET_AUTH_STEP', authStep: 'qr_login' }); }}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
         </svg>
@@ -331,7 +426,7 @@ function handleSignUp(dispatch: Dispatch) {
   dispatch({ type: 'SET_SIGNUP_FIRSTNAME', firstname });
   dispatch({ type: 'SET_SIGNUP_LASTNAME', lastname });
   dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
-  window.dispatchEvent(new CustomEvent('tg-auth-sign-up'));
+  window.dispatchEvent(new CustomEvent('tg-auth-sign-up', { detail: { firstname, lastname } }));
 }
 
 function SignUpView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {

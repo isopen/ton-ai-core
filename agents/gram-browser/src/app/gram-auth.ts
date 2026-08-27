@@ -1,4 +1,4 @@
-import { tpl, S } from '@ton-ai/gram-ui';
+import { tpl, t, S } from '@ton-ai/gram-ui';
 import { dbSet, dbDel } from '@/utils/db';
 import { addLog, setDialogsFromServer, fetchSelfUserId } from './gram-utils';
 import type { GramState } from './gram-state';
@@ -11,32 +11,25 @@ export function createAuthCallbacks(
   const svc = () => getService();
 
   function formatAuthError(msg: string): string {
-    const m = msg.match(/FLOOD_WAIT_(\d+)/);
-    if (m) {
-      const sec = parseInt(m[1]);
-      if (sec >= 3600) {
-        return `Слишком много попыток. Попробуйте снова через ${Math.floor(sec / 3600)} ч ${Math.ceil((sec % 3600) / 60)} мин.`;
-      }
-      if (sec >= 60) {
-        return `Слишком много попыток. Попробуйте снова через ${Math.ceil(sec / 60)} мин.`;
-      }
-      return `Слишком много попыток. Попробуйте снова через ${sec} сек.`;
+    // Use server-provided translations via langpack (tdesktop) — https://translations.telegram.org/en/tdesktop/login/
+    // FLOOD_WAIT is mapped to lng_flood_error; phone/code errors to lng_bad_phone / lng_bad_code
+    if (/FLOOD_WAIT_\d+/.test(msg) || /please try again in/i.test(msg)) {
+      return t(S.AUTH_ERROR_FLOOD);
     }
-    const hum = msg.match(/please try again in (?:(\d+) minutes?|(\d+) seconds?)/i);
-    if (hum) {
-      const sec = hum[1] ? parseInt(hum[1]) * 60 : parseInt(hum[2]);
-      if (sec >= 60) {
-        return `Слишком много попыток. Попробуйте снова через ${Math.ceil(sec / 60)} мин.`;
-      }
-      return `Слишком много попыток. Попробуйте снова через ${sec} сек.`;
+    if (msg.includes('PHONE_NUMBER_INVALID') || msg.includes('PHONE_NUMBER_FLOOD') || msg.includes('INVALID_PHONE')) {
+      return t(S.AUTH_ERROR_BAD_PHONE);
     }
+    if (msg.includes('PHONE_CODE')) {
+      return t(S.AUTH_ERROR_BAD_CODE);
+    }
+    if (msg.includes('AUTH_RESTART')) return t(S.AUTH_ERROR_BAD_CODE);
     return msg.replace(/^RPC Error \d+: /, '');
   }
 
   return {
     sendCode: async (_phone: string) => {
       try {
-        const phone = s.tgui.current?.state.phone || _phone;
+        const phone = _phone || s.tgui.current?.state.phone;
         const result = await svc()!.sendCode(phone);
         if (result?.phoneCodeHash) {
           s.tgui.current!.dispatch({ type: 'SET_PHONE_CODE_HASH', hash: result.phoneCodeHash });
@@ -62,13 +55,17 @@ export function createAuthCallbacks(
           setDialogsFromServer(s, dialogsResult);
         }
       } catch (e: any) {
-        if (e.message.includes('SESSION_PASSWORD_NEEDED')) {
+        const msg = e.message || String(e);
+        if (msg.includes('SESSION_PASSWORD_NEEDED')) {
           s.tgui.current!.setAuthStep('password');
-        } else if (e.message.includes('AUTH_KEY_UNREGISTERED') || e.message.includes('auth.authorizationSignUpRequired')) {
+        } else if (msg.includes('AUTH_KEY_UNREGISTERED') || msg.includes('auth.authorizationSignUpRequired') || msg.includes('PHONE_NUMBER_UNOCCUPIED')) {
           s.tgui.current!.setAuthStep('signup');
-        } else {
-          s.tgui.current!.setError(formatAuthError(e.message));
+        } else if (msg.includes('PHONE_CODE_HASH_EMPTY') || msg.includes('PHONE_NUMBER_INVALID')) {
+          s.tgui.current!.setError(formatAuthError(msg));
           s.tgui.current!.setAuthStep('phone');
+        } else {
+          s.tgui.current!.setError(formatAuthError(msg));
+          s.tgui.current!.setAuthStep('code');
         }
       }
     },
@@ -135,22 +132,21 @@ export function createAuthCallbacks(
     },
     requestQrCode: async () => {
       try {
-        const apiId = parseInt(process.env.TELEGRAM_API_ID || '0', 10);
-        const apiHash = process.env.TELEGRAM_API_HASH || '';
+        const urlApiId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('apiId') : null;
+        const urlApiHash = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('apiHash') : null;
+        const apiId = urlApiId ? parseInt(urlApiId, 10) : parseInt(process.env.TELEGRAM_API_ID || '0', 10);
+        const apiHash = urlApiHash || process.env.TELEGRAM_API_HASH || '';
         const result = await svc()!.callRpc('auth.exportLoginToken', {
           api_id: apiId,
           api_hash: apiHash,
           except_ids: [],
         });
-        if (result?._ === 'auth.loginTokenMigrateTo') {
-          s.tgui.current!.setError('DC migration not supported');
-          s.tgui.current!.setAuthStep('phone');
-          return;
-        }
+        // auth.loginToken and auth.loginTokenMigrateTo both contain a valid token
+        // MigrateTo just indicates the token is for a different DC, but QR can still be generated
         let tokenHex: string = result?.token;
         if (!tokenHex) {
-          s.tgui.current!.setError('No token in response');
-          s.tgui.current!.setAuthStep('phone');
+          s.tgui.current!.setError('No token in response: ' + JSON.stringify(result).slice(0,200));
+          s.tgui.current!.setAuthStep('qr_login');
           return;
         }
         const makeQrUrl = (hex: string) => {
@@ -218,6 +214,10 @@ export function createAuthCallbacks(
                     return true;
                 }
                 if (pollResult?._ === 'auth.loginTokenMigrateTo') {
+                    if (pollResult?.token && pollResult.token !== tokenHex) {
+                        dispatchQr(pollResult.token);
+                        tokenHex = pollResult.token;
+                    }
                     return false;
                 }
                 if (pollResult?.token && pollResult.token !== tokenHex) {
@@ -242,8 +242,10 @@ export function createAuthCallbacks(
             window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
         }, 120000);
       } catch (e: any) {
-        s.tgui.current!.setError(e.message);
-        s.tgui.current!.setAuthStep('phone');
+        // Stay on QR page and show error, allow retry — don't bounce back to phone
+        const msg = e?.message || String(e);
+        s.tgui.current!.setError('QR failed: ' + msg.slice(0,200));
+        s.tgui.current!.setAuthStep('qr_login');
       }
     },
   };

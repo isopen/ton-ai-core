@@ -133,6 +133,11 @@ export const S = {
   AUTH_QR_STEP3: 'authQrStep3',
   AUTH_QR_PHONE_LOGIN: 'authQrPhoneLogin',
   AUTH_QR_BUTTON: 'authQrButton',
+
+  AUTH_ERROR_BAD_PHONE: 'authErrorBadPhone',
+  AUTH_ERROR_BAD_CODE: 'authErrorBadCode',
+  AUTH_ERROR_FLOOD: 'authErrorFlood',
+  AUTH_ERROR_INVALID_PHONE: 'authErrorInvalidPhone',
 };
 
 export const LANG_FALLBACKS: Record<string, Record<string, string>> = {
@@ -244,6 +249,10 @@ export const LANG_FALLBACKS: Record<string, Record<string, string>> = {
     [S.AUTH_SIGNUP_SUBMIT]: 'Зарегистрироваться',
     [S.AUTH_SIGNUP_TERMS]: 'Нажимая кнопку, вы принимаете',
     [S.AUTH_SIGNUP_TERMS_LINK]: 'Условия использования',
+    [S.AUTH_ERROR_BAD_PHONE]: 'Некорректный номер телефона. Попробуйте ещё раз.',
+    [S.AUTH_ERROR_BAD_CODE]: 'Вы ввели неверный код.',
+    [S.AUTH_ERROR_FLOOD]: 'Слишком много попыток. Пожалуйста, повторите позже.',
+    [S.AUTH_ERROR_INVALID_PHONE]: 'Неверный номер телефона. Проверьте формат и попробуйте снова.',
     [S.ACTION_TYPING]: 'печатает...',
     [S.ACTION_SENDING_PHOTO]: 'отправляет фото...',
     [S.ACTION_RECORDING_VIDEO]: 'записывает видео...',
@@ -261,6 +270,10 @@ export const LANG_FALLBACKS: Record<string, Record<string, string>> = {
     [S.ACTION_MANY_TYPING]: 'Несколько человек печатают...',
   },
   en: {
+    [S.AUTH_ERROR_BAD_PHONE]: 'Invalid phone number. Please try again.',
+    [S.AUTH_ERROR_BAD_CODE]: 'You have entered an invalid code.',
+    [S.AUTH_ERROR_FLOOD]: 'Too many tries. Please try again later.',
+    [S.AUTH_ERROR_INVALID_PHONE]: 'Invalid phone number. Please try again.',
     [S.SIDEBAR_LOGS_DESC]: 'Connection events',
     [S.AUTH_APP_NAME]: 'Gram',
     [S.AUTH_CONNECTING]: 'Connecting...',
@@ -412,6 +425,11 @@ export const TLG_KEYS: Record<string, string | null> = {
   [S.AUTH_QR_STEP3]: 'lng_intro_qr_step3',
   [S.AUTH_QR_PHONE_LOGIN]: 'lng_intro_qr_skip',
   [S.AUTH_QR_BUTTON]: 'lng_intro_qr_title',
+
+  [S.AUTH_ERROR_BAD_PHONE]: 'lng_bad_phone',
+  [S.AUTH_ERROR_BAD_CODE]: 'lng_bad_code',
+  [S.AUTH_ERROR_FLOOD]: 'lng_flood_error',
+  [S.AUTH_ERROR_INVALID_PHONE]: 'lng_bad_phone',
 
   [S.API_SESSION_ID_REQUIRED]: null,
   [S.API_SESSION_NOT_FOUND]: 'lng_session_expired',

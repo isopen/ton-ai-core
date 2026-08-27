@@ -246,10 +246,18 @@ export function setupEventListeners(s: GramState): void {
   window.addEventListener('tg-auth-set-lang', onSetLang);
   window.addEventListener('tg-auth-set-step', onSetStep);
   const onAuthInvalidated = () => {
+    const wasDialogs = s.tgui.current?.state?.page === 'dialogs';
+    const curStep = s.tgui.current?.state?.authStep;
     s.tgui.current?.setConnectionStatus('disconnected');
     s.tgui.current?.setPage('auth');
-    s.tgui.current?.setAuthStep('phone');
-    s.tgui.current?.setError('Session terminated from another device');
+    if (curStep !== 'qr_login' && wasDialogs) {
+      s.tgui.current?.setAuthStep('phone');
+    }
+    if (wasDialogs && curStep !== 'qr_login') {
+      s.tgui.current?.setError('Session terminated from another device');
+    } else {
+      s.tgui.current?.setError('');
+    }
   };
   window.addEventListener('tg-auth-invalidated', onAuthInvalidated);
   const onClearCache = () => {
