@@ -1792,6 +1792,51 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
         const pid = String(msg_.peer_id?.user_id ?? msg_.peer_id?.chat_id ?? msg_.peer_id?.channel_id ?? '');
         if (pid && !lastMsgMap.has(pid)) lastMsgMap.set(pid, msg_);
     }
+    const getRichPreview = (rich: any): string => {
+        if (!rich || !Array.isArray(rich.blocks) || rich.blocks.length === 0) return '';
+        const first = rich.blocks[0];
+        // try to extract first textPlain from header/title/paragraph
+        const deep = (node: any, seen = new WeakSet()): string => {
+            if (!node || typeof node !== 'object' || seen.has(node)) return '';
+            seen.add(node);
+            if (node._ === 'textPlain' && typeof node.text === 'string') return node.text;
+            if (typeof node.text === 'string') return node.text;
+            if (Array.isArray(node.texts)) return node.texts.map((n: any) => deep(n, seen)).join('');
+            if (Array.isArray(node.text)) return node.text.map((n: any) => deep(n, seen)).join('');
+            if (node.text && typeof node.text === 'object') return deep(node.text, seen);
+            let out = '';
+            for (const v of Object.values(node)) if (v && typeof v === 'object') out += deep(v as any, seen);
+            return out;
+        };
+        const t = deep(first).trim();
+        return t ? t.slice(0, 100) : '';
+    };
+    const getSenderName = (msg: any): string => {
+        const from = msg.from_id;
+        if (from?._ === 'peerUser') {
+            const u = usersMap.get(String(from.user_id));
+            return [u?.first_name, u?.last_name].filter(Boolean).join(' ') || u?.username || 'Bot';
+        }
+        if (from?._ === 'peerChannel') {
+            const c = chatsMap.get(String(from.channel_id));
+            return c?.title || c?.username || 'Channel';
+        }
+        if (from?._ === 'peerChat') {
+            const c = chatsMap.get(String(from.chat_id));
+            return c?.title || 'Group';
+        }
+        // fallback for channel posts where from_id is missing, use peer_id
+        const peerId = msg.peer_id;
+        if (peerId?._ === 'peerChannel') {
+            const c = chatsMap.get(String(peerId.channel_id));
+            return c?.title || 'Channel';
+        }
+        if (peerId?._ === 'peerChat') {
+            const c = chatsMap.get(String(peerId.chat_id));
+            return c?.title || 'Group';
+        }
+        return '';
+    };
     const dialogs: any[] = [];
     for (const d of (dialogsResult.dialogs || [])) {
         const peer = peerInfo(d.peer);
@@ -1801,10 +1846,36 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
         let lastMsgText = '';
         let lastMsgEntities: any[] | undefined;
         if (lastMsg) {
-            lastMsgText = lastMsg.message || '';
-            if (lastMsgText.length > 100) lastMsgText = lastMsgText.slice(0, 100) + '...';
-            lastMsgEntities = Array.isArray(lastMsg.entities) ? lastMsg.entities.filter((e: any) => e.offset + e.length <= 100) : undefined;
-            if (lastMsgEntities && lastMsgEntities.length === 0) lastMsgEntities = undefined;
+            const hasRich = !!(lastMsg as any).rich_message && Array.isArray((lastMsg as any).rich_message.blocks) && (lastMsg as any).rich_message.blocks.length > 0;
+            const plain = (lastMsg.message || '').trim();
+            if (hasRich && !plain) {
+                // markdown goes first — show bot/channel name as text preview
+                lastMsgText = getSenderName(lastMsg) || getRichPreview((lastMsg as any).rich_message) || 'Bot';
+                lastMsgEntities = undefined;
+            } else if (hasRich && plain) {
+                // if rich goes first but plain also exists, still prefer rich sender name when first block is markdown header/title
+                const firstBlock = (lastMsg as any).rich_message.blocks[0];
+                const isMarkdownFirst = firstBlock && /Header|Title|Heading|Markdown/i.test(firstBlock._ || '');
+                if (isMarkdownFirst) {
+                    lastMsgText = getSenderName(lastMsg) || plain;
+                    lastMsgEntities = undefined;
+                } else {
+                    lastMsgText = plain;
+                    if (lastMsgText.length > 100) lastMsgText = lastMsgText.slice(0, 100) + '...';
+                    lastMsgEntities = Array.isArray(lastMsg.entities) ? lastMsg.entities.filter((e: any) => e.offset + e.length <= 100) : undefined;
+                    if (lastMsgEntities && lastMsgEntities.length === 0) lastMsgEntities = undefined;
+                }
+            } else {
+                lastMsgText = plain;
+                if (lastMsgText.length > 100) lastMsgText = lastMsgText.slice(0, 100) + '...';
+                lastMsgEntities = Array.isArray(lastMsg.entities) ? lastMsg.entities.filter((e: any) => e.offset + e.length <= 100) : undefined;
+                if (lastMsgEntities && lastMsgEntities.length === 0) lastMsgEntities = undefined;
+            }
+            if (!lastMsgText) {
+                // fallback to rich preview text if still empty
+                const rp = getRichPreview((lastMsg as any).rich_message);
+                if (rp) lastMsgText = rp;
+            }
         }
         dialogs.push({ peer, topMessage: d.top_message, unreadCount: d.unread_count || 0, lastMsg: lastMsgText, lastMsgEntities, date: lastMsg?.date, readInboxMaxId: d.read_inbox_max_id, readOutboxMaxId: d.read_outbox_max_id });
     }

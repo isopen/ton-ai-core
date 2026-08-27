@@ -11,6 +11,41 @@ import { getLogger } from '@ton-ai/gram-debug';
 
 const updLog = getLogger('gram-browser:updates');
 
+function dialogPreviewText(m: any): { text: string; entities: any[] | undefined } {
+  const plain = (m.message || '').trim();
+  const hasRich = !!(m.richMessage && Array.isArray(m.richMessage.blocks) && m.richMessage.blocks.length > 0);
+  if (hasRich) {
+    const firstBlock = m.richMessage.blocks[0];
+    const isMarkdownFirst = firstBlock && /Header|Title|Heading|Paragraph|Block/i.test(firstBlock._ || '');
+    // markdown goes first — show bot/channel name as text preview (user request)
+    if (!plain || isMarkdownFirst) {
+      const sender = (m as any).sender || '';
+      if (sender) return { text: sender.slice(0, 100), entities: undefined };
+      const deep = (node: any, seen = new WeakSet()): string => {
+        if (!node || typeof node !== 'object' || seen.has(node)) return '';
+        seen.add(node);
+        if (node._ === 'textPlain' && typeof node.text === 'string') return node.text;
+        if (typeof node.text === 'string') return node.text;
+        if (Array.isArray(node.texts)) return node.texts.map((n: any) => deep(n, seen)).join('');
+        if (Array.isArray(node.text)) return node.text.map((n: any) => deep(n, seen)).join('');
+        if (node.text && typeof node.text === 'object') return deep(node.text, seen);
+        let out = '';
+        for (const v of Object.values(node)) if (v && typeof v === 'object') out += deep(v as any, seen);
+        return out;
+      };
+      const rp = deep(firstBlock).trim().slice(0, 100);
+      if (rp) return { text: rp, entities: undefined };
+      return { text: sender || 'Bot', entities: undefined };
+    }
+  }
+  if (plain) {
+    const t = plain.length > 100 ? plain.slice(0, 100) + '...' : plain;
+    const ents = Array.isArray(m.entities) ? m.entities.filter((e: any) => e.offset + e.length <= 100) : undefined;
+    return { text: t, entities: ents && ents.length ? ents : undefined };
+  }
+  return { text: '', entities: undefined };
+}
+
 export function createHandleUpdate(s: GramState) {
   return (constructorId: number, data: string) => {
     try {
@@ -127,12 +162,16 @@ export function createHandleUpdate(s: GramState) {
           if (dialogIdx >= 0) {
             const dialogs = [...s.dialogsRef.current];
             const isActiveChat = s.selectedPeerRef.current && `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` === cacheKey;
+            const prev = dialogs[dialogIdx];
+            const preview = m.message ? { text: m.message, entities: m.entities } : dialogPreviewText(m);
+            const lastMsg = preview.text || prev.lastMsg;
+            const lastMsgEntities = preview.text ? preview.entities : prev.lastMsgEntities;
             dialogs[dialogIdx] = {
-              ...dialogs[dialogIdx], topMessage: m.id || dialogs[dialogIdx].topMessage,
-              lastMsg: m.message || dialogs[dialogIdx].lastMsg,
-              lastMsgEntities: m.entities || dialogs[dialogIdx].lastMsgEntities,
-              date: m.date || dialogs[dialogIdx].date,
-              unreadCount: m.out ? 0 : (isActiveChat ? dialogs[dialogIdx].unreadCount : (dialogs[dialogIdx].unreadCount || 0) + 1)
+              ...prev, topMessage: m.id || prev.topMessage,
+              lastMsg,
+              lastMsgEntities,
+              date: m.date || prev.date,
+              unreadCount: m.out ? 0 : (isActiveChat ? prev.unreadCount : (prev.unreadCount || 0) + 1)
             };
             s.dialogsRef.current = dialogs;
             scheduleDialogsFlush(s);
@@ -140,9 +179,10 @@ export function createHandleUpdate(s: GramState) {
           } else if (!m.out && peerId) {
             const pinfo = s.peerInfoMap.current.get(cacheKey) || {};
             const hasName = pinfo.firstName || pinfo.lastName || pinfo.username || pinfo.title;
+            const preview = dialogPreviewText(m);
             s.dialogsRef.current = [{
               peer: { type: peerType as any, id: peerId, ...pinfo },
-              topMessage: m.id, unreadCount: 1, lastMsg: m.message, lastMsgEntities: m.entities, date: m.date
+              topMessage: m.id, unreadCount: 1, lastMsg: preview.text || m.message, lastMsgEntities: preview.entities || m.entities, date: m.date
             }, ...s.dialogsRef.current];
             scheduleDialogsFlush(s);
             if (!hasName) {
@@ -227,9 +267,9 @@ export function createHandleUpdate(s: GramState) {
               if (dialog) {
                 if (filtered.length > 0) {
                   const last = filtered[filtered.length - 1];
-                  dialog.lastMsg = last.message || '[non-text message]';
-                  if (dialog.lastMsg.length > 100) dialog.lastMsg = dialog.lastMsg.slice(0, 100) + '...';
-                  dialog.lastMsgEntities = Array.isArray(last.entities) ? last.entities.filter((e: any) => e.offset + e.length <= 100) : undefined;
+                  const preview = dialogPreviewText(last as any);
+                  dialog.lastMsg = preview.text || '[non-text message]';
+                  dialog.lastMsgEntities = preview.entities;
                   dialog.topMessage = last.id;
                 } else {
                   dialog.lastMsg = t(S.HISTORY_CLEARED);
