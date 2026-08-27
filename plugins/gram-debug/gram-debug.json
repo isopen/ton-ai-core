@@ -1,92 +1,104 @@
 {
-    "enabled": false,
-    "level": "info",
-    "noMediaCache": true,
-    "noDialogsCache": true,
-    "scopes": {
-        "gram-db": {
-            "enabled": false,
-            "level": "info"
-        },
-        "tl-language": {
-            "enabled": false,
-            "level": "info"
-        },
-        "telegram": {
-            "enabled": false,
-            "level": "info"
-        },
-        "tgs": {
-            "enabled": false,
-            "level": "info"
-        },
-        "atom": {
-            "enabled": false,
-            "level": "info"
-        },
-        "gram-media": {
-            "enabled": false,
-            "level": "debug"
-        },
-        "gram-browser": {
-            "enabled": false,
-            "level": "debug"
-        },
-        "gram-ui": {
-            "enabled": false,
-            "level": "info"
-        },
-        "gram-ui:slot": {
-            "enabled": false,
-            "level": "debug"
-        },
-        "gram-ui:slot-layer": {
-            "enabled": false,
-            "level": "debug"
-        },
-        "gram-ui:tgs": {
-            "enabled": false,
-            "level": "debug"
-        },
-        "gram-ui:tgs-renderer": {
-            "enabled": false,
-            "level": "debug"
-        },
-        "gram-ui:ani-sticker": {
-            "enabled": false,
-            "level": "info"
-        },
-        "gram-ui:emoji-text": {
-            "enabled": false,
-            "level": "info"
-        },
-        "gram-ui:photo": {
-            "enabled": false,
-            "level": "info"
-        },
-        "gram-ui:media-source-badge": {
-            "enabled": false,
-            "level": "debug"
-        },
-        "gram-ui:media-collage": {
-            "enabled": false,
-            "level": "debug"
-        },
-        "gram-ui:telegram-image": {
-            "enabled": false,
-            "level": "debug"
-        },
-        "gram-ui:fallback": {
-            "enabled": false,
-            "level": "info"
-        },
-        "fps": {
-            "enabled": false,
-            "level": "info"
-        },
-        "crypton": {
-            "enabled": false,
-            "level": "debug"
-        }
+  "enabled": false,
+  "level": "info",
+  "noMediaCache": true,
+  "noDialogsCache": true,
+  "scopes": {
+    "gram-db": {
+      "enabled": false,
+      "level": "info"
+    },
+    "tl-language": {
+      "enabled": false,
+      "level": "info"
+    },
+    "telegram": {
+      "enabled": false,
+      "level": "info"
+    },
+    "tgs": {
+      "enabled": false,
+      "level": "info"
+    },
+    "atom": {
+      "enabled": true,
+      "level": "warn"
+    },
+    "gram-media": {
+      "enabled": false,
+      "level": "debug"
+    },
+    "gram-browser": {
+      "enabled": false,
+      "level": "debug"
+    },
+    "gram-ui": {
+      "enabled": false,
+      "level": "info"
+    },
+    "gram-ui:slot": {
+      "enabled": false,
+      "level": "debug"
+    },
+    "gram-ui:slot-layer": {
+      "enabled": false,
+      "level": "debug"
+    },
+    "gram-ui:tgs": {
+      "enabled": false,
+      "level": "debug"
+    },
+    "gram-ui:tgs-renderer": {
+      "enabled": false,
+      "level": "debug"
+    },
+    "gram-ui:ani-sticker": {
+      "enabled": false,
+      "level": "info"
+    },
+    "gram-ui:emoji-text": {
+      "enabled": false,
+      "level": "info"
+    },
+    "gram-ui:photo": {
+      "enabled": false,
+      "level": "info"
+    },
+    "gram-ui:media-source-badge": {
+      "enabled": false,
+      "level": "debug"
+    },
+    "gram-ui:media-collage": {
+      "enabled": false,
+      "level": "debug"
+    },
+    "gram-ui:telegram-image": {
+      "enabled": false,
+      "level": "debug"
+    },
+    "gram-ui:fallback": {
+      "enabled": false,
+      "level": "info"
+    },
+    "fps": {
+      "enabled": false,
+      "level": "info"
+    },
+    "crypton": {
+      "enabled": false,
+      "level": "debug"
+    },
+    "gram-ui:tmd": {
+      "enabled": true,
+      "level": "info"
+    },
+    "gram-browser:updates": {
+      "enabled": true,
+      "level": "info"
+    },
+    "gram-browser:history": {
+      "enabled": true,
+      "level": "info"
     }
+  }
 }

@@ -1,0 +1,18 @@
+{
+  "name": "@ton-ai/tmd",
+  "version": "0.1.0",
+  "description": "Tmd parser and renderer plugin for message text",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "@types/commonmark": "^0.27.10",
+    "typescript": "^6.0.3"
+  },
+  "private": true,
+  "dependencies": {
+    "commonmark": "^0.31.2"
+  }
+}
