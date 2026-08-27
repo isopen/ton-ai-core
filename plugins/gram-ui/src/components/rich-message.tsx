@@ -1,5 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
-import { useEffect, useState } from '@ton-ai/atom/hooks';
+import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedEmoji } from './emoji-text.js';
 import { getLogger } from '@ton-ai/gram-debug';
 import { matchEmojiRuns, getEmojiDocId, normalizeEmoji } from './emoji-store.js';
@@ -83,7 +83,7 @@ function collectCustomIds(node: any, out: Set<string>, seen = new WeakSet()): vo
 }
 function isHiddenEmojiAlt(alt: string): boolean {
   const n = normalizeEmoji(alt || '');
-  return n === '🙂' || n === '🫣' || n === '';
+  return n === '🙂' || n === '🫣' || n === '⬛' || n === '';
 }
 function renderPlainWithEmojis(text: string, documentUrls?: Record<string, string>): any {
   if (isHiddenEmojiAlt(text.trim())) return null;
@@ -231,14 +231,11 @@ function hasPieceInCell(c: any): boolean {
   const t = c.text;
   if (t._ !== 'textButton' || !t.text) return false;
   const inner = t.text;
-  if (inner._ === 'textCustomEmoji') {
-    const a = inner.alt || '';
-    return !isHiddenEmojiAlt(a) && a !== '';
-  }
-  if (inner._ === 'textConcat' && Array.isArray(inner.texts)) {
-    return inner.texts.some((x: any) => x && x._ === 'textCustomEmoji' && !isHiddenEmojiAlt(x.alt || ''));
-  }
-  return false;
+  let alts: string[] = [];
+  if (inner._ === 'textCustomEmoji') alts = [inner.alt || ''];
+  else if (inner._ === 'textConcat' && Array.isArray(inner.texts)) alts = inner.texts.filter((x: any) => x && x._ === 'textCustomEmoji').map((x: any) => x.alt || '');
+  else return false;
+  return alts.some(a => !isHiddenEmojiAlt(a) && a !== '' && !a.startsWith('⬛') && !!pieceTypeFromAlt(a));
 }
 function getSquareName(ri: number, ci: number, rows: any[]): string | null {
   if (!rows || rows.length < 9) return null;
@@ -263,10 +260,198 @@ function getSquareName(ri: number, ci: number, rows: any[]): string | null {
 
   return (f + rank).toLowerCase();
 }
+function pieceTypeFromAlt(alt: string): string | null {
+  const a = normalizeEmoji((alt || '').trim());
+  if (!a) return null;
+  // Custom chess set uses same emoji for both colors: 🗿 rook, 🐴 knight, 🐘 bishop, 👸 queen, 🤴 king, ♟ pawn
+  // Also support standard unicode pieces as fallback
+  if (a.startsWith('🗿')) return 'r';
+  if (a.startsWith('🐴')) return 'n';
+  if (a.startsWith('🐘')) return 'b';
+  if (a.startsWith('👸')) return 'q';
+  if (a.startsWith('🤴')) return 'k';
+  if (a.startsWith('♟') || a.startsWith('♙')) return 'p';
+  // fallback unicode
+  const c = a[0];
+  if (c === '♔' || c === '♚') return 'k';
+  if (c === '♕' || c === '♛') return 'q';
+  if (c === '♖' || c === '♜') return 'r';
+  if (c === '♗' || c === '♝') return 'b';
+  if (c === '♘' || c === '♞') return 'n';
+  if (c === '♙' || c === '♟') return 'p';
+  return null;
+}
+function getDocIdFromCell(c: any): string | null {
+  if (!c || !c.text || c.text._ !== 'textButton' || !c.text.text) return null;
+  const inner = c.text.text;
+  if (inner._ === 'textCustomEmoji' && inner.document_id != null) return String(inner.document_id);
+  if (inner._ === 'textConcat' && Array.isArray(inner.texts)) {
+    const f = inner.texts.find((x: any) => x && x._ === 'textCustomEmoji' && x.document_id != null);
+    if (f) return String(f.document_id);
+  }
+  return null;
+}
+function getPieceInfoFromCell(c: any, docColorMap?: Map<string, 'w' | 'b'>): { type: string; color: 'w' | 'b'; alt: string; docId: string | null } | null {
+  if (!c || !c.text || c.text._ !== 'textButton' || !c.text.text) return null;
+  const inner = c.text.text;
+  let alt = '';
+  let docId: string | null = null;
+  if (inner._ === 'textCustomEmoji') { alt = inner.alt || ''; docId = inner.document_id != null ? String(inner.document_id) : null; }
+  else if (inner._ === 'textConcat' && Array.isArray(inner.texts)) {
+    const f = inner.texts.find((x: any) => x && x._ === 'textCustomEmoji');
+    if (f) { alt = f.alt || ''; docId = f.document_id != null ? String(f.document_id) : null; }
+  } else return null;
+  if (isHiddenEmojiAlt(alt) || !alt) return null;
+  if (alt.startsWith('⬛')) return null; // legal destination marker, not a piece
+  const t = pieceTypeFromAlt(alt);
+  if (!t) return null;
+  let color: 'w' | 'b' | null = null;
+  if (docId && docColorMap) color = docColorMap.get(docId) || null;
+  // fallback: try to infer from alt unicode color if still null
+  if (!color) {
+    const a = normalizeEmoji(alt);
+    const c = a[0];
+    if (c === '♔' || c === '♕' || c === '♖' || c === '♗' || c === '♘' || c === '♙') color = 'w';
+    else if (c === '♚' || c === '♛' || c === '♜' || c === '♝' || c === '♞' || c === '♟') color = 'b';
+    else color = 'w'; // default for custom set will be resolved via map
+  }
+  if (!color) return null;
+  return { type: t, color, alt, docId };
+}
+function sqToCoord(sq: string): { file: number; rank: number } | null {
+  if (!sq || sq.length < 2) return null;
+  const file = sq.charCodeAt(0) - 97;
+  const rank = parseInt(sq[1], 10) - 1;
+  if (file < 0 || file > 7 || rank < 0 || rank > 7 || Number.isNaN(rank)) return null;
+  return { file, rank };
+}
+function coordToSq(file: number, rank: number): string | null {
+  if (file < 0 || file > 7 || rank < 0 || rank > 7) return null;
+  return String.fromCharCode(97 + file) + String(rank + 1);
+}
+function buildBoardMap(rows: any[], docColorMap?: Map<string, 'w' | 'b'>): Map<string, { type: string; color: 'w' | 'b'; docId: string | null }> {
+  const m = new Map<string, { type: string; color: 'w' | 'b'; docId: string | null }>();
+  if (!rows || rows.length < 9) return m;
+  const cols = rows[0]?.cells?.length || 0;
+  for (let ri = 1; ri < rows.length - 1; ri++) {
+    for (let ci = 1; ci < cols - 1; ci++) {
+      const c = rows[ri]?.cells?.[ci];
+      const sq = getSquareName(ri, ci, rows);
+      if (!sq) continue;
+      const info = getPieceInfoFromCell(c, docColorMap);
+      if (info) m.set(sq, { type: info.type, color: info.color, docId: info.docId });
+    }
+  }
+  return m;
+}
+function updateDocColorMap(rows: any[], map: Map<string, 'w' | 'b'>): void {
+  if (!rows || rows.length < 9) return;
+  const cols = rows[0]?.cells?.length || 0;
+  for (let ri = 1; ri < rows.length - 1; ri++) {
+    const rankStr = (() => {
+      const cell = rows[ri]?.cells?.[0];
+      let r = '';
+      if (cell?.text?._ === 'textPlain') r = cell.text.text || '';
+      else r = deepRichText(cell?.text).trim();
+      return r;
+    })();
+    const rank = parseInt(rankStr, 10);
+    if (Number.isNaN(rank)) continue;
+    for (let ci = 1; ci < cols - 1; ci++) {
+      const c = rows[ri]?.cells?.[ci];
+      const docId = getDocIdFromCell(c);
+      if (!docId || map.has(docId)) continue;
+      const altRaw = (() => {
+        const inner = c?.text?.text;
+        if (!inner) return '';
+        if (inner._ === 'textCustomEmoji') return inner.alt || '';
+        if (inner._ === 'textConcat' && Array.isArray(inner.texts)) {
+          const f = inner.texts.find((x: any) => x && x._ === 'textCustomEmoji');
+          return f?.alt || '';
+        }
+        return '';
+      })();
+      if (isHiddenEmojiAlt(altRaw) || altRaw.startsWith('⬛')) continue;
+      const t = pieceTypeFromAlt(altRaw);
+      if (!t) continue;
+      // initial ranks: 1-2 white, 7-8 black
+      if (rank === 1 || rank === 2) map.set(docId, 'w');
+      else if (rank === 7 || rank === 8) map.set(docId, 'b');
+    }
+  }
+}
+function generateLegalDests(fromSq: string, piece: { type: string; color: 'w' | 'b' }, board: Map<string, { type: string; color: 'w' | 'b' }>): Set<string> {
+  const out = new Set<string>();
+  const from = sqToCoord(fromSq);
+  if (!from) return out;
+  const inside = (f: number, r: number) => f >= 0 && f < 8 && r >= 0 && r < 8;
+  const pieceAt = (sq: string) => board.get(sq) || null;
+  const isEnemy = (sq: string) => { const p = pieceAt(sq); return !!p && p.color !== piece.color; };
+  const isOwn = (sq: string) => { const p = pieceAt(sq); return !!p && p.color === piece.color; };
+  const isEmpty = (sq: string) => !pieceAt(sq);
+  const addIf = (sq: string | null) => {
+    if (!sq) return false;
+    if (isOwn(sq)) return true; // blocked by own -> stop sliding, do not add
+    if (isEmpty(sq) || isEnemy(sq)) out.add(sq);
+    return !!pieceAt(sq); // true if blocked (occupied) -> stop sliding
+  };
+  if (piece.type === 'p') {
+    const dir = piece.color === 'w' ? 1 : -1;
+    const startRank = piece.color === 'w' ? 1 : 6; // rank idx 1 = rank 2
+    // forward 1
+    const f1 = coordToSq(from.file, from.rank + dir);
+    if (f1 && isEmpty(f1)) {
+      out.add(f1);
+      // double from start
+      if (from.rank === startRank) {
+        const f2 = coordToSq(from.file, from.rank + dir * 2);
+        if (f2 && isEmpty(f2)) out.add(f2);
+      }
+    }
+    // captures
+    for (const df of [-1, 1]) {
+      const cap = coordToSq(from.file + df, from.rank + dir);
+      if (cap && isEnemy(cap)) out.add(cap);
+    }
+  } else if (piece.type === 'n') {
+    const offs = [[1,2],[2,1],[2,-1],[1,-2],[-1,-2],[-2,-1],[-2,1],[-1,2]];
+    for (const [df, dr] of offs) {
+      const sq = coordToSq(from.file + df, from.rank + dr);
+      if (!sq) continue;
+      if (!isOwn(sq)) out.add(sq);
+    }
+  } else if (piece.type === 'b' || piece.type === 'r' || piece.type === 'q') {
+    const dirs: number[][] = [];
+    if (piece.type === 'b' || piece.type === 'q') dirs.push([1,1],[1,-1],[-1,1],[-1,-1]);
+    if (piece.type === 'r' || piece.type === 'q') dirs.push([1,0],[-1,0],[0,1],[0,-1]);
+    for (const [df, dr] of dirs) {
+      let f = from.file + df, r = from.rank + dr;
+      while (inside(f, r)) {
+        const sq = coordToSq(f, r)!;
+        const blocked = addIf(sq);
+        if (blocked) break;
+        f += df; r += dr;
+      }
+    }
+  } else if (piece.type === 'k') {
+    for (let df = -1; df <= 1; df++) for (let dr = -1; dr <= 1; dr++) {
+      if (df === 0 && dr === 0) continue;
+      const sq = coordToSq(from.file + df, from.rank + dr);
+      if (!sq) continue;
+      if (!isOwn(sq)) out.add(sq);
+    }
+  }
+  return out;
+}
 function ChessTable({ rows, messageId, onButton, documentUrls }: { rows: any[]; messageId: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string> }): any {
   const cols = rows[0]?.cells?.length || 0;
   const [selected, setSelected] = useState<{ ri: number; ci: number; data: string; sq: string | null } | null>(null);
-  useEffect(() => { setSelected(null); }, [rows]);
+  useEffect(() => { setSelected(null); }, [messageId]);
+  const docColorMapRef = useRef<Map<string, 'w' | 'b'>>(new Map());
+  updateDocColorMap(rows, docColorMapRef.current);
+  const boardMap = buildBoardMap(rows, docColorMapRef.current);
+  const selectedPiece = selected?.sq ? boardMap.get(selected.sq) || null : null;
+  const legalSet: Set<string> = selected && selectedPiece && selected.sq ? generateLegalDests(selected.sq, selectedPiece as any, boardMap as any) : new Set<string>();
   const handleCellClick = (ri: number, ci: number, c: any) => {
     const sq = getSquareName(ri, ci, rows);
     let data = getCellButtonData(c);
@@ -274,21 +459,36 @@ function ChessTable({ rows, messageId, onButton, documentUrls }: { rows: any[]; 
       try { data = btoa('sq:' + sq); } catch { data = 'sq:' + sq; }
     }
     if (!data || !sq) {
-      console.debug('[chess] no data for', ri, ci, c);
+      log.info('[chess] no data for', ri, ci, JSON.stringify(c).slice(0,200), 'sq=', sq);
       return;
     }
     const hasPiece = hasPieceInCell(c);
-    console.debug('[chess] click', { ri, ci, hasPiece, data, sq, selected });
+    const clickedInfo = getPieceInfoFromCell(c, docColorMapRef.current);
+    log.info('[chess] click', JSON.stringify({ ri, ci, hasPiece, data: String(data).slice(0,40), sq, selected: selected ? selected.sq : null, legal: Array.from(legalSet).slice(0,5).join(',') }));
     if (!selected) {
       if (!hasPiece) {
-        console.debug('[chess] ignore empty without selection');
+        log.info('[chess] ignore empty without selection');
         return;
       }
+      log.info('[chess] first click send piece', sq, 'data=' + String(data).slice(0,40));
+      onButton?.(data);
       setSelected({ ri, ci, data, sq });
       return;
     }
     if (selected.ri === ri && selected.ci === ci) {
       setSelected(null);
+      return;
+    }
+    // If clicked own piece -> switch selection (Telegram Android behavior)
+    if (clickedInfo && selectedPiece && clickedInfo.color === selectedPiece.color) {
+      log.info('[chess] switch selection to', sq);
+      onButton?.(data);
+      setSelected({ ri, ci, data, sq });
+      return;
+    }
+    // Validate legality: only allow moves in legalSet
+    if (!legalSet.has(sq)) {
+      log.info('[chess] illegal destination', sq, 'legal=', Array.from(legalSet).join(','));
       return;
     }
     const fromSq = selected.sq;
@@ -297,13 +497,25 @@ function ChessTable({ rows, messageId, onButton, documentUrls }: { rows: any[]; 
       setSelected(null);
       return;
     }
-    const uci = fromSq + toSq;
-    let moveData: string;
-    try { moveData = btoa(uci); } catch { moveData = uci; }
+    let gameId = '';
     try {
-      const raw = atob(data);
-      if (raw.startsWith('sq:')) moveData = btoa(uci);
+      const rawSel = atob(selected.data);
+      const sqIdx = rawSel.indexOf(':sq:');
+      if (sqIdx !== -1) gameId = rawSel.slice(0, sqIdx);
+      else {
+        const cIdx = rawSel.indexOf(':');
+        if (cIdx !== -1) gameId = rawSel.slice(0, cIdx);
+      }
     } catch {}
+    let moveData: string;
+    if (gameId) {
+      try { moveData = btoa(gameId + ':' + fromSq + ':' + toSq); } catch { moveData = gameId + ':' + fromSq + ':' + toSq; }
+      log.info('[chess] send move', fromSq + '->' + toSq, 'gameId=' + gameId + ' b64=' + moveData + ' try=' + gameId + ':' + fromSq + ':' + toSq);
+    } else {
+      const uci = fromSq + toSq;
+      try { moveData = btoa(uci); } catch { moveData = uci; }
+      log.info('[chess] send move fallback', uci, 'b64=' + moveData);
+    }
     onButton?.(moveData);
     setSelected(null);
   };
@@ -321,8 +533,13 @@ function ChessTable({ rows, messageId, onButton, documentUrls }: { rows: any[]; 
                 return <th key={'rtc' + ci} class={cellCls({ ...c, header: true })}><RichText node={c.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></th>;
               }
               const sq = getSquareName(ri, ci, rows);
-              const data = getCellButtonData(c);
               const clickable = !!sq && !isHeaderCell;
+              const isSelectedPiece = !!(selected && selected.sq === sq);
+              const isLegalDest = !!(sq && legalSet.has(sq));
+              const dstHasPiece = hasPieceInCell(c);
+              const isPossible = !!(selected && isLegalDest && !dstHasPiece && !isSelectedPiece);
+              const isCapture = !!(selected && isLegalDest && dstHasPiece && !isSelectedPiece);
+              const possibleCls = isPossible ? ' rich-cell_possible' : isCapture ? ' rich-cell_capture' : '';
 
               const renderCellContent = () => {
                 if (!c.text) return null;
@@ -334,7 +551,7 @@ function ChessTable({ rows, messageId, onButton, documentUrls }: { rows: any[]; 
               return (
                 <td
                   key={'rtc' + ci}
-                  class={cellCls({ ...c, header: false }) + chessCls + selCls + (clickable ? ' rich-cell_clickable' : '')}
+                  class={cellCls({ ...c, header: false }) + chessCls + selCls + possibleCls + (clickable ? ' rich-cell_clickable' : '')}
                   onClick={clickable ? () => handleCellClick(ri, ci, c) : undefined}
                   style={clickable ? 'cursor:pointer' : undefined}
                 >
@@ -383,6 +600,19 @@ function Block({ block, messageId, onButton, documentUrls }: { block: any; messa
       return <p class="rich-p"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></p>;
     case 'pageBlockBlockquote':
       return <blockquote class="rich-quote"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></blockquote>;
+    case 'pageBlockBlockquoteBlocks': {
+      const bqb = block as any;
+      return (
+        <blockquote class="rich-quote">
+          {(bqb.blocks || []).map((sub: any, i: number) => (
+            <div key={'bqb' + i} class="rich-block">
+              <SafeBlock block={sub} messageId={messageId} onButton={onButton} documentUrls={documentUrls} />
+            </div>
+          ))}
+          {bqb.caption ? <div class="rich-quote-caption"><RichText node={bqb.caption} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></div> : null}
+        </blockquote>
+      );
+    }
     case 'pageBlockTitle':
     case 'pageBlockHeader':
     case 'pageBlockHeading':
