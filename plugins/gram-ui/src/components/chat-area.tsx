@@ -159,7 +159,7 @@ function GreetingSticker({ documentUrls }: { documentUrls: Record<number, string
   return <AnimatedSticker tgsUrl={url} renderId="greeting-sticker" size={180} />;
 }
 
-function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; documentUrls: Record<number, string>; documentProgress?: Record<number, number> }) {
+function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress, documentSource }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; documentUrls: Record<number, string>; documentProgress?: Record<number, number>; documentSource?: string }) {
   const doc = m.media?.document;
   const emoji = getStickerEmoji(doc);
   const mimeLc = (doc?.mime_type || '').toLowerCase();
@@ -309,6 +309,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
                   ? <span class="tgui-sticker-emoji">{emoji || t(S.STICKER_FALLBACK)}</span>
                   : null
         }
+        {documentSource ? <MediaSourceBadge source={documentSource} variant="dot" /> : null}
       </div>
       <div class="tgui-sticker-meta">
         <span class="MessageBubble__time">{timeStr}</span>
@@ -659,7 +660,7 @@ function fwdFromLabel(fwd: any): string {
   return 'скрытого автора';
 }
 
-function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, selfPeer, reactions, onReact, onOpenPhoto, onOpenPeer }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; selfPeer?: boolean; reactions?: MessageReaction[]; onOpenPeer?: (peer: PeerInfo) => void; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
+function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, documentSources, selfPeer, reactions, onReact, onOpenPhoto, onOpenPeer }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; documentSources?: Record<number | string, string>; selfPeer?: boolean; reactions?: MessageReaction[]; onOpenPeer?: (peer: PeerInfo) => void; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
   const timeStr = formatMessageTime(m.date);
   const out = selfPeer ? true : m.out;
   const status = msgStatus(m, readOutboxMaxId);
@@ -714,7 +715,7 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
         return null;
       })()}
       {mediaType === 'sticker'
-        ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} documentUrls={rowUrls} documentProgress={rowProgress} />
+        ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} documentUrls={rowUrls} documentProgress={rowProgress} documentSource={documentSource} />
         : mediaType === 'dice'
           ? <DiceBubble m={m} timeStr={timeStr} out={out} status={status} />
           : mediaType === 'poll'
@@ -727,7 +728,7 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
             ? <VideoMessage m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} />
           : isLinkMsg
             ? <WebPageBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
-            : <MessageBubble text={m.message || mediaFallbackText(m.media)} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} messageId={m.id} replyMarkup={m.replyMarkup} richMessage={m.richMessage} richDocumentUrls={emojiUrls}
+            : <MessageBubble text={m.message || mediaFallbackText(m.media)} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} documentSources={documentSources} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} messageId={m.id} replyMarkup={m.replyMarkup} richMessage={m.richMessage} richDocumentUrls={emojiUrls}
               onKbButton={onKbButton} onRichButton={(data, mid) => onKbButton({ kind: 'callback', data }, mid)} />
       }
     </div>
@@ -873,12 +874,6 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
       }
       if (m.richMessage) collectRichCustomIds(m.richMessage, pre);
       if (m.replyMarkup) collectRichCustomIds(m.replyMarkup, pre);
-      if (m.message) {
-        for (const r of matchEmojiRuns(m.message)) {
-          const docId = getEmojiDocId(r.emoji);
-          if (docId) pre.add(docId);
-        }
-      }
     }
     if (pre.size > 0) {
       const ids = [...pre].filter((id) => !emojiFetchAccum.has(id));
@@ -1004,6 +999,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
           initial={initial}
           color={avatarBg}
           size="small"
+          source={state.avatarSources?.[`${p.type}_${p.id}`]}
         />
         <div class="tgui-chat-info">
           <span class="tgui-chat-name">{p.type === 'user' && state.selfUserId && p.id === state.selfUserId ? t(S.SAVED_MESSAGES_PEER) : getPeerName(p)}</span>
@@ -1092,7 +1088,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
             return (
               <div>
                 {daySep}
-                <MessageItemMemo m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrl={state.documentUrls?.[m.id] || ''} progress={state.documentProgress?.[m.id]} documentSource={state.documentSources?.[m.id]} photoSource={state.photoSources?.[m.id]} emojiUrls={emojiUrls} selfPeer={selfPeer} reactions={msgReactions} onReact={onReact} onOpenPhoto={onOpenPhoto} onOpenPeer={onOpenPeer} />
+                <MessageItemMemo m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrl={state.documentUrls?.[m.id] || ''} progress={state.documentProgress?.[m.id]} documentSource={state.documentSources?.[m.id]} photoSource={state.photoSources?.[m.id]} emojiUrls={emojiUrls} documentSources={state.documentSources} selfPeer={selfPeer} reactions={msgReactions} onReact={onReact} onOpenPhoto={onOpenPhoto} onOpenPeer={onOpenPeer} />
               </div>
             );
           }}

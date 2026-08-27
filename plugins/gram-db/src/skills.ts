@@ -285,6 +285,27 @@ export class GramDbSkills {
     }
   }
 
+  async getTgsJson(key: string): Promise<string | null> {
+    if (!this._masterKey) return null;
+    await this.ensureEngine();
+    const hk = await this.encKey('tgs:' + key);
+    const raw = await this.engine.getItem(hk);
+    if (!raw) return null;
+    try { return await EncryptedStore.decryptFromBase64(this._masterKey, raw); } catch { return null; }
+  }
+
+  async saveTgsJson(key: string, json: string): Promise<void> {
+    if (!this._masterKey) return;
+    await this.ensureEngine();
+    const hk = await this.encKey('tgs:' + key);
+    await this.engine.setItem(hk, await EncryptedStore.encryptToBase64(this._masterKey, json));
+    if (this._sessionId) {
+      const tgsKey = 'tgs:' + key;
+      const idx = await this.loadKeyIndex();
+      if (!idx.includes(tgsKey)) { idx.push(tgsKey); this._keyIndex = idx; await this.saveKeyIndex(); }
+    }
+  }
+
   async listAvatars(): Promise<Array<{ opfsName: string; dataUri: string }>> {
     if (!this._masterKey) return [];
     await this.ensureEngine();

@@ -997,7 +997,9 @@ export class GramMediaRouter {
                 const it = rest[i];
                 if (this.dropBatchOnGenChange(gen, items)) return;
                 if (typeof it.messageId === 'string' && this.isEmojiKey(it.messageId)) {
-                    this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(it.messageId), 'batch result missing');
+                    const docId = this.emojiDocIdOf(it.messageId);
+                    this.emoji.onEmojiDownloadFailed(docId, 'batch result missing');
+                    this.emitWindow('tg-emoji-bad', { docId, error: 'batch result missing' });
                 } else if (typeof it.messageId === 'number') {
                     this.scheduleDocumentRetry(it.messageId, it.document);
                 }
@@ -1044,7 +1046,10 @@ export class GramMediaRouter {
         }
         const error = (result?.error || '') as string;
         if (typeof item.messageId === 'string' && this.isEmojiKey(item.messageId)) {
-            this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(item.messageId), error);
+            const docId = this.emojiDocIdOf(item.messageId);
+            this.emoji.onEmojiDownloadFailed(docId, error);
+            this.emitWindow('tg-emoji-bad', { docId, error: error || 'empty bytes' });
+            if (error) log.warn('[gram-media] emoji batch item error:', error, item.messageId, docId);
             return;
         }
         if (typeof item.messageId !== 'number') return;

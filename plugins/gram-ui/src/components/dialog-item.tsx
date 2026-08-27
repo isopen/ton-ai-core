@@ -14,11 +14,12 @@ interface DialogItemProps {
   collapsed: boolean;
   typingText: string;
   selfUserId?: string;
+  avatarSource?: string;
   onClick: () => void;
 }
 
 export function DialogItem(props: DialogItemProps) {
-  const { d, selected, collapsed, typingText, selfUserId, onClick } = props;
+  const { d, selected, collapsed, typingText, selfUserId, avatarSource, onClick } = props;
   const avatarBg = d.peer.avatarUrl ? 'transparent' : (d.peer.type === 'user' ? '#1a4d8c' : '#2d5a27');
   const initial = getInitials(d.peer);
 
@@ -30,7 +31,7 @@ export function DialogItem(props: DialogItemProps) {
 
   const before = (
     <div style="position:relative">
-      <Avatar url={fullUrl} blurUrl={blurThumb} initial={initial} color={avatarBg} size="medium" />
+      <Avatar url={fullUrl} blurUrl={blurThumb} initial={initial} color={avatarBg} size="medium" source={avatarSource} />
       {collapsed && d.unreadCount > 0
         ? <Badge key={d.unreadCount} count={d.unreadCount} variant="circle" max={9} />
         : null}

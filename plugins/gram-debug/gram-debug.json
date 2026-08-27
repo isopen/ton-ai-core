@@ -69,6 +69,14 @@
       "enabled": true,
       "level": "debug"
     },
+    "gram-ui:emoji-diag": {
+      "enabled": true,
+      "level": "debug"
+    },
+    "gram-ui:emoji-canvas": {
+      "enabled": true,
+      "level": "debug"
+    },
     "gram-ui:media-collage": {
       "enabled": false,
       "level": "debug"

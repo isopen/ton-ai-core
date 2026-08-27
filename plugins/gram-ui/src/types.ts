@@ -90,6 +90,7 @@ export interface AppState {
   documentProgress: Record<number | string, number>;
   photoSources: Record<string, string>;
   documentSources: Record<number | string, string>;
+  avatarSources: Record<string, string>;
   reactions: Record<number, MessageReaction[]>;
 }
 
@@ -145,7 +146,7 @@ export type UIAction =
     | { type: 'SET_EMOJI_PICKER'; v: boolean }
     | { type: 'SET_TYPING_TEXT'; text: string }
     | { type: 'SET_DIALOG_TYPING'; peerKey: string; text: string }
-    | { type: 'UPDATE_DIALOG_AVATAR'; peerId: string; peerType: string; url: string }
+    | { type: 'UPDATE_DIALOG_AVATAR'; peerId: string; peerType: string; url: string; cacheSource?: string }
     | { type: 'TICK' }
     | { type: 'LOAD_MORE' }
     | { type: 'SET_LOADING_MESSAGES'; v: boolean }

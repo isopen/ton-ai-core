@@ -25,7 +25,7 @@ const EMOJI_ATTEMPT_TTL = 120_000;
 const EMOJI_TRANSIENT_RETRY_MS = 1500;
 const EMOJI_TRANSIENT_MAX_ATTEMPTS = 6;
 
-const UNRESOLVED_EMOJI_RETRY_MS = 25_000;
+const UNRESOLVED_EMOJI_RETRY_MS = 5_000;
 const EMOJI_BAD_REDOWNLOAD_MS = 30_000;
 const EMOJI_STUB_BAN_MS = 10 * 60_000;
 
@@ -992,7 +992,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.notifyEmojiDocsReady(readyEntries);
     };
 
-    private async resolveEmojiBatchDocs(items: Array<{ docId?: string; alt?: string; priority?: number; ctx?: string }>): Promise<{
+    private async resolveEmojiBatchDocs(items: Array<{ docId?: string; alt?: string; priority?: number; ctx?: string; custom?: boolean }>): Promise<{
         resolved: Array<{ id: string; doc: any; priority: number; ctx?: string }>;
         unknownIds: string[];
         unknownAlts: Array<{ alt: string; nAlt: string; priority: number; ctx?: string }>;
@@ -1027,8 +1027,9 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
         for (const it of items) {
             const docId = it.docId != null ? String(it.docId) : null;
+            const isCustom = !!(it as any).custom;
             let doc = docId ? this.findEmojiDoc(docId) : undefined;
-            if (!doc && it.alt != null) {
+            if (!doc && it.alt != null && !isCustom) {
                 const nAlt = normalizeEmoji(it.alt);
                 doc = nAlt && this.emojiStickerDocs ? this.emojiStickerDocs[nAlt] : undefined;
             }
@@ -1042,6 +1043,14 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     resolved.push({ id, doc, priority, ctx: it.ctx });
                 }
             } else if (docId) {
+                if (!isCustom && it.alt != null) {
+                    const nAlt = normalizeEmoji(it.alt);
+                    if (nAlt && !this.hasNoStickerAlt(nAlt) && !this.requestedEmojiAlts.has(nAlt)) {
+                        this.maybeLoadDiceSetForAlt(it.alt);
+                        unknownAlts.push({ alt: it.alt, nAlt, priority, ctx: it.ctx });
+                        continue;
+                    }
+                }
                 unknownIds.push(docId);
             } else if (it.alt != null) {
                 const nAlt = normalizeEmoji(it.alt);

@@ -33,6 +33,7 @@ interface MessageBubbleProps {
   className?: string;
   entities?: any[];
   documentUrls?: Record<number, string>;
+  documentSources?: Record<number | string, string>;
   reactions?: MessageReaction[];
   onReact?: (emoji: string) => void;
   reactionUrls?: Record<string, string>;
@@ -56,6 +57,7 @@ export function MessageBubble(props: MessageBubbleProps) {
     className = '',
     entities,
     documentUrls,
+    documentSources,
     reactions,
     onReact,
     reactionUrls,
@@ -88,7 +90,7 @@ export function MessageBubble(props: MessageBubbleProps) {
               onButton={(data: string) => onRichButton?.(data, messageId ?? '')} />
           : isTmd
             ? <TmdView text={text} foreignEntities={entities} documentUrls={documentUrls || {}} time={time} status={status} out={out} />
-            : <EmojiText text={text} entities={entities} documentUrls={documentUrls || {}} />}
+            : <EmojiText text={text} entities={entities} documentUrls={documentUrls || {}} documentSources={documentSources} />}
       </div>
       <InlineKeyboard
         rows={normalizeReplyMarkup(replyMarkup)}

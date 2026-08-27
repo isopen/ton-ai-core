@@ -216,7 +216,7 @@ function isEmojiOnlyText(text: string, entities?: any[]): boolean {
   return !/\S/.test(text.slice(pos));
 }
 
-export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EMOJI_SIZE, singleLine = false, ctx = 'chat' }: { text: string; entities?: any[]; documentUrls: Record<number, string>; inlineSize?: number; singleLine?: boolean; ctx?: 'dialog' | 'chat' }) {
+export function EmojiText({ text, entities, documentUrls, documentSources, inlineSize = INLINE_EMOJI_SIZE, singleLine = false, ctx = 'chat' }: { text: string; entities?: any[]; documentUrls: Record<number, string>; documentSources?: Record<number | string, string>; inlineSize?: number; singleLine?: boolean; ctx?: 'dialog' | 'chat' }) {
   const emojiEntities = (entities || [])
     .filter((e: any) => e?._ === 'messageEntityCustomEmoji' && typeof e.offset === 'number' && typeof e.length === 'number' && e.length > 0)
     .sort((a: any, b: any) => a.offset - b.offset);
@@ -299,5 +299,5 @@ export function EmojiText({ text, entities, documentUrls, inlineSize = INLINE_EM
     return <StaticEmojiText value={text} size={size} />;
   }
 
-  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} size={size} singleLine={singleLine} vAlign={isDialog ? 'middle' : 'top'} />;
+  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} documentSources={documentSources as Record<string, string> | undefined} size={size} singleLine={singleLine} vAlign={isDialog ? 'middle' : 'top'} />;
 }

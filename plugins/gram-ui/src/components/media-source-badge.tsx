@@ -20,16 +20,29 @@ function mediaSourceLabel(source?: string): string {
   }
 }
 
-export function MediaSourceBadge({ source, className, absolute = true }: {
+export function MediaSourceBadge({ source, className, absolute = true, variant = 'badge' }: {
   source?: string;
   className?: string;
   absolute?: boolean;
+  variant?: 'badge' | 'dot';
 }) {
   const [enabled, setEnabled] = useState(() => isEnabled(SCOPE));
 
   useEffect(() => subscribeScope(SCOPE, () => setEnabled(isEnabled(SCOPE))), []);
 
   if (!source || !enabled) return null;
+  if (variant === 'dot') {
+    const dotColor = source === 'memory' ? '#22c55e' : source === 'persisted' ? '#eab308' : '#ef4444';
+    const pos = absolute ? 'position:absolute;bottom:0;right:0;z-index:2;' : '';
+    const size = 'width:10px;height:10px;border-radius:50%;border:2px solid var(--bg-surface);box-sizing:border-box;';
+    return (
+      <span
+        class={`tgui-media-source-badge tgui-media-source-badge--dot${className ? ' ' + className : ''}`}
+        style={`${pos}${size}background:${dotColor}`}
+        title={mediaSourceLabel(source)}
+      />
+    );
+  }
   const pos = absolute ? 'position:absolute;top:4px;right:4px;z-index:2;' : '';
   return (
     <span

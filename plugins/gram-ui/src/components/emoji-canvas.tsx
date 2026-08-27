@@ -1,11 +1,33 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedSticker } from './animated-sticker.js';
+import { MediaSourceBadge } from './media-source-badge.js';
 import { matchEmojiRuns, requestEmojiDownload } from './emoji-store.js';
 import { inflateTgs } from '@ton-ai/tgs';
-import { getLogger } from '@ton-ai/gram-debug';
+import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 
 const log = getLogger('gram-ui:emoji-canvas');
+const diagLog = getLogger('gram-ui:emoji-diag');
+
+if (typeof window !== 'undefined') {
+  (window as any).emojiDiagDump = () => (window as any).__emojiDiagLast || null;
+  (window as any).emojiDiagEnable = () => {
+    try { localStorage.setItem('gram-debug:emoji-diag', '1'); } catch {}
+    diagLog.info('[emoji-diag] enabled via window.emojiDiagEnable(), reload to see logs');
+  };
+  window.addEventListener('tg-emoji-url', (e: any) => {
+    const d = e.detail || {};
+    diagLog.info('[emoji-diag] tg-emoji-url doc=' + d.docId + ' kind=' + d.kind + ' url=' + String(d.url).slice(0, 60) + ' src=' + (d.cacheSource || '-'));
+  });
+  window.addEventListener('tg-emoji-url-kind', (e: any) => {
+    const d = e.detail || {};
+    diagLog.info('[emoji-diag] tg-emoji-url-kind url=' + String(d.url).slice(0, 60) + ' kind=' + d.kind);
+  });
+  window.addEventListener('tg-emoji-bad', (e: any) => {
+    const d = e.detail || {};
+    diagLog.warn('[emoji-diag] tg-emoji-bad doc=' + d.docId + ' error=' + (d.error || '-'));
+  });
+}
 
 const EMOJI_GZIP_MAGIC: [number, number] = [0x1f, 0x8b];
 const MISSING_EMOJI_STRIKE_LIMIT = 8;
@@ -68,7 +90,7 @@ function cacheEmojiData(url: string, data: EmojiData) {
 }
 
 let activeFetches = 0;
-const MAX_FETCHES = 6;
+const MAX_FETCHES = 16;
 const fetchWaiters: Array<() => void> = [];
 
 function acquireFetch(): Promise<void> {
@@ -109,6 +131,33 @@ async function tgsFromResponse(resp: Response): Promise<EmojiData | null> {
 
 const emojiDataInflight = new Map<string, Promise<EmojiData>>();
 
+const tgsGramDbMem = new Map<string, string>();
+async function loadTgsFromGramDb(url: string): Promise<string | null> {
+  if (tgsGramDbMem.has(url)) return tgsGramDbMem.get(url)!;
+  try {
+    const raw = localStorage.getItem('gram-db:tgs:' + url);
+    if (raw) { tgsGramDbMem.set(url, raw); return raw; }
+  } catch {}
+  try {
+    const mod: any = await import('@ton-ai/gram-db');
+    const db = mod.getGramDb?.() || mod.createStandaloneGramDb?.();
+    if (db?.getTgsJson) {
+      const v = await db.getTgsJson(url);
+      if (v) { tgsGramDbMem.set(url, v); return v; }
+    }
+  } catch {}
+  return null;
+}
+async function saveTgsToGramDb(url: string, json: string): Promise<void> {
+  tgsGramDbMem.set(url, json);
+  try { localStorage.setItem('gram-db:tgs:' + url, json); } catch {}
+  try {
+    const mod: any = await import('@ton-ai/gram-db');
+    const db = mod.getGramDb?.() || mod.createStandaloneGramDb?.();
+    if (db?.saveTgsJson) await db.saveTgsJson(url, json);
+  } catch {}
+}
+
 export function fetchEmojiData(url: string): Promise<EmojiData> {
   const cached = emojiDataCache.get(url);
   if (cached) return Promise.resolve(cached);
@@ -134,16 +183,31 @@ async function fetchEmojiDataInner(url: string): Promise<EmojiData> {
     return data;
   }
   if (knownKind === 'tgs') {
+    const cachedTgs = await loadTgsFromGramDb(url);
+    if (cachedTgs) {
+      const data: EmojiData = { kind: 'tgs', value: cachedTgs };
+      cacheEmojiData(url, data);
+      return data;
+    }
     await acquireFetch();
     try {
       const resp = await fetch(url);
       const tgs = await tgsFromResponse(resp);
       const data: EmojiData = tgs ?? { kind: 'img', value: url };
+      if (data.kind === 'tgs') void saveTgsToGramDb(url, data.value);
       emojiDataCache.delete(url);
       cacheEmojiData(url, data);
       return data;
     } finally {
       releaseFetch();
+    }
+  }
+  {
+    const cachedTgs = await loadTgsFromGramDb(url);
+    if (cachedTgs) {
+      const data: EmojiData = { kind: 'tgs', value: cachedTgs };
+      cacheEmojiData(url, data);
+      return data;
     }
   }
   await acquireFetch();
@@ -159,6 +223,7 @@ async function fetchEmojiDataInner(url: string): Promise<EmojiData> {
     if (ct.startsWith('text/') || ct.includes('json')) {
       const text = await resp.text();
       const data: EmojiData = text.trim().startsWith('{') ? { kind: 'tgs', value: text } : { kind: 'img', value: url };
+      if (data.kind === 'tgs') void saveTgsToGramDb(url, data.value);
       emojiDataCache.delete(url);
       cacheEmojiData(url, data);
       return data;
@@ -168,6 +233,7 @@ async function fetchEmojiDataInner(url: string): Promise<EmojiData> {
     if (u8.length >= 2 && u8[0] === EMOJI_GZIP_MAGIC[0] && u8[1] === EMOJI_GZIP_MAGIC[1]) {
       const text = await inflateTgs(u8);
       const data: EmojiData = text.trim().startsWith('{') ? { kind: 'tgs', value: text } : { kind: 'img', value: url };
+      if (data.kind === 'tgs') void saveTgsToGramDb(url, data.value);
       emojiDataCache.delete(url);
       cacheEmojiData(url, data);
       return data;
@@ -175,6 +241,7 @@ async function fetchEmojiDataInner(url: string): Promise<EmojiData> {
     const ascii = new TextDecoder('latin1').decode(u8.slice(0, Math.min(u8.length, 12)));
     if (ascii.trim().startsWith('{')) {
       const data: EmojiData = { kind: 'tgs', value: new TextDecoder().decode(u8) };
+      void saveTgsToGramDb(url, data.value);
       emojiDataCache.delete(url);
       cacheEmojiData(url, data);
       return data;
@@ -377,7 +444,7 @@ function renderIdFor(docId: string, size: number): string {
 
 const everPaintedDocs = new Set<string>();
 
-export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = false, vAlign = 'top' }: { segments: EmojiSegment[]; documentUrls: Record<string, string>; size?: number; singleLine?: boolean; vAlign?: 'top' | 'middle' }) {
+export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30, singleLine = false, vAlign = 'top' }: { segments: EmojiSegment[]; documentUrls: Record<string, string>; documentSources?: Record<string, string>; size?: number; singleLine?: boolean; vAlign?: 'top' | 'middle' }) {
   const emojiSegs: Array<{ docId: string; value?: string; custom?: boolean }> = [];
   for (const s of segments) {
     if (s.type === 'emoji' && s.docId) emojiSegs.push({ docId: s.docId, value: s.value, custom: s.custom });
@@ -514,14 +581,19 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
 
   useEffect(() => {
     if (!hasEmoji) return;
+    // always log for diag when 24 slots or when enabled
+    const shouldLog = isEnabled('gram-ui:emoji-diag') || isEnabled('gram-ui:emoji-canvas') || emojiSegs.length >= 12;
+    if (!shouldLog) return;
     const rows = emojiSegs.map((s) => {
       const did = s.docId;
       const url = urlFor(did);
       const k = kinds[did] || '-';
+      const src = documentSources?.['emojipack-' + did] || documentSources?.[did] || '-';
       return {
         docId: did,
         u: url ? 'y' : 'n',
         k,
+        src,
         fail: !!failedDocs[did],
         stuck: !!stuckDocs[did],
         ld: !!loadedDocs[did],
@@ -529,17 +601,21 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
         paint: k === 'tgs' && !!url && !failedDocs[did] && (loadedDocs[did] || !stuckDocs[did]),
         slots: emojiSegs.length,
         shared,
+        pos: !!positions[emojiSegs.indexOf(s)],
       };
     });
-  }, [slotsKey, urlsKey, kinds, failedDocs, stuckDocs, loadedDocs, inView, everShown, shared, size, hasEmoji]);
+    diagLog.info('[emoji-diag] slots=' + emojiSegs.length + ' key=' + slotsKey.slice(0, 80) + ' inView=' + inView + ' everShown=' + everShown + ' shared=' + shared + ' urlsKey=' + (urlsKey ? urlsKey.slice(0, 60) : '-') + ' rows:', rows);
+    (window as any).__emojiDiagLast = rows;
+  }, [slotsKey, urlsKey, kinds, failedDocs, stuckDocs, loadedDocs, inView, everShown, shared, size, hasEmoji, positions, documentSources]);
 
   const missingStrikes = useRef<Record<string, number>>({});
 
   useEffect(() => {
-    if (!hasEmoji || !inView) return;
+    if (!hasEmoji) return;
     let timer = 0;
     const requestMissing = () => {
       const missing = emojiSegs.filter((s) => !urlFor(s.docId));
+      if (missing.length > 0) diagLog.info('[emoji-diag] requestMissing slots=' + emojiSegs.length + ' missing=' + missing.length + ' ids=' + missing.map(s => s.docId).join(',').slice(0, 200) + ' strikes=' + JSON.stringify(missingStrikes.current).slice(0, 200) + ' inView=' + inView);
       const strikes = missingStrikes.current;
       const stillMissing = new Set(missing.map((s) => s.docId));
       for (const docId of Object.keys(strikes)) {
@@ -551,31 +627,33 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
         const n = (strikes[s.docId] || 0) + 1;
         strikes[s.docId] = n;
         if (n > MISSING_EMOJI_STRIKE_LIMIT) {
+          diagLog.info('[emoji-diag] strike limit exceeded doc=' + s.docId + ' strikes=' + n);
           delete strikes[s.docId];
           continue;
         }
-        requestEmojiDownload(s.docId, s.value, 1);
+        requestEmojiDownload(s.docId, s.value, 1, undefined, !!s.custom);
         if (s.custom && n <= MISSING_EMOJI_STRIKE_LIMIT) customIds.push(s.docId);
       }
       if (customIds.length > 0) {
+        diagLog.info('[emoji-diag] tg-fetch-custom-emoji ids=' + customIds.join(',').slice(0, 300));
         window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...new Set(customIds)] } }));
       }
       return missing.length > 0;
     };
     if (requestMissing()) {
-      timer = window.setInterval(requestMissing, 3000);
+      timer = window.setInterval(requestMissing, 1500);
     }
     return () => {
       if (timer) window.clearInterval(timer);
     };
-  }, [slotsKey, urlsKey, inView]);
+  }, [slotsKey, urlsKey, inView, hasEmoji]);
 
   useEffect(() => {
     if (!hasEmoji || !playing) return;
     const missing = emojiSegs.filter((s) => !urlFor(s.docId));
     if (missing.length === 0) return;
     for (const s of missing) {
-      requestEmojiDownload(s.docId, s.value, 2);
+      requestEmojiDownload(s.docId, s.value, 2, undefined, !!s.custom);
     }
   }, [playing, slotsKey, urlsKey]);
 
@@ -693,7 +771,7 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
       : <StaticEmojiText key={s.type + ':' + (s.docId || s.value) + ':' + i} value={s.value || ''} size={size} />)}</>;
   }
 
-  const slotStyle = `display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`;
+  const slotStyle = `display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden;position:relative`;
   let emojiIdx = -1;
   const align = vAlign === 'middle' ? 'middle' : 'top';
 
@@ -714,9 +792,10 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
 
           log.info('[gram-app] emoji-slot-error doc=' + docId + ' keptFrame=' + hadPainted);
           if (!hadPainted) setFailedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
-          requestEmojiDownload(docId, s.value, 2);
+          requestEmojiDownload(docId, s.value, 2, undefined, !!s.custom);
         };
         const tgsActive = kind === 'tgs' && url && !failed && tgsPaintable(docId);
+        const emojiSource = documentSources?.['emojipack-' + docId] || documentSources?.[docId];
         return (
           <span key={s.type + ':' + (s.docId || s.value) + ':' + i} class="tgui-emoji-slot" data-doc={docId} style={slotStyle}>
             {kind === 'video' && url && !failed ? (
@@ -762,6 +841,19 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
                       onError={onError}
                     />
                   </span>
+                ) : (inView || everShown) ? (
+                  <span style="position:relative;display:block;width:100%;height:100%">
+                    <AnimatedSticker
+                      key={'stk-fallback-' + renderId + ':' + idx}
+                      tgsUrl={url}
+                      renderId={renderId}
+                      size={size}
+                      isLowPriority
+                      noPlay={!playing}
+                      onLoad={() => onSlotLoaded(docId)}
+                      onError={onError}
+                    />
+                  </span>
                 ) : (
                   <span style="display:block;width:100%;height:100%" />
                 )
@@ -784,6 +876,7 @@ export function EmojiCanvas({ segments, documentUrls, size = 30, singleLine = fa
             ) : (
               <span style="display:block;width:100%;height:100%;overflow:hidden" />
             )}
+            {emojiSource ? <MediaSourceBadge source={emojiSource} variant="dot" /> : null}
           </span>
         );
       })}

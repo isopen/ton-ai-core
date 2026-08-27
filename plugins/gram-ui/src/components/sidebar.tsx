@@ -57,6 +57,7 @@ export function Sidebar({ state, dispatch }: { state: AppState; dispatch: Dispat
                   key={`${d.peer.type}_${d.peer.id}`}
                   typingText={state.selectedPeer?.id === d.peer.id && state.selectedPeer?.type === d.peer.type ? '' : (state.typingByPeer[`${d.peer.type}_${d.peer.id}`] || '')}
                   selfUserId={state.selfUserId}
+                  avatarSource={state.avatarSources?.[`${d.peer.type}_${d.peer.id}`]}
                   onClick={getDialogClick(d.peer)}
                 />
               ))

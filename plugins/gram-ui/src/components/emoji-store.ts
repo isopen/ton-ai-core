@@ -256,18 +256,22 @@ export function searchServerEmojis(query: string): string[] {
 
 const BATCH_WINDOW_MS = 12;
 const BATCH_MAX_ITEMS = 200;
-const pendingEmojiRequests = new Map<string, { docId?: string; alt?: string; priority: number; ctx?: string }>();
+const pendingEmojiRequests = new Map<string, { docId?: string; alt?: string; priority: number; ctx?: string; custom?: boolean }>();
 let emojiBatchTimer: ReturnType<typeof setTimeout> | null = null;
 
 function dispatchEmojiBatch(): void {
   if (pendingEmojiRequests.size === 0) return;
-  const items: Array<{ docId?: string; alt?: string; priority: number; ctx?: string }> = [];
+  const items: Array<{ docId?: string; alt?: string; priority: number; ctx?: string; custom?: boolean }> = [];
   for (const [key, item] of pendingEmojiRequests) {
     if (items.length >= BATCH_MAX_ITEMS) break;
     items.push(item);
     pendingEmojiRequests.delete(key);
   }
-  window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', { detail: { items } }));
+  const CHUNK_SIZE = 8;
+  for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+    const chunk = items.slice(i, i + CHUNK_SIZE);
+    window.dispatchEvent(new CustomEvent('tg-download-emoji-batch', { detail: { items: chunk } }));
+  }
   if (pendingEmojiRequests.size > 0 && emojiBatchTimer == null) {
     emojiBatchTimer = setTimeout(flushEmojiBatch, 0);
   }
@@ -281,12 +285,14 @@ export function flushEmojiBatch(): void {
   dispatchEmojiBatch();
 }
 
-export function requestEmojiDownload(docId?: string, alt?: string, priority = 0, ctx?: string): void {
+export function requestEmojiDownload(docId?: string, alt?: string, priority = 0, ctx?: string, custom?: boolean): void {
   const key = docId != null ? 'd:' + docId : alt ? 'a:' + alt : '';
   if (!key) return;
   const prev = pendingEmojiRequests.get(key);
   if (!prev || priority > prev.priority) {
-    pendingEmojiRequests.set(key, { docId: docId != null ? String(docId) : undefined, alt: alt || undefined, priority, ctx });
+    pendingEmojiRequests.set(key, { docId: docId != null ? String(docId) : undefined, alt: alt || undefined, priority, ctx, custom });
+  } else if (custom && !prev.custom) {
+    pendingEmojiRequests.set(key, { ...prev, custom });
   }
   if (emojiBatchTimer == null) {
     emojiBatchTimer = setTimeout(flushEmojiBatch, BATCH_WINDOW_MS);
