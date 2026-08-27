@@ -10,9 +10,11 @@ interface Marker {
 const PAIRED: Marker[] = [
   { open: '`', close: '`', entity: 'messageEntityCode' },
   { open: '*', close: '*', entity: 'messageEntityBold' },
-  { open: '__', close: '__', entity: 'messageEntityItalic' },
-  { open: '--', close: '--', entity: 'messageEntityUnderline' },
+  { open: '__', close: '__', entity: 'messageEntityUnderline' },
+  { open: '_', close: '_', entity: 'messageEntityItalic' },
   { open: '~~', close: '~~', entity: 'messageEntityStrike' },
+  { open: '~', close: '~', entity: 'messageEntityStrike' },
+  { open: '--', close: '--', entity: 'messageEntityUnderline' },
   { open: '||', close: '||', entity: 'messageEntitySpoiler' },
 ];
 
@@ -82,9 +84,21 @@ export function parseTmdEntities(src: string): TmdParseResult {
     let matchedMarker = false;
     for (const mk of PAIRED) {
       if (!rest.startsWith(mk.open)) continue;
+      // TA rule: _ italic (and __ underline) should not be inside a word like snake_case
+      if (mk.open === '_' || mk.open === '__') {
+        const prev = i > 0 ? src[i - 1] : '';
+        if (/[A-Za-z0-9]/.test(prev)) continue;
+      }
       const close = src.indexOf(mk.close, i + mk.open.length);
       if (close === -1) continue;
+      if (mk.close === '_' || mk.close === '__') {
+        const next = close + mk.close.length < src.length ? src[close + mk.close.length] : '';
+        if (/[A-Za-z0-9]/.test(next)) continue;
+      }
       const innerLen = close - (i + mk.open.length);
+      if (innerLen <= 0) continue;
+      const inner = src.slice(i + mk.open.length, close);
+      if (/^\s/.test(inner) || /\s$/.test(inner)) continue;
       consume(i, i + mk.open.length, false);
       consume(i + mk.open.length, i + mk.open.length + innerLen, true);
       emitEntity(mk.entity, innerLen);
@@ -174,9 +188,14 @@ function hasCommonMark(src: string): boolean {
 export function hasTmd(src: string): boolean {
   if (!src) return false;
   if (/(^|[^*])\*[^*\s][^*\n]*\*(?!\*)/.test(src)) return true;
-  if (/(^|[^_])__[^_\n]+__/.test(src)) return true;
+  // italic _text_ (single underscore, not __, not inside word like snake_case)
+  if (/(?:^|[^A-Za-z0-9_])_[^_\s][^_\n]*_(?![A-Za-z0-9_])/.test(src)) return true;
+  // underline __text__ and legacy --text--
+  if (/__[^_\n]+__/.test(src)) return true;
   if (/--[^-\n]+--/.test(src)) return true;
+  // strike ~~text~~ and ~text~
   if (/~~[^~\n]+~~/.test(src)) return true;
+  if (/(?:^|[^A-Za-z0-9~])~[^~\s][^~\n]*~(?![A-Za-z0-9~])/.test(src)) return true;
   if (/\|\|[^|\n]+\|\|/.test(src)) return true;
   if (/`[^`\n]+`/.test(src)) return true;
   if (/```[\s\S]*?```/.test(src)) return true;

@@ -11,8 +11,8 @@ describe('parseTmdEntities', () => {
     expect(r.entities).toEqual([{ _: 'messageEntityBold', offset: 0, length: 5 }]);
   });
 
-  test('__italic__, --underline--, ~~strike~~, ||spoiler||', () => {
-    const r = parse('__it__ --u-- ~~s~~ ||sp||');
+  test('_italic_, __underline__, ~~strike~~, ||spoiler|| (Android TA)', () => {
+    const r = parse('_it_ __u__ ~~s~~ ||sp||');
     expect(r.text).toBe('it u s sp');
     expect(r.entities.map((e) => [e._, e.offset, e.length])).toEqual([
       ['messageEntityItalic', 0, 2],
@@ -20,6 +20,12 @@ describe('parseTmdEntities', () => {
       ['messageEntityStrike', 5, 1],
       ['messageEntitySpoiler', 7, 2],
     ]);
+  });
+
+  test('legacy --underline-- still supported', () => {
+    const r = parse('--u--');
+    expect(r.text).toBe('u');
+    expect(r.entities[0]._).toBe('messageEntityUnderline');
   });
 
   test('`code` and ```pre``` with language', () => {
