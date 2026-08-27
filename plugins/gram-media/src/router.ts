@@ -661,6 +661,7 @@ export class GramMediaRouter {
             if (cached) {
                 this.photoQueuedKeys.delete(String(item.messageId) + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
                 this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached });
+                if (String(item.messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(item.photo?.id ?? ''), url: cached, messageId: item.messageId });
                 continue;
             }
             if (this.photoInFlightByKey.has(ck) || this.photoInFlight >= MAX_PARALLEL_PHOTOS) {
@@ -720,6 +721,7 @@ export class GramMediaRouter {
         const cached = isNoMediaCache() ? undefined : this.photoUrlCache.get(ck);
         if (cached) {
             this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: cached, cacheSource: 'memory' });
+            if (String(messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(photo?.id ?? currentPhoto?.id ?? ''), url: cached, messageId });
             return;
         }
 
@@ -757,6 +759,7 @@ export class GramMediaRouter {
                     const url = this.bytesToBlobUrl(result.bytes, result.mime);
                     this.photoUrlCacheSet(ck2, url);
                     this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url, cacheSource: result.cacheSource || 'home-server' });
+                    if (String(messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(currentPhoto?.id ?? photo?.id ?? ''), url, messageId });
                     return;
                 }
 
@@ -765,6 +768,7 @@ export class GramMediaRouter {
                     this.photoUrlCacheSet(ck2, result.photoUrl);
                     if (isAvatar) this.avatarRequeueCounts.delete(String(messageId));
                     this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: result.photoUrl, cacheSource: result.cacheSource || 'home-server' });
+                    if (String(messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(currentPhoto?.id ?? photo?.id ?? ''), url: result.photoUrl, messageId });
                     return;
                 }
 

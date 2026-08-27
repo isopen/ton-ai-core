@@ -4,8 +4,106 @@ import { AnimatedEmoji } from './emoji-text.js';
 import { getLogger } from '@ton-ai/gram-debug';
 import { matchEmojiRuns, getEmojiDocId, normalizeEmoji } from './emoji-store.js';
 import { getChessDocColor, setChessDocColor } from './chess-assets.js';
+import { hexToDataUrl, strippedToDataUrl } from '../utils.js';
+import { Image } from '../primitives/image.js';
+import type { ImageSpec } from '../types.js';
 
 const log = getLogger('gram-ui:tmd');
+
+function getRichPhotoUrl(photo: any): string | null {
+  if (!photo || !Array.isArray(photo.sizes)) return null;
+  const prio = ['y', 'w', 'x', 'm', 's'];
+  for (const t of prio) {
+    const s = photo.sizes.find((x: any) => x.type === t && (x.url || x.src));
+    if (s) return s.url || s.src;
+  }
+  for (const s of photo.sizes) if (s.url || s.src) return s.url || s.src;
+  return null;
+}
+function getRichStrippedUrl(photo: any): string | null {
+  if (!photo || !Array.isArray(photo.sizes)) return null;
+  for (const s of photo.sizes) if (s._ === 'photoStrippedSize' && s.bytes) { try { return strippedToDataUrl(s.bytes as any); } catch {} }
+  for (const s of photo.sizes) if (s.bytes && typeof s.bytes === 'string' && (s.bytes as string).length > 40) { try { return hexToDataUrl(s.bytes as any); } catch {} }
+  return null;
+}
+
+function buildRichImageSpec(photo: any, url: string | null, stripped: string | null): ImageSpec | null {
+  if (!photo) return null;
+  const sizes: any[] = Array.isArray(photo.sizes) ? photo.sizes : [];
+  let w = 0, h = 0;
+  for (const s of sizes) {
+    const sw = s.w || s.width || 0;
+    const sh = s.h || s.height || 0;
+    if (sw > w) { w = sw; h = sh; }
+  }
+  if (!w || !h) { w = 320; h = 240; }
+  const thumbUrl = stripped || undefined;
+  const origUrl = url || undefined;
+  const spec: ImageSpec = {
+    id: String(photo.id || 'rich'),
+    width: w,
+    height: h,
+    thumbnail: thumbUrl ? { url: thumbUrl, width: Math.min(w, 32), height: Math.min(h, 32) } : undefined,
+    medium: origUrl ? { url: origUrl, width: w, height: h } : undefined,
+    original: origUrl ? { url: origUrl, width: w, height: h } : undefined,
+  };
+  return spec;
+}
+
+function RichPhoto({ photo, caption, spoiler, richMessage }: { photo: any; caption?: any; spoiler?: boolean; richMessage?: any }): any {
+  const stripped = getRichStrippedUrl(photo);
+  const [url, setUrl] = useState<string | null>(() => getRichPhotoUrl(photo));
+  const [failed, setFailed] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  useEffect(() => {
+    const u = getRichPhotoUrl(photo);
+    if (u) { setUrl(u); return; }
+    const id = photo?.id ? String(photo.id) : null;
+    if (!id) return;
+    let cancelled = false;
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (d && d.photoId && String(d.photoId) === id && d.url) {
+        if (!cancelled) setUrl(d.url);
+      }
+      if (d && d.messageId === `rich-${id}` && d.url) {
+        if (!cancelled) setUrl(d.url);
+      }
+    };
+    window.addEventListener('tg-rich-photo-url' as any, handler);
+    window.addEventListener('tg-photo-url' as any, handler);
+    try {
+      window.dispatchEvent(new CustomEvent('tg-download-photo', { detail: { photo, sizeType: 'y', messageId: `rich-${id}` } }));
+    } catch {}
+    const t = setTimeout(() => { if (!cancelled && !getRichPhotoUrl(photo)) setFailed(true); }, 12000);
+    return () => { cancelled = true; window.removeEventListener('tg-rich-photo-url' as any, handler); window.removeEventListener('tg-photo-url' as any, handler); clearTimeout(t); };
+  }, [photo]);
+  const displayUrl = url || stripped;
+  if (failed && !displayUrl) return <div class="rich-photo rich-photo_failed">photo unavailable</div>;
+  if (!displayUrl) return <div class="rich-photo rich-photo_loading">loading photo…</div>;
+  const isStripped = !url && !!stripped;
+  const spec = buildRichImageSpec(photo, url, stripped);
+  if (!spec) {
+    return (
+      <div class={`rich-photo${spoiler ? ' rich-photo_spoiler' : ''}${isStripped ? ' rich-photo_placeholder' : ''}`}>
+        <img class="rich-photo-img" src={displayUrl} alt="photo" loading="lazy" style={`max-width:100%;height:auto;border-radius:8px;display:block;${isStripped ? 'filter:blur(8px);' : ''}`} />
+        {caption ? <div class="rich-photo-caption"><RichText node={caption.text || caption} />{caption.credit ? <div class="rich-photo-credit"><RichText node={caption.credit} /></div> : null}</div> : null}
+      </div>
+    );
+  }
+  return (
+    <div class={`rich-photo${spoiler ? ' rich-photo_spoiler' : ''}${isStripped ? ' rich-photo_placeholder' : ''}`}>
+      <Image image={spec} maxWidth={480} lazy={false} rounded onOpenViewer={() => setViewerOpen(true)} />
+      {caption ? <div class="rich-photo-caption"><RichText node={caption.text || caption} />{caption.credit ? <div class="rich-photo-credit"><RichText node={caption.credit} /></div> : null}</div> : null}
+      {viewerOpen ? (
+        <div class="rich-photo-viewer" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;padding:24px" onClick={() => setViewerOpen(false)}>
+          <img src={url || stripped || ''} alt="photo" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px" onClick={(e: any) => e.stopPropagation()} />
+          <button class="rich-photo-viewer-close" style="position:absolute;top:16px;right:16px;background:rgba(255,255,255,0.9);border:none;border-radius:50%;width:36px;height:36px;cursor:pointer" onClick={() => setViewerOpen(false)}>✕</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 interface RichCtx { messageId?: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string> }
 
@@ -625,8 +723,20 @@ function ChessTable({ rows, messageId, onButton, documentUrls }: { rows: any[]; 
     </table>
   );
 }
-function Block({ block, messageId, onButton, documentUrls }: { block: any; messageId: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string> }): any {
+function Block({ block, messageId, onButton, documentUrls, richMessage }: { block: any; messageId: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string>; richMessage?: any }): any {
   switch (block._) {
+    case 'pageBlockPhoto': {
+      const pid = block.photo_id != null ? String(block.photo_id) : (block as any).photo?.id ? String((block as any).photo.id) : '';
+      const photos: any[] = (richMessage as any)?.photos || (richMessage as any)?.photos || [];
+      let photo = photos.find((p: any) => String(p.id) === pid);
+      if (!photo && (block as any).photo) photo = (block as any).photo;
+      // fallback: try to find by photo_id in documents? not needed
+      if (!photo) {
+        log.warn('[RichMessage] pageBlockPhoto photo not found', pid, 'photos', photos.length);
+        return <div class="rich-unknown">[photo {pid}]</div>;
+      }
+      return <RichPhoto photo={photo} caption={block.caption} spoiler={!!block.spoiler} richMessage={richMessage} />;
+    }
     case 'pageBlockTable': {
       const rows = block.rows || [];
       const cols = rows[0]?.cells?.length || 0;
@@ -666,7 +776,7 @@ function Block({ block, messageId, onButton, documentUrls }: { block: any; messa
         <blockquote class="rich-quote">
           {(bqb.blocks || []).map((sub: any, i: number) => (
             <div key={'bqb' + i} class="rich-block">
-              <SafeBlock block={sub} messageId={messageId} onButton={onButton} documentUrls={documentUrls} />
+              <SafeBlock block={sub} messageId={messageId} onButton={onButton} documentUrls={documentUrls} richMessage={richMessage} />
             </div>
           ))}
           {bqb.caption ? <div class="rich-quote-caption"><RichText node={bqb.caption} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></div> : null}
@@ -696,7 +806,7 @@ function Block({ block, messageId, onButton, documentUrls }: { block: any; messa
           <div class="rich-details-body">
             {(det.blocks || []).map((b: any, i: number) => (
               <div key={'det' + i} class="rich-block">
-                <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} />
+                <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} richMessage={richMessage} />
               </div>
             ))}
           </div>
@@ -747,7 +857,7 @@ export function RichMessageView({ richMessage, messageId, onButton, documentUrls
       <div class={'rich-body' + (className ? ' ' + className : '')}>
         {blocks.map((b: any, i: number) => (
           <div key={'rblk' + i} class="rich-block">
-            <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} />
+            <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} richMessage={richMessage} />
           </div>
         ))}
       </div>
@@ -758,9 +868,9 @@ export function RichMessageView({ richMessage, messageId, onButton, documentUrls
   }
 }
 
-function SafeBlock({ block, messageId, onButton, documentUrls }: { block: any; messageId: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string> }): any {
+function SafeBlock({ block, messageId, onButton, documentUrls, richMessage }: { block: any; messageId: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string>; richMessage?: any }): any {
   try {
-    return <Block block={block} messageId={messageId} onButton={onButton} documentUrls={documentUrls} />;
+    return <Block block={block} messageId={messageId} onButton={onButton} documentUrls={documentUrls} richMessage={richMessage} />;
   } catch (e: any) {
     log.error('[RichMessage] block render failed', block?._ || '?', e);
     return <div class="rich-error">block error: {block?._ || '?'} — {String(e?.message || e)}</div>;
