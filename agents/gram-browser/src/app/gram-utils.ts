@@ -81,6 +81,19 @@ export function setDialogsFromServer(s: GramState, raw: any) {
       d.peer.blurUrl = buildPeerBlurThumb(d.peer.photo) || undefined;
     }
   }
+  // Invalidate stale history: if dialog topMessage > cached max, force refresh on next open
+  for (const d of merged) {
+    const peerKey = `${d.peer.type}_${d.peer.id}`;
+    const cached = s.messagesCache.current.get(peerKey);
+    if (Array.isArray(cached) && cached.length > 0 && typeof d.topMessage === 'number' && d.topMessage > 0) {
+      const maxCached = Math.max(...cached.map(m => Number(m.id) || 0));
+      if (maxCached > 0 && d.topMessage > maxCached) {
+        log.info(`[dialogs] stale history peer=${peerKey} maxCached=${maxCached} topMessage=${d.topMessage} -> invalidate`);
+        s.historyInitRef.current.delete(peerKey);
+        s.maxFetchedIdRef.current.delete(peerKey);
+      }
+    }
+  }
   s.dialogsRef.current = merged;
   s.dialogsLoadedRef.current = true;
   s.tgui.current!.setDialogs(merged);

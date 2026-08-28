@@ -152,69 +152,16 @@ export class WorkerTelegramService extends TelegramService {
                 return Buffer.from(s, 'utf-8');
             } catch { return Buffer.from(String(s), 'utf-8'); }
         };
-        let dataBytes: Buffer = toBytes(data);
-        console.info('[bot-cb] try data=' + String(data).slice(0,60) + ' -> bytes=' + dataBytes.toString('hex').slice(0,80) + ' len=' + dataBytes.length + ' utf8=' + dataBytes.toString('utf-8').slice(0,40));
-        const tryCall = async (b: Buffer, label: string) => {
-            console.info('[bot-cb] tryCall ' + label + ' len=' + b.length + ' hex=' + b.toString('hex').slice(0,80));
-            const raw = await this.workerClient!.callRpc('messages.getBotCallbackAnswer', {
-                peer: serializePeer(peer),
-                msg_id: msgId,
-                data: b,
-                cache_time: 0,
-            });
-            return raw && (raw as any).result !== undefined ? (raw as any).result : raw;
-        };
-        try {
-            const first = await tryCall(dataBytes, 'primary');
-            this.onLog?.('← messages.getBotCallbackAnswer ok');
-            return first;
-        } catch (e: any) {
-            const msg = String(e?.message || e);
-            if (!msg.includes('DATA_INVALID')) throw e;
-            console.warn('[bot-cb] primary DATA_INVALID, trying fallbacks');
-            const utf8 = dataBytes.toString('utf-8');
-            const candidates: Buffer[] = [];
-            // if utf8 contains colon, try suffix after last colon (uci)
-            if (utf8.includes(':')) {
-                const parts = utf8.split(':');
-                const last = parts[parts.length - 1];
-                if (last && last !== utf8) {
-                    candidates.push(Buffer.from(last, 'utf-8'));
-                    // also try just UCI without gameId but with prefix stripped
-                    if (last.length === 4) candidates.push(Buffer.from(last, 'utf-8'));
-                }
-                // try gameId + ":sq:" + last (if last is uci, toSq is last 2 chars)
-                const gameId = utf8.split(':')[0];
-                if (gameId && utf8.length > gameId.length + 1) {
-                    const toSq = utf8.slice(-2);
-                    if (/^[a-h][1-8]$/.test(toSq)) {
-                        candidates.push(Buffer.from(gameId + ':sq:' + toSq, 'utf-8'));
-                    }
-                }
-            } else if (/^[a-h][1-8][a-h][1-8]$/.test(utf8)) {
-                // plain uci like "d7d5" -> try with gameId if we can guess? but we don't have gameId here
-                // no gameId, so try as is (already tried)
-            }
-            // also try hex version if original was hex-like
-            if (/^[0-9a-fA-F]+$/.test(String(data)) && String(data).length % 2 === 0) {
-                const hexBuf = Buffer.from(String(data), 'hex');
-                if (!hexBuf.equals(dataBytes)) candidates.push(hexBuf);
-            }
-            for (let i = 0; i < candidates.length; i++) {
-                const cand = candidates[i];
-                if (cand.equals(dataBytes)) continue;
-                try {
-                    console.info('[bot-cb] fallback ' + i + ' try len=' + cand.length + ' utf8=' + cand.toString('utf-8').slice(0,40));
-                    const res = await tryCall(cand, 'fallback-' + i);
-                    console.info('[bot-cb] fallback ' + i + ' OK');
-                    this.onLog?.('← messages.getBotCallbackAnswer ok (fallback ' + i + ')');
-                    return res;
-                } catch (e2: any) {
-                    console.warn('[bot-cb] fallback ' + i + ' failed: ' + (e2?.message || e2).slice(0,120));
-                }
-            }
-            throw e;
-        }
+        const dataBytes: Buffer = toBytes(data);
+        console.info('[bot-cb] data=' + String(data).slice(0,60) + ' -> bytes=' + dataBytes.toString('hex').slice(0,80) + ' len=' + dataBytes.length);
+        const raw = await this.workerClient!.callRpc('messages.getBotCallbackAnswer', {
+            peer: serializePeer(peer),
+            msg_id: msgId,
+            data: dataBytes,
+            cache_time: 0,
+        });
+        this.onLog?.('← messages.getBotCallbackAnswer ok');
+        return raw && (raw as any).result !== undefined ? (raw as any).result : raw;
     }
 
     async getCustomEmojiDocuments(documentId: string): Promise<any[]> {

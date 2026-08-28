@@ -103,6 +103,39 @@ export function createHandleUpdate(s: GramState) {
           }
           const richDbg = (msg as any).rich_message ? JSON.stringify((msg as any).rich_message).slice(0,2000) : '-';
           console.log('[upd-dbg] processNewMsg id=', msg.id, 'len=', (msg.message || '').length, 'rm=', !!(msg as any).reply_markup, 'media=', msg.media?._ || '-', 'keys=', Object.keys(msg).join(','), 'rich=', richDbg);
+          if ((msg as any).rich_message?.blocks) {
+            try {
+              const blocks = (msg as any).rich_message.blocks;
+              console.log('[blocks-dbg] total', blocks.length, 'types', blocks.map((b:any)=> b._).join(','));
+              for (let bi=0; bi<blocks.length; bi++) {
+                const b = blocks[bi];
+                const txt = b.text ? JSON.stringify(b.text).slice(0,4000) : 'no-text';
+                const cap = b.caption ? JSON.stringify(b.caption).slice(0,2000) : 'no-cap';
+                console.log('[blocks-dbg] block', bi, b._, 'text', txt, 'cap', cap, 'hasRows', !!b.rows);
+                if (b.text?.texts) {
+                  console.log('[blocks-dbg] block', bi, 'textsLen', b.text.texts.length);
+                  for (let i=0;i<b.text.texts.length;i++) {
+                    const t = b.text.texts[i];
+                    console.log('[blocks-dbg] texts['+i+']', t._ , JSON.stringify(t).slice(0,1000));
+                  }
+                }
+                if (b.blocks) {
+                  console.log('[blocks-dbg] block', bi, 'inner blocks', b.blocks.length, b.blocks.map((x:any)=> x._).join(','));
+                  for (let j=0;j<b.blocks.length;j++) {
+                    const ib = b.blocks[j];
+                    console.log('[blocks-dbg] inner', j, ib._ , JSON.stringify(ib.text || ib).slice(0,1000));
+                  }
+                }
+              }
+              const qBlocks = blocks.filter((b:any)=> b._==='pageBlockBlockquote' || b._==='pageBlockBlockquoteBlocks');
+              for (const qb of qBlocks) {
+                const txt = qb.text ? JSON.stringify(qb.text).slice(0,8000) : 'no-text';
+                const cap = qb.caption ? JSON.stringify(qb.caption).slice(0,2000) : 'no-cap';
+                const textsLen = qb.text?.texts?.length || 0;
+                console.log('[quote-dbg] raw block', qb._ , 'textsLen', textsLen, 'text', txt, 'cap', cap);
+              }
+            } catch {}
+          }
           if ((msg as any).rich_message?.blocks?.[0]?.rows) {
             try {
               const rows = (msg as any).rich_message.blocks[0].rows;

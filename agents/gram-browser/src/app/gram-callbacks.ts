@@ -112,7 +112,15 @@ export function createCallbacks(
         let existing: Message[] = [];
         const _cached = s.messagesCache.current.get(peerKey);
         if (Array.isArray(_cached)) existing = _cached;
-        const maxId = s.maxFetchedIdRef.current.get(peerKey) || 0;
+        let maxId = s.maxFetchedIdRef.current.get(peerKey) || 0;
+        const dialog = s.dialogsRef.current.find(d => `${d.peer.type}_${d.peer.id}` === peerKey);
+        if (dialog && typeof dialog.topMessage === 'number' && dialog.topMessage > 0) {
+          const maxCached = existing.length ? Math.max(...existing.map(m => Number(m.id) || 0)) : 0;
+          if (maxCached > 0 && dialog.topMessage > maxCached) {
+            histLog.info('[history] stale cache detected peer=', peerKey, 'maxCached=', maxCached, 'topMessage=', dialog.topMessage, 'forcing refresh');
+            maxId = 0;
+          }
+        }
         const count = maxId === 0
           ? Math.ceil((document.getElementById('tg-msg-list')?.clientHeight || window.innerHeight) / 60) + 5
           : 50;
@@ -258,11 +266,19 @@ export function createCallbacks(
       const cachedSources: Record<number, string> = {};
       for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
       s.tgui.current!.dispatch({ type: 'SET_MESSAGES', messages: cachedMsgs, photoSources: cachedSources });
-      if (!s.historyInitRef.current.has(peerKey) || noCache) {
+      const dialog = s.dialogsRef.current.find(d => `${d.peer.type}_${d.peer.id}` === peerKey);
+      const maxCachedId = rawMsgs.length ? Math.max(...rawMsgs.map(m => Number(m.id) || 0)) : 0;
+      const isStale = !noCache && dialog && typeof dialog.topMessage === 'number' && dialog.topMessage > 0 && maxCachedId > 0 && dialog.topMessage > maxCachedId;
+      if (!s.historyInitRef.current.has(peerKey) || noCache || isStale) {
         if (noCache) {
           s.historyInitRef.current.delete(peerKey);
           s.maxFetchedIdRef.current.delete(peerKey);
           s.messagesCache.current.delete(peerKey);
+        }
+        if (isStale) {
+          histLog.info('[history] stale on selectPeer peer=', peerKey, 'maxCached=', maxCachedId, 'topMessage=', dialog?.topMessage, 'forcing refresh');
+          s.historyInitRef.current.delete(peerKey);
+          s.maxFetchedIdRef.current.delete(peerKey);
         }
         s.tgui.current!.setLoadingMessages(true);
         getCallbacks().loadHistory();

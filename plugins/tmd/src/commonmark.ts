@@ -45,17 +45,8 @@ function isTableDelim(line: string): boolean {
   return cells.every(c => /^:?-+:?$/.test(c));
 }
 
-function isChessTable(header: string[], rows: string[][]): boolean {
-  if (header.length < 8) return false;
-  const h = header.join('').toLowerCase();
-  if (h.includes('a') && h.includes('h')) return true;
-  if (rows.length >= 8) return true;
-  return false;
-}
-
 function renderTableBlock(header: string[], delim: string, body: string[][]): string {
-  const chess = isChessTable(header, body);
-  const cls = chess ? 'md-table md-table_chess' : 'md-table';
+  const cls = 'md-table';
   let out = `<table class="${cls}"><thead><tr>`;
   for (let i = 0; i < header.length; i++) {
     out += `<th class="md-th">${esc(header[i])}</th>`;
@@ -67,10 +58,9 @@ function renderTableBlock(header: string[], delim: string, body: string[][]): st
     for (let ci = 0; ci < row.length; ci++) {
       const cell = row[ci] || '';
       const base = 'md-td';
-      const chessCls = chess ? ( (ri + ci) % 2 === 0 ? ' md-cell_light' : ' md-cell_dark') : '';
       const c = cell.trim();
       const content = c ? esc(c) : '';
-      out += `<td class="${base}${chessCls}">${content}</td>`;
+      out += `<td class="${base}">${content}</td>`;
     }
     out += `</tr>`;
   }

@@ -825,35 +825,15 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
     }
     for (const id of richIds) customIds.push(id);
     if (customIds.length > 0) {
-      const isChessBatch = richIds.size >= 12;
-      if (isChessBatch) {
-        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...richIds] } }));
-
-        const rest = customIds.filter((id) => !richIds.has(id));
-        if (rest.length > 0) {
-          for (const id of rest) emojiFetchAccum.add(id);
-          if (emojiFetchTimer != null) clearTimeout(emojiFetchTimer);
-          emojiFetchTimer = setTimeout(() => {
-            emojiFetchTimer = null;
-            if (emojiFetchAccum.size > 0) {
-              window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...emojiFetchAccum] } }));
-              emojiFetchAccum.clear();
-            }
-          }, 20);
-        } else {
-          for (const id of richIds) emojiFetchAccum.delete(id);
+      for (const id of customIds) emojiFetchAccum.add(id);
+      if (emojiFetchTimer != null) clearTimeout(emojiFetchTimer);
+      emojiFetchTimer = setTimeout(() => {
+        emojiFetchTimer = null;
+        if (emojiFetchAccum.size > 0) {
+          window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...emojiFetchAccum] } }));
+          emojiFetchAccum.clear();
         }
-      } else {
-        for (const id of customIds) emojiFetchAccum.add(id);
-        if (emojiFetchTimer != null) clearTimeout(emojiFetchTimer);
-        emojiFetchTimer = setTimeout(() => {
-          emojiFetchTimer = null;
-          if (emojiFetchAccum.size > 0) {
-            window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...emojiFetchAccum] } }));
-            emojiFetchAccum.clear();
-          }
-        }, 20);
-      }
+      }, 20);
     }
 
     if (customIds.length > 0) flushEmojiBatch();
