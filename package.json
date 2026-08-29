@@ -38,5 +38,8 @@
     "jest": "^30.4.2",
     "jest-environment-jsdom": "^30.4.1",
     "ts-jest": "^29.4.11"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
   }
 }

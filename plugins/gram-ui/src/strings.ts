@@ -138,6 +138,9 @@ export const S = {
   AUTH_ERROR_BAD_CODE: 'authErrorBadCode',
   AUTH_ERROR_FLOOD: 'authErrorFlood',
   AUTH_ERROR_INVALID_PHONE: 'authErrorInvalidPhone',
+  AUTH_ERROR_REQUIRED: 'authErrorRequired',
+  AUTH_ERROR_NAME_TOO_LONG: 'authErrorNameTooLong',
+  AUTH_ERROR_TERMS_REQUIRED: 'authErrorTermsRequired',
 };
 
 export const LANG_FALLBACKS: Record<string, Record<string, string>> = {
@@ -253,6 +256,9 @@ export const LANG_FALLBACKS: Record<string, Record<string, string>> = {
     [S.AUTH_ERROR_BAD_CODE]: 'Вы ввели неверный код.',
     [S.AUTH_ERROR_FLOOD]: 'Слишком много попыток. Пожалуйста, повторите позже.',
     [S.AUTH_ERROR_INVALID_PHONE]: 'Неверный номер телефона. Проверьте формат и попробуйте снова.',
+    [S.AUTH_ERROR_REQUIRED]: 'Заполните это поле.',
+    [S.AUTH_ERROR_NAME_TOO_LONG]: 'Имя слишком длинное.',
+    [S.AUTH_ERROR_TERMS_REQUIRED]: 'Необходимо принять условия использования.',
     [S.ACTION_TYPING]: 'печатает...',
     [S.ACTION_SENDING_PHOTO]: 'отправляет фото...',
     [S.ACTION_RECORDING_VIDEO]: 'записывает видео...',
@@ -274,6 +280,9 @@ export const LANG_FALLBACKS: Record<string, Record<string, string>> = {
     [S.AUTH_ERROR_BAD_CODE]: 'You have entered an invalid code.',
     [S.AUTH_ERROR_FLOOD]: 'Too many tries. Please try again later.',
     [S.AUTH_ERROR_INVALID_PHONE]: 'Invalid phone number. Please try again.',
+    [S.AUTH_ERROR_REQUIRED]: 'This field is required.',
+    [S.AUTH_ERROR_NAME_TOO_LONG]: 'Name is too long.',
+    [S.AUTH_ERROR_TERMS_REQUIRED]: 'You must accept the Terms of Service.',
     [S.SIDEBAR_LOGS_DESC]: 'Connection events',
     [S.AUTH_APP_NAME]: 'Gram',
     [S.AUTH_CONNECTING]: 'Connecting...',
@@ -430,6 +439,9 @@ export const TLG_KEYS: Record<string, string | null> = {
   [S.AUTH_ERROR_BAD_CODE]: 'lng_bad_code',
   [S.AUTH_ERROR_FLOOD]: 'lng_flood_error',
   [S.AUTH_ERROR_INVALID_PHONE]: 'lng_bad_phone',
+  [S.AUTH_ERROR_REQUIRED]: 'lng_bad_phone',
+  [S.AUTH_ERROR_NAME_TOO_LONG]: 'lng_bad_phone',
+  [S.AUTH_ERROR_TERMS_REQUIRED]: 'lng_signup_terms',
 
   [S.API_SESSION_ID_REQUIRED]: null,
   [S.API_SESSION_NOT_FOUND]: 'lng_session_expired',

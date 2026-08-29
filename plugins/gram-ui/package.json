@@ -32,13 +32,14 @@
   },
   "dependencies": {
     "@ton-ai/atom": "*",
-    "@ton-ai/tmd": "*",
     "@ton-ai/core": "*",
     "@ton-ai/gram-debug": "*",
-    "@ton-ai/tgs": "*"
+    "@ton-ai/tgs": "*",
+    "@ton-ai/tmd": "*"
   },
   "devDependencies": {
     "@types/node": "^20.19.33",
+    "@types/qrcode": "^1.5.6",
     "typescript": "^5.3.3"
   }
 }

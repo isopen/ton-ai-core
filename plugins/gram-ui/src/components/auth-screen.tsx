@@ -52,9 +52,10 @@ function iso2ToFlag(iso2: string): string {
 
 const PATTERN_PLACEHOLDER = 'X';
 const DEFAULT_PATTERN = 'XXX XXX XX XX';
+const PLACEHOLDER_RE_G = /X/g;
 
 function patternDigitCount(pattern: string): number {
-  return (pattern.match(new RegExp(PATTERN_PLACEHOLDER, 'g')) || []).length;
+  return (pattern.match(PLACEHOLDER_RE_G) || []).length;
 }
 
 function getBestPattern(digits: string, patterns?: string[]): string {
@@ -90,9 +91,50 @@ function formatPhoneNumber(digits: string, patterns?: string[]): string {
   return result.join('');
 }
 
+function getCaretPosition(formatted: string, digitsBeforeCaret: number, pattern: string): number {
+  if (digitsBeforeCaret <= 0) return 0;
+  // Map digitsBeforeCaret to position in formatted string using pattern placeholders
+  // Count placeholders in pattern up to digitsBeforeCaret, then find that position in formatted
+  let seen = 0;
+  for (let i = 0; i < formatted.length; i++) {
+    if (/\d/.test(formatted[i])) {
+      seen++;
+      if (seen === digitsBeforeCaret) return i + 1;
+    }
+  }
+  // Fallback: if formatted shorter than expected (e.g., truncated), return end
+  // Also handle pattern with fixed prefix: ensure caret not inside country code
+  return formatted.length;
+}
+
+function stripTrunkPrefix(digits: string, phoneCode: string): string {
+  if (!digits) return digits;
+  let out = digits;
+  // strip leading zeros first (common trunk)
+  while (out.startsWith('0') && out.length > 1) {
+    out = out.slice(1);
+  }
+  // RU: 8 as domestic trunk -> 8XXXXXXXXXX (11 digits) -> 9XXXXXXXXX
+  if (phoneCode === '7' && out.startsWith('8') && out.length === 11) {
+    out = out.slice(1);
+  }
+  return out;
+}
+
+function normalizePhoneDigits(rawDigits: string, phoneCode: string, maxDigits: number): string {
+  let digits = rawDigits.replace(/\D/g, '');
+  // strip duplicated country code if pasted full international number
+  if (phoneCode && digits.startsWith(phoneCode) && digits.length > phoneCode.length + 6 && digits.length > maxDigits) {
+    digits = digits.slice(phoneCode.length);
+  }
+  digits = stripTrunkPrefix(digits, phoneCode);
+  if (maxDigits > 0) digits = digits.slice(0, maxDigits);
+  return digits;
+}
+
 function renderError(err: string) {
   return (
-    <div class="tgui-auth-error-new">
+    <div class="tgui-auth-error-new" role="alert" aria-live="assertive">
       {err}
     </div>
   );
@@ -102,62 +144,75 @@ function handleSendCode(state: AppState, dispatch: Dispatch, phoneDigits?: strin
   const country = resolveCountry(state);
   const phoneCode = country?.phoneCode || '';
   const patterns = country?.patterns;
-  let localDigits: string;
-  if (typeof phoneDigits === 'string') {
-    localDigits = phoneDigits.replace(/\D/g, '');
-    const pat = getBestPattern(localDigits, patterns) || DEFAULT_PATTERN;
-    const md = patternDigitCount(pat);
-    if (phoneCode && localDigits.startsWith(phoneCode) && localDigits.length > phoneCode.length + 6 && localDigits.length > md) {
-      localDigits = localDigits.slice(phoneCode.length);
-    }
-  } else {
-    const input = document.getElementById('login-phone-input') as HTMLInputElement | null;
-    const raw = input?.value || '';
-    localDigits = raw.replace(/\D/g, '');
-    const pat = getBestPattern(localDigits, patterns) || DEFAULT_PATTERN;
-    const md = patternDigitCount(pat);
-    if (phoneCode && localDigits.startsWith(phoneCode) && localDigits.length > phoneCode.length + 6 && localDigits.length > md) {
-      localDigits = localDigits.slice(phoneCode.length);
-    }
-  }
-  // Strip trunk prefix (0 for most countries, 8 for RU) for national format (e.g., 06... -> 6..., 8 912... -> 912...)
-  if (localDigits.startsWith('0') && localDigits.length > 1) {
-    localDigits = localDigits.slice(1);
-  } else if (phoneCode === '7' && localDigits.startsWith('8') && localDigits.length === 11) {
-    localDigits = localDigits.slice(1);
-  }
   if (!phoneCode) {
     dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_PHONE) });
     return;
   }
-  const fullPhone = `+${phoneCode}${localDigits}`;
+  // Use controlled phoneDigits if provided, otherwise derive from state.phone (already normalized fullPhone)
+  let rawDigits: string;
+  if (typeof phoneDigits === 'string') {
+    rawDigits = phoneDigits;
+  } else if (state.phone) {
+    const all = state.phone.replace(/\D/g, '');
+    rawDigits = all.startsWith(phoneCode) ? all.slice(phoneCode.length) : all;
+  } else {
+    rawDigits = '';
+  }
+  const patForMd = getBestPattern(rawDigits.replace(/\D/g, ''), patterns) || DEFAULT_PATTERN;
+  const mdForNorm = patternDigitCount(patForMd);
+  let localDigits = normalizePhoneDigits(rawDigits, phoneCode, mdForNorm);
+  // enforce max length before building fullPhone (avoid phone longer than pattern)
+  const pat = getBestPattern(localDigits, patterns) || DEFAULT_PATTERN;
+  const md = patternDigitCount(pat);
+  if (md > 0 && localDigits.length > md) {
+    localDigits = localDigits.slice(0, md);
+  }
   if (!localDigits || localDigits.length < 6) {
     dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_PHONE) });
     return;
   }
+  const fullPhone = `+${phoneCode}${localDigits}`;
   dispatch({ type: 'SET_ERROR', error: '' });
   dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading', phone: fullPhone });
   window.dispatchEvent(new CustomEvent('tg-auth-send-code', { detail: { phone: fullPhone } }));
 }
 
-function handleRequestQr() {
-  window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'qr_login' } }));
+function handleRequestQr(dispatch: Dispatch) {
+  dispatch({ type: 'SET_ERROR', error: '' });
+  dispatch({ type: 'SET_AUTH_STEP', authStep: 'qr_login' });
 }
 
-function handleSignIn(dispatch: Dispatch) {
-  const input = document.getElementById('tg-code-input') as HTMLInputElement | null;
-  const code = input?.value || '';
-  dispatch({ type: 'SET_CODE', code });
+function handleSignIn(dispatch: Dispatch, code: string) {
+  // normalize: remove spaces/dashes, keep digits only (user may paste "12 345")
+  const normalized = code.replace(/[\s\-]/g, '').trim();
+  if (!normalized) {
+    dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_CODE) });
+    return;
+  }
+  if (!/^\d{4,6}$/.test(normalized)) {
+    dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_CODE) });
+    return;
+  }
+  dispatch({ type: 'SET_CODE', code: normalized });
+  dispatch({ type: 'SET_ERROR', error: '' });
   dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
-  window.dispatchEvent(new CustomEvent('tg-auth-sign-in', { detail: { code } }));
+  window.dispatchEvent(new CustomEvent('tg-auth-sign-in', { detail: { code: normalized } }));
 }
 
-function handleCheckPassword(dispatch: Dispatch) {
-  const input = document.getElementById('tg-password-input') as HTMLInputElement | null;
-  const pw = input?.value || '';
-  dispatch({ type: 'SET_PASSWORD', password: pw });
+function handleCheckPassword(dispatch: Dispatch, password: string) {
+  // Telegram password may contain spaces — do not trim, only check empty
+  if (!password || !password.length) {
+    dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_CODE) });
+    return;
+  }
+  if (password.length > 256) {
+    dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_CODE) });
+    return;
+  }
+  dispatch({ type: 'SET_PASSWORD', password });
+  dispatch({ type: 'SET_ERROR', error: '' });
   dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
-  window.dispatchEvent(new CustomEvent('tg-auth-check-password', { detail: { password: pw } }));
+  window.dispatchEvent(new CustomEvent('tg-auth-check-password', { detail: { password } }));
 }
 
 const FALLBACK_COUNTRIES: AppState['countries'] = [
@@ -183,7 +238,7 @@ const RESEND_DELAY = 30;
 
 function LoadingView() {
   return (
-    <div class="login-loading">
+    <div class="login-loading" role="status" aria-label="Loading">
       <div class="login-spinner"></div>
     </div>
   );
@@ -198,16 +253,23 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
     return state.phone ? state.phone.replace(/\D/g, '').slice(pc.length) : '';
   });
 
-  // Ensure global state has countries & countryIso2 soon after mount if empty (fallback)
   useEffect(() => {
     if (state.countries.length === 0) {
       dispatch({ type: 'SET_COUNTRIES', countries: FALLBACK_COUNTRIES });
-      if (!state.countryIso2) {
-        const prefIso2 = typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('ru') ? 'RU' : 'US';
+    }
+    if (!state.countryIso2) {
+      const prefIso2 = typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('ru') ? 'RU' : 'US';
+      // only set if still empty to avoid overwriting server-loaded value
+      if (!stateRefFallbackCheck(state)) {
         dispatch({ type: 'SET_COUNTRY_ISO2', countryIso2: prefIso2 });
       }
     }
   }, []);
+
+  // helper to avoid overwriting already resolved country
+  function stateRefFallbackCheck(s: AppState): boolean {
+    return !!s.countryIso2;
+  }
 
   const formatted = formatPhoneNumber(phoneDigits, patterns);
   const displayValue = formatted;
@@ -218,34 +280,59 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
   const countryRef = useRef<HTMLElement | null>(null);
 
   const pattern = getBestPattern(phoneDigits, patterns) || DEFAULT_PATTERN;
-  const phoneMask = pattern.replace(new RegExp(PATTERN_PLACEHOLDER, 'g'), '_');
+  const phoneMask = pattern.replace(PLACEHOLDER_RE_G, '_');
   const maxDigits = patternDigitCount(pattern);
 
+  const phoneInputRef = useRef<HTMLInputElement | null>(null);
+
   function handleInput(e: any) {
-    const raw = e.target?.value || '';
+    const input = e.target as HTMLInputElement;
+    const raw = input.value || '';
+    const sel = input.selectionStart ?? raw.length;
+    const digitsBeforeCaret = (raw.slice(0, sel).match(/\d/g) || []).length;
+    // count how many digits are country code duplicates before caret? Simplify: normalize whole value then recompute caret
     let allDigits = raw.replace(/\D/g, '');
-    // Strip duplicated country code if pasted full international number (avoid false strip for local numbers coinciding with code)
+    // tentative maxDigits for caret calc uses current pattern
+    let normalized = normalizePhoneDigits(allDigits, phoneCode, maxDigits);
+    // if we stripped country code, adjust digitsBeforeCaret
     if (phoneCode && allDigits.startsWith(phoneCode) && allDigits.length > phoneCode.length + 6 && allDigits.length > maxDigits) {
-      allDigits = allDigits.slice(phoneCode.length);
+      // we sliced phoneCode length digits
+      const stripped = phoneCode.length;
+      // if caret was after country code, reduce
+      // approximate
+      if (digitsBeforeCaret > stripped) {
+        // will be handled via formatted caret calc
+      }
     }
-    // Strip trunk prefix before limiting (0 or 8 for RU)
-    if (allDigits.startsWith('0') && allDigits.length > 1) {
-      allDigits = allDigits.slice(1);
-    } else if (phoneCode === '7' && allDigits.startsWith('8') && allDigits.length === 11) {
-      allDigits = allDigits.slice(1);
-    }
-    const limited = maxDigits > 0 ? allDigits.slice(0, maxDigits) : allDigits;
-    if (state.error) {
-      dispatch({ type: 'SET_ERROR', error: '' });
-    }
-    setPhoneDigits(limited);
+    setPhoneDigits(normalized);
+    // caret restoration after formatting
     requestAnimationFrame(() => {
-      const el = document.getElementById('login-phone-input') as HTMLInputElement | null;
-      if (el) el.setSelectionRange(el.value.length, el.value.length);
+      const el = phoneInputRef.current || document.getElementById('login-phone-input') as HTMLInputElement | null;
+      if (!el) return;
+      const newFormatted = formatPhoneNumber(normalized, patterns);
+      // compute digitsBeforeCaret clamped to normalized length
+      const clampedDigitsBeforeCaret = Math.min(digitsBeforeCaret, normalized.length);
+      // For stripped trunk / country code, heuristic: use number of digits typed before caret minus stripped prefix length
+      // Simpler: compute position where that many digits appear in formatted string
+      const newPos = getCaretPosition(newFormatted, clampedDigitsBeforeCaret, pattern);
+      // If we stripped trunk/country prefix, newFormatted may be shorter; fallback to end
+      const pos = Math.min(newPos, newFormatted.length);
+      try { el.setSelectionRange(pos, pos); } catch {}
     });
   }
 
-  // RAG: синхронизация phoneDigits при смене страны/паттерна — обрезка под новый maxDigits
+  function handlePhoneKeyDown(e: any) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleSendCode(state, dispatch, phoneDigits);
+    }
+  }
+
+  function handlePhoneSubmit(e: any) {
+    e.preventDefault();
+    handleSendCode(state, dispatch, phoneDigits);
+  }
+
   useEffect(() => {
     if (maxDigits > 0 && phoneDigits.length > maxDigits) {
       setPhoneDigits(prev => prev.slice(0, maxDigits));
@@ -255,10 +342,10 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
   useEffect(() => {
     if (!state.phone || !phoneCode) return;
     const all = state.phone.replace(/\D/g, '');
-    // Если при первом рендере страны ещё не загружены, phoneDigits содержит полный номер с кодом — исправить
     if (phoneDigits === all && all.startsWith(phoneCode) && all.length > phoneCode.length) {
       const local = all.slice(phoneCode.length);
-      setPhoneDigits(maxDigits > 0 ? local.slice(0, maxDigits) : local);
+      const normalized = normalizePhoneDigits(local, phoneCode, maxDigits);
+      setPhoneDigits(normalized);
     }
   }, [phoneCode, state.phone, maxDigits]);
 
@@ -267,24 +354,38 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
       setCountryOpen(false);
     }
   } : null, [countryOpen]);
+
+  useDomEvent(document, 'keydown', countryOpen ? (e: KeyboardEvent) => {
+    if (e.key === 'Escape') setCountryOpen(false);
+  } : null, [countryOpen]);
+
   const effectiveCountries = state.countries.length > 0 ? state.countries : FALLBACK_COUNTRIES;
-  const filtered = countrySearch
-    ? effectiveCountries.filter(c => (c.name || c.defaultName || '').toLowerCase().includes(countrySearch.toLowerCase()))
+  const trimmedSearch = countrySearch.trim().toLowerCase();
+  const filtered = trimmedSearch
+    ? effectiveCountries.filter(c => (c.name || c.defaultName || '').toLowerCase().includes(trimmedSearch))
     : effectiveCountries;
 
   return (
-    <div class="login-form">
+    <form class="login-form" onSubmit={handlePhoneSubmit} novalidate>
         <div class="login-phone-field" ref={countryRef}>
           <div class="login-phone-row">
             <label class="login-field-label" for="login-phone-input">{t(S.AUTH_PHONE_LABEL)}</label>
-            <button class="login-country-btn" type="button" onClick={() => setCountryOpen(!countryOpen)}>
-            <span class="login-country-flag">{country ? iso2ToFlag(country.iso2) : '🏳️'}</span>
+            <button
+              class="login-country-btn"
+              type="button"
+              aria-label={t(S.AUTH_COUNTRY)}
+              aria-expanded={countryOpen ? 'true' : 'false'}
+              aria-haspopup="listbox"
+              onClick={() => setCountryOpen(!countryOpen)}
+            >
+            <span class="login-country-flag" aria-hidden="true">{country ? iso2ToFlag(country.iso2) : '🏳️'}</span>
             <span class="login-country-code">+{phoneCode || '?'}</span>
-            <svg width="10" height="7" viewBox="0 0 10 7" fill="none">
+            <svg width="10" height="7" viewBox="0 0 10 7" fill="none" aria-hidden="true">
               <path d="M1 1.5L5 5.5L9 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
           <input
+            ref={phoneInputRef}
             class="login-phone-input"
             type="tel"
             id="login-phone-input"
@@ -292,22 +393,26 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
             placeholder={focused ? phoneMask : ''}
             inputmode="numeric"
             autocomplete="tel"
+            aria-invalid={state.error ? 'true' : 'false'}
+            aria-describedby={state.error ? 'auth-error' : undefined}
             value={displayValue}
             onInput={handleInput}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            onKeyDown={(e: any) => { if (e.key === 'Enter') handleSendCode(state, dispatch, phoneDigits); }}
+            onKeyDown={handlePhoneKeyDown}
           />
         </div>
         {countryOpen ? (
-          <div class="login-country-dropdown">
+          <div class="login-country-dropdown" role="listbox" aria-label={t(S.AUTH_COUNTRY)}>
             <div class="login-country-search-wrap">
               <input
                 class="login-country-search"
                 type="text"
-                placeholder="Search country..."
+                placeholder={t(S.AUTH_COUNTRY)}
+                aria-label={t(S.AUTH_COUNTRY)}
                 value={countrySearch}
                 onInput={(e: any) => setCountrySearch(e.target.value)}
+                onKeyDown={(e: any) => { if (e.key === 'Escape') setCountryOpen(false); }}
               />
             </div>
             <Scrollable className="login-country-list">
@@ -317,9 +422,11 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
                 <button
                   class={`login-country-item${c.iso2 === state.countryIso2 ? ' active' : ''}`}
                   type="button"
+                  role="option"
+                  aria-selected={c.iso2 === state.countryIso2 ? 'true' : 'false'}
                   onClick={() => { dispatch({ type: 'SET_COUNTRY_ISO2', countryIso2: c.iso2 }); setCountryOpen(false); setCountrySearch(''); }}
                 >
-                  <span class="login-country-item-flag">{iso2ToFlag(c.iso2)}</span>
+                  <span class="login-country-item-flag" aria-hidden="true">{iso2ToFlag(c.iso2)}</span>
                   <span class="login-country-item-name">{c.name || c.defaultName}</span>
                   <span class="login-country-item-code">+{c.phoneCode}</span>
                 </button>
@@ -329,9 +436,9 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
         ) : null}
       </div>
 
-      <button class="login-btn login-btn-primary" type="button" onClick={() => handleSendCode(state, dispatch, phoneDigits)}>
+      <button class="login-btn login-btn-primary" type="submit" aria-disabled="false">
         <span>{t(S.AUTH_NEXT)}</span>
-        <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
+        <svg width="18" height="14" viewBox="0 0 18 14" fill="none" aria-hidden="true">
           <path d="M1 7H17M17 7L11 1M17 7L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
@@ -342,122 +449,209 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
         <span class="login-divider-line"></span>
       </div>
 
-      <button class="login-btn login-btn-secondary" type="button" onClick={() => { handleRequestQr(); dispatch({ type: 'SET_AUTH_STEP', authStep: 'qr_login' }); }}>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <button class="login-btn login-btn-secondary" type="button" onClick={() => handleRequestQr(dispatch)}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
         </svg>
         <span>{t(S.AUTH_QR_BUTTON)}</span>
       </button>
 
-      <button class="login-btn login-btn-link" type="button" onClick={() => dispatch({ type: 'SET_AUTH_STEP', authStep: 'signup' })}>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <button class="login-btn login-btn-link" type="button" onClick={() => { dispatch({ type: 'SET_AUTH_STEP', authStep: 'signup' }); dispatch({ type: 'SET_ERROR', error: '' }); }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>
         </svg>
         <span>{t(S.AUTH_SIGNUP_SUBMIT)}</span>
       </button>
-    </div>
+    </form>
   );
 }
 
-function CodeView({ dispatch }: { dispatch: Dispatch }) {
+function CodeView({ dispatch, state }: { dispatch: Dispatch; state?: AppState }) {
+  const [code, setCode] = useState('');
   const [countdown, setCountdown] = useState(RESEND_DELAY);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     requestAnimationFrame(() => {
-      const el = document.getElementById('tg-code-input') as HTMLInputElement | null;
+      const el = inputRef.current || document.getElementById('tg-code-input') as HTMLInputElement | null;
       if (el) el.focus();
     });
   }, []);
 
   useEffect(() => {
-    if (countdown <= 0) return;
-    const id = setInterval(() => setCountdown(c => c - 1), 1000);
-    return () => clearInterval(id);
-  }, [countdown]);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = setInterval(() => {
+      setCountdown(c => {
+        if (c <= 1) {
+          if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, []);
+
+  function onSubmit(e?: any) {
+    if (e) e.preventDefault();
+    handleSignIn(dispatch, code);
+  }
+
+  function handleResend() {
+    dispatch({ type: 'SET_ERROR', error: '' });
+    setCountdown(RESEND_DELAY);
+    // restart interval
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = setInterval(() => {
+      setCountdown(c => {
+        if (c <= 1) { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } return 0; }
+        return c - 1;
+      });
+    }, 1000);
+    window.dispatchEvent(new CustomEvent('tg-auth-resend-code'));
+  }
 
   return (
-    <div class="login-form">
+    <form class="login-form" onSubmit={onSubmit} novalidate>
       <label class="login-field-label" for="tg-code-input">{t(S.AUTH_CODE_LABEL)}</label>
       <input
+        ref={inputRef}
         class="login-code-input"
         id="tg-code-input"
+        type="text"
+        inputmode="numeric"
+        autocomplete="one-time-code"
+        maxlength={6}
         placeholder={t(S.AUTH_CODE_PLACEHOLDER)}
+        value={code}
+        onInput={(e: any) => { setCode(e.target.value); }}
+        onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
         autofocus
-        onKeyDown={(e: any) => { if (e.key === 'Enter') handleSignIn(dispatch); }}
+        aria-invalid={state?.error ? 'true' : 'false'}
       />
       {countdown > 0
-        ? <span class="login-resend-timer">{t(S.AUTH_RESEND_CODE)} ({countdown}s)</span>
-        : <button class="login-btn login-btn-ghost" type="button" onClick={() => { setCountdown(RESEND_DELAY); window.dispatchEvent(new CustomEvent('tg-auth-resend-code')); }}>{t(S.AUTH_RESEND_CODE)}</button>
+        ? <span class="login-resend-timer" aria-live="polite">{t(S.AUTH_RESEND_CODE)} ({countdown}s)</span>
+        : <button class="login-btn login-btn-ghost" type="button" onClick={handleResend}>{t(S.AUTH_RESEND_CODE)}</button>
       }
-      <button class="login-btn login-btn-primary" type="button" onClick={() => handleSignIn(dispatch)}>{t(S.AUTH_SIGN_IN)}</button>
-    </div>
+      <button class="login-btn login-btn-primary" type="submit">{t(S.AUTH_SIGN_IN)}</button>
+    </form>
   );
 }
 
-function PasswordView({ dispatch }: { dispatch: Dispatch }) {
+function PasswordView({ dispatch, state }: { dispatch: Dispatch; state?: AppState }) {
+  const [pw, setPw] = useState('');
+  const [visible, setVisible] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      const el = inputRef.current || document.getElementById('tg-password-input') as HTMLInputElement | null;
+      if (el) el.focus();
+    });
+  }, []);
+
+  function onSubmit(e?: any) {
+    if (e) e.preventDefault();
+    handleCheckPassword(dispatch, pw);
+  }
+
   return (
-    <div class="login-form">
+    <form class="login-form" onSubmit={onSubmit} novalidate>
       <div class="login-phone-field">
         <div class="login-phone-row">
           <input
+            ref={inputRef}
             class="login-phone-input"
-            type="password"
+            type={visible ? 'text' : 'password'}
             id="tg-password-input"
             placeholder={t(S.AUTH_PASSWORD_LABEL)}
             autocomplete="current-password"
-            onKeyDown={(e: any) => { if (e.key === 'Enter') handleCheckPassword(dispatch); }}
+            maxlength={256}
+            value={pw}
+            onInput={(e: any) => { setPw(e.target.value); }}
+            onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
+            autofocus
+            aria-invalid={state?.error ? 'true' : 'false'}
           />
+          <button type="button" class="login-password-toggle" aria-label={visible ? 'Hide password' : 'Show password'} onClick={() => setVisible(v => !v)}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              {visible ? <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></> : <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.53 9.53A3 3 0 0 0 12 15a3 3 0 0 0 2.47-5.47"/><line x1="1" y1="1" x2="23" y2="23"/></>}
+            </svg>
+          </button>
         </div>
       </div>
-      <button class="login-btn login-btn-primary" type="button" onClick={() => handleCheckPassword(dispatch)}>{t(S.AUTH_SUBMIT)}</button>
-    </div>
+      <button class="login-btn login-btn-primary" type="submit">{t(S.AUTH_SUBMIT)}</button>
+    </form>
   );
 }
 
-function handleSignUp(dispatch: Dispatch) {
-  const firstnameInput = document.getElementById('tg-firstname-input') as HTMLInputElement | null;
-  const lastnameInput = document.getElementById('tg-lastname-input') as HTMLInputElement | null;
-  const firstname = firstnameInput?.value?.trim() || '';
-  const lastname = lastnameInput?.value?.trim() || '';
-  if (!firstname) {
-    dispatch({ type: 'SET_ERROR', error: 'First name is required' });
+function handleSignUpWithValues(dispatch: Dispatch, firstname: string, lastname: string, agreed?: boolean) {
+  const fn = firstname.trim();
+  const ln = lastname.trim();
+  if (agreed === false) {
+    dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_TERMS_REQUIRED) });
     return;
   }
-  dispatch({ type: 'SET_SIGNUP_FIRSTNAME', firstname });
-  dispatch({ type: 'SET_SIGNUP_LASTNAME', lastname });
+  if (!fn) {
+    dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_REQUIRED) });
+    return;
+  }
+  if (fn.length > 64 || ln.length > 64) {
+    dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_NAME_TOO_LONG) });
+    return;
+  }
+  dispatch({ type: 'SET_SIGNUP_FIRSTNAME', firstname: fn });
+  dispatch({ type: 'SET_SIGNUP_LASTNAME', lastname: ln });
+  dispatch({ type: 'SET_ERROR', error: '' });
   dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
-  window.dispatchEvent(new CustomEvent('tg-auth-sign-up', { detail: { firstname, lastname } }));
+  window.dispatchEvent(new CustomEvent('tg-auth-sign-up', { detail: { firstname: fn, lastname: ln } }));
 }
 
 function SignUpView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
   const [agreed, setAgreed] = useState(false);
+  const [firstname, setFirstname] = useState(state.signupFirstname || '');
+  const [lastname, setLastname] = useState(state.signupLastname || '');
+
+  function onSubmit(e?: any) {
+    if (e) e.preventDefault();
+    handleSignUpWithValues(dispatch, firstname, lastname, agreed);
+  }
 
   return (
-    <div class="login-form">
+    <form class="login-form" onSubmit={onSubmit} novalidate>
       <p class="login-signup-desc">{t(S.AUTH_SIGNUP_DESC)}</p>
       <input
         class="login-code-input"
         id="tg-firstname-input"
+        type="text"
+        autocomplete="given-name"
+        maxlength={64}
         placeholder={t(S.AUTH_SIGNUP_FIRSTNAME)}
+        value={firstname}
+        onInput={(e: any) => { setFirstname(e.target.value); }}
+        onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
         autofocus
-        value={state.signupFirstname}
-        onInput={(e: any) => dispatch({ type: 'SET_SIGNUP_FIRSTNAME', firstname: e.target.value })}
-        onKeyDown={(e: any) => { if (e.key === 'Enter' && agreed) handleSignUp(dispatch); }}
+        aria-invalid={state.error ? 'true' : 'false'}
+        required
       />
       <input
         class="login-code-input"
         id="tg-lastname-input"
+        type="text"
+        autocomplete="family-name"
+        maxlength={64}
         placeholder={t(S.AUTH_SIGNUP_LASTNAME)}
-        value={state.signupLastname}
-        onInput={(e: any) => dispatch({ type: 'SET_SIGNUP_LASTNAME', lastname: e.target.value })}
-        onKeyDown={(e: any) => { if (e.key === 'Enter' && agreed) handleSignUp(dispatch); }}
+        value={lastname}
+        onInput={(e: any) => { setLastname(e.target.value); }}
+        onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
       />
       <label class="login-terms-check">
-        <input type="checkbox" checked={agreed} onChange={() => setAgreed(!agreed)} />
+        <input type="checkbox" checked={agreed} onChange={() => setAgreed(!agreed)} required />
         <span>{t(S.AUTH_SIGNUP_TERMS).replace('{link}', '')} <a href="https://telegram.org/tos" target="_blank" rel="noopener noreferrer">{t(S.AUTH_SIGNUP_TERMS_LINK)}</a></span>
       </label>
-      <button class="login-btn login-btn-primary" type="button" disabled={!agreed} onClick={() => handleSignUp(dispatch)}>{t(S.AUTH_SIGNUP_SUBMIT)}</button>
-    </div>
+      <button class="login-btn login-btn-primary" type="submit">{t(S.AUTH_SIGNUP_SUBMIT)}</button>
+    </form>
   );
 }
 
@@ -470,6 +664,58 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
 
   const isLoading = state.authStep === 'loading';
 
+  // Keep validation errors visible for 3 seconds - no loader for validation
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  useEffect(() => {
+    if (state.error) {
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+      const errToClear = state.error;
+      errorTimerRef.current = setTimeout(() => {
+        if (stateRef.current.error === errToClear) {
+          dispatch({ type: 'SET_ERROR', error: '' });
+        }
+      }, 3000);
+    } else {
+      if (errorTimerRef.current) {
+        clearTimeout(errorTimerRef.current);
+        errorTimerRef.current = null;
+      }
+    }
+  }, [state.error]);
+
+  useEffect(() => {
+    return () => {
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    };
+  }, []);
+
+  function handleBack() {
+    if (errorTimerRef.current) {
+      clearTimeout(errorTimerRef.current);
+      errorTimerRef.current = null;
+    }
+    dispatch({ type: 'SET_ERROR', error: '' });
+    // If password step was reached via QR (qrToken present), go back to QR; otherwise to phone.
+    // Clear qrToken when leaving qr_login to avoid stale back navigation.
+    if (state.authStep === 'qr_login') {
+      dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
+      return;
+    }
+    if (state.authStep === 'password' && state.qrToken) {
+      dispatch({ type: 'SET_AUTH_STEP', authStep: 'qr_login' });
+      return;
+    }
+    if (state.authStep === 'signup') {
+      // from signup (PHONE_NUMBER_UNOCCUPIED) go to phone, not code
+      dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
+      return;
+    }
+    dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
+  }
+
   return (
     <div class="login-page">
       <div class="login-bg-decor"></div>
@@ -478,7 +724,10 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
           <TelegramCrystal size={100} />
         </div>
         {isLoading ? (
-          <LoadingView />
+          <div class="auth-content">
+            <LoadingView />
+            {state.error ? <div id="auth-error">{renderError(state.error)}</div> : null}
+          </div>
         ) : (
           <div class="auth-content">
             <LangSelector
@@ -488,12 +737,12 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
               suggestionLang={showSuggestion ? browserLang : null}
               onAcceptSuggestion={showSuggestion ? () => setLang(browserLang!) : undefined}
             />
-            <button class="login-theme-toggle" type="button" onClick={() => dispatch({ type: 'SET_THEME', theme: state.theme === 'dark' ? 'light' : 'dark' })}>
+            <button class="login-theme-toggle" type="button" aria-label="Toggle theme" onClick={() => dispatch({ type: 'SET_THEME', theme: state.theme === 'dark' ? 'light' : 'dark' })}>
               <ThemeIcon theme={state.theme} />
             </button>
 
             {state.authStep !== 'phone' ? (
-              <button class="login-btn-back" type="button" onClick={() => dispatch({ type: 'SET_AUTH_STEP', authStep: state.authStep === 'password' && state.qrToken ? 'qr_login' : 'phone' })}>
+              <button class="login-btn-back" type="button" aria-label="Back" onClick={handleBack}>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
               </button>
             ) : (
@@ -502,11 +751,11 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
               </div>
             )}
 
-            {state.error ? renderError(state.error) : null}
+            {state.error ? <div id="auth-error">{renderError(state.error)}</div> : null}
 
             {state.authStep === 'phone' ? <PhoneView state={state} dispatch={dispatch} /> : null}
-            {state.authStep === 'code' ? <CodeView dispatch={dispatch} /> : null}
-            {state.authStep === 'password' ? <PasswordView dispatch={dispatch} /> : null}
+            {state.authStep === 'code' ? <CodeView dispatch={dispatch} state={state} /> : null}
+            {state.authStep === 'password' ? <PasswordView dispatch={dispatch} state={state} /> : null}
             {state.authStep === 'signup' ? <SignUpView state={state} dispatch={dispatch} /> : null}
             {state.authStep === 'qr_login' ? <QrCodeView dispatch={dispatch} /> : null}
           </div>
