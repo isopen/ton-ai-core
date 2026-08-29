@@ -140,6 +140,80 @@ function renderError(err: string) {
   );
 }
 
+// Общий инпут для всех форм авторизации — label в рамке (как у телефона), оптимально один компонент
+function AuthField({
+  id,
+  label,
+  type = 'text',
+  value,
+  placeholder = '',
+  autocomplete,
+  inputmode,
+  maxlength,
+  autoFocus,
+  ariaInvalid,
+  ariaDescribedBy,
+  onInput,
+  onKeyDown,
+  onFocus,
+  onBlur,
+  inputRef,
+  leftSlot,
+  rightSlot,
+  wrapperRef,
+  dropdown,
+}: {
+  id: string;
+  label: string;
+  type?: string;
+  value?: string;
+  placeholder?: string;
+  autocomplete?: string;
+  inputmode?: string;
+  maxlength?: number;
+  autoFocus?: boolean;
+  ariaInvalid?: string;
+  ariaDescribedBy?: string;
+  onInput?: (e: any) => void;
+  onKeyDown?: (e: any) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  inputRef?: any;
+  leftSlot?: any;
+  rightSlot?: any;
+  wrapperRef?: any;
+  dropdown?: any;
+}) {
+  return (
+    <div class="login-phone-field" ref={wrapperRef}>
+      <div class="login-phone-row">
+        <label class="login-field-label" for={id}>{label}</label>
+        {leftSlot}
+        <input
+          ref={inputRef}
+          class="login-phone-input"
+          id={id}
+          type={type}
+          value={value}
+          placeholder={placeholder}
+          autocomplete={autocomplete}
+          inputmode={inputmode}
+          maxlength={maxlength}
+          autofocus={autoFocus}
+          aria-invalid={ariaInvalid}
+          aria-describedby={ariaDescribedBy}
+          onInput={onInput}
+          onKeyDown={onKeyDown}
+          onFocus={onFocus}
+          onBlur={onBlur}
+        />
+        {rightSlot}
+      </div>
+      {dropdown}
+    </div>
+  );
+}
+
 function handleSendCode(state: AppState, dispatch: Dispatch, phoneDigits?: string) {
   const country = resolveCountry(state);
   const phoneCode = country?.phoneCode || '';
@@ -365,76 +439,77 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
     ? effectiveCountries.filter(c => (c.name || c.defaultName || '').toLowerCase().includes(trimmedSearch))
     : effectiveCountries;
 
+  const countryButton = (
+    <button
+      class="login-country-btn"
+      type="button"
+      aria-label={t(S.AUTH_COUNTRY)}
+      aria-expanded={countryOpen ? 'true' : 'false'}
+      aria-haspopup="listbox"
+      onClick={() => setCountryOpen(!countryOpen)}
+    >
+      <span class="login-country-flag" aria-hidden="true">{country ? iso2ToFlag(country.iso2) : '🏳️'}</span>
+      <span class="login-country-code">+{phoneCode || '?'}</span>
+      <svg width="10" height="7" viewBox="0 0 10 7" fill="none" aria-hidden="true">
+        <path d="M1 1.5L5 5.5L9 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  );
+
+  const countryDropdown = countryOpen ? (
+    <div class="login-country-dropdown" role="listbox" aria-label={t(S.AUTH_COUNTRY)}>
+      <div class="login-country-search-wrap">
+        <input
+          class="login-country-search"
+          type="text"
+          placeholder={t(S.AUTH_COUNTRY)}
+          aria-label={t(S.AUTH_COUNTRY)}
+          value={countrySearch}
+          onInput={(e: any) => setCountrySearch(e.target.value)}
+          onKeyDown={(e: any) => { if (e.key === 'Escape') setCountryOpen(false); }}
+        />
+      </div>
+      <Scrollable className="login-country-list">
+        {filtered.length === 0 ? (
+          <div class="login-country-empty">No countries found</div>
+        ) : filtered.map(c => (
+          <button
+            class={`login-country-item${c.iso2 === state.countryIso2 ? ' active' : ''}`}
+            type="button"
+            role="option"
+            aria-selected={c.iso2 === state.countryIso2 ? 'true' : 'false'}
+            onClick={() => { dispatch({ type: 'SET_COUNTRY_ISO2', countryIso2: c.iso2 }); setCountryOpen(false); setCountrySearch(''); }}
+          >
+            <span class="login-country-item-flag" aria-hidden="true">{iso2ToFlag(c.iso2)}</span>
+            <span class="login-country-item-name">{c.name || c.defaultName}</span>
+            <span class="login-country-item-code">+{c.phoneCode}</span>
+          </button>
+        ))}
+      </Scrollable>
+    </div>
+  ) : null;
+
   return (
     <form class="login-form" onSubmit={handlePhoneSubmit} novalidate>
-        <div class="login-phone-field" ref={countryRef}>
-          <div class="login-phone-row">
-            <label class="login-field-label" for="login-phone-input">{t(S.AUTH_PHONE_LABEL)}</label>
-            <button
-              class="login-country-btn"
-              type="button"
-              aria-label={t(S.AUTH_COUNTRY)}
-              aria-expanded={countryOpen ? 'true' : 'false'}
-              aria-haspopup="listbox"
-              onClick={() => setCountryOpen(!countryOpen)}
-            >
-            <span class="login-country-flag" aria-hidden="true">{country ? iso2ToFlag(country.iso2) : '🏳️'}</span>
-            <span class="login-country-code">+{phoneCode || '?'}</span>
-            <svg width="10" height="7" viewBox="0 0 10 7" fill="none" aria-hidden="true">
-              <path d="M1 1.5L5 5.5L9 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-          <input
-            ref={phoneInputRef}
-            class="login-phone-input"
-            type="tel"
-            id="login-phone-input"
-            name="phone"
-            placeholder={focused ? phoneMask : ''}
-            inputmode="numeric"
-            autocomplete="tel"
-            aria-invalid={state.error ? 'true' : 'false'}
-            aria-describedby={state.error ? 'auth-error' : undefined}
-            value={displayValue}
-            onInput={handleInput}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
-            onKeyDown={handlePhoneKeyDown}
-          />
-        </div>
-        {countryOpen ? (
-          <div class="login-country-dropdown" role="listbox" aria-label={t(S.AUTH_COUNTRY)}>
-            <div class="login-country-search-wrap">
-              <input
-                class="login-country-search"
-                type="text"
-                placeholder={t(S.AUTH_COUNTRY)}
-                aria-label={t(S.AUTH_COUNTRY)}
-                value={countrySearch}
-                onInput={(e: any) => setCountrySearch(e.target.value)}
-                onKeyDown={(e: any) => { if (e.key === 'Escape') setCountryOpen(false); }}
-              />
-            </div>
-            <Scrollable className="login-country-list">
-              {filtered.length === 0 ? (
-                <div class="login-country-empty">No countries found</div>
-              ) : filtered.map(c => (
-                <button
-                  class={`login-country-item${c.iso2 === state.countryIso2 ? ' active' : ''}`}
-                  type="button"
-                  role="option"
-                  aria-selected={c.iso2 === state.countryIso2 ? 'true' : 'false'}
-                  onClick={() => { dispatch({ type: 'SET_COUNTRY_ISO2', countryIso2: c.iso2 }); setCountryOpen(false); setCountrySearch(''); }}
-                >
-                  <span class="login-country-item-flag" aria-hidden="true">{iso2ToFlag(c.iso2)}</span>
-                  <span class="login-country-item-name">{c.name || c.defaultName}</span>
-                  <span class="login-country-item-code">+{c.phoneCode}</span>
-                </button>
-              ))}
-            </Scrollable>
-          </div>
-        ) : null}
-      </div>
+      <AuthField
+        id="login-phone-input"
+        label={t(S.AUTH_PHONE_LABEL)}
+        type="tel"
+        value={displayValue}
+        placeholder={focused ? phoneMask : ''}
+        autocomplete="tel"
+        inputmode="numeric"
+        ariaInvalid={state.error ? 'true' : 'false'}
+        ariaDescribedBy={state.error ? 'auth-error' : undefined}
+        onInput={handleInput}
+        onKeyDown={handlePhoneKeyDown}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        inputRef={phoneInputRef}
+        leftSlot={countryButton}
+        wrapperRef={countryRef}
+        dropdown={countryDropdown}
+      />
 
       <button class="login-btn login-btn-primary" type="submit" aria-disabled="false">
         <span>{t(S.AUTH_NEXT)}</span>
@@ -514,21 +589,21 @@ function CodeView({ dispatch, state }: { dispatch: Dispatch; state?: AppState })
 
   return (
     <form class="login-form" onSubmit={onSubmit} novalidate>
-      <label class="login-field-label" for="tg-code-input">{t(S.AUTH_CODE_LABEL)}</label>
-      <input
-        ref={inputRef}
-        class="login-code-input"
+      <AuthField
         id="tg-code-input"
+        label={t(S.AUTH_CODE_LABEL)}
         type="text"
-        inputmode="numeric"
-        autocomplete="one-time-code"
-        maxlength={6}
-        placeholder={t(S.AUTH_CODE_PLACEHOLDER)}
         value={code}
+        placeholder=""
+        autocomplete="one-time-code"
+        inputmode="numeric"
+        maxlength={6}
+        autoFocus={true}
+        ariaInvalid={state?.error ? 'true' : 'false'}
+        ariaDescribedBy={state?.error ? 'auth-error' : undefined}
         onInput={(e: any) => { setCode(e.target.value); }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
-        autofocus
-        aria-invalid={state?.error ? 'true' : 'false'}
+        inputRef={inputRef}
       />
       {countdown > 0
         ? <span class="login-resend-timer" aria-live="polite">{t(S.AUTH_RESEND_CODE)} ({countdown}s)</span>
@@ -558,29 +633,28 @@ function PasswordView({ dispatch, state }: { dispatch: Dispatch; state?: AppStat
 
   return (
     <form class="login-form" onSubmit={onSubmit} novalidate>
-      <div class="login-phone-field">
-        <div class="login-phone-row">
-          <input
-            ref={inputRef}
-            class="login-phone-input"
-            type={visible ? 'text' : 'password'}
-            id="tg-password-input"
-            placeholder={t(S.AUTH_PASSWORD_LABEL)}
-            autocomplete="current-password"
-            maxlength={256}
-            value={pw}
-            onInput={(e: any) => { setPw(e.target.value); }}
-            onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
-            autofocus
-            aria-invalid={state?.error ? 'true' : 'false'}
-          />
+      <AuthField
+        id="tg-password-input"
+        label={t(S.AUTH_PASSWORD_LABEL)}
+        type={visible ? 'text' : 'password'}
+        value={pw}
+        placeholder={t(S.AUTH_PASSWORD_PLACEHOLDER)}
+        autocomplete="current-password"
+        maxlength={256}
+        autoFocus={true}
+        ariaInvalid={state?.error ? 'true' : 'false'}
+        ariaDescribedBy={state?.error ? 'auth-error' : undefined}
+        onInput={(e: any) => { setPw(e.target.value); }}
+        onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
+        inputRef={inputRef}
+        rightSlot={
           <button type="button" class="login-password-toggle" aria-label={visible ? 'Hide password' : 'Show password'} onClick={() => setVisible(v => !v)}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               {visible ? <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></> : <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.53 9.53A3 3 0 0 0 12 15a3 3 0 0 0 2.47-5.47"/><line x1="1" y1="1" x2="23" y2="23"/></>}
             </svg>
           </button>
-        </div>
-      </div>
+        }
+      />
       <button class="login-btn login-btn-primary" type="submit">{t(S.AUTH_SUBMIT)}</button>
     </form>
   );
@@ -621,28 +695,30 @@ function SignUpView({ state, dispatch }: { state: AppState; dispatch: Dispatch }
   return (
     <form class="login-form" onSubmit={onSubmit} novalidate>
       <p class="login-signup-desc">{t(S.AUTH_SIGNUP_DESC)}</p>
-      <input
-        class="login-code-input"
+      <AuthField
         id="tg-firstname-input"
+        label={t(S.AUTH_SIGNUP_FIRSTNAME)}
         type="text"
+        value={firstname}
+        placeholder={t(S.AUTH_SIGNUP_FIRSTNAME)}
         autocomplete="given-name"
         maxlength={64}
-        placeholder={t(S.AUTH_SIGNUP_FIRSTNAME)}
-        value={firstname}
+        autoFocus={true}
+        ariaInvalid={state.error ? 'true' : 'false'}
+        ariaDescribedBy={state.error ? 'auth-error' : undefined}
         onInput={(e: any) => { setFirstname(e.target.value); }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
-        autofocus
-        aria-invalid={state.error ? 'true' : 'false'}
-        required
       />
-      <input
-        class="login-code-input"
+      <AuthField
         id="tg-lastname-input"
+        label={t(S.AUTH_SIGNUP_LASTNAME)}
         type="text"
+        value={lastname}
+        placeholder={t(S.AUTH_SIGNUP_LASTNAME)}
         autocomplete="family-name"
         maxlength={64}
-        placeholder={t(S.AUTH_SIGNUP_LASTNAME)}
-        value={lastname}
+        ariaInvalid={state.error ? 'true' : 'false'}
+        ariaDescribedBy={state.error ? 'auth-error' : undefined}
         onInput={(e: any) => { setLastname(e.target.value); }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
       />
