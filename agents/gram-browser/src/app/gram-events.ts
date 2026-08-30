@@ -32,8 +32,6 @@ async function ensureEmojiAnimSet(): Promise<EmojiAnimSet | null> {
   if (!emojiAnimSetPromise) {
     emojiAnimSetPromise = Promise.race([
       mediaRouter
-        // Same cache key the gram-media pipeline uses for this set, so we hit
-        // its already-fetched copy instead of issuing our own hung RPC.
         .fetchStickerSet('inputStickerSetAnimatedEmojiAnimations', { _: 'inputStickerSetAnimatedEmojiAnimations' })
         .then((res) => {
           if (res && Array.isArray(res.documents) && res.documents.length > 0) {

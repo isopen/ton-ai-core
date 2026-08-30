@@ -142,7 +142,6 @@ export class WorkerTelegramService extends TelegramService {
                     const pad = b64.length % 4 === 0 ? b64 : b64 + '='.repeat(4 - (b64.length % 4));
                     const b = Buffer.from(pad, 'base64');
                     if (b.length > 0) {
-                        // verify round-trip: if re-encoding matches (ignoring padding), it's base64
                         const re = b.toString('base64').replace(/=+$/, '');
                         const orig = s.replace(/=+$/, '').replace(/-/g, '+').replace(/_/g, '/');
                         if (re === orig || b.toString('utf-8').length > 0) return b;
@@ -168,7 +167,7 @@ export class WorkerTelegramService extends TelegramService {
         this.onLog?.('→ messages.getCustomEmojiDocuments id=' + documentId);
         if (!this.workerClient) throw new Error('not connected');
         const raw = await this.workerClient.getCustomEmojiDocuments(documentId);
-        // worker returns array directly or {docs}
+
         if (Array.isArray(raw)) return raw;
         if (raw && Array.isArray(raw.docs)) return raw.docs;
         if (raw && raw.result && Array.isArray(raw.result)) return raw.result;

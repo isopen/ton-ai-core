@@ -325,7 +325,7 @@ function Block({ block, messageId, onButton, documentUrls, richMessage }: { bloc
       const photos: any[] = (richMessage as any)?.photos || (richMessage as any)?.photos || [];
       let photo = photos.find((p: any) => String(p.id) === pid);
       if (!photo && (block as any).photo) photo = (block as any).photo;
-      // fallback: try to find by photo_id in documents? not needed
+
       if (!photo) {
         log.warn('[RichMessage] pageBlockPhoto photo not found', pid, 'photos', photos.length);
         return <div class="rich-unknown">[photo {pid}]</div>;

@@ -581,7 +581,7 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
 
   useEffect(() => {
     if (!hasEmoji) return;
-    // always log for diag when 24 slots or when enabled
+
     const shouldLog = isEnabled('gram-ui:emoji-diag') || isEnabled('gram-ui:emoji-canvas') || emojiSegs.length >= 12;
     if (!shouldLog) return;
     const rows = emojiSegs.map((s) => {

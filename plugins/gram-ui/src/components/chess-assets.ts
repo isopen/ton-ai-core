@@ -1,8 +1,3 @@
-// deprecated: chess-specific client logic removed.
-// Parsing is game-agnostic now (markdown tables/quotes are generic).
-// Future games (e.g. doom) will be server-driven, not client chess engine.
-// This module is kept for backward compatibility only.
-
 export function pieceTypeFromAltChess(_alt: string): string | null { return null; }
 export function chessUnicodeFor(_type: string, _color: 'w' | 'b'): string { return ''; }
 export function isChessPieceAlt(_alt: string): boolean { return false; }

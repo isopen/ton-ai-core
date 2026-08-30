@@ -93,8 +93,7 @@ function formatPhoneNumber(digits: string, patterns?: string[]): string {
 
 function getCaretPosition(formatted: string, digitsBeforeCaret: number, pattern: string): number {
   if (digitsBeforeCaret <= 0) return 0;
-  // Map digitsBeforeCaret to position in formatted string using pattern placeholders
-  // Count placeholders in pattern up to digitsBeforeCaret, then find that position in formatted
+
   let seen = 0;
   for (let i = 0; i < formatted.length; i++) {
     if (/\d/.test(formatted[i])) {
@@ -102,19 +101,18 @@ function getCaretPosition(formatted: string, digitsBeforeCaret: number, pattern:
       if (seen === digitsBeforeCaret) return i + 1;
     }
   }
-  // Fallback: if formatted shorter than expected (e.g., truncated), return end
-  // Also handle pattern with fixed prefix: ensure caret not inside country code
+
   return formatted.length;
 }
 
 function stripTrunkPrefix(digits: string, phoneCode: string): string {
   if (!digits) return digits;
   let out = digits;
-  // strip leading zeros first (common trunk)
+
   while (out.startsWith('0') && out.length > 1) {
     out = out.slice(1);
   }
-  // RU: 8 as domestic trunk -> 8XXXXXXXXXX (11 digits) -> 9XXXXXXXXX
+
   if (phoneCode === '7' && out.startsWith('8') && out.length === 11) {
     out = out.slice(1);
   }
@@ -123,7 +121,7 @@ function stripTrunkPrefix(digits: string, phoneCode: string): string {
 
 function normalizePhoneDigits(rawDigits: string, phoneCode: string, maxDigits: number): string {
   let digits = rawDigits.replace(/\D/g, '');
-  // strip duplicated country code if pasted full international number
+
   if (phoneCode && digits.startsWith(phoneCode) && digits.length > phoneCode.length + 6 && digits.length > maxDigits) {
     digits = digits.slice(phoneCode.length);
   }
@@ -140,7 +138,6 @@ function renderError(err: string) {
   );
 }
 
-// Общий инпут для всех форм авторизации — label в рамке (как у телефона), оптимально один компонент
 function AuthField({
   id,
   label,
@@ -222,7 +219,7 @@ function handleSendCode(state: AppState, dispatch: Dispatch, phoneDigits?: strin
     dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_PHONE) });
     return;
   }
-  // Use controlled phoneDigits if provided, otherwise derive from state.phone (already normalized fullPhone)
+
   let rawDigits: string;
   if (typeof phoneDigits === 'string') {
     rawDigits = phoneDigits;
@@ -235,7 +232,7 @@ function handleSendCode(state: AppState, dispatch: Dispatch, phoneDigits?: strin
   const patForMd = getBestPattern(rawDigits.replace(/\D/g, ''), patterns) || DEFAULT_PATTERN;
   const mdForNorm = patternDigitCount(patForMd);
   let localDigits = normalizePhoneDigits(rawDigits, phoneCode, mdForNorm);
-  // enforce max length before building fullPhone (avoid phone longer than pattern)
+
   const pat = getBestPattern(localDigits, patterns) || DEFAULT_PATTERN;
   const md = patternDigitCount(pat);
   if (md > 0 && localDigits.length > md) {
@@ -257,7 +254,6 @@ function handleRequestQr(dispatch: Dispatch) {
 }
 
 function handleSignIn(dispatch: Dispatch, code: string) {
-  // normalize: remove spaces/dashes, keep digits only (user may paste "12 345")
   const normalized = code.replace(/[\s\-]/g, '').trim();
   if (!normalized) {
     dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_CODE) });
@@ -274,7 +270,6 @@ function handleSignIn(dispatch: Dispatch, code: string) {
 }
 
 function handleCheckPassword(dispatch: Dispatch, password: string) {
-  // Telegram password may contain spaces — do not trim, only check empty
   if (!password || !password.length) {
     dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_CODE) });
     return;
@@ -333,14 +328,13 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
     }
     if (!state.countryIso2) {
       const prefIso2 = typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('ru') ? 'RU' : 'US';
-      // only set if still empty to avoid overwriting server-loaded value
+
       if (!stateRefFallbackCheck(state)) {
         dispatch({ type: 'SET_COUNTRY_ISO2', countryIso2: prefIso2 });
       }
     }
   }, []);
 
-  // helper to avoid overwriting already resolved country
   function stateRefFallbackCheck(s: AppState): boolean {
     return !!s.countryIso2;
   }
@@ -364,32 +358,28 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
     const raw = input.value || '';
     const sel = input.selectionStart ?? raw.length;
     const digitsBeforeCaret = (raw.slice(0, sel).match(/\d/g) || []).length;
-    // count how many digits are country code duplicates before caret? Simplify: normalize whole value then recompute caret
+
     let allDigits = raw.replace(/\D/g, '');
-    // tentative maxDigits for caret calc uses current pattern
+
     let normalized = normalizePhoneDigits(allDigits, phoneCode, maxDigits);
-    // if we stripped country code, adjust digitsBeforeCaret
+
     if (phoneCode && allDigits.startsWith(phoneCode) && allDigits.length > phoneCode.length + 6 && allDigits.length > maxDigits) {
-      // we sliced phoneCode length digits
       const stripped = phoneCode.length;
-      // if caret was after country code, reduce
-      // approximate
+
       if (digitsBeforeCaret > stripped) {
-        // will be handled via formatted caret calc
       }
     }
     setPhoneDigits(normalized);
-    // caret restoration after formatting
+
     requestAnimationFrame(() => {
       const el = phoneInputRef.current || document.getElementById('login-phone-input') as HTMLInputElement | null;
       if (!el) return;
       const newFormatted = formatPhoneNumber(normalized, patterns);
-      // compute digitsBeforeCaret clamped to normalized length
+
       const clampedDigitsBeforeCaret = Math.min(digitsBeforeCaret, normalized.length);
-      // For stripped trunk / country code, heuristic: use number of digits typed before caret minus stripped prefix length
-      // Simpler: compute position where that many digits appear in formatted string
+
       const newPos = getCaretPosition(newFormatted, clampedDigitsBeforeCaret, pattern);
-      // If we stripped trunk/country prefix, newFormatted may be shorter; fallback to end
+
       const pos = Math.min(newPos, newFormatted.length);
       try { el.setSelectionRange(pos, pos); } catch {}
     });
@@ -576,7 +566,7 @@ function CodeView({ dispatch, state }: { dispatch: Dispatch; state?: AppState })
   function handleResend() {
     dispatch({ type: 'SET_ERROR', error: '' });
     setCountdown(RESEND_DELAY);
-    // restart interval
+
     if (intervalRef.current) clearInterval(intervalRef.current);
     intervalRef.current = setInterval(() => {
       setCountdown(c => {
@@ -740,7 +730,6 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
 
   const isLoading = state.authStep === 'loading';
 
-  // Keep validation errors visible for 3 seconds - no loader for validation
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -774,8 +763,7 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
       errorTimerRef.current = null;
     }
     dispatch({ type: 'SET_ERROR', error: '' });
-    // If password step was reached via QR (qrToken present), go back to QR; otherwise to phone.
-    // Clear qrToken when leaving qr_login to avoid stale back navigation.
+
     if (state.authStep === 'qr_login') {
       dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
       return;
@@ -785,7 +773,6 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
       return;
     }
     if (state.authStep === 'signup') {
-      // from signup (PHONE_NUMBER_UNOCCUPIED) go to phone, not code
       dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
       return;
     }

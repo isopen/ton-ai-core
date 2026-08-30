@@ -38,6 +38,5 @@ export class SkillPlugin extends BasePlugin<SkillPluginConfig> {
   }
 
   protected async onInit(): Promise<void> {
-    // UI skills don't need initialization
   }
 }

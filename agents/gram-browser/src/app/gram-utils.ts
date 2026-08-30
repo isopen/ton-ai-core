@@ -81,7 +81,7 @@ export function setDialogsFromServer(s: GramState, raw: any) {
       d.peer.blurUrl = buildPeerBlurThumb(d.peer.photo) || undefined;
     }
   }
-  // Invalidate stale history: if dialog topMessage > cached max, force refresh on next open
+
   for (const d of merged) {
     const peerKey = `${d.peer.type}_${d.peer.id}`;
     const cached = s.messagesCache.current.get(peerKey);
@@ -159,7 +159,6 @@ export function scheduleMessagesFlush(s: GramState) {
         for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
         s.tgui.current?.dispatch({ type: 'SET_MESSAGES', messages: cachedMsgs, photoSources: cachedSources });
       } else {
-        // force dispatch even if same reference, to ensure rich_message update is visible
         s.tgui.current?.dispatch({ type: 'SET_MESSAGES', messages: [...cachedMsgs], photoSources: {} });
         console.info('[flush] forced dispatch for rich_message update');
       }

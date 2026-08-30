@@ -177,7 +177,7 @@ export class AuthKeyCreator {
 
             if (d !== 1n && d !== pq) {
                 const other = pq / d;
-                // Return p as the smaller factor
+
                 if (d < other) {
                     return { p: d, q: other };
                 }
@@ -253,7 +253,6 @@ export class AuthKeyCreator {
         const innerSerializer = new TLSerializer();
         const isTelegramMode = this.config.mode === 'telegram';
         if (isTelegramMode) {
-            // Official Telegram format: p_q_inner_data_dc#a9f55f95 (p,q as strings)
             innerSerializer.writeConstructorId(CONSTRUCTOR_PQ_INNER_DATA_DC);
             innerSerializer.writeBytes(this.bigIntToBytes(this.pq, 8));
             innerSerializer.writeBytes(this.bigIntToBytes(this.p, 4));

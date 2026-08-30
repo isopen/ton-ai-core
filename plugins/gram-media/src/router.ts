@@ -526,7 +526,6 @@ export class GramMediaRouter {
                 const hit = (chResult?.messages || []).find((m: any) => Number(m.id) === Number(id));
                 if (hit) return hit;
             } catch {
-                // fall through to the common message box lookup
             }
         }
         try {

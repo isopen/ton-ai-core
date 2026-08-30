@@ -4,13 +4,10 @@ import { addLog, setDialogsFromServer, fetchSelfUserId } from './gram-utils';
 import type { GramState } from './gram-state';
 import type { WorkerTelegramService } from '@/utils/worker-telegram-service';
 
-// Lazy-loaded QR generator to avoid bundling issues if not needed
 let qrModule: any = null;
 async function getQrModule(): Promise<any> {
   if (qrModule) return qrModule;
   try {
-    // qrcode installed in gram-browser
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     qrModule = await import('qrcode');
     return qrModule;
   } catch {
@@ -28,7 +25,6 @@ function stopQrPolling() {
   }
 }
 
-// Ensure polling stops when navigating away from qr_login
 if (typeof window !== 'undefined') {
   window.addEventListener('tg-auth-set-step', (e: any) => {
     const step = e?.detail?.step;
@@ -43,7 +39,7 @@ function getApiCredentials(): { apiId: number; apiHash: string } {
   if (urlApiId && /^\d+$/.test(urlApiId) && urlApiHash) {
     return { apiId: parseInt(urlApiId, 10), apiHash: urlApiHash };
   }
-  // Webpack DefinePlugin injects process.env.TELEGRAM_API_ID/HASH from .env.local
+
   const envApiIdRaw = typeof process !== 'undefined' ? (process.env as any)?.TELEGRAM_API_ID : undefined;
   const envApiHashRaw = typeof process !== 'undefined' ? (process.env as any)?.TELEGRAM_API_HASH : undefined;
   const rawId = envApiIdRaw ?? '0';
@@ -62,15 +58,14 @@ function hexToBase64Url(hex: string): string {
   for (let i = 0; i < len; i++) {
     bytes[i] = parseInt(clean.substring(i * 2, i * 2 + 2), 16);
   }
-  // Use Buffer if available (polyfilled in browser via buffer package) for safety with large arrays
+
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const Buf = (globalThis as any).Buffer || require('buffer').Buffer;
     if (Buf) {
       return Buf.from(bytes).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
   } catch {}
-  // Fallback chunked btoa without spread (avoid TS downlevelIteration)
+
   let binary = '';
   for (let i = 0; i < bytes.length; i++) {
     binary += String.fromCharCode(bytes[i]);
@@ -91,13 +86,12 @@ export function createAuthCallbacks(
 
   function formatAuthError(msg: string): string {
     if (!msg) return t(S.AUTH_ERROR_BAD_CODE);
-    // Extract FLOOD_WAIT seconds to show user
+
     const floodMatch = /FLOOD_WAIT_(\d+)/.exec(msg);
     if (floodMatch) {
       const secs = parseInt(floodMatch[1], 10);
       const base = t(S.AUTH_ERROR_FLOOD);
       if (Number.isFinite(secs) && secs > 0) {
-        // Try to interpolate seconds if translation supports it, otherwise append
         const withTpl = tpl(S.AUTH_ERROR_FLOOD, { seconds: secs });
         if (withTpl !== S.AUTH_ERROR_FLOOD && withTpl !== base) return withTpl;
         return `${base} (${secs}s)`;
@@ -107,14 +101,14 @@ export function createAuthCallbacks(
     if (/please try again in/i.test(msg)) {
       return t(S.AUTH_ERROR_FLOOD);
     }
-    // PHONE_NUMBER_FLOOD should be treated as flood, not bad phone
+
     if (msg.includes('PHONE_NUMBER_FLOOD')) {
       return t(S.AUTH_ERROR_FLOOD);
     }
     if (msg.includes('PHONE_NUMBER_INVALID') || msg.includes('INVALID_PHONE') || msg.includes('PHONE_NUMBER_APP_SIGNUP_FORBIDDEN')) {
       return t(S.AUTH_ERROR_BAD_PHONE);
     }
-    // More precise phone_code handling
+
     if (msg.includes('PHONE_CODE_EXPIRED') || msg.includes('PHONE_CODE_EMPTY') || msg.includes('PHONE_CODE_INVALID') || msg.includes('PHONE_CODE_HASH_EMPTY')) {
       return t(S.AUTH_ERROR_BAD_CODE);
     }
@@ -123,7 +117,6 @@ export function createAuthCallbacks(
     }
     if (msg.includes('AUTH_RESTART')) return t(S.AUTH_ERROR_BAD_CODE);
     if (msg.includes('PASSWORD_HASH_INVALID') || msg.includes('PASSWORD_MISSING') || msg.includes('SESSION_PASSWORD_NEEDED')) {
-      // Reuse bad_code translation; password error has no dedicated key
       return t(S.AUTH_ERROR_BAD_CODE);
     }
     return msg.replace(/^RPC Error \d+: /, '').slice(0, 300);
@@ -148,7 +141,7 @@ export function createAuthCallbacks(
         s.tgui.current!.setAuthStep('code');
       } catch (e: any) {
         const svc2 = svc();
-        // Ensure we are still on auth page before mutating UI (avoid race after logout)
+
         if (!s.tgui.current) return;
         s.tgui.current!.setError(formatAuthError(e?.message || String(e)));
         s.tgui.current!.setAuthStep('phone');
@@ -312,12 +305,11 @@ export function createAuthCallbacks(
             return;
           }
           s.tgui.current!.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl });
-          // Generate QR locally to avoid leaking token to external service
+
           let dataUrl = '';
           try {
             const mod = await getQrModule();
             if (mod) {
-              // qrcode supports toDataURL with error correction
               const QR = mod.default || mod;
               if (QR.toDataURL) {
                 dataUrl = await QR.toDataURL(tgUrl, { errorCorrectionLevel: 'M', width: 256, margin: 1, color: { dark: '#000', light: '#fff' } });
@@ -327,7 +319,6 @@ export function createAuthCallbacks(
           if (dataUrl) {
             window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: dataUrl, tgUrl } }));
           } else {
-            // Fallback: dispatch tgUrl for client-side rendering; QrCodeView will handle fallback rendering
             window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: '', tgUrl } }));
           }
         };
@@ -400,14 +391,12 @@ export function createAuthCallbacks(
                     s.tgui.current!.setAuthStep('password');
                     return true;
                 }
-                // For transient network errors, stay on QR and retry
+
                 if (e.message?.includes('FLOOD_WAIT')) {
-                  // Respect flood wait before next poll
                   const m = /FLOOD_WAIT_(\d+)/.exec(e.message);
                   if (m) {
                     const secs = parseInt(m[1], 10);
                     if (Number.isFinite(secs) && secs > 5) {
-                      // Delay next poll
                     }
                   }
                 }
@@ -421,7 +410,7 @@ export function createAuthCallbacks(
         pollTimeout = setTimeout(() => {
             stopPolling();
             stopQrPolling();
-            // Expired - show error and allow retry, don't infinite loop
+
             if (s.tgui.current?.state.authStep === 'qr_login') {
               s.tgui.current!.setError('QR code expired. Please refresh.');
             }

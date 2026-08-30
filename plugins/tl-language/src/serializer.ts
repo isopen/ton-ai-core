@@ -95,7 +95,6 @@ export class SchemaSerializer {
     writeBytes(data: Buffer | Uint8Array | string): void {
         let buf: Buffer;
         if (typeof data === 'string') {
-            // string from postMessage clone may be base64/hex; treat as utf8 bytes
             buf = Buffer.from(data, 'utf-8');
         } else {
             buf = Buffer.isBuffer(data) ? data : Buffer.from(data as Uint8Array);

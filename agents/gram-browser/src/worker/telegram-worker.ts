@@ -1795,7 +1795,7 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
     const getRichPreview = (rich: any): string => {
         if (!rich || !Array.isArray(rich.blocks) || rich.blocks.length === 0) return '';
         const first = rich.blocks[0];
-        // try to extract first textPlain from header/title/paragraph
+
         const deep = (node: any, seen = new WeakSet()): string => {
             if (!node || typeof node !== 'object' || seen.has(node)) return '';
             seen.add(node);
@@ -1825,7 +1825,7 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
             const c = chatsMap.get(String(from.chat_id));
             return c?.title || 'Group';
         }
-        // fallback for channel posts where from_id is missing, use peer_id
+
         const peerId = msg.peer_id;
         if (peerId?._ === 'peerChannel') {
             const c = chatsMap.get(String(peerId.channel_id));
@@ -1849,11 +1849,9 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
             const hasRich = !!(lastMsg as any).rich_message && Array.isArray((lastMsg as any).rich_message.blocks) && (lastMsg as any).rich_message.blocks.length > 0;
             const plain = (lastMsg.message || '').trim();
             if (hasRich && !plain) {
-                // markdown goes first — show bot/channel name as text preview
                 lastMsgText = getSenderName(lastMsg) || getRichPreview((lastMsg as any).rich_message) || 'Bot';
                 lastMsgEntities = undefined;
             } else if (hasRich && plain) {
-                // if rich goes first but plain also exists, still prefer rich sender name when first block is markdown header/title
                 const firstBlock = (lastMsg as any).rich_message.blocks[0];
                 const isMarkdownFirst = firstBlock && /Header|Title|Heading|Markdown/i.test(firstBlock._ || '');
                 if (isMarkdownFirst) {
@@ -1872,7 +1870,6 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
                 if (lastMsgEntities && lastMsgEntities.length === 0) lastMsgEntities = undefined;
             }
             if (!lastMsgText) {
-                // fallback to rich preview text if still empty
                 const rp = getRichPreview((lastMsg as any).rich_message);
                 if (rp) lastMsgText = rp;
             }
@@ -2453,18 +2450,15 @@ async function sendCode(phoneNumber: string): Promise<{ phoneCodeHash: string; p
     const boxed = deser.readBoxedObject();
     if (!boxed) throw new Error('Failed to parse auth.sentCode: empty');
     wlog('[worker] sendCode parsed ' + boxed.constructorName);
-    // Accept any auth.SentCode variant (sentCode, sentCodeSuccess, sentCodePaymentRequired etc)
+
     let phoneCodeHash: string | undefined;
     let phoneRegistered = false;
     if (boxed.fields.phone_code_hash) {
         phoneCodeHash = boxed.fields.phone_code_hash;
-        // phone_registered flag was legacy; derive from presence of next_type etc if needed
-        // In current schema auth.sentCode has no phone_registered, but keep false and let signIn error handle signup
-        // Try to detect legacy flag if present
+
         const flags = boxed.fields.flags as number | undefined;
         if (typeof flags === 'number' && (flags & 0x100)) phoneRegistered = true;
     } else if (boxed.constructorName === 'auth.sentCodeSuccess' && boxed.fields.authorization) {
-        // Already authorized (e.g., via logged in on other DC) — treat as authenticated
         wlog('[worker] sendCode got sentCodeSuccess, marking authenticated');
         authenticated = true;
         phoneCodeHash = 'already';
@@ -4179,5 +4173,4 @@ try {
         postMessage({ type: 'ready' });
     }
 } catch {
-    // Not in a DedicatedWorker context (e.g. SharedWorker or in-process) — ignore
 }

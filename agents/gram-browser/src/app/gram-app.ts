@@ -96,11 +96,11 @@ export class GramApp {
       s.tgui.current?.dispatch({ type: 'SET_DIALOGS', dialogs: [] });
       s.tgui.current?.setConnectionStatus('disconnected');
       s.tgui.current?.setPage('auth');
-      // Don't kick out of QR/code flow for fresh auth — let code stay visible and allow retry
+
       if (curStep !== 'qr_login' && wasDialogs) {
         s.tgui.current?.setAuthStep('phone');
       }
-      // Only show "terminated" if user was previously authenticated/dialogs, otherwise it's a fresh/invalid key
+
       if (wasDialogs && curStep !== 'qr_login') {
         s.tgui.current?.setError('Session terminated from another device');
       } else {

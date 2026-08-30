@@ -304,7 +304,6 @@ export class TelegramUI {
   }
 
   mount() {
-    // Mount is handled in constructor via render()
   }
 
   destroy() {

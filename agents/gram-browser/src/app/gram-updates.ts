@@ -17,7 +17,7 @@ function dialogPreviewText(m: any): { text: string; entities: any[] | undefined 
   if (hasRich) {
     const firstBlock = m.richMessage.blocks[0];
     const isMarkdownFirst = firstBlock && /Header|Title|Heading|Paragraph|Block/i.test(firstBlock._ || '');
-    // markdown goes first — show bot/channel name as text preview (user request)
+
     if (!plain || isMarkdownFirst) {
       const sender = (m as any).sender || '';
       if (sender) return { text: sender.slice(0, 100), entities: undefined };
@@ -144,7 +144,7 @@ export function createHandleUpdate(s: GramState) {
               const allCells: any[] = [];
               for (const row of rows) for (const cell of (row.cells||[])) if (cell?.text?.type?.data) allCells.push({sq: (cell.text?.text?.alt || ''), data: String(cell.text.type.data).slice(0,30)});
               console.log('[upd-dbg] board cells with data:', JSON.stringify(allCells).slice(0,1200));
-              // detailed board dump for chess: log each row's pieces
+
               const boardDump = rows.map((row:any, ri:number)=> {
                 const rank = row.cells?.[0]?.text?.text || '?';
                 const cells = (row.cells||[]).slice(1,9).map((c:any)=> {

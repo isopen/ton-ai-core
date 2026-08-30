@@ -23,9 +23,8 @@ export function QrCodeView({ dispatch }: QrCodeViewProps) {
     const tUrl = e.detail?.tgUrl || '';
     if (url) setQrDataUrl(url);
     if (tUrl) setTgUrl(tUrl);
-    // If we got tgUrl but no dataUrl, try local generation as fallback
+
     if (tUrl && !url) {
-      // attempt local generation via qrcode lib if available
       (async () => {
         try {
           const mod: any = await import('qrcode');
@@ -41,10 +40,8 @@ export function QrCodeView({ dispatch }: QrCodeViewProps) {
     }
   }, []);
 
-  // Cleanup polling when unmounting (user navigated away via other means)
   useEffect(() => {
     return () => {
-      // notify gram-auth to stop polling if still on qr_login elsewhere? dispatch step change will handle
     };
   }, []);
 
