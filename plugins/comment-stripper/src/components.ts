@@ -47,19 +47,37 @@ function collectTsComments(text: string, kind: 'TS' | 'JS'): ScanRange[] {
     const ts = require('typescript') as typeof import('typescript');
     const sourceFile = ts.createSourceFile('f.' + (kind === 'TS' ? 'ts' : 'js'), text, ts.ScriptTarget.Latest, true, kind === 'TS' ? ts.ScriptKind.TS : ts.ScriptKind.JS);
     const ranges: ScanRange[] = [];
-    let lastEnd = 0;
-    const visit = (node: any) => {
-        if (ts.isSourceFile(node)) return;
-        const lead = ts.getLeadingCommentRanges(sourceFile.text, node.getFullStart());
-        if (lead) for (const r of lead) ranges.push({ start: r.pos, end: r.end });
-        const trail = ts.getTrailingCommentRanges(sourceFile.text, node.getEnd());
-        if (trail) for (const r of trail) ranges.push({ start: r.pos, end: r.end });
-        lastEnd = Math.max(lastEnd, node.getEnd());
-        ts.forEachChild(node, visit);
+    const pushLead = (pos: number) => {
+        const lead = ts.getLeadingCommentRanges(sourceFile.text, pos);
+        if (!lead) return;
+        for (const r of lead) {
+            if (r.pos === 0 && (sourceFile.text as string).startsWith('#!', 0)) continue;
+            ranges.push({ start: r.pos, end: r.end });
+        }
     };
-    ts.forEachChild(sourceFile, visit);
-    const eof = ts.getTrailingCommentRanges(sourceFile.text, lastEnd);
-    if (eof) for (const r of eof) ranges.push({ start: r.pos, end: r.end });
+    const pushTrail = (pos: number) => {
+        const trail = ts.getTrailingCommentRanges(sourceFile.text, pos);
+        if (!trail) return;
+        for (const r of trail) ranges.push({ start: r.pos, end: r.end });
+    };
+    const visit = (node: any) => {
+        pushLead(node.getFullStart());
+        pushTrail(node.getEnd());
+        let children: any[] = [];
+        try {
+            children = node.getChildren(sourceFile);
+        } catch {
+            children = [];
+        }
+        for (const ch of children) {
+            if (ch.kind > ts.SyntaxKind.LastToken) visit(ch);
+            else {
+                pushLead(ch.getFullStart());
+                pushTrail(ch.getEnd());
+            }
+        }
+    };
+    visit(sourceFile);
     return dedupe(ranges);
 }
 
@@ -152,12 +170,19 @@ function isDocblock(text: string, r: ScanRange, cfg?: LanguageConfig, lang?: str
     return false;
 }
 
+const TOOLING_PRAGMA = /@(jest-environment|ts-ignore|ts-expect-error|ts-nocheck|jsx|jsxImportSource|jsxFrag|jsxRuntime)\b/;
+
+function isToolingPragma(text: string, r: ScanRange): boolean {
+    return TOOLING_PRAGMA.test(text.slice(r.start, r.end));
+}
+
 function stripTextOnce(text: string, lang: string, preserveHeader = false, preserveDocblocks = true): { text: string; count: number } {
     const cfg: LanguageConfig | undefined = LANGUAGES[lang];
     if (!cfg) return { text, count: 0 };
     let ranges = TS_LIKE.has(lang)
         ? collectTsComments(text, lang === 'typescript' ? 'TS' : 'JS')
         : scanComments(text, cfg);
+    ranges = ranges.filter((r) => !isToolingPragma(text, r));
     if (preserveDocblocks) {
         ranges = ranges.filter((r) => !isDocblock(text, r, cfg, lang));
     }

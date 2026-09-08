@@ -5,6 +5,7 @@ const USAGE = `usage: npx ts-node agents/stripper/index.ts <command> [args]
 commands:
   strip <paths...>     strip comments in files/dirs (any language)
                        --preserve-header, -H  keep the leading license/header comment block
+                       --no-docblocks, -D    also strip /** */ docblocks and /*! */ (default: kept)
   unused <paths...>    remove unused vars/imports in files/dirs (ts/js/tsx/jsx only)
   git-dirty            strip comments in all files changed since HEAD
   watch <dir>          watch dir and strip comments on every file save
@@ -28,13 +29,17 @@ async function main(): Promise<void> {
         switch (command) {
             case 'strip': {
                 const preserveHeader = args.includes('--preserve-header') || args.includes('-H');
-                const paths = args.slice(1).filter((a) => a !== '--preserve-header' && a !== '-H');
+                const noDocblocks = args.includes('--no-docblocks') || args.includes('-D');
+                const paths = args.slice(1).filter((a) => a !== '--preserve-header' && a !== '-H' && a !== '--no-docblocks' && a !== '-D');
                 if (paths.length === 0) {
                     console.error('usage: strip <paths...>');
                     process.exitCode = 1;
                     return;
                 }
-                await agent.strip(paths, preserveHeader ? { preserveHeader: true } : undefined);
+                const stripOpts: { preserveHeader?: boolean; preserveDocblocks?: boolean } = {};
+                if (preserveHeader) stripOpts.preserveHeader = true;
+                if (noDocblocks) stripOpts.preserveDocblocks = false;
+                await agent.strip(paths, Object.keys(stripOpts).length ? stripOpts : undefined);
                 break;
             }
             case 'git-dirty':

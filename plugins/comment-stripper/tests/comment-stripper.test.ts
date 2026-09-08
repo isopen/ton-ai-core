@@ -94,9 +94,15 @@ describe('comment removal', () => {
         expect(out).toContain("import { render } from './x.js';");
     });
     it('strips docblocks when preserveDocblocks is disabled', () => {
+        const src = `/** docs */\nimport { render } from './x.js';\n`;
+        const out = stripCommentsText(src, 'typescript', { preserveDocblocks: false }).text;
+        expect(out).not.toContain('docs');
+        expect(out).toContain("import { render } from './x.js';");
+    });
+    it('keeps tooling pragmas even when preserveDocblocks is disabled', () => {
         const src = `/** @jest-environment jsdom */\nimport { render } from './x.js';\n`;
         const out = stripCommentsText(src, 'typescript', { preserveDocblocks: false }).text;
-        expect(out).not.toContain('@jest-environment');
+        expect(out).toContain('@jest-environment');
         expect(out).toContain("import { render } from './x.js';");
     });
     it('removes python comments and keeps blocks readable', () => {
@@ -415,5 +421,51 @@ describe('unused import removal', () => {
         const out = stripUnusedText(src, 'typescript');
         expect(out.removed).toBe(1);
         expect(out.text).toBe(`import { a } from 'x';\nconsole.log(a);\n`);
+    });
+});
+
+describe('ts bracket-attached comments', () => {
+    const cases: Array<[string, string, string, number]> = [
+        ['note before close brace', `if (x) {\n  foo();\n  // note\n}\n`, `if (x) {\n  foo();\n}\n`, 1],
+        ['empty block body', `try { g(); } catch { /* noop */ }\n`, `try { g(); } catch {  }\n`, 1],
+        ['trailing before open brace', `if (ok) { // go\n  run();\n}\n`, `if (ok) {\n  run();\n}\n`, 1],
+        ['run of lines before close', `if (c) {\n  c.start();\n  this.w = c;\n  // NOTE: a\n  // b\n}\n`, `if (c) {\n  c.start();\n  this.w = c;\n}\n`, 2],
+        ['jsx expression container', `const el = <div>{/* tip */}<span /></div>;\n`, `const el = <div>{}<span /></div>;\n`, 1],
+        ['comment lines at eof', `const x = 1;\n// footer\n`, `const x = 1;\n`, 1],
+    ];
+    for (const [name, input, expected, count] of cases) {
+        it(name, () => {
+            const out = stripCommentsText(input, 'typescript', { preserveDocblocks: false });
+            expect(out.comments).toBe(count);
+            expect(out.text).toBe(expected);
+        });
+    }
+});
+
+describe('tooling pragmas are never stripped', () => {
+    const full = { preserveDocblocks: false };
+    it('keeps jest-environment docblock under full strip', () => {
+        const src = `/** @jest-environment jsdom */\nimport { x } from './x';\n// gone\nconsole.log(x);\n`;
+        const out = stripCommentsText(src, 'typescript', full);
+        expect(out.comments).toBe(1);
+        expect(out.text).toBe(`/** @jest-environment jsdom */\nimport { x } from './x';\n\nconsole.log(x);\n`);
+    });
+    it('keeps ts-ignore line comment under full strip', () => {
+        const src = `// @ts-ignore\nconst w = 1;\n// gone\nconsole.log(w);\n`;
+        const out = stripCommentsText(src, 'typescript', full);
+        expect(out.comments).toBe(1);
+        expect(out.text).toBe(`// @ts-ignore\nconst w = 1;\n\nconsole.log(w);\n`);
+    });
+    it('keeps ts-expect-error line comment', () => {
+        const src = `// @ts-expect-error\nconst w: number = 's';\n`;
+        const out = stripCommentsText(src, 'typescript', full);
+        expect(out.comments).toBe(0);
+        expect(out.text).toBe(src);
+    });
+    it('still strips eslint and webpack hints', () => {
+        const src = `// eslint-disable-next-line no-console\nconsole.log(1);\nconst m = await import(/* webpackPrefetch: true */ 'qrcode');\n`;
+        const out = stripCommentsText(src, 'typescript', full);
+        expect(out.comments).toBe(2);
+        expect(out.text).toBe(`console.log(1);\nconst m = await import( 'qrcode');\n`);
     });
 });
