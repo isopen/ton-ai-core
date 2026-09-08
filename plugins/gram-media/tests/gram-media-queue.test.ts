@@ -3,7 +3,7 @@
 import { GramMediaRouter } from '../src/router.js';
 import {
     makeHost, makeTransport, makeDocument, makeVideoDocument, makeBytes,
-    flushPromises, flushTicks, actionsOfType, lastOfType,
+    flushPromises, flushTicks, flushMicrotasks, actionsOfType, lastOfType,
 } from './helpers.js';
 
 function makeRouter(): { router: GramMediaRouter; actions: ReturnType<typeof makeHost>['actions']; setTransport: (t: any) => void } {
@@ -180,5 +180,32 @@ describe('GramMediaRouter document queue', () => {
         await flushTicks();
 
         expect(started).toBe(1);
+    });
+
+    test('gives up after retries and dispatches UPDATE_MESSAGE_DOCUMENT_FAILED', async () => {
+        jest.useFakeTimers();
+        try {
+            const transport = makeTransport({
+                downloadFile: async () => { throw new Error('boom'); },
+            });
+            const { router, actions, setTransport } = makeRouter();
+            setTransport(transport);
+            router.attach();
+
+            window.dispatchEvent(new CustomEvent('tg-download-document', {
+                detail: { document: makeDocument(), messageId: 77, priority: 0 },
+            }));
+            for (let i = 0; i < 8; i++) {
+                await jest.advanceTimersByTimeAsync(12000);
+            }
+            await flushMicrotasks();
+
+            const failed = lastOfType(actions, 'UPDATE_MESSAGE_DOCUMENT_FAILED');
+            expect(failed).toBeTruthy();
+            expect(failed!.messageId).toBe(77);
+            expect(actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT')).toHaveLength(0);
+        } finally {
+            jest.useRealTimers();
+        }
     });
 });

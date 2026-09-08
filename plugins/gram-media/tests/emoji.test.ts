@@ -472,6 +472,50 @@ describe('GramMediaRouter emoji pipeline', () => {
         jest.useRealTimers();
     });
 
+    test('forced fetch retries a stub-banned doc immediately', async () => {
+        const stubDoc = { _: 'documentEmpty', id: '1258816259754120' };
+        const transport = makeTransport({
+            callRpc: async (method) => {
+                if (method === 'messages.getCustomEmojiDocuments') return [stubDoc];
+                return {};
+            },
+            downloadFiles: async () => [],
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+        router.attach();
+
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: ['1258816259754120'] } }));
+        await flushMicrotasks();
+        expect(router.emoji.findEmojiDoc('1258816259754120')).toBeUndefined();
+
+        const fullDoc = makeDocument({ id: '1258816259754120', mime_type: 'video/mp4' });
+        let resolveCallsRpc = 0;
+        setTransport(makeTransport({
+            callRpc: async (method) => {
+                if (method === 'messages.getCustomEmojiDocuments') {
+                    resolveCallsRpc++;
+                    return [fullDoc];
+                }
+                return {};
+            },
+            downloadFiles: async (docs) => docs.map((d, i) => ({
+                index: i,
+                type: d.document.mime_type,
+                bytes: makeBytes(8),
+                cacheSource: 'home-server',
+            })),
+        }));
+
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: ['1258816259754120'], force: true } }));
+        await flushTicks();
+        await flushTicks();
+        expect(resolveCallsRpc).toBeGreaterThanOrEqual(1);
+        expect(router.emoji.findEmojiDoc('1258816259754120')).toBeTruthy();
+        const done = actions.filter((a) => a.type === 'UPDATE_MESSAGE_DOCUMENT' && String(a.messageId) === 'emojipack-1258816259754120');
+        expect(done.length).toBeGreaterThanOrEqual(1);
+    });
+
     test('downloads known emoji via tg-download-document event and caches url', async () => {
         const emojiDoc = makeDocument({ id: '3001', mime_type: 'video/mp4' });
         const transport = makeTransport({

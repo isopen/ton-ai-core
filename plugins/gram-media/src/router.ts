@@ -1,4 +1,4 @@
-import { getLogger, isNoMediaCache } from '@ton-ai/gram-debug';
+import { getLogger } from '@ton-ai/gram-debug';
 import type { MediaHost, MediaTransport, MediaMessageLike, PhotoCacheProbeResult, EmojiKind } from './types.js';
 import type { EmojiPipeline } from './emoji.js';
 import { EmojiPipelineImpl } from './emoji.js';
@@ -160,7 +160,6 @@ export class GramMediaRouter {
     }
 
     injectCachedDocumentSources(msgs: MediaMessageLike[]): Promise<void> {
-        if (isNoMediaCache()) return Promise.resolve();
         const docToMsgs = new Map<string, number[]>();
         for (const m of this.probeWindow(msgs)) {
             const doc = m.media?.document;
@@ -185,7 +184,6 @@ export class GramMediaRouter {
     }
 
     prefetchPhotoCaches(msgs: MediaMessageLike[]): Promise<void> {
-        if (isNoMediaCache()) return Promise.resolve();
         const requests: Array<{ photo: any; sizeType: string }> = [];
         for (const m of this.probeWindow(msgs)) {
             const photo = m.media?.photo;
@@ -206,7 +204,6 @@ export class GramMediaRouter {
     }
 
     injectCachedPhotoUrls(msgs: MediaMessageLike[]): PhotoCacheProbeResult {
-        if (isNoMediaCache()) return { messages: msgs, cachedIds: [] };
         const cachedIds: number[] = [];
         let changedAny = false;
         const messages = msgs.map(m => {
@@ -251,12 +248,10 @@ export class GramMediaRouter {
     }
 
     getCachedEmojiUrl(key: string): string | undefined {
-        if (isNoMediaCache()) return undefined;
         return this.emojiUrlCache.get(key);
     }
 
     setCachedEmojiUrl(key: string, url: string): void {
-        if (isNoMediaCache()) return;
         const prev = this.emojiUrlCache.get(key);
         if (prev === url) return;
         if (prev) {
@@ -457,7 +452,7 @@ export class GramMediaRouter {
 
     async fetchStickerSet(key: string, stickerset: any, forceRefresh = false): Promise<any> {
         const now = Date.now();
-        const cached = forceRefresh || isNoMediaCache() ? undefined : this.stickerSetCache.get(key);
+        const cached = forceRefresh ? undefined : this.stickerSetCache.get(key);
         const hash = cached && cached.expiresAt > now ? cached.hash : 0;
         let res: any;
         try {
@@ -474,9 +469,7 @@ export class GramMediaRouter {
             return undefined;
         }
         if (res && Array.isArray(res?.documents)) {
-            if (!isNoMediaCache()) {
-                this.stickerSetCache.set(key, { set: res, hash: Number(res.hash ?? 0), expiresAt: now + this.stickerSetTtlMs() });
-            }
+            this.stickerSetCache.set(key, { set: res, hash: Number(res.hash ?? 0), expiresAt: now + this.stickerSetTtlMs() });
         }
         return res;
     }
@@ -488,7 +481,7 @@ export class GramMediaRouter {
     async fetchEmojiStickersList(): Promise<any[]> {
         if (this.emojiStickersListPending) return this.emojiStickersListPending;
         const now = Date.now();
-        const hash = !isNoMediaCache() && this.emojiStickersListCache && this.emojiStickersListCache.expiresAt > now ? this.emojiStickersListCache.hash : 0;
+        const hash = this.emojiStickersListCache && this.emojiStickersListCache.expiresAt > now ? this.emojiStickersListCache.hash : 0;
         const p = (async (): Promise<any[]> => {
             let res: any;
             try {
@@ -502,9 +495,7 @@ export class GramMediaRouter {
                 return this.emojiStickersListCache ? this.emojiStickersListCache.sets : [];
             }
             const sets = Array.isArray(res?.sets) ? res.sets : [];
-            if (!isNoMediaCache()) {
-                this.emojiStickersListCache = { sets, hash: Number(res?.hash ?? 0), expiresAt: now + this.stickerSetTtlMs() };
-            }
+            this.emojiStickersListCache = { sets, hash: Number(res?.hash ?? 0), expiresAt: now + this.stickerSetTtlMs() };
             return sets;
         })().finally(() => {
             this.emojiStickersListPending = null;
@@ -615,7 +606,6 @@ export class GramMediaRouter {
     }
 
     private photoUrlCacheSet(key: string, url: string): void {
-        if (isNoMediaCache()) return;
         if (this.photoUrlCache.has(key)) this.photoUrlCache.delete(key);
         this.photoUrlCache.set(key, url);
         while (this.photoUrlCache.size > PHOTO_URL_CACHE_MAX) {
@@ -656,7 +646,7 @@ export class GramMediaRouter {
                 continue;
             }
             const ck = this.getPhotoCacheKey(item.photo, item.sizeType);
-            const cached = isNoMediaCache() ? undefined : this.photoUrlCache.get(ck);
+            const cached = this.photoUrlCache.get(ck);
             if (cached) {
                 this.photoQueuedKeys.delete(String(item.messageId) + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
                 this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached });
@@ -690,7 +680,7 @@ export class GramMediaRouter {
         for (let i = this.avatarQueue.length - 1; i >= 0; i--) {
             const item = this.avatarQueue[i]!;
             const ck = this.getPhotoCacheKey(item.photo, item.sizeType);
-            const cached = isNoMediaCache() ? undefined : this.photoUrlCache.get(ck);
+            const cached = this.photoUrlCache.get(ck);
             if (cached) {
                 this.avatarQueuedKeys.delete(item.messageId + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
                 this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached });
@@ -717,7 +707,7 @@ export class GramMediaRouter {
         const RETRY_DELAYS = [1000, 3000, 5000];
         let currentPhoto = photo;
         const ck = this.getPhotoCacheKey(photo, sizeType);
-        const cached = isNoMediaCache() ? undefined : this.photoUrlCache.get(ck);
+        const cached = this.photoUrlCache.get(ck);
         if (cached) {
             this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: cached, cacheSource: 'memory' });
             if (String(messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(photo?.id ?? currentPhoto?.id ?? ''), url: cached, messageId });
@@ -881,7 +871,7 @@ export class GramMediaRouter {
             return;
         }
         if (isEmoji) {
-            const cachedUrl = isNoMediaCache() ? undefined : this.emojiUrlCache.get(messageId);
+            const cachedUrl = this.emojiUrlCache.get(messageId);
             if (cachedUrl) {
                 if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
                 this.dispatchDocumentUrl(messageId, cachedUrl);
@@ -1356,6 +1346,7 @@ export class GramMediaRouter {
             this.documentRetryCounts.delete(messageId);
             this.retryPendingDocs.delete(messageId);
             this.documentPending.delete(messageId);
+            this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_FAILED', messageId });
             window.dispatchEvent(new CustomEvent('tg-document-download-failed', { detail: { messageId } }));
             return;
         }

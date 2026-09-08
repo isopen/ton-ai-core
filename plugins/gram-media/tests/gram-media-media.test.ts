@@ -14,13 +14,13 @@ function makeRouter(): { router: GramMediaRouter; actions: ReturnType<typeof mak
 }
 
 describe('GramMediaRouter noMediaCache flag', () => {
-    test('emoji URL cache is bypassed when the flag is on and works when it is off', () => {
+    test('memory emoji URL cache stays active when the flag is on', () => {
         const { router } = makeRouter();
         configure({ noMediaCache: true });
         try {
             router.setCachedEmojiUrl('emojipack-1', 'blob:x');
-            expect(router.getCachedEmojiUrl('emojipack-1')).toBeUndefined();
-            expect(router.emojiUrlCacheKeys()).toHaveLength(0);
+            expect(router.getCachedEmojiUrl('emojipack-1')).toBe('blob:x');
+            expect(router.emojiUrlCacheKeys()).toHaveLength(1);
         } finally {
             configure({ noMediaCache: false });
         }
@@ -28,7 +28,7 @@ describe('GramMediaRouter noMediaCache flag', () => {
         expect(router.getCachedEmojiUrl('emojipack-1')).toBe('blob:x');
     });
 
-    test('photo downloads do not populate the photo URL cache when the flag is on', async () => {
+    test('photo downloads populate the memory photo cache even when the flag is on', async () => {
         const transport = makeTransport({
             startPhotoDownload: async () => ({ bytes: makeBytes(64), mime: 'image/jpeg' }),
         });
@@ -43,7 +43,7 @@ describe('GramMediaRouter noMediaCache flag', () => {
             await flushTicks();
             expect(lastOfType(actions, 'UPDATE_MESSAGE_PHOTO')!.url).toMatch(/^blob:/);
             const probe = router.injectCachedPhotoUrls([{ id: 1, media: { photo: makePhoto() } }]);
-            expect(probe.cachedIds).toHaveLength(0);
+            expect(probe.cachedIds).toHaveLength(1);
         } finally {
             configure({ noMediaCache: false });
         }

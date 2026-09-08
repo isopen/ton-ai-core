@@ -310,8 +310,19 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     }
 
     private onFetchCustomEmoji = async (e: Event) => {
-        const { ids } = (e as CustomEvent).detail || {};
+        const { ids, force } = (e as CustomEvent).detail || {};
         if (!Array.isArray(ids) || ids.length === 0) return;
+        if (force === true) {
+            for (const raw of ids) {
+                const id = String(raw);
+                this.fetchedEmojiIds.delete(id);
+                this.unresolvedEmojiIds.delete(id);
+                this.emojiDocAttempts.delete(id);
+                this.emojiAttemptAt.delete(id);
+                this.emojiStubDocIds.delete(id);
+                this.clearEmojiInFlight(id);
+            }
+        }
         const fresh = ids.filter((id: any) => this.canResolveEmojiId(String(id)));
         if (fresh.length === 0) return;
         try {
@@ -328,10 +339,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     this.emojiCustomDocsById.set(id, doc);
                     changed = true;
                 }
-                if (this.canRequestEmojiDoc(id)) {
-                    this.markEmojiDocInFlight(id);
-                    toDownload.push({ id, doc, priority: 1 });
-                }
+                toDownload.push({ id, doc, priority: 1 });
             }
             if (changed) this.indexEmojiDocs();
             if (toDownload.length > 0) void this.downloadEmojiList(toDownload);
@@ -1038,7 +1046,6 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 const id = String(doc.id);
                 this.notifyEmojiDocKind(id, doc?.mime_type || '');
                 if (this.canRequestEmojiDoc(id)) {
-                    this.markEmojiDocInFlight(id);
                     this.notifyCustomEmojiAlt(doc);
                     resolved.push({ id, doc, priority, ctx: it.ctx });
                 }
@@ -1094,7 +1101,6 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     changed = true;
                 }
                 if (this.canRequestEmojiDoc(id)) {
-                    this.markEmojiDocInFlight(id);
                     list.push({ id, doc, priority: 0 });
                 }
             }
@@ -1299,6 +1305,8 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         if (this.debug) log.info('[gram-media] emoji batch download start items=' + stillNeeded.length);
 
         for (const r of stillNeeded) {
+            if (!this.canRequestEmojiDoc(r.id)) continue;
+            this.markEmojiDocInFlight(r.id);
             this.router.emitWindow('tg-download-document', {
                 document: r.doc, messageId: 'emojipack-' + r.id, priority: r.priority, ctx: r.ctx,
             });
