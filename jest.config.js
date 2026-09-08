@@ -55,7 +55,8 @@ module.exports = {
     '<rootDir>/plugins/gram-media/tests',
     '<rootDir>/plugins/gram-debug/tests',
     '<rootDir>/plugins/tmd/tests',
-    '<rootDir>/plugins/gram-ui/tests'
+    '<rootDir>/plugins/gram-ui/tests',
+    '<rootDir>/plugins/gram-lang/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
@@ -83,6 +84,7 @@ module.exports = {
     '^@ton-ai/gram-debug$': '<rootDir>/plugins/gram-debug/src/index.ts',
     '^@ton-ai/gram-media$': '<rootDir>/plugins/gram-media/src/index.ts',
     '^@ton-ai/gram-db$': '<rootDir>/plugins/gram-db/src/index.ts',
+    '^@ton-ai/gram-lang$': '<rootDir>/plugins/gram-lang/src/index.ts',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
 };

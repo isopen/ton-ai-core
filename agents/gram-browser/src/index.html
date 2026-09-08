@@ -8,16 +8,22 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icon.svg" />
+  <link rel="dns-prefetch" href="//venus.web.telegram.org" />
+  <link rel="preconnect" href="https://venus.web.telegram.org" crossorigin />
+  <link rel="dns-prefetch" href="//kws1.web.telegram.org" />
+  <link rel="preconnect" href="https://kws1.web.telegram.org" crossorigin />
+  <link rel="dns-prefetch" href="//kws2.web.telegram.org" />
+  <link rel="preconnect" href="https://kws2.web.telegram.org" crossorigin />
+  <link rel="dns-prefetch" href="//kws3.web.telegram.org" />
+  <link rel="dns-prefetch" href="//kws4.web.telegram.org" />
+  <link rel="dns-prefetch" href="//kws5.web.telegram.org" />
   <title>TON AI Gram</title>
   <script>
     (function(){
       try {
-        var m = document.cookie.match(/(?:^|;\s*)tg-theme=([^;]*)/);
-        if (m) {
-          var t = m[1];
-          document.documentElement.setAttribute('data-theme', t);
-          document.documentElement.style.background = t === 'light' ? '#ffffff' : '#121212';
-        }
+        var t = 'light';
+        document.documentElement.setAttribute('data-theme', t);
+        document.documentElement.style.background = '#ffffff';
       } catch(e) {}
     })();
   </script>

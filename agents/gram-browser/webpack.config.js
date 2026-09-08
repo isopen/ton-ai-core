@@ -23,7 +23,29 @@ module.exports = {
   output: {
     path: path.resolve(__dirname, 'dist'),
     filename: 'static/[name].[contenthash:8].js',
+    chunkFilename: 'static/[name].[contenthash:8].js',
     clean: true,
+  },
+  optimization: {
+    splitChunks: {
+      chunks: 'all',
+      cacheGroups: {
+        qrcode: {
+          test: /[\\/]node_modules[\\/]qrcode[\\/]/,
+          name: 'qrcode',
+          chunks: 'async',
+          priority: 20,
+          reuseExistingChunk: true,
+        },
+        vendor: {
+          test: /[\\/]node_modules[\\/]/,
+          name: 'vendor',
+          chunks: 'initial',
+          priority: 10,
+          enforce: true,
+        },
+      },
+    },
   },
   resolve: {
     extensions: ['.ts', '.js', '.mjs'],
@@ -71,6 +93,7 @@ module.exports = {
       ...envKeys,
       'process.env.TELEGRAM_API_ID': JSON.stringify(env.TELEGRAM_API_ID),
       'process.env.TELEGRAM_API_HASH': JSON.stringify(env.TELEGRAM_API_HASH),
+      'process.env.GRAM_BUILD_TIME': JSON.stringify(new Date().toISOString()),
     }),
     new webpack.NormalModuleReplacementPlugin(
       /^@ton-ai\/core$/,

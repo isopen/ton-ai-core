@@ -20,6 +20,14 @@
     "./framework/hooks": {
       "types": "./dist/framework/hooks.d.ts",
       "default": "./dist/framework/hooks.js"
+    },
+    "./utils/qr": {
+      "types": "./dist/utils/qr.d.ts",
+      "default": "./dist/utils/qr.js"
+    },
+    "./primitives/qr-code": {
+      "types": "./dist/primitives/qr-code.d.ts",
+      "default": "./dist/primitives/qr-code.js"
     }
   },
   "author": "TON AI Core Team",
@@ -34,6 +42,7 @@
     "@ton-ai/atom": "*",
     "@ton-ai/core": "*",
     "@ton-ai/gram-debug": "*",
+    "@ton-ai/gram-lang": "*",
     "@ton-ai/tgs": "*",
     "@ton-ai/tmd": "*"
   },

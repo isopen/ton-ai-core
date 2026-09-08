@@ -1,7 +1,14 @@
 const CACHE = 'gram-v6';
 
-self.addEventListener('install', () => {
+self.addEventListener('install', (event) => {
   self.skipWaiting();
+  event.waitUntil(
+    caches.open(CACHE).then((cache) => {
+      return cache.addAll([
+        '/static/main.' + (self.__WB_MANIFEST ? '' : ''),
+      ].filter(Boolean)).catch(() => {});
+    })
+  );
 });
 
 self.addEventListener('activate', (event) => {
@@ -21,7 +28,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(event.request).then((response) => {
         const cloned = response.clone();
-        caches.open(CACHE).then((cache) => cache.put(event.request, cloned).catch(() => {}));
+        event.waitUntil(caches.open(CACHE).then((cache) => cache.put(event.request, cloned).catch(() => {})));
         return response;
       }).catch(() => caches.match(event.request))
     );
@@ -31,12 +38,11 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       caches.open(CACHE).then((cache) => {
         return cache.match(event.request).then((cached) => {
-          if (cached) return cached;
-          return fetch(event.request).then((response) => {
-            const cloned = response.clone();
-            cache.put(event.request, cloned).catch(() => {});
+          const networkFetch = fetch(event.request).then((response) => {
+            if (response.ok) event.waitUntil(cache.put(event.request, response.clone()).catch(() => {}));
             return response;
-          });
+          }).catch(() => cached);
+          return cached || networkFetch;
         });
       })
     );
@@ -48,7 +54,7 @@ self.addEventListener('fetch', (event) => {
       return fetch(event.request).then((response) => {
         if (response.ok) {
           const cloned = response.clone();
-          caches.open(CACHE).then((cache) => cache.put(event.request, cloned).catch(() => {}));
+          event.waitUntil(caches.open(CACHE).then((cache) => cache.put(event.request, cloned).catch(() => {})));
         }
         return response;
       });

@@ -32,6 +32,30 @@
     "./reconciler": {
       "types": "./dist/reconciler.d.ts",
       "default": "./dist/reconciler.js"
+    },
+    "./scheduler": {
+      "types": "./dist/scheduler.d.ts",
+      "default": "./dist/scheduler.js"
+    },
+    "./context": {
+      "types": "./dist/context.d.ts",
+      "default": "./dist/context.js"
+    },
+    "./suspense": {
+      "types": "./dist/suspense.d.ts",
+      "default": "./dist/suspense.js"
+    },
+    "./boundary": {
+      "types": "./dist/boundary.d.ts",
+      "default": "./dist/boundary.js"
+    },
+    "./portal": {
+      "types": "./dist/portal.d.ts",
+      "default": "./dist/portal.js"
+    },
+    "./dev": {
+      "types": "./dist/dev.d.ts",
+      "default": "./dist/dev.js"
     }
   },
   "author": "TON AI Core Team",
