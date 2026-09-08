@@ -1,10 +1,11 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useState, useRef, useDomEvent } from '@ton-ai/atom/hooks';
+import type { LangOption } from '@ton-ai/gram-lang';
 import { Scrollable } from '../primitives/scrollable.js';
 
 interface LangSelectorProps {
   current: string;
-  options: Array<{ code: string; label: string }>;
+  options: LangOption[];
   onChange: (code: string) => void;
   suggestionLang?: string | null;
   onAcceptSuggestion?: () => void;
@@ -13,7 +14,8 @@ interface LangSelectorProps {
 export function LangSelector({ current, options, onChange, suggestionLang, onAcceptSuggestion }: LangSelectorProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLElement | null>(null);
-  const currentLabel = options.find(o => o.code === current)?.label || current;
+  const isLoading = options.length === 0;
+  const currentLabel = options.find(o => o.code === current)?.label || (isLoading ? 'Loading...' : current);
 
   useDomEvent(document, 'mousedown', open ? (e: Event) => {
     if (ref.current && !ref.current.contains(e.target as Node)) {
@@ -21,16 +23,25 @@ export function LangSelector({ current, options, onChange, suggestionLang, onAcc
     }
   } : null, [open]);
 
-  const showSuggestion = suggestionLang && suggestionLang !== current && onAcceptSuggestion;
+  const showSuggestion = !isLoading && suggestionLang && suggestionLang !== current && onAcceptSuggestion;
   const suggestionLabel = showSuggestion ? options.find(o => o.code === suggestionLang)?.label || suggestionLang : '';
 
   return (
     <div class="login-lang-wrap" ref={ref}>
       <div class="login-lang-trigger-wrap">
-        <button class="login-lang-btn" type="button" onClick={() => setOpen(!open)}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
-          </svg>
+        <button class="login-lang-btn" type="button" onClick={() => {
+          if (isLoading) {
+            try { window.dispatchEvent(new CustomEvent('tg-refresh-langs')); } catch {}
+          }
+          setOpen(!open);
+        }}>
+          {isLoading ? (
+            <span class="login-spinner" style="width:14px;height:14px;border-width:2px" aria-hidden="true"></span>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
+            </svg>
+          )}
           <span>{currentLabel}</span>
           <svg width="12" height="8" viewBox="0 0 12 8" fill="none">
             <path d="M1 1.5L6 6.5L11 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -39,7 +50,9 @@ export function LangSelector({ current, options, onChange, suggestionLang, onAcc
         {open ? (
           <div class="login-lang-dropdown">
             <Scrollable className="login-lang-list">
-              {options.map(o => (
+              {isLoading ? (
+                <div class="login-country-empty"><span class="login-spinner" style="width:16px;height:16px;border-width:2px"></span> Loading languages...</div>
+              ) : options.map(o => (
                 <button
                   class={`login-lang-opt${o.code === current ? ' active' : ''}`}
                   type="button"

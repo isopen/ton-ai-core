@@ -1,7 +1,13 @@
+import { getBuiltinStrings } from './local/en';
+
 let current: Record<string, string> = {};
 
+function enBase(): Record<string, string> {
+  return getBuiltinStrings('en') || {};
+}
+
 export function t(key: string): string {
-  return current[key] ?? key;
+  return current[key] ?? enBase()[key] ?? key;
 }
 
 export function setStrings(map: Record<string, string>) {
@@ -9,7 +15,7 @@ export function setStrings(map: Record<string, string>) {
 }
 
 export function tpl(key: string, params: Record<string, string | number>): string {
-  let str = current[key] ?? key;
+  let str = current[key] ?? enBase()[key] ?? key;
   for (const [k, v] of Object.entries(params)) {
     str = str.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
   }
