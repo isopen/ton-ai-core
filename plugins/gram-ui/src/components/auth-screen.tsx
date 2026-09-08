@@ -2,34 +2,11 @@ import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import type { AppState, UIAction } from '../types.js';
 import type { Dispatch } from '../state.js';
 import { useState, useEffect, useRef, useDomEvent } from '@ton-ai/atom/hooks';
-import { t } from '../locale.js';
-import { S } from '../strings.js';
+import { t, S, normalizeLangCode } from '@ton-ai/gram-lang';
 import { LangSelector } from './lang-selector.js';
 import { QrCodeView } from './qr-code-view.js';
 import { Scrollable } from '../primitives/scrollable.js';
-
-function ThemeIcon({ theme }: { theme: 'light' | 'dark' }) {
-  if (theme === 'dark') {
-    return (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="5"/>
-        <line x1="12" y1="1" x2="12" y2="3"/>
-        <line x1="12" y1="21" x2="12" y2="23"/>
-        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-        <line x1="1" y1="12" x2="3" y2="12"/>
-        <line x1="21" y1="12" x2="23" y2="12"/>
-        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-      </svg>
-    );
-  }
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-    </svg>
-  );
-}
+import { ThemeToggle } from './theme-morph-icon.js';
 
 function TelegramCrystal({ size = 100 }: { size?: number }) {
   return (
@@ -159,6 +136,9 @@ function AuthField({
   rightSlot,
   wrapperRef,
   dropdown,
+  disabled,
+  error,
+  errorVersion,
 }: {
   id: string;
   label: string;
@@ -180,6 +160,9 @@ function AuthField({
   rightSlot?: any;
   wrapperRef?: any;
   dropdown?: any;
+  disabled?: boolean;
+  error?: string;
+  errorVersion?: number;
 }) {
   return (
     <div class="login-phone-field" ref={wrapperRef}>
@@ -203,10 +186,12 @@ function AuthField({
           onKeyDown={onKeyDown}
           onFocus={onFocus}
           onBlur={onBlur}
+          disabled={disabled}
         />
         {rightSlot}
       </div>
       {dropdown}
+      {error ? <div key={errorVersion} class="login-field-error" role="alert">{error}</div> : null}
     </div>
   );
 }
@@ -238,11 +223,15 @@ function handleSendCode(state: AppState, dispatch: Dispatch, phoneDigits?: strin
   if (md > 0 && localDigits.length > md) {
     localDigits = localDigits.slice(0, md);
   }
-  if (!localDigits || localDigits.length < 6) {
+  if (!localDigits || localDigits.length < 7) {
     dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_PHONE) });
     return;
   }
   const fullPhone = `+${phoneCode}${localDigits}`;
+  if (!/^\+\d{7,15}$/.test(fullPhone)) {
+    dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_PHONE) });
+    return;
+  }
   dispatch({ type: 'SET_ERROR', error: '' });
   dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading', phone: fullPhone });
   window.dispatchEvent(new CustomEvent('tg-auth-send-code', { detail: { phone: fullPhone } }));
@@ -259,7 +248,7 @@ function handleSignIn(dispatch: Dispatch, code: string) {
     dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_CODE) });
     return;
   }
-  if (!/^\d{4,6}$/.test(normalized)) {
+  if (!/^\d{4,8}$/.test(normalized)) {
     dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_CODE) });
     return;
   }
@@ -270,37 +259,26 @@ function handleSignIn(dispatch: Dispatch, code: string) {
 }
 
 function handleCheckPassword(dispatch: Dispatch, password: string) {
-  if (!password || !password.length) {
+  const trimmed = password ? String(password).trim() : '';
+  if (!trimmed) {
     dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_CODE) });
     return;
   }
-  if (password.length > 256) {
+  if (trimmed.length > 256) {
     dispatch({ type: 'SET_ERROR', error: t(S.AUTH_ERROR_BAD_CODE) });
     return;
   }
-  dispatch({ type: 'SET_PASSWORD', password });
+  dispatch({ type: 'SET_PASSWORD', password: trimmed });
   dispatch({ type: 'SET_ERROR', error: '' });
   dispatch({ type: 'SET_AUTH_STEP', authStep: 'loading' });
   window.dispatchEvent(new CustomEvent('tg-auth-check-password', { detail: { password } }));
 }
 
-const FALLBACK_COUNTRIES: AppState['countries'] = [
-  { iso2: 'RU', phoneCode: '7', patterns: ['XXX XXX-XX-XX'], defaultName: 'Russia', name: 'Russia' },
-  { iso2: 'US', phoneCode: '1', patterns: ['XXX XXX XXXX'], defaultName: 'United States', name: 'United States' },
-  { iso2: 'UA', phoneCode: '380', patterns: ['XX XXX XX XX'], defaultName: 'Ukraine', name: 'Ukraine' },
-  { iso2: 'BY', phoneCode: '375', patterns: ['XX XXX-XX-XX'], defaultName: 'Belarus', name: 'Belarus' },
-  { iso2: 'KZ', phoneCode: '7', patterns: ['XXX XXX-XX-XX'], defaultName: 'Kazakhstan', name: 'Kazakhstan' },
-  { iso2: 'DE', phoneCode: '49', patterns: ['XXX XXXXXXX'], defaultName: 'Germany', name: 'Germany' },
-  { iso2: 'FR', phoneCode: '33', patterns: ['X XX XX XX XX'], defaultName: 'France', name: 'France' },
-  { iso2: 'GB', phoneCode: '44', patterns: ['XXXX XXXXXX'], defaultName: 'United Kingdom', name: 'United Kingdom' },
-];
-
 function resolveCountry(state: AppState) {
-  const effective = state.countries.length > 0 ? state.countries : FALLBACK_COUNTRIES;
-  const found = effective.find(c => c.iso2 === state.countryIso2);
+  if (state.countries.length === 0) return null;
+  const found = state.countries.find(c => c.iso2 === state.countryIso2);
   if (found) return found;
-  const pref = typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('ru') ? 'RU' : 'US';
-  return effective.find(c => c.iso2 === pref) || effective[0];
+  return null;
 }
 
 const RESEND_DELAY = 30;
@@ -321,23 +299,6 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
     const pc = country?.phoneCode || '';
     return state.phone ? state.phone.replace(/\D/g, '').slice(pc.length) : '';
   });
-
-  useEffect(() => {
-    if (state.countries.length === 0) {
-      dispatch({ type: 'SET_COUNTRIES', countries: FALLBACK_COUNTRIES });
-    }
-    if (!state.countryIso2) {
-      const prefIso2 = typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('ru') ? 'RU' : 'US';
-
-      if (!stateRefFallbackCheck(state)) {
-        dispatch({ type: 'SET_COUNTRY_ISO2', countryIso2: prefIso2 });
-      }
-    }
-  }, []);
-
-  function stateRefFallbackCheck(s: AppState): boolean {
-    return !!s.countryIso2;
-  }
 
   const formatted = formatPhoneNumber(phoneDigits, patterns);
   const displayValue = formatted;
@@ -423,7 +384,8 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
     if (e.key === 'Escape') setCountryOpen(false);
   } : null, [countryOpen]);
 
-  const effectiveCountries = state.countries.length > 0 ? state.countries : FALLBACK_COUNTRIES;
+  const isCountriesLoading = state.countries.length === 0;
+  const effectiveCountries = state.countries;
   const trimmedSearch = countrySearch.trim().toLowerCase();
   const filtered = trimmedSearch
     ? effectiveCountries.filter(c => (c.name || c.defaultName || '').toLowerCase().includes(trimmedSearch))
@@ -436,13 +398,24 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
       aria-label={t(S.AUTH_COUNTRY)}
       aria-expanded={countryOpen ? 'true' : 'false'}
       aria-haspopup="listbox"
-      onClick={() => setCountryOpen(!countryOpen)}
+      onClick={() => {
+        if (isCountriesLoading) {
+          try { window.dispatchEvent(new CustomEvent('tg-refresh-countries')); } catch {}
+        }
+        setCountryOpen(!countryOpen);
+      }}
     >
-      <span class="login-country-flag" aria-hidden="true">{country ? iso2ToFlag(country.iso2) : '🏳️'}</span>
-      <span class="login-country-code">+{phoneCode || '?'}</span>
-      <svg width="10" height="7" viewBox="0 0 10 7" fill="none" aria-hidden="true">
-        <path d="M1 1.5L5 5.5L9 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
+      {isCountriesLoading ? (
+        <span class="login-spinner" style="width:14px;height:14px;border-width:2px" aria-hidden="true"></span>
+      ) : (
+        <>
+          <span class="login-country-flag" aria-hidden="true">{country ? iso2ToFlag(country.iso2) : '🏳️'}</span>
+          <span class="login-country-code">+{phoneCode || '?'}</span>
+          <svg width="10" height="7" viewBox="0 0 10 7" fill="none" aria-hidden="true">
+            <path d="M1 1.5L5 5.5L9 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </>
+      )}
     </button>
   );
 
@@ -460,7 +433,9 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
         />
       </div>
       <Scrollable className="login-country-list">
-        {filtered.length === 0 ? (
+        {isCountriesLoading ? (
+          <div class="login-country-empty"><span class="login-spinner" style="width:16px;height:16px;border-width:2px"></span> Loading countries...</div>
+        ) : filtered.length === 0 ? (
           <div class="login-country-empty">No countries found</div>
         ) : filtered.map(c => (
           <button
@@ -481,27 +456,35 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
 
   return (
     <form class="login-form" onSubmit={handlePhoneSubmit} novalidate>
-      <AuthField
-        id="login-phone-input"
-        label={t(S.AUTH_PHONE_LABEL)}
-        type="tel"
-        value={displayValue}
-        placeholder={focused ? phoneMask : ''}
-        autocomplete="tel"
-        inputmode="numeric"
-        ariaInvalid={state.error ? 'true' : 'false'}
-        ariaDescribedBy={state.error ? 'auth-error' : undefined}
-        onInput={handleInput}
-        onKeyDown={handlePhoneKeyDown}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        inputRef={phoneInputRef}
-        leftSlot={countryButton}
-        wrapperRef={countryRef}
-        dropdown={countryDropdown}
-      />
+      <div style={{display:'flex', gap:'12px', alignItems:'stretch'}}>
+        <div style={{flex:1, minWidth:0}}>
+          <AuthField
+            id="login-phone-input"
+            label={t(S.AUTH_PHONE_LABEL)}
+            type="tel"
+            value={isCountriesLoading ? '' : displayValue}
+            placeholder={isCountriesLoading ? 'Loading...' : (focused ? phoneMask : '')}
+            autocomplete="tel"
+            inputmode="numeric"
+            ariaInvalid={state.error ? 'true' : 'false'}
+            ariaDescribedBy={state.error ? 'auth-error' : undefined}
+            onInput={handleInput}
+            onKeyDown={handlePhoneKeyDown}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            inputRef={phoneInputRef}
+            leftSlot={countryButton}
+            wrapperRef={countryRef}
+            dropdown={countryDropdown}
+            disabled={isCountriesLoading}
+            error={state.error}
+            errorVersion={state.errorVersion}
+          />
+        </div>
+        <QrCodeView dispatch={dispatch} variant="small" />
+      </div>
 
-      <button class="login-btn login-btn-primary" type="submit" aria-disabled="false">
+      <button class="login-btn login-btn-primary" type="submit" aria-disabled={isCountriesLoading ? 'true' : 'false'} disabled={isCountriesLoading}>
         <span>{t(S.AUTH_NEXT)}</span>
         <svg width="18" height="14" viewBox="0 0 18 14" fill="none" aria-hidden="true">
           <path d="M1 7H17M17 7L11 1M17 7L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -519,13 +502,6 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
           <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
         </svg>
         <span>{t(S.AUTH_QR_BUTTON)}</span>
-      </button>
-
-      <button class="login-btn login-btn-link" type="button" onClick={() => { dispatch({ type: 'SET_AUTH_STEP', authStep: 'signup' }); dispatch({ type: 'SET_ERROR', error: '' }); }}>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>
-        </svg>
-        <span>{t(S.AUTH_SIGNUP_SUBMIT)}</span>
       </button>
     </form>
   );
@@ -564,6 +540,7 @@ function CodeView({ dispatch, state }: { dispatch: Dispatch; state?: AppState })
   }
 
   function handleResend() {
+    if (countdown > 0) return;
     dispatch({ type: 'SET_ERROR', error: '' });
     setCountdown(RESEND_DELAY);
 
@@ -594,6 +571,8 @@ function CodeView({ dispatch, state }: { dispatch: Dispatch; state?: AppState })
         onInput={(e: any) => { setCode(e.target.value); }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
         inputRef={inputRef}
+        error={state?.error}
+        errorVersion={state?.errorVersion}
       />
       {countdown > 0
         ? <span class="login-resend-timer" aria-live="polite">{t(S.AUTH_RESEND_CODE)} ({countdown}s)</span>
@@ -644,6 +623,8 @@ function PasswordView({ dispatch, state }: { dispatch: Dispatch; state?: AppStat
             </svg>
           </button>
         }
+        error={state?.error}
+        errorVersion={state?.errorVersion}
       />
       <button class="login-btn login-btn-primary" type="submit">{t(S.AUTH_SUBMIT)}</button>
     </form>
@@ -698,6 +679,8 @@ function SignUpView({ state, dispatch }: { state: AppState; dispatch: Dispatch }
         ariaDescribedBy={state.error ? 'auth-error' : undefined}
         onInput={(e: any) => { setFirstname(e.target.value); }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
+        error={state.error}
+        errorVersion={state.errorVersion}
       />
       <AuthField
         id="tg-lastname-input"
@@ -711,6 +694,8 @@ function SignUpView({ state, dispatch }: { state: AppState; dispatch: Dispatch }
         ariaDescribedBy={state.error ? 'auth-error' : undefined}
         onInput={(e: any) => { setLastname(e.target.value); }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
+        error={state.error}
+        errorVersion={state.errorVersion}
       />
       <label class="login-terms-check">
         <input type="checkbox" checked={agreed} onChange={() => setAgreed(!agreed)} required />
@@ -722,7 +707,7 @@ function SignUpView({ state, dispatch }: { state: AppState; dispatch: Dispatch }
 }
 
 export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
-  const browserLang = typeof navigator !== 'undefined' ? navigator.language?.split('-')[0]?.toLowerCase() : null;
+  const browserLang = typeof navigator !== 'undefined' && navigator.language ? normalizeLangCode(navigator.language) : null;
 
   const setLang = (code: string) => window.dispatchEvent(new CustomEvent('tg-auth-set-lang', { detail: { langCode: code } }));
 
@@ -735,21 +720,12 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
   stateRef.current = state;
 
   useEffect(() => {
-    if (state.error) {
-      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
-      const errToClear = state.error;
-      errorTimerRef.current = setTimeout(() => {
-        if (stateRef.current.error === errToClear) {
-          dispatch({ type: 'SET_ERROR', error: '' });
-        }
-      }, 3000);
-    } else {
-      if (errorTimerRef.current) {
-        clearTimeout(errorTimerRef.current);
-        errorTimerRef.current = null;
-      }
-    }
-  }, [state.error]);
+    if (!state.error) return;
+    const timer = setTimeout(() => {
+      dispatch({ type: 'SET_ERROR', error: '' });
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [state.error, state.errorVersion]);
 
   useEffect(() => {
     return () => {
@@ -763,19 +739,40 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
       errorTimerRef.current = null;
     }
     dispatch({ type: 'SET_ERROR', error: '' });
-
-    if (state.authStep === 'qr_login') {
+    try { window.dispatchEvent(new CustomEvent('tg-auth-cancel')); } catch {}
+    if (state.authStep === 'code') {
+      dispatch({ type: 'SET_PHONE_CODE_HASH', hash: '' });
+      dispatch({ type: 'SET_CODE', code: '' });
+      try { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } })); } catch {}
       dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
       return;
     }
-    if (state.authStep === 'password' && state.qrToken) {
-      dispatch({ type: 'SET_AUTH_STEP', authStep: 'qr_login' });
+    if (state.authStep === 'qr_login') {
+      try { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } })); } catch {}
+      dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
+      return;
+    }
+    if (state.authStep === 'password') {
+      dispatch({ type: 'SET_PASSWORD', password: '' });
+      dispatch({ type: 'SET_PHONE_CODE_HASH', hash: '' });
+      dispatch({ type: 'SET_CODE', code: '' });
+      try { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } })); } catch {}
+      dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
       return;
     }
     if (state.authStep === 'signup') {
+      dispatch({ type: 'SET_SIGNUP_FIRSTNAME', firstname: '' });
+      dispatch({ type: 'SET_SIGNUP_LASTNAME', lastname: '' });
+      dispatch({ type: 'SET_PHONE_CODE_HASH', hash: '' });
+      dispatch({ type: 'SET_CODE', code: '' });
+      try { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } })); } catch {}
       dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
       return;
     }
+    dispatch({ type: 'SET_PHONE_CODE_HASH', hash: '' });
+    dispatch({ type: 'SET_CODE', code: '' });
+    dispatch({ type: 'SET_PASSWORD', password: '' });
+    try { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } })); } catch {}
     dispatch({ type: 'SET_AUTH_STEP', authStep: 'phone' });
   }
 
@@ -789,7 +786,6 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
         {isLoading ? (
           <div class="auth-content">
             <LoadingView />
-            {state.error ? <div id="auth-error">{renderError(state.error)}</div> : null}
           </div>
         ) : (
           <div class="auth-content">
@@ -800,21 +796,20 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
               suggestionLang={showSuggestion ? browserLang : null}
               onAcceptSuggestion={showSuggestion ? () => setLang(browserLang!) : undefined}
             />
-            <button class="login-theme-toggle" type="button" aria-label="Toggle theme" onClick={() => dispatch({ type: 'SET_THEME', theme: state.theme === 'dark' ? 'light' : 'dark' })}>
-              <ThemeIcon theme={state.theme} />
-            </button>
+            <div class="login-top-row">
+              {state.authStep !== 'phone' ? (
+                <button class="login-btn-back" type="button" aria-label="Back" onClick={handleBack}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+                </button>
+              ) : null}
+              <ThemeToggle theme={state.theme} className="login-theme-toggle" onToggle={() => dispatch({ type: 'SET_THEME', theme: state.theme === 'dark' ? 'light' : 'dark' })} />
+            </div>
 
-            {state.authStep !== 'phone' ? (
-              <button class="login-btn-back" type="button" aria-label="Back" onClick={handleBack}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
-              </button>
-            ) : (
+            {state.authStep === 'phone' ? (
               <div>
                 <h1 class="login-title login-title-plain">Gram</h1>
               </div>
-            )}
-
-            {state.error ? <div id="auth-error">{renderError(state.error)}</div> : null}
+            ) : null}
 
             {state.authStep === 'phone' ? <PhoneView state={state} dispatch={dispatch} /> : null}
             {state.authStep === 'code' ? <CodeView dispatch={dispatch} state={state} /> : null}
