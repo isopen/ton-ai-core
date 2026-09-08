@@ -52,7 +52,7 @@ class MockCtx {
     createLinearGradient(...args: number[]) { const g = new MockGradient(); this.gradients.push(g); this.calls.push('createLinearGradient(' + this.numList(args) + ')'); return g; }
     createRadialGradient(...args: number[]) { const g = new MockGradient(); this.gradients.push(g); this.calls.push('createRadialGradient(' + this.numList(args) + ')'); return g; }
     getImageData() { return { data: [] as number[] }; }
-    putImageData() { /* noop */ }
+    putImageData() {  }
     fillText(text: string, x: number, y: number) { this.textFills.push({ text, x, y }); }
     strokeText(text: string, x: number, y: number) { this.textStrokes.push({ text, x, y }); }
 }

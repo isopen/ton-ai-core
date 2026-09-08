@@ -218,7 +218,6 @@ describe('AuthKeyCreator', () => {
         const newNonce = crypton.getRandomBytes(32);
         const serverNonce = crypton.getRandomBytes(16);
 
-        // Simulate what the client does: readInt128 then bigIntToBufferLE
         const snFromReadInt128 = serverNonce.readBigUInt64LE(0) | (serverNonce.readBigUInt64LE(8) << 64n);
         const serverNonceBuf = Buffer.alloc(16);
         for (let i = 0; i < 16; i++) {
@@ -238,12 +237,11 @@ describe('AuthKeyCreator', () => {
         const decrypted = await crypton.AES256IGE.decrypt(encrypted, tmpAesKey, tmpAesIv);
         assert.ok(decrypted.equals(testData), 'tmpAesKey roundtrip works');
 
-        // Now test the full flow: build a server_DH_params_ok response and verify client can parse it
         const now = Math.floor(Date.now() / 1000);
         const innerSer = new TLSerializer();
         innerSer.writeConstructorId(0xb5890dba);
-        innerSer.writeInt128(12345n); // nonce
-        innerSer.writeInt128(snFromReadInt128); // serverNonce
+        innerSer.writeInt128(12345n);
+        innerSer.writeInt128(snFromReadInt128);
 
         const innerData = innerSer.toBuffer();
         const innerSha1 = await origSha1(innerData);
@@ -252,7 +250,6 @@ describe('AuthKeyCreator', () => {
         const dataForEncryption = Buffer.concat([innerSha1, innerData, crypton.getRandomBytes(padLen > 0 ? padLen : 16)]);
         const encryptedAnswer = await crypton.AES256IGE.encrypt(dataForEncryption, tmpAesKey, tmpAesIv);
 
-        // Verify client can decrypt
         const decryptedAnswer = await crypton.AES256IGE.decrypt(encryptedAnswer, tmpAesKey, tmpAesIv);
         assert.ok(decryptedAnswer.length >= 24, 'decrypted answer has enough data');
         const answerSha1 = decryptedAnswer.subarray(0, 20);

@@ -117,7 +117,7 @@ class MockCtx {
     getImageData() {
         return { data: [] as number[] };
     }
-    putImageData() { /* noop */ }
+    putImageData() {  }
     fillText(text: string, x: number, y: number) {
         this.textFills.push({ text, x, y });
     }

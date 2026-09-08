@@ -66,7 +66,6 @@ async function run() {
 
     const creator = createAuthKeyCreator('test.host', 443, 2, rsaKeyInterface);
 
-    // Intercept sha1 to capture the exact inputs the client uses for key derivation
     let capturedNewNonceBuf: Buffer | null = null;
     let capturedServerNonceBuf: Buffer | null = null;
     const origSha1 = crypton.sha1.bind(crypton);
@@ -84,7 +83,7 @@ async function run() {
         sha1CallCount = 0;
         capturedNewNonceBuf = null;
         capturedServerNonceBuf = null;
-        
+
         const deser = new TLDeserializer(data);
         const ctor = deser.readUint32();
 
@@ -100,12 +99,10 @@ async function run() {
         if (ctor === 0xd712e4be) {
             const cn = deser.readInt128();
             const sn = deser.readInt128();
-            
-            // At this point, sha1CallCount should be >= 3 (client computed the 3 key-derivation SHA1s)
-            // capturedNewNonceBuf and capturedServerNonceBuf should contain the EXACT buffers the client used
+
             console.log('capturedNewNonceBuf:', capturedNewNonceBuf?.toString('hex'));
             console.log('capturedServerNonceBuf:', capturedServerNonceBuf?.toString('hex'));
-            
+
             const newNonce = capturedNewNonceBuf!;
             const serverNonceBuf = capturedServerNonceBuf!;
 
@@ -138,8 +135,6 @@ async function run() {
             const cn = deser.readInt128(); const sn = deser.readInt128();
             const encClientData = deser.readBytes();
 
-            // The client will compute SHA1s for step3 key derivation
-            // Let's capture them
             const newNonce = (creator as any).newNonce as Buffer;
             const serverNonceBuf = Buffer.alloc(16);
             serverNonceBuf.writeBigUInt64LE(sn & 0xFFFFFFFFFFFFFFFFn, 0);

@@ -89,8 +89,12 @@
       "enabled": false,
       "level": "info"
     },
+    "gram-ui:kb": {
+      "enabled": true,
+      "level": "info"
+    },
     "fps": {
-      "enabled": false,
+      "enabled": true,
       "level": "info"
     },
     "crypton": {

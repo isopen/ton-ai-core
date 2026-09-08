@@ -39,8 +39,8 @@ class MockCtx {
     getTransform() { return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }; }
     setTransform(...args: number[]) { this.calls.push('setTransform(' + args.join(',') + ')'); }
     clearRect(...args: number[]) { this.calls.push('clearRect(' + args.join(',') + ')'); }
-    save() { /* noop */ }
-    restore() { /* noop */ }
+    save() {  }
+    restore() {  }
     clip() { this.calls.push('clip:' + this.calls[this.calls.length - 1]); }
     beginPath() { this.curPath = []; }
     rect(...args: number[]) { this.calls.push('rect(' + args.join(',') + ')'); this.curPath.push('R' + args.join(',')); }
@@ -53,8 +53,8 @@ class MockCtx {
         this.pathsAtFill.push(this.curPath.slice());
         this.curPath = [];
     }
-    stroke() { /* noop */ }
-    setLineDash() { /* noop */ }
+    stroke() {  }
+    setLineDash() {  }
     drawImage(img: any, x: number, y: number) {
         this.drawImages.push('ctx#' + this.id + ' alpha=' + this.globalAlpha.toFixed(3) + ' @' + x + ',' + y + ' gco=' + this._gco + ' src=' + (img.width + 'x' + img.height));
     }
@@ -71,9 +71,9 @@ class MockCtx {
         return g;
     }
     getImageData() { return { data: [] as number[] }; }
-    putImageData() { /* noop */ }
-    fillText() { /* noop */ }
-    strokeText() { /* noop */ }
+    putImageData() {  }
+    fillText() {  }
+    strokeText() {  }
 }
 class MockCanvas {
     width = 0;

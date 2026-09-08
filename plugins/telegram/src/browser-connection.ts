@@ -59,7 +59,7 @@ export class BrowserObfuscatedConnection implements IConnection {
                     ws.close();
                     reject(new Error('WebSocket connection timeout'));
                 }
-            }, 10000);
+            }, 5000);
 
             ws.onerror = () => {
                 if (!resolved) {

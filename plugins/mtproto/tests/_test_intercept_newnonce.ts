@@ -56,9 +56,6 @@ async function run() {
 
     const creator = createAuthKeyCreator('test.host', 443, 2, rsaKeyInterface);
 
-    // Intercept writeBigUInt64LE on the tmpAesKey/tmpAesIv computation
-    // The client computes: sha1(newNonce || serverNonceBuf) etc.
-    // Let me intercept by monkey-patching crypton.sha1 to log what buffers are passed
     let sha1Calls: Buffer[] = [];
     const origSha1 = crypton.sha1.bind(crypton);
     (crypton as any).sha1 = async (data: Buffer) => {
@@ -88,14 +85,13 @@ async function run() {
             for (let i = 0; i < sha1Calls.length; i++) {
                 console.log(`  sha1[${i}]: ${sha1Calls[i].toString('hex').substring(0, 40)}... (len=${sha1Calls[i].length})`);
             }
-            // The client should have called sha1 3 times for newNonce/serverNonce
-            // Let's use those exact buffers
+
             if (sha1Calls.length >= 3) {
                 const newNonceBuf = sha1Calls[0].subarray(0, 32);
                 const serverNonceBuf = sha1Calls[0].subarray(32);
                 console.log('Client newNonce from sha1[0]:', newNonceBuf.toString('hex'));
                 console.log('Client serverNonceBuf from sha1[0]:', serverNonceBuf.toString('hex'));
-                
+
                 const sha1A = await origSha1(Buffer.concat([newNonceBuf, serverNonceBuf]));
                 const sha1B = await origSha1(Buffer.concat([serverNonceBuf, newNonceBuf]));
                 const sha1C = await origSha1(Buffer.concat([newNonceBuf, newNonceBuf]));
@@ -124,14 +120,10 @@ async function run() {
         if (ctor === 0xf5045f1f) {
             const cn = deser.readInt128(); const sn = deser.readInt128();
             const encClientData = deser.readBytes();
-            
-            // Use the same sha1 interception approach
+
             sha1Calls = [];
             const origSha1Local = (crypton as any).sha1;
-            // Actually sha1 was already patched above, so sha1Calls should have data
-            // But we need the keys computed from the values the client uses
-            // Read from sha1 calls that happen during decrypt attempt
-            // Actually, let me just read from creator state
+
             const newNonce = (creator as any).newNonce as Buffer;
             const serverNonceBuf = Buffer.alloc(16);
             serverNonceBuf.writeBigUInt64LE(sn & 0xFFFFFFFFFFFFFFFFn, 0);
