@@ -1,6 +1,6 @@
 import { getLogger, isNoDialogsCache } from '@ton-ai/gram-debug';
 import { tpl } from '@ton-ai/gram-lang';
-import { buildPeerBlurThumb } from '@ton-ai/gram-ui';
+import { buildPeerBlurThumb, requestPhoto } from '@ton-ai/gram-ui';
 import type { Dialog, Message, PeerInfo } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbGetMany, dbKeys } from '@/utils/db';
 import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, ORPHANED_KEY } from './gram-constants';
@@ -65,9 +65,7 @@ export async function loadMessageCache(s: GramState) {
 
 export function dispatchAvatarDownload(peerType: string, peerId: string, photo: any) {
   if (!photo || !photo.photo_id || typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent('tg-download-photo', {
-    detail: { photo, sizeType: 'm', messageId: `avatar_${peerType}_${peerId}` },
-  }));
+  requestPhoto(photo, `avatar_${peerType}_${peerId}`, { sizeType: 'm', tag: 'Avatar' });
 }
 
 export function setDialogsFromServer(s: GramState, raw: any) {

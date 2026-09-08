@@ -5,6 +5,7 @@ import { getLogger } from '@ton-ai/gram-debug';
 import { matchEmojiRuns, getEmojiDocId, normalizeEmoji } from './emoji-store.js';
 import { hexToDataUrl, strippedToDataUrl, buttonStyleClass, isInactiveButtonData, isButtonInactive, isDisabledButtonType, decodeButtonAction } from '../utils.js';
 import { Image } from '../primitives/image.js';
+import { requestPhoto } from './media-source.js';
 import { Slideshow } from './slideshow.js';
 import type { ImageSpec } from '../types.js';
 
@@ -75,7 +76,7 @@ function RichPhoto({ photo, caption, spoiler, richMessage, maxWidth = 480, fluid
     window.addEventListener('tg-rich-photo-url' as any, handler);
     window.addEventListener('tg-photo-url' as any, handler);
     try {
-      window.dispatchEvent(new CustomEvent('tg-download-photo', { detail: { photo, sizeType: 'y', messageId: `rich-${id}` } }));
+      requestPhoto(photo, `rich-${id}`, { sizeType: 'y', tag: 'RichMessage' });
     } catch {}
     const t = setTimeout(() => { if (!cancelled && !getRichPhotoUrl(photo)) setFailed(true); }, 12000);
     return () => { cancelled = true; window.removeEventListener('tg-rich-photo-url' as any, handler); window.removeEventListener('tg-photo-url' as any, handler); clearTimeout(t); };

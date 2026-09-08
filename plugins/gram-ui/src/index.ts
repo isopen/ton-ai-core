@@ -11,6 +11,8 @@ export { TgsPlayer } from './components/tgs-player.js';
 export { FpsMeter } from './components/fps-meter.js';
 export { startFpsLogging } from './utils/fps-log.js';
 export { buildPeerBlurThumb } from './utils.js';
+export { requestPhoto, requestDocument, requestDocumentThumb, photoAvailability, bestSourceUrl } from './components/media-source.js';
+export type { PhotoDownloadNeed, PhotoRequestOptions, DocumentRequestOptions, PhotoAvailability } from './components/media-source.js';
 export { QrCode, QrCodeDefaults, QrCodeLimits } from './primitives/qr-code.js';
 export type { QrCodeProps } from './primitives/qr-code.js';
 export {

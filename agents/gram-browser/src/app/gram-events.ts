@@ -11,6 +11,7 @@ import { AUTH_PRESERVE_KEYS } from './gram-auth';
 import { API_CREDS_PRESERVE_KEYS } from '@/utils/api-creds';
 import { fetchCachedCountries, fetchLangOptions } from './gram-lang';
 import type { Message } from '@ton-ai/gram-ui';
+import { requestDocument } from '@ton-ai/gram-ui';
 import { applyUpdateMessagePoll } from './gram-utils';
 
 const fallbackLog = getLogger('gram-ui:fallback');
@@ -634,9 +635,7 @@ export function setupEventListeners(s: GramState): void {
       const index = months === 1 ? 0 : months === 3 ? 1 : months === 6 ? 2 : months === 12 ? 3 : -1;
       const doc = (index >= 0 ? giftDocs[index] : undefined) ?? giftDocs[0];
       if (!doc) return;
-      window.dispatchEvent(new CustomEvent('tg-download-document', {
-        detail: { document: doc, messageId, priority: 0 },
-      }));
+      requestDocument(doc, messageId, 0, { tag: 'PremiumGift' });
     } catch (err: any) {
       log.error('[gram-app] tg-fetch-premium-gift error:', err?.message || err, messageId);
     }
@@ -668,9 +667,7 @@ export function setupEventListeners(s: GramState): void {
         return;
       }
       const doc = stickerDocs[Math.floor(Math.random() * stickerDocs.length)];
-      window.dispatchEvent(new CustomEvent('tg-download-document', {
-        detail: { document: doc, messageId: 'empty-chat', priority: 0 },
-      }));
+      requestDocument(doc, 'empty-chat', 0, { tag: 'GreetingSticker' });
     } catch (err: any) {
       log.error('[gram-app] tg-fetch-greeting-sticker error:', err?.message || err);
     }
@@ -787,9 +784,7 @@ export function setupEventListeners(s: GramState): void {
         } catch {}
       }
       if (!doc) { log.warn('[gram-app] rich emoji doc not found: ' + docId); return; }
-      window.dispatchEvent(new CustomEvent('tg-download-document', {
-        detail: { document: doc, messageId: 'emojipack-' + docId, priority: 1 },
-      }));
+      requestDocument(doc, 'emojipack-' + docId, 1, { tag: 'EmojiPack' });
     } catch (err: any) {
       log.warn('[gram-app] rich emoji doc fetch failed:', err?.message || err);
     }

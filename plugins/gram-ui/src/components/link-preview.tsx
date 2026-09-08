@@ -1,5 +1,6 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef } from '@ton-ai/atom/hooks';
+import { requestPhoto } from './media-source.js';
 
 function siteColor(site: string): string {
   let hash = 0;
@@ -55,9 +56,7 @@ export function WebPageBubble({ m, timeStr, out, status, sameSenderPrev, sameSen
         if (best) break;
       }
       if (best) {
-        window.dispatchEvent(new CustomEvent('tg-download-photo', {
-          detail: { photo: wpPhoto, sizeType: best.type, messageId: m.id },
-        }));
+        requestPhoto(wpPhoto, m.id, { sizeType: best.type, tag: 'LinkPreview' });
       }
       obs.disconnect();
     }, { rootMargin: '200px' });

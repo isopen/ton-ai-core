@@ -7,7 +7,7 @@ import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import type { ImageSpec } from '../types.js';
 import { calculateAlbumLayout } from './photo-album-layout.js';
-import { firstMissingSizeType, chatPhotoPrio, isInlinePhotoSize } from './photo-spec.js';
+import { requestPhoto, requestDocumentThumb, photoAvailability } from './media-source.js';
 import { t, S } from '@ton-ai/gram-lang';
 import { getLogger } from '@ton-ai/gram-debug';
 
@@ -41,10 +41,6 @@ function toFileSize(bytes?: number): string {
 function fmt(s: number): string {
   s = Math.max(0, Math.round(s || 0));
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
-}
-
-function photoNeed(photo: any): { sizeType: string; id: number } | null {
-  return firstMissingSizeType(photo, chatPhotoPrio());
 }
 
 export function MediaCollage({
@@ -114,21 +110,14 @@ export function MediaCollage({
           const vt = doc?.video_thumbs?.find((x: any) => x.type !== 'f');
           if (doc && vt && !v.thumbUrl && !requestedThumbs.has(item.m.id)) {
             requestedThumbs.add(item.m.id);
-            window.dispatchEvent(new CustomEvent('tg-download-document-thumb', {
-              detail: { document: doc, messageId: item.m.id, thumbType: vt.type },
-            }));
+            requestDocumentThumb(doc, item.m.id, vt.type, { tag: 'MediaCollage' });
           }
           continue;
         }
         const photo = item.m?.media?.photo;
         if (!photo) continue;
-        const need = photoNeed(photo);
+        const need = requestPhoto(photo, item.m.id, { tag: 'MediaCollage' });
         lines.push(item.m.id + ':need=' + (need ? need.sizeType : 'null') + ':urls=' + (photo.sizes || []).filter((s: any) => s.url || s.src).length + '/' + (photo.sizes || []).length);
-        if (need) {
-          window.dispatchEvent(new CustomEvent('tg-download-photo', {
-            detail: { photo, sizeType: need.sizeType, messageId: item.m.id },
-          }));
-        }
       }
       if (lines.length > 0) collageLog.info('[collage-req] ' + lines.join(' | '));
     };
@@ -162,19 +151,14 @@ export function MediaCollage({
         const isMoreCell = moreCount > 0 && i === visible.length - 1;
         const v = item.video;
         const photo = v ? null : item.m?.media?.photo;
-        const sizes = Array.isArray(photo?.sizes) ? photo.sizes : [];
-        const hasAnyUrl = sizes.some((s: any) => !isInlinePhotoSize(s) && !!(s.url || s.src));
+        const { hasAnyUrl } = photoAvailability(photo);
         const progress = (photo?.progress as number | undefined) ?? 0;
         const isPreloading = !hasAnyUrl;
         const failed = photo?.failed === true;
         const fileSize = toFileSize(photo?.size);
 
         const retryPhoto = () => {
-          const need = firstMissingSizeType(photo, chatPhotoPrio());
-          if (!need) return;
-          window.dispatchEvent(new CustomEvent('tg-download-photo', {
-            detail: { photo, sizeType: need.sizeType, messageId: item.m?.id },
-          }));
+          requestPhoto(photo, item.m?.id, { tag: 'MediaCollage', force: true });
         };
 
         return (

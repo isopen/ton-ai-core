@@ -12,7 +12,8 @@ import { PhotoLoader } from './photo-loader.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import { VideoMessage } from './video-message.js';
 import { MediaPlayer } from './media-player.js';
-import { buildImageSpec, chatPhotoPrio, firstMissingSizeType, isInlinePhotoSize } from './photo-spec.js';
+import { buildImageSpec, isInlinePhotoSize } from './photo-spec.js';
+import { photoAvailability, bestSourceUrl, requestPhoto, requestDocument } from './media-source.js';
 import { isAnimatedMedia, getMediaType, buildDocumentThumb } from '../utils.js';
 import type { ImageSpec } from '../types.js';
 
@@ -199,8 +200,7 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
   );
   const videoM = attachVideo ? { id: m.id, media: { _: 'messageMediaDocument', document: attachedDoc }, message: '', entities: [] } : null;
   const attachAnimated = videoM ? isAnimatedMedia(videoM.media) : false;
-  const photoSizes = attachedPhoto?.sizes;
-  const hasAnyUrl = Array.isArray(photoSizes) && photoSizes.some((s: any) => !isInlinePhotoSize(s) && !!(s.url || s.src));
+  const { hasAnyUrl } = photoAvailability(attachedPhoto);
   const photoProgress = attachedPhoto?.progress !== undefined ? attachedPhoto.progress : 0;
   const photoFileSize = toFileSize(attachedPhoto?.size);
   const isPreloading = !!attachedPhoto && !hasAnyUrl;
@@ -243,14 +243,8 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
     const hasAnswerMedia = answers.some((a: any) => !!a?.media);
     if (!attachedPhoto && !hasAnswerMedia) return;
     const requestAll = () => {
-      if (attachedPhoto && attachedPhoto.failed !== true) {
-        const need = firstMissingSizeType(attachedPhoto, chatPhotoPrio());
-        pollPhotoLog.info('[PollBubble] dispatch ' + m.id + ' need: ' + (need?.sizeType || 'null'));
-        if (need) {
-          window.dispatchEvent(new CustomEvent('tg-download-photo', {
-            detail: { photo: attachedPhoto, sizeType: need.sizeType, messageId: m.id },
-          }));
-        }
+      if (attachedPhoto) {
+        requestPhoto(attachedPhoto, m.id, { tag: 'PollBubble' });
       }
       for (const a of answers) {
         const am = a?.media;
@@ -258,21 +252,13 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
         const okey = pollAnswerKey(m, keyOf(a));
         if (am.photo && Array.isArray(am.photo.sizes)) {
           if (am.photo.failed === true) continue;
-          const need = firstMissingSizeType(am.photo, chatPhotoPrio());
-          if (need) {
-            pollPhotoLog.info('[PollBubble] answer dispatch ' + okey + ' need: ' + need.sizeType);
-            window.dispatchEvent(new CustomEvent('tg-download-photo', {
-              detail: { photo: am.photo, sizeType: need.sizeType, messageId: okey },
-            }));
-          }
+          requestPhoto(am.photo, okey, { tag: 'PollBubble' });
           continue;
         }
         const doc = am.document;
         if (doc && doc._ !== 'documentEmpty') {
           if (!(documentUrls as any)?.[okey]) {
-            window.dispatchEvent(new CustomEvent('tg-download-document', {
-              detail: { document: doc, messageId: okey, priority: 1 },
-            }));
+            requestDocument(doc, okey, 1, { tag: 'PollBubble' });
           }
         }
       }
@@ -300,11 +286,7 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
   }, [m.id, hasAnyUrl, answerMediaSig]);
 
   const retryPhoto = () => {
-    const need = firstMissingSizeType(attachedPhoto, chatPhotoPrio());
-    if (!need) return;
-    window.dispatchEvent(new CustomEvent('tg-download-photo', {
-      detail: { photo: attachedPhoto, sizeType: need.sizeType, messageId: m.id },
-    }));
+    requestPhoto(attachedPhoto, m.id, { tag: 'PollBubble', force: true });
   };
 
   const vote = () => {
@@ -418,17 +400,13 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
               const anyUrl = sizes.some((s: any) => !isInlinePhotoSize(s) && !!(s.url || s.src));
               const failed = am.photo.failed === true;
               const okey = pollAnswerKey(m, key);
-              const bestUrl = spec.medium?.url || spec.original?.url || spec.thumbnail?.url || '';
+              const bestUrl = bestSourceUrl(spec);
               const openOrRetry = () => {
                 if (bestUrl && onOpenPhoto) {
                   onOpenPhoto(spec, 0);
                   return;
                 }
-                const need = firstMissingSizeType(am.photo, chatPhotoPrio());
-                if (!need) return;
-                window.dispatchEvent(new CustomEvent('tg-download-photo', {
-                  detail: { photo: am.photo, sizeType: need.sizeType, messageId: okey },
-                }));
+                requestPhoto(am.photo, okey, { tag: 'PollBubble' });
               };
               optMedia = (
                 <div key="optps" class="tgui-poll-optmedia_small" onClick={(e: any) => { e.stopPropagation(); openOrRetry(); }}>

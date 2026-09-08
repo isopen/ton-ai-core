@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback, useDomEvent } from '@ton-ai/a
 import { buildDocumentThumb } from '../utils.js';
 import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
+import { requestDocument, requestDocumentThumb } from './media-source.js';
 
 const RING_CIRC = 2 * Math.PI * 28;
 
@@ -168,9 +169,7 @@ export function VideoMessage(props: VideoMessageProps) {
       thumbReqSentRef.current = true;
       const vt = doc.video_thumbs.find((v: any) => v.type !== 'f');
       if (!vt) return;
-      window.dispatchEvent(new CustomEvent('tg-download-document-thumb', {
-        detail: { document: doc, messageId: m.id, thumbType: vt.type },
-      }));
+      requestDocumentThumb(doc, m.id, vt.type, { tag: 'VideoMessage' });
     }
   }, [thumb?.url]);
 
@@ -330,16 +329,12 @@ export function VideoMessage(props: VideoMessageProps) {
     if (uiState === 'loading') return;
     if (uiState === 'error') {
       setUiState('loading'); setLpct(0);
-      window.dispatchEvent(new CustomEvent('tg-download-document', {
-        detail: { document: doc, messageId: m.id, priority: 2 },
-      }));
+      requestDocument(doc, m.id, 2, { tag: 'VideoMessage' });
       return;
     }
     if (uiState === 'playing') { pause(); return; }
     if (!url) {
-      window.dispatchEvent(new CustomEvent('tg-download-document', {
-        detail: { document: doc, messageId: m.id, priority: 1 },
-      }));
+      requestDocument(doc, m.id, 1, { tag: 'VideoMessage' });
       return;
     }
     play();

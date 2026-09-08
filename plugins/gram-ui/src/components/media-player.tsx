@@ -6,6 +6,7 @@ import { buildDocumentThumb, isAnimatedMedia } from '../utils.js';
 import { GifPlayer } from './gif-player.js';
 import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
+import { requestDocument } from './media-source.js';
 
 const log = getLogger('gram-ui');
 
@@ -73,9 +74,7 @@ export function MediaPlayer(props: MediaPlayerProps) {
 
   const triggerDownload = () => {
     if (url) return;
-    window.dispatchEvent(new CustomEvent('tg-download-document', {
-      detail: { document: doc, messageId: m.id, priority: 1 },
-    }));
+    requestDocument(doc, m.id, 1, { tag: 'MediaPlayer' });
   };
 
   const handleVideoClick = () => {

@@ -37,7 +37,8 @@ import { AnimatedEmoji } from './emoji-text.js';
 import { PollBubble } from './poll-bubble.js';
 import { MediaCaption } from './media-caption.js';
 import type { ButtonNoticeData } from './button-notice.js';
-import { buildImageSpec, firstMissingSizeType, chatPhotoPrio, isInlinePhotoSize } from './photo-spec.js';
+import { buildImageSpec } from './photo-spec.js';
+import { photoAvailability, requestPhoto, requestDocument, requestDocumentThumb } from './media-source.js';
 import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 
 const photoLog = getLogger('gram-ui:photo');
@@ -272,9 +273,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
     if (!visible) return;
     if (url) return;
     if (downloadAttempts >= STICKER_DOWNLOAD_MAX_ATTEMPTS) return;
-    window.dispatchEvent(new CustomEvent('tg-download-document', {
-      detail: { document: doc, messageId: m.id, priority: 1 },
-    }));
+    requestDocument(doc, m.id, 1, { tag: 'StickerBubble' });
     const t = setTimeout(() => {
       setDownloadAttempts((a) => a + 1);
     }, STICKER_DOWNLOAD_RETRY_MS);
@@ -328,9 +327,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
     if (!visible) return;
     if (!effectVt || effectVt.url) return;
     if (!doc?.id || m.id == null) return;
-    window.dispatchEvent(new CustomEvent('tg-download-document-thumb', {
-      detail: { document: doc, messageId: m.id, thumbType: 'f' },
-    }));
+    requestDocumentThumb(doc, m.id, 'f', { tag: 'StickerBubble' });
   }, [visible, effectVt?.url, doc?.id, m.id]);
 
   const downloadStickerSource = useCallback(async (e: MouseEvent) => {
@@ -410,7 +407,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   const imgWidth = imgSpec ? Math.min(imgSpec.width || 320, 320) : 0;
 
   const photoSizes = m.media?.photo?.sizes;
-  const hasAnyUrl = Array.isArray(photoSizes) && photoSizes.some((s: any) => !isInlinePhotoSize(s) && !!(s.url || s.src));
+  const { hasAnyUrl } = photoAvailability(m.media?.photo);
   if (isEnabled('gram-ui:photo')) {
     photoLog.info('[PhotoBubble] render', m.id, 'photoSizes:', Array.isArray(photoSizes) ? photoSizes.length : photoSizes, 'hasAnyUrl:', hasAnyUrl, 'imgSpec urls:', imgSpec ? { t: !!imgSpec.thumbnail?.url, m: !!imgSpec.medium?.url, o: !!imgSpec.original?.url } : 'null');
   }
@@ -421,26 +418,12 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
       const el = document.getElementById(`msg-${m.id}`);
       if (!el) {
         photoLog.info('[PhotoBubble] NO ELEMENT msg-' + m.id);
-        if (m.media?.photo?.failed === true) return;
-        const need = firstMissingSizeType(m.media?.photo, chatPhotoPrio());
-        photoLog.info('[PhotoBubble] direct dispatch', m.id, 'need:', need?.sizeType || null);
-        if (need) {
-          window.dispatchEvent(new CustomEvent('tg-download-photo', {
-            detail: { photo: m.media.photo, sizeType: need.sizeType, messageId: m.id },
-          }));
-        }
+        requestPhoto(m.media?.photo, m.id, { tag: 'PhotoBubble' });
         return;
       }
       const obs = new IntersectionObserver(([entry]) => {
         if (entry.isIntersecting) {
-          if (m.media?.photo?.failed === true) return;
-          const need = firstMissingSizeType(m.media?.photo, chatPhotoPrio());
-          photoLog.info('[PhotoBubble] obs intersect', m.id, 'need:', need?.sizeType || null);
-          if (need) {
-            window.dispatchEvent(new CustomEvent('tg-download-photo', {
-              detail: { photo: m.media.photo, sizeType: need.sizeType, messageId: m.id },
-            }));
-          }
+          requestPhoto(m.media?.photo, m.id, { tag: 'PhotoBubble' });
         }
       }, { rootMargin: '200px' });
       obsRef.current = obs;
@@ -462,11 +445,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   const failed = m.media?.photo?.failed === true;
 
   const retryPhoto = () => {
-    const need = firstMissingSizeType(m.media?.photo, chatPhotoPrio());
-    if (!need) return;
-    window.dispatchEvent(new CustomEvent('tg-download-photo', {
-      detail: { photo: m.media.photo, sizeType: need.sizeType, messageId: m.id },
-    }));
+    requestPhoto(m.media?.photo, m.id, { tag: 'PhotoBubble', force: true });
   };
 
   let mediaCls = 'tgui-photo-preview';
@@ -598,9 +577,7 @@ function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrl
         return;
       }
       if (url) return;
-      window.dispatchEvent(new CustomEvent('tg-download-document', {
-        detail: { document: stickerDoc, messageId: m.id, priority: 0 },
-      }));
+      requestDocument(stickerDoc, m.id, 0, { tag: 'GiftBubble' });
     }, [visible, url, isPremiumGift, premiumDays, stickerDoc, m.id]);
 
     const giftRenderId = 'gift-' + String(stickerDoc?.id || m.id);

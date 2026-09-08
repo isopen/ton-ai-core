@@ -1,7 +1,8 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
-import { buildImageSpec, largestMissingSizeType, VIEWER_PHOTO_PRIO, getPhotoQuality } from './photo-spec.js';
+import { buildImageSpec, VIEWER_PHOTO_PRIO, getPhotoQuality } from './photo-spec.js';
+import { requestPhoto, requestDocument } from './media-source.js';
 
 export interface MediaViewerPhotoItem {
   kind: 'photo';
@@ -103,12 +104,9 @@ export function MediaViewer({
     if (requestedFullRef.current === pid) return;
     const livePhoto = liveM?.media?.photo;
     if (!livePhoto) return;
-    const need = largestMissingSizeType(livePhoto, VIEWER_PHOTO_PRIO);
+    const need = requestPhoto(livePhoto, Number(liveM.id), { prio: VIEWER_PHOTO_PRIO, largest: true, ctx: 'viewer', force: true, tag: 'MediaViewer' });
     if (need) {
       requestedFullRef.current = pid;
-      window.dispatchEvent(new CustomEvent('tg-download-photo', {
-        detail: { photo: livePhoto, sizeType: need.sizeType, messageId: Number(liveM.id), ctx: 'viewer' },
-      }));
     } else {
       requestedFullRef.current = pid;
     }
@@ -254,9 +252,7 @@ function VideoViewerContent({ item, documentUrls }: { item: MediaViewerVideoItem
   useEffect(() => {
     if (!url && !requestedRef.current) {
       requestedRef.current = true;
-      window.dispatchEvent(new CustomEvent('tg-download-document', {
-        detail: { document: m.media?.document, messageId: m.id, priority: 0, ctx: 'viewer' },
-      }));
+      requestDocument(m.media?.document, m.id, 0, { ctx: 'viewer', tag: 'MediaViewer' });
     }
   }, [url, m]);
 

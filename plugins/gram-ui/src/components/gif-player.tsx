@@ -3,6 +3,7 @@ import { useEffect, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import { buildDocumentThumb } from '../utils.js';
 import { PhotoLoader } from './photo-loader.js';
 import { MediaSourceBadge } from './media-source-badge.js';
+import { requestDocument } from './media-source.js';
 
 interface GifPlayerProps {
   m: any;
@@ -68,9 +69,7 @@ export function GifPlayer(props: GifPlayerProps) {
 
   const triggerDownload = () => {
     if (url) return;
-    window.dispatchEvent(new CustomEvent('tg-download-document', {
-      detail: { document: doc, messageId: m.id, priority: 1 },
-    }));
+    requestDocument(doc, m.id, 1, { tag: 'GifPlayer' });
   };
 
   useEffect(() => {
