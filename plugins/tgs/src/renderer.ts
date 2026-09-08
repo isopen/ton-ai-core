@@ -10,6 +10,7 @@ import type { ParsedMask } from './types.js';
 const EPSILON = 0.000001;
 const DASH_TOLERANCE = 0.1;
 const DASH_ITER_CAP = 10000;
+const STAR_POINTS_CAP = 10000;
 const SQRT_2 = 1.41421;
 const MAX_PARENT_DEPTH = 64;
 
@@ -259,7 +260,8 @@ function ellipseToVerts(p: number[], s: number[]): any[] {
 }
 
 function starToVerts(shape: ParsedShape, frame: number): any[] {
-    const points = toNumber(resolveProp(shape.points, frame, 5));
+    const rawPoints = toNumber(resolveProp(shape.points, frame, 5));
+    const points = Math.min(STAR_POINTS_CAP, rawPoints);
     const innerR = toNumber(resolveProp(shape.innerRadius, frame, 0));
     const outerR = toNumber(resolveProp(shape.outerRadius, frame, 0));
     const innerRoundness = toNumber(resolveProp(shape.innerRoundness, frame, 0)) / 100;
