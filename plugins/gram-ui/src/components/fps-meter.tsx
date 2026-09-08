@@ -1,5 +1,8 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
+import { isEnabled, subscribeScope } from '@ton-ai/gram-debug';
+
+const SCOPE = 'fps';
 
 let setVisibleGlobal: ((on: boolean) => void) | null = null;
 
@@ -7,8 +10,8 @@ let setVisibleGlobal: ((on: boolean) => void) | null = null;
   setVisibleGlobal?.(on !== false);
 };
 
-export function FpsMeter({ defaultVisible = true }: { defaultVisible?: boolean } = {}) {
-  const [visible, setVisible] = useState(defaultVisible);
+export function FpsMeter() {
+  const [visible, setVisible] = useState(() => isEnabled(SCOPE));
   const boxRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef(0);
   const lastTsRef = useRef(0);
@@ -24,6 +27,8 @@ export function FpsMeter({ defaultVisible = true }: { defaultVisible?: boolean }
       setVisibleGlobal = null;
     };
   }, []);
+
+  useEffect(() => subscribeScope(SCOPE, () => setVisible(isEnabled(SCOPE))), []);
 
   useEffect(() => {
     if (!visible) return;

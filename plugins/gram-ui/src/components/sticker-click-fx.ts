@@ -1020,6 +1020,5 @@ function runRandomEffect(stickerEl: HTMLElement, cv: HTMLCanvasElement, x: numbe
     }
     void stickerEl;
   } catch {
-    /* effects must never break the chat */
   }
 }

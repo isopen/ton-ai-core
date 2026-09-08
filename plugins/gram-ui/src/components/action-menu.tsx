@@ -1,8 +1,7 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useRef, useState, useDomEvent } from '@ton-ai/atom/hooks';
-import { t } from '../locale.js';
-import type { AppState } from '../types.js';
-import type { Dispatch } from '../state.js';
+import { t } from '@ton-ai/gram-lang';
+import { useApp } from '../app-context.js';
 
 function SettingsIcon() {
   return (
@@ -20,7 +19,8 @@ function LogsIcon() {
   return <span class="ActionMenuDropdown__icon-text">L</span>;
 }
 
-export function ActionMenu({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
+export function ActionMenu() {
+  const { activeSkill, pluginSkills, dispatch } = useApp();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -31,8 +31,8 @@ export function ActionMenu({ state, dispatch }: { state: AppState; dispatch: Dis
   } : null, [open]);
 
   function selectSkill(id: string | null) {
-    dispatch({ type: 'SET_ACTIVE_SKILL', id: state.activeSkill === id ? null : id });
-    if (state.activeSkill !== id) dispatch({ type: 'SET_SELECTED_PEER', peer: null });
+    dispatch({ type: 'SET_ACTIVE_SKILL', id: activeSkill === id ? null : id });
+    if (activeSkill !== id) dispatch({ type: 'SET_SELECTED_PEER', peer: null });
     setOpen(false);
   }
 
@@ -51,10 +51,10 @@ export function ActionMenu({ state, dispatch }: { state: AppState; dispatch: Dis
       </button>
       {open && (
         <div class="ActionMenuDropdown__menu">
-          {state.pluginSkills.map(skill => (
+          {pluginSkills.map(skill => (
             <button
               key={skill.id}
-              class={`ActionMenuDropdown__item${state.activeSkill === skill.id ? ' ActionMenuDropdown__item--active' : ''}`}
+              class={`ActionMenuDropdown__item${activeSkill === skill.id ? ' ActionMenuDropdown__item--active' : ''}`}
               onClick={() => selectSkill(skill.id)}
             >
               <span class="ActionMenuDropdown__item-icon">

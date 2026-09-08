@@ -1,3 +1,5 @@
+import type { LangOption } from '@ton-ai/gram-lang';
+
 export interface PeerInfo {
     type: 'user' | 'chat' | 'channel';
     id: string;
@@ -32,6 +34,7 @@ export interface Message {
     fromId: any;
     sender: string;
     date: number;
+    edit_date?: number;
     message: string;
     out: boolean;
     peerId: any;
@@ -53,6 +56,7 @@ export interface Country {
     phoneCode: string;
     patterns?: string[];
 }
+export type LangListOption = LangOption;
 
 export interface AppState {
     theme: 'light' | 'dark';
@@ -62,6 +66,7 @@ export interface AppState {
     code: string;
     password: string;
     error: string;
+    errorVersion: number;
     sessionId: string;
     dialogs: Dialog[];
     selectedPeer: PeerInfo | null;
@@ -73,6 +78,7 @@ export interface AppState {
     typingByPeer: Record<string, string>;
     renderTick: number;
     imageQuality: 'min' | 'medium' | 'max';
+    animationsEnabled: boolean;
     loadingMessages: boolean;
     connectionStatus: 'disconnected' | 'connecting' | 'connected';
     langCode: string;
@@ -85,12 +91,14 @@ export interface AppState {
     selfUserId: string;
   pluginSkills: Array<{ id: string; label: string }>;
   activeSkill: string | null;
-  langOptions: Array<{ code: string; label: string }>;
+  langOptions: LangOption[];
   documentUrls: Record<number | string, string>;
   documentProgress: Record<number | string, number>;
   photoSources: Record<string, string>;
   documentSources: Record<number | string, string>;
   avatarSources: Record<string, string>;
+  inactiveButtons: Record<string, true>;
+  buttonNotice: { messageId: number | string; text: string; version: number; rel?: { x: number; y: number; w: number; h: number } | null } | null;
   reactions: Record<number, MessageReaction[]>;
 }
 
@@ -161,14 +169,20 @@ export type UIAction =
     | { type: 'SET_SELF_USER_ID'; userId: string }
     | { type: 'SET_PLUGIN_SKILLS'; skills: Array<{ id: string; label: string }> }
     | { type: 'SET_IMAGE_QUALITY'; quality: 'min' | 'medium' | 'max' }
+    | { type: 'SET_ANIMATIONS_ENABLED'; v: boolean }
     | { type: 'SET_ACTIVE_SKILL'; id: string | null }
-    | { type: 'SET_LANG_OPTIONS'; options: Array<{ code: string; label: string }> }
+    | { type: 'SET_LANG_OPTIONS'; options: LangOption[] }
     | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number | string; sizeType: string; url: string; cacheSource?: string }
     | { type: 'UPDATE_MESSAGE_PHOTO_PROGRESS'; messageId: number; progress: number }
     | { type: 'UPDATE_MESSAGE_PHOTO_FAILED'; messageId: number; sizeType: string }
     | { type: 'REFRESH_MESSAGE_PHOTO'; messageId: number; photo: any }
     | { type: 'UPDATE_MESSAGE_DOCUMENT'; messageId: number | string; url: string; cacheSource?: string }
     | { type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS'; messageId: number | string; progress: number }
+    | { type: 'UPDATE_MESSAGE_DOCUMENT_FAILED'; messageId: number | string }
+    | { type: 'MARK_BUTTON_INACTIVE'; messageId: number | string; data: string }
+    | { type: 'CLEAR_BUTTON_INACTIVE'; messageId?: number | string; messageIds?: Array<number | string> }
+    | { type: 'SET_BUTTON_NOTICE'; messageId: number | string; text: string; rel?: { x: number; y: number; w: number; h: number } | null }
+    | { type: 'CLEAR_BUTTON_NOTICE' }
     | { type: 'UPDATE_MESSAGE_DOCUMENT_THUMB'; messageId: number | string; thumbType: string; url: string }
     | { type: 'UPDATE_MESSAGE_DOCUMENT_SOURCE'; messageId: number | string; cacheSource: string }
     | { type: 'SET_MESSAGE_REACTIONS'; messageId: number; reactions: MessageReaction[] }

@@ -2,8 +2,7 @@ import { h } from '@ton-ai/atom/jsx-runtime';
 import { Scrollable } from '../primitives/scrollable.js';
 import { Text } from '../primitives/text.js';
 import type { AppState } from '../types.js';
-import { t } from '../locale.js';
-import { S } from '../strings.js';
+import { t, S } from '@ton-ai/gram-lang';
 
 export function DebugView({ state }: { state: AppState }) {
   return (

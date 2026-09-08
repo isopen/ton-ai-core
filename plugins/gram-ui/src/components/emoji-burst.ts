@@ -46,7 +46,7 @@ function snapshotVideoFrame(vid: HTMLVideoElement): string {
         tmp.height = Math.max(1, Math.round(vid.videoHeight * scale));
         tmp.getContext('2d')!.drawImage(vid, 0, 0, tmp.width, tmp.height);
         return tmp.toDataURL();
-    } catch { /* cross-origin or not ready */ return ''; }
+    } catch {  return ''; }
 }
 
 function resolveDrawableValue(node: Element, px: number, py: number): string {
@@ -254,7 +254,7 @@ function popEmojiSlot(el: Element, big = false): void {
             { transform: 'scale(' + (big ? 1.6 : 1.35) + ')', offset: 0.4 },
             { transform: 'scale(1)' },
         ], { duration: big ? 380 : 320, easing: 'cubic-bezier(.34,1.56,.64,1)' });
-    } catch { /* animate() unsupported */ }
+    } catch {}
 }
 
 export function playVideoEmojiFx(anchor: Element, vid: HTMLVideoElement, x?: number, y?: number, big = false): void {
@@ -382,7 +382,7 @@ export function attachEmojiInteractions(): void {
 
         const anchorEl = pickInteractionAnchor(bubble, detail.x, detail.y);
         const anchorRect = anchorEl ? anchorEl.getBoundingClientRect() : bubble.getBoundingClientRect();
-        playStickerFxOverlay('emoji-fx-' + (detail.key || String(detail.messageId)), detail.url, anchorRect);
+        playStickerFxOverlay('emoji-fx-' + (detail.key || String(detail.messageId)), detail.url, anchorEl ?? bubble, anchorRect);
     };
 
     const onLocal = (e: Event) => {

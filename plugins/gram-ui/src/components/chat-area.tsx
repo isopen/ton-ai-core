@@ -1,6 +1,10 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState, useCallback, useMemo } from '@ton-ai/atom/hooks';
 import { VirtualList, memo } from '@ton-ai/atom';
+import { createPortal } from '@ton-ai/atom';
+import { Suspense } from '@ton-ai/atom/suspense';
+import { ErrorBoundary } from '@ton-ai/atom/boundary';
+import type { ComponentType } from '@ton-ai/atom';
 import { Spinner } from '../primitives/spinner.js';
 import { Avatar } from '../primitives/avatar.js';
 import { Flex } from '../primitives/flex.js';
@@ -15,14 +19,13 @@ import type { Dispatch } from '../state.js';
 import type { SkillDef } from '../plugin/types.js';
 import { Image } from '../primitives/image.js';
 import type { ImageSpec } from '../types.js';
-import { t } from '../locale.js';
-import { S } from '../strings.js';
+import { t, S } from '@ton-ai/gram-lang';
 import { flushEmojiBatch, getEmojiDocId, getDiceDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeDiceSets, ensureEmojiStickers } from './emoji-store.js';
 import { SlotMachineSticker, resetSlotMachineDone } from './slot-machine.js';
 import { resetCompletedAnimations } from './tgs-player.js';
 import { observeVisibility } from './emoji-canvas.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
-import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText } from '../utils.js';
+import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText, isInactiveButtonData, buttonBubbleRel } from '../utils.js';
 import { MediaPlayer } from './media-player.js';
 import { VideoMessage } from './video-message.js';
 import { PhotoLoader } from './photo-loader.js';
@@ -33,12 +36,14 @@ import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
 import { AnimatedEmoji } from './emoji-text.js';
 import { PollBubble } from './poll-bubble.js';
 import { MediaCaption } from './media-caption.js';
+import type { ButtonNoticeData } from './button-notice.js';
 import { buildImageSpec, firstMissingSizeType, chatPhotoPrio, isInlinePhotoSize } from './photo-spec.js';
 import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 
 const photoLog = getLogger('gram-ui:photo');
 const fxLog = getLogger('gram-ui:sticker-fx');
 const fallbackLog = getLogger('gram-ui:fallback');
+const kbLog = getLogger('gram-ui:kb');
 
 const loggedMsgTypes = new Set<string>();
 
@@ -83,6 +88,28 @@ function collectRichCustomIds(node: any, out: Set<string>, seen = new WeakSet())
   }
 }
 
+function collectPollCustomIds(m: any, out: string[]): void {
+  const media = m?.media;
+  if (!media || media._ !== 'messageMediaPoll') return;
+  const q = media.poll?.question?.entities;
+  if (Array.isArray(q)) {
+    for (const e of q) {
+      if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) out.push(String(e.document_id));
+    }
+  }
+  const answers = media.poll?.answers;
+  if (Array.isArray(answers)) {
+    for (const a of answers) {
+      const ents = a?.text?.entities;
+      if (Array.isArray(ents)) {
+        for (const e of ents) {
+          if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) out.push(String(e.document_id));
+        }
+      }
+    }
+  }
+}
+
 function getAlbumGroupId(m: any): number | string | null {
   if (m == null) return null;
   const id = (m.groupedId ?? m.grouped_id) as number | string | undefined;
@@ -101,10 +128,49 @@ function estimateRowHeight(row: AlbumRow): number {
   if (!m) return 52;
   if (row.msgs.length > 1) return 320;
   const t = getMediaType(m.media);
-  if (t === 'photo') return 380;
+  if (t === 'photo') {
+    const sizes = m.media?.photo?.sizes || [];
+    let bw = 0;
+    let bh = 0;
+    for (const s of sizes) {
+      const w = s.w || s.width || 0;
+      const hh = s.h || s.height || 0;
+      if (w > bw) { bw = w; bh = hh; }
+    }
+    let h = (bw > 0 && bh > 0) ? Math.min(420, Math.round(bh * Math.min(1, 320 / bw))) : 380;
+    const capLen = (m.message || '').length;
+    if (capLen) h += Math.min(120, 24 + Math.ceil(capLen / 60) * 22);
+    return h;
+  }
   if (t === 'sticker') return 220;
   if (t === 'dice') return 240;
-  if (t === 'poll') return 220;
+  if (t === 'poll') {
+    const poll = m.media?.poll || {};
+    const answers = Array.isArray(poll.answers) ? poll.answers : [];
+    let h = 150 + answers.length * 40;
+    const capLen = (m.message || '').length;
+    if (capLen) h += Math.min(120, 24 + Math.ceil(capLen / 60) * 22);
+    for (const a of answers) {
+      if (a?.media?.photo || a?.media?.document) h += 100;
+    }
+    const am = m.media?.attached_media;
+    if (am?.photo) {
+      let bw = 0;
+      let bh = 0;
+      for (const s of (am.photo.sizes || [])) {
+        const w = s.w || s.width || 0;
+        const hh = s.h || s.height || 0;
+        if (w > bw) { bw = w; bh = hh; }
+      }
+      h += (bw > 0 && bh > 0) ? Math.min(320, Math.round(bh * Math.min(1, 320 / bw))) : 280;
+    } else if (am?.document) {
+      h += 300;
+    }
+    const res = m.media?.results || {};
+    const voted = Array.isArray(res.results) && res.results.some((r: any) => !!r?.chosen);
+    if (poll.multiple_choice === true && poll.closed !== true && !voted && answers.length > 0) h += 48;
+    return h;
+  }
   if (t === 'video') return 340;
   if (t === 'document') return 80;
   if (m.media?.webpage) return 130;
@@ -249,7 +315,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
       if (!match || detail.mediaType !== 'sticker' || !rootRef.current) return;
       if (fxUrlRef.current) {
         fxLog.info('[gram-app] sticker-fx overlay for msg=' + m.id + ' (interaction server fx)');
-        playStickerFxOverlay('fx' + m.id, fxUrlRef.current, rootRef.current.getBoundingClientRect());
+        playStickerFxOverlay('fx' + m.id, fxUrlRef.current, rootRef.current, rootRef.current.getBoundingClientRect());
       } else if (!detail.hasCanvasFx) {
         window.dispatchEvent(new CustomEvent('tg-interaction-local', { detail: { messageId: String(mid), x: detail.x, y: detail.y } }));
       }
@@ -283,7 +349,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
       a.click();
       a.remove();
       window.setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    } catch { /* noop */ }
+    } catch {}
   }, [url, isTgs, doc?.file_name, doc?.id, m.id]);
 
   return (
@@ -353,7 +419,18 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   useEffect(() => {
     const timer = setTimeout(() => {
       const el = document.getElementById(`msg-${m.id}`);
-      if (!el) { photoLog.info('[PhotoBubble] NO ELEMENT msg-' + m.id); return; }
+      if (!el) {
+        photoLog.info('[PhotoBubble] NO ELEMENT msg-' + m.id);
+        if (m.media?.photo?.failed === true) return;
+        const need = firstMissingSizeType(m.media?.photo, chatPhotoPrio());
+        photoLog.info('[PhotoBubble] direct dispatch', m.id, 'need:', need?.sizeType || null);
+        if (need) {
+          window.dispatchEvent(new CustomEvent('tg-download-photo', {
+            detail: { photo: m.media.photo, sizeType: need.sizeType, messageId: m.id },
+          }));
+        }
+        return;
+      }
       const obs = new IntersectionObserver(([entry]) => {
         if (entry.isIntersecting) {
           if (m.media?.photo?.failed === true) return;
@@ -429,16 +506,26 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
   );
 }
 
-function onKbButton(button: { kind: 'callback' | 'url' | 'plain'; text?: string; data?: string; url?: string }, messageId: number | string) {
-  console.info('[onKbButton] click msg=' + messageId + ' kind=' + button.kind + ' data=' + String(button.data).slice(0,60));
+function onKbButton(button: { kind: 'callback' | 'url' | 'plain' | 'disabled'; text?: string; data?: string; url?: string }, messageId: number | string, e?: any) {
+  kbLog.info('[onKbButton] click msg=' + messageId + ' kind=' + button.kind + ' data=' + String(button.data).slice(0,60));
+  if (button.kind === 'disabled') {
+    kbLog.info('[onKbButton] protocol-disabled skipped msg=' + messageId);
+    return;
+  }
   if (button.kind === 'url' && button.url) {
     window.open(button.url, '_blank', 'noopener');
     return;
   }
   if (button.kind === 'callback' && button.data) {
-    console.info('[onKbButton] dispatch tg-bot-callback msg=' + messageId + ' data=' + String(button.data).slice(0,60));
-    window.dispatchEvent(new CustomEvent('tg-bot-callback', { detail: { messageId, data: button.data, text: button.text } }));
+    if (isInactiveButtonData(button.data)) {
+      kbLog.info('[onKbButton] inactive noop skipped msg=' + messageId);
+      return;
+    }
+    kbLog.info('[onKbButton] dispatch tg-bot-callback msg=' + messageId + ' data=' + String(button.data).slice(0,60));
+    window.dispatchEvent(new CustomEvent('tg-bot-callback', { detail: { messageId, data: button.data, text: button.text, rel: buttonBubbleRel(e) } }));
+    return;
   }
+  kbLog.warn('[onKbButton] ignored kind=' + button.kind + ' msg=' + messageId + ' hasData=' + !!button.data);
 }
 
 function msgStatus(m: any, readOutboxMaxId?: number): 'pending' | 'sent' | 'delivered' | 'read' {
@@ -654,13 +741,13 @@ function fwdFromLabel(fwd: any): string {
   if (fwd.from_name) return String(fwd.from_name);
   if (fwd.post_author) return String(fwd.post_author);
   const fid = fwd.from_id;
-  if (fid?._ === 'peerChannel') return 'канала';
-  if (fid?._ === 'peerChat') return 'чата';
-  if (fid?._ === 'peerUser' && fid.user_id != null) return 'пользователя';
-  return 'скрытого автора';
+  if (fid?._ === 'peerChannel') return 'channel';
+  if (fid?._ === 'peerChat') return 'chat';
+  if (fid?._ === 'peerUser' && fid.user_id != null) return 'user';
+  return 'hidden author';
 }
 
-function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, documentSources, selfPeer, reactions, onReact, onOpenPhoto, onOpenPeer }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; documentSources?: Record<number | string, string>; selfPeer?: boolean; reactions?: MessageReaction[]; onOpenPeer?: (peer: PeerInfo) => void; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
+export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, documentSources, inactiveButtons, buttonNotice, selfPeer, reactions, onReact, onOpenPhoto, onOpenPeer }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; documentSources?: Record<number | string, string>; inactiveButtons?: Record<string, true>; buttonNotice?: ButtonNoticeData | null; selfPeer?: boolean; reactions?: MessageReaction[]; onOpenPeer?: (peer: PeerInfo) => void; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
   const timeStr = formatMessageTime(m.date);
   const out = selfPeer ? true : m.out;
   const status = msgStatus(m, readOutboxMaxId);
@@ -679,6 +766,11 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
 
   const marginBottom = sameSenderPrev ? 2 : 8;
 
+  const bubbleText = m.message || mediaFallbackText(m.media, t(S.FILE_DEFAULT));
+  const fileName = m.media?.document?.file_name || '';
+  const showUnsupported = !m.richMessage && !(m.message || '').trim() && (mediaType === 'unknown' || ((mediaType === 'audio' || mediaType === 'document') && !fileName));
+  const unsupportedText = t(S.MESSAGE_UNSUPPORTED);
+
   const fwdLabel = m.fwdName || fwdFromLabel(m.fwdFrom);
 
   if (isGiftMessage(m.action)) {
@@ -696,7 +788,7 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
     <div
       class={m.fwdPeer ? 'tgui-fwd-header tgui-fwd-header_link' : 'tgui-fwd-header'}
       onClick={m.fwdPeer && onOpenPeer ? () => onOpenPeer(m.fwdPeer!) : undefined}
-    >Переслано от <b>{fwdLabel}</b></div>
+    >Forwarded from <b>{fwdLabel}</b></div>
   ) : null;
   return (
     <div
@@ -719,7 +811,7 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
         : mediaType === 'dice'
           ? <DiceBubble m={m} timeStr={timeStr} out={out} status={status} />
           : mediaType === 'poll'
-            ? <PollBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} onOpenPhoto={onOpenPhoto} documentUrls={emojiUrls} />
+            ? <PollBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} onOpenPhoto={onOpenPhoto} documentUrls={emojiUrls} photoSource={photoSource} documentProgress={rowProgress} documentSources={documentSources} />
           : mediaType === 'photo' || mediaType === 'image'
           ? <PhotoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} cacheSource={photoSource} entities={m.entities} documentUrls={rowUrls} onOpenPhoto={onOpenPhoto} />
           : mediaType === 'video' && isAnimatedMedia(m.media)
@@ -728,8 +820,8 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
             ? <VideoMessage m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} />
           : isLinkMsg
             ? <WebPageBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
-            : <MessageBubble text={m.message || mediaFallbackText(m.media)} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} documentSources={documentSources} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} messageId={m.id} replyMarkup={m.replyMarkup} richMessage={m.richMessage} richDocumentUrls={emojiUrls}
-              onKbButton={onKbButton} onRichButton={(data, mid) => onKbButton({ kind: 'callback', data }, mid)} />
+            : <MessageBubble text={showUnsupported ? unsupportedText : bubbleText} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} documentSources={documentSources} inactiveButtons={inactiveButtons} buttonNotice={buttonNotice} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} messageId={m.id} replyMarkup={m.replyMarkup} richMessage={m.richMessage} richDocumentUrls={emojiUrls}
+              onKbButton={onKbButton} onRichButton={(data, mid, e) => onKbButton({ kind: 'callback', data }, mid, e)} />
       }
     </div>
   );
@@ -737,11 +829,12 @@ function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMax
 
 const MessageItemMemo = memo(MessageItem as any);
 
-export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; dispatch: Dispatch; skills?: SkillDef[] }) {
+function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispatch: Dispatch; skills?: SkillDef[] }) {
   const peer = state.selectedPeer;
   const [visRange, setVisRange] = useState<[number, number]>([0, 0]);
   const [viewer, setViewer] = useState<{ items: MediaViewerItem[]; index: number } | null>(null);
   const rowsRef = useRef<AlbumRow[]>([]);
+  const sabPrev = useRef<boolean | null>(null);
 
   const handlerCacheRef = useRef(new Map<string, { onReact: (emoji: string, adding: boolean) => void; onOpenPhoto: (image: ImageSpec) => void; onOpenPeer: (peer: PeerInfo) => void }>());
   const handlerPeerKey = peer?.id != null ? String(peer.id) : '';
@@ -815,6 +908,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
         for (const e of (m.entities || [])) {
           if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) customIds.push(String(e.document_id));
         }
+        collectPollCustomIds(m, customIds);
         if (m.richMessage) collectRichCustomIds(m.richMessage, richIds);
         if (m.replyMarkup) collectRichCustomIds(m.replyMarkup, richIds);
         const diceEmoji = m.media?.emoticon || m.media?.emoji;
@@ -852,6 +946,9 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
       for (const e of (m.entities || [])) {
         if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) pre.add(String(e.document_id));
       }
+      const pollIds: string[] = [];
+      collectPollCustomIds(m, pollIds);
+      for (const id of pollIds) pre.add(id);
       if (m.richMessage) collectRichCustomIds(m.richMessage, pre);
       if (m.replyMarkup) collectRichCustomIds(m.replyMarkup, pre);
     }
@@ -879,6 +976,9 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
         for (const e of (m.entities || [])) {
           if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) keep.add(String(e.document_id));
         }
+        const pollKeep: string[] = [];
+        collectPollCustomIds(m, pollKeep);
+        for (const id of pollKeep) keep.add(id);
         if (m.richMessage) {
           const s = new Set<string>();
           collectRichCustomIds(m.richMessage, s);
@@ -923,7 +1023,11 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
             </Button>
             <Text variant="title">{t(skill.label) !== skill.label ? t(skill.label) : skill.label}</Text>
           </div>
-          {skill.render({ state, dispatch })}
+          <ErrorBoundary resetKeys={[state.activeSkill]} fallback={<div class="tgui-empty-chat">{t(S.CHAT_EMPTY)}</div>}>
+            <Suspense fallback={<div class="tgui-empty-chat"><Spinner /></div>}>
+              {skill.render({ state, dispatch })}
+            </Suspense>
+          </ErrorBoundary>
         </div>
       );
     }
@@ -951,6 +1055,10 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
     ? rows.findIndex(row => row.msgs.some(m => !m.out && Number(m.id) > readInboxMaxId))
     : -1;
   const hasUnread = firstUnreadRowIdx >= 0 && (currentDialog?.unreadCount ?? 0) > 0;
+  if (sabPrev.current !== !hasUnread) {
+    sabPrev.current = !hasUnread;
+    getLogger('gram-ui').info('[pollscroll] startAtBottom=' + (!hasUnread) + ' unread=' + (currentDialog?.unreadCount ?? 0) + ' n=' + msgs.length);
+  }
 
   const hasMessages = msgs.length > 0;
 
@@ -1068,7 +1176,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
             return (
               <div>
                 {daySep}
-                <MessageItemMemo m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrl={state.documentUrls?.[m.id] || ''} progress={state.documentProgress?.[m.id]} documentSource={state.documentSources?.[m.id]} photoSource={state.photoSources?.[m.id]} emojiUrls={emojiUrls} documentSources={state.documentSources} selfPeer={selfPeer} reactions={msgReactions} onReact={onReact} onOpenPhoto={onOpenPhoto} onOpenPeer={onOpenPeer} />
+                <MessageItemMemo m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrl={state.documentUrls?.[m.id] || ''} progress={state.documentProgress?.[m.id]} documentSource={state.documentSources?.[m.id]} photoSource={state.photoSources?.[m.id]} emojiUrls={emojiUrls} documentSources={state.documentSources} inactiveButtons={state.inactiveButtons} buttonNotice={state.buttonNotice && String(state.buttonNotice.messageId) === String(m.id) ? state.buttonNotice : null} selfPeer={selfPeer} reactions={msgReactions} onReact={onReact} onOpenPhoto={onOpenPhoto} onOpenPeer={onOpenPeer} />
               </div>
             );
           }}
@@ -1076,7 +1184,7 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
           onNearTop={handleNearTop}
         />
       ) : msgListChildren}
-      {viewer ? (
+      {viewer ? createPortal(
         <MediaViewer
           items={viewer.items}
           index={viewer.index}
@@ -1084,8 +1192,34 @@ export function ChatArea({ state, dispatch, skills = [] }: { state: AppState; di
           getMessage={(id) => state.messages.find(mm => mm.id === id) || null}
           onClose={() => setViewer(null)}
           onNavigate={(idx) => setViewer(v => v ? { ...v, index: idx } : v)}
-        />
+        />,
+        typeof document !== 'undefined' ? document.body : null,
       ) : null}
     </div>
   );
 }
+
+export const ChatArea = memo(ChatAreaView as ComponentType, (a, b) =>
+  a.dispatch === b.dispatch &&
+  a.skills === b.skills &&
+  a.state.messages === b.state.messages &&
+  a.state.documentUrls === b.state.documentUrls &&
+  a.state.inactiveButtons === b.state.inactiveButtons &&
+  a.state.buttonNotice === b.state.buttonNotice &&
+  a.state.selfUserId === b.state.selfUserId &&
+  a.state.typingText === b.state.typingText &&
+  a.state.selectedPeer === b.state.selectedPeer &&
+  a.state.photoSources === b.state.photoSources &&
+  a.state.loadingMessages === b.state.loadingMessages &&
+  a.state.documentSources === b.state.documentSources &&
+  a.state.activeSkill === b.state.activeSkill &&
+  a.state.reactions === b.state.reactions &&
+  a.state.documentProgress === b.state.documentProgress &&
+  a.state.dialogs === b.state.dialogs &&
+  a.state.avatarSources === b.state.avatarSources &&
+  a.state.langCode === b.state.langCode &&
+  a.state.log === b.state.log &&
+  a.state.sessionId === b.state.sessionId &&
+  a.state.imageQuality === b.state.imageQuality &&
+  a.state.animationsEnabled === b.state.animationsEnabled,
+);

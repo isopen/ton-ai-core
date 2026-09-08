@@ -111,10 +111,11 @@ interface VideoMessageProps {
   sameSenderPrev?: boolean;
   sameSenderNext?: boolean;
   onFullscreen?: (messageId: number) => void;
+  maxWidth?: number;
 }
 
 export function VideoMessage(props: VideoMessageProps) {
-  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext, onFullscreen } = props;
+  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext, onFullscreen, maxWidth = 480 } = props;
 
   const frameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -157,7 +158,7 @@ export function VideoMessage(props: VideoMessageProps) {
   const duration = videoAttr?.duration || doc?.duration || 45;
   const videoW = videoAttr?.w || doc?.w || 0;
   const videoH = videoAttr?.h || doc?.h || 0;
-  const displayW = videoW ? Math.min(videoW, 480) : 0;
+  const displayW = videoW ? Math.min(videoW, maxWidth) : 0;
   const displayH = videoH && videoW ? Math.round(videoH * (displayW / videoW)) : 0;
   const thumb = buildDocumentThumb(doc);
 
@@ -261,6 +262,10 @@ export function VideoMessage(props: VideoMessageProps) {
         setUiState('loading');
         setLpct(progress);
         wasLoadingRef.current = true;
+      } else if (wasLoadingRef.current) {
+        wasLoadingRef.current = false;
+        setLpct(0);
+        setUiState('ready');
       }
       return;
     }
@@ -429,7 +434,7 @@ export function VideoMessage(props: VideoMessageProps) {
             <PosterThumb />
           )}
 
-          {/* top badge row */}
+          {}
           <div class="video-message__top">
             <div class="video-message__top-left">
               <span class="badge badge--duration">{uiState === 'playing' ? fmt(ct) : durLabel}</span>
@@ -466,14 +471,14 @@ export function VideoMessage(props: VideoMessageProps) {
             </div>
           </div>
 
-          {/* central play/pause/retry */}
+          {}
           <button type="button" class="video-message__center-btn" data-action="center" onClick={(e: any) => { e.stopPropagation(); toggle(); }}>
             <IconPlay />
             <IconPause />
             <IconWarning />
           </button>
 
-          {/* loading ring */}
+          {}
           <div class="video-message__loading-ring">
             <svg viewBox="0 0 64 64" aria-hidden="true">
               <circle class="ring-bg" cx="32" cy="32" r="28" />
@@ -483,18 +488,18 @@ export function VideoMessage(props: VideoMessageProps) {
             <span class="loading-pct" data-role="loading-pct">{lpct}%</span>
           </div>
 
-          {/* meta overlay: time + read status (only when no caption) */}
+          {}
           {!m.message ? <div class="video-message__meta-overlay">
             <span>{timeStr}</span>
             {out ? <IconCheckDouble /> : null}
           </div> : null}
 
-          {/* mini progress (visible during play) */}
+          {}
           <div class="video-message__mini-progress" data-role="seek-track" onClick={(e: any) => { e.stopPropagation(); seek(e.clientX); }}>
             <span class="track"><span class="fill" style={`width:${pct}%`} /></span>
           </div>
 
-          {/* bottom control bar (hover) */}
+          {}
           <div class="video-message__controls">
             <span class="ctrl-time">{fmt(ct)} / {durLabel}</span>
             <span style="flex:1" />

@@ -1,9 +1,11 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { bindLifetimeListeners } from '@ton-ai/atom';
+import { ErrorBoundary } from '@ton-ai/atom/boundary';
 import { getLogger } from '@ton-ai/gram-debug';
 import { Panel } from './primitives/panel.js';
 import { Flex } from './primitives/flex.js';
 import type { AppState, UIAction, PeerInfo, Dialog, Message } from './types.js';
+import type { LangOption } from '@ton-ai/gram-lang';
 import type { Dispatch } from './state.js';
 import type { SkillDef } from './plugin/types.js';
 import { SkillPlugin } from './plugin/skill-plugin.js';
@@ -15,22 +17,26 @@ import { attachEmojiBurst, attachEmojiInteractions } from './components/emoji-bu
 
 const log = getLogger('gram-ui');
 import { render, setUseRafBatching } from '@ton-ai/atom/render';
-import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
+import { useState, useEffect, useRef, useCallback, useMemo } from '@ton-ai/atom/hooks';
+import { AppContext } from './app-context.js';
 import { Header } from './components/header.js';
 import { AuthScreen } from './components/auth-screen.js';
 import { Sidebar } from './components/sidebar.js';
 import { ChatArea } from './components/chat-area.js';
 import { ChatInput } from './components/chat-input.js';
+import { Toast } from './primitives/toast.js';
 import { DebugView } from './components/debug-view.js';
 import { SettingsView } from './components/settings-view.js';
 import { CacheView } from './components/cache-view.js';
 import { FpsMeter } from './components/fps-meter.js';
-import { S, LANG_FALLBACKS } from './strings.js';
-import { setStrings } from './locale.js';
+import { S, t, setStrings, getBuiltinStrings } from '@ton-ai/gram-lang';
+import { THEME_TOGGLE_SELECTOR, supportsViewTransitions, themeRevealOverlayCss, viewTransitionReveal } from './components/theme-reveal.js';
+import type { RevealHandle } from './components/theme-reveal.js';
 export type { AppState, UIAction, PeerInfo, Dialog, Message };
 
 export interface TelegramUICallbacks {
   sendCode: (phone: string) => Promise<void>;
+  resendCode?: () => Promise<void>;
   signIn: (code: string) => Promise<void>;
   checkPassword: (password: string) => Promise<void>;
   signUp: (firstname: string, lastname: string) => Promise<void>;
@@ -39,6 +45,7 @@ export interface TelegramUICallbacks {
   logout: () => Promise<void>;
   selectPeer: (peer: PeerInfo) => void;
   requestQrCode: () => Promise<void>;
+  requestQrPreview?: () => Promise<void>;
   sendTyping: () => void;
   sendTypingCancel: () => void;
 }
@@ -56,28 +63,26 @@ export class TelegramUI {
 
   constructor(container: HTMLElement, callbacks: TelegramUICallbacks, initialState?: Partial<AppState>) {
     this.callbacks = callbacks;
-    setStrings(LANG_FALLBACKS.ru || {});
+    setStrings(getBuiltinStrings('en') || {});
     injectStyles();
 
-    const storedQuality = (() => {
-      try {
-        const v = localStorage.getItem('tg_imageQuality');
-        return v === 'min' || v === 'medium' || v === 'max' ? v as 'min' | 'medium' | 'max' : null;
-      } catch { return null; }
-    })();
     const merged = {
       ...defaultState(),
-      ...(storedQuality ? { imageQuality: storedQuality } : {}),
       ...initialState,
     };
     setPhotoQuality(merged.imageQuality);
     document.documentElement.setAttribute('data-theme', merged.theme);
+    try {
+      (document.documentElement as any).dataset.animations = merged.animationsEnabled === false ? 'off' : 'on';
+    } catch {}
 
     const self = this;
 
     function App() {
       const [state, setState] = useState<AppState>(merged);
       const firstRun = useRef(true);
+      const mountTimeRef = useRef(Date.now());
+      const revealRef = useRef<RevealHandle | null>(null);
       const setStateRef = useRef(setState);
       setStateRef.current = setState;
 
@@ -93,11 +98,22 @@ export class TelegramUI {
         const root = document.documentElement;
         if (firstRun.current) {
           firstRun.current = false;
+          mountTimeRef.current = Date.now();
           root.setAttribute('data-theme', state.theme);
           return;
         }
+        if (state.animationsEnabled === false) {
+          root.setAttribute('data-theme', state.theme);
+          window.dispatchEvent(new CustomEvent('tg-theme-changed', { detail: { theme: state.theme } }));
+          return;
+        }
+        if (Date.now() - mountTimeRef.current < 1500) {
+          root.setAttribute('data-theme', state.theme);
+          window.dispatchEvent(new CustomEvent('tg-theme-changed', { detail: { theme: state.theme } }));
+          return;
+        }
 
-        const btn = document.querySelector('.tgui-theme-toggle');
+        const btn = document.querySelector(THEME_TOGGLE_SELECTOR);
         let cx = 16;
         let cy = 28;
         if (btn) {
@@ -109,24 +125,39 @@ export class TelegramUI {
         const newTheme = state.theme;
         const oldTheme = root.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
 
+        const applyThemeToDom = () => {
+          root.setAttribute('data-theme', newTheme);
+          window.dispatchEvent(new CustomEvent('tg-theme-changed', { detail: { theme: newTheme } }));
+        };
+
+        if (supportsViewTransitions()) {
+          try { revealRef.current?.cancel(); } catch {  }
+          revealRef.current = null;
+          const handle = viewTransitionReveal({
+            point: { x: cx, y: cy },
+            goingDark: newTheme === 'dark',
+            apply: applyThemeToDom,
+          });
+          if (handle) {
+            revealRef.current = handle;
+            handle.finished.finally(() => {
+              if (revealRef.current === handle) revealRef.current = null;
+            });
+            return () => {
+              try { handle.cancel(); } catch {  }
+              if (revealRef.current === handle) revealRef.current = null;
+            };
+          }
+        }
+
         const oldBg = getComputedStyle(root).getPropertyValue('--bg-primary').trim() || (oldTheme === 'light' ? '#ffffff' : '#121212');
 
         const overlay = document.createElement('div');
-        overlay.style.cssText = [
-          'position:fixed',
-          'inset:0',
-          'z-index:99999',
-          'pointer-events:none',
-          `background:${oldBg}`,
-          `clip-path:circle(150% at ${cx}px ${cy}px)`,
-          'transition:clip-path .35s cubic-bezier(0.4,0.0,0.2,1)',
-          'will-change:clip-path',
-        ].join(';');
+
+        overlay.style.cssText = themeRevealOverlayCss(cx, cy, oldBg);
         document.body.appendChild(overlay);
 
-        root.setAttribute('data-theme', newTheme);
-
-        window.dispatchEvent(new CustomEvent('tg-theme-changed', { detail: { theme: newTheme } }));
+        applyThemeToDom();
 
         overlay.getBoundingClientRect();
 
@@ -162,11 +193,39 @@ export class TelegramUI {
 
       useEffect(() => {
         setPhotoQuality(state.imageQuality);
-        try { localStorage.setItem('tg_imageQuality', state.imageQuality); } catch {}
+        try { window.dispatchEvent(new CustomEvent('tg-image-quality-changed', { detail: { quality: state.imageQuality } })); } catch {}
       }, [state.imageQuality]);
+
+      useEffect(() => {
+        const enabled = state.animationsEnabled !== false;
+        try { (document.documentElement as any).dataset.animations = enabled ? 'on' : 'off'; } catch {}
+        try { window.dispatchEvent(new CustomEvent('tg-animations-changed', { detail: { enabled } })); } catch {}
+      }, [state.animationsEnabled]);
+
+      useEffect(() => {
+        if (!state.error && !state.buttonNotice) return;
+        const t = setTimeout(() => {
+          dispatch({ type: 'SET_ERROR', error: '' });
+          dispatch({ type: 'CLEAR_BUTTON_NOTICE' });
+        }, 5000);
+        return () => clearTimeout(t);
+      }, [state.error, state.errorVersion, state.buttonNotice]);
+
+      const appCtx = useMemo(() => ({
+        theme: state.theme,
+        imageQuality: state.imageQuality,
+        animationsEnabled: state.animationsEnabled,
+        selfUserId: state.selfUserId,
+        selectedPeer: state.selectedPeer,
+        activeSkill: state.activeSkill,
+        pluginSkills: state.pluginSkills,
+        langCode: state.langCode,
+        dispatch,
+      }), [state.theme, state.imageQuality, state.animationsEnabled, state.selfUserId, state.selectedPeer, state.activeSkill, state.pluginSkills, state.langCode, dispatch]);
 
       return (
         <Panel>
+          <AppContext.Provider value={appCtx}>
           {state.page !== 'auth' ? (
             <div class="tgui-header-wrapper">
               <Header state={state} dispatch={self._dispatch} />
@@ -174,17 +233,25 @@ export class TelegramUI {
           ) : null}
           {state.page === 'auth'
             ? <Flex key="auth-body" direction="row" grow className="tgui-body">
-                <AuthScreen state={state} dispatch={self._dispatch} />
+                <ErrorBoundary resetKeys={[state.authStep]} fallback={<div class="tgui-empty-chat">{t(S.CHAT_EMPTY)}</div>}>
+                  <AuthScreen state={state} dispatch={self._dispatch} />
+                </ErrorBoundary>
               </Flex>
             : <Flex key="app-body" direction="row" grow className="tgui-body">
-                <Sidebar state={state} dispatch={self._dispatch} />
+                <ErrorBoundary resetKeys={[state.page]} fallback={<div class="tgui-empty-chat">{t(S.CHAT_EMPTY)}</div>}>
+                  <Sidebar state={state} dispatch={self._dispatch} />
+                </ErrorBoundary>
                 <Flex direction="column" grow className="tgui-chat-column">
-                  <ChatArea state={state} dispatch={self._dispatch} skills={self._pluginSkills} />
+                  <ErrorBoundary resetKeys={[state.selectedPeer?.type, state.selectedPeer?.id]} fallback={<div class="tgui-empty-chat">{t(S.CHAT_EMPTY)}</div>}>
+                    <ChatArea state={state} dispatch={self._dispatch} skills={self._pluginSkills} />
+                  </ErrorBoundary>
                   <ChatInput state={state} dispatch={self._dispatch} />
                 </Flex>
               </Flex>
           }
+          {state.page !== 'auth' ? <Toast text={state.error} version={state.errorVersion} /> : null}
           <FpsMeter />
+          </AppContext.Provider>
         </Panel>
       );
     }
@@ -206,12 +273,11 @@ export class TelegramUI {
       'tg-send-message': (e: any) => { this.callbacks.sendMessage(e.detail.text); },
       'tg-typing': () => { this.callbacks.sendTyping(); },
       'tg-typing-stop': () => { this.callbacks.sendTypingCancel(); },
-      'tg-auth-resend-code': () => { this.callbacks.sendCode(this._state.phone); },
+      'tg-auth-resend-code': () => { if (this.callbacks.resendCode) this.callbacks.resendCode(); else this.callbacks.sendCode(this._state.phone); },
       'tg-auth-request-qr': () => { this.callbacks.requestQrCode(); },
+      'tg-auth-request-qr-preview': () => { (this.callbacks.requestQrPreview || this.callbacks.requestQrCode)?.(); },
       'tg-auth-set-lang': (e: any) => {
         this.dispatch({ type: 'SET_LANG_CODE', langCode: e.detail.langCode });
-        const fallback = LANG_FALLBACKS[e.detail.langCode];
-        if (fallback) setStrings(fallback);
       },
     });
   }
@@ -243,10 +309,9 @@ export class TelegramUI {
   setSelfUserId(userId: string) { this.dispatch({ type: 'SET_SELF_USER_ID', userId }); }
   setImageQuality(q: 'min' | 'medium' | 'max') {
     setPhotoQuality(q);
-    try { localStorage.setItem('tg_imageQuality', q); } catch {}
     this.dispatch({ type: 'SET_IMAGE_QUALITY', quality: q });
   }
-  setLangOptions(options: Array<{ code: string; label: string }>) { this.dispatch({ type: 'SET_LANG_OPTIONS', options }); }
+  setLangOptions(options: LangOption[]) { this.dispatch({ type: 'SET_LANG_OPTIONS', options }); }
 
   private registerBuiltinSkills() {
     const debugPlugin = new SkillPlugin({

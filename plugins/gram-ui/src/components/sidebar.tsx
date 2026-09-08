@@ -1,4 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
+import { memo, type ComponentType } from '@ton-ai/atom';
 import { useEffect, useCallback, useRef } from '@ton-ai/atom/hooks';
 import { CustomScrollbar } from '../primitives/custom-scrollbar.js';
 import { Spinner } from '../primitives/spinner.js';
@@ -9,7 +10,7 @@ import { ensureEmojiStickers } from './emoji-store.js';
 import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';
 
-export function Sidebar({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
+function SidebarView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
   const collapsed = state.sidebarCollapsed;
 
   useEffect(() => {
@@ -42,7 +43,7 @@ export function Sidebar({ state, dispatch }: { state: AppState; dispatch: Dispat
         <div class={`tgui-sidebar-header ${collapsed ? 'tgui-sidebar-header-collapsed' : 'tgui-sidebar-header-expanded'}`}>
           {!collapsed ? <ConnectionIndicator status={state.connectionStatus} /> : null}
           <div class="tgui-sidebar-header-actions">
-            <ActionMenu state={state} dispatch={dispatch} />
+            <ActionMenu />
           </div>
         </div>
         <CustomScrollbar className="tgui-sidebar-list">
@@ -69,3 +70,17 @@ export function Sidebar({ state, dispatch }: { state: AppState; dispatch: Dispat
     </>
   );
 }
+
+export const Sidebar = memo(SidebarView as ComponentType, (a, b) =>
+  a.dispatch === b.dispatch &&
+  a.state.sidebarCollapsed === b.state.sidebarCollapsed &&
+  a.state.connectionStatus === b.state.connectionStatus &&
+  a.state.dialogs === b.state.dialogs &&
+  a.state.selectedPeer === b.state.selectedPeer &&
+  a.state.typingByPeer === b.state.typingByPeer &&
+  a.state.selfUserId === b.state.selfUserId &&
+  a.state.avatarSources === b.state.avatarSources &&
+  a.state.langCode === b.state.langCode &&
+  a.state.activeSkill === b.state.activeSkill &&
+  a.state.pluginSkills === b.state.pluginSkills,
+);

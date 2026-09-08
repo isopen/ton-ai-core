@@ -186,11 +186,9 @@ export function TgsPlayer(props: TgsPlayerProps) {
     }, [layerOrder, hiddenLayers, width]);
 
     useEffect(() => {
-        if (!inView) return;
         const anim = animRef.current;
         if (!anim) return;
         const drawNow = () => {
-            if (!inView) return;
             const total = anim.outFrame - anim.inFrame;
             const frame = (showLastFrame || (endFiredRef.current && total > 0)) ? anim.outFrame - 1 : anim.inFrame;
             drawFrame(frame);

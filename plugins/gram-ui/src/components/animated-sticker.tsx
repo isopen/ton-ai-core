@@ -25,33 +25,109 @@ export function replayAnimatedCanvas(canvas: Element): boolean {
 const FX_OVERLAY_SIZE = 300;
 const FX_OVERLAY_TTL_MS = 3400;
 
-const activeFxOverlays = new Map<string, { host: HTMLDivElement; renderer: IAnimatedRenderer; timer: number }>();
+const activeFxOverlays = new Map<string, { host: HTMLDivElement; renderer: IAnimatedRenderer; timer: number; anchorEl: Element | null; detach: (() => void) | null }>();
+
+let fxTrackRaf = 0;
+
+function fxCenterOf(anchorEl: Element | null): { x: number; y: number } | null {
+  try {
+    if (!anchorEl || !anchorEl.isConnected || typeof anchorEl.getBoundingClientRect !== 'function') return null;
+    const r = anchorEl.getBoundingClientRect();
+    if (!Number.isFinite(r.top) || !Number.isFinite(r.left) || !Number.isFinite(r.width) || !Number.isFinite(r.height)) return null;
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  } catch { return null; }
+}
+
+function fxSyncEntry(key: string): void {
+  const entry = activeFxOverlays.get(key);
+  if (!entry) return;
+  const c = fxCenterOf(entry.anchorEl);
+  if (!c) {
+    disposeStickerFxOverlay(key);
+    return;
+  }
+  placeFxHost(entry.host, { left: c.x - FX_OVERLAY_SIZE / 2, top: c.y - FX_OVERLAY_SIZE / 2 });
+}
+
+function fxTrackTick(): void {
+  fxTrackRaf = 0;
+  if (activeFxOverlays.size === 0) return;
+  for (const key of [...activeFxOverlays.keys()]) fxSyncEntry(key);
+  if (activeFxOverlays.size === 0) return;
+  fxTrackRaf = requestAnimationFrame(fxTrackTick);
+}
+
+function fxWatchEntry(key: string): () => void {
+  const detach: Array<() => void> = [];
+  try {
+    const onMove = () => fxSyncEntry(key);
+    window.addEventListener('scroll', onMove, { capture: true, passive: true });
+    detach.push(() => window.removeEventListener('scroll', onMove, { capture: true }));
+    window.addEventListener('resize', onMove);
+    detach.push(() => window.removeEventListener('resize', onMove));
+  } catch { }
+  return () => { for (const fn of detach) { try { fn(); } catch { } } };
+}
+
+function fxTrackEnsure(): void {
+  if (fxTrackRaf !== 0 || activeFxOverlays.size === 0) return;
+  if (typeof requestAnimationFrame !== 'function') return;
+  fxTrackRaf = requestAnimationFrame(fxTrackTick);
+}
 
 export function disposeStickerFxOverlay(key: string): void {
   const active = activeFxOverlays.get(key);
   if (!active) return;
   activeFxOverlays.delete(key);
+  try { active.detach?.(); } catch { }
   clearTimeout(active.timer);
   try { active.renderer.destroy(); } catch { }
   active.host.remove();
 }
 
-export function playStickerFxOverlay(key: string, tgsUrl: string, anchor: DOMRect): void {
+function placeFxHost(host: HTMLDivElement, placed: { left: number; top: number }): void {
+  host.style.left = Math.round(placed.left) + 'px';
+  host.style.top = Math.round(placed.top) + 'px';
+}
+
+function fxInitialCenter(anchorEl: Element | null, fallbackRect?: DOMRect | null): { x: number; y: number } {
+  const c = fxCenterOf(anchorEl);
+  if (c) return c;
+  if (fallbackRect) {
+    return { x: fallbackRect.left + fallbackRect.width / 2, y: fallbackRect.top + fallbackRect.height / 2 };
+  }
+  const vw = typeof window !== 'undefined' ? window.innerWidth || 0 : 0;
+  const vh = typeof window !== 'undefined' ? window.innerHeight || 0 : 0;
+  return { x: vw / 2, y: vh / 2 };
+}
+
+export function playStickerFxOverlay(key: string, tgsUrl: string, anchorEl: Element | null, fallbackRect?: DOMRect | null): void {
     aniLog.info('[gram-app] playStickerFxOverlay key=' + key + ' url=' + String(tgsUrl).slice(0, 70));
     try { window.dispatchEvent(new CustomEvent('tg-sticker-fx-overlay-started', { detail: { key } })); } catch {}
+    const c0 = fxInitialCenter(anchorEl, fallbackRect ?? null);
+    const geo = { left: c0.x - FX_OVERLAY_SIZE / 2, top: c0.y - FX_OVERLAY_SIZE / 2 };
     const existing = activeFxOverlays.get(key);
   if (existing && existing.host.isConnected) {
     existing.renderer.restart?.();
+    existing.anchorEl = anchorEl;
+    if (existing.host.parentNode !== document.body) document.body.appendChild(existing.host);
+    existing.host.style.position = 'fixed';
+    placeFxHost(existing.host, geo);
     clearTimeout(existing.timer);
     existing.timer = window.setTimeout(() => disposeStickerFxOverlay(key), FX_OVERLAY_TTL_MS);
+    fxTrackEnsure();
     return;
+  }
+  if (existing) {
+    try { existing.renderer.destroy(); } catch { }
+    clearTimeout(existing.timer);
+    activeFxOverlays.delete(key);
   }
   const host = document.createElement('div');
   host.className = 'tgui-sticker-fx-overlay';
   host.style.cssText = 'position:fixed;z-index:1150;pointer-events:none;'
-    + 'width:' + FX_OVERLAY_SIZE + 'px;height:' + FX_OVERLAY_SIZE + 'px;'
-    + 'left:' + Math.round(anchor.left + anchor.width / 2 - FX_OVERLAY_SIZE / 2) + 'px;'
-    + 'top:' + Math.round(anchor.top + anchor.height / 2 - FX_OVERLAY_SIZE / 2) + 'px;';
+    + 'width:' + FX_OVERLAY_SIZE + 'px;height:' + FX_OVERLAY_SIZE + 'px;';
+  placeFxHost(host, geo);
   document.body.appendChild(host);
   const renderer = initAnimatedRenderer(
     tgsUrl,
@@ -63,7 +139,8 @@ export function playStickerFxOverlay(key: string, tgsUrl: string, anchor: DOMRec
     undefined,
   );
   const timer = window.setTimeout(() => disposeStickerFxOverlay(key), FX_OVERLAY_TTL_MS);
-  activeFxOverlays.set(key, { host, renderer, timer });
+  activeFxOverlays.set(key, { host, renderer, timer, anchorEl, detach: fxWatchEntry(key) });
+  fxTrackEnsure();
 }
 
 export interface AnimatedStickerProps {

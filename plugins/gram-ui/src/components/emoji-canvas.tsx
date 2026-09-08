@@ -277,7 +277,7 @@ export function StaticEmojiText({ value, size }: { value: string; size: number }
   let key = 0;
   for (const r of runs) {
     if (r.start > pos) parts.push(<span key={'t' + key++}>{value.slice(pos, r.start)}</span>);
-    parts.push(<span key={'e' + key++} style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`} />);
+    parts.push(<span key={'e' + key++} style={`display:inline-block;min-width:${size}px;height:${size}px;line-height:${size}px;text-align:center;vertical-align:middle;overflow:hidden`}>{r.emoji}</span>);
     pos = r.end;
   }
   if (pos < value.length) parts.push(<span key={'t' + key++}>{value.slice(pos)}</span>);
@@ -873,6 +873,8 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
               ) : (
                 <span style="display:block;width:100%;height:100%" />
               )
+            ) : s.value ? (
+              <span style={`display:flex;align-items:center;justify-content:center;width:100%;height:100%;overflow:hidden;font-size:${size}px;line-height:1`}>{s.value}</span>
             ) : (
               <span style="display:block;width:100%;height:100%;overflow:hidden" />
             )}

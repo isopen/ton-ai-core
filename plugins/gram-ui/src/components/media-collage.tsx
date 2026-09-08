@@ -8,8 +8,7 @@ import { MediaSourceBadge } from './media-source-badge.js';
 import type { ImageSpec } from '../types.js';
 import { calculateAlbumLayout } from './photo-album-layout.js';
 import { firstMissingSizeType, chatPhotoPrio, isInlinePhotoSize } from './photo-spec.js';
-import { t } from '../locale.js';
-import { S } from '../strings.js';
+import { t, S } from '@ton-ai/gram-lang';
 import { getLogger } from '@ton-ai/gram-debug';
 
 const collageLog = getLogger('gram-ui:fallback');

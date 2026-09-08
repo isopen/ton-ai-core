@@ -9,14 +9,16 @@ interface GifPlayerProps {
   documentUrls: Record<number, string>;
   documentProgress?: Record<number, number>;
   documentSources?: Record<number, string>;
+  maxWidth?: number;
 }
 
 export function GifPlayer(props: GifPlayerProps) {
-  const { m, documentUrls, documentProgress, documentSources } = props;
+  const { m, documentUrls, documentProgress, documentSources, maxWidth = 320 } = props;
   const cacheSource = documentSources?.[m.id];
   const doc = m.media?.document;
   const url = documentUrls[m.id] || '';
   const progress = documentProgress?.[m.id] ?? -1;
+  const isLoading = !url && progress >= 0 && progress < 100;
   const thumb = buildDocumentThumb(doc);
   const mime = (doc?.mime_type || '').toLowerCase();
   const isVideoGif = mime.startsWith('video/');
@@ -25,7 +27,7 @@ export function GifPlayer(props: GifPlayerProps) {
   const videoAttr = attrs.find((a: any) => a._ === 'documentAttributeVideo');
   const videoW = videoAttr?.w || doc?.w || 0;
   const videoH = videoAttr?.h || doc?.h || 0;
-  const displayW = videoW ? Math.min(videoW, 320) : 0;
+  const displayW = videoW ? Math.min(videoW, maxWidth) : 0;
   const displayH = videoH && videoW ? Math.round(videoH * (displayW / videoW)) : 0;
   const containerStyle = displayW && displayH ? `width:${displayW}px;height:${displayH}px` : displayW ? `width:${displayW}px` : '';
 
@@ -75,7 +77,7 @@ export function GifPlayer(props: GifPlayerProps) {
     if (!doc || url) return;
     const timer = setTimeout(() => {
       const el = document.getElementById(`msg-${m.id}`);
-      if (!el) return;
+      if (!el) { triggerDownload(); return; }
       const obs = new IntersectionObserver(([entry]) => {
         if (entry.isIntersecting) {
           if (visibleTimerRef.current) return;
@@ -139,7 +141,7 @@ export function GifPlayer(props: GifPlayerProps) {
           {cacheSource ? <MediaSourceBadge source={cacheSource} /> : null}
         </>
       ) : (
-        <div class="tgui-media-preview tgui-media-preview_loading" style={containerStyle}>
+        <div class="tgui-media-preview tgui-media-preview_loading" style={containerStyle} onClick={isLoading ? undefined : triggerDownload}>
           {thumb?.url ? (
             <img class="tgui-media-thumb" src={thumb.url} alt="" />
           ) : null}

@@ -1,9 +1,9 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
+import { requestOnce } from '@ton-ai/atom';
 import { Scrollable } from '../primitives/scrollable.js';
-import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
+import { useState, useEffect, useRef, useReducer } from '@ton-ai/atom/hooks';
 import type { AppState } from '../types.js';
-import { t } from '../locale.js';
-import { S } from '../strings.js';
+import { t, S } from '@ton-ai/gram-lang';
 
 interface BinlogEventItem {
   off: number;
@@ -36,6 +36,57 @@ function tryPrettyJson(raw: string): { formatted: string; isJson: boolean } {
     return { formatted: JSON.stringify(parsed, null, 2), isJson: true };
   } catch {
     return { formatted: raw, isJson: false };
+  }
+}
+
+export interface CacheViewState {
+  data: CacheInspectData | null;
+  loading: boolean;
+  sec: { db: boolean; opfs: boolean; binlog: boolean; avatars: boolean };
+}
+
+export type CacheViewAction =
+  | { type: 'LOADING' }
+  | { type: 'LOADED'; data: CacheInspectData }
+  | { type: 'LOAD_FAILED' }
+  | { type: 'TOGGLE_SEC'; key: 'db' | 'opfs' | 'binlog' | 'avatars' }
+  | { type: 'DELETE_KEY'; key: string }
+  | { type: 'DELETE_OPFS'; dir: string; name: string }
+  | { type: 'DELETE_AVATAR'; name: string }
+  | { type: 'CLEAR_AVATARS' }
+  | { type: 'DELETE_BINLOG'; target: string };
+
+export function initCacheState(): CacheViewState {
+  return { data: null, loading: true, sec: { db: false, opfs: false, binlog: false, avatars: false } };
+}
+
+export function cacheReducer(prev: CacheViewState, action: CacheViewAction): CacheViewState {
+  switch (action.type) {
+    case 'LOADING':
+      return { ...prev, loading: true };
+    case 'LOADED':
+      return { ...prev, data: action.data, loading: false };
+    case 'LOAD_FAILED':
+      return { ...prev, loading: false };
+    case 'TOGGLE_SEC':
+      return { ...prev, sec: { ...prev.sec, [action.key]: !prev.sec[action.key] } };
+    case 'DELETE_KEY':
+      if (!prev.data) return prev;
+      return { ...prev, data: { ...prev.data, dbKeys: prev.data.dbKeys.filter(e => e.key !== action.key) } };
+    case 'DELETE_OPFS':
+      if (!prev.data) return prev;
+      if (action.dir === '_7a') return { ...prev, data: { ...prev.data, opfs7a: prev.data.opfs7a.filter(f => f.name !== action.name) } };
+      return { ...prev, data: { ...prev.data, opfsRoot: prev.data.opfsRoot.filter(f => f.name !== action.name) } };
+    case 'DELETE_AVATAR':
+      if (!prev.data) return prev;
+      return { ...prev, data: { ...prev.data, avatars: prev.data.avatars?.filter(a => a.opfsName !== action.name) } };
+    case 'CLEAR_AVATARS':
+      if (!prev.data) return prev;
+      return { ...prev, data: { ...prev.data, avatars: [] } };
+    case 'DELETE_BINLOG':
+      if (!prev.data) return prev;
+      if (action.target !== 'all' && action.target !== 'binlog') return prev;
+      return { ...prev, data: { ...prev.data, binlogInfo: { size: 0, exists: false, events: [] } } };
   }
 }
 
@@ -77,28 +128,21 @@ function SectionHeader({ title, count, expanded, onToggle }: {
 }
 
 export function CacheView({ }: { state: AppState }) {
-  const [data, setData] = useState<CacheInspectData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [sec, setSec] = useState({ db: false, opfs: false, binlog: false, avatars: false });
+  const [{ data, loading, sec }, dispatchCache] = useReducer(cacheReducer, undefined, initCacheState);
   const [binlogRaw, setBinlogRaw] = useState<string | null>(null);
   const [showBinlogRaw, setShowBinlogRaw] = useState(false);
 
   function fetchData() {
-    setLoading(true);
+    dispatchCache({ type: 'LOADING' });
     setBinlogRaw(null);
     setShowBinlogRaw(false);
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as CacheInspectData;
-      setData(detail);
-      setLoading(false);
-      window.removeEventListener('tg-inspect-cache-data', handler as EventListener);
-    };
-    window.addEventListener('tg-inspect-cache-data', handler as EventListener);
-    window.dispatchEvent(new CustomEvent('tg-inspect-cache'));
-    setTimeout(() => {
-      window.removeEventListener('tg-inspect-cache-data', handler as EventListener);
-      setLoading(false);
-    }, 10000);
+    requestOnce<CacheInspectData>('tg-inspect-cache', 'tg-inspect-cache-data', { timeoutMs: 10000 })
+      .then((detail) => {
+        dispatchCache({ type: 'LOADED', data: detail });
+      })
+      .catch(() => {
+        dispatchCache({ type: 'LOAD_FAILED' });
+      });
   }
 
   useEffect(() => { fetchData(); }, []);
@@ -116,42 +160,28 @@ export function CacheView({ }: { state: AppState }) {
 
   function deleteKey(key: string) {
     window.dispatchEvent(new CustomEvent('tg-cache-delete-key', { detail: { key } }));
-    setData(prev => {
-      if (!prev) return prev;
-      return { ...prev, dbKeys: prev.dbKeys.filter(e => e.key !== key) };
-    });
+    dispatchCache({ type: 'DELETE_KEY', key });
   }
 
   function deleteOpfsFile(dir: string, name: string) {
     window.dispatchEvent(new CustomEvent('tg-cache-delete-opfs-file', { detail: { dir, name } }));
-    setData(prev => {
-      if (!prev) return prev;
-      if (dir === '_7a') return { ...prev, opfs7a: prev.opfs7a.filter(f => f.name !== name) };
-      return { ...prev, opfsRoot: prev.opfsRoot.filter(f => f.name !== name) };
-    });
+    dispatchCache({ type: 'DELETE_OPFS', dir, name });
   }
 
   function deleteAvatar(opfsName: string) {
     window.dispatchEvent(new CustomEvent('tg-cache-delete-avatar', { detail: { opfsName } }));
-    setData(prev => prev ? { ...prev, avatars: prev.avatars?.filter(a => a.opfsName !== opfsName) } : prev);
+    dispatchCache({ type: 'DELETE_AVATAR', name: opfsName });
   }
 
   function deleteAllAvatars() {
     const names = avatars.map(a => a.opfsName);
     window.dispatchEvent(new CustomEvent('tg-cache-delete-all-avatars', { detail: { names } }));
-    setData(prev => prev ? { ...prev, avatars: [] } : prev);
+    dispatchCache({ type: 'CLEAR_AVATARS' });
   }
 
   function deleteBinlogFile(target: string) {
     window.dispatchEvent(new CustomEvent('tg-cache-delete-binlog', { detail: { target } }));
-    if (target === 'all') {
-      setData(prev => prev ? {
-        ...prev,
-        binlogInfo: { size: 0, exists: false, events: [] },
-      } : prev);
-    } else if (target === 'binlog') {
-      setData(prev => prev ? { ...prev, binlogInfo: { size: 0, exists: false, events: [] } } : prev);
-    }
+    dispatchCache({ type: 'DELETE_BINLOG', target });
   }
 
   const totalDbSize = data?.dbKeys.reduce((acc, { value }) => acc + new TextEncoder().encode(value).length, 0) ?? 0;
@@ -181,7 +211,6 @@ export function CacheView({ }: { state: AppState }) {
 
       {data && (
         <>
-          {/* Summary */}
           <div class="tgui-cache-summary">
             <div class="tgui-cache-summary-item">
               <span class="tgui-cache-summary-label">DB keys</span>
@@ -212,14 +241,12 @@ export function CacheView({ }: { state: AppState }) {
                 <span class="tgui-cache-summary-value">0</span>
             </div>
           </div>
-
-          {/* DB Keys */}
           <div class="tgui-cache-section">
             <SectionHeader
               title={t(S.CACHE_DB_KEYS)}
               count={data.dbKeys.length}
               expanded={sec.db}
-              onToggle={() => setSec(s => ({ ...s, db: !s.db }))}
+              onToggle={() => dispatchCache({ type: 'TOGGLE_SEC', key: 'db' })}
             />
             {sec.db && (
               <div class="tgui-cache-kv-list">
@@ -230,14 +257,12 @@ export function CacheView({ }: { state: AppState }) {
               </div>
             )}
           </div>
-
-          {/* OPFS Files */}
           <div class="tgui-cache-section">
             <SectionHeader
               title={t(S.CACHE_OPFS_FILES)}
               count={data.opfsRoot.length + data.opfs7a.length}
               expanded={sec.opfs}
-              onToggle={() => setSec(s => ({ ...s, opfs: !s.opfs }))}
+              onToggle={() => dispatchCache({ type: 'TOGGLE_SEC', key: 'opfs' })}
             />
             {sec.opfs && (
               <div class="tgui-cache-opfs">
@@ -273,14 +298,12 @@ export function CacheView({ }: { state: AppState }) {
               </div>
             )}
           </div>
-
-          {/* Avatars */}
           <div class="tgui-cache-section">
             <SectionHeader
               title={'Avatars'}
               count={avatars.length}
               expanded={sec.avatars}
-              onToggle={() => setSec(s => ({ ...s, avatars: !s.avatars }))}
+              onToggle={() => dispatchCache({ type: 'TOGGLE_SEC', key: 'avatars' })}
             />
             {sec.avatars && (
               <div class="tgui-cache-kv-list">
@@ -308,18 +331,15 @@ export function CacheView({ }: { state: AppState }) {
               </div>
             )}
           </div>
-
-          {/* Binlog + Session */}
           <div class="tgui-cache-section">
             <SectionHeader
               title={t(S.CACHE_BINLOG)}
               count={binlogEvents.length}
               expanded={sec.binlog}
-              onToggle={() => setSec(s => ({ ...s, binlog: !s.binlog }))}
+              onToggle={() => dispatchCache({ type: 'TOGGLE_SEC', key: 'binlog' })}
             />
             {sec.binlog && (
               <div class="tgui-cache-binlog">
-                {/* Binlog file summary */}
                 <div class="tgui-cache-binlog-bar">
                   <div class="tgui-cache-binlog-bar-item">
                     <span class="tgui-cache-binlog-bar-label">binlog</span>

@@ -2,8 +2,7 @@ import { h } from '@ton-ai/atom/jsx-runtime';
 import { Scrollable } from '../primitives/scrollable.js';
 import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';
-import { t } from '../locale.js';
-import { S } from '../strings.js';
+import { t, S } from '@ton-ai/gram-lang';
 
 export function SettingsView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
   return (
@@ -27,25 +26,40 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
           </div>
         </div>
       </div>
-
       <div class="tgui-settings-section">
-        <div class="tgui-settings-section-label">Качество фото</div>
+        <div class="tgui-settings-section-label">Photo quality</div>
         <div class="tgui-settings-card">
           <div class="tgui-settings-row" style="flex-direction:column;align-items:stretch;gap:6px">
-            <span class="tgui-settings-label">Загружать и открывать изображения в</span>
+            <span class="tgui-settings-label">Load and open images in</span>
             <div style="display:flex;gap:6px">
               {(['min', 'medium', 'max'] as const).map(q => (
                 <button
                   key={q}
                   class={'tgui-quality-btn' + (state.imageQuality === q ? ' tgui-quality-btn_active' : '')}
                   onClick={() => dispatch({ type: 'SET_IMAGE_QUALITY', quality: q })}
-                >{q === 'min' ? 'Мин' : q === 'medium' ? 'Сред' : 'Макс'}</button>
+                >{q === 'min' ? 'Min' : q === 'medium' ? 'Med' : 'Max'}</button>
               ))}
             </div>
           </div>
         </div>
       </div>
-
+      <div class="tgui-settings-section">
+        <div class="tgui-settings-section-label">Animations</div>
+        <div class="tgui-settings-card">
+          <div class="tgui-settings-row" style="flex-direction:column;align-items:stretch;gap:6px">
+            <span class="tgui-settings-label">Enable interface animations</span>
+            <div style="display:flex;gap:6px">
+              {([true, false] as const).map(v => (
+                <button
+                  key={String(v)}
+                  class={'tgui-quality-btn' + ((state.animationsEnabled !== false) === v ? ' tgui-quality-btn_active' : '')}
+                  onClick={() => dispatch({ type: 'SET_ANIMATIONS_ENABLED', v })}
+                >{v ? 'On' : 'Off'}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="tgui-settings-section">
         <div class="tgui-settings-section-label">{t(S.SETTINGS_ACTIONS)}</div>
         <div class="tgui-settings-actions">
@@ -74,7 +88,6 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
           </div>
         </div>
       </div>
-
       <div class="tgui-settings-section">
         <div class="tgui-settings-section-label">{t(S.SETTINGS_ABOUT)}</div>
         <div class="tgui-settings-card">

@@ -5,6 +5,7 @@ import { getLogger } from '@ton-ai/gram-debug';
 const tmdLog = getLogger('gram-ui:tmd');
 import { Checkmark } from './checkmark.js';
 import { EmojiText } from './emoji-text.js';
+import { ButtonNotice, type ButtonNoticeData } from './button-notice.js';
 import { InlineKeyboard, normalizeReplyMarkup, type KbButton } from './inline-keyboard.js';
 import { RichMessageView } from './rich-message.js';
 import { TmdView } from './tmd-view.js';
@@ -41,9 +42,11 @@ interface MessageBubbleProps {
   replyMarkup?: any;
   richMessage?: any;
   richDocumentUrls?: Record<number | string, string>;
-  onKbButton?: (button: KbButton, messageId: number | string) => void;
+  inactiveButtons?: Record<string, true>;
+  buttonNotice?: ButtonNoticeData | null;
+  onKbButton?: (button: KbButton, messageId: number | string, e?: any) => void;
 
-  onRichButton?: (data: string, messageId: number | string) => void;
+  onRichButton?: (data: string, messageId: number | string, e?: any) => void;
 }
 
 export function MessageBubble(props: MessageBubbleProps) {
@@ -65,6 +68,8 @@ export function MessageBubble(props: MessageBubbleProps) {
     replyMarkup,
     richMessage,
     richDocumentUrls,
+    inactiveButtons,
+    buttonNotice,
     onKbButton,
     onRichButton,
   } = props;
@@ -87,15 +92,19 @@ export function MessageBubble(props: MessageBubbleProps) {
               richMessage={richMessage}
               messageId={messageId ?? ''}
               documentUrls={richDocumentUrls || documentUrls || {}}
-              onButton={(data: string) => onRichButton?.(data, messageId ?? '')} />
+              inactiveButtons={inactiveButtons}
+              onButton={(data: string, e?: any) => onRichButton?.(data, messageId ?? '', e)} />
           : isTmd
-            ? <TmdView text={text} foreignEntities={entities} documentUrls={documentUrls || {}} time={time} status={status} out={out} />
+            ? <TmdView text={text} foreignEntities={entities} documentUrls={documentUrls || {}} inactiveButtons={inactiveButtons} time={time} status={status} out={out} messageId={messageId ?? ''} />
             : <EmojiText text={text} entities={entities} documentUrls={documentUrls || {}} documentSources={documentSources} />}
       </div>
+      {buttonNotice ? <ButtonNotice notice={buttonNotice} /> : null}
       <InlineKeyboard
         rows={normalizeReplyMarkup(replyMarkup)}
         documentUrls={richDocumentUrls || documentUrls || {}}
-        onButton={(b) => onKbButton?.(b, messageId ?? '')}
+        inactiveButtons={inactiveButtons}
+        messageId={messageId ?? ''}
+        onButton={(b, e) => onKbButton?.(b, messageId ?? '', e)}
       />
       {isTmd ? null : (
         <div class="MessageBubble__meta">

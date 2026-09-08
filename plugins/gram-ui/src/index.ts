@@ -6,9 +6,33 @@ export { Image } from './primitives/image.js';
 export { MediaCollage } from './components/media-collage.js';
 export type { MediaCollageItem } from './components/media-collage.js';
 export { MediaViewer } from './components/media-viewer.js';
+export { collectCustomIds } from './components/rich-message.js';
 export { TgsPlayer } from './components/tgs-player.js';
 export { FpsMeter } from './components/fps-meter.js';
 export { startFpsLogging } from './utils/fps-log.js';
-export { setStrings, t, tpl } from './locale.js';
-export { S, TLG_KEYS, LANG_FALLBACKS } from './strings.js';
 export { buildPeerBlurThumb } from './utils.js';
+export { QrCode, QrCodeDefaults, QrCodeLimits } from './primitives/qr-code.js';
+export type { QrCodeProps } from './primitives/qr-code.js';
+export {
+  QR_DEFAULTS,
+  QR_LIMITS,
+  validateQrValue,
+  validateQrOptions,
+  clampQrOptions,
+  isValidHex,
+  isValidTgUrl,
+  isValidColor,
+  hexToBase64Url,
+  makeQrUrl,
+  isValidTokenHex,
+  generateQrDataUrl,
+  generateQrToCanvas,
+  generateQrSvgString,
+  generateQrToOffscreen,
+  getQrModule,
+  preloadQrModule,
+  scheduleQrPreload,
+  getThemedQrColors,
+  getCurrentTheme,
+} from './utils/qr.js';
+export type { QrOptions, QrValidatedOptions, QrErrorCorrectionLevel } from './utils/qr.js';

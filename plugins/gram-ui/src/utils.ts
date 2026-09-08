@@ -1,6 +1,5 @@
 import { getLogger } from '@ton-ai/gram-debug';
-import { t } from './locale.js';
-import { S } from './strings.js';
+import { t, S } from '@ton-ai/gram-lang';
 
 const log = getLogger('gram-ui');
 
@@ -76,13 +75,102 @@ export function getStickerEmoji(doc: any): string {
     return attr?.alt || '';
 }
 
-export function mediaFallbackText(media: any): string {
+export function mediaFallbackText(media: any, untitled = 'File'): string {
     if (!media) return '';
     const doc = media.document;
     const name = doc?.file_name;
     if (name) return name;
-    if (media._ === 'messageMediaDocument') return '[Документ]';
+    if (media._ === 'messageMediaDocument') return untitled;
     return '';
+}
+
+export function buttonStyleClass(style: any): string {
+    if (!style || typeof style !== 'object') return '';
+    let cls = '';
+    if (style.bg_danger) cls += ' is-danger';
+    else if (style.bg_success) cls += ' is-success';
+    else if (style.bg_primary) cls += ' is-primary';
+    if (style.link) cls += ' is-link';
+    return cls;
+}
+
+function decodeButtonBytes(data: string): string {
+    let s = (data || '').trim();
+    if (!s) return '';
+    try {
+        if (s.startsWith('b64:')) {
+            const body = s.slice(4).replace(/-/g, '+').replace(/_/g, '/');
+            const pad = body.length % 4 === 0 ? body : body + '='.repeat(4 - (body.length % 4));
+            return atob(pad);
+        }
+        if (s.startsWith('hex:')) {
+            const h = s.slice(4);
+            if (/^[0-9a-fA-F]*$/.test(h) && h.length % 2 === 0 && h.length > 0) {
+                return hexToBytes(h).reduce((a, b) => a + String.fromCharCode(b), '');
+            }
+            return s;
+        }
+        if (/^[0-9a-fA-F]+$/.test(s) && s.length % 2 === 0) {
+            return hexToBytes(s).reduce((a, b) => a + String.fromCharCode(b), '');
+        }
+        if (/^[A-Za-z0-9+/=_-]+$/.test(s)) {
+            const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+            const pad = b64.length % 4 === 0 ? b64 : b64 + '='.repeat(4 - (b64.length % 4));
+            const bin = atob(pad);
+            if (bin.length > 0 && /^[\x20-\x7E]*$/.test(bin)) return bin;
+            return s;
+        }
+    } catch {}
+    return s;
+}
+
+export function isDisabledButtonType(type: unknown): boolean {
+    return !!type && typeof type === 'object' && (type as Record<string, unknown>)._ === 'inlineButtonTypeDisabled';
+}
+
+const INACTIVE_BARE_DATA = new Set(['noop']);
+const INACTIVE_BOT_ACTION = new Set(['no', 'noop', 'none']);
+
+export function decodeButtonAction(data: unknown): string {
+    if (typeof data !== 'string') return '';
+    return decodeButtonBytes(data).trim().toLowerCase();
+}
+
+export function isInactiveButtonData(data: unknown): boolean {
+    const text = decodeButtonAction(data);
+    if (!text) return false;
+    const sep = text.lastIndexOf(':');
+    if (sep >= 0) return INACTIVE_BOT_ACTION.has(text.slice(sep + 1).trim());
+    return INACTIVE_BARE_DATA.has(text);
+}
+
+export function inactiveButtonKey(messageId: number | string, data: string): string {
+    return String(messageId) + '\n' + String(data || '');
+}
+
+export function buttonBubbleRel(e: any): { x: number; y: number; w: number; h: number } | null {
+    try {
+        const t = e?.target as HTMLElement | null;
+        const el = t && typeof (t as any).closest === 'function'
+            ? (((t as any).closest('button,td,th,a') as HTMLElement | null) || (t as HTMLElement))
+            : null;
+        if (!el || typeof el.getBoundingClientRect !== 'function') return null;
+        const box = el.closest('.MessageBubble') as HTMLElement | null;
+        if (!box || typeof box.getBoundingClientRect !== 'function') return null;
+        const r = el.getBoundingClientRect();
+        const b = box.getBoundingClientRect();
+        if (!Number.isFinite(r.top) || !Number.isFinite(r.left) || !Number.isFinite(r.width) || !Number.isFinite(r.height)) return null;
+        if (!Number.isFinite(b.top) || !Number.isFinite(b.left)) return null;
+        const vw = typeof window !== 'undefined' ? window.innerWidth || 0 : 0;
+        let x = r.left + r.width / 2 - b.left;
+        if (vw > 0) x = Math.min(Math.max(x, 150), Math.max(150, vw - 150));
+        return { x, y: r.top - b.top, w: r.width, h: r.height };
+    } catch { return null; }
+}
+
+export function isButtonInactive(map: Record<string, true> | undefined, messageId: number | string, data: string): boolean {
+    if (!map || data == null) return false;
+    return map[inactiveButtonKey(messageId, data)] === true;
 }
 
 export function hexToBytes(hex: string): Uint8Array {

@@ -1,38 +1,47 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef } from '@ton-ai/atom/hooks';
+import { getLogger } from '@ton-ai/gram-debug';
 import { AnimatedEmoji } from './emoji-text.js';
 import { matchEmojiRuns, getEmojiDocId } from './emoji-store.js';
 import { hasTmd, parseTmdEntities, applyEntitiesHtml } from '@ton-ai/tmd';
 import { render } from '@ton-ai/atom/render';
+import { buttonStyleClass, isInactiveButtonData, isButtonInactive, isDisabledButtonType, decodeButtonAction } from '../utils.js';
+
+const kbLog = getLogger('gram-ui:kb');
+const kbLoggedSigs = new Set<string>();
 
 export interface KbButton {
   text: string;
-  kind: 'callback' | 'url' | 'plain';
+  kind: 'callback' | 'url' | 'plain' | 'disabled';
 
   data?: string;
   url?: string;
+  styleClass?: string;
 }
 
 function buttonFromEntry(b: any): KbButton {
   const text = String(b.text ?? '');
+  const styleClass = buttonStyleClass(b.style);
   const type = b.type && typeof b.type === 'object' ? b.type : null;
   if (type) {
     switch (type._) {
+      case 'inlineButtonTypeDisabled':
+        return { text, kind: 'disabled', styleClass };
       case 'inlineButtonTypeCallback':
-        return { text, kind: 'callback', data: toBase64(type.data) };
+        return { text, kind: 'callback', data: toBase64(type.data), styleClass };
       case 'inlineButtonTypeUrl':
       case 'inlineButtonTypeWebView':
       case 'buttonTypeSimpleWebView':
-        return { text, kind: 'url', url: String(type.url || '') };
+        return { text, kind: 'url', url: String(type.url || ''), styleClass };
       default:
-        return { text, kind: 'plain' };
+        return { text, kind: 'plain', styleClass };
     }
   }
-  if (b.url) return { text, kind: 'url', url: String(b.url) };
+  if (b.url) return { text, kind: 'url', url: String(b.url), styleClass };
   if (b.data !== undefined || b._ === 'keyboardButtonCallback') {
-    return { text, kind: 'callback', data: toBase64(b.data) };
+    return { text, kind: 'callback', data: toBase64(b.data), styleClass };
   }
-  return { text, kind: 'plain' };
+  return { text, kind: 'plain', styleClass };
 }
 
 export function normalizeReplyMarkup(rm: any): KbButton[][] | null {
@@ -45,7 +54,9 @@ export function normalizeReplyMarkup(rm: any): KbButton[][] | null {
     if (!btnsSrc) continue;
     const btns: KbButton[] = [];
     for (const b of btnsSrc) {
-      if (b && b.text) btns.push(buttonFromEntry(b));
+      if (!b) continue;
+      if (!b.text && b.data === undefined && !b.url && !(b.type && typeof b.type === 'object')) continue;
+      btns.push(buttonFromEntry(b));
     }
     if (btns.length) rows.push(btns);
   }
@@ -142,20 +153,39 @@ function ButtonText({ text, documentUrls }: { text: string; documentUrls?: Recor
   if (pos < text.length) parts.push(<span key="tend">{text.slice(pos)}</span>);
   return <span style="display:inline-flex;align-items:center;gap:4px;vertical-align:middle;color:inherit">{parts}</span>;
 }
-export function InlineKeyboard({ rows, onButton, documentUrls }: { rows: KbButton[][] | null; onButton?: (b: KbButton) => void; documentUrls?: Record<string, string> }) {
+export function InlineKeyboard({ rows, onButton, documentUrls, inactiveButtons, messageId }: { rows: KbButton[][] | null; onButton?: (b: KbButton, e?: any) => void; documentUrls?: Record<string, string>; inactiveButtons?: Record<string, true>; messageId?: number | string }) {
   if (!rows || rows.length === 0) return null;
+  const kbSig = String(messageId ?? '') + '|' + rows.map((row) => row.map((b) => {
+    if (b.kind === 'disabled') return 'disabled';
+    if (b.kind === 'url') return 'url';
+    if (b.kind !== 'callback' || !b.data) return 'plain';
+    return decodeButtonAction(b.data) || '?';
+  }).join(',')).join(';');
+  if (!kbLoggedSigs.has(kbSig)) {
+    kbLoggedSigs.add(kbSig);
+    kbLog.info('[kb-btns] msg=' + String(messageId ?? '') + ' actions=[' + rows.map((row) => row.map((b) => {
+      if (b.kind === 'disabled') return 'disabled';
+      if (b.kind === 'url') return 'url';
+      if (b.kind !== 'callback' || !b.data) return 'plain';
+      return decodeButtonAction(b.data) || '?';
+    }).join(',')).join(' | ') + ']');
+  }
   return (
     <div class="MessageBubble__kb">
       {rows.map((row, i) => (
         <div class="MessageBubble__kb-row" key={'kbr' + i}>
-          {row.map((b, j) => (
-            <button
-              key={'kbb' + j}
-              class="MessageBubble__kb-btn"
-              type="button"
-              onClick={() => onButton?.(b)}
-            ><ButtonText text={b.text} documentUrls={documentUrls} /></button>
-          ))}
+          {row.map((b, j) => {
+            const inactive = b.kind === 'disabled' || (b.kind === 'callback' && !!b.data && (isInactiveButtonData(b.data) || isButtonInactive(inactiveButtons, messageId ?? '', b.data)));
+            return (
+              <button
+                key={'kbb' + j}
+                class={'MessageBubble__kb-btn' + (b.styleClass || '') + (inactive ? ' is-inactive' : '')}
+                type="button"
+                disabled={inactive}
+                onClick={(e: any) => { if (!inactive) onButton?.(b, e); }}
+              ><ButtonText text={b.text} documentUrls={documentUrls} /></button>
+            );
+          })}
         </div>
       ))}
     </div>

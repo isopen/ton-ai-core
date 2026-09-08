@@ -1,6 +1,6 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState, useDomEvent } from '@ton-ai/atom/hooks';
-import { EmojiCanvas, StaticEmojiText, fetchEmojiData } from './emoji-canvas.js';
+import { EmojiCanvas, StaticEmojiText, fetchEmojiData, getCachedEmojiData, subscribeEmojiData } from './emoji-canvas.js';
 import type { EmojiSegment } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
 import { ensureEmojiStickers, getEmojiAlt, getEmojiDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
@@ -16,10 +16,17 @@ const SINGLE_EMOJI_SIZE = INLINE_EMOJI_SIZE * 8;
 export { releaseEmojiCache } from './emoji-canvas.js';
 
 function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, playKey, showLastFrame }: { docId?: string; url: string; alt?: string; size: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean }) {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<any>(() => (url ? getCachedEmojiData(url) ?? null : null));
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoIoRef = useRef<IntersectionObserver | null>(null);
   const failRef = useRef(0);
+
+  useEffect(() => {
+    if (!url) return;
+    return subscribeEmojiData(url, (next) => {
+      if (next) setData(next);
+    });
+  }, [url]);
 
   useEffect(() => {
     if (!autoplay) return;
@@ -180,23 +187,6 @@ function buildSegments(text: string, emojiEntities: any[]): EmojiSegment[] {
   return segments;
 }
 
-function EmojiPendingRuns({ text, size }: { text: string; size: number }) {
-  const runs = matchEmojiRuns(text);
-  if (runs.length === 0) return <StaticEmojiText value={text} size={size} />;
-  const parts: any[] = [];
-  let pos = 0;
-  let key = 0;
-  for (const r of runs) {
-    if (r.start > pos) parts.push(<span key={'t' + key++}>{text.slice(pos, r.start)}</span>);
-    parts.push(
-      <span key={'e' + key++} style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden`} />
-    );
-    pos = r.end;
-  }
-  if (pos < text.length) parts.push(<span key={'t' + key++}>{text.slice(pos)}</span>);
-  return <>{parts}</>;
-}
-
 function isEmojiOnlyText(text: string, entities?: any[]): boolean {
   if (!text) return false;
   const spans: Array<{ start: number; end: number }> = [];
@@ -293,9 +283,6 @@ export function EmojiText({ text, entities, documentUrls, documentSources, inlin
   }
   const hasEmoji = segments.some((s) => s.type === 'emoji');
   if (!hasEmoji) {
-    if (matchEmojiRuns(text).length > 0) {
-      return <EmojiPendingRuns text={text} size={size} />;
-    }
     return <StaticEmojiText value={text} size={size} />;
   }
 

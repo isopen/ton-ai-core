@@ -35,12 +35,13 @@ export function Image(props: {
   height?: number;
   maxWidth?: number;
   maxHeight?: number;
+  fluid?: boolean;
   lazy?: boolean;
   rounded?: boolean;
   onOpenViewer?: (id: string) => void;
   onLoad?: () => void;
 }) {
-  const { image, width, height, maxWidth, maxHeight, lazy = true, rounded = false, onOpenViewer, onLoad } = props;
+  const { image, width, height, maxWidth, maxHeight, fluid = false, lazy = true, rounded = false, onOpenViewer, onLoad } = props;
 
   const [visible, setVisible] = useState(!lazy);
   const [loaded, setLoaded] = useState(false);
@@ -145,7 +146,8 @@ export function Image(props: {
     imgH = height ?? 96;
   }
   const exactFill = width != null && height != null ? `width:${Math.round(width)}px;height:${Math.round(height)}px` : '';
-  const dimStyle = exactFill || 'width:' + Math.round(Math.max(imgW, 1)) + 'px;height:' + Math.round(Math.max(imgH, 1)) + 'px';
+  const fluidFill = !exactFill && fluid && hasAspect ? `width:100%;max-width:${Math.round(Math.max(imgW, 1))}px;aspect-ratio:${Math.round(Math.max(imgW, 1))} / ${Math.round(Math.max(imgH, 1))}` : '';
+  const dimStyle = exactFill || fluidFill || 'width:' + Math.round(Math.max(imgW, 1)) + 'px;height:' + Math.round(Math.max(imgH, 1)) + 'px';
 
   if (!visible) {
     return (

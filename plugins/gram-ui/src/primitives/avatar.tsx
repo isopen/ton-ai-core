@@ -32,8 +32,7 @@ export function Avatar({ url, blurUrl, initial, color, size = 'medium', classNam
   return (
     <div class={cls} style={`background:${color};position:relative`}>
       <span class={initialCls}>{initial}</span>
-      {/* Blurred inline preview sits above the tint/initials and below the
-           sharp image; TelegramImage fades in over it once loaded. */}
+      {}
       {blurUrl ? <img class="Avatar__blur" src={blurUrl} alt="" /> : null}
       {imageSpec && <Image image={imageSpec} width={dim} lazy={false} />}
       {source ? <MediaSourceBadge source={source} variant="dot" /> : null}

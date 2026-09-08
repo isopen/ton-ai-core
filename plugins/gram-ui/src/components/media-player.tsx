@@ -19,10 +19,11 @@ interface MediaPlayerProps {
   documentSources?: Record<number, string>;
   sameSenderPrev?: boolean;
   sameSenderNext?: boolean;
+  maxWidth?: number;
 }
 
 export function MediaPlayer(props: MediaPlayerProps) {
-  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext } = props;
+  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext, maxWidth = 320 } = props;
   const doc = m.media?.document;
   const url = documentUrls[m.id] || '';
   const progress = documentProgress?.[m.id] ?? -1;
@@ -38,14 +39,14 @@ export function MediaPlayer(props: MediaPlayerProps) {
     const videoAttr = attrs.find((a: any) => a._ === 'documentAttributeVideo');
     const videoW = videoAttr?.w || doc.w || 0;
     const videoH = videoAttr?.h || doc.h || 0;
-    const displayW = videoW ? Math.min(videoW, 320) : 0;
+    const displayW = videoW ? Math.min(videoW, maxWidth) : 0;
     const displayH = videoH && videoW ? Math.round(videoH * (displayW / videoW)) : 0;
     const containerStyle = displayW && displayH ? `width:${displayW}px;height:${displayH}px` : displayW ? `width:${displayW}px` : '';
     const captionStyle = displayW ? `width:${displayW}px` : '';
     return (
       <div class={cls}>
         <div class="tgui-media-container" style={containerStyle}>
-          <GifPlayer m={m} documentUrls={documentUrls} documentProgress={documentProgress} documentSources={documentSources} />
+          <GifPlayer m={m} documentUrls={documentUrls} documentProgress={documentProgress} documentSources={documentSources} maxWidth={maxWidth} />
           {!m.message ? (
             <div class="MessageBubble__meta MessageBubble__meta_overlay">
               <span class="MessageBubble__time">{timeStr}</span>

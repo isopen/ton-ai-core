@@ -1,7 +1,6 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import type { Dispatch } from '../state.js';
-import { t } from '../locale.js';
-import { S } from '../strings.js';
+import { t, S } from '@ton-ai/gram-lang';
 import { Button } from '../primitives/button.js';
 import { TextField } from '../primitives/text-field.js';
 
