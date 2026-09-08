@@ -1,9 +1,19 @@
 import { getLogger } from '@ton-ai/gram-debug';
-import { TEXT, FRAGMENT, SLOT, SLOTTABLE, ComponentInstance, setCurrentInstance, getMountRoot, type VNode, type ComponentType } from './vdom.js';
+import { TEXT, FRAGMENT, PORTAL, SLOT, SLOTTABLE, ComponentInstance, setCurrentInstance, getMountRoot, boundaryStack, takeBoundaryFrame, type BoundaryFrame, type VNode, type ComponentType } from './vdom.js';
+import { isTraced, diffProps } from './dev.js';
 
 const log = getLogger('atom');
 
 function runUnmountCleanups(vnode: VNode) {
+  if (vnode.type === PORTAL) {
+    for (const child of vnode.children) {
+      runUnmountCleanups(child);
+    }
+    for (const node of findAllDomNodes(vnode)) {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    }
+    return;
+  }
   if (vnode.componentInstance) {
     const inst = vnode.componentInstance;
     inst._mounted = false;
@@ -21,6 +31,40 @@ function runUnmountCleanups(vnode: VNode) {
   }
   for (const child of vnode.children) {
     runUnmountCleanups(child);
+  }
+}
+
+function restoreProvided(instance: ComponentInstance) {
+  const provided = (instance as any).__atomProvides;
+  if (!provided) return;
+  delete (instance as any).__atomProvides;
+  try {
+    provided.ctx._current = provided.prev;
+  } catch {}
+}
+
+function popFrame(frame: BoundaryFrame) {
+  const top = boundaryStack[boundaryStack.length - 1];
+  if (top === frame) {
+    boundaryStack.pop();
+    return;
+  }
+  const idx = boundaryStack.indexOf(frame);
+  if (idx !== -1) boundaryStack.splice(idx, 1);
+}
+
+function safeFallback(frame: BoundaryFrame): VNode | null {
+  try {
+    return frame.renderFallback();
+  } catch (e) {
+    log.error('[atom] boundary fallback render failed:', e);
+    return null;
+  }
+}
+
+export function removePortalNodes(vnode: VNode): void {
+  for (const node of findAllDomNodes(vnode)) {
+    if (node.parentNode) node.parentNode.removeChild(node);
   }
 }
 
@@ -430,6 +474,28 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
     return createDOM(resolved);
   }
 
+  if (vnode.type === PORTAL) {
+    const placeholder = document.createTextNode('');
+    vnode.dom = placeholder;
+    const container = vnode.props.container as Element | null;
+    if (container) {
+      const created: Node[] = [];
+      try {
+        for (const child of vnode.children) {
+          const childDom = createDOM(child);
+          container.appendChild(childDom);
+          created.push(childDom);
+        }
+      } catch (e) {
+        for (const node of created) {
+          if (node.parentNode === container) container.removeChild(node);
+        }
+        throw e;
+      }
+    }
+    return placeholder;
+  }
+
     if (typeof vnode.type === 'function') {
       const component = vnode.type as ComponentType;
       const instance = reuseInstance ?? new ComponentInstance(component, vnode.props);
@@ -439,19 +505,49 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
         reuseInstance._mounted = true;
       }
       setCurrentInstance(instance);
-      const result = instance.render();
-      instance.vnode = result;
-      if (result) {
-        result.componentInstance = instance;
-        const dom = createDOM(result);
-        vnode.dom = dom;
-        vnode.componentInstance = instance;
-        return dom;
+      let result: VNode | null;
+      try {
+        result = instance.render();
+      } catch (e) {
+        restoreProvided(instance);
+        throw e;
       }
-      const empty = document.createTextNode('');
-      vnode.dom = empty;
-      vnode.componentInstance = instance;
-      return empty;
+      const frame = takeBoundaryFrame(instance);
+      if (frame) boundaryStack.push(frame);
+      try {
+        instance.vnode = result;
+        if (result) {
+          result.componentInstance = instance;
+          const dom = createDOM(result);
+          vnode.dom = dom;
+          vnode.componentInstance = instance;
+          return dom;
+        }
+        const empty = document.createTextNode('');
+        vnode.dom = empty;
+        vnode.componentInstance = instance;
+        return empty;
+      } catch (e) {
+        if (frame && boundaryStack[boundaryStack.length - 1] === frame && frame.handle(e)) {
+          const fb = safeFallback(frame);
+          instance.vnode = fb;
+          if (fb) {
+            fb.componentInstance = instance;
+            const dom = createDOM(fb);
+            vnode.dom = dom;
+            vnode.componentInstance = instance;
+            return dom;
+          }
+          const empty = document.createTextNode('');
+          vnode.dom = empty;
+          vnode.componentInstance = instance;
+          return empty;
+        }
+        throw e;
+      } finally {
+        if (frame) popFrame(frame);
+        restoreProvided(instance);
+      }
     }
 
   const el = createElement(vnode.type as string);
@@ -478,7 +574,7 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
 
 function findDomNode(vnode: VNode): Node | null {
   if (vnode.dom) return vnode.dom;
-  if (vnode.type === FRAGMENT || vnode.type === SLOTTABLE || vnode.type === SLOT) {
+  if (vnode.type === FRAGMENT || vnode.type === SLOTTABLE || vnode.type === SLOT || vnode.type === PORTAL) {
     for (const child of vnode.children) {
       const dom = findDomNode(child);
       if (dom) return dom;
@@ -492,7 +588,7 @@ function findDomNode(vnode: VNode): Node | null {
 }
 
 function findAllDomNodes(vnode: VNode): Node[] {
-  if (vnode.type === FRAGMENT || vnode.type === SLOTTABLE || vnode.type === SLOT) {
+  if (vnode.type === FRAGMENT || vnode.type === SLOTTABLE || vnode.type === SLOT || vnode.type === PORTAL) {
     const nodes: Node[] = [];
     for (const child of vnode.children) {
       nodes.push(...findAllDomNodes(child));
@@ -510,6 +606,7 @@ function findAllDomNodes(vnode: VNode): Node[] {
 
 function isSameNodeType(a: VNode, b: VNode): boolean {
   if (a.type === SLOT || b.type === SLOT) return a.type === b.type;
+  if (a.type === PORTAL || b.type === PORTAL) return a.type === b.type;
   if (typeof a.type === 'function' && typeof b.type === 'function') {
     return a.type === b.type;
   }
@@ -525,11 +622,13 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   if (!isSameNodeType(oldVNode, newVNode)) {
     runUnmountCleanups(oldVNode);
     const newDom = createDOM(newVNode);
-    if (dom.parentNode) {
-      dom.parentNode.replaceChild(newDom, dom);
+    const anchor = findDomNode(oldVNode) || dom;
+    const host = (anchor && anchor.parentNode) || (dom && dom.parentNode);
+    if (host && anchor) {
+      host.replaceChild(newDom, anchor);
       const oldNodes = findAllDomNodes(oldVNode);
       for (const node of oldNodes) {
-        if (node !== dom && node.parentNode) node.parentNode.removeChild(node);
+        if (node !== anchor && node !== newDom && node.parentNode) node.parentNode.removeChild(node);
       }
     }
     return newDom;
@@ -544,7 +643,9 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   }
 
   if (newVNode.type === FRAGMENT || newVNode.type === SLOTTABLE) {
-    reconcileChildren(dom.parentNode || dom, oldVNode.children, newVNode.children, findDomNode(oldVNode) || dom);
+    const firstOld = findDomNode(oldVNode);
+    const host = (firstOld && firstOld.parentNode) || (dom && dom.parentNode) || dom;
+    reconcileChildren(host, oldVNode.children, newVNode.children, firstOld || dom);
     newVNode.dom = dom;
     return dom;
   }
@@ -563,6 +664,30 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
     return patch(dom, oldResolved, resolved);
   }
 
+  if (newVNode.type === PORTAL) {
+    const container = newVNode.props.container as Element | null;
+    const oldContainer = oldVNode.props.container as Element | null;
+    if (container !== oldContainer) {
+      runUnmountCleanups(oldVNode);
+      for (const node of findAllDomNodes(oldVNode)) {
+        if (node.parentNode) node.parentNode.removeChild(node);
+      }
+      const fresh = createDOM(newVNode);
+      if (dom.parentNode) dom.parentNode.replaceChild(fresh, dom);
+      return fresh;
+    }
+    if (container) {
+      reconcileChildren(container, oldVNode.children, newVNode.children, null);
+    } else if (oldContainer) {
+      runUnmountCleanups(oldVNode);
+      for (const node of findAllDomNodes(oldVNode)) {
+        if (node.parentNode) node.parentNode.removeChild(node);
+      }
+    }
+    newVNode.dom = dom;
+    return dom;
+  }
+
   if (typeof newVNode.type === 'function') {
     const component = newVNode.type as ComponentType;
     let instance = oldVNode.componentInstance;
@@ -575,38 +700,77 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
     }
     newVNode.componentInstance = instance;
 
+    if (isTraced(instance.displayName)) {
+      const changed = diffProps(oldVNode.props, newVNode.props);
+      log.debug('[atom] rerender ' + instance.displayName + ' props changed: ' + (changed || '(same)'));
+    }
+
     setCurrentInstance(instance);
-    const result = instance.render();
-    instance._dirty = false;
+    let result: VNode | null;
+    try {
+      result = instance.render();
+    } catch (e) {
+      restoreProvided(instance);
+      throw e;
+    }
+    const frame = takeBoundaryFrame(instance);
+    if (frame) boundaryStack.push(frame);
+    try {
+      instance._dirty = false;
 
-    const oldResult = oldVNode.componentInstance?.vnode || oldVNode;
-    const hadNullResult = oldVNode.componentInstance != null && oldVNode.componentInstance.vnode == null;
-    instance.vnode = result;
+      const oldResult = oldVNode.componentInstance?.vnode || oldVNode;
+      const hadNullResult = oldVNode.componentInstance != null && oldVNode.componentInstance.vnode == null;
+      instance.vnode = result;
 
-    if (!result) {
-      if (dom && dom.nodeType !== 3) {
-        runUnmountCleanups(oldResult);
-        for (const node of findAllDomNodes(oldResult)) {
-          if (node.parentNode) node.parentNode.removeChild(node);
+      if (!result) {
+        if (dom && dom.nodeType !== 3) {
+          runUnmountCleanups(oldResult);
+          for (const node of findAllDomNodes(oldResult)) {
+            if (node.parentNode) node.parentNode.removeChild(node);
+          }
         }
+        const empty = dom && dom.nodeType === 3 ? dom : document.createTextNode('');
+        newVNode.dom = empty;
+        return empty;
       }
-      const empty = dom && dom.nodeType === 3 ? dom : document.createTextNode('');
-      newVNode.dom = empty;
-      return empty;
+
+      result.componentInstance = instance;
+
+      if (hadNullResult) {
+        const freshDom = createDOM(result, result.type === instance.component ? instance : undefined);
+        if (dom && dom.parentNode) dom.parentNode.replaceChild(freshDom, dom);
+        newVNode.dom = freshDom;
+        return freshDom;
+      }
+
+      const newDom = patch(dom, oldResult, result);
+      newVNode.dom = newDom;
+      return newDom;
+    } catch (e) {
+      if (frame && boundaryStack[boundaryStack.length - 1] === frame && frame.handle(e)) {
+        const fb = safeFallback(frame);
+        const oldResult = oldVNode.componentInstance?.vnode || oldVNode;
+        instance._dirty = false;
+        instance.vnode = fb;
+        if (!fb) {
+          runUnmountCleanups(oldResult);
+          for (const node of findAllDomNodes(oldResult)) {
+            if (node.parentNode) node.parentNode.removeChild(node);
+          }
+          const empty = document.createTextNode('');
+          newVNode.dom = empty;
+          return empty;
+        }
+        fb.componentInstance = instance;
+        const newDom = patch(dom, oldResult, fb);
+        newVNode.dom = newDom;
+        return newDom;
+      }
+      throw e;
+    } finally {
+      if (frame) popFrame(frame);
+      restoreProvided(instance);
     }
-
-    result.componentInstance = instance;
-
-    if (hadNullResult) {
-      const freshDom = createDOM(result, instance);
-      if (dom && dom.parentNode) dom.parentNode.replaceChild(freshDom, dom);
-      newVNode.dom = freshDom;
-      return freshDom;
-    }
-
-    const newDom = patch(dom, oldResult, result);
-    newVNode.dom = newDom;
-    return newDom;
   }
 
   const el = dom as HTMLElement;
@@ -650,8 +814,7 @@ function reconcileChildren(
       if (oldDom && oldDom.parentNode) {
         const newDom = patch(oldDom, oldEntry.vnode, newChild);
         newChild.dom = newDom;
-        const nodes = newDom === oldDom ? oldEntry.nodes : findAllDomNodes(newChild);
-        patches.push({ nodes });
+        patches.push({ nodes: findAllDomNodes(newChild) });
       } else {
         for (const node of oldEntry.nodes) {
           if (node.parentNode) node.parentNode.removeChild(node);
@@ -688,7 +851,12 @@ function reconcileChildren(
   if (patches.length === 0) return;
 
   const flat: Node[] = [];
-  for (const p of patches) flat.push(...p.nodes);
+  for (const p of patches) {
+    for (const node of p.nodes) {
+      const par = node.parentNode;
+      if (!par || par === parentEl || par.nodeType === 11) flat.push(node);
+    }
+  }
   {
     const members = new Set<Node>(flat);
     let matched = 0;

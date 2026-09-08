@@ -374,7 +374,7 @@ describe('integration: nested component unmount cleanup', () => {
 
     const Outer: ComponentType = () => {
       useEffect(() => {
-        return () => { /* outer cleanup */ };
+        return () => {  };
       }, []);
       return h('div', {},
         { type: Inner, props: {}, children: [], key: null },

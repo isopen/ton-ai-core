@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from './hooks.js';
 import type { VNode } from './vdom.js';
+import { getLogger } from '@ton-ai/gram-debug';
+
+const vlDiagLog = getLogger('atom:vlist');
 
 export interface VirtualListProps<T> {
   data: T[];
@@ -66,7 +69,8 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   const readyFired = useRef(false);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const userScrolledRef = useRef(false);
-  const suppressScrollRef = useRef(false);
+  const suppressUntilRef = useRef(0);
+  const lastPinKeyRef = useRef('');
   const atBottomRef = useRef(false);
   const thumbRef = useRef<HTMLDivElement | null>(null);
   const scrollToFiredRef = useRef(false);
@@ -135,6 +139,10 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     t.style.top = Math.round((el.scrollTop / (sh - ch)) * maxT) + 'px';
   }
 
+  function armSuppress() {
+    suppressUntilRef.current = Date.now() + 150;
+  }
+
   function onThumbMove(e: MouseEvent) {
     const el = containerRef.current;
     const t = thumbRef.current;
@@ -182,8 +190,12 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
           if (!el) return;
 
           if (wasAtBottom && el.scrollTop === oldST) {
-            suppressScrollRef.current = true;
-            el.scrollTop = el.scrollHeight;
+            const maxTop = el.scrollHeight - el.clientHeight;
+            if (el.scrollTop !== maxTop) {
+              armSuppress();
+              el.scrollTop = maxTop;
+              vlDiagLog.info('[pollscroll] vl-appended-pin len=' + data.length + ' st=' + Math.round(el.scrollTop) + ' maxTop=' + Math.round(maxTop));
+            }
             st.current.lastST = el.scrollTop;
             st.current.lastSH = el.scrollHeight;
             atBottomRef.current = true;
@@ -198,7 +210,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
               const r = node.getBoundingClientRect();
               const diff = r.top - anchor.top;
               if (diff !== 0) {
-                suppressScrollRef.current = true;
+                armSuppress();
                 el.scrollTop = el.scrollTop + diff;
     st.current.lastST = el.scrollTop;
     st.current.lastSH = el.scrollHeight;
@@ -210,8 +222,10 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
           }
           if (oldSH > 0 && el.scrollTop === oldST) {
             const diff = el.scrollHeight - oldSH;
-            suppressScrollRef.current = true;
-            el.scrollTop = oldST + diff;
+            if (diff !== 0) {
+              armSuppress();
+              el.scrollTop = oldST + diff;
+            }
             st.current.lastST = el.scrollTop;
             st.current.lastSH = el.scrollHeight;
           }
@@ -323,9 +337,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     const el = e.target as HTMLElement;
     const newSH = el.scrollHeight;
 
-    if (suppressScrollRef.current) {
-      suppressScrollRef.current = false;
-    } else {
+    if (Date.now() >= suppressUntilRef.current) {
       userScrolledRef.current = true;
     }
 
@@ -383,17 +395,49 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   useEffect(() => {
     if (!startAtBottom || data.length === 0) return;
     const el = containerRef.current;
-    if (!el || userScrolledRef.current) return;
-    const maxTop = el.scrollHeight - el.clientHeight;
-    if (maxTop <= 0) return;
-
-    suppressScrollRef.current = true;
-    el.scrollTop = maxTop;
-    st.current.lastST = maxTop;
+    if (!el) return;
+    const pinKey = data.length + '|' + (startAtBottom ? 1 : 0) + '|' + containerHeight;
+    if (pinKey !== lastPinKeyRef.current) {
+      lastPinKeyRef.current = pinKey;
+      if (userScrolledRef.current) return;
+      const maxTop = el.scrollHeight - el.clientHeight;
+      if (maxTop <= 0) return;
+      if (el.scrollTop !== maxTop) {
+        armSuppress();
+        el.scrollTop = maxTop;
+        vlDiagLog.info('[pollscroll] vl-pin len=' + data.length + ' st=' + Math.round(el.scrollTop) + ' maxTop=' + Math.round(maxTop));
+      }
+      st.current.lastST = el.scrollTop;
+      st.current.lastSH = el.scrollHeight;
+      atBottomRef.current = true;
+      st.current.wasAtBottom = true;
+      setScrollTop(el.scrollTop);
+      updateThumb();
+      return;
+    }
+    const a = st.current.anchor;
+    if (a && a.key) {
+      const node = el.querySelector<HTMLElement>('[data-vl-key="' + a.key + '"]');
+      if (node) {
+        const r = node.getBoundingClientRect();
+        const diff = r.top - a.top;
+        if (diff !== 0 && Number.isFinite(diff)) {
+          armSuppress();
+          el.scrollTop = el.scrollTop + diff;
+          vlDiagLog.info('[pollscroll] vl-anchor key=' + a.key + ' diff=' + Math.round(diff) + ' st=' + Math.round(el.scrollTop));
+        }
+        st.current.lastST = el.scrollTop;
+        st.current.lastSH = el.scrollHeight;
+        atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+        st.current.wasAtBottom = atBottomRef.current;
+        setScrollTop(el.scrollTop);
+        updateAnchor(el);
+        updateThumb();
+        return;
+      }
+    }
+    st.current.lastST = el.scrollTop;
     st.current.lastSH = el.scrollHeight;
-    atBottomRef.current = true;
-    st.current.wasAtBottom = true;
-    setScrollTop(maxTop);
     updateThumb();
   }, [data.length, startAtBottom, measTick, vh, containerHeight]);
 
@@ -420,8 +464,11 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     const pos = dynamicMode ? ensurePrefix()[idx] : idx * itemHeight!;
     const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
     const target = Math.max(0, Math.min(pos, maxTop));
-    suppressScrollRef.current = true;
-    el.scrollTop = target;
+    if (el.scrollTop !== target) {
+      armSuppress();
+      el.scrollTop = target;
+      vlDiagLog.info('[pollscroll] vl-scrollToKey st=' + Math.round(el.scrollTop));
+    }
     st.current.lastST = el.scrollTop;
     st.current.lastSH = el.scrollHeight;
     atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
@@ -591,8 +638,11 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         st.current.lastSH = el.scrollHeight;
         st.current.wasAtBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
         if (startAtBottom && data.length > 0 && el.scrollTop === 0 && el.scrollHeight > 0) {
-          suppressScrollRef.current = true;
-          el.scrollTop = el.scrollHeight;
+          const maxTop = el.scrollHeight - el.clientHeight;
+          if (maxTop > 0 && el.scrollTop !== maxTop) {
+            armSuppress();
+            el.scrollTop = maxTop;
+          }
           st.current.lastST = el.scrollTop;
           st.current.lastSH = el.scrollHeight;
           atBottomRef.current = true;

@@ -1,7 +1,8 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { ComponentInstance, setMountRoot, type VNode, type ComponentType } from './vdom.js';
-import { __setReroot, flushAllEffects } from './hooks.js';
-import { createDOM, patch, flushPendingRefs } from './reconciler.js';
+import { __setReroot, flushAllEffects, flushLayoutEffects } from './hooks.js';
+import { createDOM, patch, flushPendingRefs, removePortalNodes } from './reconciler.js';
+import { inTransition, drainTransitionSettled, setTransitionFlusher } from './scheduler.js';
 
 const log = getLogger('atom');
 
@@ -30,6 +31,11 @@ export function setUseRafBatching(v: boolean) {
 }
 
 function scheduleFlush(rd: RootData) {
+  if (inTransition()) {
+    transitionRoots.add(rd);
+    scheduleTransitionFlush();
+    return;
+  }
   if (!pendingRoots) pendingRoots = new Set();
   pendingRoots.add(rd);
   if (renderScheduled) return;
@@ -41,6 +47,29 @@ function scheduleFlush(rd: RootData) {
     queueMicrotask(flushPending);
   }
 }
+
+const transitionRoots = new Set<RootData>();
+let transitionScheduled = false;
+
+function scheduleTransitionFlush() {
+  if (transitionScheduled) return;
+  transitionScheduled = true;
+  const run = () => {
+    transitionScheduled = false;
+    flushTransitionRoots();
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else setTimeout(run, 16);
+}
+
+function flushTransitionRoots() {
+  const list = [...transitionRoots];
+  transitionRoots.clear();
+  for (const rd of list) flushRenderInternal(rd);
+  drainTransitionSettled();
+}
+
+setTransitionFlusher(scheduleTransitionFlush);
 
 function flushPending() {
   renderScheduled = false;
@@ -94,6 +123,7 @@ function flushRenderInternal(rd: RootData) {
   }
   rd.oldVNode = newVNode;
 
+  flushLayoutEffects();
   flushAllEffects();
 }
 
@@ -135,6 +165,7 @@ export function render(component: ComponentType, container: HTMLElement): Node {
     if (target) scheduleFlush(target);
   });
 
+  flushLayoutEffects();
   flushAllEffects();
 
   if (typeof window !== 'undefined') {
@@ -164,6 +195,11 @@ function unmountRoot(container: HTMLElement): void {
 
 function runUnmountTree(vnode: VNode | null): void {
   if (!vnode) return;
+  if (vnode.type === 'PORTAL_NODE') {
+    for (const child of vnode.children) runUnmountTree(child);
+    removePortalNodes(vnode);
+    return;
+  }
   const inst = vnode.componentInstance;
   if (inst) {
     inst._mounted = false;

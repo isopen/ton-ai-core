@@ -11,6 +11,10 @@ export function __setReroot(fn: (inst?: ComponentInstance) => void) {
   reroot = fn;
 }
 
+export function requestRerender(inst?: ComponentInstance) {
+  reroot?.(inst);
+}
+
 function getInstance(): ComponentInstance {
   if (!currentInstance) throw new Error('Hooks must be called within a component');
   return currentInstance;
@@ -135,4 +139,143 @@ export function useDomEvent(
     t.addEventListener(type, handler, options);
     return () => t.removeEventListener(type, handler, options);
   }, deps);
+}
+
+export function useReducer<S, A>(
+  reducer: (prev: S, action: A) => S,
+  initialState: S | (() => S),
+): [S, (action: A) => void];
+export function useReducer<S, A, I>(
+  reducer: (prev: S, action: A) => S,
+  initializerArg: I,
+  initializer: (arg: I) => S,
+): [S, (action: A) => void];
+export function useReducer<S, A>(
+  reducer: (prev: S, action: A) => S,
+  initial: any,
+  init?: (v: any) => S,
+): [S, (action: A) => void] {
+  const [state, setState] = useState<S>(() => {
+    if (init) return init(initial);
+    return typeof initial === 'function' ? (initial as () => S)() : initial;
+  });
+  const dispatchRef = useRef<((action: A) => void) | null>(null);
+  if (!dispatchRef.current) {
+    dispatchRef.current = (action: A) => {
+      setState((prev) => reducer(prev, action));
+    };
+  }
+  return [state, dispatchRef.current];
+}
+
+interface LayoutEffectEntry {
+  inst: ComponentInstance;
+  fn: () => (() => void) | void;
+  oldCleanup?: (() => void);
+  cleanupIdx: number;
+}
+
+const pendingLayoutEffects: LayoutEffectEntry[] = [];
+
+export function useLayoutEffect(fn: () => (() => void) | void, deps?: any[]) {
+  const inst = getInstance();
+  const depsIdx = inst.hookIndex++;
+  const cleanupIdx = inst.hookIndex++;
+
+  const oldDeps = inst.hookStates[depsIdx] as any[] | undefined;
+  let changed = true;
+
+  if (oldDeps !== undefined && deps !== undefined) {
+    changed = deps.length !== oldDeps.length || deps.some((d, i) => d !== oldDeps[i]);
+  }
+
+  if (changed) {
+    inst.hookStates[depsIdx] = deps;
+    pendingLayoutEffects.push({
+      inst,
+      fn,
+      oldCleanup: inst.hookStates[cleanupIdx] as (() => void) | undefined,
+      cleanupIdx,
+    });
+  }
+}
+
+export function flushLayoutEffects() {
+  while (pendingLayoutEffects.length > 0) {
+    const { inst, fn, oldCleanup, cleanupIdx } = pendingLayoutEffects.shift()!;
+    if (!inst._mounted) continue;
+    if (oldCleanup) {
+      try { oldCleanup(); } catch (e) { log.error('useLayoutEffect cleanup error:', e); }
+      const ci = inst.unmountCleanups.indexOf(oldCleanup);
+      if (ci !== -1) inst.unmountCleanups.splice(ci, 1);
+    }
+    let cleanup: (() => void) | void;
+    try {
+      cleanup = fn();
+    } catch (e) {
+      log.error('useLayoutEffect error:', e);
+      cleanup = undefined;
+    }
+    inst.hookStates[cleanupIdx] = typeof cleanup === 'function' ? cleanup : undefined;
+    if (typeof cleanup === 'function') {
+      inst.unmountCleanups.push(cleanup);
+    }
+  }
+}
+
+export function useSyncExternalStore<T>(
+  subscribe: (onChange: () => void) => () => void,
+  getSnapshot: () => T,
+): T {
+  const inst = getInstance();
+  const snapshot = getSnapshot();
+  const [, setTick] = useState(0);
+  const ref = useRef<{ snapshot: T; getSnapshot: () => T }>({ snapshot, getSnapshot });
+  ref.current.snapshot = snapshot;
+  ref.current.getSnapshot = getSnapshot;
+  void inst;
+  useEffect(() => {
+    const check = () => {
+      const next = ref.current.getSnapshot();
+      if (!Object.is(ref.current.snapshot, next)) {
+        ref.current.snapshot = next;
+        setTick((t) => t + 1);
+      }
+    };
+    check();
+    return subscribe(check);
+  }, [subscribe]);
+  return snapshot;
+}
+
+export interface SelectorStore<S> {
+  subscribe: (onChange: () => void) => () => void;
+  getState: () => S;
+}
+
+export function useSelector<S, T>(
+  store: SelectorStore<S>,
+  selector: (state: S) => T,
+  isEqual: (a: T, b: T) => boolean = Object.is,
+): T {
+  const selected = selector(store.getState());
+  const ref = useRef<{ value: T; selector: typeof selector; isEqual: typeof isEqual }>({
+    value: selected,
+    selector,
+    isEqual,
+  });
+  ref.current.selector = selector;
+  ref.current.isEqual = isEqual;
+  if (!ref.current.isEqual(ref.current.value, selected)) {
+    ref.current.value = selected;
+  }
+  const getSnapshot = useCallback(() => {
+    const next = ref.current.selector(store.getState());
+    if (!ref.current.isEqual(ref.current.value, next)) {
+      ref.current.value = next;
+    }
+    return ref.current.value;
+  }, [store]);
+  useSyncExternalStore(store.subscribe, getSnapshot);
+  return ref.current.value;
 }

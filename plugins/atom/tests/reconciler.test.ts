@@ -754,7 +754,6 @@ describe('patch - updateProp edge cases', () => {
     const newVNode = h('div', { id: 'same' });
     patch(el, oldVNode, newVNode);
     expect(el.id).toBe('same');
-    // no error = pass
   });
 
   test('removeProp removes event listener', () => {
