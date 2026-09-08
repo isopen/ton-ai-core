@@ -6,6 +6,7 @@ import { AnimatedEmoji, EmojiText } from './emoji-text.js';
 import { matchEmojiRuns, getEmojiDocId } from './emoji-store.js';
 import { render } from '@ton-ai/atom/render';
 import { Checkmark } from './checkmark.js';
+import { isInactiveButtonData, isButtonInactive, buttonBubbleRel } from '../utils.js';
 
 const tmdLog = getLogger('gram-ui:tmd');
 
@@ -89,14 +90,16 @@ function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, str
   }
 }
 
-export function TmdView({ text, foreignEntities, documentUrls, className = '', time, status, out }: {
+export function TmdView({ text, foreignEntities, documentUrls, inactiveButtons, className = '', time, status, out, messageId }: {
   text: string;
   foreignEntities?: any[];
   documentUrls?: Record<number, string>;
+  inactiveButtons?: Record<string, true>;
   className?: string;
   time?: string;
   status?: string;
   out?: boolean;
+  messageId?: number | string;
 }) {
   if (!text) return null;
 
@@ -150,7 +153,40 @@ export function TmdView({ text, foreignEntities, documentUrls, className = '', t
     mountStandardEmojis(el, (documentUrls || {}) as any);
   }, [documentUrls]);
 
-  return h('div', { class: 'tmd-body md-body' + (className ? ' ' + className : '') },
+  const handleTableClick = (e: any) => {
+    try {
+      const target = e?.target as HTMLElement | null;
+      if (!target || typeof (target as any).closest !== 'function') return;
+      const anchor = (target as any).closest('a.md-link') as HTMLAnchorElement | null;
+      if (!anchor) return;
+      const table = (anchor as any).closest?.('table.md-table');
+      if (!table) return;
+      const href = anchor.getAttribute('href') || '';
+      if (!href.startsWith('#') || href.length < 2) return;
+      if (messageId == null || messageId === '') return;
+      e.preventDefault();
+      e.stopPropagation();
+      const raw = href.slice(1);
+      let payload = raw;
+      try {
+        payload = 'b64:' + btoa(unescape(encodeURIComponent(raw)));
+      } catch {}
+      if (isInactiveButtonData(raw) || isInactiveButtonData(payload)) {
+        tmdLog.info('[TmdView] table inactive noop skipped msg=', String(messageId));
+        return;
+      }
+      if (messageId != null && messageId !== '' && isButtonInactive(inactiveButtons, messageId, payload)) {
+        tmdLog.info('[TmdView] table inactive marked skipped msg=', String(messageId));
+        return;
+      }
+      tmdLog.info('[TmdView] table move msg=', String(messageId), 'data=', raw.slice(0, 60));
+      window.dispatchEvent(new CustomEvent('tg-bot-callback', { detail: { messageId, data: payload, text: anchor.textContent || raw, rel: buttonBubbleRel({ target: anchor }) } }));
+    } catch (err) {
+      tmdLog.error('[TmdView] table click failed', err);
+    }
+  };
+
+  return h('div', { class: 'tmd-body md-body' + (className ? ' ' + className : ''), onClick: handleTableClick },
     h('div', { ref: (e: HTMLDivElement | null) => { ref.current = e; }, dangerouslySetInnerHTML: { __html: html } } as any),
     hasTime ? h('div', { class: 'tmd-body__footer' },
       h('span', { class: 'tmd-body__time' }, time!),

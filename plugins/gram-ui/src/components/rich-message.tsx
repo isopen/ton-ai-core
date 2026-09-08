@@ -3,11 +3,14 @@ import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedEmoji } from './emoji-text.js';
 import { getLogger } from '@ton-ai/gram-debug';
 import { matchEmojiRuns, getEmojiDocId, normalizeEmoji } from './emoji-store.js';
-import { hexToDataUrl, strippedToDataUrl } from '../utils.js';
+import { hexToDataUrl, strippedToDataUrl, buttonStyleClass, isInactiveButtonData, isButtonInactive, isDisabledButtonType, decodeButtonAction } from '../utils.js';
 import { Image } from '../primitives/image.js';
+import { Slideshow } from './slideshow.js';
 import type { ImageSpec } from '../types.js';
 
 const log = getLogger('gram-ui:tmd');
+
+const btnLoggedSigs = new Set<string>();
 
 function getRichPhotoUrl(photo: any): string | null {
   if (!photo || !Array.isArray(photo.sizes)) return null;
@@ -49,7 +52,7 @@ function buildRichImageSpec(photo: any, url: string | null, stripped: string | n
   return spec;
 }
 
-function RichPhoto({ photo, caption, spoiler, richMessage }: { photo: any; caption?: any; spoiler?: boolean; richMessage?: any }): any {
+function RichPhoto({ photo, caption, spoiler, richMessage, maxWidth = 480, fluid = false }: { photo: any; caption?: any; spoiler?: boolean; richMessage?: any; maxWidth?: number; fluid?: boolean }): any {
   const stripped = getRichStrippedUrl(photo);
   const [url, setUrl] = useState<string | null>(() => getRichPhotoUrl(photo));
   const [failed, setFailed] = useState(false);
@@ -92,7 +95,7 @@ function RichPhoto({ photo, caption, spoiler, richMessage }: { photo: any; capti
   }
   return (
     <div class={`rich-photo${spoiler ? ' rich-photo_spoiler' : ''}${isStripped ? ' rich-photo_placeholder' : ''}`}>
-      <Image image={spec} maxWidth={480} lazy={false} rounded onOpenViewer={() => setViewerOpen(true)} />
+      <Image image={spec} maxWidth={maxWidth} fluid={fluid} lazy={false} rounded onOpenViewer={() => setViewerOpen(true)} />
       {caption ? <div class="rich-photo-caption"><RichText node={caption.text || caption} />{caption.credit ? <div class="rich-photo-credit"><RichText node={caption.credit} /></div> : null}</div> : null}
       {viewerOpen ? (
         <div class="rich-photo-viewer" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;padding:24px" onClick={() => setViewerOpen(false)}>
@@ -104,7 +107,7 @@ function RichPhoto({ photo, caption, spoiler, richMessage }: { photo: any; capti
   );
 }
 
-interface RichCtx { messageId?: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string> }
+interface RichCtx { messageId?: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true> }
 
 function toBase64(data: any): string {
   if (data == null) return '';
@@ -126,11 +129,18 @@ function toBase64(data: any): string {
   try { return btoa(bin); } catch { return ''; }
 }
 
+function toB64Utf8(raw: string): string {
+  try {
+    return 'b64:' + btoa(unescape(encodeURIComponent(raw)));
+  } catch {}
+  return raw;
+}
+
 function RichTextChildren(node: any, ctx?: RichCtx): any {
   const t = node?.text;
   if (t == null) return null;
-  if (Array.isArray(t)) return <>{t.map((n: any, i: number) => <RichTextNode key={i} node={n} messageId={ctx?.messageId} onButton={ctx?.onButton} documentUrls={ctx?.documentUrls} />)}</>;
-  if (typeof t === 'object') return <RichTextNode node={t} messageId={ctx?.messageId} onButton={ctx?.onButton} documentUrls={ctx?.documentUrls} />;
+  if (Array.isArray(t)) return <>{t.map((n: any, i: number) => <RichTextNode key={i} node={n} messageId={ctx?.messageId} onButton={ctx?.onButton} documentUrls={ctx?.documentUrls} inactiveButtons={ctx?.inactiveButtons} />)}</>;
+  if (typeof t === 'object') return <RichTextNode node={t} messageId={ctx?.messageId} onButton={ctx?.onButton} documentUrls={ctx?.documentUrls} inactiveButtons={ctx?.inactiveButtons} />;
   return <>{t}</>;
 }
 
@@ -171,7 +181,7 @@ function containsCustomEmoji(node: any, seen = new WeakSet()): boolean {
   return false;
 }
 
-function collectCustomIds(node: any, out: Set<string>, seen = new WeakSet()): void {
+export function collectCustomIds(node: any, out: Set<string>, seen = new WeakSet()): void {
   if (!node || typeof node !== 'object') return;
   if (seen.has(node)) return;
   seen.add(node);
@@ -197,8 +207,8 @@ function renderPlainWithEmojis(text: string, documentUrls?: Record<string, strin
     const emoji = r.emoji;
     const docId = getEmojiDocId(emoji);
     const url = docId ? ((documentUrls as any)?.['emojipack-' + docId] || (documentUrls as any)?.[docId] || '') : '';
-    if (!url) {
-      parts.push(<AnimatedEmoji key={'e' + i} docId={docId} alt={emoji} url={url} size={16} />);
+    if (!docId) {
+      parts.push(emoji);
     } else {
       parts.push(<AnimatedEmoji key={'e' + i} docId={docId} alt={emoji} url={url} size={16} />);
     }
@@ -214,15 +224,23 @@ function renderPlainWithEmojis(text: string, documentUrls?: Record<string, strin
 
 function CustomEmojiNode({ documentId, alt, documentUrls }: { documentId: string; alt: string; documentUrls?: Record<number | string, string> }): any {
   const url = (documentUrls || {})['emojipack-' + documentId] || (documentUrls || {})['emoji-' + documentId] || (documentUrls || {})[documentId];
+  useEffect(() => {
+    if (!url && documentId) {
+      try {
+        window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [String(documentId)] } }));
+      } catch {}
+    }
+  }, [documentId, url]);
+  if (normalizeEmoji(alt || '').startsWith('⬛')) return <span class="rich-ce-dot" data-doc-id={documentId} />;
   if (isHiddenEmojiAlt(alt)) return null;
   if (!url) {
-    console.debug('[rich-ce-miss]', documentId, alt, Object.keys(documentUrls || {}).slice(0,5));
+    log.debug('[rich-ce-miss]', documentId, alt, Object.keys(documentUrls || {}).slice(0,5));
   }
-  if (url && String(url).startsWith('blob:ce')) return <img class="rich-ce-img" src={url} alt={alt} draggable={false} />;
+  if (String(url).startsWith('blob:ce')) return <img class="rich-ce-img" src={url} alt={alt} draggable={false} />;
   return <AnimatedEmoji docId={documentId} url={url || ''} alt={alt} size={20} />;
 }
 
-function RichTextNode({ node, messageId, onButton, documentUrls }: { node: any; messageId?: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string> }): any {
+function RichTextNode({ node, messageId, onButton, documentUrls, inactiveButtons }: { node: any; messageId?: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true> }): any {
   if (!node || node._ === 'textEmpty') return null;
   const ctx = { messageId, onButton, documentUrls };
   switch (node._) {
@@ -235,23 +253,27 @@ function RichTextNode({ node, messageId, onButton, documentUrls }: { node: any; 
     case 'textMentionName': return <strong>{RichTextChildren(node, ctx)}</strong>;
     case 'textConcat': {
       const parts = Array.isArray(node.texts) ? node.texts : [];
-      return <>{parts.map((n: any, i: number) => <RichTextNode key={'tc' + i} node={n} messageId={messageId} onButton={onButton} documentUrls={documentUrls} />)}</>;
+      return <>{parts.map((n: any, i: number) => <RichTextNode key={'tc' + i} node={n} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} />)}</>;
     }
     case 'textCustomEmoji': {
-      const a = node.alt || '';
-      if (isHiddenEmojiAlt(a)) return null;
-      return <CustomEmojiNode documentId={String(node.document_id)} alt={a} documentUrls={documentUrls} />;
+      if (node.document_id == null) {
+        log.warn('[RichMessage] custom emoji without document id', String(node.alt || ''));
+        return null;
+      }
+      return <CustomEmojiNode documentId={String(node.document_id)} alt={node.alt || ''} documentUrls={documentUrls} />;
     }
     case 'textButton': {
       const type = node.type || {};
       const isCb = type._ === 'inlineButtonTypeCallback';
-      const data = typeof type.data === 'string' ? type.data : toBase64(type.data);
+      const data = toBase64(type.data);
+      const inactive = isDisabledButtonType(type) || (isCb && !!data && (isInactiveButtonData(data) || isButtonInactive(inactiveButtons, messageId ?? '', data)));
       return (
         <button
-          class="rich-cell-btn"
+          class={'rich-cell-btn' + buttonStyleClass((node as any).style) + (inactive ? ' is-inactive' : '')}
           type="button"
-          onClick={() => {
-            if (isCb && data) onButton?.(data);
+          disabled={inactive}
+          onClick={(e: any) => {
+            if (isCb && data && !inactive) onButton?.(data, e);
             else if (type.url) window.open(type.url, '_blank', 'noopener');
           }}
         >{RichTextChildren(node, ctx)}</button>
@@ -269,10 +291,10 @@ function RichTextNode({ node, messageId, onButton, documentUrls }: { node: any; 
   }
 }
 
-function RichText({ node, messageId, onButton, documentUrls }: { node: any; messageId?: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string> }): any {
+function RichText({ node, messageId, onButton, documentUrls, inactiveButtons }: { node: any; messageId?: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true> }): any {
   if (!node) return null;
-  if (Array.isArray(node)) return <>{node.map((n, i) => <RichTextNode key={i} node={n} messageId={messageId} onButton={onButton} documentUrls={documentUrls} />)}</>;
-  return <RichTextNode node={node} messageId={messageId} onButton={onButton} documentUrls={documentUrls} />;
+  if (Array.isArray(node)) return <>{node.map((n, i) => <RichTextNode key={i} node={n} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} />)}</>;
+  return <RichTextNode node={node} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} />;
 }
 
 function cellCls(c: any): string {
@@ -284,33 +306,54 @@ function cellCls(c: any): string {
   return cls;
 }
 
-function pressButton(btn: any, messageId: number | string, onButton?: (data: string) => void): void {
-  const type = btn?.type || {};
-  if (type._ === 'inlineButtonTypeCallback' && type.data != null) {
-    onButton?.(toBase64(type.data));
+function pressButton(btn: any, messageId: number | string, onButton?: (data: string, e?: any) => void, e?: any): void {
+  if (isDisabledButtonType(btn?.type)) return;
+  const data = buttonCallbackData(btn);
+  if (data == null) {
+    const type = btn?.type || {};
+    if (type.url) window.open(type.url, '_blank', 'noopener');
     return;
   }
-  if (type.url) window.open(type.url, '_blank', 'noopener');
+  if (isInactiveButtonData(data)) return;
+  onButton?.(data, e);
 }
 
-function ButtonRow({ block, messageId, onButton, documentUrls }: { block: any; messageId: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string> }): any {
+function buttonCallbackData(btn: any): string | null {
+  const type = btn?.type || {};
+  if (type._ === 'inlineButtonTypeCallback' && type.data != null) return toBase64(type.data);
+  return null;
+}
+
+function ButtonRow({ block, messageId, onButton, documentUrls, inactiveButtons }: { block: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true> }): any {
   const buttons = block.buttons || [];
+  const btnActionOf = (b: any): string => {
+    if (isDisabledButtonType((b as any)?.type)) return 'disabled';
+    const d = buttonCallbackData(b);
+    return d == null ? 'url' : decodeButtonAction(d) || '?';
+  };
+  const btnSig = messageId + '|' + buttons.map(btnActionOf).join(',');
+  if (!btnLoggedSigs.has(btnSig)) {
+    btnLoggedSigs.add(btnSig);
+    log.info('[board-btns] msg=' + messageId + ' actions=[' + buttons.map(btnActionOf).join(' | ') + ']');
+  }
   return (
     <div class="rich-buttons">
       {buttons.map((b: any, i: number) => {
         const txt = b.text;
-
+        const rowData = buttonCallbackData(b);
+        const inactive = isDisabledButtonType((b as any)?.type) || (rowData != null && (isInactiveButtonData(rowData) || isButtonInactive(inactiveButtons, messageId, rowData)));
         const debugTitle = (() => { try { return JSON.stringify(txt).slice(0,800); } catch { return ''; } })();
         return (
           <button
             key={'rb' + i}
-            class="rich-btn"
+            class={'rich-btn' + buttonStyleClass((b as any).style) + (inactive ? ' is-inactive' : '')}
             type="button"
             title={debugTitle}
-            onClick={() => pressButton(b, messageId, onButton)}
+            disabled={inactive}
+            onClick={(e: any) => pressButton(b, messageId, onButton, e)}
             style="display:flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;text-align:center"
           >
-            <span style="display:inline-flex;align-items:center;gap:6px;justify-content:center;white-space:nowrap"><RichText node={txt} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></span>
+            <span style="display:inline-flex;align-items:center;gap:6px;justify-content:center;white-space:nowrap"><RichText node={txt} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></span>
           </button>
         );
       })}
@@ -318,7 +361,19 @@ function ButtonRow({ block, messageId, onButton, documentUrls }: { block: any; m
   );
 }
 
-function Block({ block, messageId, onButton, documentUrls, richMessage }: { block: any; messageId: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string>; richMessage?: any }): any {
+function ListItemContent({ item, messageId, onButton, documentUrls, inactiveButtons, richMessage }: { item: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true>; richMessage?: any }): any {
+  const blocks = Array.isArray(item?.blocks) ? item.blocks : null;
+  if (blocks) {
+    return <>{blocks.map((b: any, i: number) => (
+      <div key={'lib' + i} class="rich-block">
+        <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} />
+      </div>
+    ))}</>;
+  }
+  return <RichText node={item?.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} />;
+}
+
+function Block({ block, messageId, onButton, documentUrls, inactiveButtons, richMessage, photoMaxWidth = 480, photoFluid = false }: { block: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true>; richMessage?: any; photoMaxWidth?: number; photoFluid?: boolean }): any {
   switch (block._) {
     case 'pageBlockPhoto': {
       const pid = block.photo_id != null ? String(block.photo_id) : (block as any).photo?.id ? String((block as any).photo.id) : '';
@@ -330,10 +385,50 @@ function Block({ block, messageId, onButton, documentUrls, richMessage }: { bloc
         log.warn('[RichMessage] pageBlockPhoto photo not found', pid, 'photos', photos.length);
         return <div class="rich-unknown">[photo {pid}]</div>;
       }
-      return <RichPhoto photo={photo} caption={block.caption} spoiler={!!block.spoiler} richMessage={richMessage} />;
+      return <RichPhoto photo={photo} caption={block.caption} spoiler={!!block.spoiler} richMessage={richMessage} maxWidth={photoMaxWidth} fluid />;
+    }
+    case 'pageBlockSlideshow':
+    case 'pageBlockCollage': {
+      const items = Array.isArray(block.items) ? block.items : [];
+      const cap = block.caption;
+      return (
+        <div>
+          <Slideshow
+            count={items.length}
+            nav="edges"
+            renderItem={(i: number) => <SafeBlock block={items[i]} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={480} photoFluid />}
+          />
+          {cap ? <div class="rich-photo-caption"><RichText node={cap.text || cap} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} />{cap.credit ? <div class="rich-photo-credit"><RichText node={cap.credit} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></div> : null}</div> : null}
+        </div>
+      );
     }
     case 'pageBlockTable': {
       const rows = block.rows || [];
+      const cellAction = (c: any): { kind: string; data: string; url: string } | null => {
+        const t = c?.text;
+        if (!t) return null;
+        if (t._ === 'textButton') {
+          const ty = t.type || {};
+          if (isDisabledButtonType(ty)) return { kind: 'disabled', data: '', url: '' };
+          if (ty._ === 'inlineButtonTypeCallback' && ty.data != null) return { kind: 'callback', data: toBase64(ty.data), url: '' };
+          if (typeof ty.url === 'string' && ty.url) return { kind: 'url', data: '', url: ty.url };
+          if (typeof ty._ === 'string' && ty._.toLowerCase().includes('url') && typeof ty.url === 'string') return { kind: 'url', data: '', url: ty.url };
+          return null;
+        }
+        if (t._ === 'textAnchor' && typeof t.name === 'string' && t.name) return { kind: 'callback', data: toB64Utf8(t.name), url: '' };
+        return null;
+      };
+      const handleCell = (e: any, c: any) => {
+        try {
+          const target = e?.target as HTMLElement | null;
+          if (target && typeof (target as any).closest === 'function' && (target as any).closest('.rich-cell-btn,.rich-btn')) return;
+        } catch {}
+        const act = cellAction(c);
+        if (!act) return;
+        if (act.kind === 'callback' && act.data && (isInactiveButtonData(act.data) || isButtonInactive(inactiveButtons, messageId, act.data))) return;
+        if (act.kind === 'callback' && act.data) onButton?.(act.data, e);
+        else if (act.kind === 'url' && act.url) window.open(act.url, '_blank', 'noopener');
+      };
       return (
         <table class={'rich-table' + (block.compact ? ' rich-table_compact' : '')}>
           <tbody>
@@ -341,9 +436,14 @@ function Block({ block, messageId, onButton, documentUrls, richMessage }: { bloc
               <tr key={'rtr' + ri}>
                 {(row.cells || []).map((c: any, ci: number) => {
                   const isHeaderCell = c.header;
+                  const act = cellAction(c);
+                  const inactive = !!act && (act.kind === 'disabled' || (act.kind === 'callback' && !!act.data && (isInactiveButtonData(act.data) || isButtonInactive(inactiveButtons, messageId, act.data))));
+                  const clickable = !!act && !inactive;
+                  const cls = cellCls({ ...c, header: !!isHeaderCell }) + (clickable ? ' rich-cell_clickable' : '') + (inactive ? ' rich-cell_inactive' : '');
+                  const content = <RichText node={c.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} />;
                   return isHeaderCell
-                    ? <th key={'rtc' + ci} class={cellCls({ ...c, header: true })}><RichText node={c.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></th>
-                    : <td key={'rtc' + ci} class={cellCls({ ...c, header: false })}><RichText node={c.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></td>;
+                    ? <th key={'rtc' + ci} class={cls} onClick={clickable ? (e: any) => handleCell(e, c) : undefined} style={clickable ? 'cursor:pointer' : undefined}>{content}</th>
+                    : <td key={'rtc' + ci} class={cls} onClick={clickable ? (e: any) => handleCell(e, c) : undefined} style={clickable ? 'cursor:pointer' : undefined}>{content}</td>;
                 })}
               </tr>
             ))}
@@ -352,24 +452,24 @@ function Block({ block, messageId, onButton, documentUrls, richMessage }: { bloc
       );
     }
     case 'pageBlockButtonRow':
-      return <ButtonRow block={block} messageId={messageId} onButton={onButton} documentUrls={documentUrls} />;
+      return <ButtonRow block={block} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} />;
     case 'pageBlockDivider':
       return <hr class="md-hr" />;
     case 'pageBlockParagraph':
     case 'pageBlockAuthorDate':
-      return <p class="rich-p"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></p>;
+      return <p class="rich-p"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></p>;
     case 'pageBlockBlockquote':
-      return <blockquote class="rich-quote"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></blockquote>;
+      return <blockquote class="rich-quote"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></blockquote>;
     case 'pageBlockBlockquoteBlocks': {
       const bqb = block as any;
       return (
         <blockquote class="rich-quote">
           {(bqb.blocks || []).map((sub: any, i: number) => (
             <div key={'bqb' + i} class="rich-block">
-              <SafeBlock block={sub} messageId={messageId} onButton={onButton} documentUrls={documentUrls} richMessage={richMessage} />
+              <SafeBlock block={sub} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={photoMaxWidth} photoFluid={photoFluid} />
             </div>
           ))}
-          {bqb.caption ? <div class="rich-quote-caption"><RichText node={bqb.caption} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></div> : null}
+          {bqb.caption ? <div class="rich-quote-caption"><RichText node={bqb.caption} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></div> : null}
         </blockquote>
       );
     }
@@ -384,19 +484,19 @@ function Block({ block, messageId, onButton, documentUrls, richMessage }: { bloc
     case 'pageBlockHeading6':
     case 'pageBlockSubheader':
     case 'pageBlockKicker':
-      return <h3 class="rich-h"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></h3>;
+      return <h3 class="rich-h"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></h3>;
     case 'pageBlockSubtitle':
     case 'pageBlockFooter':
-      return <p class="rich-footer"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></p>;
+      return <p class="rich-footer"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></p>;
     case 'pageBlockDetails': {
       const det = block as any;
       return (
         <details class="rich-details" open={!!det.open}>
-          <summary class="rich-details-title"><RichText node={det.title} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></summary>
+          <summary class="rich-details-title"><RichText node={det.title} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></summary>
           <div class="rich-details-body">
             {(det.blocks || []).map((b: any, i: number) => (
               <div key={'det' + i} class="rich-block">
-                <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} richMessage={richMessage} />
+                <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={photoMaxWidth} photoFluid={photoFluid} />
               </div>
             ))}
           </div>
@@ -408,7 +508,7 @@ function Block({ block, messageId, onButton, documentUrls, richMessage }: { bloc
       return (
         <ul class="rich-list">
           {(lst.items || []).map((it: any, i: number) => (
-            <li key={'li' + i} class="rich-list-item"><RichText node={it.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></li>
+            <li key={'li' + i} class="rich-list-item"><ListItemContent item={it} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} /></li>
           ))}
         </ul>
       );
@@ -418,26 +518,27 @@ function Block({ block, messageId, onButton, documentUrls, richMessage }: { bloc
       return (
         <ol class="rich-list rich-list_ordered">
           {(lst.items || []).map((it: any, i: number) => (
-            <li key={'oli' + i} class="rich-list-item"><RichText node={it.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></li>
+            <li key={'oli' + i} class="rich-list-item"><ListItemContent item={it} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} /></li>
           ))}
         </ol>
       );
     }
     case 'pageBlockPreformatted':
-      return <pre class="rich-pre"><RichText node={(block as any).text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></pre>;
+      return <pre class="rich-pre"><RichText node={(block as any).text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></pre>;
     default: {
-      if (block.text) return <p class="rich-p"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} /></p>;
+      if (block.text) return <p class="rich-p"><RichText node={block.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></p>;
       log.info('[RichMessage] unhandled block', block._);
       return <div class="rich-unknown">[block: {block._}]</div>;
     }
   }
 }
 
-export function RichMessageView({ richMessage, messageId, onButton, documentUrls, className = '' }: {
+export function RichMessageView({ richMessage, messageId, onButton, documentUrls, inactiveButtons, className = '' }: {
   richMessage: any;
   messageId: number | string;
-  onButton?: (data: string) => void;
+  onButton?: (data: string, e?: any) => void;
   documentUrls?: Record<number | string, string>;
+  inactiveButtons?: Record<string, true>;
   className?: string;
 }) {
   const blocks = richMessage?.blocks || [];
@@ -447,7 +548,7 @@ export function RichMessageView({ richMessage, messageId, onButton, documentUrls
       <div class={'rich-body' + (className ? ' ' + className : '')}>
         {blocks.map((b: any, i: number) => (
           <div key={'rblk' + i} class="rich-block">
-            <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} richMessage={richMessage} />
+            <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} />
           </div>
         ))}
       </div>
@@ -458,9 +559,9 @@ export function RichMessageView({ richMessage, messageId, onButton, documentUrls
   }
 }
 
-function SafeBlock({ block, messageId, onButton, documentUrls, richMessage }: { block: any; messageId: number | string; onButton?: (data: string) => void; documentUrls?: Record<number | string, string>; richMessage?: any }): any {
+function SafeBlock({ block, messageId, onButton, documentUrls, inactiveButtons, richMessage, photoMaxWidth = 480, photoFluid = false }: { block: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true>; richMessage?: any; photoMaxWidth?: number; photoFluid?: boolean }): any {
   try {
-    return <Block block={block} messageId={messageId} onButton={onButton} documentUrls={documentUrls} richMessage={richMessage} />;
+    return <Block block={block} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={photoMaxWidth} photoFluid={photoFluid} />;
   } catch (e: any) {
     log.error('[RichMessage] block render failed', block?._ || '?', e);
     return <div class="rich-error">block error: {block?._ || '?'} — {String(e?.message || e)}</div>;
