@@ -87,9 +87,9 @@ describe('parseTmdEntities', () => {
     const r = parse('*ab* cd **ef**');
 
     const foreign = [
-      { _: 'messageEntityCustomEmoji', offset: 1, length: 2 },   // 'ab' inside bold → ok
-      { _: 'messageEntityMention', offset: 4, length: 2 },       // 'cd' plain → ok
-      { _: 'messageEntityMention', offset: 0, length: 1 },       // '*' marker → dropped
+      { _: 'messageEntityCustomEmoji', offset: 1, length: 2 },
+      { _: 'messageEntityMention', offset: 4, length: 2 },
+      { _: 'messageEntityMention', offset: 0, length: 1 },
     ];
     const remapped = remapEntities(foreign, r.srcToPlain);
     expect(remapped).toEqual([
@@ -202,7 +202,7 @@ describe('CommonMark 0.31.2 – hasCommonMark / hasCommonTmd', () => {
     '[link](https://example.com)',
     '![image](https://example.com/img.png)',
     '<https://example.com>',
-    'foo  \nbar', // hard break
+    'foo  \nbar',
   ];
   for (const src of positive) {
     test(`hasCommonMark true for ${JSON.stringify(src).slice(0,40)}`, () => {
@@ -280,9 +280,9 @@ describe('renderCommonMark – CommonMark 0.31.2 blocks', () => {
     expect(tight).toContain('<li class="md-li">a</li>');
     expect(tight).not.toContain('<p class="md-p">a</p>');
     const loose = renderCommonMark('- a\n\n- b');
-    expect(loose).toContain('<li class="md-li">');
-
-    expect(loose).toContain('<p class="md-p">');
+    expect(loose).toContain('<li class="md-li">a</li>');
+    expect(loose).toContain('<li class="md-li">b</li>');
+    expect(loose).not.toContain('<p class="md-p">');
   });
 
   test('ordered lists with start', () => {
@@ -336,6 +336,12 @@ describe('renderCommonMark – CommonMark 0.31.2 inlines', () => {
     expect(out).toContain('<img class="md-image"');
     expect(out).toContain('src="https://example.com/img.png"');
     expect(out).toContain('alt="alt"');
+  });
+
+  test('linked image keeps anchor wrapping img', () => {
+    const out = renderCommonMark('[![alt](https://example.com/img.png)](https://example.com/page)');
+    expect(out).toContain('<a class="md-link" href="https://example.com/page"');
+    expect(out).toContain('<img class="md-image" src="https://example.com/img.png"');
   });
 
   test('autolinks', () => {

@@ -45,11 +45,87 @@ function isTableDelim(line: string): boolean {
   return cells.every(c => /^:?-+:?$/.test(c));
 }
 
-function renderTableBlock(header: string[], delim: string, body: string[][]): string {
+function renderInlineCell(cell: string, opts: RenderOptions = {}): string {
+  const safe = opts.safe ?? true;
+  const segments = cell.split(/(\{\{EMOJI_\d+\}\})/g);
+  let html = '';
+  for (const seg of segments) {
+    if (!seg) continue;
+    if (/^\{\{EMOJI_\d+\}\}$/.test(seg)) {
+      html += seg;
+      continue;
+    }
+    try {
+      const parser = new Parser();
+      const parsed = parser.parse(seg);
+      const walker = parsed.walker();
+      let ev: any;
+      let disable = 0;
+      while ((ev = walker.next())) {
+        const n: any = ev.node;
+        const ent: boolean = ev.entering;
+        const tp: string = n.type;
+        if (tp === 'document' || tp === 'paragraph' || tp === 'heading' || tp === 'block_quote' || tp === 'list' || tp === 'item' || tp === 'code_block' || tp === 'html_block' || tp === 'thematic_break') continue;
+        if (tp === 'text') {
+          if (disable === 0) html += esc(n.literal);
+        } else if (tp === 'softbreak' || tp === 'linebreak') {
+          if (disable === 0) html += ' ';
+        } else if (tp === 'emph') {
+          if (disable === 0) html += ent ? '<em class="md-em">' : '</em>';
+        } else if (tp === 'strong') {
+          if (disable === 0) html += ent ? '<strong class="md-strong">' : '</strong>';
+        } else if (tp === 'code') {
+          if (disable === 0) html += '<code class="md-code">' + esc(n.literal) + '</code>';
+        } else if (tp === 'link') {
+          if (disable === 0) {
+            if (ent) {
+              const href = n.destination || '';
+              const su = safeHref(href);
+              const isUnsafe = isPotentiallyUnsafe(href);
+              const finalHref = !safe || !isUnsafe ? su : '#';
+              html += '<a class="md-link" href="' + esc(finalHref) + '"';
+              if (n.title) html += ' title="' + esc(n.title) + '"';
+              html += ' target="_blank" rel="noopener noreferrer">';
+            } else {
+              html += '</a>';
+            }
+          }
+        } else if (tp === 'image') {
+          if (ent) {
+            if (disable === 0) {
+              const s = n.destination || '';
+              const ss = safeHref(s);
+              const fs = safe && isPotentiallyUnsafe(s) ? '' : ss;
+              html += '<img class="md-image" src="' + esc(fs) + '" alt="';
+            }
+            disable += 1;
+          } else {
+            disable -= 1;
+            if (disable === 0) {
+              html += '"';
+              if (n.title) html += ' title="' + esc(n.title) + '"';
+              html += ' />';
+            }
+          }
+        } else if (tp === 'html_inline') {
+          if (disable === 0) {
+            if (safe) html += esc(n.literal);
+            else html += n.literal;
+          }
+        }
+      }
+    } catch {
+      html += esc(seg);
+    }
+  }
+  return html;
+}
+
+function renderTableBlock(header: string[], delim: string, body: string[][], opts: RenderOptions = {}): string {
   const cls = 'md-table';
   let out = `<table class="${cls}"><thead><tr>`;
   for (let i = 0; i < header.length; i++) {
-    out += `<th class="md-th">${esc(header[i])}</th>`;
+    out += `<th class="md-th">${renderInlineCell(header[i] || '', opts) || esc((header[i] || '').trim())}</th>`;
   }
   out += `</tr></thead><tbody>`;
   for (let ri = 0; ri < body.length; ri++) {
@@ -59,7 +135,7 @@ function renderTableBlock(header: string[], delim: string, body: string[][]): st
       const cell = row[ci] || '';
       const base = 'md-td';
       const c = cell.trim();
-      const content = c ? esc(c) : '';
+      const content = c ? renderInlineCell(c, opts) : '';
       out += `<td class="${base}">${content}</td>`;
     }
     out += `</tr>`;
@@ -107,8 +183,10 @@ function extractAndRenderTables(src: string, opts: RenderOptions = {}): { html: 
         else if (tp === 'emph') tmpTag(ent ? 'em' : '/em', ent ? [['class','md-em']] : []);
         else if (tp === 'strong') tmpTag(ent ? 'strong' : '/strong', ent ? [['class','md-strong']] : []);
         else if (tp === 'paragraph') {
-          const gp = n._parent?._parent;
-          if (gp && gp._type === 'list' && gp._listData?.tight) continue;
+          const parent = n._parent;
+          const gp = parent?._parent;
+          const sole = parent && parent._type === 'item' && parent._firstChild === n && !n._next;
+          if (gp && gp._type === 'list' && (gp._listData?.tight || sole)) continue;
           if (ent) { tmpCr(); tmpTag('p', [['class','md-p']]); } else { tmpTag('/p'); tmpCr(); }
         } else if (tp === 'heading') {
           const lvl = n.level;
@@ -179,7 +257,7 @@ function extractAndRenderTables(src: string, opts: RenderOptions = {}): { html: 
         body.push(splitTableRow(lines[i]));
         i++;
       }
-      res += renderTableBlock(header, delim, body);
+      res += renderTableBlock(header, delim, body, opts);
       hasTable = true;
     } else {
       buf += lines[i] + '\n';
