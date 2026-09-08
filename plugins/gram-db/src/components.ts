@@ -53,12 +53,14 @@ class OpfsEngine implements StorageEngine {
   }
 
   async getItem(key: string): Promise<string | null> {
-    try {
-      const fh = await this.root.getFileHandle(key);
-      const file = await fh.getFile();
-      if (file.size === 0) return null;
-      return await file.text();
-    } catch { return null; }
+    return this.serialized(async () => {
+      try {
+        const fh = await this.root.getFileHandle(key);
+        const file = await fh.getFile();
+        if (file.size === 0) return null;
+        return await file.text();
+      } catch { return null; }
+    });
   }
 
   async setItem(key: string, value: string): Promise<void> {
@@ -77,19 +79,23 @@ class OpfsEngine implements StorageEngine {
   }
 
   async getAllKeys(): Promise<string[]> {
-    const keys: string[] = [];
-    for await (const [name] of this.root.entries()) {
-      keys.push(name);
-    }
-    return keys;
+    return this.serialized(async () => {
+      const keys: string[] = [];
+      for await (const [name] of this.root.entries()) {
+        keys.push(name);
+      }
+      return keys;
+    });
   }  async clear(): Promise<void> {
-    const names: string[] = [];
-    for await (const [name] of this.root.entries()) {
-      names.push(name);
-    }
-    for (const name of names) {
-      await this.root.removeEntry(name).catch(() => {});
-    }
+    return this.serialized(async () => {
+      const names: string[] = [];
+      for await (const [name] of this.root.entries()) {
+        names.push(name);
+      }
+      for (const name of names) {
+        await this.root.removeEntry(name).catch(() => {});
+      }
+    });
   }
 }
 

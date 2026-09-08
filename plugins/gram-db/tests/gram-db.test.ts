@@ -286,6 +286,56 @@ describe('GramDbSkills', () => {
     assert.strictEqual(await skills.get('some-data'), undefined, 'user data cleared');
   });
 
+  test('clearCacheKeepSession preserves requested keys and clears cache keys', async () => {
+    const skills = createSkills();
+    await skills.init();
+    await skills.setEncryptionKey('s');
+    await skills.setSessionId('s');
+    await skills.set('authenticated', '1');
+    await skills.set('theme', 'dark');
+    await skills.set('dialogs', [{ peer: 'x' }]);
+    await skills.set('messages_user_1', [{ id: 1 }]);
+    await skills.saveSession('s', { dcId: 2, authKey: 'abc' });
+
+    await skills.clearCacheKeepSession(['authenticated', 'theme', 'missing-key']);
+
+    assert.strictEqual(await skills.get('authenticated'), 1);
+    assert.strictEqual(await skills.get('theme'), 'dark');
+    assert.strictEqual(await skills.getSessionId(), 's');
+    assert.strictEqual(await skills.get('dialogs'), undefined);
+    assert.strictEqual(await skills.get('messages_user_1'), undefined);
+    assert.ok(await skills.loadSession('s'), 'session blob preserved');
+  });
+
+  test('clearCacheKeepSession survives reload with fresh instance', async () => {
+    const engine = new MockStorageEngine();
+    const first = new GramDbSkills(new GramDbComponents(engine));
+    await first.init();
+    await first.setEncryptionKey('sess1');
+    await first.setSessionId('sess1');
+    await first.set('authenticated', '1');
+    await first.set('theme', 'dark');
+    await first.set('langCode', 'ru');
+    await first.set('tgApiId', 12345);
+    await first.set('dialogs', [{ peer: 'x' }]);
+    await first.set('messages_user_1', [{ id: 1 }]);
+    await first.saveSession('sess1', { dcId: 2, authKey: 'abc' });
+
+    await first.clearCacheKeepSession(['authenticated', 'theme', 'langCode', 'tgApiId']);
+
+    const second = new GramDbSkills(new GramDbComponents(engine));
+    await second.init();
+    assert.strictEqual(await second.getSessionId(), 'sess1');
+    await second.setEncryptionKey('sess1');
+    assert.strictEqual(await second.get('authenticated'), 1);
+    assert.strictEqual(await second.get('theme'), 'dark');
+    assert.strictEqual(await second.get('langCode'), 'ru');
+    assert.strictEqual(await second.get('tgApiId'), 12345);
+    assert.strictEqual(await second.get('dialogs'), undefined);
+    assert.strictEqual(await second.get('messages_user_1'), undefined);
+    assert.ok(await second.loadSession('sess1'), 'session blob preserved');
+  });
+
   test('getSessionId/setSessionId roundtrip', async () => {
     const skills = createSkills();
     await skills.init();
