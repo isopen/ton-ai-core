@@ -1,5 +1,6 @@
 import { getLogger, isNoDialogsCache } from '@ton-ai/gram-debug';
-import { tpl, buildPeerBlurThumb } from '@ton-ai/gram-ui';
+import { tpl } from '@ton-ai/gram-lang';
+import { buildPeerBlurThumb } from '@ton-ai/gram-ui';
 import type { Dialog, Message, PeerInfo } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbGetMany, dbKeys } from '@/utils/db';
 import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, ORPHANED_KEY } from './gram-constants';
@@ -56,9 +57,6 @@ export async function loadMessageCache(s: GramState) {
       const peerKey = k.slice(MESSAGE_CACHE_PREFIX.length);
       const cleaned = scrubSessionMedia(msgs);
       s.messagesCache.current.set(peerKey, cleaned);
-      s.historyInitRef.current.add(peerKey);
-      const positiveIds = cleaned.filter(m => Number(m.id) > 0).map(m => Number(m.id));
-      if (positiveIds.length > 0) s.maxFetchedIdRef.current.set(peerKey, Math.min(...positiveIds));
     } catch {
       await dbDel(k);
     }
@@ -143,7 +141,7 @@ export function scheduleDialogsFlush(s: GramState) {
 }
 
 export function scheduleMessagesFlush(s: GramState) {
-  console.info('[flush] scheduleMessagesFlush for', s.selectedPeerRef.current ? `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` : '(none)', 'cacheSize', s.selectedPeerRef.current ? (s.messagesCache.current.get(`${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}`)?.length || 0) : 0);
+  log.debug('[flush] scheduleMessagesFlush for', s.selectedPeerRef.current ? `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` : '(none)', 'cacheSize', s.selectedPeerRef.current ? (s.messagesCache.current.get(`${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}`)?.length || 0) : 0);
   if (s.messageFlushRef.current !== null) cancelAnimationFrame(s.messageFlushRef.current);
   s.messageFlushRef.current = requestAnimationFrame(() => {
     s.messageFlushRef.current = null;
@@ -153,14 +151,14 @@ export function scheduleMessagesFlush(s: GramState) {
       prefetchPhotoCaches(s, cached).catch(() => {});
       injectCachedDocumentSources(s, cached);
       const { messages: cachedMsgs, cachedIds } = injectCachedPhotoUrls(cached);
-      console.info('[flush] dispatch SET_MESSAGES n=' + cachedMsgs.length + ' cachedIds=' + cachedIds.length);
+      log.debug('[flush] dispatch SET_MESSAGES n=' + cachedMsgs.length + ' cachedIds=' + cachedIds.length);
       if (cachedMsgs !== cached || (cachedIds.length > 0)) {
         const cachedSources: Record<number, string> = {};
         for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
         s.tgui.current?.dispatch({ type: 'SET_MESSAGES', messages: cachedMsgs, photoSources: cachedSources });
       } else {
         s.tgui.current?.dispatch({ type: 'SET_MESSAGES', messages: [...cachedMsgs], photoSources: {} });
-        console.info('[flush] forced dispatch for rich_message update');
+        log.debug('[flush] forced dispatch for rich_message update');
       }
     }
   });

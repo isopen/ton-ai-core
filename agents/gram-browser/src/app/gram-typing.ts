@@ -1,4 +1,5 @@
-import { t, tpl, S } from '@ton-ai/gram-ui';
+import { t, tpl, S } from '@ton-ai/gram-lang';
+import { startTransition } from '@ton-ai/atom';
 import type { TelegramUI } from '@ton-ai/gram-ui';
 import type { PeerInfo } from '@ton-ai/gram-ui';
 import { ACTION_KEYS, TYPING_TIMEOUT } from './gram-constants';
@@ -103,14 +104,18 @@ export function handleTypingUpdate(upd: any, deps: TypingDeps): void {
 function syncTypingUI(pkey: string, pType: string | undefined, deps: TypingDeps): void {
   const text = getTypingStr(pkey, pType, deps.typingMap);
   const prevDialog = deps.lastDialogTyping.get(pkey);
-  if (text !== prevDialog) {
-    deps.lastDialogTyping.set(pkey, text);
-    deps.tgui.current?.setDialogTyping(pkey, text);
-  }
-  if (pkey === `${deps.selectedPeerRef.current?.type}_${deps.selectedPeerRef.current?.id}`) {
-    if (text !== deps.lastHeaderTyping) {
+  const needDialog = text !== prevDialog;
+  const isSelected = pkey === `${deps.selectedPeerRef.current?.type}_${deps.selectedPeerRef.current?.id}`;
+  const needHeader = isSelected && text !== deps.lastHeaderTyping;
+  if (!needDialog && !needHeader) return;
+  startTransition(() => {
+    if (needDialog) {
+      deps.lastDialogTyping.set(pkey, text);
+      deps.tgui.current?.setDialogTyping(pkey, text);
+    }
+    if (needHeader) {
       deps.lastHeaderTyping = text;
       deps.tgui.current?.setTypingText(text);
     }
-  }
+  });
 }

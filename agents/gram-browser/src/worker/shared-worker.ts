@@ -1,16 +1,19 @@
 import * as TW from './telegram-worker';
 import { initWasmCrypton, isCryptonWasmActive, getWasmCallStats } from '@ton-ai/core';
+import { getLogger } from '@ton-ai/gram-debug';
+
+const log = getLogger('gram-browser');
 
 initWasmCrypton()
     .then(() => {
-        console.log(`[worker] crypton-rs WASM ${isCryptonWasmActive() ? 'ACTIVE — Telegram crypto routed through Rust' : 'NOT active — JS fallback in use'}`);
+        log.debug('[worker] crypton-rs WASM ' + (isCryptonWasmActive() ? 'ACTIVE' : 'NOT active'));
         (self as any).__CRYPTON_RS__ = {
             ...(self as any).__CRYPTON_RS__,
             stats: getWasmCallStats,
         };
     })
     .catch((e: any) => {
-        console.error('[worker] crypton-rs WASM init FAILED:', e);
+        log.warn('[worker] crypton-rs WASM init FAILED:', e);
     });
 
 interface PortLike {
@@ -110,7 +113,7 @@ async function ensureConnected(): Promise<void> {
     if (!TW.isConnected() && lastSessionId) {
         if (!connectInFlight) {
             connectInFlight = TW.handleConnect(lastSessionId, lastDcId)
-                .catch((e: any) => { console.error('[worker] connect failed:', e?.message || e); throw e; })
+                .catch((e: any) => { log.warn('[worker] connect failed:', e?.message || e); throw e; })
                 .finally(() => { connectInFlight = null; });
         }
         await connectInFlight;
@@ -137,28 +140,37 @@ function collectTransferables(result: any): ArrayBuffer[] {
 
 async function handleMessage(msg: Record<string, any>): Promise<any> {
     const t0 = Date.now();
-    console.log(`[worker] → ${msg.type} @${t0 % 100000}`);
+    log.debug('[worker] → ' + String(msg.type) + ' @' + String(t0 % 100000));
     try {
         const result = await _handleMessage(msg);
-        console.log(`[worker] ← ${msg.type} OK (${Date.now() - t0}ms)`);
+        log.debug('[worker] ← ' + String(msg.type) + ' OK (' + String(Date.now() - t0) + 'ms)');
         return result;
     } catch (e: any) {
-        console.error(`[worker] ← ${msg.type} ERROR (${Date.now() - t0}ms):`, e?.message || e);
-        if (e?.stack) console.error(e.stack.split('\n').slice(0, 5).join('\n'));
+        log.warn('[worker] ← ' + String(msg.type) + ' ERROR (' + String(Date.now() - t0) + 'ms):', e?.message || e);
         throw e;
     }
 }
 
 async function _handleMessage(msg: Record<string, any>): Promise<any> {
     switch (msg.type) {
+        case 'start':
+            try { TW.setApiCreds(msg.apiId, msg.apiHash); } catch {}
+            return { type: 'started' };
         case 'connect':
+            try { if (msg.apiId || msg.apiHash) TW.setApiCreds(msg.apiId, msg.apiHash); } catch {}
             lastSessionId = msg.sessionId;
             lastDcId = msg.dcId || 2;
             await ensureConnected();
             return { type: 'connected', authenticated: TW.isAuthenticated() };
         case 'sendCode':
             await ensureConnected();
-            return { type: 'codeSent', ...(await TW.sendCode(msg.phoneNumber)) };
+            return { type: 'codeSent', ...(await TW.sendCode(msg.phoneNumber, msg.logoutTokens)) };
+        case 'resendCode':
+            await ensureConnected();
+            return { type: 'codeSent', ...(await TW.resendCode(msg.phoneNumber, msg.phoneCodeHash, msg.reason)) };
+        case 'importLoginToken':
+            await ensureConnected();
+            return { type: 'loginTokenResult', result: await TW.importLoginToken(msg.tokenHex, msg.dcId) };
         case 'signIn':
             await ensureConnected();
             await TW.signIn(msg.phoneNumber, msg.code);
@@ -170,6 +182,10 @@ async function _handleMessage(msg: Record<string, any>): Promise<any> {
         case 'getAuthState': {
             const state = TW.getAuthState();
             return { type: 'authState', state };
+        }
+        case 'clearPendingAuth': {
+            await TW.clearPendingAuth(msg.phoneNumber);
+            return { type: 'cleared' };
         }
         case 'sendMessage': {
             const sendResult = await TW.sendMessage_({ message: msg.message, peer: msg.peer });

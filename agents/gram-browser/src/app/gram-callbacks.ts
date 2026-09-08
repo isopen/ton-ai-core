@@ -1,5 +1,5 @@
 import type { PeerInfo, Message, TelegramUICallbacks } from '@ton-ai/gram-ui';
-import { t, tpl, S } from '@ton-ai/gram-ui';
+import { t, tpl, S } from '@ton-ai/gram-lang';
 import type { GramState } from './gram-state';
 import {
   addLog, setMessageCache, getMaxLoadedMsgId,
@@ -179,7 +179,7 @@ export function createCallbacks(
         if (data?.messages) {
           for (const raw of data.messages) {
             if (!(raw.message || '').length) {
-              console.log('[hist-dbg] empty-text msg id=' + raw.id, JSON.stringify(raw).slice(0, 12000));
+              histLog.debug('[hist-dbg] empty-text msg id=' + raw.id, JSON.stringify(raw).slice(0, 12000));
             }
           }
           const msgs = data.messages.map((m: any) => ({
@@ -223,6 +223,9 @@ export function createCallbacks(
             const cachedSources: Record<number, string> = {};
             for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
             s.tgui.current!.dispatch({ type: 'SET_MESSAGES', messages: injectedMsgs, photoSources: cachedSources });
+            try {
+              s.tgui.current!.dispatch({ type: 'CLEAR_BUTTON_INACTIVE', messageIds: result.map(m => m.id) });
+            } catch {}
           }
         } else if (!data) {
           addLog(s, tpl(S.LOG_HISTORY_NO_DATA, { peerKey }));
@@ -254,6 +257,9 @@ export function createCallbacks(
       const noCache = isNoDialogsCache();
       s.tgService.current?.cancelPhotoDownloads().catch(() => {});
       s.cancelDocumentDownloads();
+      try {
+        s.tgui.current?.dispatch({ type: 'CLEAR_BUTTON_INACTIVE' });
+      } catch {}
       s.selectedPeerRef.current = peer;
       s.lastHeaderTyping.current = '';
       s.tgui.current?.setTypingText('');

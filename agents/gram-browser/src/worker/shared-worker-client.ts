@@ -76,6 +76,9 @@ export class SharedWorkerClient {
         };
 
         this.port.start();
+        try {
+            await this.send({ type: 'start', apiId, apiHash });
+        } catch {}
     }
 
     private send(msg: Record<string, any>, timeoutMs = 30000): Promise<any> {
@@ -107,8 +110,16 @@ export class SharedWorkerClient {
         return { authenticated: r.authenticated };
     }
 
-    async sendCode(phoneNumber: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean }> {
-        return this.send({ type: 'sendCode', phoneNumber });
+    async sendCode(phoneNumber: string, logoutTokens?: string[]): Promise<{ phoneCodeHash: string; phoneRegistered: boolean; codeType?: string; timeout?: number; nextType?: string }> {
+        return this.send({ type: 'sendCode', phoneNumber, logoutTokens });
+    }
+
+    async resendCode(phoneNumber: string, phoneCodeHash: string, reason?: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean; codeType?: string; timeout?: number; nextType?: string }> {
+        return this.send({ type: 'resendCode', phoneNumber, phoneCodeHash, reason });
+    }
+
+    async importLoginToken(tokenHex: string, dcId: number): Promise<any> {
+        return this.send({ type: 'importLoginToken', tokenHex, dcId });
     }
 
     async signIn(phoneNumber: string, code: string): Promise<void> {
@@ -228,6 +239,10 @@ export class SharedWorkerClient {
     async getAuthState(): Promise<'none' | 'code_sent' | 'password_needed' | 'authenticated'> {
         const r = await this.send({ type: 'getAuthState' });
         return r.state;
+    }
+
+    async clearPendingAuth(phoneNumber?: string): Promise<void> {
+        await this.send({ type: 'clearPendingAuth', phoneNumber });
     }
 
     async logout(): Promise<void> {

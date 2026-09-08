@@ -1,4 +1,4 @@
-import { S } from '@ton-ai/gram-ui';
+import { S } from '@ton-ai/gram-lang';
 
 export function genId(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -28,16 +28,4 @@ export const ACTION_KEYS: Record<string, string> = {
   'sendMessageUploadRoundAction': S.ACTION_SENDING_ROUND,
 };
 
-export const LANG_CODE_MAP: Record<string, string> = {
-  'zh': 'zh-hans',
-  'zh-TW': 'zh-hant',
-  'pt': 'pt-br',
-  'pt-PT': 'pt-pt',
-};
-
-export const REVERSE_LANG_CODE_MAP: Record<string, string> = {
-  'zh-hans': 'zh',
-  'zh-hant': 'zh-TW',
-  'pt-br': 'pt',
-  'pt-pt': 'pt-PT',
-};
+export { LANG_CODE_MAP, REVERSE_LANG_CODE_MAP } from '@ton-ai/gram-lang';

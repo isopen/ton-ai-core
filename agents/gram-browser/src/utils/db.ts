@@ -12,4 +12,4 @@ export async function dbKeys(prefix: string): Promise<string[]> { return g().key
 export async function dbListAvatars(): Promise<Array<{ opfsName: string; dataUri: string }>> { return g().listAvatars(); }
 export async function dbDeleteAvatarByOpfsName(opfsName: string): Promise<void> { return g().deleteAvatarByOpfsName(opfsName); }
 export async function dbCompact(): Promise<void> { return g().compact(); }
-export async function dbClearCacheKeepSession(): Promise<void> { return g().clearCacheKeepSession(); }
+export async function dbClearCacheKeepSession(preserveKeys: string[] = []): Promise<void> { return g().clearCacheKeepSession(preserveKeys); }

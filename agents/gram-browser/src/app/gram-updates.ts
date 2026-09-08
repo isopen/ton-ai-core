@@ -1,5 +1,5 @@
-import { t, S, tpl } from '@ton-ai/gram-ui';
-import type { Message } from '@ton-ai/gram-ui';
+import { t, S, tpl } from '@ton-ai/gram-lang';
+import { collectCustomIds, type Message } from '@ton-ai/gram-ui';
 import type { GramState } from './gram-state';
 import {
   addLog, setMessageCache, deleteMessageCache, scheduleDialogsFlush,
@@ -102,28 +102,28 @@ export function createHandleUpdate(s: GramState) {
             sender = s.userNameMap.current.get(uid || cid) || uid || cid || t(S.SENDER_USER);
           }
           const richDbg = (msg as any).rich_message ? JSON.stringify((msg as any).rich_message).slice(0,2000) : '-';
-          console.log('[upd-dbg] processNewMsg id=', msg.id, 'len=', (msg.message || '').length, 'rm=', !!(msg as any).reply_markup, 'media=', msg.media?._ || '-', 'keys=', Object.keys(msg).join(','), 'rich=', richDbg);
+          updLog.debug('[upd-dbg] processNewMsg id=', msg.id, 'len=', (msg.message || '').length, 'rm=', !!(msg as any).reply_markup, 'media=', msg.media?._ || '-', 'keys=', Object.keys(msg).join(','), 'rich=', richDbg);
           if ((msg as any).rich_message?.blocks) {
             try {
               const blocks = (msg as any).rich_message.blocks;
-              console.log('[blocks-dbg] total', blocks.length, 'types', blocks.map((b:any)=> b._).join(','));
+              updLog.debug('[blocks-dbg] total', blocks.length, 'types', blocks.map((b:any)=> b._).join(','));
               for (let bi=0; bi<blocks.length; bi++) {
                 const b = blocks[bi];
                 const txt = b.text ? JSON.stringify(b.text).slice(0,4000) : 'no-text';
                 const cap = b.caption ? JSON.stringify(b.caption).slice(0,2000) : 'no-cap';
-                console.log('[blocks-dbg] block', bi, b._, 'text', txt, 'cap', cap, 'hasRows', !!b.rows);
+                updLog.debug('[blocks-dbg] block', bi, b._, 'text', txt, 'cap', cap, 'hasRows', !!b.rows);
                 if (b.text?.texts) {
-                  console.log('[blocks-dbg] block', bi, 'textsLen', b.text.texts.length);
+                  updLog.debug('[blocks-dbg] block', bi, 'textsLen', b.text.texts.length);
                   for (let i=0;i<b.text.texts.length;i++) {
                     const t = b.text.texts[i];
-                    console.log('[blocks-dbg] texts['+i+']', t._ , JSON.stringify(t).slice(0,1000));
+                    updLog.debug('[blocks-dbg] texts['+i+']', t._ , JSON.stringify(t).slice(0,1000));
                   }
                 }
                 if (b.blocks) {
-                  console.log('[blocks-dbg] block', bi, 'inner blocks', b.blocks.length, b.blocks.map((x:any)=> x._).join(','));
+                  updLog.debug('[blocks-dbg] block', bi, 'inner blocks', b.blocks.length, b.blocks.map((x:any)=> x._).join(','));
                   for (let j=0;j<b.blocks.length;j++) {
                     const ib = b.blocks[j];
-                    console.log('[blocks-dbg] inner', j, ib._ , JSON.stringify(ib.text || ib).slice(0,1000));
+                    updLog.debug('[blocks-dbg] inner', j, ib._ , JSON.stringify(ib.text || ib).slice(0,1000));
                   }
                 }
               }
@@ -132,7 +132,7 @@ export function createHandleUpdate(s: GramState) {
                 const txt = qb.text ? JSON.stringify(qb.text).slice(0,8000) : 'no-text';
                 const cap = qb.caption ? JSON.stringify(qb.caption).slice(0,2000) : 'no-cap';
                 const textsLen = qb.text?.texts?.length || 0;
-                console.log('[quote-dbg] raw block', qb._ , 'textsLen', textsLen, 'text', txt, 'cap', cap);
+                updLog.debug('[quote-dbg] raw block', qb._ , 'textsLen', textsLen, 'text', txt, 'cap', cap);
               }
             } catch {}
           }
@@ -140,10 +140,10 @@ export function createHandleUpdate(s: GramState) {
             try {
               const rows = (msg as any).rich_message.blocks[0].rows;
               const sample = rows.slice(1,3).map((r:any)=> r.cells.slice(1,4).map((c:any)=> c.text?._ + ':' + (c.text?.text?.alt || c.text?.text || '').slice(0,5) + ':' + String(c.text?.type?.data || '').slice(0,20)).join('|')).join(' // ');
-              console.log('[upd-dbg] board sample rows1-2:', sample.slice(0,800));
+              updLog.debug('[upd-dbg] board sample rows1-2:', sample.slice(0,800));
               const allCells: any[] = [];
               for (const row of rows) for (const cell of (row.cells||[])) if (cell?.text?.type?.data) allCells.push({sq: (cell.text?.text?.alt || ''), data: String(cell.text.type.data).slice(0,30)});
-              console.log('[upd-dbg] board cells with data:', JSON.stringify(allCells).slice(0,1200));
+              updLog.info('[upd-dbg] board cells with data:', JSON.stringify(allCells).slice(0,1200));
 
               const boardDump = rows.map((row:any, ri:number)=> {
                 const rank = row.cells?.[0]?.text?.text || '?';
@@ -155,13 +155,34 @@ export function createHandleUpdate(s: GramState) {
                 }).join(' ');
                 return `r${ri}:${rank}|${cells}`;
               }).join(' // ');
-              console.log('[upd-dbg] board dump:', boardDump.slice(0,2000));
+              updLog.debug('[upd-dbg] board dump:', boardDump.slice(0,2000));
+              try {
+                const pos = rows.map((row: any) => {
+                  const rankCell = row.cells?.[0]?.text;
+                  const rank = (rankCell?.text && typeof rankCell.text === 'string' ? rankCell.text : rankCell?.text?.alt) || '?';
+                  const cells = (row.cells || []).slice(1, 9).map((c: any) => {
+                    const inner = c?.text?.text && typeof c.text.text === 'object' ? c.text.text : null;
+                    const alts: string[] = [];
+                    let doc = '';
+                    if (inner && inner._ === 'textCustomEmoji' && inner.alt) { alts.push(inner.alt); doc = String(inner.document_id ?? ''); }
+                    else if (inner && inner._ === 'textConcat' && Array.isArray(inner.texts)) {
+                      for (const x of inner.texts) if (x && x._ === 'textCustomEmoji' && x.alt) { alts.push(x.alt); if (!doc) doc = String(x.document_id ?? ''); }
+                    }
+                    else if (typeof c?.text?.text === 'string') alts.push(c.text.text);
+                    else if (typeof inner === 'string') alts.push(inner);
+                    const label = alts.length ? alts.join('+') : '·';
+                    return doc ? `${label}(${doc.slice(-4)})` : label;
+                  }).join(',');
+                  return `${rank}:${cells}`;
+                }).join(' | ');
+                updLog.info('[upd-dbg] board pos msg=' + msg.id + ' edit=' + ((msg as any).edit_date || 0) + ' ' + pos.slice(0, 1500));
+              } catch {}
             } catch {}
           }
           const m: Message = {
             id: msg.id || 0, fromId: msg.from_id,
             sender,
-            date: msg.date || 0, message: msg.message || '',
+            date: msg.date || 0, edit_date: (msg as any).edit_date || 0, message: msg.message || '',
             out: !!msg.out, peerId: msg.peer_id, media: msg.media, action: msg.action, entities: msg.entities,
             replyMarkup: (msg as any).reply_markup,
             richMessage: (msg as any).rich_message,
@@ -171,12 +192,40 @@ export function createHandleUpdate(s: GramState) {
           if (fromType === 'peerUser' && uid && !s.userNameMap.current.has(uid)) {
             fetchPeerInfo(s, 'user', uid);
           }
+          try {
+            const richIds = new Set<string>();
+            if ((m as any).richMessage) collectCustomIds((m as any).richMessage, richIds);
+            if ((m as any).replyMarkup) collectCustomIds((m as any).replyMarkup, richIds);
+            if (richIds.size > 0 && typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...richIds] } }));
+              try {
+                const urls = (s.tgui.current?.state as any)?.documentUrls || {};
+                const missing: string[] = [];
+                for (const id of richIds) {
+                  if (!urls['emojipack-' + id] && !urls['emoji-' + id] && !urls[id]) missing.push(id);
+                }
+                if (missing.length > 0) {
+                  window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: missing, force: true } }));
+                }
+              } catch {}
+            }
+          } catch {}
           if (cacheKey) {
             const prev = s.messagesCache.current.get(cacheKey);
             const updated = Array.isArray(prev) ? [...prev] : [];
             const existingIdx = updated.findIndex(c => c.id === m.id);
             if (existingIdx >= 0) {
+              const prevMsg = updated[existingIdx];
+              const prevEdit = prevMsg.edit_date || 0;
+              const nextEdit = m.edit_date || 0;
+              if (prevEdit > 0 && nextEdit > 0 && nextEdit < prevEdit) {
+                updLog.info('[upd-dbg] stale edit dropped id=', m.id, 'incoming edit=', m.edit_date, 'cached edit=', prevMsg.edit_date);
+                return;
+              }
               updated[existingIdx] = m;
+              try {
+                s.tgui.current?.dispatch({ type: 'CLEAR_BUTTON_INACTIVE', messageId: m.id });
+              } catch {}
             } else {
               updated.push(m);
             }
@@ -233,7 +282,7 @@ export function createHandleUpdate(s: GramState) {
             }
           }
         };
-        console.log('[upd-dbg] update', u._, 'msgLen=', (u.message || '').length, 'inner=', u.update?._ || '-', 'msgs=', Array.isArray(u.updates) ? u.updates.map((x: any) => x._).join(',') : '-');
+        updLog.debug('[upd-dbg] update', u._, 'msgLen=', (u.message || '').length, 'inner=', u.update?._ || '-', 'msgs=', Array.isArray(u.updates) ? u.updates.map((x: any) => x._).join(',') : '-');
         const pushMsg = u.message || (u.messages?.[0]);
         if (pushMsg) {
           processNewMsg(pushMsg);
@@ -252,6 +301,36 @@ export function createHandleUpdate(s: GramState) {
           tgui: s.tgui,
           userNameMap: s.userNameMap.current,
         });
+        if (u._ === 'updateShort' && u.update?._ === 'updateLoginToken') {
+          try {
+            if (typeof window !== 'undefined' && s.tgui.current?.state.page === 'auth') {
+              const st = s.tgui.current?.state.authStep;
+              if (st === 'phone' || st === 'qr_login' || st === 'password') {
+                addLog(s, 'Login token update, refreshing QR');
+                window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
+                window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
+              }
+            }
+          } catch {}
+        }
+        if (u._ === 'updateLoginToken') {
+          try {
+            if (typeof window !== 'undefined' && s.tgui.current?.state.page === 'auth') {
+              const st = s.tgui.current?.state.authStep;
+              if (st === 'phone' || st === 'qr_login' || st === 'password') {
+                addLog(s, 'Login token update, refreshing QR');
+                window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
+                window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
+              }
+            }
+          } catch {}
+        }
+        if (u._ === 'updateNewAuthorization' || (u._ === 'updateShort' && u.update?._ === 'updateNewAuthorization')) {
+          try {
+            const au = u._ === 'updateShort' ? u.update : u;
+            addLog(s, 'New authorization hash=' + String(au?.hash || ''));
+          } catch {}
+        }
         if (u._ === 'updateShortMessage') {
           processNewMsg({ id: u.id, from_id: { _: 'peerUser', user_id: u.user_id }, peer_id: { _: 'peerUser', user_id: u.user_id }, date: u.date, message: u.message, out: !!u.out, media: u.media, entities: u.entities, replyMarkup: (u as any).reply_markup, richMessage: (u as any).rich_message });
         }
@@ -301,7 +380,7 @@ export function createHandleUpdate(s: GramState) {
                 if (filtered.length > 0) {
                   const last = filtered[filtered.length - 1];
                   const preview = dialogPreviewText(last as any);
-                  dialog.lastMsg = preview.text || '[non-text message]';
+                  dialog.lastMsg = preview.text || t(S.API_NON_TEXT_MSG);
                   dialog.lastMsgEntities = preview.entities;
                   dialog.topMessage = last.id;
                 } else {
@@ -355,6 +434,23 @@ export function createHandleUpdate(s: GramState) {
               }
             }
             if (upd._ === 'updateReadHistoryInbox') { handleReadHistoryInbox(upd); }
+            if (upd._ === 'updateLoginToken') {
+              try {
+                if (typeof window !== 'undefined' && s.tgui.current?.state.page === 'auth') {
+                  const st = s.tgui.current?.state.authStep;
+                  if (st === 'phone' || st === 'qr_login' || st === 'password') {
+                    addLog(s, 'Login token update, refreshing QR');
+                    window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
+                    window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
+                  }
+                }
+              } catch {}
+            }
+            if (upd._ === 'updateNewAuthorization') {
+              try {
+                addLog(s, 'New authorization hash=' + String(upd?.hash || ''));
+              } catch {}
+            }
             if (isTypingUpdate(upd)) {
               handleTypingUpdate(upd, {
                 typingMap: s.typingMap.current,

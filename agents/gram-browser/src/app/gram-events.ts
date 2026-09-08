@@ -7,12 +7,16 @@ import { GramMediaRouter } from '@ton-ai/gram-media';
 import type { MediaMessageLike } from '@ton-ai/gram-media';
 import type { GramState } from './gram-state';
 import { DIALOG_CACHE_KEY } from './gram-constants';
+import { AUTH_PRESERVE_KEYS } from './gram-auth';
+import { API_CREDS_PRESERVE_KEYS } from '@/utils/api-creds';
+import { fetchCachedCountries, fetchLangOptions } from './gram-lang';
 import type { Message } from '@ton-ai/gram-ui';
 import { applyUpdateMessagePoll } from './gram-utils';
 
 const fallbackLog = getLogger('gram-ui:fallback');
 
 const log = getLogger('gram-browser');
+const cbLog = getLogger('gram-browser:updates');
 
 let mediaRouter: GramMediaRouter | null = null;
 
@@ -221,6 +225,64 @@ export function injectCachedPhotoUrls(msgs: Message[]): { messages: Message[]; c
   return { messages: result.messages as Message[], cachedIds: result.cachedIds };
 }
 
+const WARMUP_CUSTOM_EMOJI_MAX = 600;
+const WARMUP_RECENT_PER_PEER = 50;
+
+function collectWarmupCustomIds(value: unknown, out: Set<string>): void {
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const v of value) {
+      if (out.size >= WARMUP_CUSTOM_EMOJI_MAX) return;
+      collectWarmupCustomIds(v, out);
+    }
+    return;
+  }
+  const node = value as Record<string, unknown>;
+  if (node._ === 'textCustomEmoji' && node.document_id != null) {
+    out.add(String(node.document_id));
+    return;
+  }
+  for (const v of Object.values(node)) {
+    if (out.size >= WARMUP_CUSTOM_EMOJI_MAX) return;
+    if (v && typeof v === 'object') collectWarmupCustomIds(v, out);
+  }
+}
+
+export function warmupEmojiPipeline(s: GramState): void {
+  try {
+    window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
+  } catch (e: any) {
+    cbLog.warn('[warmup] stickers dispatch failed: ' + (e?.message || e));
+  }
+  try {
+    const ids = new Set<string>();
+    for (const msgs of s.messagesCache.current.values()) {
+      if (!Array.isArray(msgs)) continue;
+      const recent = msgs.slice(-WARMUP_RECENT_PER_PEER);
+      for (const m of recent) {
+        for (const e of (m.entities || [])) {
+          if (e?._ === 'messageEntityCustomEmoji' && e.document_id != null) {
+            ids.add(String(e.document_id));
+            if (ids.size >= WARMUP_CUSTOM_EMOJI_MAX) break;
+          }
+        }
+        if (ids.size >= WARMUP_CUSTOM_EMOJI_MAX) break;
+        if (m.richMessage) collectWarmupCustomIds(m.richMessage, ids);
+        if (ids.size >= WARMUP_CUSTOM_EMOJI_MAX) break;
+        if (m.replyMarkup) collectWarmupCustomIds(m.replyMarkup, ids);
+        if (ids.size >= WARMUP_CUSTOM_EMOJI_MAX) break;
+      }
+      if (ids.size >= WARMUP_CUSTOM_EMOJI_MAX) break;
+    }
+    if (ids.size > 0) {
+      cbLog.info('[warmup] custom emoji ids=' + ids.size);
+      window.dispatchEvent(new CustomEvent('tg-fetch-custom-emoji', { detail: { ids: [...ids] } }));
+    }
+  } catch (e: any) {
+    cbLog.warn('[warmup] custom emoji collect failed: ' + (e?.message || e));
+  }
+}
+
 export function setupEventListeners(s: GramState): void {
   const onSetLang = (e: Event) => {
     const detail = (e as CustomEvent).detail;
@@ -243,6 +305,47 @@ export function setupEventListeners(s: GramState): void {
   };
   window.addEventListener('tg-auth-set-lang', onSetLang);
   window.addEventListener('tg-auth-set-step', onSetStep);
+  let countriesRefreshAt = 0;
+  let countriesInFlight = false;
+  const onRefreshCountries = async () => {
+    if (countriesInFlight) return;
+    if (Date.now() - countriesRefreshAt < 5000) return;
+    countriesRefreshAt = Date.now();
+    countriesInFlight = true;
+    try {
+      const countries = await fetchCachedCountries({ tgui: s.tgui, tgService: s.tgService });
+      if (countries.length > 0) {
+        s.tgui.current?.dispatch({ type: 'SET_COUNTRIES', countries });
+        if (!s.tgui.current?.state.countryIso2) {
+          const browserLang = (typeof navigator !== 'undefined' ? navigator.language : 'en').split('-')[0].toLowerCase();
+          const preferred = countries.find(c => c.iso2 === browserLang.toUpperCase())
+            || countries.find(c => c.phoneCode === '1')
+            || countries[0];
+          if (preferred) s.tgui.current?.dispatch({ type: 'SET_COUNTRY_ISO2', countryIso2: preferred.iso2 });
+        }
+      }
+    } catch {} finally {
+      countriesInFlight = false;
+    }
+  };
+  window.addEventListener('tg-refresh-countries', onRefreshCountries);
+  let langsRefreshAt = 0;
+  let langsInFlight = false;
+  const onRefreshLangs = async () => {
+    if (langsInFlight) return;
+    if (Date.now() - langsRefreshAt < 5000) return;
+    langsRefreshAt = Date.now();
+    langsInFlight = true;
+    try {
+      const opts = await fetchLangOptions({ tgui: s.tgui, tgService: s.tgService });
+      if (opts.length > 0) {
+        s.tgui.current?.setLangOptions(opts);
+      }
+    } catch {} finally {
+      langsInFlight = false;
+    }
+  };
+  window.addEventListener('tg-refresh-langs', onRefreshLangs);
   const onAuthInvalidated = () => {
     const wasDialogs = s.tgui.current?.state?.page === 'dialogs';
     const curStep = s.tgui.current?.state?.authStep;
@@ -253,13 +356,24 @@ export function setupEventListeners(s: GramState): void {
     }
     if (wasDialogs && curStep !== 'qr_login') {
       s.tgui.current?.setError('Session terminated from another device');
-    } else {
+    } else if (!s.tgui.current?.state?.error) {
       s.tgui.current?.setError('');
     }
   };
   window.addEventListener('tg-auth-invalidated', onAuthInvalidated);
   const onClearCache = () => {
-    dbClearCacheKeepSession().then(() => {
+    const preserveKeys = [
+      'authenticated',
+      'authInvalidated',
+      'theme',
+      'langCode',
+      'imageQuality',
+      'animationsEnabled',
+      ...AUTH_PRESERVE_KEYS,
+      ...API_CREDS_PRESERVE_KEYS,
+    ];
+    cbLog.info('[clear-cache] preserve=' + preserveKeys.length + ' keys=' + preserveKeys.join(','));
+    dbClearCacheKeepSession(preserveKeys).then(() => {
       window.location.reload();
     }).catch(() => {
       window.location.reload();
@@ -450,10 +564,23 @@ export function setupEventListeners(s: GramState): void {
     const theme = (e as CustomEvent).detail?.theme;
     if (theme) {
       dbSet('theme', theme).catch(() => {});
-      document.cookie = `tg-theme=${theme};path=/;max-age=31536000;SameSite=Lax`;
     }
   };
   window.addEventListener('tg-theme-changed', onThemeChanged);
+  const onImageQualityChanged = (e: Event) => {
+    const quality = (e as CustomEvent).detail?.quality;
+    if (quality === 'min' || quality === 'medium' || quality === 'max') {
+      dbSet('imageQuality', quality).catch(() => {});
+    }
+  };
+  window.addEventListener('tg-image-quality-changed', onImageQualityChanged);
+  const onAnimationsChanged = (e: Event) => {
+    const enabled = (e as CustomEvent).detail?.enabled;
+    if (typeof enabled === 'boolean') {
+      dbSet('animationsEnabled', enabled).catch(() => {});
+    }
+  };
+  window.addEventListener('tg-animations-changed', onAnimationsChanged);
 
   mediaRouter = new GramMediaRouter({
     tgService: s.tgService,
@@ -565,14 +692,49 @@ export function setupEventListeners(s: GramState): void {
     void processLocalEmojiClick(s, String(detail.messageId), detail.x, detail.y, detail.slotIndex);
   };
   const onBotCallback = (e: Event) => {
-    const detail = ((e as CustomEvent).detail || {}) as { messageId?: number | string; data?: string; text?: string };
+    const detail = ((e as CustomEvent).detail || {}) as { messageId?: number | string; data?: string; text?: string; rel?: { x: number; y: number; w: number; h: number } | null };
     const peer = s.selectedPeerRef.current;
-    if (!peer || !detail.data) return;
-    console.info('[bot-cb] click msg=' + detail.messageId + ' data=' + String(detail.data).slice(0,120));
-    s.tgService.current?.getBotCallbackAnswer(peer, Number(detail.messageId) || 0, detail.data)
+    if (!peer || !detail.data) {
+      cbLog.warn('[bot-cb] dropped msg=' + detail.messageId + ' peer=' + (peer ? peer.type + '_' + peer.id : 'none') + ' hasData=' + !!detail.data);
+      return;
+    }
+    if (detail.messageId != null) {
+      try {
+        const marked = (s.tgui.current?.state as any)?.inactiveButtons as Record<string, true> | undefined;
+        const key = String(detail.messageId) + '\n' + String(detail.data);
+        if (marked && marked[key] === true) {
+          cbLog.info('[bot-cb] inactive skipped msg=' + detail.messageId);
+          return;
+        }
+      } catch {}
+    }
+    cbLog.info('[bot-cb] click msg=' + detail.messageId + ' data=' + String(detail.data).slice(0, 120));
+    const svc = s.tgService.current;
+    if (!svc) {
+      cbLog.warn('[bot-cb] no service msg=' + detail.messageId);
+      return;
+    }
+    svc.getBotCallbackAnswer(peer, Number(detail.messageId) || 0, detail.data)
       .then((res: any) => {
-        console.info('[bot-cb] ok msg=' + detail.messageId + ' res=' + JSON.stringify(res).slice(0,1200));
-        const upd = res?.updates || res?.result?.updates || res?.update;
+        const payload = res?.result && typeof res.result === 'object' ? res.result : res;
+        cbLog.info('[bot-cb] ok msg=' + detail.messageId + ' res=' + JSON.stringify(payload).slice(0, 1200));
+        const answerMessage = typeof payload?.message === 'string' ? payload.message : '';
+        const answerUrl = typeof payload?.url === 'string' ? payload.url : '';
+        if (answerUrl) {
+          try {
+            window.open(answerUrl, '_blank', 'noopener');
+          } catch {}
+        }
+        if (answerMessage) {
+          try {
+            if (detail.messageId != null) {
+              s.tgui.current?.dispatch({ type: 'SET_BUTTON_NOTICE', messageId: detail.messageId, text: answerMessage, rel: detail.rel ?? null });
+            } else {
+              s.tgui.current?.setError(answerMessage);
+            }
+          } catch {}
+        }
+        const upd = payload?.updates || res?.updates || res?.update;
         if (upd && s.tgService.current) {
           const h = (s as any).handleUpdate as ((id: number, data: string) => void) | undefined;
           try {
@@ -590,23 +752,23 @@ export function setupEventListeners(s: GramState): void {
             }
           } catch {}
         }
-        const msg = res?.message || res?.result?.message || res?.msg || upd?.message;
-        if (msg && msg.rich_message) {
-          const key = `${peer.type}_${peer.id}`;
-          const cur = s.messagesCache.current.get(key);
-          if (Array.isArray(cur)) {
-            const nxt = cur.map((m: any) => Number(m.id) === Number(detail.messageId) ? { ...m, richMessage: msg.rich_message } : m);
-            s.messagesCache.current.set(key, nxt);
-            if (s.selectedPeerRef.current?.id === peer.id) {
-              const curMsgs = s.tgui.current?.state.messages || [];
-              const updMsgs = curMsgs.map((m: any) => Number(m.id) === Number(detail.messageId) ? { ...m, richMessage: msg.rich_message } : m);
-              s.tgui.current?.setMessages(updMsgs);
-            }
-          }
+        const hasUpdates = upd != null && (!Array.isArray(upd) || upd.length > 0);
+        if (detail.messageId != null && detail.data && hasUpdates) {
+          try {
+            s.tgui.current?.dispatch({ type: 'CLEAR_BUTTON_INACTIVE', messageId: detail.messageId });
+          } catch {}
         }
       })
       .catch((err: any) => {
-        console.error('[bot-cb] failed msg=' + detail.messageId + ' err=' + (err?.message || err));
+        const errText = String(err?.message || err);
+        cbLog.error('[bot-cb] failed msg=' + detail.messageId + ' err=' + errText);
+        try {
+          if (detail.messageId != null) {
+            s.tgui.current?.dispatch({ type: 'SET_BUTTON_NOTICE', messageId: detail.messageId, text: errText, rel: detail.rel ?? null });
+          } else {
+            s.tgui.current?.setError(errText);
+          }
+        } catch {}
       });
   };
   const onRichEmojiDoc = async (e: Event) => {
@@ -649,6 +811,8 @@ export function setupEventListeners(s: GramState): void {
     window.removeEventListener('tg-cache-delete-avatar', onDeleteAvatar);
     window.removeEventListener('tg-cache-delete-all-avatars', onDeleteAllAvatars);
     window.removeEventListener('tg-theme-changed', onThemeChanged);
+    window.removeEventListener('tg-image-quality-changed', onImageQualityChanged);
+    window.removeEventListener('tg-animations-changed', onAnimationsChanged);
     window.removeEventListener('tg-fetch-premium-gift', onFetchPremiumGift);
     window.removeEventListener('tg-fetch-greeting-sticker', onFetchGreetingSticker);
     window.removeEventListener('tg-emoji-interaction', onEmojiInteraction);

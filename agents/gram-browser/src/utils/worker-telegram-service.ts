@@ -1,25 +1,74 @@
 import { Buffer } from 'buffer';
 import { TelegramWorkerClient } from '@/worker/worker-adapter';
+import { getApiCredentials } from './api-creds';
 import { TelegramService } from '@ton-ai/telegram/dist/telegram-service';
 import type { PeerInfo } from '@ton-ai/telegram/dist/types';
 import { serializePeer } from '@ton-ai/telegram/dist/types';
 
 export class WorkerTelegramService extends TelegramService {
     workerClient: TelegramWorkerClient | null = null;
+    private connectPromise: Promise<void> | null = null;
 
     constructor(sessionId: string, private onLog?: (msg: string) => void, private onUpdate?: (constructorId: number, data: string) => void) {
         super({ baseUrl: '', sessionId });
     }
 
+    async warmUp(dcId = 2): Promise<void> {
+        try {
+          const hosts = ['https://venus.web.telegram.org', 'https://kws1.web.telegram.org', 'https://kws2.web.telegram.org'];
+          hosts.forEach(h => {
+            try {
+              const l = document.createElement('link');
+              l.rel = 'preconnect';
+              l.href = h;
+              l.crossOrigin = 'anonymous';
+              document.head.appendChild(l);
+              setTimeout(() => { try { l.remove(); } catch {} }, 15000);
+            } catch {}
+          });
+        } catch {}
+        try {
+          if (!this.workerClient) {
+            const c = new TelegramWorkerClient();
+            c.onAuthInvalidated = () => this.onAuthInvalidated?.();
+            let apiId = 0; let apiHash = '';
+            try {
+              const creds = getApiCredentials();
+              apiId = creds.apiId; apiHash = creds.apiHash;
+            } catch {}
+            c.start(apiId, apiHash).catch(() => {});
+            this.workerClient = c;
+          }
+        } catch {}
+    }
+
     async connect(dcId = 2, signal?: AbortSignal): Promise<void> {
+        if (signal?.aborted) throw new Error('timeout');
+        if (!this.connectPromise) {
+            this.connectPromise = this.connectInner(dcId, signal).finally(() => {
+                this.connectPromise = null;
+            });
+        }
+        return this.connectPromise;
+    }
+
+    private async connectInner(dcId = 2, signal?: AbortSignal): Promise<void> {
         this.onLog?.('→ connect dc=' + dcId);
-        if (this.workerClient) this.workerClient.destroy();
-        this.workerClient = new TelegramWorkerClient();
+        if (!this.workerClient) {
+          this.workerClient = new TelegramWorkerClient();
+        }
         this.workerClient.onAuthInvalidated = () => {
             this.onAuthInvalidated?.();
         };
-        const apiId = parseInt(process.env.TELEGRAM_API_ID || '0', 10);
-        const apiHash = process.env.TELEGRAM_API_HASH || '';
+        let apiId = 0;
+        let apiHash = '';
+        try {
+          const creds = getApiCredentials();
+          apiId = creds.apiId; apiHash = creds.apiHash;
+        } catch {
+          apiId = parseInt(process.env.TELEGRAM_API_ID || '0', 10);
+          apiHash = process.env.TELEGRAM_API_HASH || '';
+        }
         await this.workerClient.start(apiId, apiHash);
 
         if (this.onUpdate) {
@@ -60,11 +109,38 @@ export class WorkerTelegramService extends TelegramService {
         }
     }
 
-    async sendCode(phoneNumber: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean }> {
+    async sendCode(phoneNumber: string, logoutTokens?: string[]): Promise<{ phoneCodeHash: string; phoneRegistered: boolean; codeType?: string; timeout?: number; nextType?: string }> {
         this.onLog?.('→ auth.sendCode');
         if (!this.workerClient) throw new Error('not connected');
         try {
-            return await this.workerClient.sendCode(phoneNumber);
+            return await this.workerClient.sendCode(phoneNumber, logoutTokens);
+        } catch (e: any) {
+            if (e.message?.includes('AUTH_KEY_UNREGISTERED') || e.message?.includes('AUTH_KEY_PERM_EMPTY')) {
+                this.onAuthInvalidated?.();
+            }
+            throw e;
+        }
+    }
+
+    async resendCode(phoneNumber: string, phoneCodeHash: string, reason?: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean; codeType?: string; timeout?: number; nextType?: string }> {
+        this.onLog?.('→ auth.resendCode');
+        if (!this.workerClient) throw new Error('not connected');
+        try {
+            return await this.workerClient.resendCode(phoneNumber, phoneCodeHash, reason);
+        } catch (e: any) {
+            if (e.message?.includes('AUTH_KEY_UNREGISTERED') || e.message?.includes('AUTH_KEY_PERM_EMPTY')) {
+                this.onAuthInvalidated?.();
+            }
+            throw e;
+        }
+    }
+
+    async importLoginToken(tokenHex: string, dcId: number): Promise<any> {
+        this.onLog?.('→ auth.importLoginToken dc=' + dcId);
+        if (!this.workerClient) throw new Error('not connected');
+        try {
+            const r = await this.workerClient.importLoginToken(tokenHex, dcId);
+            return r && (r as any).result !== undefined ? (r as any).result : r;
         } catch (e: any) {
             if (e.message?.includes('AUTH_KEY_UNREGISTERED') || e.message?.includes('AUTH_KEY_PERM_EMPTY')) {
                 this.onAuthInvalidated?.();
@@ -78,6 +154,7 @@ export class WorkerTelegramService extends TelegramService {
         if (!this.workerClient) throw new Error('not connected');
         try {
             await this.workerClient.signIn(phoneNumber, code);
+            this.authenticated = true;
         } catch (e: any) {
             if (e.message?.includes('AUTH_KEY_UNREGISTERED') || e.message?.includes('AUTH_KEY_PERM_EMPTY')) {
                 this.onAuthInvalidated?.();
@@ -91,6 +168,7 @@ export class WorkerTelegramService extends TelegramService {
         if (!this.workerClient) throw new Error('not connected');
         try {
             await this.workerClient.checkPassword(password);
+            this.authenticated = true;
         } catch (e: any) {
             if (e.message?.includes('AUTH_KEY_UNREGISTERED') || e.message?.includes('AUTH_KEY_PERM_EMPTY')) {
                 this.onAuthInvalidated?.();
@@ -102,6 +180,11 @@ export class WorkerTelegramService extends TelegramService {
     async getAuthState(): Promise<'none' | 'code_sent' | 'password_needed' | 'authenticated'> {
         if (!this.workerClient) return 'none';
         return this.workerClient.getAuthState();
+    }
+
+    async clearPendingAuth(phoneNumber?: string): Promise<void> {
+        if (!this.workerClient) return;
+        await this.workerClient.clearPendingAuth(phoneNumber);
     }
 
     async sendMessage(message: string, peer: Record<string, any>): Promise<any> {
@@ -136,6 +219,12 @@ export class WorkerTelegramService extends TelegramService {
         if (!this.workerClient) throw new Error('not connected');
         const toBytes = (s: string): Buffer => {
             try {
+                if (s.startsWith('b64:')) {
+                    const body = s.slice(4).replace(/-/g, '+').replace(/_/g, '/');
+                    const pad = body.length % 4 === 0 ? body : body + '='.repeat(4 - (body.length % 4));
+                    return Buffer.from(pad, 'base64');
+                }
+                if (s.startsWith('hex:')) return Buffer.from(s.slice(4), 'hex');
                 if (/^[0-9a-fA-F]+$/.test(s) && s.length % 2 === 0) return Buffer.from(s, 'hex');
                 if (/^[A-Za-z0-9+/=_-]+$/.test(s)) {
                     const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
@@ -152,7 +241,7 @@ export class WorkerTelegramService extends TelegramService {
             } catch { return Buffer.from(String(s), 'utf-8'); }
         };
         const dataBytes: Buffer = toBytes(data);
-        console.info('[bot-cb] data=' + String(data).slice(0,60) + ' -> bytes=' + dataBytes.toString('hex').slice(0,80) + ' len=' + dataBytes.length);
+        this.onLog?.('[bot-cb] len=' + dataBytes.length);
         const raw = await this.workerClient!.callRpc('messages.getBotCallbackAnswer', {
             peer: serializePeer(peer),
             msg_id: msgId,
@@ -235,6 +324,7 @@ export class WorkerTelegramService extends TelegramService {
         this.onLog?.('→ auth.logout');
         if (!this.workerClient) throw new Error('not connected');
         await this.workerClient.logout();
+        this.authenticated = false;
     }
 
     destroy(): void {

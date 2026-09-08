@@ -32,8 +32,16 @@ export class TelegramWorkerClient {
         return r;
     }
 
-    async sendCode(phoneNumber: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean }> {
-        return this.client.sendCode(phoneNumber);
+    async sendCode(phoneNumber: string, logoutTokens?: string[]): Promise<{ phoneCodeHash: string; phoneRegistered: boolean; codeType?: string; timeout?: number; nextType?: string }> {
+        return this.client.sendCode(phoneNumber, logoutTokens);
+    }
+
+    async resendCode(phoneNumber: string, phoneCodeHash: string, reason?: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean; codeType?: string; timeout?: number; nextType?: string }> {
+        return this.client.resendCode(phoneNumber, phoneCodeHash, reason);
+    }
+
+    async importLoginToken(tokenHex: string, dcId: number): Promise<any> {
+        return this.client.importLoginToken(tokenHex, dcId);
     }
 
     async signIn(phoneNumber: string, code: string): Promise<void> {
@@ -46,6 +54,10 @@ export class TelegramWorkerClient {
 
     async getAuthState(): Promise<'none' | 'code_sent' | 'password_needed' | 'authenticated'> {
         return this.client.getAuthState();
+    }
+
+    async clearPendingAuth(phoneNumber?: string): Promise<void> {
+        await this.client.clearPendingAuth(phoneNumber);
     }
 
     async sendMessage(message: string, peer: Record<string, any>): Promise<any> {

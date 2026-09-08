@@ -41,6 +41,7 @@ interface PendingCall {
 interface PendingAuth {
     phoneCodeHash: string;
     phoneRegistered?: boolean;
+    phoneNumber?: string;
 }
 
 const TELEGRAM_API_ID = parseInt(
@@ -84,10 +85,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
     });
 }
 
-const DC_CONNECT_TIMEOUT_MS = 30000;
-const CDN_CALL_TIMEOUT_MS = 15000;
-const DC_RPC_SLOT_TIMEOUT_MS = 30000;
-const CDN_PROBE_TIMEOUT_MS = 8000;
+const DC_CONNECT_TIMEOUT_MS = 15000;
+const CDN_CALL_TIMEOUT_MS = 8000;
+const DC_RPC_SLOT_TIMEOUT_MS = 15000;
+const CDN_PROBE_TIMEOUT_MS = 3000;
 const cdnUnreachableDcs = new Set<number>();
 let cdnProbeStarted = false;
 
@@ -243,12 +244,29 @@ function getAppVersion(): string {
 }
 
 function getApiId(): number {
+    if (runtimeApiId) return runtimeApiId;
+    try {
+      const urlId = typeof self !== 'undefined' && self.location?.search ? new URLSearchParams(self.location.search).get('apiId') : null;
+      if (urlId && /^\d+$/.test(urlId)) return parseInt(urlId, 10);
+    } catch {}
     if (!TELEGRAM_API_ID) throw new Error('TELEGRAM_API_ID not set');
     return TELEGRAM_API_ID;
 }
 function getApiHash(): string {
+    if (runtimeApiHash) return runtimeApiHash;
+    try {
+      const urlHash = typeof self !== 'undefined' && self.location?.search ? new URLSearchParams(self.location.search).get('apiHash') : null;
+      if (urlHash && /^[0-9a-f]{32}$/i.test(urlHash)) return urlHash.toLowerCase();
+    } catch {}
     if (!TELEGRAM_API_HASH) throw new Error('TELEGRAM_API_HASH not set');
     return TELEGRAM_API_HASH;
+}
+
+let runtimeApiId = 0;
+let runtimeApiHash = '';
+export function setApiCreds(apiId: number, apiHash: string): void {
+    if (Number.isFinite(apiId) && apiId > 0) runtimeApiId = apiId;
+    if (typeof apiHash === 'string' && /^[0-9a-f]{32}$/i.test(apiHash)) runtimeApiHash = apiHash.toLowerCase();
 }
 
 function setAuthKeys(k: Buffer, id: bigint, salt: bigint): void {
@@ -448,14 +466,18 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
             if (!hasPendingRpc) ses!.seqNo = 0;
 
         let resolvedPing = false;
+        let pingMsgIdToDelete: string | null = null;
         for (const [key, pending] of pendingCalls) {
             if (!resolvedPing && key.startsWith('ping_')) {
                 clearTimeout(pending.timer);
+                pingMsgIdToDelete = pending.msgId.toString();
                 pendingCalls.delete(key);
                 pending.resolve(Buffer.alloc(0));
                 resolvedPing = true;
+                break;
             }
         }
+        if (pingMsgIdToDelete) pendingCalls.delete(pingMsgIdToDelete);
         return;
     }
 
@@ -640,16 +662,40 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
         dcStalledHosts.delete(stalledHostKey(dcId, type));
     }
     let hostUsed = '';
-    for (const entry of hosts) {
+    let finalConn: BrowserObfuscatedConnection = newConn;
+    let connected = false;
+
+    const raceHosts = hosts.slice(0, 3);
+    const restHosts = hosts.slice(3);
+    const connectWithTimeout = (conn: BrowserObfuscatedConnection, host: { host: string; noObfuscation?: boolean }) =>
+        withTimeout(conn.connect(host.host, dcOpts.port, undefined, dcId, !!host.noObfuscation), 2000, 'race connect timeout ' + host.host);
+    if (raceHosts.length > 1) {
+        const conns = raceHosts.map(h => ({ conn: new BrowserObfuscatedConnection(), host: h }));
         try {
-            await newConn.connect(entry.host, dcOpts.port, undefined, dcId, !!entry.noObfuscation);
-            hostUsed = entry.host;
-            break;
+            const winner = await Promise.any(conns.map(async ({ conn, host }) => {
+                await connectWithTimeout(conn, host);
+                return { conn, host: host.host };
+            }));
+
+            for (const { conn } of conns) if (conn !== winner.conn) try { conn.close(); } catch {}
+            try { newConn.close(); } catch {}
+            finalConn = winner.conn;
+            hostUsed = winner.host;
+            connected = true;
         } catch {
-            continue;
+            for (const { conn } of conns) try { conn.close(); } catch {}
+            for (const entry of restHosts) {
+                try { await finalConn.connect(entry.host, dcOpts.port, undefined, dcId, !!entry.noObfuscation); hostUsed = entry.host; connected = true; break; } catch { continue; }
+            }
+        }
+    } else {
+        for (const entry of hosts) {
+            try { await finalConn.connect(entry.host, dcOpts.port, undefined, dcId, !!entry.noObfuscation); hostUsed = entry.host; connected = true; break; } catch { continue; }
         }
     }
-    if (!newConn.isConnected()) throw new Error('Failed to connect to DC ' + dcId);
+    if (!connected && !finalConn.isConnected()) throw new Error('Failed to connect to DC ' + dcId);
+
+    const activeConn = finalConn;
 
     const isCurrentDc = ses?.dcId === dcId;
     const isHomeDc = !!(homeSession && dcId === homeSession.dcId);
@@ -660,7 +706,7 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
     if (storedAuth) {
         const akBuf = Buffer.alloc(8);
         akBuf.writeBigUInt64LE(storedAuth.authKeyId, 0);
-        newConn.expectedAuthKeyBuf = akBuf;
+        activeConn.expectedAuthKeyBuf = akBuf;
         session = {
             authKey: storedAuth.authKey,
             authKeyId: storedAuth.authKeyId,
@@ -673,7 +719,7 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
     } else if (isCurrentDc && authKey) {
         const akBuf = Buffer.alloc(8);
         akBuf.writeBigUInt64LE(authKeyId, 0);
-        newConn.expectedAuthKeyBuf = akBuf;
+        activeConn.expectedAuthKeyBuf = akBuf;
         session = {
             authKey, authKeyId, serverSalt,
             serverTime: Math.floor(Date.now() / 1000) + serverTimeOffset,
@@ -685,7 +731,7 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
     } else if (isHomeDc && homeSession) {
         const akBuf = Buffer.alloc(8);
         akBuf.writeBigUInt64LE(homeSession.authKeyId, 0);
-        newConn.expectedAuthKeyBuf = akBuf;
+        activeConn.expectedAuthKeyBuf = akBuf;
         session = {
             ...homeSession,
             sessionId: crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn,
@@ -702,8 +748,8 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
             const creator = new AuthKeyCreator({ host: '', port: 0, dcId, publicRsaKey: rsaKey, mode: 'telegram' });
             const authResult = await creator.createAuthKey(async (tlPayload: Buffer) => {
                 const msgId = BigInt(Math.floor(Date.now() / 1000)) << 32n;
-                await newConn.sendNoCrypto(msgId, tlPayload);
-                const response = await newConn.readPacket();
+                await activeConn.sendNoCrypto(msgId, tlPayload);
+                const response = await activeConn.readPacket();
                 return parseNoCryptoResponse(response);
             });
             const storedKey = { authKey: authResult.authKey, authKeyId: authResult.authKeyId, serverSalt: authResult.serverSalt, serverTime: authResult.serverTime };
@@ -721,7 +767,7 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
             const stored = dcStoredAuthKeys.get(dcId)!;
             const akBuf = Buffer.alloc(8);
             akBuf.writeBigUInt64LE(stored.authKeyId, 0);
-            newConn.expectedAuthKeyBuf = akBuf;
+            activeConn.expectedAuthKeyBuf = akBuf;
             session = {
                 authKey: stored.authKey,
                 authKeyId: stored.authKeyId,
@@ -738,7 +784,7 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
         const stored = dcStoredAuthKeys.get(dcId)!;
         const akBuf = Buffer.alloc(8);
         akBuf.writeBigUInt64LE(stored.authKeyId, 0);
-        newConn.expectedAuthKeyBuf = akBuf;
+        activeConn.expectedAuthKeyBuf = akBuf;
         session = {
             authKey: stored.authKey,
             authKeyId: stored.authKeyId,
@@ -753,7 +799,7 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
     const entry: DcConnection = {
         dcId,
         type,
-        conn: newConn,
+        conn: activeConn,
         authKey: session.authKey,
         authKeyId: session.authKeyId,
         serverSalt: session.serverSalt,
@@ -1124,7 +1170,7 @@ function startDcReadLoop(entry: DcConnection): void {
     })();
 }
 
-const DC_IDLE_RECYCLE_MS = 12000;
+const DC_IDLE_RECYCLE_MS = 45000;
 const DC_RECONNECT_BACKOFF_MS = 5000;
 const dcReconnectAt = new Map<string, number>();
 
@@ -1139,13 +1185,22 @@ function warmUpDcConnection(dcId: number, type: 'video' | 'download'): void {
 }
 
 setInterval(() => {
-    for (const c of dcConnectionPool) {
+    const perDcCount = new Map<string, number>();
+    for (const c of dcConnectionPool) if (!c.dead) perDcCount.set(c.dcId + ':' + c.type, (perDcCount.get(c.dcId + ':' + c.type) || 0) + 1);
+    for (const c of [...dcConnectionPool]) {
         if (c.dead) continue;
         const idleMs = Date.now() - c.lastDataAt;
-        if (c.suspect && c.pending.size === 0) {
+        const key = c.dcId + ':' + c.type;
+        const cnt = perDcCount.get(key) || 1;
+        if (c.suspect && c.pending.size === 0 && cnt > 1) {
             wlog('[worker] DC ' + c.dcId + ' suspect drained (no pending) — recycling connection');
             killDcConnection(c, new Error('DC ' + c.dcId + ' suspect drained'));
+            perDcCount.set(key, cnt - 1);
             warmUpDcConnection(c.dcId, c.type);
+            continue;
+        }
+        if (c.pending.size === 0 && idleMs > 30000 && idleMs < DC_IDLE_RECYCLE_MS && cnt === 1) {
+            c.lastDataAt = Date.now();
             continue;
         }
         if (c.pending.size > 0 && idleMs > DC_IDLE_RECYCLE_MS) {
@@ -1319,7 +1374,7 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
                 if (floodSec != null && floodRetries < 3) {
                     floodRetries++;
                     wlog('[worker] DC ' + dcId + ' ' + methodName + ' FLOOD_WAIT_' + floodSec + ' — waiting and retrying');
-                    await new Promise(r => setTimeout(r, Math.min(6000, (floodSec + 1) * 1000)));
+                    await new Promise(r => setTimeout(r, Math.min(60000, (floodSec + 1) * 1000)));
                     continue;
                 }
                 if (msg.includes('BAD_SERVER_SALT') && saltRetries < 2) {
@@ -1628,7 +1683,7 @@ async function directRpcWith(
 
     const rpcResult = deepConvert(boxed);
     if (rpcResult && typeof rpcResult === 'object' && rpcResult._ === 'auth.loginTokenSuccess') {
-        authenticated = true;
+        if (!(rpcResult as any)?.authorization?.password_pending) authenticated = true;
     }
     if (rpcResult && typeof rpcResult === 'object' && rpcResult._ === 'auth.sentCode') {
         authenticated = false;
@@ -2124,10 +2179,10 @@ async function migrateDc(targetDcId: number): Promise<void> {
     if (!ses) throw new Error('No session');
     const origDcId = ses.dcId;
     if (origDcId === targetDcId) return;
-    wlog('[worker] миграция на DC ' + targetDcId);
+    wlog('[worker] migrating to DC ' + targetDcId);
 
     while (migratingDc !== 0 && migratingDc !== targetDcId) {
-        wlog('[worker] миграция на DC ' + targetDcId + ' ожидает завершения миграции на DC ' + migratingDc);
+        wlog('[worker] migration to DC ' + targetDcId + ' waiting for migration to DC ' + migratingDc + ' to finish');
         await new Promise(r => setTimeout(r, 100));
     }
     if (migratingDc === targetDcId) {
@@ -2163,13 +2218,13 @@ async function migrateDc(targetDcId: number): Promise<void> {
                         const eaId = typeof result.id === 'bigint' ? result.id : BigInt(result.id);
                         const eaBytes = typeof result.bytes === 'string' ? Buffer.from(result.bytes, 'hex') : Buffer.from(result.bytes);
                         exportedAuth = { id: eaId, bytes: eaBytes };
-                        wlog('[worker] экспортирована авторизация id=' + eaId + ' bytes.len=' + eaBytes.length);
+                        wlog('[worker] exported auth id=' + eaId + ' bytes.len=' + eaBytes.length);
                     } else {
                         wlog('[worker] migrateDc: exportedAuth FAILED — result.id=' + (result?.id ?? 'null') + ' result.bytes=' + (result?.bytes ? 'present' : 'null'));
                     }
                 }
             } catch (e: any) {
-                wlog('[worker] не удалось экспортировать авторизацию: ' + e.message + ' stack=' + (e.stack || '').split('\n').slice(0,3).join('|'));
+                        wlog('[worker] failed to export auth: ' + e.message + ' stack=' + (e.stack || '').split('\n').slice(0,3).join('|'));
             }
             if (!exportedAuth) {
                 const msg = 'Cannot migrate to DC ' + targetDcId + ': no exported auth (authenticated=' + authenticated + ' isHomeDc=' + isHomeDc + ')';
@@ -2247,21 +2302,21 @@ async function migrateDc(targetDcId: number): Promise<void> {
                 if (!isHomeDc && exportedAuth && exportedAuth.id != null && exportedAuth.bytes != null) {
                     try {
                         await callRpc('auth.importAuthorization', { id: exportedAuth.id, bytes: exportedAuth.bytes });
-                        wlog('[worker] импортирована авторизация на DC ' + targetDcId);
+                        wlog('[worker] imported auth on DC ' + targetDcId);
                     } catch (e: any) {
-                        wlog('[worker] не удалось импортировать авторизацию: ' + e.message);
+                        wlog('[worker] failed to import auth: ' + e.message);
                     }
                 }
 
-                wlog('[worker] мигрирован на DC ' + targetDcId + ' через ' + entry.host);
+                wlog('[worker] migrated to DC ' + targetDcId + ' via ' + entry.host);
                 return;
             } catch (e: any) {
-                wlog('[worker] миграция на DC ' + targetDcId + ' через ' + entry.host + ' не удалась: ' + e.message);
+                wlog('[worker] migration to DC ' + targetDcId + ' via ' + entry.host + ' failed: ' + e.message);
                 if (c) { try { c.close(); } catch {} }
             }
         }
 
-    wlog('[worker] все хосты миграции не удались, восстанавливаю исходный DC ' + origDcId);
+    wlog('[worker] all migration hosts failed, restoring original DC ' + origDcId);
     const origOpts = TELEGRAM_WS_DC_OPTIONS.find(d => d.id === origDcId);
     if (origOpts && ses) {
         try {
@@ -2282,7 +2337,7 @@ async function migrateDc(targetDcId: number): Promise<void> {
             ses.sessionId = crypton.getRandomBytes(8).readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn;
             ses.seqNo = 0;
         } catch (restoreErr: any) {
-            wlog('[worker] не удалось восстановить исходный DC: ' + restoreErr.message);
+            wlog('[worker] failed to restore original DC: ' + restoreErr.message);
         }
     }
     throw new Error('Failed to migrate to DC ' + targetDcId);
@@ -2358,7 +2413,7 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
             wlog('[worker] call sending constructorId=0x' + constructorId.toString(16) + ' msgId=' + msgId + ' attempt=' + (nonFloodRetries + 1));
             key = msgId.toString();
             const promise = new Promise<Buffer>((resolve, reject) => {
-                const timer = setTimeout(() => { wlog('[worker] Таймаут RPC msgId=' + msgId); pendingCalls.delete(key); reject(new Error('RPC timeout')); }, 30000);
+                const timer = setTimeout(() => { wlog('[worker] RPC timeout msgId=' + msgId); pendingCalls.delete(key); reject(new Error('RPC timeout')); }, 30000);
                 pendingCalls.set(key, { msgId, constructorId, resolve, reject, timer });
             });
             try {
@@ -2371,7 +2426,7 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
             return await promise;
         } catch (e: any) {
             const m = (e as Error).message || '';
-            wlog('[worker] вызов отклонён: ' + m + ' для constructorId=0x' + constructorId.toString(16) + ' попытка=' + (nonFloodRetries + 1));
+            wlog('[worker] call rejected: ' + m + ' for constructorId=0x' + constructorId.toString(16) + ' attempt=' + (nonFloodRetries + 1));
             if (m === 'NEW_SESSION_CREATED' ||
                 m.startsWith('Bad msg error code: 48') ||
                 m.startsWith('Bad msg error code: 64') ||
@@ -2405,21 +2460,21 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
                 if (Date.now() - floodWaitStart > 90000) {
                     throw new Error('FLOOD_WAIT_totaltime');
                 }
-                wlog('[worker] flood wait ' + floodSec + 'с, повтор');
-                await new Promise(r => setTimeout(r, floodSec * 1000));
+                wlog('[worker] flood wait ' + floodSec + 's, retry');
+                await new Promise(r => setTimeout(r, (floodSec + 1) * 1000));
                 continue;
             }
             if (m.includes('CONNECTION_NOT_INITED')) {
                 pendingCalls.delete(key);
                 nonFloodRetries++;
                 connectionInitialized = false;
-                wlog('[worker] CONNECTION_NOT_INITED, сбрасываю флаг и повтор');
+                wlog('[worker] CONNECTION_NOT_INITED, resetting flag and retrying');
                 continue;
             }
             if (m === 'Not connected') {
                 pendingCalls.delete(key);
                 nonFloodRetries++;
-                wlog('[worker] Нет соединения, повтор');
+                wlog('[worker] no connection, retry');
                 while (migratingDc !== 0) {
                     await new Promise(r => setTimeout(r, 100));
                 }
@@ -2433,16 +2488,26 @@ async function call(constructorId: number, params: Record<string, any> = {}): Pr
             throw e;
         }
     }
-    throw new Error('RPC вызов не удался после повторов');
+    throw new Error('RPC call failed after retries');
 }
 
-async function sendCode(phoneNumber: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean }> {
+async function sendCode(phoneNumber: string, logoutTokensHex?: string[]): Promise<{ phoneCodeHash: string; phoneRegistered: boolean; codeType?: string; timeout?: number; nextType?: string }> {
     wlog('[worker] sendCode called phone=' + phoneNumber);
+    const settings: Record<string, any> = { _: 'codeSettings', flags: 0 };
+    if (Array.isArray(logoutTokensHex) && logoutTokensHex.length > 0) {
+        const toks: Buffer[] = [];
+        for (const h of logoutTokensHex.slice(0, 20)) {
+            try {
+                if (typeof h === 'string' && /^[0-9a-fA-F]+$/.test(h) && h.length % 2 === 0) toks.push(Buffer.from(h, 'hex'));
+            } catch {}
+        }
+        if (toks.length > 0) (settings as any).logout_tokens = toks;
+    }
     const result = await call(TL_CONSTRUCTORS.AUTH_SEND_CODE, {
         phone_number: phoneNumber,
         api_id: getApiId(),
         api_hash: getApiHash(),
-        settings: { _: 'codeSettings', flags: 0 },
+        settings,
     });
     wlog('[worker] sendCode call returned, result.len=' + result.length);
     const registry = getSchemaRegistry();
@@ -2453,14 +2518,30 @@ async function sendCode(phoneNumber: string): Promise<{ phoneCodeHash: string; p
 
     let phoneCodeHash: string | undefined;
     let phoneRegistered = false;
+    let codeType: string | undefined;
+    let timeout: number | undefined;
+    let nextType: string | undefined;
     if (boxed.fields.phone_code_hash) {
         phoneCodeHash = boxed.fields.phone_code_hash;
 
         const flags = boxed.fields.flags as number | undefined;
         if (typeof flags === 'number' && (flags & 0x100)) phoneRegistered = true;
+        try {
+            const t = (boxed.fields as any).type;
+            if (t && typeof t === 'object' && (t as any).constructorName) codeType = (t as any).constructorName;
+        } catch {}
+        try {
+            const nt = (boxed.fields as any).next_type;
+            if (nt && typeof nt === 'object' && (nt as any).constructorName) nextType = (nt as any).constructorName;
+        } catch {}
+        try {
+            const to = (boxed.fields as any).timeout;
+            if (typeof to === 'number') timeout = to;
+        } catch {}
     } else if (boxed.constructorName === 'auth.sentCodeSuccess' && boxed.fields.authorization) {
         wlog('[worker] sendCode got sentCodeSuccess, marking authenticated');
         authenticated = true;
+        passwordPending = false;
         phoneCodeHash = 'already';
         phoneRegistered = true;
         if (ses) homeSession = { ...ses };
@@ -2471,15 +2552,59 @@ async function sendCode(phoneNumber: string): Promise<{ phoneCodeHash: string; p
         throw new Error('No phone_code_hash in ' + boxed.constructorName);
     }
     if (!phoneCodeHash) throw new Error('Missing phone_code_hash');
-    pendingAuth = { phoneCodeHash, phoneRegistered };
+    passwordPending = false;
+    pendingAuth = { phoneCodeHash, phoneRegistered, phoneNumber };
     if (curSessionId) await persistSession();
-    return { phoneCodeHash, phoneRegistered };
+    return { phoneCodeHash, phoneRegistered, codeType, timeout, nextType };
 }
 
-async function signIn(phoneNumber: string, code: string): Promise<void> {
+async function resendCode(phoneNumber: string, phoneCodeHash: string, reason?: string): Promise<{ phoneCodeHash: string; phoneRegistered: boolean; codeType?: string; timeout?: number; nextType?: string }> {
+    wlog('[worker] resendCode called phone=' + phoneNumber);
+    const params: Record<string, any> = { phone_number: phoneNumber, phone_code_hash: phoneCodeHash };
+    if (typeof reason === 'string' && reason.length > 0) (params as any).reason = reason;
+    const rpcResult: any = await callRpc('auth.resendCode', params);
+    wlog('[worker] resendCode parsed ' + String(rpcResult?._));
+    if (!rpcResult || typeof rpcResult !== 'object') throw new Error('Empty auth.resendCode result');
+    if (rpcResult._ === 'auth.sentCodeSuccess') {
+        authenticated = true;
+        passwordPending = false;
+        if (ses) homeSession = { ...ses };
+        if (curSessionId) await persistSession();
+        return { phoneCodeHash: 'already', phoneRegistered: true };
+    }
+    if (rpcResult._ !== 'auth.sentCode' || !rpcResult.phone_code_hash) throw new Error('No phone_code_hash in ' + String(rpcResult._));
+    passwordPending = false;
+    pendingAuth = { phoneCodeHash: rpcResult.phone_code_hash, phoneRegistered: false, phoneNumber };
+    if (curSessionId) await persistSession();
+    return { phoneCodeHash: rpcResult.phone_code_hash, phoneRegistered: false, codeType: rpcResult.type?._ , timeout: rpcResult.timeout, nextType: rpcResult.next_type?._ };
+}
+
+async function importLoginToken(tokenHex: string, dcId: number): Promise<any> {
+    wlog('[worker] importLoginToken dc=' + dcId);
+    if (!/^[0-9a-fA-F]+$/.test(tokenHex) || tokenHex.length % 2 !== 0) throw new Error('AUTH_TOKEN_INVALID');
+    const token = Buffer.from(tokenHex, 'hex');
+    const rpcResult: any = await callRpcOnDc(dcId, 'auth.importLoginToken', { token }, 'download');
+    wlog('[worker] importLoginToken parsed ' + String(rpcResult?._));
+    if (rpcResult?._ === 'auth.loginTokenSuccess') {
+        const auth = rpcResult.authorization;
+        if (auth && (auth as any).password_pending === true) {
+            passwordPending = true;
+            if (curSessionId) await persistSession();
+            throw new Error('SESSION_PASSWORD_NEEDED');
+        }
+        authenticated = true;
+        passwordPending = false;
+        if (ses) homeSession = { ...ses };
+        if (curSessionId) await persistSession();
+    }
+    return rpcResult;
+}
+
+async function signIn(phoneNumber: string, code: string): Promise<any> {
     if (!pendingAuth) throw new Error('No pending auth');
+    let rpcResult: any;
     try {
-        await callRpc('auth.signIn', {
+        rpcResult = await callRpc('auth.signIn', {
             phone_number: phoneNumber,
             phone_code_hash: pendingAuth.phoneCodeHash,
             phone_code: code,
@@ -2491,12 +2616,22 @@ async function signIn(phoneNumber: string, code: string): Promise<void> {
         }
         throw e;
     }
+    if (rpcResult && rpcResult._ === 'auth.authorizationSignUpRequired') throw new Error('auth.authorizationSignUpRequired');
+    if (rpcResult && rpcResult._ === 'auth.authorization') {
+        const auth = rpcResult.authorization;
+        if (auth && (auth as any).password_pending === true) {
+            passwordPending = true;
+            if (curSessionId) await persistSession();
+            throw new Error('SESSION_PASSWORD_NEEDED');
+        }
+    }
     passwordPending = false;
     authenticated = true;
     if (ses) homeSession = { ...ses };
     if (curSessionId) await persistSession();
     createDcConnection(ses!.dcId).catch(() => {});
     setTimeout(() => initUpdates().catch(() => {}), 100);
+    return rpcResult;
 }
 
 async function checkPassword(password: string): Promise<void> {
@@ -2697,7 +2832,7 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
                 if (Date.now() - floodWaitStart > 90000) {
                     throw new Error('FLOOD_WAIT_totaltime');
                 }
-                wlog('[worker] flood wait ' + floodSec + 'с, повтор');
+                wlog('[worker] flood wait ' + floodSec + 's, retry');
                 await new Promise(r => setTimeout(r, floodSec * 1000));
                 continue;
             }
@@ -2705,13 +2840,13 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
                 pendingCalls.delete(key);
                 nonFloodRetries++;
                 connectionInitialized = false;
-                wlog('[worker] CONNECTION_NOT_INITED, сбрасываю флаг и повтор');
+                wlog('[worker] CONNECTION_NOT_INITED, resetting flag and retrying');
                 continue;
             }
             if (m === 'Not connected') {
                 pendingCalls.delete(key);
                 nonFloodRetries++;
-                wlog('[worker] Нет соединения, повтор');
+                wlog('[worker] no connection, retry');
                 while (migratingDc !== 0) {
                     await new Promise(r => setTimeout(r, 100));
                 }
@@ -2725,7 +2860,7 @@ async function callRpc(methodName: string, params: Record<string, any> = {}, opt
             throw e;
         }
     }
-    throw new Error('RPC вызов не удался после повторов');
+    throw new Error('RPC call failed after retries');
 }
 
 async function initUpdates(): Promise<void> {
@@ -3174,7 +3309,7 @@ async function persistDownloadParts(cacheKey: string, parts: Map<number, Buffer>
         const writes: Promise<void>[] = [];
         const indexes: number[] = [];
         for (const [idx, buf] of parts) {
-            if (buf.length === partSize) { // only full parts survive resume
+            if (buf.length === partSize) {
                 writes.push(db.set(SESSION_PARTS_PREFIX + cacheKey + ':' + idx, { bytes: buf.toString('base64'), updatedAt: Date.now() }));
                 indexes.push(idx);
             }
@@ -3536,14 +3671,14 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : photo?.thumb_size ? `_thumb_${photo.thumb_size}` : '';
         const cacheKey = baseKey + thumbSuffix;
         const knownSizeEarly = totalSize || Number(document?.size || photo?.size || 0);
-        if (cacheKey && !isNoMediaCache()) {
+        if (cacheKey) {
             if (downloadCache.has(cacheKey)) {
                 const cached = downloadCacheGet(cacheKey)!;
                 wlog('[dl] cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey);
                 if (cached.type && cached.bytes && cached.bytes.length > 0) return { type: cached.type, bytes: b64ToAb(cached.bytes), cacheSource: 'memory' };
             }
 
-            {
+            if (!isNoMediaCache()) {
                 const persisted = await loadPersistedDownloadCache(cacheKey);
                 if (persisted && persisted.type && persisted.bytes && persisted.bytes.length > 0) {
                     wlog('[dl] gram-db cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey + ' bytesLen=' + persisted.bytes.length);
@@ -3720,9 +3855,9 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 const c2 = Buffer.from(r2.bytes || '', 'hex');
                 if (r2._ === 'upload.file' && c2.length > 0) {
                     const res2: DownloadResult = { type: t2, bytes: bufToAb(c2) };
-                    if (cacheKey && !isNoMediaCache()) {
+                    if (cacheKey) {
                         downloadCacheSet(cacheKey, { type: t2, bytes: c2.toString('base64') }, document?.mime_type);
-                        persistDownloadCache(cacheKey, t2, c2.toString('base64'), document?.mime_type);
+                        if (!isNoMediaCache()) persistDownloadCache(cacheKey, t2, c2.toString('base64'), document?.mime_type);
                     }
                     return res2;
                 }
@@ -3732,9 +3867,9 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
         }
         const res: DownloadResult = { type: finalType, bytes: bufToAb(allBytes) };
-            if (cacheKey && !isNoMediaCache()) {
+            if (cacheKey) {
                 downloadCacheSet(cacheKey, { type: finalType, bytes: allBytes.toString('base64') }, document?.mime_type);
-                persistDownloadCache(cacheKey, finalType, allBytes.toString('base64'), document?.mime_type);
+                if (!isNoMediaCache()) persistDownloadCache(cacheKey, finalType, allBytes.toString('base64'), document?.mime_type);
             }
             return res;
         }
@@ -3812,10 +3947,10 @@ if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen 
             return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
         }
         const res: DownloadResult = { type: finalType, bytes: bufToAb(allBytes), cacheSource: serverType };
-        if (cacheKey && !isNoMediaCache()) {
-            if (resumed && resumed.parts.size > 0) await clearPersistedParts(cacheKey);
+        if (cacheKey) {
+            if (resumed && resumed.parts.size > 0 && !isNoMediaCache()) await clearPersistedParts(cacheKey);
             downloadCacheSet(cacheKey, { type: finalType, bytes: allBytes.toString('base64') }, document?.mime_type);
-            persistDownloadCache(cacheKey, finalType, allBytes.toString('base64'), document?.mime_type);
+            if (!isNoMediaCache()) persistDownloadCache(cacheKey, finalType, allBytes.toString('base64'), document?.mime_type);
         }
         return res;
     } catch (e: any) {
@@ -3843,7 +3978,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     const baseKey = document?.id?.toString() || '';
     const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : '';
     const cacheKey = baseKey + thumbSuffix;
-    if (cacheKey && !isNoMediaCache()) {
+    if (cacheKey) {
         if (downloadCache.has(cacheKey)) {
             const cached = downloadCacheGet(cacheKey)!;
             if (cached.type && cached.bytes && cached.bytes.length > 0) {
@@ -3854,21 +3989,23 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
                 return 'memory';
             }
         }
-        const persisted = await loadPersistedDownloadCache(cacheKey);
-        if (persisted && persisted.type && persisted.bytes && persisted.bytes.length > 0) {
-            vlog('CACHE-HIT persisted');
-            downloadCacheSet(cacheKey, persisted, document?.mime_type);
-            const buf = Buffer.from(persisted.bytes, 'base64');
-            const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-            onChunk(ab, true, persisted.type);
-            return 'persisted';
+        if (!isNoMediaCache()) {
+            const persisted = await loadPersistedDownloadCache(cacheKey);
+            if (persisted && persisted.type && persisted.bytes && persisted.bytes.length > 0) {
+                vlog('CACHE-HIT persisted');
+                downloadCacheSet(cacheKey, persisted, document?.mime_type);
+                const buf = Buffer.from(persisted.bytes, 'base64');
+                const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+                onChunk(ab, true, persisted.type);
+                return 'persisted';
+            }
         }
         vlog('CACHE miss');
     }
 
     const streamCacheLimit = 20 * 1024 * 1024;
     const streamSize = Number(document?.size) || 0;
-    const accumulateCacheChunks = cacheKey !== '' && !isNoMediaCache() && (streamSize === 0 || streamSize <= streamCacheLimit);
+    const accumulateCacheChunks = cacheKey !== '' && (streamSize === 0 || streamSize <= streamCacheLimit);
     const cacheChunks: Buffer[] = [];
     const limit = 1048576;
     let finalType = 'storage.fileUnknown';
@@ -4014,12 +4151,12 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     }
     vlog('DONE chunks=' + cacheChunks.length + ' total=' + (cacheChunks.reduce((s, c) => s + c.byteLength, 0)) + ' in ' + (Date.now() - t0) + 'ms');
 
-    if (cacheKey && !isNoMediaCache() && cacheChunks.length > 0) {
+    if (cacheKey && cacheChunks.length > 0) {
         const allBytes = Buffer.concat(cacheChunks);
         const res = { type: finalType, bytes: allBytes.toString('base64'), cacheSource: serverType };
         if (res.bytes.length <= streamCacheLimit) {
             downloadCacheSet(cacheKey, res, document?.mime_type);
-            persistDownloadCache(cacheKey, finalType, res.bytes, document?.mime_type);
+            if (!isNoMediaCache()) persistDownloadCache(cacheKey, finalType, res.bytes, document?.mime_type);
         }
     }
     return serverType;
@@ -4079,7 +4216,6 @@ async function runIndexedDbBatch<T>(items: T[], fn: (item: T) => Promise<void>):
 
 export async function batchCheckPhotoCache(requests: Array<{ photo: any; sizeType: string }>): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
-  if (isNoMediaCache()) return result;
   const withKey = requests.map(({ photo, sizeType }) => {
     const photoWithThumb = { ...photo, thumb_size: sizeType };
     const location = buildDownloadLocation(undefined, photoWithThumb);
@@ -4096,19 +4232,20 @@ export async function batchCheckPhotoCache(requests: Array<{ photo: any; sizeTyp
     }
   }
   const persisted = withKey.filter(({ cacheKey }) => !(cacheKey in result));
-  await runIndexedDbBatch(persisted, async ({ cacheKey }) => {
-    const p = await loadPersistedDownloadCache(cacheKey);
-    if (p && p.type && p.bytes) {
-      downloadCacheSet(cacheKey, p);
-      result[cacheKey] = 'data:image/jpeg;base64,' + p.bytes;
-    }
-  });
+  if (!isNoMediaCache()) {
+    await runIndexedDbBatch(persisted, async ({ cacheKey }) => {
+      const p = await loadPersistedDownloadCache(cacheKey);
+      if (p && p.type && p.bytes) {
+        downloadCacheSet(cacheKey, p);
+        result[cacheKey] = 'data:image/jpeg;base64,' + p.bytes;
+      }
+    });
+  }
   return result;
 }
 
 export async function batchCheckDocumentCache(documents: Array<{ id: string | number; thumb_size?: string }>): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
-  if (isNoMediaCache()) return result;
   const withKey = documents.map((doc) => {
     const baseKey = doc?.id?.toString() || '';
     const thumbSuffix = doc?.thumb_size ? `_thumb_${doc.thumb_size}` : '';
@@ -4123,13 +4260,15 @@ export async function batchCheckDocumentCache(documents: Array<{ id: string | nu
     }
   }
   const persisted = withKey.filter(({ baseKey }) => !(baseKey in result));
-  await runIndexedDbBatch(persisted, async ({ baseKey, cacheKey }) => {
-    const p = await loadPersistedDownloadCache(cacheKey);
-    if (p && p.type && p.bytes) {
-      downloadCacheSet(cacheKey, p);
-      result[baseKey] = 'persisted';
-    }
-  });
+  if (!isNoMediaCache()) {
+    await runIndexedDbBatch(persisted, async ({ baseKey, cacheKey }) => {
+      const p = await loadPersistedDownloadCache(cacheKey);
+      if (p && p.type && p.bytes) {
+        downloadCacheSet(cacheKey, p);
+        result[baseKey] = 'persisted';
+      }
+    });
+  }
   return result;
 }
 
@@ -4154,7 +4293,21 @@ async function downloadFiles_(docs: Array<{ document: any; priority?: number }>)
     return Promise.all(tasks);
 }
 
-export { callRpc, resolvePeer, sendCode, signIn, checkPassword, downloadFile_, downloadFileStream_, requestPhotoDownload, cancelPhotoDownloads, enqueueDownload, downloadFiles_, registerVideoStream, unregisterVideoStream, cancelVideoStreams };
+export async function clearPendingAuth(phoneNumber?: string): Promise<void> {
+    const old = pendingAuth;
+    pendingAuth = null;
+    passwordPending = false;
+    if (tdBinlog) {
+        try { await tdBinlog.append(EventType.PendingCodeHash, ''); } catch {}
+        try { await tdBinlog.append(EventType.SessionFlags, authenticated ? 1 : 0); } catch {}
+    }
+    const phone = (typeof phoneNumber === 'string' && phoneNumber ? phoneNumber : old?.phoneNumber) || '';
+    if (old?.phoneCodeHash && phone) {
+        try { await callRpc('auth.cancelCode', { phone_number: phone, phone_code_hash: old.phoneCodeHash }).catch(() => {}); } catch {}
+    }
+}
+
+export { callRpc, callRpcOnDc, resolvePeer, sendCode, resendCode, importLoginToken, signIn, checkPassword, downloadFile_, downloadFileStream_, requestPhotoDownload, cancelPhotoDownloads, enqueueDownload, downloadFiles_, registerVideoStream, unregisterVideoStream, cancelVideoStreams };
 export { handleConnectInternal as handleConnect };
 export { handleDisconnect as disconnect };
 export { handleLogout as logout };
