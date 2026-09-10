@@ -6199,3 +6199,120 @@ img.tgui-poll-optthumb {
   background: var(--bg-hover);
 }
 
+.TumblerWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.TumblerWrap_disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.Tumbler__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.Tumbler {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: rgba(128,128,128,0.35);
+  transition: background var(--tumbler-duration, 0.18s) ease;
+}
+
+.Tumbler_size_small {
+  width: 32px;
+  height: 18px;
+}
+
+.Tumbler_size_medium {
+  width: 40px;
+  height: 22px;
+}
+
+.Tumbler_size_large {
+  width: 48px;
+  height: 26px;
+}
+
+.Tumbler_on {
+  background: var(--accent, #2AABEE);
+}
+
+.Tumbler__knob {
+  position: absolute;
+  left: 2px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+  transition: transform var(--tumbler-duration, 0.18s) ease;
+  pointer-events: none;
+}
+
+.Tumbler_size_small .Tumbler__knob {
+  width: 14px;
+  height: 14px;
+}
+
+.Tumbler_size_medium .Tumbler__knob {
+  width: 16px;
+  height: 16px;
+  left: 3px;
+}
+
+.Tumbler_size_large .Tumbler__knob {
+  width: 20px;
+  height: 20px;
+  left: 3px;
+}
+
+.Tumbler_size_small.Tumbler_on .Tumbler__knob {
+  transform: translateX(14px);
+}
+
+.Tumbler_size_medium.Tumbler_on .Tumbler__knob {
+  transform: translateX(18px);
+}
+
+.Tumbler_size_large.Tumbler_on .Tumbler__knob {
+  transform: translateX(22px);
+}
+
+.Tumbler__input:focus-visible + .Tumbler {
+  box-shadow: 0 0 0 3px rgba(0,122,255,0.35);
+}
+
+.Tumbler__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.Tumbler__label {
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.Tumbler__description {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.TumblerWrap_disabled .Tumbler__label {
+  color: var(--text-tertiary);
+}
+
+.TumblerWrap_disabled .Tumbler__description {
+  color: var(--text-tertiary);
+}

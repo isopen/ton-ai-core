@@ -1,5 +1,7 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { Scrollable } from '../primitives/scrollable.js';
+import { Radio } from '../primitives/radio.js';
+import { Tumbler } from '../primitives/tumbler.js';
 import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';
 import { t, S } from '@ton-ai/gram-lang';
@@ -46,15 +48,31 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
       <div class="tgui-settings-section">
         <div class="tgui-settings-section-label">Animations</div>
         <div class="tgui-settings-card">
+          <div class="tgui-settings-row" style="align-items:center">
+            <Tumbler
+              size="medium"
+              name="animations"
+              checked={state.animationsEnabled !== false}
+              onChange={(v) => dispatch({ type: 'SET_ANIMATIONS_ENABLED', v })}
+            />
+          </div>
+        </div>
+      </div>
+      <div class="tgui-settings-section">
+        <div class="tgui-settings-section-label">Map provider</div>
+        <div class="tgui-settings-card">
           <div class="tgui-settings-row" style="flex-direction:column;align-items:stretch;gap:6px">
-            <span class="tgui-settings-label">Enable interface animations</span>
-            <div style="display:flex;gap:6px">
-              {([true, false] as const).map(v => (
-                <button
-                  key={String(v)}
-                  class={'tgui-quality-btn' + ((state.animationsEnabled !== false) === v ? ' tgui-quality-btn_active' : '')}
-                  onClick={() => dispatch({ type: 'SET_ANIMATIONS_ENABLED', v })}
-                >{v ? 'On' : 'Off'}</button>
+            <span class="tgui-settings-label">Load maps in messages from</span>
+            <div class="tgui-settings-radio-list">
+              {(['google', 'yandex'] as const).map(p => (
+                <Radio
+                  key={p}
+                  size="large"
+                  name="map-provider"
+                  label={p === 'google' ? 'Google Maps' : 'Yandex Maps'}
+                  checked={(state.mapProvider === 'yandex' ? 'yandex' : 'google') === p}
+                  onChange={() => dispatch({ type: 'SET_MAP_PROVIDER', provider: p })}
+                />
               ))}
             </div>
           </div>
