@@ -1,7 +1,13 @@
-.PHONY: build build-core build-plugins build-agents clean build-% rebuild-gram-browser
+.PHONY: build build-core build-plugins build-agents clean build-% rebuild-gram-browser install
+
+install:
+	npm install --no-audit --no-fund --prefer-offline
 
 rebuild-gram-browser:
 	node scripts/run-config.cjs rebuild:quick
+
+rebuild-gram-browser-wasm:
+	BUILD_WASM=1 node scripts/run-config.cjs rebuild:quick
 
 build: build-core build-plugins
 
