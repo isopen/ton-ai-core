@@ -332,6 +332,12 @@ export function resolveAvatar(peer: any): { url: string; blurUrl: string } {
   return { url: isFullFile ? rawUrl : '', blurUrl };
 }
 
+export function resolveDisplayPeer(dialogs: Array<{ peer: any }>, peer: any): any {
+  if (!peer) return peer;
+  const found = (dialogs || []).find(d => d?.peer?.id === peer.id && d?.peer?.type === peer.type);
+  return found?.peer ?? peer;
+}
+
 export function buildDocumentThumb(doc: any): { url: string; width: number; height: number; isDownloading?: boolean } | null {  if (doc?.thumbs?.length) {
     let best: any = null;
     const prio = ['m', 'x', 'y', 'w', 'v', 'u'];

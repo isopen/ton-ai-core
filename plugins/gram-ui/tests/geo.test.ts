@@ -5,7 +5,7 @@
 import { render } from '@ton-ai/atom';
 import { GeoBubble } from '../dist/components/geo-bubble.js';
 import { PollBubble } from '../dist/components/poll-bubble.js';
-import { getMediaType, geoCoords, geoMapsUrl, geoEmbedUrl, geoExternalUrl, currentMapProvider, buildPeerBlurThumb, resolveAvatar } from '../dist/utils.js';
+import { getMediaType, geoCoords, geoMapsUrl, geoEmbedUrl, geoExternalUrl, currentMapProvider, buildPeerBlurThumb, resolveAvatar, resolveDisplayPeer } from '../dist/utils.js';
 
 if (typeof (global as any).IntersectionObserver === 'undefined') {
     (global as any).IntersectionObserver = class {
@@ -239,5 +239,35 @@ describe('Peer blur cache', () => {
         expect(buildPeerBlurThumb(photo)).toBe('');
         expect(buildPeerBlurThumb(photo)).toBe('');
         expect(reads).toBe(1);
+    });
+
+    test('resolveAvatar returns stable values for same peer', () => {
+        const peer = { avatarUrl: '', photo: { sizes: [] } };
+        const a = resolveAvatar(peer);
+        const b = resolveAvatar(peer);
+        expect(a).toEqual(b);
+        expect(a).toEqual({ url: '', blurUrl: '' });
+    });
+
+    test('resolveAvatar keeps only fetchable urls', () => {
+        const thumb = 'data:image/jpeg;base64,/9j/4AA=';
+        expect(resolveAvatar({ avatarUrl: thumb, blurUrl: thumb })).toEqual({ url: '', blurUrl: thumb });
+        expect(resolveAvatar({ avatarUrl: 'foo/bar' })).toEqual({ url: '', blurUrl: '' });
+        expect(resolveAvatar({ avatarUrl: 'blob:abc' })).toEqual({ url: 'blob:abc', blurUrl: '' });
+    });
+
+    test('resolveDisplayPeer prefers dialog peer over stale selection', () => {
+        const stale = { type: 'user', id: '7', firstName: 'A' };
+        const fresh = { type: 'user', id: '7', firstName: 'A', avatarUrl: 'blob:x', blurUrl: 'blob:x' };
+        const dialogs = [{ peer: { type: 'user', id: '9' } }, { peer: fresh }];
+        expect(resolveDisplayPeer(dialogs as any, stale)).toBe(fresh);
+        expect(resolveAvatar(resolveDisplayPeer(dialogs as any, stale))).toEqual({ url: 'blob:x', blurUrl: 'blob:x' });
+    });
+
+    test('resolveDisplayPeer falls back to selection without dialog match', () => {
+        const stale = { type: 'user', id: '7' };
+        expect(resolveDisplayPeer([{ peer: { type: 'user', id: '9' } }] as any, stale)).toBe(stale);
+        expect(resolveDisplayPeer([] as any, stale)).toBe(stale);
+        expect(resolveDisplayPeer([] as any, null)).toBeNull();
     });
 });

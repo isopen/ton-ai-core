@@ -25,7 +25,7 @@ import { SlotMachineSticker, resetSlotMachineDone } from './slot-machine.js';
 import { resetCompletedAnimations } from './tgs-player.js';
 import { observeVisibility } from './emoji-canvas.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
-import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText, isInactiveButtonData, buttonBubbleRel, resolveAvatar } from '../utils.js';
+import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText, isInactiveButtonData, buttonBubbleRel, resolveAvatar, resolveDisplayPeer } from '../utils.js';
 import { MediaPlayer } from './media-player.js';
 import { VideoMessage } from './video-message.js';
 import { PhotoLoader } from './photo-loader.js';
@@ -1029,12 +1029,13 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
   }
 
   const p = peer as any;
-  const headerAvatar = resolveAvatar(p);
-  const avatarBg = headerAvatar.url || headerAvatar.blurUrl ? 'transparent' : (p.type === 'user' ? '#1a4d8c' : '#2d5a27');
-  const initial = getInitials(p);
+  const currentDialog = state.dialogs.find(d => d.peer.id === peer.id && d.peer.type === peer.type);
+  const hp = resolveDisplayPeer(state.dialogs, peer) as any;
+  const headerAvatar = resolveAvatar(hp);
+  const avatarBg = headerAvatar.url || headerAvatar.blurUrl ? 'transparent' : (hp.type === 'user' ? '#1a4d8c' : '#2d5a27');
+  const initial = getInitials(hp);
 
   const selfPeer = state.selfUserId != null && p.id === state.selfUserId && p.type === 'user';
-  const currentDialog = state.dialogs.find(d => d.peer.id === peer.id && d.peer.type === peer.type);
   const readOutboxMaxId = currentDialog?.readOutboxMaxId;
 
   const msgListChildren: any[] = [];
@@ -1081,7 +1082,7 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
           source={state.avatarSources?.[`${p.type}_${p.id}`]}
         />
         <div class="tgui-chat-info">
-          <span class="tgui-chat-name">{p.type === 'user' && state.selfUserId && p.id === state.selfUserId ? t(S.SAVED_MESSAGES_PEER) : getPeerName(p)}</span>
+          <span class="tgui-chat-name">{p.type === 'user' && state.selfUserId && p.id === state.selfUserId ? t(S.SAVED_MESSAGES_PEER) : getPeerName(hp)}</span>
           {state.typingText ? <span class="chat-subtitle"><TypingIndicator text={state.typingText} /></span> : null}
         </div>
       </div>
