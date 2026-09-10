@@ -5262,6 +5262,7 @@ body {
 
 .MessageBubble_poll {
   min-width: 260px;
+  max-width: 360px;
 }
 .tgui-poll-header {
   font-size: 12px;
