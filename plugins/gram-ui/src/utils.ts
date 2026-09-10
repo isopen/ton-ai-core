@@ -66,6 +66,7 @@ export function getMediaType(media: any): string {
         return 'document';
     }
     if (media._ === 'messageMediaWebPage') return 'webpage';
+    if ((media._ === 'messageMediaGeo' || media._ === 'messageMediaGeoLive' || media._ === 'messageMediaVenue') && geoCoords(media)) return 'geo';
     return 'unknown';
 }
 
@@ -73,6 +74,42 @@ export function getStickerEmoji(doc: any): string {
     if (!doc) return '';
     const attr = (doc.attributes || []).find((a: any) => a._ === 'documentAttributeSticker');
     return attr?.alt || '';
+}
+
+export function geoCoords(media: any): { lat: number; long: number } | null {
+  const geo = media?.geo;
+  if (!geo || typeof geo !== 'object' || geo._ !== 'geoPoint') return null;
+  const lat = Number(geo.lat);
+  const long = Number(geo.long);
+  if (!Number.isFinite(lat) || !Number.isFinite(long)) return null;
+  if (lat < -90 || lat > 90 || long < -180 || long > 180) return null;
+  return { lat, long };
+}
+
+export function geoMapsUrl(lat: number, lon: number): string {
+  return 'https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lon;
+}
+
+export type MapProvider = 'google' | 'yandex';
+
+export function currentMapProvider(): MapProvider {
+  try {
+    const v = (document.documentElement as any)?.dataset?.mapProvider;
+    if (v === 'yandex') return 'yandex';
+  } catch {}
+  return 'google';
+}
+
+export function geoEmbedUrl(lat: number, lon: number, provider?: MapProvider): string {
+  const p = provider || currentMapProvider();
+  if (p === 'yandex') return 'https://yandex.ru/map-widget/v1/?ll=' + lon + '%2C' + lat + '&z=15&pt=' + lon + ',' + lat + ',pm2rdm';
+  return 'https://maps.google.com/maps?q=' + lat + ',' + lon + '&z=15&output=embed';
+}
+
+export function geoExternalUrl(lat: number, lon: number, provider?: MapProvider): string {
+  const p = provider || currentMapProvider();
+  if (p === 'yandex') return 'https://yandex.ru/maps/?ll=' + lon + '%2C' + lat + '&z=15';
+  return geoMapsUrl(lat, lon);
 }
 
 export function mediaFallbackText(media: any, untitled = 'File'): string {
@@ -276,6 +313,13 @@ export function buildPeerBlurThumb(photo: any): string {
   }
   if (!best) return '';
   try { return strippedToDataUrl(best); } catch { return ''; }
+}
+
+export function resolveAvatar(peer: any): { url: string; blurUrl: string } {
+  const rawUrl = peer?.avatarUrl || '';
+  const isFullFile = rawUrl.startsWith('blob:') || /^https?:/.test(rawUrl);
+  const blurUrl = peer?.blurUrl || buildPeerBlurThumb(peer?.photo) || (/^data:image/.test(rawUrl) ? rawUrl : '');
+  return { url: isFullFile ? rawUrl : '', blurUrl };
 }
 
 export function buildDocumentThumb(doc: any): { url: string; width: number; height: number; isDownloading?: boolean } | null {  if (doc?.thumbs?.length) {

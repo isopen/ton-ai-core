@@ -14,7 +14,8 @@ import { VideoMessage } from './video-message.js';
 import { MediaPlayer } from './media-player.js';
 import { buildImageSpec, isInlinePhotoSize } from './photo-spec.js';
 import { photoAvailability, bestSourceUrl, requestPhoto, requestDocument } from './media-source.js';
-import { isAnimatedMedia, getMediaType, buildDocumentThumb } from '../utils.js';
+import { isAnimatedMedia, getMediaType, buildDocumentThumb, geoCoords, geoExternalUrl, currentMapProvider } from '../utils.js';
+import { GeoBubble } from './geo-bubble.js';
 import type { ImageSpec } from '../types.js';
 
 const pollPhotoLog = getLogger('gram-ui:photo');
@@ -199,6 +200,9 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
     || docAttrs.some((a: any) => a._ === 'documentAttributeVideo' || a._ === 'documentAttributeAnimated')
   );
   const videoM = attachVideo ? { id: m.id, media: { _: 'messageMediaDocument', document: attachedDoc }, message: '', entities: [] } : null;
+  const attachGeoM = getMediaType(media.attached_media) === 'geo'
+    ? { id: m.id, media: media.attached_media, message: '', entities: [], date: m.date }
+    : null;
   const attachAnimated = videoM ? isAnimatedMedia(videoM.media) : false;
   const { hasAnyUrl } = photoAvailability(attachedPhoto);
   const photoProgress = attachedPhoto?.progress !== undefined ? attachedPhoto.progress : 0;
@@ -376,6 +380,10 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
             <VideoMessage m={videoM} timeStr={timeStr} out={out} status={status} documentUrls={documentUrls || {}} documentProgress={documentProgress} documentSources={documentSources} maxWidth={296} />
           )}
         </div>
+      ) : attachGeoM ? (
+        <div key="cover-geo" class="tgui-poll-attach tgui-poll-attach_geo">
+          <GeoBubble m={attachGeoM} timeStr={timeStr} out={out} status={status} />
+        </div>
       ) : null}
       {capText ? <div class="tgui-poll-caption"><EmojiText text={capText} entities={capEnts} documentUrls={documentUrls || {}} /></div> : null}
       <div class="tgui-poll-answers">
@@ -436,6 +444,27 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
                 <span key="dur" class="MediaCollage__video-duration">{fmtDur(dur)}</span>
               </div>
             );
+          } else if (getMediaType(am) === 'geo') {
+            const gc = geoCoords(am);
+            const openAnswerGeo = () => {
+              if (!gc) return;
+              try {
+                window.open(geoExternalUrl(gc.lat, gc.long, currentMapProvider()), '_blank', 'noopener,noreferrer');
+              } catch (e) {
+                pollPhotoLog.warn('[PollBubble] open answer geo failed');
+              }
+            };
+            optMedia = gc ? (
+              <div key="optgs" class="tgui-poll-optmedia_small tgui-poll-optgeo" onClick={(e: any) => { e.stopPropagation(); openAnswerGeo(); }}>
+                <span key="grid" class="tgui-geo-grid" aria-hidden="true" />
+                <span key="pin" class="tgui-geo-pin tgui-poll-optgeo-pin" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="22" height="22">
+                    <path d="M12 2a7 7 0 00-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 00-7-7z" fill="currentColor" />
+                    <circle cx="12" cy="9" r="2.6" fill="#fff" />
+                  </svg>
+                </span>
+              </div>
+            ) : null;
           }
           return (
             <div

@@ -95,6 +95,11 @@ export class GramApp {
         const a = await dbGet<boolean>('animationsEnabled');
         if (typeof a === 'boolean') initialAnimations = a;
       } catch {}
+      let initialMapProvider: 'google' | 'yandex' = 'google';
+      try {
+        const mp = await dbGet<string>('mapProvider');
+        if (mp === 'google' || mp === 'yandex') initialMapProvider = mp;
+      } catch {}
       const [bootAuthenticated, bootInvalidated] = await Promise.all([
         dbGet<string>('authenticated'),
         dbGet<string>('authInvalidated'),
@@ -106,6 +111,7 @@ export class GramApp {
         theme: initialTheme as AppState['theme'],
         imageQuality: initialQuality as AppState['imageQuality'],
         animationsEnabled: initialAnimations,
+        mapProvider: initialMapProvider,
         dialogs: [],
         connectionStatus: 'connecting' as AppState['connectionStatus'],
       });

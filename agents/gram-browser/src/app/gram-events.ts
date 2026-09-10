@@ -370,6 +370,7 @@ export function setupEventListeners(s: GramState): void {
       'langCode',
       'imageQuality',
       'animationsEnabled',
+      'mapProvider',
       ...AUTH_PRESERVE_KEYS,
       ...API_CREDS_PRESERVE_KEYS,
     ];
@@ -582,6 +583,13 @@ export function setupEventListeners(s: GramState): void {
     }
   };
   window.addEventListener('tg-animations-changed', onAnimationsChanged);
+  const onMapProviderChanged = (e: Event) => {
+    const provider = (e as CustomEvent).detail?.provider;
+    if (provider === 'google' || provider === 'yandex') {
+      dbSet('mapProvider', provider).catch(() => {});
+    }
+  };
+  window.addEventListener('tg-map-provider-changed', onMapProviderChanged);
 
   mediaRouter = new GramMediaRouter({
     tgService: s.tgService,

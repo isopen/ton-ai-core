@@ -74,6 +74,7 @@ export class TelegramUI {
     document.documentElement.setAttribute('data-theme', merged.theme);
     try {
       (document.documentElement as any).dataset.animations = merged.animationsEnabled === false ? 'off' : 'on';
+      (document.documentElement as any).dataset.mapProvider = merged.mapProvider === 'yandex' ? 'yandex' : 'google';
     } catch {}
 
     const self = this;
@@ -201,6 +202,12 @@ export class TelegramUI {
         try { (document.documentElement as any).dataset.animations = enabled ? 'on' : 'off'; } catch {}
         try { window.dispatchEvent(new CustomEvent('tg-animations-changed', { detail: { enabled } })); } catch {}
       }, [state.animationsEnabled]);
+
+      useEffect(() => {
+        const provider = state.mapProvider === 'yandex' ? 'yandex' : 'google';
+        try { (document.documentElement as any).dataset.mapProvider = provider; } catch {}
+        try { window.dispatchEvent(new CustomEvent('tg-map-provider-changed', { detail: { provider } })); } catch {}
+      }, [state.mapProvider]);
 
       useEffect(() => {
         if (!state.error && !state.buttonNotice) return;

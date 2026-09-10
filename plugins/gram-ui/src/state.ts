@@ -36,6 +36,7 @@ export function defaultState(): AppState {
     renderTick: 0,
     imageQuality: 'max',
     animationsEnabled: true,
+    mapProvider: 'google',
     loadingMessages: false,
     connectionStatus: 'disconnected',
     langCode: detectBrowserLang(),
@@ -103,6 +104,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_PLUGIN_SKILLS': return { ...state, pluginSkills: action.skills };
     case 'SET_IMAGE_QUALITY': return { ...state, imageQuality: action.quality };
     case 'SET_ANIMATIONS_ENABLED': return { ...state, animationsEnabled: action.v };
+    case 'SET_MAP_PROVIDER': return { ...state, mapProvider: action.provider };
     case 'SET_ACTIVE_SKILL': return { ...state, activeSkill: action.id, ...(action.id ? { selectedPeer: null } : {}) };
     case 'SET_LANG_OPTIONS': return { ...state, langOptions: action.options };
     case 'UPDATE_MESSAGE_PHOTO': {

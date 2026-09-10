@@ -25,7 +25,7 @@ import { SlotMachineSticker, resetSlotMachineDone } from './slot-machine.js';
 import { resetCompletedAnimations } from './tgs-player.js';
 import { observeVisibility } from './emoji-canvas.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
-import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText, isInactiveButtonData, buttonBubbleRel } from '../utils.js';
+import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText, isInactiveButtonData, buttonBubbleRel, resolveAvatar } from '../utils.js';
 import { MediaPlayer } from './media-player.js';
 import { VideoMessage } from './video-message.js';
 import { PhotoLoader } from './photo-loader.js';
@@ -35,6 +35,7 @@ import { MediaCollage, type MediaCollageItem } from './media-collage.js';
 import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
 import { AnimatedEmoji } from './emoji-text.js';
 import { PollBubble } from './poll-bubble.js';
+import { GeoBubble } from './geo-bubble.js';
 import { MediaCaption } from './media-caption.js';
 import type { ButtonNoticeData } from './button-notice.js';
 import { buildImageSpec } from './photo-spec.js';
@@ -152,7 +153,7 @@ function estimateRowHeight(row: AlbumRow): number {
     const capLen = (m.message || '').length;
     if (capLen) h += Math.min(120, 24 + Math.ceil(capLen / 60) * 22);
     for (const a of answers) {
-      if (a?.media?.photo || a?.media?.document) h += 100;
+      if (a?.media?.photo || a?.media?.document || getMediaType(a?.media) === 'geo') h += 100;
     }
     const am = m.media?.attached_media;
     if (am?.photo) {
@@ -166,6 +167,8 @@ function estimateRowHeight(row: AlbumRow): number {
       h += (bw > 0 && bh > 0) ? Math.min(320, Math.round(bh * Math.min(1, 320 / bw))) : 280;
     } else if (am?.document) {
       h += 300;
+    } else if (getMediaType(am) === 'geo') {
+      h += 250;
     }
     const res = m.media?.results || {};
     const voted = Array.isArray(res.results) && res.results.some((r: any) => !!r?.chosen);
@@ -173,6 +176,13 @@ function estimateRowHeight(row: AlbumRow): number {
     return h;
   }
   if (t === 'video') return 340;
+  if (t === 'geo') {
+    let h = 250;
+    if (m.media?._ === 'messageMediaVenue' && m.media?.title) h += 44;
+    const capLen = (m.message || '').length;
+    if (capLen) h += Math.min(120, 24 + Math.ceil(capLen / 60) * 22);
+    return h;
+  }
   if (t === 'document') return 80;
   if (m.media?.webpage) return 130;
   const len = (m.message || '').length;
@@ -778,7 +788,7 @@ export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOu
         : null}
       {fwdHeader}
       {(() => {
-        if (m.media && !['sticker', 'dice', 'poll', 'photo', 'image', 'video', 'webpage'].includes(mediaType)) {
+        if (m.media && !['sticker', 'dice', 'poll', 'photo', 'image', 'video', 'webpage', 'geo'].includes(mediaType)) {
           fallbackLog.info('[fallback] msg=' + m.id + ' mediaType=' + mediaType + ' media=' + JSON.stringify(m.media).slice(0, 400));
         }
         return null;
@@ -795,6 +805,8 @@ export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOu
             ? <MediaPlayer m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} />
           : mediaType === 'video'
             ? <VideoMessage m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} />
+          : mediaType === 'geo'
+            ? <GeoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} />
           : isLinkMsg
             ? <WebPageBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
             : <MessageBubble text={showUnsupported ? unsupportedText : bubbleText} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} documentSources={documentSources} inactiveButtons={inactiveButtons} buttonNotice={buttonNotice} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} messageId={m.id} replyMarkup={m.replyMarkup} richMessage={m.richMessage} richDocumentUrls={emojiUrls}
@@ -1017,7 +1029,8 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
   }
 
   const p = peer as any;
-  const avatarBg = p.avatarUrl ? 'transparent' : (p.type === 'user' ? '#1a4d8c' : '#2d5a27');
+  const headerAvatar = resolveAvatar(p);
+  const avatarBg = headerAvatar.url || headerAvatar.blurUrl ? 'transparent' : (p.type === 'user' ? '#1a4d8c' : '#2d5a27');
   const initial = getInitials(p);
 
   const selfPeer = state.selfUserId != null && p.id === state.selfUserId && p.type === 'user';
@@ -1060,7 +1073,8 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
     <div class="tgui-chat-body">
       <div class="tgui-chat-header">
         <Avatar
-          url={p.avatarUrl}
+          url={headerAvatar.url}
+          blurUrl={headerAvatar.blurUrl}
           initial={initial}
           color={avatarBg}
           size="small"
