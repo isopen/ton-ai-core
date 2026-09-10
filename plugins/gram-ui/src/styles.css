@@ -2745,33 +2745,18 @@ body {
 .MediaViewer {
   position: fixed;
   inset: 0;
-  z-index: 1000;
-  background: rgba(6, 8, 12, 0.94);
+  z-index: 2000;
   display: flex;
   align-items: center;
   justify-content: center;
   touch-action: pan-y;
 }
 
-.MediaViewer__close {
+.MediaViewer__backdrop {
   position: absolute;
-  top: 14px;
-  right: 14px;
-  z-index: 3;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(255,255,255,0.1);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  inset: 0;
+  background: #06080c;
   cursor: pointer;
-}
-
-.MediaViewer__close:hover {
-  background: rgba(255,255,255,0.2);
 }
 
 .MediaViewer__counter {
@@ -2817,26 +2802,29 @@ body {
 
 .MediaViewer__container {
   position: relative;
-  max-width: 92vw;
-  max-height: 92vh;
+  width: 100vw;
+  height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  pointer-events: none;
 }
 
 .MediaViewer__container_grab { cursor: grab; }
 .MediaViewer__container_grabbing { cursor: grabbing; }
 
 .MediaViewer__img {
-  max-width: 92vw;
-  max-height: 92vh;
+  max-width: 100vw;
+  max-height: 100vh;
   object-fit: contain;
   display: block;
   opacity: 0;
   transition: opacity .25s ease;
   user-select: none;
   -webkit-user-drag: none;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .MediaViewer__img_loaded {
@@ -2844,13 +2832,13 @@ body {
 }
 
 .MediaViewer__video {
-  max-width: 92vw;
-  max-height: 92vh;
+  max-width: 100vw;
+  max-height: 100vh;
   object-fit: contain;
   display: block;
   background: #000;
-  border-radius: 4px;
-  box-shadow: 0 12px 48px rgba(0,0,0,.6);
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .MediaViewer__thumb {
@@ -2862,6 +2850,7 @@ body {
   object-fit: contain;
   filter: blur(10px);
   opacity: 0.9;
+  pointer-events: none;
 }
 
 .MediaViewer__spinner {
@@ -2871,6 +2860,7 @@ body {
   border: 3px solid rgba(255,255,255,0.15);
   border-top-color: #fff;
   animation: MediaViewer-spin 0.9s linear infinite;
+  pointer-events: none;
 }
 
 @keyframes MediaViewer-spin {

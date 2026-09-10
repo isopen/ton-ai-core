@@ -171,8 +171,8 @@ export function MediaViewer({
     }
   }
 
-  function handleBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) onClose();
+  function handleBackdropClick() {
+    onClose();
   }
 
   if (!item) return null;
@@ -187,13 +187,8 @@ export function MediaViewer({
       : { onClick: (e: MouseEvent) => { e.stopPropagation(); onNavigate?.(index + delta); } };
 
   return (
-    <div class="MediaViewer" onClick={handleBackdropClick} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
-      <button class="MediaViewer__close" onClick={onClose}>
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
+    <div class="MediaViewer" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+      <div class="MediaViewer__backdrop" onClick={handleBackdropClick} />
       {items.length > 1 ? (
         <span class="MediaViewer__counter">{index + 1} / {items.length}</span>
       ) : null}
