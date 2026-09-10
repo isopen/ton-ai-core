@@ -278,8 +278,18 @@ function thumbUrl(s: any): string {
   return url;
 }
 
+const peerBlurCache = new WeakMap<object, string>();
+
 export function buildPeerBlurThumb(photo: any): string {
   if (!photo || typeof photo !== 'object') return '';
+  const hit = peerBlurCache.get(photo);
+  if (hit !== undefined) return hit;
+  const built = buildPeerBlurThumbUncached(photo);
+  peerBlurCache.set(photo, built);
+  return built;
+}
+
+function buildPeerBlurThumbUncached(photo: any): string {
   const sizes = photo.sizes;
   if (!Array.isArray(sizes)) return '';
   const toBytes = (raw: any): Uint8Array | null => {

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { getLogger } from '@ton-ai/gram-debug';
 import { Checkmark } from './checkmark.js';
 import { MediaCaption } from './media-caption.js';
+import { observeVisibility } from './emoji-canvas.js';
 import { geoCoords, geoEmbedUrl, geoExternalUrl, currentMapProvider } from '../utils.js';
 
 const geoLog = getLogger('gram-ui:geo');
@@ -34,14 +35,7 @@ export function GeoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderN
       setVisible(true);
       return;
     }
-    const obs = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) {
-        setVisible(true);
-        obs.disconnect();
-      }
-    }, { rootMargin: '200px' });
-    obs.observe(el);
-    return () => obs.disconnect();
+    return observeVisibility(el, 200, setVisible);
   }, [m?.id]);
   useEffect(() => {
     const onProv = () => setProvTick((t) => t + 1);

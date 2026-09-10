@@ -5,13 +5,16 @@
 import { render } from '@ton-ai/atom';
 import { GeoBubble } from '../dist/components/geo-bubble.js';
 import { PollBubble } from '../dist/components/poll-bubble.js';
-import { getMediaType, geoCoords, geoMapsUrl, geoEmbedUrl, geoExternalUrl, currentMapProvider } from '../dist/utils.js';
+import { getMediaType, geoCoords, geoMapsUrl, geoEmbedUrl, geoExternalUrl, currentMapProvider, buildPeerBlurThumb, resolveAvatar } from '../dist/utils.js';
 
 if (typeof (global as any).IntersectionObserver === 'undefined') {
     (global as any).IntersectionObserver = class {
         private cb: any;
-        constructor(cb: any) { this.cb = cb; }
-        observe() { try { this.cb([{ isIntersecting: true }]); } catch {} }
+        constructor(cb: any) {
+            this.cb = cb;
+            ((global as any).__geoIO = (global as any).__geoIO || []).push(this);
+        }
+        observe(t: any) { setTimeout(() => { try { this.cb([{ isIntersecting: true, target: t }]); } catch {} }, 0); }
         unobserve() {}
         disconnect() {}
     };
@@ -204,5 +207,37 @@ describe('GeoBubble in polls', () => {
     test('invalid answer geo renders no thumb', () => {
         const c = mount(h(PollBubble as any, { m: pollMsg({ question: { text: 'Q' }, answers: [{ option: 'a1', text: { text: 'X' }, media: { _: 'messageMediaGeo', geo: { _: 'geoPointEmpty' } } }] }), timeStr: '12:44', out: false, status: 'read' }));
         expect(c.querySelector('.tgui-poll-optgeo')).toBeNull();
+    });
+});
+
+describe('GeoBubble viewport parking', () => {
+    test('iframe unmounts when scrolled out and remounts on return', async () => {
+        const c = document.createElement('div');
+        document.body.appendChild(c);
+        const Comp: any = () => h(GeoBubble as any, { m: geoMsg({ _: 'messageMediaGeo', geo: geoPoint }), timeStr: '12:44', out: false, status: 'read' });
+        render(Comp, c);
+        await new Promise((r) => setTimeout(r, 150));
+        const map = c.querySelector('.tgui-geo-map') as HTMLElement;
+        expect(c.querySelector('.tgui-geo-frame')).toBeTruthy();
+        const ios = (global as any).__geoIO as any[];
+        const io = ios[ios.length - 1];
+        io.cb([{ isIntersecting: false, target: map }]);
+        await new Promise((r) => setTimeout(r, 150));
+        expect(c.querySelector('.tgui-geo-frame')).toBeNull();
+        expect(c.querySelector('.tgui-geo-map')).toBeTruthy();
+        io.cb([{ isIntersecting: true, target: map }]);
+        await new Promise((r) => setTimeout(r, 150));
+        expect(c.querySelector('.tgui-geo-frame')).toBeTruthy();
+    });
+});
+
+describe('Peer blur cache', () => {
+    test('buildPeerBlurThumb reads sizes once per photo object', () => {
+        let reads = 0;
+        const photo: any = {};
+        Object.defineProperty(photo, 'sizes', { get() { reads += 1; return []; }, enumerable: true });
+        expect(buildPeerBlurThumb(photo)).toBe('');
+        expect(buildPeerBlurThumb(photo)).toBe('');
+        expect(reads).toBe(1);
     });
 });
