@@ -7,7 +7,8 @@ export type TmdEntityType =
   | 'messageEntityCode'
   | 'messageEntityPre'
   | 'messageEntityTextLink'
-  | 'messageEntityBlockquote';
+  | 'messageEntityBlockquote'
+  | 'messageEntityExpandableBlockquote';
 
 export interface TmdEntity {
   _: TmdEntityType;

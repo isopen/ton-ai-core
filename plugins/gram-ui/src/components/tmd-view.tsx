@@ -186,7 +186,23 @@ export function TmdView({ text, foreignEntities, documentUrls, inactiveButtons, 
     }
   };
 
-  return h('div', { class: 'tmd-body md-body' + (className ? ' ' + className : ''), onClick: handleTableClick },
+  const handleQuoteClick = (e: any) => {
+    try {
+      const target = e?.target as HTMLElement | null;
+      if (!target || typeof (target as any).closest !== 'function') return;
+      const quote = (target as any).closest?.('blockquote.md-quote_collapsible') as HTMLElement | null;
+      if (!quote) return;
+      if ((target as any).closest?.('a[href], button')) return;
+      e.stopPropagation();
+      quote.classList.toggle('md-quote_collapsed');
+    } catch (err) {
+      tmdLog.error('[TmdView] quote toggle failed', err);
+    }
+  };
+
+  const handleContentClick = (e: any) => { handleTableClick(e); handleQuoteClick(e); };
+
+  return h('div', { class: 'tmd-body md-body' + (className ? ' ' + className : ''), onClick: handleContentClick },
     h('div', { ref: (e: HTMLDivElement | null) => { ref.current = e; }, dangerouslySetInnerHTML: { __html: html } } as any),
     hasTime ? h('div', { class: 'tmd-body__footer' },
       h('span', { class: 'tmd-body__time' }, time!),

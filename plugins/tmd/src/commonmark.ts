@@ -179,7 +179,7 @@ function extractAndRenderTables(src: string, opts: RenderOptions = {}): { html: 
         if (tp === 'document') continue;
         if (tp === 'text') tmpOut(n.literal);
         else if (tp === 'softbreak') tmpLit(softbreak);
-        else if (tp === 'linebreak') { tmpTag('br', [], true); tmpCr(); }
+        else if (tp === 'linebreak') { tmpTag('br', [], true); }
         else if (tp === 'emph') tmpTag(ent ? 'em' : '/em', ent ? [['class','md-em']] : []);
         else if (tp === 'strong') tmpTag(ent ? 'strong' : '/strong', ent ? [['class','md-strong']] : []);
         else if (tp === 'paragraph') {
@@ -268,11 +268,74 @@ function extractAndRenderTables(src: string, opts: RenderOptions = {}): { html: 
   return { html: res.trim(), hasTable };
 }
 
+export function shouldCollapseQuote(kind: string, text: string): boolean {
+  if (kind === 'messageEntityExpandableBlockquote') return true;
+  if (text.split('\n').length > 3) return true;
+  return text.length > 300;
+}
+
+export function quoteToggleHtml(_collapsed: boolean): string {
+  return '';
+}
+
+interface QuoteSub {
+  ph: string;
+  html: string;
+}
+
+function renderQuoteHtml(kind: string, inner: string, opts: RenderOptions): string {
+  const collapsed = shouldCollapseQuote(kind, inner);
+  const body = renderCommonMark(inner, { ...opts });
+  if (!collapsed) return '<blockquote class="md-quote">' + body + '</blockquote>';
+  return '<blockquote class="md-quote md-quote_collapsible md-quote_collapsed"><div class="md-quote-content">' + body + '</div></blockquote>';
+}
+
+function applyQuotePlaceholders(src: string, entities: any[] | undefined): { text: string; quotes: QuoteSub[]; entities: any[] } {
+  const list = Array.isArray(entities) ? entities : [];
+  const quotes = list
+    .filter((e: any) => e && (e._ === 'messageEntityBlockquote' || e._ === 'messageEntityExpandableBlockquote') && typeof e.offset === 'number' && typeof e.length === 'number' && e.length > 0 && e.offset < src.length)
+    .sort((a: any, b: any) => b.offset - a.offset);
+  if (quotes.length === 0) return { text: src, quotes: [], entities: list };
+  let text = src;
+  let rest = [...list];
+  const subs: QuoteSub[] = [];
+  for (let qi = 0; qi < quotes.length; qi++) {
+    const q = quotes[qi];
+    const end = Math.min(q.offset + q.length, text.length);
+    if (end <= q.offset) continue;
+    const inner = text.slice(q.offset, end);
+    const ph = '{{QUOTE_' + qi + '}}';
+    subs.push({ ph, html: '' });
+    const idx = subs.length - 1;
+    const innerEmojis = rest.filter((e: any) => e && e._ === 'messageEntityCustomEmoji' && typeof e.offset === 'number' && typeof e.length === 'number' && e.offset >= q.offset && e.offset + e.length <= end);
+    rest = rest.filter((e: any) => !(e && e._ === 'messageEntityCustomEmoji' && typeof e.offset === 'number' && typeof e.length === 'number' && e.offset >= q.offset && e.offset + e.length <= end));
+    rest = rest.map((e: any) => {
+      if (!e || typeof e.offset !== 'number' || typeof e.length !== 'number') return e;
+      if (e === q || quotes.indexOf(e) >= 0) return e;
+      if (e.offset >= end) {
+        const delta = ('\n\n' + ph + '\n\n').length - (end - q.offset);
+        return { ...e, offset: e.offset + delta };
+      }
+      return e;
+    });
+    subs[idx].html = renderQuoteHtml(q._, inner, { entities: innerEmojis.map((e: any) => ({ ...e, offset: e.offset - q.offset })) } as any);
+    text = text.slice(0, q.offset) + '\n\n' + ph + '\n\n' + text.slice(end);
+  }
+  return { text, quotes: subs, entities: rest.filter((e: any) => quotes.indexOf(e) < 0) };
+}
+
 export function renderCommonMark(src: string, opts: RenderOptions = {}): string {
-  return renderWithEmoji(src, opts, (s) => {
+  const applied = applyQuotePlaceholders(src, opts.entities);
+  const html = renderWithEmoji(applied.text, { ...opts, entities: applied.entities }, (s) => {
     const r = extractAndRenderTables(s, opts);
     return r.html;
   });
+  let out = html;
+  for (const q of applied.quotes) {
+    out = out.split('<p class="md-p">' + q.ph + '</p>').join(q.html);
+    out = out.split(q.ph).join(q.html);
+  }
+  return out;
 }
 
 export function hasCommonMark(src: string): boolean {

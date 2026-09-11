@@ -1,6 +1,6 @@
 import { parseTmdEntities, remapEntities } from './parser.js';
 import type { TmdEntity } from './types.js';
-import { renderCommonMark } from './commonmark.js';
+import { renderCommonMark, shouldCollapseQuote } from './commonmark.js';
 
 export function escapeHtml(s: string): string {
   return s
@@ -46,6 +46,12 @@ export function applyEntitiesHtml(text: string, entities: TmdEntity[] = []): str
     if (e._ === 'messageEntityPre') {
       const lang = e.language ? ' data-lang="' + escapeHtml(e.language) + '"' : '';
       return { open: '<pre class="md-pre"' + lang + '><code class="md-code-block">', close: '</code></pre>', end: Math.min(e.offset + e.length, text.length) };
+    }
+    if (e._ === 'messageEntityBlockquote' || e._ === 'messageEntityExpandableBlockquote') {
+      const end = Math.min(e.offset + e.length, text.length);
+      const covered = end > e.offset ? text.slice(e.offset, end) : '';
+      if (!shouldCollapseQuote(e._, covered)) return { open: '<blockquote class="md-quote">', close: '</blockquote>', end };
+      return { open: '<blockquote class="md-quote md-quote_collapsible md-quote_collapsed"><div class="md-quote-content">', close: '</div></blockquote>', end };
     }
     const pair = TAG_BY_ENTITY[e._];
     if (!pair) return null;

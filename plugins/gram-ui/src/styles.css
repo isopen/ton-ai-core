@@ -5592,19 +5592,19 @@ img.tgui-poll-optthumb {
   animation: tgui-poll-stat-in .25s ease;
 }
 
-.md-body { line-height: 1.5; }
+.md-body { line-height: 1.5; white-space: normal; }
 .md-body > :first-child,
 .md-body > :first-child > :first-child { margin-top: 0 !important; }
 .md-body > :last-child,
 .md-body > :last-child > :last-child { margin-bottom: 0 !important; }
 .md-body .md-p { margin: 8px 0; white-space: pre-wrap; word-break: break-word; }
-.md-body .md-h { margin: 10px 0 6px; font-weight: 700; line-height: 1.25; }
+.md-body .md-h { margin: 10px 0 6px; font-weight: 700; line-height: 1.25; white-space: pre-wrap; word-break: break-word; }
 .md-body .md-h1 { font-size: 1.5em; }
 .md-body .md-h2 { font-size: 1.3em; }
 .md-body .md-h3 { font-size: 1.15em; }
 .md-body .md-h4, .md-body .md-h5, .md-body .md-h6 { font-size: 1em; }
 .md-body .md-list { margin: 8px 0; padding-left: 22px; }
-.md-body .md-li { margin: 2px 0; }
+.md-body .md-li { margin: 2px 0; white-space: pre-wrap; word-break: break-word; }
 .md-body .md-quote {
   margin: 8px 0; padding: 4px 12px;
   border-left: 3px solid var(--accent, #369CE8);
@@ -5612,6 +5612,14 @@ img.tgui-poll-optthumb {
   border-radius: 4px;
 }
 .md-body .md-quote .md-p { margin: 0; }
+.md-body .md-quote-content { min-width: 0; }
+.md-body .md-quote_collapsed .md-quote-content {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.md-body .md-quote_collapsible { cursor: pointer; }
 .md-body .md-pre {
   margin: 8px 0; padding: 10px 12px;
   background: rgba(0,0,0,.28); border-radius: 8px;
