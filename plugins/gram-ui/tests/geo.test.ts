@@ -5,7 +5,7 @@
 import { render } from '@ton-ai/atom';
 import { GeoBubble } from '../dist/components/geo-bubble.js';
 import { PollBubble } from '../dist/components/poll-bubble.js';
-import { getMediaType, geoCoords, geoMapsUrl, geoEmbedUrl, geoExternalUrl, currentMapProvider, buildPeerBlurThumb, resolveAvatar, resolveDisplayPeer } from '../dist/utils.js';
+import { getMediaType, geoCoords, geoMapsUrl, geoEmbedUrl, geoExternalUrl, currentMapProvider, isMapEmbeddable, buildPeerBlurThumb, resolveAvatar, resolveDisplayPeer } from '../dist/utils.js';
 
 if (typeof (global as any).IntersectionObserver === 'undefined') {
     (global as any).IntersectionObserver = class {
@@ -79,6 +79,11 @@ describe('geo media routing', () => {
         expect(geoExternalUrl(55.7558, 37.6176, 'google')).toBe('https://www.google.com/maps/search/?api=1&query=55.7558,37.6176');
         expect(geoEmbedUrl(55.7558, 37.6176, 'yandex')).toBe('https://yandex.ru/map-widget/v1/?ll=37.6176%2C55.7558&z=15&pt=37.6176,55.7558,pm2rdm');
         expect(geoExternalUrl(55.7558, 37.6176, 'yandex')).toBe('https://yandex.ru/maps/?ll=37.6176%2C55.7558&z=15');
+        expect(geoEmbedUrl(55.7558, 37.6176, 'dgis')).toBe('https://2gis.ru/?m=37.6176%2C55.7558%2F15');
+        expect(geoExternalUrl(55.7558, 37.6176, 'dgis')).toBe('https://2gis.ru/?m=37.6176%2C55.7558%2F15');
+        expect(isMapEmbeddable('google')).toBe(true);
+        expect(isMapEmbeddable('yandex')).toBe(true);
+        expect(isMapEmbeddable('dgis')).toBe(false);
     });
 
     test('current provider defaults to google', () => {
@@ -87,6 +92,12 @@ describe('geo media routing', () => {
         try { (document.documentElement as any).dataset.mapProvider = 'yandex'; } catch {}
         expect(currentMapProvider()).toBe('yandex');
         expect(geoEmbedUrl(55.7558, 37.6176)).toContain('yandex.ru');
+        try { (document.documentElement as any).dataset.mapProvider = 'dgis'; } catch {}
+        expect(currentMapProvider()).toBe('dgis');
+        expect(geoEmbedUrl(55.7558, 37.6176)).toContain('2gis.ru');
+        expect(geoExternalUrl(55.7558, 37.6176)).toContain('2gis.ru');
+        try { (document.documentElement as any).dataset.mapProvider = 'unknown'; } catch {}
+        expect(currentMapProvider()).toBe('google');
         try { (document.documentElement as any).dataset.mapProvider = 'google'; } catch {}
         expect(currentMapProvider()).toBe('google');
     });
@@ -148,6 +159,11 @@ describe('GeoBubble', () => {
         await new Promise((r) => setTimeout(r, 150));
         expect(y.querySelector('.tgui-geo-frame')?.getAttribute('src')).toContain('yandex.ru');
         expect(y.querySelector('.tgui-geo-open')).toBeTruthy();
+        const d = renderFresh('dgis');
+        await new Promise((r) => setTimeout(r, 150));
+        expect(d.querySelector('.tgui-geo-frame')).toBeNull();
+        expect(d.querySelector('.tgui-geo-open')).toBeTruthy();
+        expect(d.querySelector('.tgui-geo-pin')).toBeTruthy();
         try { (document.documentElement as any).dataset.mapProvider = 'google'; } catch {}
     });
 

@@ -12,6 +12,7 @@ import { SkillPlugin } from './plugin/skill-plugin.js';
 import { PluginManager } from '@ton-ai/core';
 import { defaultState, reducer } from './state.js';
 import { injectStyles } from './styles.js';
+import { normalizeMapProvider } from './utils.js';
 import { setPhotoQuality } from './components/photo-spec.js';
 import { attachEmojiBurst, attachEmojiInteractions } from './components/emoji-burst.js';
 
@@ -74,7 +75,7 @@ export class TelegramUI {
     document.documentElement.setAttribute('data-theme', merged.theme);
     try {
       (document.documentElement as any).dataset.animations = merged.animationsEnabled === false ? 'off' : 'on';
-      (document.documentElement as any).dataset.mapProvider = merged.mapProvider === 'yandex' ? 'yandex' : 'google';
+      (document.documentElement as any).dataset.mapProvider = normalizeMapProvider(merged.mapProvider);
     } catch {}
 
     const self = this;
@@ -204,7 +205,7 @@ export class TelegramUI {
       }, [state.animationsEnabled]);
 
       useEffect(() => {
-        const provider = state.mapProvider === 'yandex' ? 'yandex' : 'google';
+        const provider = normalizeMapProvider(state.mapProvider);
         try { (document.documentElement as any).dataset.mapProvider = provider; } catch {}
         try { window.dispatchEvent(new CustomEvent('tg-map-provider-changed', { detail: { provider } })); } catch {}
       }, [state.mapProvider]);

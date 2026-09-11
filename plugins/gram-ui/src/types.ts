@@ -79,7 +79,7 @@ export interface AppState {
     renderTick: number;
     imageQuality: 'min' | 'medium' | 'max';
     animationsEnabled: boolean;
-    mapProvider: 'google' | 'yandex';
+    mapProvider: 'google' | 'yandex' | 'dgis';
     loadingMessages: boolean;
     connectionStatus: 'disconnected' | 'connecting' | 'connected';
     langCode: string;
@@ -171,7 +171,7 @@ export type UIAction =
     | { type: 'SET_PLUGIN_SKILLS'; skills: Array<{ id: string; label: string }> }
     | { type: 'SET_IMAGE_QUALITY'; quality: 'min' | 'medium' | 'max' }
     | { type: 'SET_ANIMATIONS_ENABLED'; v: boolean }
-    | { type: 'SET_MAP_PROVIDER'; provider: 'google' | 'yandex' }
+    | { type: 'SET_MAP_PROVIDER'; provider: 'google' | 'yandex' | 'dgis' }
     | { type: 'SET_ACTIVE_SKILL'; id: string | null }
     | { type: 'SET_LANG_OPTIONS'; options: LangOption[] }
     | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number | string; sizeType: string; url: string; cacheSource?: string }

@@ -1191,7 +1191,7 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
   );
 }
 
-export const ChatArea = memo(ChatAreaView as ComponentType, (a, b) =>
+export const areChatAreaPropsEqual = (a: any, b: any): boolean =>
   a.dispatch === b.dispatch &&
   a.skills === b.skills &&
   a.state.messages === b.state.messages &&
@@ -1213,5 +1213,7 @@ export const ChatArea = memo(ChatAreaView as ComponentType, (a, b) =>
   a.state.log === b.state.log &&
   a.state.sessionId === b.state.sessionId &&
   a.state.imageQuality === b.state.imageQuality &&
-  a.state.animationsEnabled === b.state.animationsEnabled,
-);
+  a.state.mapProvider === b.state.mapProvider &&
+  a.state.animationsEnabled === b.state.animationsEnabled;
+
+export const ChatArea = memo(ChatAreaView as ComponentType, areChatAreaPropsEqual);

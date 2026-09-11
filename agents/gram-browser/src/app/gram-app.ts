@@ -95,10 +95,10 @@ export class GramApp {
         const a = await dbGet<boolean>('animationsEnabled');
         if (typeof a === 'boolean') initialAnimations = a;
       } catch {}
-      let initialMapProvider: 'google' | 'yandex' = 'google';
+      let initialMapProvider: 'google' | 'yandex' | 'dgis' = 'google';
       try {
         const mp = await dbGet<string>('mapProvider');
-        if (mp === 'google' || mp === 'yandex') initialMapProvider = mp;
+        if (mp === 'google' || mp === 'yandex' || mp === 'dgis') initialMapProvider = mp;
       } catch {}
       const [bootAuthenticated, bootInvalidated] = await Promise.all([
         dbGet<string>('authenticated'),

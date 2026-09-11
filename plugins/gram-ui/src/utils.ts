@@ -90,12 +90,22 @@ export function geoMapsUrl(lat: number, lon: number): string {
   return 'https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lon;
 }
 
-export type MapProvider = 'google' | 'yandex';
+export type MapProvider = 'google' | 'yandex' | 'dgis';
+
+export function normalizeMapProvider(v: unknown): MapProvider {
+  if (v === 'yandex' || v === 'dgis') return v;
+  return 'google';
+}
+
+export function isMapEmbeddable(provider?: MapProvider): boolean {
+  const p = provider || currentMapProvider();
+  return p !== 'dgis';
+}
+
 
 export function currentMapProvider(): MapProvider {
   try {
-    const v = (document.documentElement as any)?.dataset?.mapProvider;
-    if (v === 'yandex') return 'yandex';
+    return normalizeMapProvider((document.documentElement as any)?.dataset?.mapProvider);
   } catch {}
   return 'google';
 }
@@ -103,12 +113,14 @@ export function currentMapProvider(): MapProvider {
 export function geoEmbedUrl(lat: number, lon: number, provider?: MapProvider): string {
   const p = provider || currentMapProvider();
   if (p === 'yandex') return 'https://yandex.ru/map-widget/v1/?ll=' + lon + '%2C' + lat + '&z=15&pt=' + lon + ',' + lat + ',pm2rdm';
+  if (p === 'dgis') return 'https://2gis.ru/?m=' + lon + '%2C' + lat + '%2F15';
   return 'https://maps.google.com/maps?q=' + lat + ',' + lon + '&z=15&output=embed';
 }
 
 export function geoExternalUrl(lat: number, lon: number, provider?: MapProvider): string {
   const p = provider || currentMapProvider();
   if (p === 'yandex') return 'https://yandex.ru/maps/?ll=' + lon + '%2C' + lat + '&z=15';
+  if (p === 'dgis') return 'https://2gis.ru/?m=' + lon + '%2C' + lat + '%2F15';
   return geoMapsUrl(lat, lon);
 }
 

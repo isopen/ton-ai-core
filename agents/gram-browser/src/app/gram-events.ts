@@ -585,7 +585,7 @@ export function setupEventListeners(s: GramState): void {
   window.addEventListener('tg-animations-changed', onAnimationsChanged);
   const onMapProviderChanged = (e: Event) => {
     const provider = (e as CustomEvent).detail?.provider;
-    if (provider === 'google' || provider === 'yandex') {
+    if (provider === 'google' || provider === 'yandex' || provider === 'dgis') {
       dbSet('mapProvider', provider).catch(() => {});
     }
   };

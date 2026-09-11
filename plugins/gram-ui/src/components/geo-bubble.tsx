@@ -1,10 +1,11 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { getLogger } from '@ton-ai/gram-debug';
+import { t, tpl, S } from '@ton-ai/gram-lang';
 import { Checkmark } from './checkmark.js';
 import { MediaCaption } from './media-caption.js';
 import { observeVisibility } from './emoji-canvas.js';
-import { geoCoords, geoEmbedUrl, geoExternalUrl, currentMapProvider } from '../utils.js';
+import { geoCoords, geoEmbedUrl, geoExternalUrl, currentMapProvider, isMapEmbeddable } from '../utils.js';
 
 const geoLog = getLogger('gram-ui:geo');
 
@@ -98,7 +99,7 @@ export function GeoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderN
               <circle cx="12" cy="9" r="2.6" fill="#fff" />
             </svg>
           </span>
-          {visible ? (
+          {visible && isMapEmbeddable(provider) ? (
             <iframe
               key={embed}
               class="tgui-geo-frame"
