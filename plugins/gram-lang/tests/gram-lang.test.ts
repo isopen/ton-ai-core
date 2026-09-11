@@ -131,3 +131,33 @@ describe('gram-lang cache', () => {
         assert.strictEqual(normalizeLangCode(''), 'en');
     });
 });
+
+describe('gram-lang key coverage', () => {
+    test('every S key has builtin English text', async () => {
+        const { S } = await import('../src/keys');
+        const { getBuiltinStrings } = await import('../src/local/en');
+        const en = getBuiltinStrings('en') || {};
+        const missing = Object.values(S).filter((k) => !en[k] && en[k] !== '');
+        assert.deepStrictEqual(missing, []);
+    });
+
+    test('every builtin English key is registered in S', async () => {
+        const { S } = await import('../src/keys');
+        const { getBuiltinStrings } = await import('../src/local/en');
+        const en = getBuiltinStrings('en') || {};
+        const registered = new Set(Object.values(S));
+        const orphan = Object.keys(en).filter((k) => !registered.has(k));
+        assert.deepStrictEqual(orphan, []);
+    });
+
+    test('t() falls back to English for unmapped keys', async () => {
+        const { t, setStrings } = await import('../src/locale');
+        const { S } = await import('../src/keys');
+        setStrings({});
+        assert.strictEqual(t(S.GEO_OPEN), 'Open map');
+        assert.strictEqual(t(S.QR_LOADING), 'Loading QR');
+        setStrings({ [S.GEO_OPEN]: 'GEO_OPEN_XX' });
+        assert.strictEqual(t(S.GEO_OPEN), 'GEO_OPEN_XX');
+        setStrings({});
+    });
+});
