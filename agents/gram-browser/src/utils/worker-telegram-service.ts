@@ -273,19 +273,20 @@ export class WorkerTelegramService extends TelegramService {
         return this.sendTyping(peer, 'sendMessageCancelAction');
     }
 
-    async downloadFile(info: { document?: any; photo?: any }): Promise<{ bytes: ArrayBuffer; type: string; cacheSource?: string } | null> {
+    async downloadFile(info: { document?: any; photo?: any }, opts?: { offset?: number; limit?: number; onProgress?: (pct: number) => void }): Promise<{ bytes: ArrayBuffer; type: string; cacheSource?: string } | null> {
         this.onLog?.('→ downloadFile');
         if (!this.workerClient) throw new Error('not connected');
-        const result = await this.workerClient.downloadFile(info.document, info.photo);
+        const clientOpts = opts && (opts.onProgress !== undefined || opts.offset !== undefined || opts.limit !== undefined) ? opts : undefined;
+        const result = await this.workerClient.downloadFile(info.document, info.photo, clientOpts);
         if (result.error) throw new Error(result.error);
         if (!result.bytes?.byteLength) return null;
         return { bytes: result.bytes, type: result.fileType, cacheSource: result.cacheSource };
     }
 
-    async downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
+    async downloadFiles(docs: Array<{ document: any; priority?: number; offset?: number; limit?: number }>, onProgress?: (index: number, pct: number) => void): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
         this.onLog?.('→ downloadFiles count=' + (docs?.length || 0));
         if (!this.workerClient) throw new Error('not connected');
-        return this.workerClient.downloadFiles(docs || []);
+        return this.workerClient.downloadFiles(docs || [], onProgress);
     }
 
     async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<{ cacheSource?: string }> {

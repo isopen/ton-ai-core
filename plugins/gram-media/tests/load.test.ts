@@ -132,7 +132,7 @@ describe('GramMediaRouter load tests', () => {
         expect(started.filter((v) => v === 17)).toHaveLength(4);
     });
 
-    test('queue buildup: queued photos wait for slots and drain in queue order for short queues', async () => {
+    test('queue buildup: queued photos wait for slots and drain last-requested-first for short queues', async () => {
         jest.useFakeTimers();
         const started: number[] = [];
         const transport = makeTransport({
@@ -152,7 +152,7 @@ describe('GramMediaRouter load tests', () => {
         await jest.advanceTimersByTimeAsync(1_000);
         await flushMicrotasks();
 
-        expect(started).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+        expect(started).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 17]);
         await jest.advanceTimersByTimeAsync(1_000);
         await flushMicrotasks();
 

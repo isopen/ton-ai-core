@@ -3219,10 +3219,13 @@ const b64ToAb = (b64: string): ArrayBuffer => bufToAb(Buffer.from(b64, 'base64')
 
 const inflightDownloads = new Map<string, Promise<DownloadResult>>();
 
-function downloadCacheKeyFor(document?: any, photo?: any): string {
+function downloadCacheKeyFor(document?: any, photo?: any, range?: { offset: number; limit: number }): string {
     const baseKey = document?.id?.toString() || photo?.id?.toString() || '';
     if (!baseKey) return '';
     const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : photo?.thumb_size ? `_thumb_${photo.thumb_size}` : '';
+    if (range && Number.isFinite(range.offset) && Number.isFinite(range.limit) && range.limit > 0) {
+        return baseKey + thumbSuffix + `:r${Math.max(0, Math.floor(range.offset))}-${Math.floor(range.limit)}`;
+    }
     return baseKey + thumbSuffix;
 }
 
@@ -3360,6 +3363,7 @@ interface QueueItem {
     totalSize?: number;
     locationOverride?: Record<string, any> | null;
     bucket?: string | null;
+    range?: { offset: number; limit: number };
 }
 const downloadQueue: Array<QueueItem> = [];
 const downloadQueueByKey = new Map<string, QueueItem>();
@@ -3586,7 +3590,7 @@ async function processDownloadQueue(): Promise<void> {
         const label = item.photo ? 'photo' : item.document?.thumb_size ? `thumb:${item.document.thumb_size}` : 'document';
         const id = item.document?.id?.toString() || item.photo?.id?.toString() || '?';
         wlog('[dlq] dequeue id=' + id + ' label=' + label + ' priority=' + item.priority + ' inflight=' + downloadInFlight + ' queued=' + downloadQueue.length);
-        downloadFile_(item.document, item.photo, item.genRef, item.onProgress, item.totalSize, item.priority, item.locationOverride, item.bucket).then(item.resolve, item.reject).finally(() => {
+        downloadFile_(item.document, item.photo, item.genRef, item.onProgress, item.totalSize, item.priority, item.locationOverride, item.bucket, item.range).then(item.resolve, item.reject).finally(() => {
             downloadInFlight--;
             wlog('[dlq] done id=' + id + ' label=' + label + ' inflight=' + downloadInFlight);
             processDownloadQueue();
@@ -3597,12 +3601,12 @@ async function processDownloadQueue(): Promise<void> {
     }
 }
 
-function enqueueDownload(document?: any, photo?: any, priority = 0, genRef?: QueueItem['genRef'], onProgress?: (pct: number) => void, totalSize?: number, locationOverride?: Record<string, any> | null, bucket?: string | null): Promise<DownloadResult> {
+function enqueueDownload(document?: any, photo?: any, priority = 0, genRef?: QueueItem['genRef'], onProgress?: (pct: number) => void, totalSize?: number, locationOverride?: Record<string, any> | null, bucket?: string | null, range?: { offset: number; limit: number }): Promise<DownloadResult> {
     const norm = normalizePriority(priority < 1 ? 1 : priority);
     const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
     const id = document?.id?.toString() || photo?.id?.toString() || '?';
     wlog('[dlq] enqueue id=' + id + ' label=' + label + ' priority=' + priority + ' norm=' + norm + ' queued_before=' + downloadQueue.length);
-    const cacheKey = downloadCacheKeyFor(document, photo);
+    const cacheKey = downloadCacheKeyFor(document, photo, range);
     const inflight = cacheKey ? inflightDownloads.get(cacheKey) : undefined;
     if (inflight) {
         const queued = cacheKey ? downloadQueueByKey.get(cacheKey) : undefined;
@@ -3615,7 +3619,7 @@ function enqueueDownload(document?: any, photo?: any, priority = 0, genRef?: Que
         return inflight;
     }
     const p = new Promise<DownloadResult>((resolve, reject) => {
-        const item: QueueItem = { document, photo, priority: norm, cacheKey, resolve, reject, genRef, onProgress, totalSize, locationOverride, bucket };
+        const item: QueueItem = { document, photo, priority: norm, cacheKey, resolve, reject, genRef, onProgress, totalSize, locationOverride, bucket, range };
         downloadQueue.push(item);
         if (cacheKey) downloadQueueByKey.set(cacheKey, item);
         processDownloadQueue();
@@ -3628,7 +3632,7 @@ function enqueueDownload(document?: any, photo?: any, priority = 0, genRef?: Que
     return p;
 }
 
-async function downloadFile_(document?: any, photo?: any, genRef?: { value: number; counter: 'photo' | 'avatar' }, onProgress?: (pct: number) => void, totalSize?: number, priority = TDLIB_PRIORITY_MAX, locationOverride?: Record<string, any> | null, bucket?: string | null): Promise<DownloadResult> {
+async function downloadFile_(document?: any, photo?: any, genRef?: { value: number; counter: 'photo' | 'avatar' }, onProgress?: (pct: number) => void, totalSize?: number, priority = TDLIB_PRIORITY_MAX, locationOverride?: Record<string, any> | null, bucket?: string | null, range?: { offset: number; limit: number }): Promise<DownloadResult> {
     const label = photo ? 'photo' : document?.thumb_size ? `thumb:${document.thumb_size}` : 'document';
     const id = document?.id?.toString() || photo?.id?.toString() || '?';
     wlog('[dl] start id=' + id + ' label=' + label + ' thumbSuffix=' + (document?.thumb_size || photo?.thumb_size || '') + ' totalSize=' + (totalSize || 0));
@@ -3669,7 +3673,11 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
 
         const baseKey = document?.id?.toString() || photo?.id?.toString() || '';
         const thumbSuffix = document?.thumb_size ? `_thumb_${document.thumb_size}` : photo?.thumb_size ? `_thumb_${photo.thumb_size}` : '';
-        const cacheKey = baseKey + thumbSuffix;
+        const hasRange = !!range && Number.isFinite(range.offset) && Number.isFinite(range.limit) && range.limit > 0;
+        const rangeOffset = hasRange ? Math.max(0, Math.floor(range.offset)) : 0;
+        const rangeLimit = hasRange ? Math.floor(range.limit) : 0;
+        const rangeEnd = rangeOffset + rangeLimit;
+        const cacheKey = hasRange ? '' : baseKey + thumbSuffix;
         const knownSizeEarly = totalSize || Number(document?.size || photo?.size || 0);
         if (cacheKey) {
             if (downloadCache.has(cacheKey)) {
@@ -3696,6 +3704,9 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         const knownSize = totalSize || Number(document?.size || photo?.size || 0);
 
         const PART_SIZE = selectPartSize(knownSize);
+        const rangeFirstPart = hasRange ? Math.floor(rangeOffset / PART_SIZE) : 0;
+        const rangeLastExclusive = hasRange ? Math.ceil(rangeEnd / PART_SIZE) : 0;
+        const rangeEndCap = hasRange ? rangeEnd : knownSize;
 
         const MAX_CONCURRENT = Math.max(1, Math.floor(POOL_BUDGET / PART_SIZE));
 
@@ -3713,8 +3724,8 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             finally { releasePool(poolDc, fileSmall, size, bucket || undefined); }
         };
         const requestSize = (ofs: bigint): number => {
-            if (knownSize > 0) {
-                const remaining = knownSize - Number(ofs);
+            if (rangeEndCap > 0) {
+                const remaining = rangeEndCap - Number(ofs);
                 return remaining > 0 ? Math.min(PART_SIZE, remaining) : PART_SIZE;
             }
             return PART_SIZE;
@@ -3799,8 +3810,9 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         };
 
         let firstResult: any;
-        const firstSize = PART_SIZE;
-        const firstClaimSize = knownSize > 0 ? Math.min(PART_SIZE, knownSize) : Math.min(PART_SIZE, SMALL_FILE_LIMIT);
+        const probeOfs = BigInt(rangeFirstPart * PART_SIZE);
+        const firstSize = hasRange ? Math.min(PART_SIZE, Math.max(1, rangeEnd - rangeFirstPart * PART_SIZE)) : PART_SIZE;
+        const firstClaimSize = hasRange ? firstSize : (knownSize > 0 ? Math.min(PART_SIZE, knownSize) : Math.min(PART_SIZE, SMALL_FILE_LIMIT));
         let abortFirstRequest: (() => void) | null = null;
         const firstRequestAbort = new Promise<never>((_, reject) => {
             abortFirstRequest = () => reject(new Error('download STALL timeout after 45s'));
@@ -3819,10 +3831,10 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         }, 45000);
         try {
             try {
-                firstResult = await Promise.race([poolCall(() => doCall(BigInt(0), firstSize, false), firstClaimSize), firstRequestAbort]);
+                firstResult = await Promise.race([poolCall(() => doCall(probeOfs, firstSize, false), firstClaimSize), firstRequestAbort]);
             } catch (e: any) {
                 if (!e.message?.includes('FILE_REFERENCE_EXPIRED') || !(await refreshDocumentRef())) throw e;
-                firstResult = await Promise.race([poolCall(() => doCall(BigInt(0), firstSize, false), firstClaimSize), firstRequestAbort]);
+                firstResult = await Promise.race([poolCall(() => doCall(probeOfs, firstSize, false), firstClaimSize), firstRequestAbort]);
             }
         } finally {
             clearTimeout(stallDumpTimer);
@@ -3835,7 +3847,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 throw new Error('File requires CDN DC ' + firstResult.dc_id + ' which is unreachable');
             }
             wlog('[dl] CDN redirect id=' + id + ' label=' + label + ' cdnDc=' + cdnDcId);
-            firstResult = await poolCall(() => doCall(BigInt(0), firstSize, false), firstClaimSize);
+            firstResult = await poolCall(() => doCall(probeOfs, firstSize, false), firstClaimSize);
         }
         if (firstResult._ !== 'upload.file') return { type: '', bytes: new ArrayBuffer(0), error: 'Unexpected response: ' + firstResult._ };
 
@@ -3844,7 +3856,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         const chunks: Buffer[] = [firstChunk];
         finalType = typeName;
 
-        if (firstChunk.length < PART_SIZE || typeName !== 'storage.filePartial') {
+        if (!hasRange && (firstChunk.length < PART_SIZE || typeName !== 'storage.filePartial')) {
             wlog('[dl] single chunk id=' + id + ' label=' + label + ' chunkLen=' + firstChunk.length + ' type=' + typeName);
             const allBytes = Buffer.concat(chunks);
         if (allBytes.length === 0) {
@@ -3874,8 +3886,8 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             return res;
         }
 
-        let maxTotal = knownSize > 0 ? knownSize : MAX_FILE_SIZE;
-        let nextPart = 1;
+        let maxTotal = hasRange ? rangeEnd : (knownSize > 0 ? knownSize : MAX_FILE_SIZE);
+        let nextPart = hasRange ? rangeFirstPart + 1 : 1;
         const usePartsResume = !!cacheKey && !isNoMediaCache() && knownSize > 0 && knownSize > PART_SIZE;
         const resumed = usePartsResume ? await loadPersistedParts(cacheKey) : null;
         if (resumed && resumed.partSize !== PART_SIZE) {
@@ -3920,6 +3932,7 @@ if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen 
             const batch: Promise<{ idx: number; chunk: Buffer }>[] = [];
             for (let i = 0; i < MAX_CONCURRENT; i++) {
                 const partIdx = nextPart + i;
+                if (hasRange && partIdx >= rangeLastExclusive) break;
                 batch.push(fetchPart(partIdx).then(chunk => ({ idx: partIdx, chunk })));
             }
             const batchResults = await Promise.all(batch);
@@ -3932,7 +3945,9 @@ if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen 
                 nextPart = idx + 1;
                 if (onProgress) {
                     const received = chunks.reduce((s, c) => s + c.length, 0);
-                    onProgress(Math.min(99, Math.round((received / (knownSize || maxTotal)) * 100)));
+                    const pctBase = hasRange ? Math.max(0, received - (rangeOffset - rangeFirstPart * PART_SIZE)) : received;
+                    const pctTotal = hasRange ? rangeLimit : (knownSize || maxTotal);
+                    onProgress(Math.min(99, Math.round((pctBase / pctTotal) * 100)));
                 }
                 if (chunk.length < PART_SIZE) { maxTotal = (idx + 1) * PART_SIZE; batchEndedEarly = true; break; }
             }
@@ -3944,13 +3959,15 @@ if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen 
 
         const allBytes = Buffer.concat(chunks);
         if (allBytes.length === 0) {
+            if (hasRange) return { type: finalType, bytes: new ArrayBuffer(0), cacheSource: serverType };
             return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
         }
-        const res: DownloadResult = { type: finalType, bytes: bufToAb(allBytes), cacheSource: serverType };
+        const rangeBytes = hasRange ? allBytes.slice(rangeOffset - rangeFirstPart * PART_SIZE, rangeOffset - rangeFirstPart * PART_SIZE + rangeLimit) : allBytes;
+        const res: DownloadResult = { type: finalType, bytes: bufToAb(rangeBytes), cacheSource: serverType };
         if (cacheKey) {
             if (resumed && resumed.parts.size > 0 && !isNoMediaCache()) await clearPersistedParts(cacheKey);
-            downloadCacheSet(cacheKey, { type: finalType, bytes: allBytes.toString('base64') }, document?.mime_type);
-            if (!isNoMediaCache()) persistDownloadCache(cacheKey, finalType, allBytes.toString('base64'), document?.mime_type);
+            downloadCacheSet(cacheKey, { type: finalType, bytes: rangeBytes.toString('base64') }, document?.mime_type);
+            if (!isNoMediaCache()) persistDownloadCache(cacheKey, finalType, rangeBytes.toString('base64'), document?.mime_type);
         }
         return res;
     } catch (e: any) {
@@ -4272,7 +4289,7 @@ export async function batchCheckDocumentCache(documents: Array<{ id: string | nu
   return result;
 }
 
-async function downloadFiles_(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
+async function downloadFiles_(docs: Array<{ document: any; priority?: number; offset?: number; limit?: number; onProgress?: (pct: number) => void }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
     const BATCH_ITEM_WATCHDOG_MS = 8000;
     const BATCH_ITEM_DEADLINE_MS = 50_000;
     const tasks = (docs || []).map((item, index) =>
@@ -4284,7 +4301,10 @@ async function downloadFiles_(docs: Array<{ document: any; priority?: number }>)
                 wlog('[dl] batch item timeout index=' + index + ' docId=' + (item?.document?.id?.toString?.() ?? '?') + ' — resolving with error');
                 resolve({ index, type: '', bytes: new ArrayBuffer(0), error: 'download timeout' });
             }, BATCH_ITEM_DEADLINE_MS);
-            enqueueDownload(item?.document, undefined, item?.priority || 0).then(
+            const range = typeof item?.limit === 'number' && item.limit > 0
+                ? { offset: typeof item?.offset === 'number' ? item.offset : 0, limit: item.limit }
+                : undefined;
+            enqueueDownload(item?.document, undefined, item?.priority || 0, undefined, item?.onProgress, undefined, undefined, undefined, range).then(
                 (r) => { clearTimeout(watchdog); clearTimeout(deadline); resolve({ index, type: r.type, bytes: r.bytes.slice(0), error: r.error, cacheSource: r.cacheSource }); },
                 (err) => { clearTimeout(watchdog); clearTimeout(deadline); resolve({ index, type: '', bytes: new ArrayBuffer(0), error: String((err as Error)?.message || err) }); },
             );

@@ -78,6 +78,35 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
             } else if (msg.type === 'cancelVideoStreams') {
                 try { TW.cancelVideoStreams(); } catch {}
                 try { port.postMessage({ type: 'response', id: msg.id, result: {} }); } catch {}
+            } else if (msg.type === 'downloadFile' && msg.withProgress) {
+                try {
+                    const dfRange = typeof msg.limit === 'number' && msg.limit > 0
+                        ? { offset: typeof msg.offset === 'number' ? msg.offset : 0, limit: msg.limit }
+                        : undefined;
+                    const dfResult = await TW.enqueueDownload(msg.document, msg.photo, msg.priority || 0, undefined, (pct: number) => {
+                        try { port.postMessage({ type: 'fileProgress', streamId: msg.id, progress: pct }); } catch {}
+                    }, undefined, undefined, undefined, dfRange);
+                    try { port.postMessage({ type: 'fileProgress', streamId: msg.id, progress: 100 }); } catch {}
+                    try { port.postMessage({ type: 'response', id: msg.id, result: { type: 'downloadFileResult', fileType: dfResult.type, bytes: dfResult.bytes.slice(0), error: dfResult.error, cacheSource: dfResult.cacheSource } }, [dfResult.bytes]); } catch {}
+                } catch (e: any) {
+                    try { port.postMessage({ type: 'response', id: msg.id, error: e.message }); } catch {}
+                }
+            } else if (msg.type === 'downloadFiles' && msg.withProgress) {
+                try {
+                    const docs = (msg.docs || []).map((d: any, index: number) => ({
+                        document: d.document,
+                        priority: d.priority,
+                        offset: d.offset,
+                        limit: d.limit,
+                        onProgress: (pct: number) => {
+                            try { port.postMessage({ type: 'fileProgress', streamId: msg.id, index, progress: pct }); } catch {}
+                        },
+                    }));
+                    const results = await TW.downloadFiles_(docs);
+                    try { port.postMessage({ type: 'response', id: msg.id, result: { type: 'downloadFilesResult', results } }, collectTransferables({ results })); } catch {}
+                } catch (e: any) {
+                    try { port.postMessage({ type: 'response', id: msg.id, error: e.message }); } catch {}
+                }
             } else if (msg.type === 'startPhotoDownload') {
                 try {
                     const result = await TW.requestPhotoDownload(msg.photo, msg.sizeType, msg.messageId, (pct: number) => {
@@ -222,11 +251,20 @@ async function _handleMessage(msg: Record<string, any>): Promise<any> {
             return { type: 'historyResult', result: historyResult };
         }
         case 'downloadFile': {
-            const dfResult = await TW.enqueueDownload(msg.document, msg.photo, msg.priority || 0);
+            const dfRange = typeof msg.limit === 'number' && msg.limit > 0
+                ? { offset: typeof msg.offset === 'number' ? msg.offset : 0, limit: msg.limit }
+                : undefined;
+            const dfResult = await TW.enqueueDownload(msg.document, msg.photo, msg.priority || 0, undefined, undefined, undefined, undefined, undefined, dfRange);
             return { type: 'downloadFileResult', fileType: dfResult.type, bytes: dfResult.bytes.slice(0), error: dfResult.error, cacheSource: dfResult.cacheSource };
         }
         case 'downloadFiles': {
-            const results = await TW.downloadFiles_(msg.docs || []);
+            const docs = (msg.docs || []).map((d: any) => ({
+                document: d.document,
+                priority: d.priority,
+                offset: d.offset,
+                limit: d.limit,
+            }));
+            const results = await TW.downloadFiles_(docs);
             return { type: 'downloadFilesResult', results };
         }
         case 'requestPhotoDownload': {

@@ -1,7 +1,12 @@
+export interface FileRange {
+    offset?: number;
+    limit?: number;
+}
+
 export interface MediaTransport {
     callRpc(method: string, params?: Record<string, any>): Promise<any>;
-    downloadFile(info: { document?: any; photo?: any }): Promise<{ bytes: string | ArrayBuffer | Uint8Array; type: string; cacheSource?: string } | null>;
-    downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>>;
+    downloadFile(info: { document?: any; photo?: any }, opts?: FileRange & { onProgress?: (pct: number) => void }): Promise<{ bytes: string | ArrayBuffer | Uint8Array; type: string; cacheSource?: string } | null>;
+    downloadFiles(docs: Array<{ document: any; priority?: number; offset?: number; limit?: number }>, onProgress?: (index: number, pct: number) => void): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>>;
     startPhotoDownload(photo: any, sizeType: string, messageId: number | string, onProgress: (pct: number) => void): Promise<any>;
     startVideoStream(document: any, onChunk: (data: ArrayBuffer | undefined, final: boolean, fileType: string) => void): Promise<{ cacheSource?: string }>;
     cancelVideoStreams?(): void;

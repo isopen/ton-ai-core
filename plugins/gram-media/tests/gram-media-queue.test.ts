@@ -2,7 +2,7 @@
 
 import { GramMediaRouter, normalizeDownloadPriority } from '../src/router.js';
 import {
-    makeHost, makeTransport, makeDocument, makeVideoDocument, makeBytes,
+    makeHost, makeTransport, makeDocument, makeVideoDocument, makePhoto, makeBytes,
     flushPromises, flushTicks, flushMicrotasks, actionsOfType, lastOfType,
 } from './helpers.js';
 
@@ -353,5 +353,205 @@ describe('GramMediaRouter TDLib download ordering', () => {
         expect(order).toEqual(['42']);
         const done = actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT');
         expect(done.map((a) => a.messageId)).toEqual([42]);
+    });
+});
+
+describe('GramMediaRouter TDLib ranges, progress and photo priorities', () => {
+    beforeEach(() => {
+        (globalThis as any).MediaSource = class MediaSource {};
+    });
+    afterEach(() => {
+        delete (globalThis as any).MediaSource;
+    });
+
+    test('queue range reaches transport downloadFiles items', async () => {
+        const seen: any[] = [];
+        const transport = makeTransport({
+            downloadFiles: async (items: any[]) => {
+                for (const it of items) seen.push({ id: String(it.document.id), offset: it.offset, limit: it.limit });
+                return items.map((it, i) => ({ index: i, type: 'application/octet-stream', bytes: makeBytes(8), cacheSource: 'test' }));
+            },
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+
+        router.queueDocumentDownload(makeDocument({ id: '401' }), 401, 1, undefined, { offset: 0, limit: 100 });
+        router.queueDocumentDownload(makeDocument({ id: '402' }), 402, 1, undefined, { offset: 500, limit: 100 });
+        await flushTicks();
+        await flushTicks();
+        await flushTicks();
+
+        const byId = new Map(seen.map((s) => [s.id, s]));
+        expect(byId.get('401')).toMatchObject({ offset: 0, limit: 100 });
+        expect(byId.get('402')).toMatchObject({ offset: 500, limit: 100 });
+        const done = actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT');
+        expect(done).toHaveLength(2);
+    });
+
+    test('downloadDocumentNow resolves with bytes and forwards range', async () => {
+        let gotOpts: any = null;
+        const transport = makeTransport({
+            downloadFile: async (_info: any, opts: any) => {
+                gotOpts = opts;
+                return { bytes: makeBytes(8), type: 'video/mp4', cacheSource: 'test' };
+            },
+        });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+
+        const res = await router.downloadDocumentNow(makeDocument({ id: '403' }), { offset: 10, limit: 20 });
+        expect(gotOpts).toMatchObject({ offset: 10, limit: 20 });
+        expect(res?.bytes?.byteLength).toBe(8);
+        expect(await router.downloadDocumentNow(null)).toBeNull();
+    });
+
+    test('batch progress dispatches deduplicated updates plus final 100', async () => {
+        const transport = makeTransport({
+            downloadFiles: async (items: any[], onProgress?: (index: number, pct: number) => void) => {
+                onProgress?.(0, 40);
+                onProgress?.(0, 40);
+                onProgress?.(1, 90);
+                return items.map((it, i) => ({ index: i, type: 'application/octet-stream', bytes: makeBytes(8), cacheSource: 'test' }));
+            },
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+
+        router.queueDocumentDownload(makeDocument({ id: '501' }), 501, 5);
+        router.queueDocumentDownload(makeDocument({ id: '502' }), 502, 1);
+        await flushTicks();
+        await flushTicks();
+        await flushTicks();
+
+        const forMsg = (id: number) => actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT_PROGRESS')
+            .filter((a) => a.messageId === id).map((a) => a.progress);
+        expect(forMsg(501)).toEqual([0, 40, 100]);
+        expect(forMsg(502)).toEqual([0, 90, 100]);
+    });
+
+    test('photo queue dequeues last-requested-first', async () => {
+        const started: string[] = [];
+        const deferreds: Array<() => void> = [];
+        const transport = makeTransport({
+            startPhotoDownload: (photo: any) => {
+                started.push(String(photo.id));
+                return new Promise((resolve) => {
+                    deferreds.push(() => resolve({ bytes: makeBytes(16), mime: 'image/jpeg' }));
+                });
+            },
+        });
+        const { host, setTransport } = makeHost();
+        const router = new GramMediaRouter(host);
+        setTransport(transport);
+        router.attach();
+        try {
+            for (let i = 1; i <= 18; i++) {
+                window.dispatchEvent(new CustomEvent('tg-download-photo', {
+                    detail: { photo: makePhoto({ id: 'p' + i }), sizeType: 'm', messageId: 600 + i },
+                }));
+            }
+            await flushPromises();
+            expect(started).toHaveLength(16);
+
+            deferreds[0]!();
+            await flushTicks();
+            await flushTicks();
+            expect(started[16]).toBe('p18');
+
+            for (let round = 0; round < 6 && started.length < 18; round++) {
+                for (const d of deferreds.splice(0)) d();
+                await flushTicks();
+            }
+            expect(started).toHaveLength(18);
+        } finally {
+            for (const fn of host.cleanupFns.splice(0)) fn();
+        }
+    });
+
+    test('photo re-request raises queued priority', async () => {
+        const started: string[] = [];
+        const deferreds: Array<() => void> = [];
+        const transport = makeTransport({
+            startPhotoDownload: (photo: any) => {
+                started.push(String(photo.id));
+                return new Promise((resolve) => {
+                    deferreds.push(() => resolve({ bytes: makeBytes(16), mime: 'image/jpeg' }));
+                });
+            },
+        });
+        const { host, setTransport } = makeHost();
+        const router = new GramMediaRouter(host);
+        setTransport(transport);
+        router.attach();
+        try {
+            for (let i = 1; i <= 18; i++) {
+                window.dispatchEvent(new CustomEvent('tg-download-photo', {
+                    detail: { photo: makePhoto({ id: 'q' + i }), sizeType: 'm', messageId: 700 + i },
+                }));
+            }
+            await flushPromises();
+            expect(started).toHaveLength(16);
+
+            window.dispatchEvent(new CustomEvent('tg-download-photo', {
+                detail: { photo: makePhoto({ id: 'q17' }), sizeType: 'm', messageId: 717, priority: 9 },
+            }));
+            const queued = (router as any).photoQueue as Array<any>;
+            expect(queued.map((q) => q.priority)).toEqual([1, 9]);
+
+            deferreds[0]!();
+            await flushTicks();
+            await flushTicks();
+            expect(started[16]).toBe('q17');
+
+            for (let round = 0; round < 6 && started.length < 18; round++) {
+                for (const d of deferreds.splice(0)) d();
+                await flushTicks();
+            }
+            expect(started).toHaveLength(18);
+        } finally {
+            for (const fn of host.cleanupFns.splice(0)) fn();
+        }
+    });
+
+    test('avatar queue dequeues last-requested-first with default priority', async () => {
+        const started: string[] = [];
+        const deferreds: Array<() => void> = [];
+        const transport = makeTransport({
+            startPhotoDownload: (photo: any) => {
+                started.push(String(photo.id));
+                return new Promise((resolve) => {
+                    deferreds.push(() => resolve({ bytes: makeBytes(16), mime: 'image/jpeg' }));
+                });
+            },
+        });
+        const { host, setTransport } = makeHost();
+        const router = new GramMediaRouter(host);
+        setTransport(transport);
+        router.attach();
+        try {
+            for (let i = 1; i <= 34; i++) {
+                window.dispatchEvent(new CustomEvent('tg-download-photo', {
+                    detail: { photo: makePhoto({ id: 'a' + i }), sizeType: 'm', messageId: 'avatar_user_' + i },
+                }));
+            }
+            await flushPromises();
+            expect(started).toHaveLength(32);
+            const queued = (router as any).avatarQueue as Array<any>;
+            expect(queued.map((q) => String(q.photo.id)).sort()).toEqual(['a33', 'a34']);
+            expect(queued.every((q) => q.priority === 1)).toBe(true);
+
+            deferreds[0]!();
+            await flushTicks();
+            await flushTicks();
+            expect(started[32]).toBe('a34');
+
+            for (let round = 0; round < 8 && started.length < 34; round++) {
+                for (const d of deferreds.splice(0)) d();
+                await flushTicks();
+            }
+            expect(started).toHaveLength(34);
+        } finally {
+            for (const fn of host.cleanupFns.splice(0)) fn();
+        }
     });
 });

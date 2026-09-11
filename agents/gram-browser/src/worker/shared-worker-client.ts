@@ -47,7 +47,7 @@ export class SharedWorkerClient {
                 this.onAuthInvalidated?.();
                 return;
             }
-            if (msg.type === 'videoChunk' || msg.type === 'photoProgress') {
+            if (msg.type === 'videoChunk' || msg.type === 'photoProgress' || msg.type === 'fileProgress') {
                 const handler = this.streamListeners.get(msg.streamId);
                 if (handler) handler(msg);
                 return;
@@ -140,13 +140,59 @@ export class SharedWorkerClient {
         return this.send({ type: 'callRpc', methodName, params });
     }
 
-    async downloadFile(document: any, photo: any): Promise<{ fileType: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }> {
-        return this.send({ type: 'downloadFile', document, photo }, 60_000);
+    async downloadFile(document: any, photo: any, opts?: { offset?: number; limit?: number; onProgress?: (pct: number) => void }): Promise<{ fileType: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }> {
+        if (!opts || (opts.onProgress === undefined && opts.offset === undefined && opts.limit === undefined)) {
+            return this.send({ type: 'downloadFile', document, photo }, 60_000);
+        }
+        return new Promise((resolve, reject) => {
+            if (!this.port) { reject(new Error('Not started')); return; }
+            const id = ++this.msgId;
+            const timer = setTimeout(() => {
+                this.streamListeners.delete(id);
+                this.pending.delete(id);
+                reject(new Error('Download timeout'));
+            }, 120_000);
+            this.streamListeners.set(id, (msg: any) => {
+                if (msg.progress !== undefined && opts.onProgress) {
+                    opts.onProgress(msg.progress);
+                }
+            });
+            this.pending.set(id, {
+                resolve: (v: any) => { clearTimeout(timer); this.streamListeners.delete(id); resolve(v); },
+                reject: (e: Error) => { clearTimeout(timer); this.streamListeners.delete(id); reject(e); },
+            });
+            this.port.postMessage({ type: 'downloadFile', document, photo, offset: opts.offset, limit: opts.limit, withProgress: opts.onProgress !== undefined, id });
+        });
     }
 
-    async downloadFiles(docs: Array<{ document: any; priority?: number }>): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
-        const resp = await this.send({ type: 'downloadFiles', docs }, 60_000);
-        return resp && Array.isArray(resp.results) ? resp.results : [];
+    async downloadFiles(docs: Array<{ document: any; priority?: number; offset?: number; limit?: number }>, onProgress?: (index: number, pct: number) => void): Promise<Array<{ index: number; type: string; bytes: ArrayBuffer; error?: string; cacheSource?: string }>> {
+        if (onProgress === undefined && !(docs || []).some((d) => d && (d.offset !== undefined || d.limit !== undefined))) {
+            const resp = await this.send({ type: 'downloadFiles', docs }, 60_000);
+            return resp && Array.isArray(resp.results) ? resp.results : [];
+        }
+        return new Promise((resolve, reject) => {
+            if (!this.port) { reject(new Error('Not started')); return; }
+            const id = ++this.msgId;
+            const timer = setTimeout(() => {
+                this.streamListeners.delete(id);
+                this.pending.delete(id);
+                reject(new Error('Download timeout'));
+            }, 180_000);
+            this.streamListeners.set(id, (msg: any) => {
+                if (msg.progress !== undefined && typeof msg.index === 'number' && onProgress) {
+                    onProgress(msg.index, msg.progress);
+                }
+            });
+            this.pending.set(id, {
+                resolve: (v: any) => {
+                    clearTimeout(timer);
+                    this.streamListeners.delete(id);
+                    resolve(v && Array.isArray(v.results) ? v.results : []);
+                },
+                reject: (e: Error) => { clearTimeout(timer); this.streamListeners.delete(id); reject(e); },
+            });
+            this.port.postMessage({ type: 'downloadFiles', docs, withProgress: onProgress !== undefined, id });
+        });
     }
 
     async startVideoStream(document: any, onChunk: (data: ArrayBuffer, final: boolean, fileType: string) => void): Promise<{ cacheSource?: string }> {
