@@ -11,7 +11,9 @@ import { t, S } from '@ton-ai/gram-lang';
 
 if (typeof (global as any).IntersectionObserver === 'undefined') {
     (global as any).IntersectionObserver = class {
-        observe() {}
+        private cb: any;
+        constructor(cb: any) { this.cb = cb; }
+        observe(target: any) { try { this.cb([{ isIntersecting: true, target }]); } catch {} }
         unobserve() {}
         disconnect() {}
     };
@@ -83,6 +85,7 @@ describe('chat text emoji display', () => {
         expect(c.querySelector('span.tgui-emoji-slot')?.textContent).toBe('');
         expect(c.textContent).not.toContain('❤');
     });
+
 });
 
 describe('sticker display', () => {

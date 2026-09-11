@@ -444,6 +444,37 @@ function renderIdFor(docId: string, size: number): string {
 
 const everPaintedDocs = new Set<string>();
 
+export function VideoSlot({ url, size, playing, onError }: { url: string; size: number; playing: boolean; onError?: () => void }) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    if (playing) {
+      try {
+        const p = v.play() as unknown as Promise<void> | undefined;
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } catch {}
+    } else {
+      try { v.pause(); } catch {}
+    }
+  }, [playing, url]);
+  return (
+    <video
+      ref={(el: HTMLVideoElement | null) => { ref.current = el; }}
+      src={url}
+      width={size}
+      height={size}
+      style="display:block;width:100%;height:100%"
+      loop
+      muted
+      playsinline
+      preload="auto"
+      autoplay={playing}
+      onError={onError}
+    />
+  );
+}
+
 export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30, singleLine = false, vAlign = 'top' }: { segments: EmojiSegment[]; documentUrls: Record<string, string>; documentSources?: Record<string, string>; size?: number; singleLine?: boolean; vAlign?: 'top' | 'middle' }) {
   const emojiSegs: Array<{ docId: string; value?: string; custom?: boolean }> = [];
   for (const s of segments) {
@@ -799,18 +830,8 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
         return (
           <span key={s.type + ':' + (s.docId || s.value) + ':' + i} class="tgui-emoji-slot" data-doc={docId} style={slotStyle}>
             {kind === 'video' && url && !failed ? (
-              playing ? (
-                <video
-                  src={url}
-                  width={size}
-                  height={size}
-                  style="display:block;width:100%;height:100%"
-                  loop
-                  muted
-                  playsinline
-                  autoplay
-                  onError={onError}
-                />
+              (inView || everShown) ? (
+                <VideoSlot url={url} size={size} playing={playing} onError={onError} />
               ) : (
                 <span style="display:block;width:100%;height:100%" />
               )
