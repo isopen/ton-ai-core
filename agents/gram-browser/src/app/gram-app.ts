@@ -177,7 +177,7 @@ export class GramApp {
       }
 
       if (wasDialogs && curStep !== 'qr_login') {
-        s.tgui.current?.setError('Session terminated from another device');
+        s.tgui.current?.setError(t(S.AUTH_SESSION_TERMINATED));
       } else if (!s.tgui.current?.state?.error) {
         s.tgui.current?.setError('');
       }
@@ -241,7 +241,7 @@ export class GramApp {
           s.tgui.current.setConnectionStatus('disconnected');
           s.tgui.current.setPage('auth');
           s.tgui.current.setAuthStep('phone');
-          s.tgui.current.setError('Connection failed');
+          s.tgui.current.setError(t(S.APP_CONNECTION_FAILED));
         }
         return;
       }

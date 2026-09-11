@@ -1,6 +1,6 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useRef, useState, useDomEvent } from '@ton-ai/atom/hooks';
-import { t } from '@ton-ai/gram-lang';
+import { t, S } from '@ton-ai/gram-lang';
 import { useApp } from '../app-context.js';
 
 function SettingsIcon() {
@@ -41,7 +41,7 @@ export function ActionMenu() {
       <button
         class="ActionMenuDropdown__trigger"
         onClick={() => setOpen(!open)}
-        aria-label="Menu"
+        aria-label={t(S.ACTION_MENU)}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
           <circle cx="5" cy="12" r="1.5" />

@@ -1,4 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
+import { t, S } from '@ton-ai/gram-lang';
 import { useEffect, useMemo, useRef } from '@ton-ai/atom/hooks';
 
 export const MOON_D_ORIGINAL = 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z';
@@ -468,7 +469,7 @@ export function ThemeMorphIcon({ theme, size = 20 }: { theme: ThemeName; size?: 
 
 export function themeToggleLabel(theme: ThemeName, lang?: string): string {
   const toLight = theme === 'dark';
-  return toLight ? 'Switch to light theme' : 'Switch to dark theme';
+  return toLight ? t(S.THEME_SWITCH_LIGHT) : t(S.THEME_SWITCH_DARK);
 }
 
 export function ThemeToggle({

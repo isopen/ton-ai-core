@@ -285,7 +285,7 @@ const RESEND_DELAY = 30;
 
 function LoadingView() {
   return (
-    <div class="login-loading" role="status" aria-label="Loading">
+    <div class="login-loading" role="status" aria-label={t(S.AUTH_LOADING)}>
       <div class="login-spinner"></div>
     </div>
   );
@@ -434,9 +434,9 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
       </div>
       <Scrollable className="login-country-list">
         {isCountriesLoading ? (
-          <div class="login-country-empty"><span class="login-spinner" style="width:16px;height:16px;border-width:2px"></span> Loading countries...</div>
+          <div class="login-country-empty"><span class="login-spinner" style="width:16px;height:16px;border-width:2px"></span> {t(S.AUTH_LOADING_COUNTRIES)}</div>
         ) : filtered.length === 0 ? (
-          <div class="login-country-empty">No countries found</div>
+          <div class="login-country-empty">{t(S.AUTH_NO_COUNTRIES)}</div>
         ) : filtered.map(c => (
           <button
             class={`login-country-item${c.iso2 === state.countryIso2 ? ' active' : ''}`}
@@ -463,7 +463,7 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
             label={t(S.AUTH_PHONE_LABEL)}
             type="tel"
             value={isCountriesLoading ? '' : displayValue}
-            placeholder={isCountriesLoading ? 'Loading...' : (focused ? phoneMask : '')}
+            placeholder={isCountriesLoading ? t(S.LANG_LOADING) : (focused ? phoneMask : '')}
             autocomplete="tel"
             inputmode="numeric"
             ariaInvalid={state.error ? 'true' : 'false'}
@@ -617,7 +617,7 @@ function PasswordView({ dispatch, state }: { dispatch: Dispatch; state?: AppStat
         onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); onSubmit(); } }}
         inputRef={inputRef}
         rightSlot={
-          <button type="button" class="login-password-toggle" aria-label={visible ? 'Hide password' : 'Show password'} onClick={() => setVisible(v => !v)}>
+          <button type="button" class="login-password-toggle" aria-label={visible ? t(S.AUTH_HIDE_PASSWORD) : t(S.AUTH_SHOW_PASSWORD)} onClick={() => setVisible(v => !v)}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               {visible ? <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></> : <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.53 9.53A3 3 0 0 0 12 15a3 3 0 0 0 2.47-5.47"/><line x1="1" y1="1" x2="23" y2="23"/></>}
             </svg>
@@ -798,7 +798,7 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
             />
             <div class="login-top-row">
               {state.authStep !== 'phone' ? (
-                <button class="login-btn-back" type="button" aria-label="Back" onClick={handleBack}>
+                <button class="login-btn-back" type="button" aria-label={t(S.AUTH_BACK)} onClick={handleBack}>
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
                 </button>
               ) : null}
@@ -807,7 +807,7 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
 
             {state.authStep === 'phone' ? (
               <div>
-                <h1 class="login-title login-title-plain">Gram</h1>
+                <h1 class="login-title login-title-plain">{t(S.AUTH_APP_NAME)}</h1>
               </div>
             ) : null}
 

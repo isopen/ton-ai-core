@@ -71,7 +71,7 @@ export function GeoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderN
   const single = !m.message && !title && !address;
   const embed = geoEmbedUrl(coords.lat, coords.long, provider);
   const external = geoExternalUrl(coords.lat, coords.long, provider);
-  const mapTitle = 'Map ' + coords.lat + ', ' + coords.long;
+  const mapTitle = tpl(S.MAP_COORDS, { coords: coords.lat + ', ' + coords.long });
   const openMap = () => {
     try {
       window.open(external, '_blank', 'noopener,noreferrer');
@@ -115,7 +115,7 @@ export function GeoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderN
               {fmtCountdown(remaining)}
             </span>
           ) : null}
-          <button type="button" class="tgui-geo-open" aria-label="Open map" onClick={(e: Event) => { e.stopPropagation(); openMap(); }}>
+          <button type="button" class="tgui-geo-open" aria-label={t(S.GEO_OPEN)} onClick={(e: Event) => { e.stopPropagation(); openMap(); }}>
             <svg viewBox="0 0 24 24" width="13" height="13">
               <path d="M9 6H6.5A1.5 1.5 0 005 7.5v10A1.5 1.5 0 006.5 19h10a1.5 1.5 0 001.5-1.5V15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
               <path d="M13 5h6v6M19 5l-8.5 8.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />

@@ -1,4 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
+import { t, S } from '@ton-ai/gram-lang';
 import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedEmoji } from './emoji-text.js';
 import { getLogger } from '@ton-ai/gram-debug';
@@ -82,8 +83,8 @@ function RichPhoto({ photo, caption, spoiler, richMessage, maxWidth = 480, fluid
     return () => { cancelled = true; window.removeEventListener('tg-rich-photo-url' as any, handler); window.removeEventListener('tg-photo-url' as any, handler); clearTimeout(t); };
   }, [photo]);
   const displayUrl = url || stripped;
-  if (failed && !displayUrl) return <div class="rich-photo rich-photo_failed">photo unavailable</div>;
-  if (!displayUrl) return <div class="rich-photo rich-photo_loading">loading photo…</div>;
+  if (failed && !displayUrl) return <div class="rich-photo rich-photo_failed">{t(S.PHOTO_LOAD_FAILED)}</div>;
+  if (!displayUrl) return <div class="rich-photo rich-photo_loading">{t(S.RICH_PHOTO_LOADING)}</div>;
   const isStripped = !url && !!stripped;
   const spec = buildRichImageSpec(photo, url, stripped);
   if (!spec) {

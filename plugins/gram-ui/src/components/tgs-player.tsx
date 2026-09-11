@@ -1,4 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
+import { t, S } from '@ton-ai/gram-lang';
 import { useState, useEffect, useRef, useCallback, useDomEvent } from '@ton-ai/atom/hooks';
 import { renderFrame } from '@ton-ai/tgs';
 import type { LayerOrder, ParsedAnimation } from '@ton-ai/tgs';
@@ -170,7 +171,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
             } catch (e: any) {
                 if (cancelled) return;
                 tgsLog.info('[TGS_LOG] parse error', e);
-                setError(e.message || 'Invalid TGS');
+                setError(e.message || t(S.TGS_INVALID));
                 animRef.current = null;
             }
         })();
@@ -439,7 +440,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
             <div
                 class={'TgsPlayer TgsPlayer_error' + (className ? ' ' + className : '')}
                 style={{ width: width + 'px', height: height + 'px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', fontSize: '12px', color: '#999' }}>
-                <span>TGS Error</span>
+                <span>{t(S.TGS_ERROR)}</span>
             </div>
         );
     }

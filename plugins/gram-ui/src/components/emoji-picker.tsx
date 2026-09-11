@@ -5,6 +5,7 @@ import { checkEmojiKind, observeVisibility } from './emoji-canvas.js';
 import { AnimatedSticker } from './animated-sticker.js';
 import { ensureEmojiStickers, getEmojiDocId, requestEmojiDownload, subscribeEmojiMap, ensureEmojiPicker, subscribeEmojiPicker, getPickerCategories, searchServerEmojis } from './emoji-store.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
+import { t, S } from '@ton-ai/gram-lang';
 import type { Dispatch } from '../state.js';
 
 const ITEM_SIZE = 40;
@@ -340,7 +341,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
   }, [onPick, onClose]);
 
   const allCats: EmojiCategory[] = [
-    { name: 'Recent', emojis: recent },
+    { name: t(S.EMOJI_RECENT), emojis: recent },
     ...(cats || []),
   ];
 
@@ -354,7 +355,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
       <div class="tgui-emoji-search-wrap">
         <input
           class="tgui-emoji-search"
-          placeholder="Search"
+          placeholder={t(S.SEARCH_FIELD)}
           value={query}
           onInput={(e: any) => setQuery(e.target.value)}
           onKeyDown={(e: any) => {
@@ -378,7 +379,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
           ) : (
             <CategorySection
               key="search"
-              cat={{ name: 'Search results', emojis: searchResults }}
+              cat={{ name: t(S.EMOJI_SEARCH_RESULTS), emojis: searchResults }}
               index={0}
               mounted
               expanded

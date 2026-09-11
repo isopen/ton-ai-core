@@ -1,4 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
+import { t, S } from '@ton-ai/gram-lang';
 import { useState, useEffect, useRef } from '@ton-ai/atom/hooks';
 import { GramLogo } from '../components/gram-logo.js';
 import {
@@ -106,7 +107,7 @@ export function QrCode({
 
     const vCheck = validateQrValue(value);
     if (!vCheck.valid) {
-      setError(vCheck.error || 'Invalid QR params');
+      setError(vCheck.error || t(S.QR_INVALID_PARAMS));
       setDataUrl('');
       setLoading(false);
       if (vCheck.error) onError?.(new Error(vCheck.error));
@@ -174,8 +175,8 @@ export function QrCode({
   if (!value && !dataUrlProp) {
     if (loadingFallback) return loadingFallback;
     return (
-      <div class={`qr-code qr-code--empty ${className || ''}`} style={{ width: `${normalizedSize}px`, height: `${normalizedSize}px`, ...style }} role="status" aria-label="QR empty">
-        <div class="login-spinner" role="status" aria-label="Loading QR"></div>
+      <div class={`qr-code qr-code--empty ${className || ''}`} style={{ width: `${normalizedSize}px`, height: `${normalizedSize}px`, ...style }} role="status" aria-label={t(S.QR_EMPTY)}>
+        <div class="login-spinner" role="status" aria-label={t(S.QR_LOADING)}></div>
       </div>
     );
   }
@@ -183,7 +184,7 @@ export function QrCode({
   if (!validation.valid) {
     if (errorFallback) return errorFallback;
     return (
-      <div class={`qr-code qr-code--error ${className || ''}`} style={style} role="alert" aria-label="QR error">
+      <div class={`qr-code qr-code--error ${className || ''}`} style={style} role="alert" aria-label={t(S.QR_ERROR)}>
         <span style={{ fontSize: '12px', color: 'var(--danger, #ff303c)', textAlign: 'center', padding: '8px' }}>{error || validation.error}</span>
       </div>
     );
@@ -201,7 +202,7 @@ export function QrCode({
   if (!dataUrl) {
     if (loadingFallback) return loadingFallback;
     return (
-      <div class={`qr-code qr-code--loading ${className || ''}`} style={{ width: `${normalizedSize}px`, height: `${normalizedSize}px`, display: 'flex', alignItems: 'center', justifyContent: 'center', ...style }} role="status" aria-label="Loading QR">
+      <div class={`qr-code qr-code--loading ${className || ''}`} style={{ width: `${normalizedSize}px`, height: `${normalizedSize}px`, display: 'flex', alignItems: 'center', justifyContent: 'center', ...style }} role="status" aria-label={t(S.QR_LOADING)}>
         <div class="login-spinner"></div>
       </div>
     );

@@ -19,7 +19,7 @@ import type { Dispatch } from '../state.js';
 import type { SkillDef } from '../plugin/types.js';
 import { Image } from '../primitives/image.js';
 import type { ImageSpec } from '../types.js';
-import { t, S } from '@ton-ai/gram-lang';
+import { t, tpl, S } from '@ton-ai/gram-lang';
 import { flushEmojiBatch, getEmojiDocId, getDiceDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeDiceSets, ensureEmojiStickers } from './emoji-store.js';
 import { SlotMachineSticker, resetSlotMachineDone } from './slot-machine.js';
 import { resetCompletedAnimations } from './tgs-player.js';
@@ -366,7 +366,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
           <img class="tgui-sticker-thumb" src={staticThumb.url} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
         ) : null}
         {isTgs && url ? (
-          <button class="tgui-sticker-dl" type="button" title="Download TGS source" onClick={downloadStickerSource}>⤓</button>
+          <button class="tgui-sticker-dl" type="button" title={t(S.DEBUG_DOWNLOAD_TGS)} onClick={downloadStickerSource}>⤓</button>
         ) : null}
         {showTgs
           ? <AnimatedSticker tgsUrl={url} renderId={renderId} size={150} noPlay={!playing} onError={() => setAnimFailed(true)} />
@@ -775,7 +775,7 @@ export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOu
     <div
       class={m.fwdPeer ? 'tgui-fwd-header tgui-fwd-header_link' : 'tgui-fwd-header'}
       onClick={m.fwdPeer && onOpenPeer ? () => onOpenPeer(m.fwdPeer!) : undefined}
-    >Forwarded from <b>{fwdLabel}</b></div>
+    >{tpl(S.FORWARD_FROM, { user: fwdLabel })}</div>
   ) : null;
   return (
     <div

@@ -483,19 +483,19 @@ export function createAuthCallbacks(
         const ln = sanitizeName(lastname);
         if (!fn) {
           if (gen !== authGen) return;
-          s.tgui.current!.setError('First name is required');
+          s.tgui.current!.setError(t(S.AUTH_ERROR_FIRSTNAME_REQUIRED));
           s.tgui.current!.setAuthStep('signup');
           return;
         }
         if (fn.length > 64 || ln.length > 64) {
           if (gen !== authGen) return;
-          s.tgui.current!.setError('Name is too long');
+          s.tgui.current!.setError(t(S.AUTH_ERROR_NAME_TOO_LONG));
           s.tgui.current!.setAuthStep('signup');
           return;
         }
         if (/[<>\/]/.test(fn) || /[<>\/]/.test(ln)) {
           if (gen !== authGen) return;
-          s.tgui.current!.setError('Invalid characters in name');
+          s.tgui.current!.setError(t(S.AUTH_ERROR_NAME_INVALID));
           s.tgui.current!.setAuthStep('signup');
           return;
         }
@@ -552,7 +552,7 @@ export function createAuthCallbacks(
         const qrPreload = preloadQrModule().catch(() => null);
         const { apiId, apiHash } = getApiCredentials();
         if (!apiId || !apiHash) {
-          s.tgui.current!.setError('QR failed: API credentials missing. Set TELEGRAM_API_ID/HASH in .env.local');
+          s.tgui.current!.setError(t(S.QR_FAILED_CREDS));
           s.tgui.current!.setAuthStep('qr_login');
           return;
         }
@@ -677,17 +677,17 @@ export function createAuthCallbacks(
         const expires = (result as any)?.expires;
         let tokenHex: string = result?.token;
         if (!tokenHex) {
-          s.tgui.current!.setError('No token in response: ' + escapeHtml(JSON.stringify(result).slice(0,200)));
+          s.tgui.current!.setError(t(S.QR_FAILED_NO_TOKEN) + escapeHtml(JSON.stringify(result).slice(0,200)));
           s.tgui.current!.setAuthStep('qr_login');
           return;
         }
         if (typeof expires !== 'number' || !Number.isFinite(expires) || expires <= 0) {
-          s.tgui.current!.setError('QR failed: invalid expiry');
+          s.tgui.current!.setError(t(S.QR_FAILED_EXPIRY));
           s.tgui.current!.setAuthStep('qr_login');
           return;
         }
         try { hexToBase64Url(tokenHex); } catch {
-          s.tgui.current!.setError('QR failed: invalid token hex');
+          s.tgui.current!.setError(t(S.QR_FAILED_TOKEN));
           s.tgui.current!.setAuthStep('qr_login');
           return;
         }
@@ -697,7 +697,7 @@ export function createAuthCallbacks(
           try {
             tgUrl = makeQrUrl(hex);
           } catch (err: any) {
-            s.tgui.current!.setError('QR failed: invalid token hex');
+            s.tgui.current!.setError(t(S.QR_FAILED_TOKEN));
             return;
           }
           const ex = typeof exp === 'number' ? exp : expires;

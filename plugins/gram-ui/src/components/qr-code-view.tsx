@@ -180,7 +180,7 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true }: 
           }}
         >
         {hasDataUrl ? (
-          <QrCode value="" dataUrl={qrDataUrl} size={52} variant="small" alt="QR" />
+          <QrCode value="" dataUrl={qrDataUrl} size={52} variant="small" alt={t(S.QR_SHORT)} />
         ) : hasTgUrl ? (
           <QrCode
             value={value}
@@ -190,10 +190,10 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true }: 
             darkColor={themedColors.darkColor}
             lightColor={themedColors.lightColor}
             variant="small"
-            alt="QR"
+            alt={t(S.QR_SHORT)}
           />
           ) : loading ? (
-            <div class="login-spinner" style="width:20px;height:20px;border-width:2px" role="status" aria-label="Loading QR"></div>
+            <div class="login-spinner" style="width:20px;height:20px;border-width:2px" role="status" aria-label={t(S.QR_LOADING)}></div>
           ) : (
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
@@ -211,7 +211,7 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true }: 
 
   return (
     <div class="login-form" style={{ textAlign: 'center' }}>
-      <div class="login-qr-wrap" role="img" aria-label="QR code for Telegram login">
+      <div class="login-qr-wrap" role="img" aria-label={t(S.QR_IMAGE_ALT)}>
         {hasTgUrl ? (
           <QrCode
             value={value}
@@ -223,15 +223,15 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true }: 
             lightColor={themedColors.lightColor}
             showLogo={true}
             logoSize={28}
-            alt="QR Code for Telegram login"
+            alt={t(S.QR_IMAGE_ALT)}
             onGenerated={(url) => { if (url && url !== qrDataUrl) setQrDataUrl(url); }}
           />
         ) : hasDataUrl ? (
-          <QrCode value="" dataUrl={qrDataUrl} size={256} margin={1} errorCorrectionLevel="M" alt="QR Code for Telegram login" />
+          <QrCode value="" dataUrl={qrDataUrl} size={256} margin={1} errorCorrectionLevel="M" alt={t(S.QR_IMAGE_ALT)} />
         ) : loading ? (
-          <div class="login-spinner" role="status" aria-label="Loading QR code"></div>
+          <div class="login-spinner" role="status" aria-label={t(S.QR_LOADING_CODE)}></div>
         ) : (
-          <div class="login-spinner" role="status" aria-label="Loading QR code"></div>
+          <div class="login-spinner" role="status" aria-label={t(S.QR_LOADING_CODE)}></div>
         )}
       </div>
       {tgUrl ? <div style={{ fontSize: '10px', wordBreak: 'break-all', opacity: 0.6, margin: '8px 0' }} aria-hidden="true">{tgUrl.slice(0, 60)}...</div> : null}

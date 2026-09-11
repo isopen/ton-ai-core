@@ -1,4 +1,5 @@
 import { getLogger, isEnabled, isNoDialogsCache } from '@ton-ai/gram-debug';
+import { t, S } from '@ton-ai/gram-lang';
 import { requestOnce } from '@ton-ai/atom';
 import { parseEventHeader, parseEncryptionEvent } from '@ton-ai/gram-db';
 import { decodeKvPayload } from '@ton-ai/tl-language';
@@ -356,7 +357,7 @@ export function setupEventListeners(s: GramState): void {
       s.tgui.current?.setAuthStep('phone');
     }
     if (wasDialogs && curStep !== 'qr_login') {
-      s.tgui.current?.setError('Session terminated from another device');
+      s.tgui.current?.setError(t(S.AUTH_SESSION_TERMINATED));
     } else if (!s.tgui.current?.state?.error) {
       s.tgui.current?.setError('');
     }

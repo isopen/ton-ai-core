@@ -101,7 +101,7 @@ function KeyValueRow({ k, v, onDelete }: { k: string; v: string; onDelete: (key:
         <span class="tgui-cache-kv-key-text">{k}</span>
         <span class="tgui-cache-kv-json-badge">{isJson ? '{ }' : 'str'}</span>
         <span class="tgui-cache-kv-size">{formatSize(byteLen)}</span>
-        <button class="tgui-cache-kv-del" title="Delete key"
+        <button class="tgui-cache-kv-del" title={t(S.CACHE_DELETE_KEY)}
           onClick={(e: MouseEvent) => { e.stopPropagation(); onDelete(k); }}>
           ✕
         </button>
@@ -207,37 +207,37 @@ export function CacheView({ }: { state: AppState }) {
         </button>
       </div>
 
-      {loading && <div class="tgui-cache-loading">Loading...</div>}
+      {loading && <div class="tgui-cache-loading">{t(S.CACHE_LOADING)}</div>}
 
       {data && (
         <>
           <div class="tgui-cache-summary">
             <div class="tgui-cache-summary-item">
-              <span class="tgui-cache-summary-label">DB keys</span>
+              <span class="tgui-cache-summary-label">{t(S.CACHE_DB_KEYS)}</span>
               <span class="tgui-cache-summary-value">{data.dbKeys.length}</span>
             </div>
             <div class="tgui-cache-summary-item">
-              <span class="tgui-cache-summary-label">DB size</span>
+              <span class="tgui-cache-summary-label">{t(S.CACHE_DB_SIZE)}</span>
               <span class="tgui-cache-summary-value">{formatSize(totalDbSize)}</span>
             </div>
             <div class="tgui-cache-summary-item">
-              <span class="tgui-cache-summary-label">OPFS files</span>
+              <span class="tgui-cache-summary-label">{t(S.CACHE_OPFS_FILES)}</span>
               <span class="tgui-cache-summary-value">{data.opfsRoot.length + data.opfs7a.length}</span>
             </div>
             <div class="tgui-cache-summary-item">
-              <span class="tgui-cache-summary-label">OPFS size</span>
+              <span class="tgui-cache-summary-label">{t(S.CACHE_OPFS_SIZE)}</span>
               <span class="tgui-cache-summary-value">{formatSize(totalOpfsSize + total7aSize)}</span>
             </div>
             <div class="tgui-cache-summary-item">
-              <span class="tgui-cache-summary-label">Avatars</span>
+              <span class="tgui-cache-summary-label">{t(S.CACHE_AVATARS)}</span>
               <span class="tgui-cache-summary-value">{avatars.length}</span>
             </div>
             <div class="tgui-cache-summary-item">
-              <span class="tgui-cache-summary-label">Binlog ev</span>
+              <span class="tgui-cache-summary-label">{t(S.CACHE_BINLOG_EVENTS)}</span>
               <span class="tgui-cache-summary-value">{binlogEvents.length}</span>
             </div>
             <div class="tgui-cache-summary-item">
-              <span class="tgui-cache-summary-label">Session ev</span>
+              <span class="tgui-cache-summary-label">{t(S.CACHE_SESSION_EVENTS)}</span>
                 <span class="tgui-cache-summary-value">0</span>
             </div>
           </div>
@@ -273,7 +273,7 @@ export function CacheView({ }: { state: AppState }) {
                     <div class="tgui-cache-opfs-file">
                       <span class="tgui-cache-opfs-file-name">{f.name}</span>
                       <span class="tgui-cache-opfs-file-size">{formatSize(f.size)}</span>
-                      <button class="tgui-cache-kv-del" title="Delete file"
+                      <button class="tgui-cache-kv-del" title={t(S.CACHE_DELETE_FILE)}
                         onClick={(e: MouseEvent) => { e.stopPropagation(); deleteOpfsFile('root', f.name); }}>
                         ✕
                       </button>
@@ -287,7 +287,7 @@ export function CacheView({ }: { state: AppState }) {
                       <div class="tgui-cache-opfs-file">
                         <span class="tgui-cache-opfs-file-name">{f.name}</span>
                         <span class="tgui-cache-opfs-file-size">{formatSize(f.size)}</span>
-                        <button class="tgui-cache-kv-del" title="Delete file"
+                        <button class="tgui-cache-kv-del" title={t(S.CACHE_DELETE_FILE)}
                           onClick={(e: MouseEvent) => { e.stopPropagation(); deleteOpfsFile('_7a', f.name); }}>
                           ✕
                         </button>
@@ -300,7 +300,7 @@ export function CacheView({ }: { state: AppState }) {
           </div>
           <div class="tgui-cache-section">
             <SectionHeader
-              title={'Avatars'}
+              title={t(S.CACHE_AVATARS)}
               count={avatars.length}
               expanded={sec.avatars}
               onToggle={() => dispatchCache({ type: 'TOGGLE_SEC', key: 'avatars' })}
@@ -321,7 +321,7 @@ export function CacheView({ }: { state: AppState }) {
                     <div class="tgui-cache-kv-key" style="display:flex;align-items:center;gap:8px">
                       <img src={a.dataUri} style="width:32px;height:32px;border-radius:50%;flex-shrink:0" />
                       <span style="font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={a.opfsName}>{a.opfsName.slice(0, 24)}…</span>
-                      <button class="tgui-cache-kv-del" title="Delete avatar"
+                      <button class="tgui-cache-kv-del" title={t(S.CACHE_DELETE_AVATAR)}
                         onClick={(e: MouseEvent) => { e.stopPropagation(); deleteAvatar(a.opfsName); }}>
                         ✕
                       </button>
@@ -361,11 +361,11 @@ export function CacheView({ }: { state: AppState }) {
                   </div>
                   {data.binlogInfo.exists && (
                     <button class="tgui-cache-bevent-raw-btn" onClick={loadBinlogRaw}>
-                      {showBinlogRaw ? 'Hex ▼' : 'Raw hex'}
+                      {showBinlogRaw ? t(S.CACHE_HEX) : t(S.CACHE_RAW_HEX)}
                     </button>
                   )}
                   {data.binlogInfo.exists && (
-                    <button class="tgui-cache-bevent-del-btn" title="Delete binlog"
+                    <button class="tgui-cache-bevent-del-btn" title={t(S.CACHE_DELETE_BINLOG)}
                       onClick={() => deleteBinlogFile('binlog')}>✕</button>
                   )}
                 </div>
@@ -376,7 +376,7 @@ export function CacheView({ }: { state: AppState }) {
                   </Scrollable>
                 )}
                 {showBinlogRaw && binlogRaw === null && (
-                  <div class="tgui-cache-loading">Loading raw data...</div>
+                  <div class="tgui-cache-loading">{t(S.CACHE_LOADING_RAW)}</div>
                 )}
 
               </div>

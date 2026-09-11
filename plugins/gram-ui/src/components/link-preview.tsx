@@ -1,5 +1,6 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef } from '@ton-ai/atom/hooks';
+import { t, S } from '@ton-ai/gram-lang';
 import { requestPhoto } from './media-source.js';
 
 function siteColor(site: string): string {
@@ -136,7 +137,7 @@ export function WebPageBubble({ m, timeStr, out, status, sameSenderPrev, sameSen
                 <span class="skel-bar skel-bar--w50" />
                 <span class="skel-bar skel-bar--w95" />
                 <span class="skel-bar skel-bar--w70" />
-                <span class="skel-caption">Loading…</span>
+                <span class="skel-caption">{t(S.LINK_LOADING)}</span>
               </div>
               <div class="link-preview__skel-media" />
             </div>
@@ -150,24 +151,24 @@ export function WebPageBubble({ m, timeStr, out, status, sameSenderPrev, sameSen
                   <path d="M4 4l16 16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
                 </svg>
               </span>
-              <span class="link-preview__error-text">Failed to load link preview.</span>
+              <span class="link-preview__error-text">{t(S.LINK_FAILED)}</span>
               <span class="link-preview__error-retry-hint">
                 <svg class="icon" viewBox="0 0 24 24" width="13" height="13">
                   <path d="M4.5 12a7.5 7.5 0 0112.7-5.4M19.5 12a7.5 7.5 0 01-12.7 5.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
                   <path d="M17 4.5v3.6h-3.6M7 19.5v-3.6h3.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
-                Retry
+                {t(S.PHOTO_RETRY)}
               </span>
             </div>
 
             <div class="link-preview__actions">
-              <button type="button" class="lp-action" aria-label="Copy link" onClick={onCopyUrl}>
+              <button type="button" class="lp-action" aria-label={t(S.LINK_COPY)} onClick={onCopyUrl}>
                 <svg class="icon" viewBox="0 0 24 24" width="13" height="13">
                   <rect x="8.5" y="8.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/>
                   <path d="M5.5 15.5V6.5a1.5 1.5 0 011.5-1.5h9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
                 </svg>
               </button>
-              <button type="button" class="lp-action" aria-label="Open in browser" onClick={(e: Event) => { e.stopPropagation(); onOpenUrl(); }}>
+              <button type="button" class="lp-action" aria-label={t(S.LINK_OPEN_BROWSER)} onClick={(e: Event) => { e.stopPropagation(); onOpenUrl(); }}>
                 <svg class="icon" viewBox="0 0 24 24" width="13" height="13">
                   <path d="M9 6H6.5A1.5 1.5 0 005 7.5v10A1.5 1.5 0 006.5 19h10a1.5 1.5 0 001.5-1.5V15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
                   <path d="M13 5h6v6M19 5l-8.5 8.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>

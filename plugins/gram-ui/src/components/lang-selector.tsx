@@ -1,4 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
+import { t, S } from '@ton-ai/gram-lang';
 import { useState, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import type { LangOption } from '@ton-ai/gram-lang';
 import { Scrollable } from '../primitives/scrollable.js';
@@ -15,7 +16,7 @@ export function LangSelector({ current, options, onChange, suggestionLang, onAcc
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLElement | null>(null);
   const isLoading = options.length === 0;
-  const currentLabel = options.find(o => o.code === current)?.label || (isLoading ? 'Loading...' : current);
+  const currentLabel = options.find(o => o.code === current)?.label || (isLoading ? t(S.LANG_LOADING) : current);
 
   useDomEvent(document, 'mousedown', open ? (e: Event) => {
     if (ref.current && !ref.current.contains(e.target as Node)) {
@@ -51,7 +52,7 @@ export function LangSelector({ current, options, onChange, suggestionLang, onAcc
           <div class="login-lang-dropdown">
             <Scrollable className="login-lang-list">
               {isLoading ? (
-                <div class="login-country-empty"><span class="login-spinner" style="width:16px;height:16px;border-width:2px"></span> Loading languages...</div>
+                <div class="login-country-empty"><span class="login-spinner" style="width:16px;height:16px;border-width:2px"></span> {t(S.LANG_LOADING_LIST)}</div>
               ) : options.map(o => (
                 <button
                   class={`login-lang-opt${o.code === current ? ' active' : ''}`}

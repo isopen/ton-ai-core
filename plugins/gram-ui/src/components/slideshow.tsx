@@ -1,4 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
+import { t, tpl, S } from '@ton-ai/gram-lang';
 import { useRef, useState } from '@ton-ai/atom/hooks';
 import { getLogger } from '@ton-ai/gram-debug';
 
@@ -94,7 +95,7 @@ export function Slideshow({ count, renderItem, className = '', nav = 'bar', slid
           key={'rsd' + i}
           type="button"
           class={'rich-slideshow-dot' + (i === safeIndex ? ' rich-slideshow-dot_active' : '')}
-          aria-label={'Slide ' + (i + 1)}
+          aria-label={tpl(S.SLIDE_NUMBER, { n: i + 1 })}
           onClick={() => goTo(i)}
         />
       ))}
@@ -107,7 +108,7 @@ export function Slideshow({ count, renderItem, className = '', nav = 'bar', slid
       <button
         type="button"
         class={'rich-slideshow-btn' + (can ? '' : ' rich-slideshow-btn_disabled')}
-        aria-label={prev ? 'Previous' : 'Next'}
+        aria-label={prev ? t(S.VIEWER_PREV) : t(S.VIEWER_NEXT)}
         onClick={() => goTo(safeIndex + (prev ? -1 : 1))}
         disabled={!can}
       >
@@ -122,7 +123,7 @@ export function Slideshow({ count, renderItem, className = '', nav = 'bar', slid
       <button
         type="button"
         class={'rich-slideshow-edge rich-slideshow-edge_' + (prev ? 'prev' : 'next') + (can ? '' : ' rich-slideshow-edge_disabled')}
-        aria-label={prev ? 'Previous' : 'Next'}
+        aria-label={prev ? t(S.VIEWER_PREV) : t(S.VIEWER_NEXT)}
         onClick={(e: any) => { try { e.stopPropagation(); } catch {} goTo(safeIndex + (prev ? -1 : 1)); }}
         disabled={!can}
       >
@@ -137,7 +138,7 @@ export function Slideshow({ count, renderItem, className = '', nav = 'bar', slid
       onKeyDown={count > 1 ? handleKey : undefined}
       tabIndex={count > 1 ? 0 : undefined}
       role={count > 1 ? 'group' : undefined}
-      aria-label={count > 1 ? 'Slides' : undefined}
+      aria-label={count > 1 ? t(S.SLIDESHOW_LABEL) : undefined}
     >
       {edges && count > 1 ? (
         <div

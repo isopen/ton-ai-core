@@ -1,4 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
+import { t, S } from '@ton-ai/gram-lang';
 import { useState, useEffect, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
 import { buildImageSpec, VIEWER_PHOTO_PRIO, getPhotoQuality } from './photo-spec.js';
@@ -197,7 +198,7 @@ export function MediaViewer({
           <button
             type="button"
             class={'MediaViewer__nav MediaViewer__nav_prev' + (canPrev ? '' : ' MediaViewer__nav_disabled')}
-            aria-label="Previous"
+            aria-label={t(S.VIEWER_PREV)}
             {...navProps(-1, !canPrev)}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7" /></svg>
@@ -205,7 +206,7 @@ export function MediaViewer({
           <button
             type="button"
             class={'MediaViewer__nav MediaViewer__nav_next' + (canNext ? '' : ' MediaViewer__nav_disabled')}
-            aria-label="Next"
+            aria-label={t(S.VIEWER_NEXT)}
             {...navProps(1, !canNext)}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7" /></svg>
