@@ -392,7 +392,7 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
           const serverV = votersByKey.get(key);
           const v = optimisticKey ? (key === optimisticKey ? { chosen: true, voters: 1 } : (serverV || { chosen: false, voters: 0 })) : serverV;
           const serverShowStat = !!serverV && (serverV.voters > 0 || total > 0);
-          const showStat = optimisticKey ? true : (serverV ? serverShowStat : (voted || total > 0));
+          const showStat = optimisticKey ? true : voted || closed || (multi && picked.size > 0 && total > 0);
           const snapRow = revSnap ? revSnap.votes.get(key) : undefined;
           const reverseRow = !!revSnap && !serverShowStat && !!snapRow && snapRow.voters > 0;
           const pct = reverseRow ? 0 : (effTotal > 0 && v ? Math.round((v.voters / effTotal) * 100) : 0);
@@ -500,18 +500,12 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
                 </div>
                 {showStat || reverseRow ? (
                   <div key="bot" class="tgui-poll-optbottom">
-                    {showStat ? (
-                    <span key="markBot" class="tgui-poll-mark">
-                      {multi
-                        ? <Checkbox size="large" checked={serverChosen} disabled onChange={undefined} />
-                        : <Radio size="large" checked={serverChosen} disabled onChange={undefined} />}
-                    </span>
-                    ) : reverseRow ? (
-                    <span key="markBot" class="tgui-poll-mark">
-                      {multi
-                        ? <Checkbox size="large" checked={!!snapRow?.chosen} disabled onChange={undefined} />
-                        : <Radio size="large" checked={!!snapRow?.chosen} disabled onChange={undefined} />}
-                    </span>
+                    {!canVote ? (
+                      <span key="markBot" class="tgui-poll-mark">
+                        {multi
+                          ? <Checkbox size="large" checked={showStat ? serverChosen : !!snapRow?.chosen} disabled onChange={undefined} />
+                          : <Radio size="large" checked={showStat ? serverChosen : !!snapRow?.chosen} disabled onChange={undefined} />}
+                      </span>
                     ) : <span key="markBot" class="tgui-poll-mark" />}
                     <div key="track" class="tgui-poll-track"><div key="fill" class={reverseRow ? 'tgui-poll-bar tgui-poll-bar_rev' : 'tgui-poll-bar'} style={`width:${reverseRow ? frozenPct : pct}%`} /></div>
                   </div>

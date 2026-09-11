@@ -102,20 +102,24 @@ describe('PollBubble option primitives', () => {
         }
     });
 
-    test('voted poll shows bars without choice elements', () => {
+    test('voted poll shows bars with disabled choice marks', () => {
         const results = { total_voters: 3, results: [{ option: 'a2', voters: 3, chosen: true }] };
         const c = mount(h(PollBubble as any, bubbleProps(baseMsg(singlePoll, results))));
-        expect(c.querySelector('.Radio')).toBeNull();
-        expect(c.querySelector('.Checkbox')).toBeNull();
+        const radios = Array.from(c.querySelectorAll('.Radio'));
+        expect(radios.length).toBe(2);
+        expect(radios.every((el) => (el as HTMLElement).className.includes('Radio_disabled'))).toBe(true);
+        expect(c.querySelectorAll('.Radio_selected').length).toBe(1);
         expect(c.querySelector('.tgui-poll-bar')).toBeTruthy();
         expect(c.querySelector('button.tgui-poll-vote')).toBeNull();
     });
 
-    test('closed poll shows bars without choice elements', () => {
+    test('closed poll shows bars with disabled choice marks', () => {
         const closedPoll = { ...singlePoll, closed: true };
         const c = mount(h(PollBubble as any, bubbleProps(baseMsg(closedPoll))));
-        expect(c.querySelector('.Radio')).toBeNull();
-        expect(c.querySelector('.Checkbox')).toBeNull();
+        const radios = Array.from(c.querySelectorAll('.Radio'));
+        expect(radios.length).toBe(2);
+        expect(radios.every((el) => (el as HTMLElement).className.includes('Radio_disabled'))).toBe(true);
+        expect(c.querySelector('.tgui-poll-bar')).toBeTruthy();
     });
 
     test('multi shows Vote only after picking', async () => {
@@ -154,8 +158,8 @@ describe('PollBubble option primitives', () => {
             rows[1].click();
             await new Promise((r) => setTimeout(r, 60));
             expect((container.querySelector('button.tgui-poll-vote') as HTMLButtonElement).disabled).toBe(false);
-            expect(container.querySelectorAll('.tgui-poll-bar').length).toBe(2);
-            expect(container.querySelectorAll('.tgui-poll-pct').length).toBe(2);
+            expect(container.querySelectorAll('.tgui-poll-bar').length).toBe(0);
+            expect(container.querySelectorAll('.tgui-poll-pct').length).toBe(0);
             const checked = Array.from(container.querySelectorAll('.Checkbox_selected'));
             expect(checked.length).toBe(2);
             (container.querySelector('button.tgui-poll-vote') as HTMLButtonElement).click();
@@ -192,20 +196,27 @@ describe('PollBubble option primitives', () => {
     });
 
     test('picked multi reveals stats on voted options', async () => {
-        document.body.innerHTML = '';
-        const m = { id: 7009, date: 1, out: false, sender: 'U', message: '', entities: [],
-            media: { _: 'messageMediaPoll', poll: { question: { text: 'Q' }, multiple_choice: true, answers: [{ option: 'a1', text: { text: 'First' } }, { option: 'a2', text: { text: 'Second' } }] }, results: { total_voters: 5, results: [{ option: 'a1', voters: 5 }, { option: 'a2', voters: 0 }] } } };
-        const container = document.createElement('div');
-        document.body.appendChild(container);
-        const Comp: any = () => h(PollBubble as any, { m, timeStr: '12:44', out: false, status: 'read', documentUrls: {} });
-        render(Comp, container);
-        expect(container.querySelector('.tgui-poll-pct')).toBeNull();
-        const rows = Array.from(container.querySelectorAll('.tgui-poll-answer')) as HTMLElement[];
-        rows[1].click();
-        await new Promise((r) => setTimeout(r, 60));
-        const pcts = Array.from(container.querySelectorAll('.tgui-poll-pct')).map((el) => el.textContent);
-        expect(pcts.sort()).toEqual(['0%', '100%']);
-        expect(container.querySelectorAll('.tgui-poll-bar').length).toBe(2);
+        const prevDataset = (document.documentElement as any).dataset.animations;
+        (document.documentElement as any).dataset.animations = 'off';
+        try {
+            document.body.innerHTML = '';
+            const m = { id: 7009, date: 1, out: false, sender: 'U', message: '', entities: [],
+                media: { _: 'messageMediaPoll', poll: { question: { text: 'Q' }, multiple_choice: true, answers: [{ option: 'a1', text: { text: 'First' } }, { option: 'a2', text: { text: 'Second' } }] }, results: { total_voters: 5, results: [{ option: 'a1', voters: 5 }, { option: 'a2', voters: 0 }] } } };
+            const container = document.createElement('div');
+            document.body.appendChild(container);
+            const Comp: any = () => h(PollBubble as any, { m, timeStr: '12:44', out: false, status: 'read', documentUrls: {} });
+            render(Comp, container);
+            expect(container.querySelector('.tgui-poll-pct')).toBeNull();
+            const rows = Array.from(container.querySelectorAll('.tgui-poll-answer')) as HTMLElement[];
+            rows[1].click();
+            await new Promise((r) => setTimeout(r, 60));
+            const pcts = Array.from(container.querySelectorAll('.tgui-poll-pct')).map((el) => el.textContent);
+            expect(pcts.sort()).toEqual(['0%', '100%']);
+            expect(container.querySelectorAll('.tgui-poll-bar').length).toBe(2);
+        } finally {
+            if (prevDataset === undefined) delete (document.documentElement as any).dataset.animations;
+            else (document.documentElement as any).dataset.animations = prevDataset;
+        }
     });
 
     test('others voted but self did not stays votable', () => {
