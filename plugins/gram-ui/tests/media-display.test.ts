@@ -60,7 +60,7 @@ describe('chat text emoji display', () => {
         expect(c.textContent).toContain('hi');
     });
 
-    test('custom emoji entity without url shows fallback glyph, not blank', async () => {
+    test('custom emoji entity without url shows blank placeholder, no alt glyph', async () => {
         const c = mount(h(EmojiText as any, {
             text: 'hi ❤',
             entities: [{ _: 'messageEntityCustomEmoji', offset: 3, length: 1, document_id: '999' }],
@@ -68,10 +68,11 @@ describe('chat text emoji display', () => {
         }));
         await new Promise((r) => setTimeout(r, 50));
         expect(c.querySelectorAll('span.tgui-emoji-slot').length).toBe(1);
-        expect(c.textContent).toContain('❤');
+        expect(c.querySelector('span.tgui-emoji-slot')?.textContent).toBe('');
+        expect(c.textContent).not.toContain('❤');
     });
 
-    test('custom emoji entity with url keeps slot and glyph', async () => {
+    test('custom emoji entity with url keeps slot without alt glyph', async () => {
         const c = mount(h(EmojiText as any, {
             text: 'hi ❤',
             entities: [{ _: 'messageEntityCustomEmoji', offset: 3, length: 1, document_id: '999' }],
@@ -79,7 +80,8 @@ describe('chat text emoji display', () => {
         }));
         await new Promise((r) => setTimeout(r, 50));
         expect(c.querySelectorAll('span.tgui-emoji-slot').length).toBe(1);
-        expect(c.textContent).toContain('❤');
+        expect(c.querySelector('span.tgui-emoji-slot')?.textContent).toBe('');
+        expect(c.textContent).not.toContain('❤');
     });
 });
 

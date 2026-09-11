@@ -873,8 +873,6 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
               ) : (
                 <span style="display:block;width:100%;height:100%" />
               )
-            ) : s.value ? (
-              <span style={`display:flex;align-items:center;justify-content:center;width:100%;height:100%;overflow:hidden;font-size:${size}px;line-height:1`}>{s.value}</span>
             ) : (
               <span style="display:block;width:100%;height:100%;overflow:hidden" />
             )}
