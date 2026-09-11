@@ -1343,15 +1343,14 @@ export class GramMediaRouter {
                             chunkCount++;
                             receivedBytes += data.byteLength;
                             dispatchEarlyUrl();
-                            const pct = totalBytes > 0
+                            const rawPct = totalBytes > 0
                                 ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100))
                                 : Math.min(99, chunkCount);
+                            const pct = Math.min(99, Math.floor(rawPct / 10) * 10);
                             if (pct !== lastProgress) {
-                                if (pct >= 99 || pct % 10 === 0) {
-                                    lastProgress = pct;
-                                    if (this.debug) log.info('[gram-media] progress dispatch', messageId, pct);
-                                    if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
-                                }
+                                lastProgress = pct;
+                                if (this.debug) log.info('[gram-media] progress dispatch', messageId, pct);
+                                if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: pct });
                             }
                         });
                         const streamCacheSource = (streamResult as any)?.cacheSource;

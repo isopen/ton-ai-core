@@ -44,7 +44,8 @@ describe('GramMediaRouter video streaming', () => {
 
         const progress = actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT_PROGRESS').map((a) => a.progress);
         expect(progress).toContain(50);
-        expect(progress).toContain(99);
+        expect(progress).toContain(90);
+        expect(progress).not.toContain(99);
         expect(progress[progress.length - 1]).toBe(100);
     });
 
@@ -64,7 +65,29 @@ describe('GramMediaRouter video streaming', () => {
         await flushTicks();
 
         const progress = actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT_PROGRESS').map((a) => a.progress);
-        expect(progress).toEqual([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99, 100]);
+        expect(progress).toEqual([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+    });
+
+    test('three chunks step through buckets without jumping to 99', async () => {
+        const transport = makeTransport({
+            startVideoStream: async (doc, onChunk) => {
+                onChunk(makeBytes(330), false, 'storage.filePartial');
+                onChunk(makeBytes(330), false, 'storage.filePartial');
+                onChunk(makeBytes(340), true, 'video/mp4');
+                return { cacheSource: 'home-server' };
+            },
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+
+        router.queueDocumentDownload(makeVideoDocument(1000, '61'), 61, 1);
+        await flushTicks();
+        await flushTicks();
+        await flushTicks();
+
+        const pcts = actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT_PROGRESS')
+            .filter((a) => a.messageId === 61).map((a) => a.progress);
+        expect(pcts).toEqual([0, 30, 60, 90, 100]);
     });
 
     test('throws and falls back to downloadFile when no chunks received', async () => {

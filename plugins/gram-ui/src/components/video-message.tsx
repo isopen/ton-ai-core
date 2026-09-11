@@ -1,6 +1,6 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useCallback, useDomEvent } from '@ton-ai/atom/hooks';
-import { buildDocumentThumb } from '../utils.js';
+import { buildDocumentThumb, animationsOff } from '../utils.js';
 import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import { requestDocument, requestDocumentThumb } from './media-source.js';
@@ -145,6 +145,42 @@ export function VideoMessage(props: VideoMessageProps) {
   const [uiState, setUiState] = useState<'ready' | 'loading' | 'playing' | 'error'>('ready');
   const [ct, setCt] = useState(0);
   const [lpct, setLpct] = useState(0);
+  const [shownPct, setShownPct] = useState(0);
+  const shownRef = useRef(0);
+  const tweenRef = useRef<number | null>(null);
+  useEffect(() => {
+    const to = Math.max(0, Math.min(100, Math.floor(lpct)));
+    if (tweenRef.current != null) {
+      cancelAnimationFrame(tweenRef.current);
+      tweenRef.current = null;
+    }
+    if (animationsOff() || shownRef.current === to) {
+      shownRef.current = to;
+      setShownPct(to);
+      return;
+    }
+    const from = shownRef.current;
+    const t0 = performance.now();
+    const dur = 300;
+    const step = (t: number) => {
+      const k = Math.min(1, Math.max(0, (t - t0) / dur));
+      const v = Math.round(from + (to - from) * k);
+      shownRef.current = v;
+      setShownPct(v);
+      if (k < 1) {
+        tweenRef.current = requestAnimationFrame(step);
+      } else {
+        tweenRef.current = null;
+      }
+    };
+    tweenRef.current = requestAnimationFrame(step);
+    return () => {
+      if (tweenRef.current != null) {
+        cancelAnimationFrame(tweenRef.current);
+        tweenRef.current = null;
+      }
+    };
+  }, [lpct]);
   const [muted, setMuted] = useState(true);
   const [videoMuted, setVideoMuted] = useState(true);
   const [volume, setVolume] = useState(0);
@@ -480,7 +516,7 @@ export function VideoMessage(props: VideoMessageProps) {
               <circle class="ring-fg" data-role="ring-fg" cx="32" cy="32" r="28"
                 style={`stroke-dashoffset: ${RING_CIRC * (1 - lpct / 100)}`} />
             </svg>
-            <span class="loading-pct" data-role="loading-pct">{lpct}%</span>
+            <span class="loading-pct" data-role="loading-pct">{shownPct}%</span>
           </div>
 
           {}

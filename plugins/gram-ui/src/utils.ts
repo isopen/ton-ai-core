@@ -102,6 +102,12 @@ export function isMapEmbeddable(provider?: MapProvider): boolean {
   return p !== 'dgis';
 }
 
+export function animationsOff(): boolean {
+  try {
+    return (document.documentElement as any)?.dataset?.animations === 'off';
+  } catch {}
+  return false;
+}
 
 export function currentMapProvider(): MapProvider {
   try {
