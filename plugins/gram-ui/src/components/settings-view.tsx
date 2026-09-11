@@ -28,26 +28,43 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
             <span class="tgui-settings-value">{String(state.dialogs.length)}</span>
           </div>
         </div>
+        <div class="tgui-settings-actions" style="margin-top:12px">
+          <div
+            id="tg-clear-cache-action"
+            class="tgui-settings-action"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('tg-clear-cache'));
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" class="tgui-settings-action-icon">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" fill="#ff9800" />
+            </svg>
+            <span class="tgui-settings-action-text" style="color:#ff9800">{t(S.SETTINGS_CLEAR_CACHE)}</span>
+          </div>
+        </div>
       </div>
       <div class="tgui-settings-section">
-        <div class="tgui-settings-section-label">Photo quality</div>
+        <div class="tgui-settings-section-label">{t(S.SETTINGS_PHOTO_QUALITY)}</div>
         <div class="tgui-settings-card">
           <div class="tgui-settings-row" style="flex-direction:column;align-items:stretch;gap:6px">
-            <span class="tgui-settings-label">Load and open images in</span>
-            <div style="display:flex;gap:6px">
+            <span class="tgui-settings-label">{t(S.SETTINGS_IMAGES_HINT)}</span>
+            <div class="tgui-settings-radio-list">
               {(['min', 'medium', 'max'] as const).map(q => (
-                <button
+                <Radio
                   key={q}
-                  class={'tgui-quality-btn' + (state.imageQuality === q ? ' tgui-quality-btn_active' : '')}
-                  onClick={() => dispatch({ type: 'SET_IMAGE_QUALITY', quality: q })}
-                >{q === 'min' ? 'Min' : q === 'medium' ? 'Med' : 'Max'}</button>
+                  size="large"
+                  name="photo-quality"
+                  label={q === 'min' ? t(S.QUALITY_LOW) : q === 'medium' ? t(S.QUALITY_MEDIUM) : t(S.QUALITY_HIGH)}
+                  checked={state.imageQuality === q}
+                  onChange={() => dispatch({ type: 'SET_IMAGE_QUALITY', quality: q })}
+                />
               ))}
             </div>
           </div>
         </div>
       </div>
       <div class="tgui-settings-section">
-        <div class="tgui-settings-section-label">Animations</div>
+        <div class="tgui-settings-section-label">{t(S.SETTINGS_ANIMATIONS)}</div>
         <div class="tgui-settings-card">
           <div class="tgui-settings-row" style="align-items:center">
             <Tumbler
@@ -82,18 +99,6 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
       <div class="tgui-settings-section">
         <div class="tgui-settings-section-label">{t(S.SETTINGS_ACTIONS)}</div>
         <div class="tgui-settings-actions">
-          <div
-            id="tg-clear-cache-action"
-            class="tgui-settings-action"
-            onClick={() => {
-              window.dispatchEvent(new CustomEvent('tg-clear-cache'));
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" class="tgui-settings-action-icon">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" fill="#ff9800" />
-            </svg>
-            <span class="tgui-settings-action-text" style="color:#ff9800">{t(S.SETTINGS_CLEAR_CACHE)}</span>
-          </div>
           <div
             id="tg-logout-action"
             class="tgui-settings-action"
