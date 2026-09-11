@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { GramMediaRouter } from '../src/router.js';
+import { GramMediaRouter, normalizeDownloadPriority } from '../src/router.js';
 import {
     makeHost, makeTransport, makeDocument, makeVideoDocument, makeBytes,
     flushPromises, flushTicks, flushMicrotasks, actionsOfType, lastOfType,
@@ -207,5 +207,151 @@ describe('GramMediaRouter document queue', () => {
         } finally {
             jest.useRealTimers();
         }
+    });
+});
+
+describe('GramMediaRouter TDLib download ordering', () => {
+    beforeEach(() => {
+        (globalThis as any).MediaSource = class MediaSource {};
+    });
+    afterEach(() => {
+        delete (globalThis as any).MediaSource;
+    });
+
+    test('equal priorities dequeue last-requested-first', async () => {
+        const order: string[] = [];
+        const deferreds: Array<() => void> = [];
+        const transport = makeTransport({
+            startVideoStream: (doc, onChunk) => {
+                order.push(String(doc.id));
+                return new Promise((resolve) => {
+                    deferreds.push(() => {
+                        onChunk(makeBytes(32), true, 'video/mp4');
+                        resolve({});
+                    });
+                });
+            },
+        });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+
+        router.queueDocumentDownload(makeVideoDocument(100, '1'), 11, 1);
+        router.queueDocumentDownload(makeVideoDocument(100, '2'), 22, 1);
+        router.queueDocumentDownload(makeVideoDocument(100, '3'), 33, 1);
+        await flushPromises();
+
+        expect(order).toEqual(['3']);
+        deferreds[0]!();
+        await flushTicks();
+        expect(order).toEqual(['3', '2']);
+        deferreds[1]!();
+        await flushTicks();
+        expect(order).toEqual(['3', '2', '1']);
+    });
+
+    test('re-request raises priority of the queued item', async () => {
+        const order: string[] = [];
+        const deferreds: Array<() => void> = [];
+        const transport = makeTransport({
+            startVideoStream: (doc, onChunk) => {
+                order.push(String(doc.id));
+                return new Promise((resolve) => {
+                    deferreds.push(() => {
+                        onChunk(makeBytes(32), true, 'video/mp4');
+                        resolve({});
+                    });
+                });
+            },
+        });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+
+        router.queueDocumentDownload(makeVideoDocument(100, '51'), 51, 0);
+        router.queueDocumentDownload(makeVideoDocument(100, '52'), 52, 0);
+        router.queueDocumentDownload(makeVideoDocument(100, '53'), 53, 0);
+        await flushPromises();
+        await flushPromises();
+
+        expect(order).toEqual(['53']);
+        const queued = (router as any).downloadQueues.video_queue as Array<any>;
+        expect(queued.map((q) => String(q.document.id))).toEqual(['51', '52']);
+
+        router.queueDocumentDownload(makeVideoDocument(100, '51'), 51, 9);
+        expect(queued.map((q) => q.priority)).toEqual([9, 1]);
+
+        deferreds[0]!();
+        await flushTicks();
+        await flushTicks();
+        expect(order).toEqual(['53', '51']);
+        deferreds[1]!();
+        await flushTicks();
+        await flushTicks();
+        expect(order).toEqual(['53', '51', '52']);
+    });
+
+    test('priorities clamp to TDLib range 1-32', async () => {
+        expect(normalizeDownloadPriority(99)).toBe(32);
+        expect(normalizeDownloadPriority(0)).toBe(1);
+        expect(normalizeDownloadPriority(-5)).toBe(1);
+        expect(normalizeDownloadPriority(2.7)).toBe(3);
+        expect(normalizeDownloadPriority(Number.NaN)).toBe(1);
+
+        let release!: () => void;
+        const gate = new Promise<void>((r) => { release = r; });
+        const transport = makeTransport({
+            downloadFiles: async (items: any[]) => {
+                await gate;
+                return items.map((it, i) => ({ index: i, type: 'application/octet-stream', bytes: makeBytes(8), cacheSource: 'test' }));
+            },
+        });
+        const { router, setTransport } = makeRouter();
+        setTransport(transport);
+
+        router.queueDocumentDownload(makeDocument({ id: '301' }), 301, 99);
+        router.queueDocumentDownload(makeDocument({ id: '302' }), 302, -4);
+        const queued = (router as any).downloadQueues.photo_queue as Array<any>;
+        const byId = new Map(queued.map((q) => [String(q.document.id), q.priority]));
+        expect(byId.get('301')).toBe(32);
+        expect(byId.get('302')).toBe(1);
+
+        release();
+        await flushTicks();
+        await flushTicks();
+    });
+
+    test('cancelDocumentDownload drops pending file, keeps active unless forced', async () => {
+        const order: string[] = [];
+        const deferreds: Array<() => void> = [];
+        const transport = makeTransport({
+            startVideoStream: (doc, onChunk) => {
+                order.push(String(doc.id));
+                return new Promise((resolve) => {
+                    deferreds.push(() => {
+                        onChunk(makeBytes(32), true, 'video/mp4');
+                        resolve({});
+                    });
+                });
+            },
+        });
+        const { router, actions, setTransport } = makeRouter();
+        setTransport(transport);
+
+        router.queueDocumentDownload(makeVideoDocument(100, '41'), 41, 1);
+        router.queueDocumentDownload(makeVideoDocument(100, '42'), 42, 1);
+        await flushPromises();
+        expect(order).toEqual(['42']);
+
+        expect(router.cancelDocumentDownload(41)).toBe(true);
+        expect(router.cancelDocumentDownload(41)).toBe(false);
+        expect(router.cancelDocumentDownload(42)).toBe(false);
+        expect(router.cancelDocumentDownload(42, false)).toBe(true);
+
+        deferreds[0]!();
+        await flushTicks();
+        await flushTicks();
+
+        expect(order).toEqual(['42']);
+        const done = actionsOfType(actions, 'UPDATE_MESSAGE_DOCUMENT');
+        expect(done.map((a) => a.messageId)).toEqual([42]);
     });
 });

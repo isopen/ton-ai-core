@@ -35,6 +35,14 @@ const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue:
 const DOC_DOWNLOAD_BATCH = 4;
 const DOC_PENDING_TTL_MS = 30_000;
 
+export const DOWNLOAD_PRIORITY_MIN = 1;
+export const DOWNLOAD_PRIORITY_MAX = 32;
+
+export function normalizeDownloadPriority(p: number): number {
+    if (!Number.isFinite(p)) return DOWNLOAD_PRIORITY_MIN;
+    return Math.min(DOWNLOAD_PRIORITY_MAX, Math.max(DOWNLOAD_PRIORITY_MIN, Math.round(p)));
+}
+
 export class GramMediaRouter {
     readonly debug: boolean;
 
@@ -228,6 +236,65 @@ export class GramMediaRouter {
         return { messages, cachedIds };
     }
 
+    private downloadActiveIds = new Set<number | string>();
+
+    private isDownloadActive(messageId: number | string): boolean {
+        if (this.downloadActiveIds.has(messageId)) return true;
+        const prefix = String(messageId) + '_';
+        for (const key of this.photoInFlightByKey) {
+            if (key === String(messageId) || key.startsWith(prefix)) return true;
+        }
+        for (const key of this.avatarInFlightByKey) {
+            if (key === String(messageId) || key.startsWith(prefix)) return true;
+        }
+        return false;
+    }
+
+    cancelDocumentDownload(messageId: number | string, onlyIfPending = true): boolean {
+        if (onlyIfPending && this.isDownloadActive(messageId)) return false;
+        let cancelled = false;
+        const keys = Object.keys(this.downloadQueues) as QueueKey[];
+        for (const key of keys) {
+            const q = this.downloadQueues[key];
+            for (let i = q.length - 1; i >= 0; i--) {
+                if (q[i].messageId === messageId) {
+                    q.splice(i, 1);
+                    cancelled = true;
+                }
+            }
+        }
+        const dropByMessage = (arr: Array<{ messageId: number | string }>): void => {
+            for (let i = arr.length - 1; i >= 0; i--) {
+                if (arr[i].messageId === messageId) {
+                    arr.splice(i, 1);
+                    cancelled = true;
+                }
+            }
+        };
+        dropByMessage(this.photoQueue);
+        dropByMessage(this.avatarQueue);
+        const prefix = String(messageId) + '_';
+        for (const set of [this.photoQueuedKeys, this.avatarQueuedKeys]) {
+            for (const k of [...set]) {
+                if (k === String(messageId) || k.startsWith(prefix)) {
+                    set.delete(k);
+                    cancelled = true;
+                }
+            }
+        }
+        if (this.documentPending.delete(messageId)) cancelled = true;
+        if (typeof messageId === 'number') {
+            const retryTimer = this.documentRetryTimers.get(messageId);
+            if (retryTimer) {
+                clearTimeout(retryTimer);
+                this.documentRetryTimers.delete(messageId);
+                cancelled = true;
+            }
+        }
+        if (this.retryPendingDocs.delete(messageId)) cancelled = true;
+        return cancelled;
+    }
+
     cancelDocumentDownloads(): void {
         this.documentDownloadGen++;
         this.videoStreamInflight.clear();
@@ -240,6 +307,7 @@ export class GramMediaRouter {
         this.photoQueuedKeys.clear();
         this.avatarQueuedKeys.clear();
         this.retryPendingDocs.clear();
+        this.downloadActiveIds.clear();
         for (const t of this.documentRetryTimers.values()) clearTimeout(t);
         this.documentRetryTimers.clear();
         for (const key of Object.keys(this.downloadQueues) as QueueKey[]) {
@@ -855,6 +923,16 @@ export class GramMediaRouter {
         return 'photo_queue';
     }
 
+    private bumpQueuedPriority(messageId: number | string, priority: number): void {
+        const keys = Object.keys(this.downloadQueues) as QueueKey[];
+        for (const key of keys) {
+            const q = this.downloadQueues[key];
+            for (const item of q) {
+                if (item.messageId === messageId && item.priority < priority) item.priority = priority;
+            }
+        }
+    }
+
     queueDocumentDownload(docParam: any, messageId: any, priority: number, ctx?: string): void {
         let document = docParam;
         if (!document) {
@@ -865,6 +943,8 @@ export class GramMediaRouter {
             this.registerStickerDoc(document);
         }
         if (!document || messageId == null) return;
+        const requestedPriority = priority;
+        priority = normalizeDownloadPriority(priority);
         const isEmoji = typeof messageId === 'string' && this.isEmojiKey(messageId);
         if (isEmoji && document && (document._ === 'documentEmpty' || (!document.file_reference && !document.mime_type && !document.size && !document.dc_id))) {
             if (document.id != null) this.emoji.onEmojiDownloadFailed(String(document.id));
@@ -879,6 +959,7 @@ export class GramMediaRouter {
             }
         }
         if (this.documentPending.has(messageId)) {
+            this.bumpQueuedPriority(messageId, priority);
             const pendingSince = this.documentPending.get(messageId) as number;
             if (Date.now() - pendingSince <= DOC_PENDING_TTL_MS) return;
             this.documentPending.delete(messageId);
@@ -889,7 +970,7 @@ export class GramMediaRouter {
             clearTimeout(retryTimer);
             this.documentRetryTimers.delete(messageId);
         }
-        if (priority > 0) this.documentRetryCounts.delete(messageId);
+        if (requestedPriority > 0) this.documentRetryCounts.delete(messageId);
         this.documentPending.set(messageId, Date.now());
         if (this.debug) log.info('[gram-media] tg-download-document messageId=' + messageId + ' priority=' + priority + ' ctx=' + (ctx || 'chat') + ' docId=' + document.id);
         if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
@@ -924,15 +1005,17 @@ export class GramMediaRouter {
                 let bestIdx = -1;
                 for (let i = 0; i < queue.length; i++) {
                     if (!this.isViewportEligible(queue[i].messageId, queue[i].ctx)) continue;
-                    if (bestIdx === -1 || queue[i].priority > queue[bestIdx].priority) bestIdx = i;
+                    if (bestIdx === -1 || queue[i].priority >= queue[bestIdx].priority) bestIdx = i;
                 }
                 if (bestIdx === -1) break;
                 items.push(queue.splice(bestIdx, 1)[0]);
             }
             if (items.length === 0) break;
             this.downloadInProgress[queueKey] += items.length;
+            for (const it of items) this.downloadActiveIds.add(it.messageId);
             void this.execDownloadsBatch(items, queueKey).finally(() => {
                 this.downloadInProgress[queueKey] -= items.length;
+                for (const it of items) this.downloadActiveIds.delete(it.messageId);
                 this.processDownloadQueue(queueKey);
             });
         }

@@ -703,7 +703,7 @@ describe('GramMediaRouter emoji pipeline', () => {
             detail: { items: [{ docId: '8001' }] },
         }));
         await flushTicks();
-        expect(downloadedItems).toEqual(['8001', '8002']);
+        expect(downloadedItems).toEqual(['8002', '8001']);
 
         releaseA();
         await flushTicks();
