@@ -3368,7 +3368,7 @@ interface QueueItem {
 const downloadQueue: Array<QueueItem> = [];
 const downloadQueueByKey = new Map<string, QueueItem>();
 let downloadInFlight = 0;
-const MAX_PARALLEL_DOWNLOADS = 48;
+const MAX_PARALLEL_DOWNLOADS = 16;
 
 const IS_PREMIUM = false;
 const POOL_BUDGET = (IS_PREMIUM ? 16 : 8) << 20;

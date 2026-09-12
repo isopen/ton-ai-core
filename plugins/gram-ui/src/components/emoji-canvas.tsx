@@ -640,6 +640,8 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
   }, [slotsKey, urlsKey, kinds, failedDocs, stuckDocs, loadedDocs, inView, everShown, shared, size, hasEmoji, positions, documentSources]);
 
   const missingStrikes = useRef<Record<string, number>>({});
+  const missingLastAt = useRef<Record<string, number>>({});
+  const missingCooldownUntil = useRef<Record<string, number>>({});
 
   useEffect(() => {
     if (!hasEmoji) return;
@@ -648,22 +650,37 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
       const missing = emojiSegs.filter((s) => !urlFor(s.docId));
       if (missing.length > 0) diagLog.info('[emoji-diag] requestMissing slots=' + emojiSegs.length + ' missing=' + missing.length + ' ids=' + missing.map(s => s.docId).join(',').slice(0, 200) + ' strikes=' + JSON.stringify(missingStrikes.current).slice(0, 200) + ' inView=' + inView);
       const strikes = missingStrikes.current;
+      const lastAt = missingLastAt.current;
+      const cooldownUntil = missingCooldownUntil.current;
       const stillMissing = new Set(missing.map((s) => s.docId));
       for (const docId of Object.keys(strikes)) {
-        if (!stillMissing.has(docId)) delete strikes[docId];
+        if (!stillMissing.has(docId)) {
+          delete strikes[docId];
+          delete lastAt[docId];
+          delete cooldownUntil[docId];
+        }
       }
+      if (!inView && !everShown) return false;
 
+      const now = Date.now();
       const customIds: string[] = [];
       for (const s of missing) {
-        const n = (strikes[s.docId] || 0) + 1;
-        strikes[s.docId] = n;
-        if (n > MISSING_EMOJI_STRIKE_LIMIT) {
-          diagLog.info('[emoji-diag] strike limit exceeded doc=' + s.docId + ' strikes=' + n);
-          delete strikes[s.docId];
+        const did = s.docId;
+        if ((cooldownUntil[did] || 0) > now) continue;
+        const n = strikes[did] || 0;
+        const gap = Math.min(30000, 1500 * Math.pow(2, Math.min(n, 4)));
+        if (now - (lastAt[did] || 0) < gap) continue;
+        lastAt[did] = now;
+        const nn = n + 1;
+        strikes[did] = nn;
+        if (nn > MISSING_EMOJI_STRIKE_LIMIT) {
+          diagLog.info('[emoji-diag] strike limit exceeded doc=' + did + ' strikes=' + nn);
+          cooldownUntil[did] = now + 60000;
+          delete strikes[did];
           continue;
         }
-        requestEmojiDownload(s.docId, s.value, 1, undefined, !!s.custom);
-        if (s.custom && n <= MISSING_EMOJI_STRIKE_LIMIT) customIds.push(s.docId);
+        requestEmojiDownload(did, s.value, 1, undefined, !!s.custom);
+        if (s.custom) customIds.push(did);
       }
       if (customIds.length > 0) {
         diagLog.info('[emoji-diag] tg-fetch-custom-emoji ids=' + customIds.join(',').slice(0, 300));
@@ -677,7 +694,7 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
     return () => {
       if (timer) window.clearInterval(timer);
     };
-  }, [slotsKey, urlsKey, inView, hasEmoji]);
+  }, [slotsKey, urlsKey, inView, everShown, hasEmoji]);
 
   useEffect(() => {
     if (!hasEmoji || !playing) return;

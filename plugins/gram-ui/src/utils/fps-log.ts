@@ -99,6 +99,7 @@ export function startFpsLogging(): void {
 
   document.addEventListener('visibilitychange', () => {
     log.info('vis=' + document.visibilityState + ' ' + diag());
+    if (document.visibilityState === 'visible') lastTs = 0;
   });
 
   if (typeof PerformanceObserver !== 'undefined') {

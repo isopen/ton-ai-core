@@ -282,7 +282,7 @@ describe('PollBubble option primitives', () => {
         }
     });
 
-    test('question custom emoji resolves with document urls', () => {
+    test('question custom emoji resolves with document urls', async () => {
         const seen: any[] = [];
         const onFetch = (e: Event) => { seen.push((e as CustomEvent).detail); };
         window.addEventListener('tg-fetch-custom-emoji', onFetch);
@@ -299,6 +299,7 @@ describe('PollBubble option primitives', () => {
                 return container;
             };
             const c1 = mk({ question: q, answers: [{ option: 'a1', text: { text: 'First' } }] }, {});
+            await new Promise((r) => setTimeout(r, 0));
             expect(seen.some((d) => Array.isArray(d.ids) && d.ids.includes('99'))).toBe(true);
             c1.remove();
             seen.length = 0;
@@ -375,7 +376,7 @@ describe('PollBubble mock layout', () => {
         container.remove();
     });
 
-    test('option custom emoji resolves with document urls', () => {
+    test('option custom emoji resolves with document urls', async () => {
         const seen: any[] = [];
         const onFetch = (e: Event) => { seen.push((e as CustomEvent).detail); };
         window.addEventListener('tg-fetch-custom-emoji', onFetch);
@@ -392,6 +393,7 @@ describe('PollBubble mock layout', () => {
                 return container;
             };
             const c1 = mkOpt({});
+            await new Promise((r) => setTimeout(r, 0));
             expect(seen.some((d) => Array.isArray(d.ids) && d.ids.includes('77'))).toBe(true);
             c1.remove();
             seen.length = 0;
