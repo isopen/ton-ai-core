@@ -7,6 +7,7 @@ import {
   fetchPeerInfo, dispatchAvatarDownload, resolveFwdHeader, applyUpdateMessagePoll,
 } from './gram-utils';
 import { isTypingUpdate, handleTypingUpdate } from './gram-typing';
+import { insertHistoryMessage, filterDeletedMessages } from './gram-history';
 import { getLogger } from '@ton-ai/gram-debug';
 
 const updLog = getLogger('gram-browser:updates');
@@ -211,26 +212,23 @@ export function createHandleUpdate(s: GramState) {
             }
           } catch {}
           if (cacheKey) {
-            const prev = s.messagesCache.current.get(cacheKey);
-            const updated = Array.isArray(prev) ? [...prev] : [];
-            const existingIdx = updated.findIndex(c => c.id === m.id);
-            if (existingIdx >= 0) {
-              const prevMsg = updated[existingIdx];
-              const prevEdit = prevMsg.edit_date || 0;
-              const nextEdit = m.edit_date || 0;
-              if (prevEdit > 0 && nextEdit > 0 && nextEdit < prevEdit) {
-                updLog.info('[upd-dbg] stale edit dropped id=', m.id, 'incoming edit=', m.edit_date, 'cached edit=', prevMsg.edit_date);
-                return;
-              }
-              updated[existingIdx] = m;
+            const prevList = s.messagesCache.current.get(cacheKey);
+            const base = Array.isArray(prevList) ? prevList : [];
+            const prevMsg = base.find(c => Number(c.id) === Number(m.id));
+            const prevEdit = prevMsg?.edit_date || 0;
+            const nextEdit = m.edit_date || 0;
+            if (prevMsg && prevEdit > 0 && nextEdit > 0 && nextEdit < prevEdit) {
+              updLog.info('[upd-dbg] stale edit dropped id=', m.id, 'incoming edit=', m.edit_date, 'cached edit=', prevMsg.edit_date);
+              return;
+            }
+            const { list: updated, isNew } = insertHistoryMessage(base, m);
+            if (!isNew) {
               try {
                 s.tgui.current?.dispatch({ type: 'CLEAR_BUTTON_INACTIVE', messageId: m.id });
               } catch {}
-            } else {
-              updated.push(m);
             }
             const log = getLogger('gram-browser');
-            log.debug(`[msgs] new ${cacheKey} id=${m.id} out=${m.out} text=${(m.message || '').slice(0, 20)} cacheN=${updated.length} ${existingIdx >= 0 ? 'REPLACED' : 'APPEND'}`);
+            log.debug(`[msgs] new ${cacheKey} id=${m.id} out=${m.out} text=${(m.message || '').slice(0, 20)} cacheN=${updated.length} ${isNew ? 'APPEND' : 'REPLACED'}`);
             setMessageCache(s, cacheKey, updated);
             if (s.selectedPeerRef.current && `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` === cacheKey) {
               scheduleMessagesFlush(s);
@@ -245,15 +243,17 @@ export function createHandleUpdate(s: GramState) {
             const dialogs = [...s.dialogsRef.current];
             const isActiveChat = s.selectedPeerRef.current && `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` === cacheKey;
             const prev = dialogs[dialogIdx];
+            const prevTop = prev.topMessage || 0;
+            const advance = (m.id || 0) > 0 && (m.id || 0) >= prevTop;
             const preview = m.message ? { text: m.message, entities: m.entities } : dialogPreviewText(m);
-            const lastMsg = preview.text || prev.lastMsg;
-            const lastMsgEntities = preview.text ? preview.entities : prev.lastMsgEntities;
+            const lastMsg = advance ? (preview.text || prev.lastMsg) : prev.lastMsg;
+            const lastMsgEntities = advance ? (preview.text ? preview.entities : prev.lastMsgEntities) : prev.lastMsgEntities;
             dialogs[dialogIdx] = {
-              ...prev, topMessage: m.id || prev.topMessage,
+              ...prev, topMessage: advance ? (m.id || prev.topMessage) : prev.topMessage,
               lastMsg,
               lastMsgEntities,
-              date: m.date || prev.date,
-              unreadCount: m.out ? 0 : (isActiveChat ? prev.unreadCount : (prev.unreadCount || 0) + 1)
+              date: advance ? (m.date || prev.date) : prev.date,
+              unreadCount: m.out ? 0 : (isActiveChat ? prev.unreadCount : (isNew ? (prev.unreadCount || 0) + 1 : prev.unreadCount))
             };
             s.dialogsRef.current = dialogs;
             scheduleDialogsFlush(s);
@@ -344,6 +344,9 @@ export function createHandleUpdate(s: GramState) {
             const k = `${type}_${key}`;
             if (upd.max_id === 0) {
               deleteMessageCache(s, k);
+              s.historyInitRef.current.delete(k);
+              s.maxFetchedIdRef.current.delete(k);
+              s.historyEndRef.current.delete(k);
               const dialog = s.dialogsRef.current.find(d => `${d.peer.type}_${d.peer.id}` === k);
               if (dialog) {
                 dialog.lastMsg = t(S.HISTORY_CLEARED);
@@ -354,6 +357,7 @@ export function createHandleUpdate(s: GramState) {
                 scheduleDialogsFlush(s);
                 if (s.selectedPeerRef.current && `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` === k) {
                   s.tgui.current!.setMessages([]);
+                  try { s.reloadHistoryRef.current?.(); } catch {}
                 }
               }
             } else {
@@ -368,11 +372,11 @@ export function createHandleUpdate(s: GramState) {
             if (upd._ === 'updateMessagePoll') applyUpdateMessagePoll(s, upd);
             if (upd._ === 'updateNewMessage' || upd._ === 'updateNewChannelMessage') processNewMsg(upd.message);
             if (upd._ === 'updateEditMessage' || upd._ === 'updateEditChannelMessage') processNewMsg(upd.message);
-            const applyMsgDeletions = (peerKey: string, deletedIds: Set<number>): boolean => {
+            const applyMsgDeletions = (peerKey: string, deletedIds: Set<number>, deleteIncoming: boolean): boolean => {
               const cached = s.messagesCache.current.get(peerKey);
               if (!Array.isArray(cached)) return false;
               const before = cached.length;
-              const filtered = cached.filter(m => !deletedIds.has(Number(m.id)));
+              const filtered = filterDeletedMessages(cached, deletedIds, deleteIncoming);
               if (filtered.length === before) return false;
               setMessageCache(s, peerKey, filtered);
               const dialog = s.dialogsRef.current.find(d => `${d.peer.type}_${d.peer.id}` === peerKey);
@@ -396,9 +400,10 @@ export function createHandleUpdate(s: GramState) {
             if (upd._ === 'updateDeleteMessages') {
               const deletedIds: Set<number> = new Set((upd.messages || []).map((id: any) => Number(id)));
               if (deletedIds.size > 0) {
+                const sk = s.selectedPeerRef.current ? `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` : '';
                 let anyChanged = false;
                 for (const [k] of s.messagesCache.current.entries()) {
-                  if (applyMsgDeletions(k, deletedIds)) anyChanged = true;
+                  if (applyMsgDeletions(k, deletedIds, k === sk)) anyChanged = true;
                 }
                 if (anyChanged && s.selectedPeerRef.current) {
                   const sk = `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}`;
@@ -411,7 +416,7 @@ export function createHandleUpdate(s: GramState) {
               if (channelId) {
                 const deletedIds: Set<number> = new Set((upd.messages || []).map((id: any) => Number(id)));
                 const k = `channel_${channelId}`;
-                if (applyMsgDeletions(k, deletedIds) && s.selectedPeerRef.current?.type === 'channel' && s.selectedPeerRef.current?.id === channelId) {
+                if (applyMsgDeletions(k, deletedIds, true) && s.selectedPeerRef.current?.type === 'channel' && s.selectedPeerRef.current?.id === channelId) {
                   scheduleMessagesFlush(s);
                 }
               }

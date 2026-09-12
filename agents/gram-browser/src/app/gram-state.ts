@@ -28,7 +28,9 @@ export interface GramState {
   scrollReadElRef: { current: HTMLElement | null };
   scrollReadHandlerRef: { current: (() => void) | null };
   selfUserIdFetchedRef: { current: boolean };
-  orphanedDialogsRef: { current: Map<string, Dialog> };
+  orphanedDialogsRef: { current: Map<string, { dialog: Dialog; ts: number }> };
+  historyEndRef: { current: Set<string> };
+  reloadHistoryRef: { current: (() => void) | null };
   loadStringsSeq: number;
   cleanupFns: (() => void)[];
   cancelDocumentDownloads: () => void;
@@ -63,6 +65,8 @@ export function createGramState(): GramState {
     scrollReadHandlerRef: { current: null },
     selfUserIdFetchedRef: { current: false },
     orphanedDialogsRef: { current: new Map() },
+    historyEndRef: { current: new Set() },
+    reloadHistoryRef: { current: null },
     loadStringsSeq: 0,
     cleanupFns: [],
     cancelDocumentDownloads: () => {},

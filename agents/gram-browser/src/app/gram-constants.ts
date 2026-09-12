@@ -11,6 +11,8 @@ export const TYPING_TIMEOUT = 10000;
 export const MESSAGE_CACHE_PREFIX = 'messages_';
 export const DIALOG_CACHE_KEY = 'dialogs';
 export const ORPHANED_KEY = 'tg_orphaned_dialogs';
+export const ORPHAN_MAX = 50;
+export const ORPHAN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const LANG_CACHE_VERSION = 'v3';
 
 export const ACTION_KEYS: Record<string, string> = {

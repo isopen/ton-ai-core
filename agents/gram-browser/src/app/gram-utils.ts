@@ -3,11 +3,14 @@ import { tpl } from '@ton-ai/gram-lang';
 import { buildPeerBlurThumb, requestPhoto } from '@ton-ai/gram-ui';
 import type { Dialog, Message, PeerInfo } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbGetMany, dbKeys } from '@/utils/db';
-import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, ORPHANED_KEY } from './gram-constants';
+import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, ORPHANED_KEY, ORPHAN_MAX, ORPHAN_TTL_MS } from './gram-constants';
+import { maxPositiveHistoryId, trimHistoryMessages, HISTORY_MAX_CACHED_PEERS } from './gram-history';
 import type { GramState } from './gram-state';
 import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
 
 const log = getLogger('gram-browser');
+
+const persistQueue = new Map<string, Promise<void>>();
 
 export function addLog(s: GramState, text: string) {
   s.tgui.current?.addLog(text);
@@ -15,7 +18,15 @@ export function addLog(s: GramState, text: string) {
 
 export function setMessageCache(s: GramState, peerKey: string, msgs: Message[]) {
   s.messagesCache.current.set(peerKey, msgs);
-  dbSet(MESSAGE_CACHE_PREFIX + peerKey, msgs).catch(() => {});
+  const prev = persistQueue.get(peerKey) || Promise.resolve();
+  const next = prev.then(() => dbSet(MESSAGE_CACHE_PREFIX + peerKey, msgs)).then(
+    () => {},
+    () => {},
+  );
+  persistQueue.set(peerKey, next);
+  next.then(() => {
+    if (persistQueue.get(peerKey) === next) persistQueue.delete(peerKey);
+  });
 }
 
 export function deleteMessageCache(s: GramState, peerKey: string) {
@@ -47,7 +58,7 @@ function scrubSessionMedia(msgs: Message[]): Message[] {
 export async function loadMessageCache(s: GramState) {
   const keys = await dbKeys(MESSAGE_CACHE_PREFIX);
   if (keys.length === 0) return;
-  const map = await dbGetMany<Message[]>(keys);
+  const map = await dbGetMany<Message[]>(keys.slice(-HISTORY_MAX_CACHED_PEERS));
   for (const [k, msgs] of Object.entries(map)) {
     if (!Array.isArray(msgs) || msgs.length === 0) {
       if (msgs) try { await dbDel(k); } catch {}
@@ -56,7 +67,7 @@ export async function loadMessageCache(s: GramState) {
     try {
       const peerKey = k.slice(MESSAGE_CACHE_PREFIX.length);
       const cleaned = scrubSessionMedia(msgs);
-      s.messagesCache.current.set(peerKey, cleaned);
+      s.messagesCache.current.set(peerKey, trimHistoryMessages(cleaned));
     } catch {
       await dbDel(k);
     }
@@ -270,8 +281,12 @@ export function applyReadReceipt(s: GramState, peerKey: string, maxId: number) {
     d.readInboxMaxId = maxId;
     const cached = s.messagesCache.current.get(peerKey);
     if (Array.isArray(cached)) {
-      const remaining = cached.filter(m => !m.out && m.id > maxId).length;
-      d.unreadCount = Math.max(0, remaining);
+      const top = typeof d.topMessage === 'number' ? d.topMessage : 0;
+      const maxCached = maxPositiveHistoryId(cached);
+      if (top <= 0 || maxCached <= 0 || maxCached >= top) {
+        const remaining = cached.filter(m => !m.out && m.id > maxId).length;
+        d.unreadCount = Math.max(0, remaining);
+      }
     }
     scheduleDialogsFlush(s);
   }
@@ -306,33 +321,61 @@ export async function loadOrphanedDialogs(s: GramState) {
   try {
     const entries = await dbGet(ORPHANED_KEY);
     if (Array.isArray(entries)) {
-      s.orphanedDialogsRef.current = new Map(entries);
+      const now = Date.now();
+      const kept: Array<[string, { dialog: Dialog; ts: number }]> = [];
+      for (const e of entries) {
+        const key = e?.[0];
+        const dialog = e?.[1];
+        if (typeof key !== 'string' || !dialog?.peer) continue;
+        const ts = typeof e?.[2] === 'number' ? e[2] : now;
+        if (now - ts > ORPHAN_TTL_MS) continue;
+        kept.push([key, { dialog, ts }]);
+      }
+      s.orphanedDialogsRef.current = new Map(kept.slice(-ORPHAN_MAX));
     }
   } catch {}
 }
 
 function persistOrphanedDialogs(s: GramState) {
-  const clean = Array.from(s.orphanedDialogsRef.current.entries()).map(([key, d]: [string, Dialog]) => [
+  const clean = Array.from(s.orphanedDialogsRef.current.entries()).map(([key, v]: [string, { dialog: Dialog; ts: number }]) => [
     key,
-    d?.peer?.avatarUrl ? { ...d, peer: { ...d.peer, avatarUrl: undefined } } : d,
+    v?.dialog?.peer?.avatarUrl ? { ...v.dialog, peer: { ...v.dialog.peer, avatarUrl: undefined } } : v.dialog,
+    v.ts,
   ]);
   dbSet(ORPHANED_KEY, clean).catch(() => {});
 }
 
 export function addOrphanedDialog(s: GramState, key: string, dialog: Dialog) {
-  s.orphanedDialogsRef.current.set(key, { ...dialog });
+  s.orphanedDialogsRef.current.delete(key);
+  s.orphanedDialogsRef.current.set(key, { dialog: { ...dialog }, ts: Date.now() });
+  while (s.orphanedDialogsRef.current.size > ORPHAN_MAX) {
+    const oldest = s.orphanedDialogsRef.current.keys().next().value;
+    if (oldest === undefined) break;
+    s.orphanedDialogsRef.current.delete(oldest);
+  }
   persistOrphanedDialogs(s);
+}
+
+export function removeOrphanedDialog(s: GramState, key: string) {
+  if (s.orphanedDialogsRef.current.delete(key)) persistOrphanedDialogs(s);
 }
 
 function mergeOrphanedDialogs(s: GramState, serverDialogs: Dialog[]): Dialog[] {
   const merged = [...serverDialogs].filter(d => d?.peer?.type && d?.peer?.id);
   const existingKeys = new Set(merged.map(d => `${d.peer.type}_${d.peer.id}`));
-  for (const [key, dialog] of s.orphanedDialogsRef.current.entries()) {
-    if (!existingKeys.has(key)) {
-      const peer = dialog.peer?.avatarUrl ? { ...dialog.peer, avatarUrl: undefined } : dialog.peer;
-      merged.push({ ...dialog, peer });
+  let pruned = false;
+  for (const [key, v] of s.orphanedDialogsRef.current.entries()) {
+    if (existingKeys.has(key)) {
+      s.orphanedDialogsRef.current.delete(key);
+      pruned = true;
+      continue;
     }
+    const dialog = v?.dialog;
+    if (!dialog) continue;
+    const peer = dialog.peer?.avatarUrl ? { ...dialog.peer, avatarUrl: undefined } : dialog.peer;
+    merged.push({ ...dialog, peer });
   }
+  if (pruned) persistOrphanedDialogs(s);
   merged.sort((a, b) => (b.date || 0) - (a.date || 0));
   return merged;
 }

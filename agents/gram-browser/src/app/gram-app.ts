@@ -40,6 +40,9 @@ export class GramApp {
     let callbacks: TelegramUICallbacks;
     const appCallbacks = createCallbacks(s, () => callbacks);
     callbacks = { ...authCallbacks, ...appCallbacks } as TelegramUICallbacks;
+    s.reloadHistoryRef.current = () => {
+      try { callbacks.loadHistory(); } catch {}
+    };
     try {
       setStrings({ ...(getBuiltinStrings('en') || {}) });
     } catch {}

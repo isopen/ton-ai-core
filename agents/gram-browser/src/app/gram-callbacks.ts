@@ -7,6 +7,7 @@ import {
   resolveFwdHeader,
 } from './gram-utils';
 import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
+import { mergeHistoryMessages, insertHistoryMessage, minPositiveHistoryId } from './gram-history';
 import { getLogger, isNoDialogsCache } from '@ton-ai/gram-debug';
 
 const histLog = getLogger('gram-browser:history');
@@ -54,7 +55,7 @@ export function createCallbacks(
           sentId = updates.id || optimisticId;
           sentDate = updates.date || sentDate;
           sentMedia = updates.media;
-        } else if (updates?._ === 'updates' && Array.isArray(updates.updates)) {
+        } else if ((updates?._ === 'updates' || updates?._ === 'updatesCombined') && Array.isArray(updates.updates)) {
           newMsgUpdate = updates.updates.find((u: any) => u._ === 'updateNewMessage' || u._ === 'updateNewChannelMessage');
           if (newMsgUpdate?.message) {
             sentId = newMsgUpdate.message.id || optimisticId;
@@ -62,7 +63,9 @@ export function createCallbacks(
             sentMedia = newMsgUpdate.message.media;
           }
         }
-        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null, media: sentMedia, entities: newMsgUpdate.message?.entities, groupedId: newMsgUpdate.message?.grouped_id };
+        const sentMsg = newMsgUpdate?.message;
+        if (!sentMsg) histLog.warn('[send] updates without new-message, keeping optimistic id peer=', peerKey);
+        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null, media: sentMedia, entities: sentMsg?.entities, groupedId: sentMsg?.grouped_id };
         const wasNearBottom = (() => {
           const el = document.getElementById('tg-msg-list-content');
           return el && el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
@@ -79,14 +82,13 @@ export function createCallbacks(
         const cached = s.messagesCache.current.get(cacheKey);
         if (Array.isArray(cached)) {
           const filtered = cached.filter(c => c.id !== optimisticId && c.id !== sentId);
-          filtered.push(realMsg);
-          await setMessageCache(s, cacheKey, filtered);
+          await setMessageCache(s, cacheKey, insertHistoryMessage(filtered, realMsg).list);
         } else {
           await setMessageCache(s, cacheKey, [realMsg]);
         }
         const dialogs = s.dialogsRef.current.map(d => {
           if (`${d.peer.type}_${d.peer.id}` === cacheKey) {
-            return { ...d, topMessage: sentId, lastMsg: text, lastMsgEntities: newMsgUpdate.message?.entities, date: sentDate, unreadCount: 0 };
+            return { ...d, topMessage: sentId, lastMsg: text, lastMsgEntities: sentMsg?.entities, date: sentDate, unreadCount: 0 };
           }
           return d;
         });
@@ -119,7 +121,12 @@ export function createCallbacks(
           if (maxCached > 0 && dialog.topMessage > maxCached) {
             histLog.info('[history] stale cache detected peer=', peerKey, 'maxCached=', maxCached, 'topMessage=', dialog.topMessage, 'forcing refresh');
             maxId = 0;
+            s.historyEndRef.current.delete(peerKey);
           }
+        }
+        if (maxId > 0 && s.historyEndRef.current.has(peerKey)) {
+          histLog.info('[history] end reached, skip fetch peer=', peerKey);
+          return;
         }
         const count = maxId === 0
           ? Math.ceil((document.getElementById('tg-msg-list')?.clientHeight || window.innerHeight) / 60) + 5
@@ -193,22 +200,30 @@ export function createCallbacks(
             ...resolveFwdHeader(s, m.fwd_from, data.users, data.chats),
           })).reverse();
           let result: Message[];
+          const live = s.messagesCache.current.get(peerKey);
+          const current: Message[] = Array.isArray(live) ? live : [];
+          const currentIds = new Set(current.map(m => Number(m.id) || 0));
+          const addedFresh = msgs.filter(m => !currentIds.has(Number(m.id) || 0)).length;
+          if (msgs.length === 0 || (maxId > 0 && addedFresh === 0)) {
+            s.historyEndRef.current.add(peerKey);
+          }
           if (msgs.length === 0 && maxId === 0) {
-            await setMessageCache(s, peerKey, []);
-            s.maxFetchedIdRef.current.delete(peerKey);
-            result = [];
-          } else {
-            const existingIds = new Set(msgs.map((m: Message) => m.id));
-            const merged = [...msgs];
-            for (const m of existing) {
-              if (!existingIds.has(m.id)) {
-                merged.push({ ...m, sender: resolveSenderName(m.fromId, m.sender) });
-              }
+            if (current.length === 0) {
+              await setMessageCache(s, peerKey, []);
+              s.maxFetchedIdRef.current.delete(peerKey);
             }
+            result = current;
+          } else {
+            const merged = mergeHistoryMessages(msgs, current).map(m => {
+              const name = resolveSenderName(m.fromId, m.sender);
+              return name === m.sender ? m : { ...m, sender: name };
+            });
             await setMessageCache(s, peerKey, merged);
-            const positiveIds = merged.filter(m => Number(m.id) > 0).map(m => Number(m.id));
-            if (positiveIds.length > 0) {
-              s.maxFetchedIdRef.current.set(peerKey, Math.min(...positiveIds));
+            const minId = minPositiveHistoryId(merged);
+            if (minId > 0) {
+              s.maxFetchedIdRef.current.set(peerKey, minId);
+            } else {
+              s.maxFetchedIdRef.current.delete(peerKey);
             }
             result = merged;
             const uniqIds = new Set(merged.map(m => Number(m.id))).size;
@@ -279,6 +294,7 @@ export function createCallbacks(
         if (noCache) {
           s.historyInitRef.current.delete(peerKey);
           s.maxFetchedIdRef.current.delete(peerKey);
+          s.historyEndRef.current.delete(peerKey);
           s.messagesCache.current.delete(peerKey);
         }
         if (isStale) {

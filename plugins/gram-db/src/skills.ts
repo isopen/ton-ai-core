@@ -1,7 +1,10 @@
 import { crypton } from '@ton-ai/core';
+import { getLogger } from '@ton-ai/gram-debug';
 import { GramDbComponents, KeyManager, EncryptedStore, StorageEngine, DbVersion, currentDbVersion } from './components';
 import type { StoredSession } from './types';
 import { Buffer } from 'buffer';
+
+const dbLog = getLogger('gram-db');
 
 const KEY_INDEX_KEY = '__key_index';
 const SESSION_ID_KEY = '__g';
@@ -29,6 +32,18 @@ export class GramDbSkills {
     const p = this._opQueue.then(fn, () => fn());
     this._opQueue = p.then(() => {}, () => {});
     return p;
+  }
+
+  private _indexLock<T>(fn: () => Promise<T>): Promise<T> {
+    const locks: any = (typeof navigator !== 'undefined' ? (navigator as any).locks : undefined);
+    if (locks?.request) {
+      try {
+        return locks.request('gram-db-key-index', async () => fn());
+      } catch {
+        return fn();
+      }
+    }
+    return fn();
   }
 
   private async _withSaltLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -191,12 +206,15 @@ export class GramDbSkills {
       : (typeof value === 'string' ? value : JSON.stringify(value));
     await this.engine.setItem(hk, encVal as string);
     if (this._sessionId) {
-      const idx = await this._loadKeyIndexInternal();
-      if (!idx.includes(key)) {
-        idx.push(key);
-        this._keyIndex = idx;
-        await this._saveKeyIndexInternal();
-      }
+      await this._indexLock(async () => {
+        this._keyIndex = null;
+        const idx = await this._loadKeyIndexInternal();
+        if (!idx.includes(key)) {
+          idx.push(key);
+          this._keyIndex = idx;
+          await this._saveKeyIndexInternal();
+        }
+      });
     }
   }
 
@@ -215,9 +233,12 @@ export class GramDbSkills {
     const hk = await this.encKey(key);
     await this.engine.removeItem(hk);
     if (this._sessionId) {
-      const idx = await this._loadKeyIndexInternal();
-      this._keyIndex = idx.filter(k => k !== key);
-      await this._saveKeyIndexInternal();
+      await this._indexLock(async () => {
+        this._keyIndex = null;
+        const idx = await this._loadKeyIndexInternal();
+        this._keyIndex = idx.filter(k => k !== key);
+        await this._saveKeyIndexInternal();
+      });
     }
   }
 
@@ -242,13 +263,12 @@ export class GramDbSkills {
   async keys(prefix: string): Promise<string[]> {
     return this._serial(async () => {
       await this.ensureEngine();
+      this._keyIndex = null;
       const index = await this._loadKeyIndexInternal();
       const filtered = index.filter(k => k.startsWith(prefix));
-      if (filtered.length > 0) return filtered;
-
-      try {
-        const all = await this.engine.getAllKeys();
-      } catch {}
+      if (filtered.length === 0) {
+        dbLog.warn('[gram-db] keys empty for prefix=' + prefix + ' (index lost or no data)');
+      }
       return filtered;
     });
   }
@@ -392,12 +412,15 @@ export class GramDbSkills {
         await EncryptedStore.encryptToBase64(this._masterKey, dataUri));
       if (this._sessionId) {
         const avatarUserKey = 'avatar:' + key;
-        const idx = await this._loadKeyIndexInternal();
-        if (!idx.includes(avatarUserKey)) {
-          idx.push(avatarUserKey);
-          this._keyIndex = idx;
-          await this._saveKeyIndexInternal();
-        }
+        await this._indexLock(async () => {
+          this._keyIndex = null;
+          const idx = await this._loadKeyIndexInternal();
+          if (!idx.includes(avatarUserKey)) {
+            idx.push(avatarUserKey);
+            this._keyIndex = idx;
+            await this._saveKeyIndexInternal();
+          }
+        });
       }
     });
   }
@@ -421,8 +444,11 @@ export class GramDbSkills {
       await this.engine.setItem(hk, await EncryptedStore.encryptToBase64(this._masterKey, json));
       if (this._sessionId) {
         const tgsKey = 'tgs:' + key;
-        const idx = await this._loadKeyIndexInternal();
-        if (!idx.includes(tgsKey)) { idx.push(tgsKey); this._keyIndex = idx; await this._saveKeyIndexInternal(); }
+        await this._indexLock(async () => {
+          this._keyIndex = null;
+          const idx = await this._loadKeyIndexInternal();
+          if (!idx.includes(tgsKey)) { idx.push(tgsKey); this._keyIndex = idx; await this._saveKeyIndexInternal(); }
+        });
       }
     });
   }
@@ -455,9 +481,12 @@ export class GramDbSkills {
       await this.engine.removeItem(hk);
       if (this._sessionId) {
         const avatarUserKey = 'avatar:' + key;
-        const idx = await this._loadKeyIndexInternal();
-        this._keyIndex = idx.filter(k => k !== avatarUserKey);
-        await this._saveKeyIndexInternal();
+        await this._indexLock(async () => {
+          this._keyIndex = null;
+          const idx = await this._loadKeyIndexInternal();
+          this._keyIndex = idx.filter(k => k !== avatarUserKey);
+          await this._saveKeyIndexInternal();
+        });
       }
     });
   }
