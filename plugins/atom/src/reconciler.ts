@@ -613,8 +613,8 @@ function isSameNodeType(a: VNode, b: VNode): boolean {
   return a.type === b.type;
 }
 
-function getKey(vnode: VNode, index: number): string | number {
-  return vnode.key ?? index;
+function childMapKey(vnode: VNode, index: number): string {
+  return vnode.key != null ? 'k:' + String(vnode.key) : 'i:' + index;
 }
 
 export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
@@ -715,6 +715,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
     }
     const frame = takeBoundaryFrame(instance);
     if (frame) boundaryStack.push(frame);
+    const prevCommitted = instance.vnode;
     try {
       instance._dirty = false;
 
@@ -762,10 +763,18 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
           return empty;
         }
         fb.componentInstance = instance;
-        const newDom = patch(dom, oldResult, fb);
-        newVNode.dom = newDom;
-        return newDom;
+        try {
+          const fbDom = patch(dom, oldResult, fb);
+          newVNode.dom = fbDom;
+          return fbDom;
+        } catch (e2) {
+          instance.vnode = prevCommitted;
+          instance._dirty = true;
+          throw e2;
+        }
       }
+      instance.vnode = prevCommitted;
+      instance._dirty = true;
       throw e;
     } finally {
       if (frame) popFrame(frame);
@@ -793,19 +802,19 @@ function reconcileChildren(
 
   if (oldChildren === newChildren) return;
 
-  const oldKeyed = new Map<string | number, { vnode: VNode; nodes: Node[]; origKey: string | number }>();
+  const oldKeyed = new Map<string, { vnode: VNode; nodes: Node[]; origKey: string }>();
   for (let i = 0; i < oldLen; i++) {
-    const key = getKey(oldChildren[i], i);
+    const key = childMapKey(oldChildren[i], i);
     oldKeyed.set(key, { vnode: oldChildren[i], nodes: findAllDomNodes(oldChildren[i]), origKey: key });
   }
 
-  const usedKeys = new Set<string | number>();
+  const usedKeys = new Set<string>();
   interface PatchEntry { nodes: Node[] }
   const patches: PatchEntry[] = [];
 
   for (let i = 0; i < newLen; i++) {
     const newChild = newChildren[i];
-    const key = getKey(newChild, i);
+    const key = childMapKey(newChild, i);
     const oldEntry = oldKeyed.get(key);
 
     if (oldEntry && !usedKeys.has(key)) {

@@ -63,6 +63,15 @@ export function useEffect(fn: () => (() => void) | void, deps?: any[]) {
   }
 }
 
+export function snapshotEffectQueues(): [number, number] {
+  return [pendingEffects.length, pendingLayoutEffects.length];
+}
+
+export function rollbackEffectQueues(snap: [number, number]): void {
+  if (pendingEffects.length > snap[0]) pendingEffects.length = snap[0];
+  if (pendingLayoutEffects.length > snap[1]) pendingLayoutEffects.length = snap[1];
+}
+
 export function flushAllEffects() {
   while (pendingEffects.length > 0) {
     const { inst, fn, oldCleanup, cleanupIdx } = pendingEffects.shift()!;

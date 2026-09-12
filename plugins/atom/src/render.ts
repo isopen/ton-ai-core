@@ -1,6 +1,6 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { ComponentInstance, setMountRoot, type VNode, type ComponentType } from './vdom.js';
-import { __setReroot, flushAllEffects, flushLayoutEffects } from './hooks.js';
+import { __setReroot, flushAllEffects, flushLayoutEffects, snapshotEffectQueues, rollbackEffectQueues } from './hooks.js';
 import { createDOM, patch, flushPendingRefs, removePortalNodes } from './reconciler.js';
 import { inTransition, drainTransitionSettled, setTransitionFlusher } from './scheduler.js';
 
@@ -11,6 +11,7 @@ interface RootData {
   oldVNode: VNode;
   container: HTMLElement;
   rootDom: Node;
+  retried?: boolean;
 }
 
 const roots = new Map<HTMLElement, RootData>();
@@ -96,6 +97,7 @@ function flushRenderInternal(rd: RootData) {
 
   const { instance, oldVNode, rootDom } = rd;
 
+  const fxSnap = snapshotEffectQueues();
   let newVNode: VNode;
   try {
     instance.props = {};
@@ -103,11 +105,9 @@ function flushRenderInternal(rd: RootData) {
   } catch (e) {
     log.error('[atom] render error in ' + instance.displayName + ' — keeping previous DOM:', e);
     instance._dirty = false;
+    rollbackEffectQueues(fxSnap);
     return;
   }
-  instance._dirty = false;
-  instance.vnode = newVNode;
-  newVNode.componentInstance = instance;
 
   try {
     if (rootDom && oldVNode) {
@@ -117,9 +117,24 @@ function flushRenderInternal(rd: RootData) {
     }
   } catch (e) {
     log.error('[atom] patch error in ' + instance.displayName + ' — keeping previous tree:', e);
+    rollbackEffectQueues(fxSnap);
+    if (!rd.retried) {
+      rd.retried = true;
+      instance._dirty = true;
+      scheduleFlush(rd);
+    } else {
+      rd.retried = false;
+      instance._dirty = false;
+    }
     return;
   } finally {
     setMountRoot(null);
+  }
+  rd.retried = false;
+  instance._dirty = false;
+  instance.vnode = newVNode;
+  if (typeof newVNode.type !== 'function' && newVNode.componentInstance == null) {
+    newVNode.componentInstance = instance;
   }
   rd.oldVNode = newVNode;
 
@@ -141,7 +156,14 @@ export function render(component: ComponentType, container: HTMLElement): Node {
   }
 
   const instance = new ComponentInstance(component, {});
-  const vnode = instance.render();
+  const fxSnap = snapshotEffectQueues();
+  let vnode: VNode;
+  try {
+    vnode = instance.render();
+  } catch (e) {
+    rollbackEffectQueues(fxSnap);
+    throw e;
+  }
   instance.vnode = vnode;
   vnode.componentInstance = instance;
   const rd: RootData = { instance, oldVNode: vnode, container, rootDom: null as unknown as Node };
@@ -150,6 +172,9 @@ export function render(component: ComponentType, container: HTMLElement): Node {
   let dom: Node;
   try {
     dom = createDOM(vnode);
+  } catch (e) {
+    rollbackEffectQueues(fxSnap);
+    throw e;
   } finally {
     setMountRoot(null);
   }
