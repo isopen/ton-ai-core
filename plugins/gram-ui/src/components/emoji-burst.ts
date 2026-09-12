@@ -1,5 +1,6 @@
 import { playStickerFxOverlay } from './animated-sticker.js';
 import { scheduleStickerClickFx } from './sticker-click-fx.js';
+import { isEmojiAtTextOffset } from './emoji-store.js';
 import { bindLifetimeListeners } from '@ton-ai/atom';
 import { getLogger } from '@ton-ai/gram-debug';
 
@@ -241,10 +242,36 @@ function dispatchInteractionRequest(detail: {
     x?: number;
     y?: number;
     slotIndex?: number;
+    docId?: string;
     hasCanvasFx?: boolean;
 }): void {
     if (!detail.messageId) return;
     window.dispatchEvent(new CustomEvent('tg-interaction-request', { detail }));
+}
+
+function isEmojiTapAtPoint(x: number, y: number): boolean {
+  try {
+    const d = document as any;
+    let node: Node | null = null;
+    let offset = -1;
+    if (typeof d.caretRangeFromPoint === 'function') {
+      const r = d.caretRangeFromPoint(x, y);
+      if (r) {
+        node = r.startContainer;
+        offset = r.startOffset;
+      }
+    } else if (typeof d.caretPositionFromPoint === 'function') {
+      const p = d.caretPositionFromPoint(x, y);
+      if (p) {
+        node = p.offsetNode;
+        offset = p.offset;
+      }
+    }
+    if (!node || offset < 0 || node.nodeType !== 3) return true;
+    return isEmojiAtTextOffset(node.textContent || '', offset);
+  } catch {
+    return true;
+  }
 }
 
 function popEmojiSlot(el: Element, big = false): void {
@@ -314,8 +341,9 @@ export function attachEmojiBurst(): void {
             const under = document.elementFromPoint(x, y);
             const el = under && bubble.contains(under) ? under : null;
             if (el && el.children.length === 0
-                && !(el instanceof HTMLImageElement) && !(el instanceof HTMLCanvasElement) && !(el instanceof HTMLVideoElement)) {
-                glyphHit = /\p{Extended_Pictographic}/u.test(el.textContent || '');
+                && !(el instanceof HTMLImageElement) && !(el instanceof HTMLCanvasElement) && !(el instanceof HTMLVideoElement)
+                && /\p{Extended_Pictographic}/u.test(el.textContent || '')) {
+                glyphHit = isEmojiTapAtPoint(x, y);
             }
         }
         if (!rowId || target.closest('.tgui-reaction') || (!emojiHit && !glyphHit)) {
@@ -330,6 +358,7 @@ export function attachEmojiBurst(): void {
                 mediaType: 'emoji',
                 x, y,
                 slotIndex: slotIdx >= 0 ? slotIdx : undefined,
+                docId: slotEl?.getAttribute('data-doc') || undefined,
             });
         }
     }, { passive: true });

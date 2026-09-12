@@ -360,3 +360,11 @@ export function matchEmojiRuns(text: string): Array<{ start: number; end: number
   runCache.set(text, runs);
   return runs;
 }
+
+export function isEmojiAtTextOffset(text: string, offset: number): boolean {
+  if (!text || !Number.isFinite(offset) || offset < 0 || offset > text.length) return false;
+  for (const r of matchEmojiRuns(text)) {
+    if (offset >= r.start && offset <= r.end) return true;
+  }
+  return false;
+}

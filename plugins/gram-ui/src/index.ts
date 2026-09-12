@@ -7,6 +7,7 @@ export { MediaCollage } from './components/media-collage.js';
 export type { MediaCollageItem } from './components/media-collage.js';
 export { MediaViewer } from './components/media-viewer.js';
 export { collectCustomIds } from './components/rich-message.js';
+export { getEmojiAlt, matchEmojiRuns, isEmojiAtTextOffset } from './components/emoji-store.js';
 export { TgsPlayer } from './components/tgs-player.js';
 export { FpsMeter } from './components/fps-meter.js';
 export { startFpsLogging } from './utils/fps-log.js';
