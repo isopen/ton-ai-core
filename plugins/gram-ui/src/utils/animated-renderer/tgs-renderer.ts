@@ -1,5 +1,7 @@
 import type { AnimatedRendererParams, AnimatedRendererView, IAnimatedRenderer } from './types.js';
 import { getMediaWorkers, MAX_WORKERS, respawnWorker } from './media-workers.js';
+import { registerTickClient } from './tick-coordinator.js';
+import { shouldFullCacheFrames, createPaintRateState, notePaintLatency, skipPaintTick } from './frame-cache-policy.js';
 import type { MediaWorker } from './media-workers.js';
 import { isPageFocused } from './page-focus.js';
 import { resetDrawBudgetIfExpired, tryAcquireDrawCall } from './draw-budget.js';
@@ -126,6 +128,8 @@ export class TgsRenderer implements IAnimatedRenderer {
 
   private framesCount?: number;
 
+  private fullFrameCache = false;
+
   private isAnimating = false;
 
   private isWaiting = true;
@@ -224,6 +228,21 @@ export class TgsRenderer implements IAnimatedRenderer {
 
   private reinitAttempted = false;
 
+  private frameReqAt = 0;
+  private rateState = createPaintRateState();
+  private halvedLogged = false;
+
+  private noteFrameLatency(): void {
+    if (!this.frameReqAt) return;
+    const lat = Date.now() - this.frameReqAt;
+    this.frameReqAt = 0;
+    notePaintLatency(this.rateState, lat, this.msPerFrame, this.framesCount || 0);
+    if (this.rateState.halved !== this.halvedLogged) {
+      this.halvedLogged = this.rateState.halved;
+      debugLog.info('[tgs] paint rate ' + (this.rateState.halved ? 'halved' : 'full'), this.renderId, 'lat=' + lat + 'ms');
+    }
+  }
+
   private approxFrameIndex = 0;
 
   private prevFrameIndex = -1;
@@ -247,11 +266,20 @@ export class TgsRenderer implements IAnimatedRenderer {
   private startLoop() {
     if (this.isLooping) return;
     this.isLooping = true;
-    this.scheduleTick();
+    if (!this.tickUnregister) {
+      this.tickUnregister = registerTickClient(() => {
+        this.step();
+        return this.isLooping;
+      });
+    }
   }
 
   private stopLoop() {
     this.isLooping = false;
+    if (this.tickUnregister) {
+      this.tickUnregister();
+      this.tickUnregister = null;
+    }
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     if (this.rafTimer) {
@@ -260,15 +288,7 @@ export class TgsRenderer implements IAnimatedRenderer {
     }
   }
 
-  private scheduleTick() {
-    if (!this.isLooping) return;
-    this.raf = requestAnimationFrame(() => {
-      if (!this.isLooping) return;
-      this.raf = 0;
-      this.step();
-      this.scheduleTick();
-    });
-  }
+  private tickUnregister: (() => void) | null = null;
 
   private step() {
     try {
@@ -384,6 +404,7 @@ export class TgsRenderer implements IAnimatedRenderer {
         + ' wait=' + (r.isWaiting ? 'y' : 'n')
         + ' inited=' + (r.isRendererInited ? 'y' : 'n')
         + ' failed=' + (r.initFailed ? 'y' : 'n')
+        + ' half=' + (r.rateState.halved ? 'y' : 'n')
         + ' attempts=' + r.initAttempts
         + ' lastPaint=' + (r.lastPaintAt ? Math.round((now - r.lastPaintAt) / 1000) + 's' : 'never')
         + ' views=' + r.views.size
@@ -766,6 +787,7 @@ export class TgsRenderer implements IAnimatedRenderer {
     this.reduceFactor = reduceFactor;
     this.msPerFrame = msPerFrame;
     this.framesCount = framesCount;
+    this.fullFrameCache = shouldFullCacheFrames(framesCount, this.imgSize);
 
     this.prevFrameIndex = -1;
     this.heartbeatFrozenReinit = false;
@@ -811,6 +833,15 @@ export class TgsRenderer implements IAnimatedRenderer {
       this.isAnimating = false;
       this.isWaiting = true;
       return false;
+    }
+
+    if (skipPaintTick(this.rateState, this.framesCount!)) {
+      const skipNow = Date.now();
+      const skipSpeed = this.lastRenderAt ? this.msPerFrame / (skipNow - this.lastRenderAt) : 1;
+      this.approxFrameIndex += (this.direction * this.speed) / skipSpeed;
+      this.prevFrameIndex = frameIndex;
+      this.lastRenderAt = skipNow;
+      return true;
     }
 
     if (this.cacheModulo && frameIndex % this.cacheModulo === 0) {
@@ -939,6 +970,7 @@ export class TgsRenderer implements IAnimatedRenderer {
 
   private requestFrame(frameIndex: number) {
     this.frames[frameIndex] = WAITING;
+    this.frameReqAt = Date.now();
     debugLog.info('[tgs] request', this.renderId, 'idx=' + frameIndex);
     this.worker.request('tgs:renderFrames', { renderId: this.renderId, frameIndex })
       .then((res: any) => {
@@ -1031,6 +1063,7 @@ export class TgsRenderer implements IAnimatedRenderer {
   }
 
   private cleanupPrevFrame(frameIndex: number) {
+    if (this.fullFrameCache) return;
     if (this.framesCount! < 3) return;
     const prevFrameIndex = cycleRestrict(this.framesCount!, frameIndex - 1);
     const prev = this.frames[prevFrameIndex];
@@ -1039,6 +1072,7 @@ export class TgsRenderer implements IAnimatedRenderer {
   }
 
   private sweepOldFrames(frameIndex: number) {
+    if (this.fullFrameCache) return;
     const count = this.framesCount;
     if (!count || count <= 1) return;
     const window = this.params.isLowPriority ? CACHE_WINDOW_LOW_PRIORITY : CACHE_WINDOW_HIGH_PRIORITY;
@@ -1077,6 +1111,7 @@ export class TgsRenderer implements IAnimatedRenderer {
     this.frameStallCount = 0;
     this.frameStallReinit = false;
     this.heartbeatFrozenReinit = false;
+    this.noteFrameLatency();
     if (this.isWaiting) {
       this.doPlay();
     }
