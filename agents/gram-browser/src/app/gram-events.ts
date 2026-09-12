@@ -14,6 +14,7 @@ import { fetchCachedCountries, fetchLangOptions } from './gram-lang';
 import type { Message } from '@ton-ai/gram-ui';
 import { requestDocument } from '@ton-ai/gram-ui';
 import { applyUpdateMessagePoll } from './gram-utils';
+import { collectViewportEmoticons, extractEmoticons } from './gram-history';
 
 const fallbackLog = getLogger('gram-ui:fallback');
 
@@ -30,7 +31,7 @@ type EmojiAnimSet = { packs?: any[]; documents?: any[] };
 let emojiAnimSet: EmojiAnimSet | null = null;
 let emojiAnimSetPromise: Promise<EmojiAnimSet | null> | null = null;
 const pendingAnimDownloads = new Map<string, Promise<string>>();
-const ANIM_DOWNLOAD_TIMEOUT_MS = 20000;
+const ANIM_DOWNLOAD_TIMEOUT_MS = 8000;
 
 async function ensureEmojiAnimSet(): Promise<EmojiAnimSet | null> {
   if (emojiAnimSet) return emojiAnimSet;
@@ -88,6 +89,51 @@ function downloadAnimDoc(docId: string, doc: any): Promise<string> {
   return p;
 }
 
+const FX_PREFETCH_DEBOUNCE_MS = 500;
+const FX_PREFETCH_MAX_EMOTICONS = 8;
+const FX_PREFETCH_MAX_DOCS_PER_PACK = 12;
+const FX_PREFETCH_PACK_TTL_MS = 5 * 60 * 1000;
+const fxPrefetchedPacks = new Map<string, number>();
+let fxPrefetchTimer: ReturnType<typeof setTimeout> | null = null;
+let fxPrefetchPendingIds: number[] | null = null;
+
+async function runFxPrefetch(s: GramState, ids: number[]): Promise<void> {
+  try {
+    const peer = s.selectedPeerRef.current;
+    if (!peer || peer.id === '_debug_' || peer.id === '_settings_') return;
+    const set = await ensureEmojiAnimSet();
+    if (!set) return;
+    const cache = s.messagesCache.current.get(`${peer.type}_${peer.id}`);
+    if (!Array.isArray(cache) || cache.length === 0) return;
+    const emoticons = collectViewportEmoticons(cache, ids, FX_PREFETCH_MAX_EMOTICONS);
+    if (emoticons.length === 0) return;
+    const now = Date.now();
+    for (const [k, ts] of fxPrefetchedPacks) {
+      if (now - ts > FX_PREFETCH_PACK_TTL_MS) fxPrefetchedPacks.delete(k);
+    }
+    const docsById = new Map<string, any>();
+    for (const d of (emojiAnimSet?.documents || [])) {
+      if (d?.id != null) docsById.set(String(d.id), d);
+    }
+    for (const emo of emoticons) {
+      if ((fxPrefetchedPacks.get(emo) || 0) > now - FX_PREFETCH_PACK_TTL_MS) continue;
+      const docIds = findAnimPack(emo);
+      if (!docIds || docIds.length === 0) continue;
+      fxPrefetchedPacks.set(emo, now);
+      let n = 0;
+      for (const docId of docIds) {
+        if (n >= FX_PREFETCH_MAX_DOCS_PER_PACK) break;
+        const id = String(docId);
+        if (mediaRouter?.getCachedEmojiUrl('emojipack-' + id)) continue;
+        const doc = docsById.get(id);
+        if (!doc) continue;
+        n++;
+        downloadAnimDoc(id, doc).catch(() => {});
+      }
+    }
+  } catch {}
+}
+
 async function playAnimSegment(emoticon: string, index: number, messageId: string, seqKey: string, x?: number, y?: number): Promise<boolean> {
   const ids = findAnimPack(emoticon);
   if (!ids || index < 1 || index > ids.length) {
@@ -120,15 +166,7 @@ async function playAnimSegment(emoticon: string, index: number, messageId: strin
   }
 }
 
-function extractEmoticons(text: string): string[] {
-  const out: string[] = [];
-  const re = /\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/gu;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) out.push(m[0]);
-  return out;
-}
-
-function currentPeerKey(s: GramState): string {
+export function currentPeerKey(s: GramState): string {
   const peer = s.selectedPeerRef.current;
   return peer ? `${peer.type}_${peer.id}` : '';
 }
@@ -255,6 +293,11 @@ export function warmupEmojiPipeline(s: GramState): void {
     window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
   } catch (e: any) {
     cbLog.warn('[warmup] stickers dispatch failed: ' + (e?.message || e));
+  }
+  try {
+    void ensureEmojiAnimSet();
+  } catch (e: any) {
+    cbLog.warn('[warmup] anim set prefetch failed: ' + (e?.message || e));
   }
   try {
     const ids = new Set<string>();
@@ -801,6 +844,22 @@ export function setupEventListeners(s: GramState): void {
   window.addEventListener('tg-fetch-rich-emoji-doc', onRichEmojiDoc);
   window.addEventListener('tg-bot-callback', onBotCallback);
   window.addEventListener('tg-interaction-request', onLocalEmojiClick);
+  const onMediaViewport = (e: Event) => {
+    const detail = ((e as CustomEvent).detail || {}) as { peer?: string; ids?: number[] };
+    const ids = Array.isArray(detail.ids) ? detail.ids : [];
+    if (ids.length === 0) return;
+    const peer = s.selectedPeerRef.current;
+    if (!peer || String(detail.peer) !== String(peer.id)) return;
+    fxPrefetchPendingIds = ids.map(Number).filter(id => Number.isFinite(id));
+    if (fxPrefetchTimer != null) return;
+    fxPrefetchTimer = setTimeout(() => {
+      fxPrefetchTimer = null;
+      const batch = fxPrefetchPendingIds;
+      fxPrefetchPendingIds = null;
+      if (batch && batch.length > 0) void runFxPrefetch(s, batch);
+    }, FX_PREFETCH_DEBOUNCE_MS);
+  };
+  window.addEventListener('tg-media-viewport', onMediaViewport);
 
   s.cleanupFns.push(() => {
     window.removeEventListener('tg-auth-set-lang', onSetLang);
@@ -823,5 +882,11 @@ export function setupEventListeners(s: GramState): void {
     window.removeEventListener('tg-bot-callback', onBotCallback);
     window.removeEventListener('tg-fetch-rich-emoji-doc', onRichEmojiDoc);
     window.removeEventListener('tg-interaction-request', onLocalEmojiClick);
+    window.removeEventListener('tg-media-viewport', onMediaViewport);
+    if (fxPrefetchTimer != null) {
+      clearTimeout(fxPrefetchTimer);
+      fxPrefetchTimer = null;
+    }
+    fxPrefetchPendingIds = null;
   });
 }

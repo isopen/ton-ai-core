@@ -62,8 +62,7 @@ export function filterDeletedMessages(list: Message[], ids: Set<number>, deleteI
   });
 }
 
-export function minPositiveHistoryId(list: Message[]): number {
-  let min = 0;
+export function minPositiveHistoryId(list: Message[]): number {  let min = 0;
   for (const m of list) {
     const id = historyMessageId(m);
     if (id > 0 && (min === 0 || id < min)) min = id;
@@ -78,4 +77,32 @@ export function maxPositiveHistoryId(list: Message[]): number {
     if (id > max) max = id;
   }
   return max;
+}
+
+export function extractEmoticons(text: string): string[] {
+  const out: string[] = [];
+  const re = /\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/gu;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) out.push(m[0]);
+  return out;
+}
+
+export function collectViewportEmoticons(
+  messages: Array<{ id: number | string; message?: string }>,
+  ids: number[],
+  limit: number,
+): string[] {
+  const wanted = new Set(ids.map(Number));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const m of messages) {
+    if (!wanted.has(Number(m?.id))) continue;
+    for (const e of extractEmoticons(m?.message || '')) {
+      if (seen.has(e)) continue;
+      seen.add(e);
+      out.push(e);
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
 }
