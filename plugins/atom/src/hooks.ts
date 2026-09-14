@@ -81,11 +81,21 @@ export function useEffect(fn: () => (() => void) | void, deps?: any[]) {
   }
 }
 
-export function snapshotEffectQueues(): [number, number] {
-  return [pendingEffects.length, pendingLayoutEffects.length];
+interface MemoEntry {
+  inst: ComponentInstance;
+  idx: number;
+  prevLen: number;
+  prevVal: unknown;
+  had: boolean;
 }
 
-export function rollbackEffectQueues(snap: [number, number]): void {
+const memoJournal: MemoEntry[] = [];
+
+export function snapshotEffectQueues(): [number, number, number] {
+  return [pendingEffects.length, pendingLayoutEffects.length, memoJournal.length];
+}
+
+export function rollbackEffectQueues(snap: [number, number, number]): void {
   if (pendingEffects.length > snap[0]) {
     for (let i = pendingEffects.length - 1; i >= snap[0]; i--) {
       const entry = pendingEffects[i];
@@ -103,6 +113,19 @@ export function rollbackEffectQueues(snap: [number, number]): void {
       } catch {}
     }
     pendingLayoutEffects.length = snap[1];
+  }
+  if (memoJournal.length > snap[2]) {
+    for (let i = memoJournal.length - 1; i >= snap[2]; i--) {
+      const entry = memoJournal[i];
+      try {
+        if (entry.had) {
+          entry.inst.hookStates[entry.idx] = entry.prevVal;
+        } else if (entry.inst.hookStates.length > entry.prevLen) {
+          entry.inst.hookStates.length = entry.prevLen;
+        }
+      } catch {}
+    }
+    memoJournal.length = snap[2];
   }
 }
 
@@ -164,6 +187,8 @@ export function useMemo<T>(fn: () => T, deps: any[]): T {
   }
 
   if (changed) {
+    const had = inst.hookStates.length > idx;
+    memoJournal.push({ inst, idx, prevLen: inst.hookStates.length, prevVal: inst.hookStates[idx], had });
     const value = fn();
     inst.hookStates[idx] = { deps: deps ? [...deps] : deps, value };
     return value;
@@ -201,7 +226,7 @@ export function useDomEvent(
     const dispatch = (e: any) => handlerRef.current?.(e);
     t.addEventListener(type, dispatch, opts);
     return () => t.removeEventListener(type, dispatch, opts);
-  }, [type, ...deps]);
+  }, [type, target, options?.capture, options?.passive, options?.once, ...deps]);
 }
 
 export function useReducer<S, A>(
@@ -305,10 +330,10 @@ export function useSyncExternalStore<T>(
   isEqual: (a: T, b: T) => boolean = Object.is,
 ): T {
   const inst = getInstance();
-  const snapshot = getSnapshot();
+  const nextSnapshot = getSnapshot();
   const [, setTick] = useState(0);
-  const ref = useRef<{ snapshot: T; getSnapshot: () => T }>({ snapshot, getSnapshot });
-  ref.current.snapshot = snapshot;
+  const ref = useRef<{ snapshot: T; getSnapshot: () => T }>({ snapshot: nextSnapshot, getSnapshot });
+  if (!isEqual(ref.current.snapshot, nextSnapshot)) ref.current.snapshot = nextSnapshot;
   ref.current.getSnapshot = getSnapshot;
   void inst;
   useEffect(() => {
@@ -322,7 +347,7 @@ export function useSyncExternalStore<T>(
     check();
     return subscribe(check);
   }, [subscribe, getSnapshot]);
-  return snapshot;
+  return ref.current.snapshot;
 }
 
 export interface SelectorStore<S> {

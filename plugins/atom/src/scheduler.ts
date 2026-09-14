@@ -58,18 +58,19 @@ export function useTransition(): [boolean, (fn: () => void) => void] {
   const [pending, setPending] = useState(false);
   const inflight = useRef(0);
   const start = useCallback((fn: () => void) => {
-    try {
-      startTransition(fn);
-    } catch (e) {
-      setPending(false);
-      throw e;
-    }
     inflight.current++;
     setPending(true);
     onTransitionSettled(() => {
       inflight.current = Math.max(0, inflight.current - 1);
       if (inflight.current === 0) setPending(false);
     });
+    try {
+      startTransition(fn);
+    } catch (e) {
+      inflight.current = Math.max(0, inflight.current - 1);
+      if (inflight.current === 0) setPending(false);
+      throw e;
+    }
   }, []);
   return [pending, start];
 }

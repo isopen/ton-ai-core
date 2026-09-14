@@ -127,7 +127,7 @@ export function memo(component: ComponentType, areEqual?: MemoCompare): Componen
       }
     }
     const vnode = component(props);
-    MEMO_CACHE.set(inst, { props, vnode, hookCount: inst.hookIndex });
+    MEMO_CACHE.set(inst, { props: { ...props }, vnode, hookCount: inst.hookIndex });
     return vnode;
   };
   (wrapped as any).displayName = (component as any).displayName || component.name || '(memo)';

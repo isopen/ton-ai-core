@@ -73,11 +73,17 @@ interface SuspendEntry {
   value?: any;
   error?: any;
   promise?: Promise<any>;
+  owners?: Set<ComponentInstance | null>;
 }
 
 const suspendCache = new Map<string, SuspendEntry>();
 
 const SUSPEND_CACHE_LIMIT = 500;
+
+function suspendTouch(key: string, entry: SuspendEntry): void {
+  suspendCache.delete(key);
+  suspendCache.set(key, entry);
+}
 
 function suspendSet(key: string, entry: SuspendEntry): void {
   suspendCache.set(key, entry);
@@ -87,10 +93,24 @@ function suspendSet(key: string, entry: SuspendEntry): void {
   }
 }
 
+function rerenderOwners(key: string): void {
+  const owners = suspendCache.get(key)?.owners;
+  if (!owners || owners.size === 0) return;
+  for (const owner of [...owners]) {
+    try {
+      requestRerender(owner ?? undefined);
+    } catch {}
+  }
+}
+
 export function suspend<T>(key: string, loader: () => Promise<T>): T {
   const owner: ComponentInstance | null = currentInstance;
   const entry = suspendCache.get(key);
   if (entry) {
+    suspendTouch(key, entry);
+    if (entry.status === 'pending') {
+      (entry.owners ??= new Set()).add(owner);
+    }
     if (entry.status === 'ok') return entry.value as T;
     if (entry.status === 'fail') throw entry.error;
     throw entry.promise;
@@ -105,16 +125,16 @@ export function suspend<T>(key: string, loader: () => Promise<T>): T {
   raw.then(
     (value: T) => {
       if (suspendCache.get(key)?.promise !== raw) return;
-      suspendSet(key, { status: 'ok', value });
-      requestRerender(owner ?? undefined);
+      suspendSet(key, { status: 'ok', value, owners: suspendCache.get(key)?.owners });
+      rerenderOwners(key);
     },
     (error: any) => {
       if (suspendCache.get(key)?.promise !== raw) return;
-      suspendSet(key, { status: 'fail', error });
-      requestRerender(owner ?? undefined);
+      suspendSet(key, { status: 'fail', error, owners: suspendCache.get(key)?.owners });
+      rerenderOwners(key);
     },
   );
-  suspendSet(key, { status: 'pending', promise: raw });
+  suspendSet(key, { status: 'pending', promise: raw, owners: new Set([owner]) });
   throw raw;
 }
 

@@ -1000,13 +1000,13 @@ describe('patch - maximum coverage branches', () => {
     expect(() => patch(el, oldVNode, newVNode)).not.toThrow();
   });
 
-  test('removing dangerouslySetInnerHTML prop is a no-op in removeProp', () => {
+  test('removing dangerouslySetInnerHTML prop clears stale html', () => {
     const oldVNode = h('div', { dangerouslySetInnerHTML: { __html: '<b>keep</b>' } });
     const el = createDOM(oldVNode) as HTMLElement;
 
     const newVNode = h('div', {});
     patch(el, oldVNode, newVNode);
-    expect(el.innerHTML).toBe('<b>keep</b>');
+    expect(el.innerHTML).toBe('');
   });
 
   test('updateProps skips removal when old value is nullish', () => {

@@ -906,7 +906,7 @@ describe('VirtualList', () => {
       });
     });
 
-    test('startAtBottom with content that does not overflow sets scrollTop to scrollHeight (browser clamps to 0)', (done) => {
+    test('startAtBottom with content that does not overflow clamps scrollTop to 0', (done) => {
       const items = generateItems(3);
       Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 200 });
       Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 100 });
@@ -928,7 +928,7 @@ describe('VirtualList', () => {
       render(App, container);
 
       queueMicrotask(() => {
-        expect(listElOf(container).scrollTop).toBe(100);
+        expect(listElOf(container).scrollTop).toBe(0);
         done();
       });
     });

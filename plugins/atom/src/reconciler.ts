@@ -455,7 +455,10 @@ function removeProp(el: Element, key: string, oldValue: any) {
     el.removeAttribute('style');
     return;
   }
-  if (key === 'dangerouslySetInnerHTML') return;
+  if (key === 'dangerouslySetInnerHTML') {
+    el.innerHTML = '';
+    return;
+  }
   if (delegateEventType(key)) {
     removeDelegateBinding(el, key);
     return;
@@ -555,6 +558,21 @@ function mergeSlotProps(childProps: Record<string, any>, slotProps: Record<strin
       result[key] = (e: any) => { cv(e); sv(e); };
       continue;
     }
+    if (key === 'ref' && cv != null && sv != null) {
+      const cbr = cv;
+      const sbr = sv;
+      result[key] = (el2: unknown) => {
+        try {
+          if (typeof cbr === 'function') cbr(el2);
+          else if (cbr && typeof cbr === 'object') (cbr as any).current = el2;
+        } catch {}
+        try {
+          if (typeof sbr === 'function') sbr(el2);
+          else if (sbr && typeof sbr === 'object') (sbr as any).current = el2;
+        } catch {}
+      };
+      continue;
+    }
     if (key in slotProps) {
       if (sv !== undefined && sv !== null) result[key] = sv;
     } else if (cv !== undefined && cv !== null) {
@@ -610,10 +628,19 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
       vnode.dom = empty;
       return empty;
     }
-    const node = createDOM(resolved);
-    vnode.dom = node;
-    (vnode as any).__resolved = resolved;
-    return node;
+    const fxSnapSlot = snapshotEffectQueues();
+    const ctxSnapSlot = snapshotContextQueue();
+    try {
+      const node = createDOM(resolved);
+      vnode.dom = node;
+      (vnode as any).__resolved = resolved;
+      return node;
+    } catch (e) {
+      destroyCreated([resolved]);
+      rollbackEffectQueues(fxSnapSlot);
+      rollbackContextQueue(ctxSnapSlot);
+      throw e;
+    }
   }
 
   if (vnode.type === PORTAL) {
@@ -685,13 +712,22 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
         return empty;
       } catch (e) {
         if (frame && boundaryStack[boundaryStack.length - 1] === frame && frame.handle(e)) {
+          rollbackEffectQueues(fxSnapMount);
+          rollbackContextQueue(ctxSnapMount);
           const fb = safeFallback(frame);
           instance.vnode = fb;
           if (fb) {
-            const dom = createDOM(fb);
-            vnode.dom = dom;
-            vnode.componentInstance = instance;
-            return dom;
+            try {
+              const dom = createDOM(fb);
+              vnode.dom = dom;
+              vnode.componentInstance = instance;
+              return dom;
+            } catch (e2) {
+              instance.vnode = null;
+              rollbackEffectQueues(fxSnapMount);
+              rollbackContextQueue(ctxSnapMount);
+              throw e2;
+            }
           }
           const empty = document.createTextNode('');
           vnode.dom = empty;
@@ -711,32 +747,32 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
   const el = createElement(vnode.type as string);
   vnode.dom = el;
 
-  for (const [key, value] of Object.entries(vnode.props)) {
-    if (key === 'key' || key === 'children') continue;
-    if (value !== undefined && value !== null) {
-      setProp(el, key, value);
+  const fxSnapEl = snapshotEffectQueues();
+  const ctxSnapEl = snapshotContextQueue();
+  const doneEl: VNode[] = [];
+  try {
+    for (const [key, value] of Object.entries(vnode.props)) {
+      if (key === 'key' || key === 'children') continue;
+      if (value !== undefined && value !== null) {
+        setProp(el, key, value);
+      }
     }
-  }
 
-  if (vnode.children.length > 0) {
-    const fxSnapEl = snapshotEffectQueues();
-    const ctxSnapEl = snapshotContextQueue();
-    const doneEl: VNode[] = [];
-    const frag = document.createDocumentFragment();
-    try {
+    if (vnode.children.length > 0) {
+      const frag = document.createDocumentFragment();
       for (const child of vnode.children) {
         const childDom = createDOM(child);
         if (childDom) frag.appendChild(childDom);
         doneEl.push(child);
       }
-    } catch (e) {
-      destroyCreated(doneEl);
-      dropPendingRefsFor(el);
-      rollbackEffectQueues(fxSnapEl);
-      rollbackContextQueue(ctxSnapEl);
-      throw e;
+      el.appendChild(frag);
     }
-    el.appendChild(frag);
+  } catch (e) {
+    destroyCreated(doneEl);
+    dropPendingRefsFor(el);
+    rollbackEffectQueues(fxSnapEl);
+    rollbackContextQueue(ctxSnapEl);
+    throw e;
   }
 
   return el;
@@ -747,6 +783,13 @@ function findDomNode(vnode: VNode): Node | null {
     const inner = vnode.componentInstance?.vnode;
     if (inner && inner !== vnode) {
       const found = findDomNode(inner);
+      if (found) return found;
+    }
+  }
+  if (vnode.type === SLOT) {
+    const resolved = (vnode as any).__resolved as VNode | undefined;
+    if (resolved) {
+      const found = findDomNode(resolved);
       if (found) return found;
     }
   }
@@ -796,6 +839,18 @@ function childMapKey(vnode: VNode, index: number): string {
   return vnode.key != null ? 'k:' + String(vnode.key) : 'i:' + index;
 }
 
+function removePortalPlaceholder(vnode: VNode): void {
+  if (vnode.type !== PORTAL) return;
+  const ph = vnode.dom;
+  if (ph && ph.parentNode) ph.parentNode.removeChild(ph);
+}
+
+function reorderNodes(vnode: VNode): Node[] {
+  const nodes = findAllDomNodes(vnode);
+  if (vnode.type === PORTAL && vnode.dom && !nodes.includes(vnode.dom)) nodes.push(vnode.dom);
+  return nodes;
+}
+
 export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   if (oldVNode === newVNode) return dom;
   if (!isSameNodeType(oldVNode, newVNode)) {
@@ -822,9 +877,17 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   }
 
   if (newVNode.type === FRAGMENT || newVNode.type === SLOTTABLE) {
-    const firstOld = findDomNode(oldVNode);
-    const host = (firstOld && firstOld.parentNode) || (dom && dom.parentNode) || dom;
-    reconcileChildren(host, oldVNode.children, newVNode.children, firstOld || dom);
+    const fxSnapFragP = snapshotEffectQueues();
+    const ctxSnapFragP = snapshotContextQueue();
+    try {
+      const firstOld = findDomNode(oldVNode);
+      const host = (firstOld && firstOld.parentNode) || (dom && dom.parentNode) || dom;
+      reconcileChildren(host, oldVNode.children, newVNode.children, firstOld || dom);
+    } catch (e) {
+      rollbackEffectQueues(fxSnapFragP);
+      rollbackContextQueue(ctxSnapFragP);
+      throw e;
+    }
     newVNode.dom = dom;
     return dom;
   }
@@ -843,31 +906,57 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
       newVNode.dom = dom;
       return dom;
     }
-    const out = patch(dom, oldResolved, resolved);
-    newVNode.dom = (resolved as VNode).dom ?? out;
-    (newVNode as any).__resolved = resolved;
-    return out;
+    const fxSnapSlotP = snapshotEffectQueues();
+    const ctxSnapSlotP = snapshotContextQueue();
+    try {
+      const out = patch(dom, oldResolved, resolved);
+      newVNode.dom = (resolved as VNode).dom ?? out;
+      (newVNode as any).__resolved = resolved;
+      return out;
+    } catch (e) {
+      rollbackEffectQueues(fxSnapSlotP);
+      rollbackContextQueue(ctxSnapSlotP);
+      throw e;
+    }
   }
 
   if (newVNode.type === PORTAL) {
     const container = newVNode.props.container as Element | null;
     const oldContainer = oldVNode.props.container as Element | null;
     if (container !== oldContainer) {
+      const fxSnapPortalP = snapshotEffectQueues();
+      const ctxSnapPortalP = snapshotContextQueue();
+      let fresh: Node;
+      try {
+        fresh = createDOM(newVNode);
+      } catch (e) {
+        rollbackEffectQueues(fxSnapPortalP);
+        rollbackContextQueue(ctxSnapPortalP);
+        throw e;
+      }
       runUnmountCleanups(oldVNode);
-      const fresh = createDOM(newVNode);
       if (dom.parentNode) dom.parentNode.replaceChild(fresh, dom);
       return fresh;
     }
     if (container) {
-      reconcileChildren(container, oldVNode.children, newVNode.children, null);
+      const fxSnapPortalC = snapshotEffectQueues();
+      const ctxSnapPortalC = snapshotContextQueue();
+      try {
+        reconcileChildren(container, oldVNode.children, newVNode.children, null);
+      } catch (e) {
+        rollbackEffectQueues(fxSnapPortalC);
+        rollbackContextQueue(ctxSnapPortalC);
+        throw e;
+      }
     }
-    newVNode.dom = dom;
-    return dom;
+    newVNode.dom = oldVNode.dom ?? dom;
+    return newVNode.dom;
   }
 
   if (typeof newVNode.type === 'function') {
     const component = newVNode.type as ComponentType;
     let instance = oldVNode.componentInstance;
+    const prevProps = instance ? instance.props : newVNode.props;
     if (!instance) {
       instance = new ComponentInstance(component, newVNode.props);
       if (instance.rootRef === undefined) instance.rootRef = getMountRoot();
@@ -890,6 +979,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
     try {
       result = instance.render();
     } catch (e) {
+      instance.props = prevProps;
       rollbackEffectQueues(fxSnapPatch);
       rollbackContextQueue(ctxSnapPatch);
       setCurrentInstance(prevPatchInst);
@@ -934,6 +1024,8 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
       return newDom;
     } catch (e) {
       if (frame && boundaryStack[boundaryStack.length - 1] === frame && frame.handle(e)) {
+        rollbackEffectQueues(fxSnapPatch);
+        rollbackContextQueue(ctxSnapPatch);
         const fb = safeFallback(frame);
         const oldResult = isComponentBoundary(oldVNode) && oldVNode.componentInstance?.vnode ? oldVNode.componentInstance.vnode : oldVNode;
         instance._dirty = false;
@@ -952,6 +1044,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
           newVNode.dom = fbDom;
           return fbDom;
         } catch (e2) {
+          instance.props = prevProps;
           instance.vnode = prevCommitted;
           instance._dirty = true;
           rollbackEffectQueues(fxSnapPatch);
@@ -959,6 +1052,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
           throw e2;
         }
       }
+      instance.props = prevProps;
       instance.vnode = prevCommitted;
       instance._dirty = true;
       rollbackEffectQueues(fxSnapPatch);
@@ -973,8 +1067,16 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   const el = dom as HTMLElement;
   newVNode.dom = el;
 
-  updateProps(el, oldVNode.props, newVNode.props);
-  reconcileChildren(el, oldVNode.children, newVNode.children, null);
+  const fxSnapElP = snapshotEffectQueues();
+  const ctxSnapElP = snapshotContextQueue();
+  try {
+    updateProps(el, oldVNode.props, newVNode.props);
+    reconcileChildren(el, oldVNode.children, newVNode.children, null);
+  } catch (e) {
+    rollbackEffectQueues(fxSnapElP);
+    rollbackContextQueue(ctxSnapElP);
+    throw e;
+  }
 
   return el;
 }
@@ -999,6 +1101,7 @@ function reconcileChildren(
       for (const node of findAllDomNodes(oldChildren[i])) {
         if (node.parentNode) node.parentNode.removeChild(node);
       }
+      removePortalPlaceholder(oldChildren[i]);
       continue;
     }
     oldKeyed.set(key, { vnode: oldChildren[i], nodes: findAllDomNodes(oldChildren[i]), origKey: key });
@@ -1019,24 +1122,25 @@ function reconcileChildren(
       if (oldDom && oldDom.parentNode) {
         const newDom = patch(oldDom, oldEntry.vnode, newChild);
         newChild.dom = newDom;
-        patches.push({ nodes: findAllDomNodes(newChild) });
+        patches.push({ nodes: reorderNodes(newChild) });
       } else {
         for (const node of oldEntry.nodes) {
           if (node.parentNode) node.parentNode.removeChild(node);
         }
+        removePortalPlaceholder(oldEntry.vnode);
         const newDom = createDOM(newChild);
         newChild.dom = newDom;
-        patches.push({ nodes: findAllDomNodes(newChild) });
+        patches.push({ nodes: reorderNodes(newChild) });
       }
     } else if (oldEntry) {
       log.warn('[recon] DUP-KEY key=' + String(key) + ' parent=' + (parentEl as HTMLElement).className);
       const newDom = createDOM(newChild);
       newChild.dom = newDom;
-      patches.push({ nodes: findAllDomNodes(newChild) });
+      patches.push({ nodes: reorderNodes(newChild) });
     } else {
       const newDom = createDOM(newChild);
       newChild.dom = newDom;
-      patches.push({ nodes: findAllDomNodes(newChild) });
+      patches.push({ nodes: reorderNodes(newChild) });
     }
   }
 
@@ -1047,6 +1151,7 @@ function reconcileChildren(
       for (const node of entry.nodes) {
         if (node.parentNode) node.parentNode.removeChild(node);
       }
+      removePortalPlaceholder(entry.vnode);
     }
   }
 
