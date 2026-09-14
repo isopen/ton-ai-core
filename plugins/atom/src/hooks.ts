@@ -28,14 +28,20 @@ export function useState<T>(initial: T | (() => T)): [T, (v: T | ((prev: T) => T
     inst.hookStates[idx] = typeof initial === 'function' ? (initial as () => T)() : initial;
   }
 
-  const setState = (v: T | ((prev: T) => T)) => {
-    const newVal = typeof v === 'function' ? (v as (prev: T) => T)(inst.hookStates[idx]) : v;
-    if (newVal !== inst.hookStates[idx]) {
-      inst.hookStates[idx] = newVal;
-      inst._dirty = true;
-      reroot?.(inst);
-    }
-  };
+  const cache = ((inst as unknown as { __stateSetters?: Map<number, (v: T | ((prev: T) => T)) => void> }).__stateSetters ??= new Map());
+  let setState = cache.get(idx);
+  if (!setState) {
+    setState = (v: T | ((prev: T) => T)) => {
+      if (!inst._mounted) return;
+      const newVal = typeof v === 'function' ? (v as (prev: T) => T)(inst.hookStates[idx]) : v;
+      if (!Object.is(newVal, inst.hookStates[idx])) {
+        inst.hookStates[idx] = newVal;
+        inst._dirty = true;
+        reroot?.(inst);
+      }
+    };
+    cache.set(idx, setState);
+  }
 
   return [inst.hookStates[idx] as T, setState];
 }
@@ -49,11 +55,11 @@ export function useEffect(fn: () => (() => void) | void, deps?: any[]) {
   let changed = true;
 
   if (oldDeps !== undefined && deps !== undefined) {
-    changed = deps.length !== oldDeps.length || deps.some((d, i) => d !== oldDeps[i]);
+    changed = deps.length !== oldDeps.length || deps.some((d, i) => !Object.is(d, oldDeps[i]));
   }
 
   if (changed) {
-    inst.hookStates[depsIdx] = deps;
+    inst.hookStates[depsIdx] = deps ? [...deps] : deps;
     pendingEffects.push({
       inst,
       fn,
@@ -113,13 +119,13 @@ export function useMemo<T>(fn: () => T, deps: any[]): T {
   const oldDeps = inst.hookStates[idx] as { deps: any[]; value: T } | undefined;
   let changed = true;
 
-  if (oldDeps !== undefined) {
-    changed = deps.length !== oldDeps.deps.length || deps.some((d, i) => d !== oldDeps.deps[i]);
+  if (oldDeps !== undefined && deps != null && oldDeps.deps != null) {
+    changed = deps.length !== oldDeps.deps.length || deps.some((d, i) => !Object.is(d, oldDeps.deps[i]));
   }
 
   if (changed) {
     const value = fn();
-    inst.hookStates[idx] = { deps, value };
+    inst.hookStates[idx] = { deps: deps ? [...deps] : deps, value };
     return value;
   }
 
@@ -142,12 +148,20 @@ export function useDomEvent(
   deps: any[] = [],
   options?: AddEventListenerOptions,
 ): void {
+  const handlerRef = useRef(handler);
+  handlerRef.current = handler;
+  const targetRef = useRef(target);
+  targetRef.current = target;
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
   useEffect(() => {
-    const t = typeof target === 'function' ? target() : target;
-    if (!t || !handler || typeof (t as any).addEventListener !== 'function') return;
-    t.addEventListener(type, handler, options);
-    return () => t.removeEventListener(type, handler, options);
-  }, deps);
+    const t = typeof targetRef.current === 'function' ? targetRef.current() : targetRef.current;
+    const opts = optionsRef.current;
+    if (!t || !handlerRef.current || typeof (t as any).addEventListener !== 'function') return;
+    const dispatch = (e: any) => handlerRef.current?.(e);
+    t.addEventListener(type, dispatch, opts);
+    return () => t.removeEventListener(type, dispatch, opts);
+  }, [type, ...deps]);
 }
 
 export function useReducer<S, A>(
@@ -169,9 +183,12 @@ export function useReducer<S, A>(
     return typeof initial === 'function' ? (initial as () => S)() : initial;
   });
   const dispatchRef = useRef<((action: A) => void) | null>(null);
+  const reducerRef = useRef(reducer);
+  reducerRef.current = reducer;
   if (!dispatchRef.current) {
     dispatchRef.current = (action: A) => {
-      setState((prev) => reducer(prev, action));
+      const latest = reducerRef.current;
+      setState((prev) => latest(prev, action));
     };
   }
   return [state, dispatchRef.current];
@@ -195,11 +212,11 @@ export function useLayoutEffect(fn: () => (() => void) | void, deps?: any[]) {
   let changed = true;
 
   if (oldDeps !== undefined && deps !== undefined) {
-    changed = deps.length !== oldDeps.length || deps.some((d, i) => d !== oldDeps[i]);
+    changed = deps.length !== oldDeps.length || deps.some((d, i) => !Object.is(d, oldDeps[i]));
   }
 
   if (changed) {
-    inst.hookStates[depsIdx] = deps;
+    inst.hookStates[depsIdx] = deps ? [...deps] : deps;
     pendingLayoutEffects.push({
       inst,
       fn,

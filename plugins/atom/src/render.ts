@@ -1,7 +1,8 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { ComponentInstance, setMountRoot, type VNode, type ComponentType } from './vdom.js';
 import { __setReroot, flushAllEffects, flushLayoutEffects, snapshotEffectQueues, rollbackEffectQueues } from './hooks.js';
-import { createDOM, patch, flushPendingRefs, removePortalNodes } from './reconciler.js';
+import { snapshotContextQueue, rollbackContextQueue, flushPendingContexts } from './context.js';
+import { createDOM, patch, flushPendingRefs, removePortalNodes, dropPendingRefsFor } from './reconciler.js';
 import { inTransition, drainTransitionSettled, setTransitionFlusher } from './scheduler.js';
 
 const log = getLogger('atom');
@@ -98,6 +99,7 @@ function flushRenderInternal(rd: RootData) {
   const { instance, oldVNode, rootDom } = rd;
 
   const fxSnap = snapshotEffectQueues();
+  const ctxSnap = snapshotContextQueue();
   let newVNode: VNode;
   try {
     instance.props = {};
@@ -106,6 +108,7 @@ function flushRenderInternal(rd: RootData) {
     log.error('[atom] render error in ' + instance.displayName + ' — keeping previous DOM:', e);
     instance._dirty = false;
     rollbackEffectQueues(fxSnap);
+    rollbackContextQueue(ctxSnap);
     return;
   }
 
@@ -118,6 +121,7 @@ function flushRenderInternal(rd: RootData) {
   } catch (e) {
     log.error('[atom] patch error in ' + instance.displayName + ' — keeping previous tree:', e);
     rollbackEffectQueues(fxSnap);
+    rollbackContextQueue(ctxSnap);
     if (!rd.retried) {
       rd.retried = true;
       instance._dirty = true;
@@ -133,11 +137,9 @@ function flushRenderInternal(rd: RootData) {
   rd.retried = false;
   instance._dirty = false;
   instance.vnode = newVNode;
-  if (typeof newVNode.type !== 'function' && newVNode.componentInstance == null) {
-    newVNode.componentInstance = instance;
-  }
   rd.oldVNode = newVNode;
 
+  flushPendingContexts();
   flushLayoutEffects();
   flushAllEffects();
 }
@@ -157,15 +159,16 @@ export function render(component: ComponentType, container: HTMLElement): Node {
 
   const instance = new ComponentInstance(component, {});
   const fxSnap = snapshotEffectQueues();
+  const ctxSnap = snapshotContextQueue();
   let vnode: VNode;
   try {
     vnode = instance.render();
   } catch (e) {
     rollbackEffectQueues(fxSnap);
+    rollbackContextQueue(ctxSnap);
     throw e;
   }
   instance.vnode = vnode;
-  vnode.componentInstance = instance;
   const rd: RootData = { instance, oldVNode: vnode, container, rootDom: null as unknown as Node };
   instance.rootRef = rd;
   setMountRoot(rd);
@@ -174,6 +177,7 @@ export function render(component: ComponentType, container: HTMLElement): Node {
     dom = createDOM(vnode);
   } catch (e) {
     rollbackEffectQueues(fxSnap);
+    rollbackContextQueue(ctxSnap);
     throw e;
   } finally {
     setMountRoot(null);
@@ -186,10 +190,12 @@ export function render(component: ComponentType, container: HTMLElement): Node {
   defaultRoot = rd;
 
   __setReroot((inst) => {
+    if (inst && !inst._mounted) return;
     const target = (inst?.rootRef as RootData | undefined) ?? defaultRoot;
     if (target) scheduleFlush(target);
   });
 
+  flushPendingContexts();
   flushLayoutEffects();
   flushAllEffects();
 
@@ -212,6 +218,15 @@ function unmountRoot(container: HTMLElement): void {
   if (!rd) return;
   roots.delete(container);
   if (defaultRoot === rd) defaultRoot = null;
+  if (pendingRoots) pendingRoots.delete(rd);
+  transitionRoots.delete(rd);
+  const inst = rd.instance;
+  inst._mounted = false;
+  inst.rootRef = undefined;
+  for (const fn of inst.unmountCleanups) {
+    try { fn(); } catch (e) { log.error('[atom] unmount cleanup error:', e); }
+  }
+  inst.unmountCleanups.length = 0;
   runUnmountTree(rd.instance.vnode);
   if (rd.rootDom && rd.rootDom.parentNode) {
     rd.rootDom.parentNode.removeChild(rd.rootDom);
@@ -225,9 +240,10 @@ function runUnmountTree(vnode: VNode | null): void {
     removePortalNodes(vnode);
     return;
   }
-  const inst = vnode.componentInstance;
+  const inst = typeof vnode.type === 'function' ? vnode.componentInstance : undefined;
   if (inst) {
     inst._mounted = false;
+    inst.rootRef = undefined;
     for (const fn of inst.unmountCleanups) {
       try { fn(); } catch (e) { log.error('[atom] unmount cleanup error:', e); }
     }
@@ -238,6 +254,17 @@ function runUnmountTree(vnode: VNode | null): void {
     }
     return;
   }
+  if (typeof vnode.type === 'string' && vnode.props && vnode.props.ref != null) {
+    const dom = vnode.dom as Element | undefined;
+    if (dom) {
+      dropPendingRefsFor(dom);
+      try {
+        const ref = vnode.props.ref;
+        if (typeof ref === 'function') ref(null);
+        else if (typeof ref === 'object') ref.current = null;
+      } catch (e) { log.error('[atom] unmount ref release error:', e); }
+    }
+  }
   for (const child of vnode.children) runUnmountTree(child);
 }
 
@@ -246,7 +273,7 @@ function inspectTree(inst?: ComponentInstance): any {
   const children: any[] = [];
   const walk = (vnode: VNode) => {
     for (const child of vnode.children) {
-      if (child.componentInstance) {
+      if (typeof child.type === 'function' && child.componentInstance) {
         children.push(inspectTree(child.componentInstance));
       }
       walk(child);

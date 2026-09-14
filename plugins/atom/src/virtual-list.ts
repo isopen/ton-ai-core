@@ -54,6 +54,8 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
   const dynamicMode = itemHeight == null;
   const estH = itemHeight ?? estHUser ?? 60;
+  const safeOverscan = Math.max(0, Math.min(Number.isFinite(overscan) ? overscan : 3, 50));
+  const safeInitial = Math.max(1, Math.min(Number.isFinite(initialNumToRender) ? initialNumToRender : 10, 100));
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -63,7 +65,30 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   const measuredHRef = useRef(ch ?? 600);
 
   const [measTick, setMeasTick] = useState(0);
-  const measureRefsRef = useRef<Map<number, (el: HTMLDivElement | null) => void>>(new Map());
+  const measureRefsRef = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map());
+
+  function vlKeyOf(item: T, index: number): string {
+    if (keyExtractor) {
+      try {
+        return String(keyExtractor(item, index));
+      } catch {}
+    }
+    return String(index);
+  }
+
+  function vlEscapeKey(key: string): string {
+    const w = window as unknown as { CSS?: { escape?: (v: string) => string } };
+    if (w.CSS && typeof w.CSS.escape === 'function') return w.CSS.escape(key);
+    return key.replace(/["\\]/g, '\\$&');
+  }
+
+  function vlKeysSignature(): string {
+    const len = data.length;
+    if (len === 0) return '0';
+    const first = vlKeyOf(data[0], 0);
+    const last = vlKeyOf(data[len - 1], len - 1);
+    return len + '|' + first + '|' + last;
+  }
   const endReachedRef = useRef(false);
   const nearTopFiredRef = useRef(false);
   const readyFired = useRef(false);
@@ -77,7 +102,8 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   const dragRef = useRef({ dragging: false, dragY: 0, dragTop: 0 });
 
   const st = useRef<{
-    heights: number[];
+    heights: Map<string, number>;
+    prevKeys: string;
     prevLen: number;
     lastST: number;
     lastSH: number;
@@ -86,10 +112,12 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     prefix: Float64Array | null;
     prefixLen: number;
     prefixVersion: number;
+    prefixKeys: string;
     anchor?: { key: string; top: number };
     wasAtBottom: boolean;
   }>({
-    heights: [],
+    heights: new Map(),
+    prevKeys: '',
     prevLen: 0,
     lastST: 0,
     lastSH: 0,
@@ -98,6 +126,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     prefix: null,
     prefixLen: -1,
     prefixVersion: -1,
+    prefixKeys: '',
     anchor: undefined,
     wasAtBottom: true,
   });
@@ -121,26 +150,55 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     st.current.anchor = undefined;
   }
 
+  const thumbCacheRef = useRef({ display: '', height: '', top: '' });
+  const measRafRef = useRef(0);
+
+  function scheduleMeasTick() {
+    if (measRafRef.current) return;
+    measRafRef.current = requestAnimationFrame(() => {
+      measRafRef.current = 0;
+      setMeasTick((t) => t + 1);
+    });
+  }
+
   function updateThumb() {
     const el = containerRef.current;
     const t = thumbRef.current;
     if (!el || !t) return;
+    const cache = thumbCacheRef.current;
     const ch = el.clientHeight;
     if (ch === 0) return;
     const sh = el.scrollHeight;
     if (sh <= ch) {
-      t.style.display = 'none';
+      if (cache.display !== 'none') {
+        cache.display = 'none';
+        t.style.display = 'none';
+      }
       return;
     }
-    t.style.display = 'block';
     const thumbH = Math.max(ch * 0.12, (ch / sh) * ch);
     const maxT = ch - thumbH;
-    t.style.height = thumbH + 'px';
-    t.style.top = Math.round((el.scrollTop / (sh - ch)) * maxT) + 'px';
+    const heightStr = thumbH + 'px';
+    const topStr = Math.round((el.scrollTop / (sh - ch)) * maxT) + 'px';
+    if (cache.display !== 'block') {
+      cache.display = 'block';
+      t.style.display = 'block';
+    }
+    if (cache.height !== heightStr) {
+      cache.height = heightStr;
+      t.style.height = heightStr;
+    }
+    if (cache.top !== topStr) {
+      cache.top = topStr;
+      t.style.top = topStr;
+    }
   }
 
-  function armSuppress() {
+  const programmaticTopRef = useRef(-1);
+
+  function armSuppress(top?: number) {
     suppressUntilRef.current = Date.now() + 150;
+    programmaticTopRef.current = top != null && Number.isFinite(top) ? top : -1;
   }
 
   function onThumbMove(e: MouseEvent) {
@@ -152,6 +210,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     const hh = t.clientHeight;
     const maxT = ch - hh;
     const newTop = Math.max(0, Math.min(maxT, dragRef.current.dragTop + dy));
+    thumbCacheRef.current.top = newTop + 'px';
     t.style.top = newTop + 'px';
     if (maxT > 0) el.scrollTop = (newTop / maxT) * (el.scrollHeight - el.clientHeight);
   }
@@ -173,14 +232,20 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
   if (dynamicMode) {
     const len = data.length;
-    if (len !== st.current.prevLen) {
-      const itemsAdded = len > st.current.prevLen && st.current.prevLen > 0;
-      if (itemsAdded) {
-        const added = len - st.current.prevLen;
-        const shifted = new Array(len).fill(0);
-        for (let i = 0; i < st.current.prevLen; i++) shifted[i + added] = st.current.heights[i] || 0;
-        st.current.heights = shifted;
-        st.current.heightsVersion++;
+    const sig = vlKeysSignature();
+    if (sig !== st.current.prevKeys) {
+      const grew = len > st.current.prevLen && st.current.prevLen > 0;
+      if (grew) {
+        const alive = new Set<string>();
+        for (let i = 0; i < len; i++) alive.add(vlKeyOf(data[i], i));
+        let pruned = false;
+        for (const k of [...st.current.heights.keys()]) {
+          if (!alive.has(k)) {
+            st.current.heights.delete(k);
+            pruned = true;
+          }
+        }
+        if (pruned) st.current.heightsVersion++;
         const anchor = st.current.anchor;
         const oldSH = st.current.lastSH;
         const oldST = st.current.lastST;
@@ -192,7 +257,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
           if (wasAtBottom && el.scrollTop === oldST) {
             const maxTop = el.scrollHeight - el.clientHeight;
             if (el.scrollTop !== maxTop) {
-              armSuppress();
+              armSuppress(maxTop);
               el.scrollTop = maxTop;
               vlDiagLog.info('[pollscroll] vl-appended-pin len=' + data.length + ' st=' + Math.round(el.scrollTop) + ' maxTop=' + Math.round(maxTop));
             }
@@ -205,16 +270,16 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
             return;
           }
           if (anchor && anchor.key && el.scrollTop === oldST) {
-            const node = el.querySelector<HTMLElement>('[data-vl-key="' + anchor.key + '"]');
+            const node = el.querySelector<HTMLElement>('[data-vl-key="' + vlEscapeKey(anchor.key) + '"]');
             if (node) {
               const r = node.getBoundingClientRect();
               const diff = r.top - anchor.top;
               if (diff !== 0) {
-                armSuppress();
+                armSuppress(el.scrollTop + diff);
                 el.scrollTop = el.scrollTop + diff;
-    st.current.lastST = el.scrollTop;
-    st.current.lastSH = el.scrollHeight;
-    atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+                st.current.lastST = el.scrollTop;
+                st.current.lastSH = el.scrollHeight;
+                atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
               }
               updateAnchor(el);
               return;
@@ -223,7 +288,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
           if (oldSH > 0 && el.scrollTop === oldST) {
             const diff = el.scrollHeight - oldSH;
             if (diff !== 0) {
-              armSuppress();
+              armSuppress(oldST + diff);
               el.scrollTop = oldST + diff;
             }
             st.current.lastST = el.scrollTop;
@@ -231,22 +296,26 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
           }
         });
       } else {
-        st.current.heights = new Array(len).fill(0);
+        st.current.heights.clear();
+        const refs = measureRefsRef.current;
+        if (refs.size > 0) refs.clear();
         st.current.heightsVersion++;
       }
+      st.current.prevKeys = sig;
       st.current.prevLen = len;
     }
   }
 
   function getHeight(i: number): number {
     if (!dynamicMode) return itemHeight!;
-    if (i < st.current.heights.length && st.current.heights[i] > 0) {
-      return st.current.heights[i];
-    }
     const item = data[i];
-    if (item !== undefined && estimateItem) {
-      const est = estimateItem(item, i);
-      if (Number.isFinite(est) && est > 0) return est;
+    if (item !== undefined) {
+      const known = st.current.heights.get(vlKeyOf(item, i));
+      if (known != null && known > 0) return known;
+      if (estimateItem) {
+        const est = estimateItem(item, i);
+        if (Number.isFinite(est) && est > 0) return est;
+      }
     }
     return estH;
   }
@@ -254,12 +323,14 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   function ensurePrefix(): Float64Array {
     const s = st.current;
     const len = data.length;
-    if (s.prefix && s.prefixLen === len && s.prefixVersion === s.heightsVersion) return s.prefix;
+    const sig = vlKeysSignature() + '|' + s.heightsVersion;
+    if (s.prefix && s.prefixLen === len && s.prefixVersion === s.heightsVersion && s.prefixKeys === sig) return s.prefix;
     const prefix = new Float64Array(len + 1);
     for (let i = 0; i < len; i++) prefix[i + 1] = prefix[i] + getHeight(i);
     s.prefix = prefix;
     s.prefixLen = len;
     s.prefixVersion = s.heightsVersion;
+    s.prefixKeys = sig;
     return prefix;
   }
 
@@ -274,7 +345,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     const stPos = Math.max(0, Math.min(scrollTop, vh - containerHeight));
     if (dynamicMode) {
       const prefix = ensurePrefix();
-      const minBuffer = overscan;
+      const minBuffer = safeOverscan;
       const fillBuffer = Math.ceil(containerHeight / estH);
       const buffer = Math.max(minBuffer, Math.min(fillBuffer, 4));
       const visibleTop = Math.max(0, stPos - buffer * estH);
@@ -299,10 +370,10 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       const end = Math.min(len, lo2 + buffer);
       return { start, end };
     }
-    let start = Math.max(0, Math.floor(stPos / itemHeight!) - overscan);
-    let end = Math.min(len, Math.ceil((stPos + containerHeight) / itemHeight!) + overscan);
-    if (end - start < initialNumToRender && len > 0) {
-      end = Math.min(len, start + initialNumToRender);
+    let start = Math.max(0, Math.floor(stPos / itemHeight!) - safeOverscan);
+    let end = Math.min(len, Math.ceil((stPos + containerHeight) / itemHeight!) + safeOverscan);
+    if (end - start < safeInitial && len > 0) {
+      end = Math.min(len, start + safeInitial);
     }
     return { start, end };
   }
@@ -331,14 +402,22 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       lastRangeRef.current = k;
       onVisibleRangeChange?.(start, end);
     }
-  }, [scrollTop, containerHeight, data.length, vh, estH, overscan, initialNumToRender, dynamicMode, itemHeight, measTick, onVisibleRangeChange]);
+  }, [scrollTop, containerHeight, data.length, vh, estH, safeOverscan, safeInitial, dynamicMode, itemHeight, measTick, onVisibleRangeChange]);
 
   const handleScroll = useCallback((e: Event) => {
     const el = e.target as HTMLElement;
     const newSH = el.scrollHeight;
 
-    if (Date.now() >= suppressUntilRef.current) {
+    const suppressed = Date.now() < suppressUntilRef.current;
+    const expected = programmaticTopRef.current;
+    if (!suppressed || Math.abs(el.scrollTop - expected) > 1) {
       userScrolledRef.current = true;
+      if (suppressed) {
+        suppressUntilRef.current = 0;
+        programmaticTopRef.current = -1;
+      }
+    } else {
+      programmaticTopRef.current = -1;
     }
 
     st.current.wasAtBottom = el.scrollTop + el.clientHeight >= newSH - 2;
@@ -399,11 +478,23 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     const pinKey = data.length + '|' + (startAtBottom ? 1 : 0) + '|' + containerHeight;
     if (pinKey !== lastPinKeyRef.current) {
       lastPinKeyRef.current = pinKey;
-      if (userScrolledRef.current) return;
+      if (userScrolledRef.current && !st.current.wasAtBottom) return;
       const maxTop = el.scrollHeight - el.clientHeight;
-      if (maxTop <= 0) return;
+      if (maxTop <= 0) {
+        if (el.scrollTop !== el.scrollHeight) {
+          armSuppress(el.scrollHeight);
+          el.scrollTop = el.scrollHeight;
+        }
+        st.current.lastST = el.scrollTop;
+        st.current.lastSH = el.scrollHeight;
+        atBottomRef.current = true;
+        st.current.wasAtBottom = true;
+        setScrollTop(el.scrollTop);
+        updateThumb();
+        return;
+      }
       if (el.scrollTop !== maxTop) {
-        armSuppress();
+        armSuppress(maxTop);
         el.scrollTop = maxTop;
         vlDiagLog.info('[pollscroll] vl-pin len=' + data.length + ' st=' + Math.round(el.scrollTop) + ' maxTop=' + Math.round(maxTop));
       }
@@ -417,12 +508,17 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     }
     const a = st.current.anchor;
     if (a && a.key) {
-      const node = el.querySelector<HTMLElement>('[data-vl-key="' + a.key + '"]');
+      let node: HTMLElement | null = null;
+      try {
+        node = el.querySelector<HTMLElement>('[data-vl-key="' + vlEscapeKey(a.key) + '"]');
+      } catch {
+        node = null;
+      }
       if (node) {
         const r = node.getBoundingClientRect();
         const diff = r.top - a.top;
         if (diff !== 0 && Number.isFinite(diff)) {
-          armSuppress();
+          armSuppress(el.scrollTop + diff);
           el.scrollTop = el.scrollTop + diff;
           vlDiagLog.info('[pollscroll] vl-anchor key=' + a.key + ' diff=' + Math.round(diff) + ' st=' + Math.round(el.scrollTop));
         }
@@ -441,8 +537,18 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     updateThumb();
   }, [data.length, startAtBottom, measTick, vh, containerHeight]);
 
+  const scrollToSeenRef = useRef<string | number | null>(null);
   useEffect(() => {
-    if (scrollToKey == null || scrollToFiredRef.current) return;
+    if (scrollToKey == null) {
+      scrollToSeenRef.current = null;
+      scrollToFiredRef.current = false;
+      return;
+    }
+    if (scrollToSeenRef.current !== scrollToKey) {
+      scrollToSeenRef.current = scrollToKey;
+      scrollToFiredRef.current = false;
+    }
+    if (scrollToFiredRef.current) return;
     const el = containerRef.current;
     if (!el || data.length === 0 || el.clientHeight <= 0) return;
     const k = String(scrollToKey);
@@ -465,7 +571,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
     const target = Math.max(0, Math.min(pos, maxTop));
     if (el.scrollTop !== target) {
-      armSuppress();
+      armSuppress(target);
       el.scrollTop = target;
       vlDiagLog.info('[pollscroll] vl-scrollToKey st=' + Math.round(el.scrollTop));
     }
@@ -476,7 +582,12 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     setScrollTop(el.scrollTop);
     updateThumb();
     requestAnimationFrame(() => {
-      const node = el.querySelector<HTMLElement>('[data-vl-key="' + k + '"]');
+      let node: HTMLElement | null = null;
+      try {
+        node = el.querySelector<HTMLElement>('[data-vl-key="' + vlEscapeKey(k) + '"]');
+      } catch {
+        node = null;
+      }
       if (node) {
         node.scrollIntoView({ block: 'start' });
       } else {
@@ -497,6 +608,15 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         cancelAnimationFrame(scrollRafRef.current);
         scrollRafRef.current = 0;
       }
+      if (measRafRef.current) {
+        cancelAnimationFrame(measRafRef.current);
+        measRafRef.current = 0;
+      }
+      if (dragRef.current.dragging) {
+        dragRef.current.dragging = false;
+        document.removeEventListener('mousemove', onThumbMove);
+        document.removeEventListener('mouseup', onThumbUp);
+      }
       if (resizeObserverRef.current) {
         resizeObserverRef.current.disconnect();
         resizeObserverRef.current = null;
@@ -511,23 +631,35 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     const k = keyExtractor ? keyExtractor(item, i) : (vnode.key ?? i);
     vnode.key = k;
     const prev = vnode.props;
-    const extraProps: Record<string, any> = { 'data-vl-key': String(k) };
+    const keyStr = String(k);
+    const extraProps: Record<string, any> = { 'data-vl-key': keyStr };
     if (withRef && dynamicMode) {
-      const idx = i;
-      let refCb = measureRefsRef.current.get(idx);
+      let refCb = measureRefsRef.current.get(keyStr);
       if (!refCb) {
         refCb = (el2: HTMLDivElement | null) => {
           if (!el2) return;
           const h = el2.offsetHeight;
-          if (h > 0 && st.current.heights[idx] !== h) {
-            st.current.heights[idx] = h;
+          if (h > 0 && st.current.heights.get(keyStr) !== h) {
+            st.current.heights.set(keyStr, h);
             st.current.heightsVersion++;
-            setMeasTick((t) => t + 1);
+            scheduleMeasTick();
           }
         };
-        measureRefsRef.current.set(idx, refCb);
+        measureRefsRef.current.set(keyStr, refCb);
       }
-      extraProps.ref = refCb;
+      const userRef = (vnode.props as Record<string, any>).ref;
+      if (typeof userRef === 'function' || (userRef && typeof userRef === 'object')) {
+        const measureCb = refCb;
+        extraProps.ref = (el2: HTMLDivElement | null) => {
+          measureCb(el2);
+          try {
+            if (typeof userRef === 'function') userRef(el2);
+            else if (userRef && typeof userRef === 'object') userRef.current = el2;
+          } catch {}
+        };
+      } else {
+        extraProps.ref = refCb;
+      }
     }
     vnode.props = { ...prev, ...extraProps };
     return vnode;
@@ -557,7 +689,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     }
     const rEnd = visibleEndIndex > visibleStartIndex
       ? visibleEndIndex
-      : Math.min(data.length, initialNumToRender);
+      : Math.min(data.length, safeInitial);
     for (let i = visibleStartIndex; i < rEnd; i++) {
       items.push(makeItemVNode(data[i], i, true));
     }
@@ -639,9 +771,14 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         st.current.wasAtBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
         if (startAtBottom && data.length > 0 && el.scrollTop === 0 && el.scrollHeight > 0) {
           const maxTop = el.scrollHeight - el.clientHeight;
-          if (maxTop > 0 && el.scrollTop !== maxTop) {
-            armSuppress();
-            el.scrollTop = maxTop;
+          if (maxTop > 0) {
+            if (el.scrollTop !== maxTop) {
+              armSuppress(maxTop);
+              el.scrollTop = maxTop;
+            }
+          } else if (el.scrollTop !== el.scrollHeight) {
+            armSuppress(el.scrollHeight);
+            el.scrollTop = el.scrollHeight;
           }
           st.current.lastST = el.scrollTop;
           st.current.lastSH = el.scrollHeight;

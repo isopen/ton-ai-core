@@ -1,7 +1,7 @@
-import { normalizeChildren } from './vdom.js';
+import { normalizeChildren, FRAGMENT } from './vdom.js';
 import type { VNode } from './vdom.js';
 
-export const Fragment = 'FRAGMENT_NODE';
+export const Fragment = FRAGMENT;
 
 export function jsx(type: any, config: Record<string, any> | null, maybeKey?: any): VNode {
   const { children, key: configKey, ...props } = config || {};
@@ -13,8 +13,8 @@ export function jsx(type: any, config: Record<string, any> | null, maybeKey?: an
     return vnode;
   }
 
-  if (type === 'FRAGMENT_NODE') {
-    return { type: 'FRAGMENT_NODE' as any, props: {}, children: flatChildren, key: flatKey };
+  if (type === FRAGMENT) {
+    return { type: FRAGMENT as any, props: {}, children: flatChildren, key: flatKey };
   }
 
   return { type, props, children: flatChildren, key: flatKey };

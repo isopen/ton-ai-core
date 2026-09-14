@@ -16,9 +16,12 @@ export const boundaryStack: BoundaryFrame[] = [];
 export function takeBoundaryFrame(instance: ComponentInstance): BoundaryFrame | null {
   const frame = (instance as any).__atomBoundary as BoundaryFrame | undefined;
   if (!frame) return null;
-  delete (instance as any).__atomBoundary;
   frame.instance = instance;
   return frame;
+}
+
+export function clearBoundaryFrame(instance: ComponentInstance): void {
+  delete (instance as any).__atomBoundary;
 }
 
 export type ComponentType = (props: Record<string, any>) => VNode;
@@ -60,6 +63,7 @@ export class ComponentInstance {
   }
 
   render(): VNode {
+    const prev = currentInstance;
     setCurrentInstance(this);
     this.hookIndex = 0;
     try {
@@ -70,7 +74,7 @@ export class ComponentInstance {
       this.hookCount = this.hookIndex;
       return vnode;
     } finally {
-      setCurrentInstance(null);
+      setCurrentInstance(prev);
     }
   }
 }
@@ -147,9 +151,11 @@ export function normalizeChild(child: any): VNode | null {
   }
 
   if (typeof child === 'object' && !child.type) {
-    if (typeof console !== 'undefined') {
-      console.warn('[atom] non-vnode object in children rendered as text:', Object.keys(child).join(','));
-    }
+    log.warn('[atom] non-vnode object in children rendered as text: ' + Object.keys(child).join(','));
+    try {
+      const detail = JSON.stringify(child).slice(0, 120);
+      log.debug('[atom] non-vnode detail: ' + detail);
+    } catch {}
     return { type: TEXT, props: { nodeValue: String(child.text ?? '') }, children: [], key: null };
   }
   return child as VNode;

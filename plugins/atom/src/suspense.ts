@@ -1,4 +1,4 @@
-import { currentInstance, normalizeChild, normalizeChildren, FRAGMENT, type VNode } from './vdom.js';
+import { currentInstance, clearBoundaryFrame, normalizeChild, normalizeChildren, FRAGMENT, type ComponentInstance, type VNode } from './vdom.js';
 import { requestRerender } from './hooks.js';
 
 interface SuspenseState {
@@ -21,8 +21,14 @@ export function Suspense(props: SuspenseProps): VNode | null {
   const inst = currentInstance;
   if (!inst) return normalizeChild(props.children);
   const st = stateOf(inst);
-  if (st.hasError) throw st.error;
-  if (st.pending) return normalizeChild(props.fallback);
+  if (st.hasError) {
+    clearBoundaryFrame(inst);
+    throw st.error;
+  }
+  if (st.pending) {
+    clearBoundaryFrame(inst);
+    return normalizeChild(props.fallback);
+  }
   (inst as any).__atomBoundary = {
     kind: 'suspense',
     handle: (thrown: any) => {
@@ -69,13 +75,24 @@ export function suspend<T>(key: string, loader: () => Promise<T>): T {
     if (entry.status === 'fail') throw entry.error;
     throw entry.promise;
   }
-  const raw = loader();
+  const owner: ComponentInstance | null = currentInstance;
+  let raw: Promise<T>;
+  try {
+    raw = loader();
+  } catch (error) {
+    suspendCache.set(key, { status: 'fail', error });
+    throw error;
+  }
   raw.then(
     (value: T) => {
+      if (suspendCache.get(key)?.promise !== raw) return;
       suspendCache.set(key, { status: 'ok', value });
+      requestRerender(owner ?? undefined);
     },
     (error: any) => {
+      if (suspendCache.get(key)?.promise !== raw) return;
       suspendCache.set(key, { status: 'fail', error });
+      requestRerender(owner ?? undefined);
     },
   );
   suspendCache.set(key, { status: 'pending', promise: raw });

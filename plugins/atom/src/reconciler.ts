@@ -1,8 +1,14 @@
 import { getLogger } from '@ton-ai/gram-debug';
-import { TEXT, FRAGMENT, PORTAL, SLOT, SLOTTABLE, ComponentInstance, setCurrentInstance, getMountRoot, boundaryStack, takeBoundaryFrame, type BoundaryFrame, type VNode, type ComponentType } from './vdom.js';
+import { TEXT, FRAGMENT, PORTAL, SLOT, SLOTTABLE, ComponentInstance, setCurrentInstance, getMountRoot, boundaryStack, takeBoundaryFrame, clearBoundaryFrame, currentInstance, type BoundaryFrame, type VNode, type ComponentType } from './vdom.js';
+import { snapshotEffectQueues, rollbackEffectQueues } from './hooks.js';
+import { snapshotContextQueue, rollbackContextQueue } from './context.js';
 import { isTraced, diffProps } from './dev.js';
 
 const log = getLogger('atom');
+
+function isComponentBoundary(vnode: VNode): boolean {
+  return typeof vnode.type === 'function' && vnode.componentInstance != null;
+}
 
 function runUnmountCleanups(vnode: VNode) {
   if (vnode.type === PORTAL) {
@@ -14,9 +20,10 @@ function runUnmountCleanups(vnode: VNode) {
     }
     return;
   }
-  if (vnode.componentInstance) {
-    const inst = vnode.componentInstance;
+  if (isComponentBoundary(vnode)) {
+    const inst = vnode.componentInstance!;
     inst._mounted = false;
+    inst.rootRef = undefined;
     const cleanups = inst.unmountCleanups;
     for (const fn of cleanups) {
       try { fn(); } catch (e) { log.error('useEffect unmount cleanup error:', e); }
@@ -29,18 +36,27 @@ function runUnmountCleanups(vnode: VNode) {
     }
     return;
   }
+  if (typeof vnode.type === 'string' && vnode.props && vnode.props.ref != null) {
+    const dom = vnode.dom as Element | undefined;
+    if (dom) {
+      dropPendingRefsFor(dom);
+      releaseRef(dom, vnode.props.ref);
+    }
+  }
   for (const child of vnode.children) {
     runUnmountCleanups(child);
   }
 }
 
 function restoreProvided(instance: ComponentInstance) {
-  const provided = (instance as any).__atomProvides;
-  if (!provided) return;
-  delete (instance as any).__atomProvides;
-  try {
-    provided.ctx._current = provided.prev;
-  } catch {}
+  const stack = (instance as any).__atomProvidesStack as Array<{ ctx: { _current: unknown }; prev: unknown }> | undefined;
+  if (!stack || stack.length === 0) return;
+  (instance as any).__atomProvidesStack = [];
+  for (let i = stack.length - 1; i >= 0; i--) {
+    try {
+      stack[i].ctx._current = stack[i].prev;
+    } catch {}
+  }
 }
 
 function popFrame(frame: BoundaryFrame) {
@@ -259,6 +275,14 @@ function styleObjToCss(style: Record<string, any>): string {
 
 const pendingRefCalls: Array<{ el: Element; ref: any }> = [];
 
+function releaseRef(el: Element, ref: any): void {
+  if (ref == null) return;
+  try {
+    if (typeof ref === 'function') ref(null);
+    else if (typeof ref === 'object') ref.current = null;
+  } catch (e) { log.error('[recon] ref release error:', e); }
+}
+
 export function flushPendingRefs(): void {
   if (pendingRefCalls.length === 0) return;
   const list = pendingRefCalls.splice(0, pendingRefCalls.length);
@@ -267,6 +291,17 @@ export function flushPendingRefs(): void {
       if (typeof ref === 'function') ref(el);
       else if (ref && typeof ref === 'object') ref.current = el;
     } catch (e) { log.error('[recon] ref callback error:', e); }
+  }
+}
+
+export function dropPendingRefsFor(root: Node | null): void {
+  if (!root || pendingRefCalls.length === 0) return;
+  for (let i = pendingRefCalls.length - 1; i >= 0; i--) {
+    const entry = pendingRefCalls[i];
+    if (entry.el === root || (root.contains && root.contains(entry.el))) {
+      const picked = pendingRefCalls.splice(i, 1)[0];
+      releaseRef(picked.el, picked.ref);
+    }
   }
 }
 
@@ -318,7 +353,11 @@ function setProp(el: Element, key: string, value: any) {
   if (key === 'value') {
     const tag = el.tagName;
     if (tag === 'SELECT') {
-      requestAnimationFrame(() => { (el as HTMLSelectElement).value = String(value); });
+      const want = String(value);
+      requestAnimationFrame(() => {
+        if (!el.isConnected) return;
+        (el as HTMLSelectElement).value = want;
+      });
     } else if (tag === 'INPUT' || tag === 'TEXTAREA') {
       (el as HTMLInputElement).value = String(value);
     }
@@ -334,7 +373,11 @@ function setProp(el: Element, key: string, value: any) {
 }
 
 function removeProp(el: Element, key: string, oldValue: any) {
-  if (key === 'key' || key === 'children' || key === 'ref') return;
+  if (key === 'key' || key === 'children') return;
+  if (key === 'ref') {
+    releaseRef(el, oldValue);
+    return;
+  }
   if (key === 'class' || key === 'className') {
     el.removeAttribute('class');
     return;
@@ -355,6 +398,11 @@ function removeProp(el: Element, key: string, oldValue: any) {
 
 function updateProp(el: Element, key: string, oldValue: any, newValue: any) {
   if (oldValue === newValue) return;
+  if (key === 'ref') {
+    releaseRef(el, oldValue);
+    setProp(el, key, newValue);
+    return;
+  }
   if (key === 'style') {
     if (typeof newValue === 'object' && newValue !== null) {
       if (typeof oldValue === 'object' && oldValue !== null) {
@@ -504,20 +552,29 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
         reuseInstance.props = vnode.props;
         reuseInstance._mounted = true;
       }
+      const prevInst = currentInstance;
       setCurrentInstance(instance);
+      const fxSnapMount = snapshotEffectQueues();
+      const ctxSnapMount = snapshotContextQueue();
       let result: VNode | null;
       try {
         result = instance.render();
       } catch (e) {
+        rollbackEffectQueues(fxSnapMount);
+        rollbackContextQueue(ctxSnapMount);
+        setCurrentInstance(prevInst);
         restoreProvided(instance);
         throw e;
       }
+      setCurrentInstance(prevInst);
       const frame = takeBoundaryFrame(instance);
-      if (frame) boundaryStack.push(frame);
+      if (frame) {
+        clearBoundaryFrame(instance);
+        boundaryStack.push(frame);
+      }
       try {
         instance.vnode = result;
         if (result) {
-          result.componentInstance = instance;
           const dom = createDOM(result);
           vnode.dom = dom;
           vnode.componentInstance = instance;
@@ -532,7 +589,6 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
           const fb = safeFallback(frame);
           instance.vnode = fb;
           if (fb) {
-            fb.componentInstance = instance;
             const dom = createDOM(fb);
             vnode.dom = dom;
             vnode.componentInstance = instance;
@@ -543,6 +599,9 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
           vnode.componentInstance = instance;
           return empty;
         }
+        instance.vnode = null;
+        rollbackEffectQueues(fxSnapMount);
+        rollbackContextQueue(ctxSnapMount);
         throw e;
       } finally {
         if (frame) popFrame(frame);
@@ -582,7 +641,9 @@ function findDomNode(vnode: VNode): Node | null {
     return null;
   }
   if (typeof vnode.type === 'function') {
-    return vnode.componentInstance?.vnode ? findDomNode(vnode.componentInstance.vnode) : null;
+    const inner = vnode.componentInstance?.vnode;
+    if (inner && inner !== vnode) return findDomNode(inner);
+    return null;
   }
   return null;
 }
@@ -596,7 +657,8 @@ function findAllDomNodes(vnode: VNode): Node[] {
     return nodes;
   }
   if (typeof vnode.type === 'function') {
-    if (vnode.componentInstance?.vnode) return findAllDomNodes(vnode.componentInstance.vnode);
+    const inner = vnode.componentInstance?.vnode;
+    if (inner && inner !== vnode) return findAllDomNodes(inner);
     if (vnode.dom && vnode.dom.nodeType === 3) return [vnode.dom];
     return [];
   }
@@ -620,9 +682,9 @@ function childMapKey(vnode: VNode, index: number): string {
 export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   if (oldVNode === newVNode) return dom;
   if (!isSameNodeType(oldVNode, newVNode)) {
-    runUnmountCleanups(oldVNode);
     const newDom = createDOM(newVNode);
-    const anchor = findDomNode(oldVNode) || dom;
+    runUnmountCleanups(oldVNode);
+    const anchor = (oldVNode.type === PORTAL ? oldVNode.dom : null) || findDomNode(oldVNode) || dom;
     const host = (anchor && anchor.parentNode) || (dom && dom.parentNode);
     if (host && anchor) {
       host.replaceChild(newDom, anchor);
@@ -669,20 +731,12 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
     const oldContainer = oldVNode.props.container as Element | null;
     if (container !== oldContainer) {
       runUnmountCleanups(oldVNode);
-      for (const node of findAllDomNodes(oldVNode)) {
-        if (node.parentNode) node.parentNode.removeChild(node);
-      }
       const fresh = createDOM(newVNode);
       if (dom.parentNode) dom.parentNode.replaceChild(fresh, dom);
       return fresh;
     }
     if (container) {
       reconcileChildren(container, oldVNode.children, newVNode.children, null);
-    } else if (oldContainer) {
-      runUnmountCleanups(oldVNode);
-      for (const node of findAllDomNodes(oldVNode)) {
-        if (node.parentNode) node.parentNode.removeChild(node);
-      }
     }
     newVNode.dom = dom;
     return dom;
@@ -705,22 +759,32 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
       log.debug('[atom] rerender ' + instance.displayName + ' props changed: ' + (changed || '(same)'));
     }
 
+    const prevPatchInst = currentInstance;
     setCurrentInstance(instance);
+    const fxSnapPatch = snapshotEffectQueues();
+    const ctxSnapPatch = snapshotContextQueue();
     let result: VNode | null;
     try {
       result = instance.render();
     } catch (e) {
+      rollbackEffectQueues(fxSnapPatch);
+      rollbackContextQueue(ctxSnapPatch);
+      setCurrentInstance(prevPatchInst);
       restoreProvided(instance);
       throw e;
     }
+    setCurrentInstance(prevPatchInst);
     const frame = takeBoundaryFrame(instance);
-    if (frame) boundaryStack.push(frame);
+    if (frame) {
+      clearBoundaryFrame(instance);
+      boundaryStack.push(frame);
+    }
     const prevCommitted = instance.vnode;
     try {
       instance._dirty = false;
 
-      const oldResult = oldVNode.componentInstance?.vnode || oldVNode;
-      const hadNullResult = oldVNode.componentInstance != null && oldVNode.componentInstance.vnode == null;
+      const oldResult = isComponentBoundary(oldVNode) && oldVNode.componentInstance?.vnode ? oldVNode.componentInstance.vnode : oldVNode;
+      const hadNullResult = isComponentBoundary(oldVNode) && oldVNode.componentInstance?.vnode == null;
       instance.vnode = result;
 
       if (!result) {
@@ -735,10 +799,8 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
         return empty;
       }
 
-      result.componentInstance = instance;
-
       if (hadNullResult) {
-        const freshDom = createDOM(result, result.type === instance.component ? instance : undefined);
+        const freshDom = createDOM(result);
         if (dom && dom.parentNode) dom.parentNode.replaceChild(freshDom, dom);
         newVNode.dom = freshDom;
         return freshDom;
@@ -750,7 +812,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
     } catch (e) {
       if (frame && boundaryStack[boundaryStack.length - 1] === frame && frame.handle(e)) {
         const fb = safeFallback(frame);
-        const oldResult = oldVNode.componentInstance?.vnode || oldVNode;
+        const oldResult = isComponentBoundary(oldVNode) && oldVNode.componentInstance?.vnode ? oldVNode.componentInstance.vnode : oldVNode;
         instance._dirty = false;
         instance.vnode = fb;
         if (!fb) {
@@ -762,7 +824,6 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
           newVNode.dom = empty;
           return empty;
         }
-        fb.componentInstance = instance;
         try {
           const fbDom = patch(dom, oldResult, fb);
           newVNode.dom = fbDom;
@@ -770,11 +831,15 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
         } catch (e2) {
           instance.vnode = prevCommitted;
           instance._dirty = true;
+          rollbackEffectQueues(fxSnapPatch);
+          rollbackContextQueue(ctxSnapPatch);
           throw e2;
         }
       }
       instance.vnode = prevCommitted;
       instance._dirty = true;
+      rollbackEffectQueues(fxSnapPatch);
+      rollbackContextQueue(ctxSnapPatch);
       throw e;
     } finally {
       if (frame) popFrame(frame);
@@ -805,6 +870,14 @@ function reconcileChildren(
   const oldKeyed = new Map<string, { vnode: VNode; nodes: Node[]; origKey: string }>();
   for (let i = 0; i < oldLen; i++) {
     const key = childMapKey(oldChildren[i], i);
+    if (oldKeyed.has(key)) {
+      log.warn('[recon] DUP-KEY key=' + String(key));
+      runUnmountCleanups(oldChildren[i]);
+      for (const node of findAllDomNodes(oldChildren[i])) {
+        if (node.parentNode) node.parentNode.removeChild(node);
+      }
+      continue;
+    }
     oldKeyed.set(key, { vnode: oldChildren[i], nodes: findAllDomNodes(oldChildren[i]), origKey: key });
   }
 
@@ -833,10 +906,7 @@ function reconcileChildren(
         patches.push({ nodes: findAllDomNodes(newChild) });
       }
     } else if (oldEntry) {
-      log.warn('[recon] DUP-KEY key=' + String(key) + ' parent=' + (parentEl as HTMLElement).className + ' oldNodes=' + oldEntry.nodes.length);
-      for (const node of oldEntry.nodes) {
-        if (node.parentNode) node.parentNode.removeChild(node);
-      }
+      log.warn('[recon] DUP-KEY key=' + String(key) + ' parent=' + (parentEl as HTMLElement).className);
       const newDom = createDOM(newChild);
       newChild.dom = newDom;
       patches.push({ nodes: findAllDomNodes(newChild) });

@@ -9,6 +9,33 @@ export interface AtomContext<T> {
   _subs: Set<() => void>;
 }
 
+const pendingCtx = new Map<AtomContext<any>, unknown>();
+
+export function snapshotContextQueue(): number {
+  return pendingCtx.size;
+}
+
+export function rollbackContextQueue(snap: number): void {
+  if (pendingCtx.size === snap) return;
+  const keys = [...pendingCtx.keys()];
+  for (let i = snap; i < keys.length; i++) pendingCtx.delete(keys[i]);
+}
+
+export function flushPendingContexts(): void {
+  if (pendingCtx.size === 0) return;
+  const entries = [...pendingCtx.entries()];
+  pendingCtx.clear();
+  for (const [ctx] of entries) {
+    ctx._version++;
+  }
+  for (const [ctx] of entries) {
+    const subs = [...ctx._subs];
+    for (const cb of subs) {
+      try { cb(); } catch {}
+    }
+  }
+}
+
 export function createContext<T>(defaultValue: T): AtomContext<T> {
   const ctx: AtomContext<T> = {
     defaultValue,
@@ -19,18 +46,15 @@ export function createContext<T>(defaultValue: T): AtomContext<T> {
       const prev = ctx._current;
       const inst = currentInstance;
       if (inst) {
-        (inst as any).__atomProvides = { ctx, prev };
+        const stack = ((inst as any).__atomProvidesStack ??= []) as Array<{ ctx: AtomContext<any>; prev: unknown }>;
+        stack.push({ ctx, prev });
       }
       ctx._current = props.value;
       const hadLast = !!inst && '__atomLastValue' in (inst as any);
       const last = hadLast ? (inst as any).__atomLastValue : undefined;
       if (!hadLast || !Object.is(last, props.value)) {
         if (inst) (inst as any).__atomLastValue = props.value;
-        ctx._version++;
-        const subs = [...ctx._subs];
-        for (const cb of subs) {
-          try { cb(); } catch {}
-        }
+        pendingCtx.set(ctx, props.value);
       }
       return { type: FRAGMENT, props: {}, children: normalizeChildren(props.children), key: null };
     },

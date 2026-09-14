@@ -13,13 +13,30 @@ export function requestOnce<TDetail = any>(
   responseEvent: string,
   opts: RequestOnceOptions<TDetail> = {},
 ): Promise<TDetail> {
-  const { match, timeoutMs = 10_000, payload, target = window } = opts;
+  const fallbackTarget = typeof window !== 'undefined' ? window : undefined;
+  const { match, timeoutMs = 10_000, payload, target = fallbackTarget } = opts;
   return new Promise<TDetail>((resolve, reject) => {
+    if (!target || typeof (target as any).addEventListener !== 'function') {
+      reject(new Error('requestOnce: no event target available'));
+      return;
+    }
     let done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const onResponse = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (match && !match(detail)) return;
+      if (match) {
+        let matched = false;
+        try {
+          matched = match(detail);
+        } catch (err) {
+          if (done) return;
+          done = true;
+          cleanup();
+          reject(err instanceof Error ? err : new Error(String(err)));
+          return;
+        }
+        if (!matched) return;
+      }
       if (done) return;
       done = true;
       cleanup();

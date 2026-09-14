@@ -1,5 +1,5 @@
 import { getLogger } from '@ton-ai/gram-debug';
-import { currentInstance, normalizeChild, normalizeChildren, FRAGMENT, type VNode } from './vdom.js';
+import { currentInstance, clearBoundaryFrame, normalizeChild, normalizeChildren, FRAGMENT, type VNode } from './vdom.js';
 
 const log = getLogger('atom');
 
@@ -35,12 +35,15 @@ export function ErrorBoundary(props: ErrorBoundaryProps): VNode | null {
   const inst = currentInstance;
   if (!inst) return normalizeChild(props.children);
   const st = stateOf(inst);
-  if (props.resetKeys && st.prevKeys && keysChanged(st.prevKeys, props.resetKeys)) {
+  if (keysChanged(st.prevKeys, props.resetKeys)) {
     st.hasError = false;
     st.error = null;
   }
-  st.prevKeys = props.resetKeys;
-  if (st.hasError) return toFallback(props.fallback, st.error);
+  st.prevKeys = props.resetKeys ? [...props.resetKeys] : props.resetKeys;
+  if (st.hasError) {
+    clearBoundaryFrame(inst);
+    return toFallback(props.fallback, st.error);
+  }
   (inst as any).__atomBoundary = {
     kind: 'error',
     handle: (thrown: any) => {

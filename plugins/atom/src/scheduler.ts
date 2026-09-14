@@ -1,4 +1,4 @@
-import { useState, useCallback } from './hooks.js';
+import { useState, useCallback, useRef } from './hooks.js';
 
 export type Lane = 'urgent' | 'transition';
 
@@ -19,9 +19,11 @@ export function startTransition(fn: () => void): void {
   currentLane = 'transition';
   try {
     fn();
-  } finally {
+  } catch (e) {
     currentLane = prev;
+    throw e;
   }
+  currentLane = prev;
   if (transitionFlusher) transitionFlusher();
 }
 
@@ -40,10 +42,21 @@ export function drainTransitionSettled(): void {
 
 export function useTransition(): [boolean, (fn: () => void) => void] {
   const [pending, setPending] = useState(false);
+  const inflight = useRef(0);
   const start = useCallback((fn: () => void) => {
+    inflight.current++;
     setPending(true);
-    onTransitionSettled(() => setPending(false));
-    startTransition(fn);
+    onTransitionSettled(() => {
+      inflight.current = Math.max(0, inflight.current - 1);
+      if (inflight.current === 0) setPending(false);
+    });
+    try {
+      startTransition(fn);
+    } catch (e) {
+      inflight.current = Math.max(0, inflight.current - 1);
+      if (inflight.current === 0) setPending(false);
+      throw e;
+    }
   }, []);
   return [pending, start];
 }
