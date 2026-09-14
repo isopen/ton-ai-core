@@ -458,6 +458,7 @@ export function createAuthCallbacks(
       s.tgui.current!.dispatch({ type: 'SET_PHONE_CODE_HASH', hash: '' });
       s.tgui.current!.dispatch({ type: 'SET_CODE', code: '' });
       s.tgui.current!.dispatch({ type: 'SET_PASSWORD', password: '' });
+      s.selfUserIdFetchedRef.current = false;
       await dbDel('authenticated').catch(() => {});
       await dbDel(AUTH_PHONE_KEY).catch(() => {});
       await dbDel(AUTH_HASH_KEY).catch(() => {});
@@ -924,9 +925,9 @@ export function createAuthCallbacks(
             }
             s.tgui.current?.setAuthStep('loading');
             try {
+              await fetchSelfUserId(s);
               const dialogsResult = await inst.fetchDialogs();
               if (dialogsResult) setDialogsFromServer(s, dialogsResult);
-              await fetchSelfUserId(s);
               inst.authenticated = true;
               await dbSet('authenticated', '1').catch(() => {});
               s.tgui.current?.setConnectionStatus('connected');

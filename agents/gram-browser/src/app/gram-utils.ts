@@ -225,7 +225,8 @@ export async function fetchSelfUserId(s: GramState) {
     if (!svc) return;
     const result = await svc.callRpc('users.getUsers', { id: [{ _: 'inputUserSelf' }] });
     if (result) {
-      const items = Array.isArray(result) ? result : (result.items || [result]);
+      const raw = result as any;
+      const items = Array.isArray(raw) ? raw : (raw.items || raw.users || [raw]);
       const selfUser = items.find((u: any) => u && u.id);
       if (selfUser) {
         s.selfUserIdFetchedRef.current = true;

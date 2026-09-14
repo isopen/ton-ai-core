@@ -517,11 +517,16 @@ function onKbButton(button: { kind: 'callback' | 'url' | 'plain' | 'disabled'; t
   kbLog.warn('[onKbButton] ignored kind=' + button.kind + ' msg=' + messageId + ' hasData=' + !!button.data);
 }
 
-function msgStatus(m: any, readOutboxMaxId?: number): 'pending' | 'sent' | 'delivered' | 'read' {
-  if (!m.out) return 'sent';
+function msgStatus(m: any, readOutboxMaxId?: number, outOverride?: boolean): 'pending' | 'sent' | 'delivered' | 'read' {
+  const out = outOverride ?? m.out;
+  if (!out) return 'sent';
   if (Number(m.id) <= 0) return 'pending';
   if (readOutboxMaxId != null && Number(m.id) <= readOutboxMaxId) return 'read';
   return 'sent';
+}
+
+export function effectiveOut(m: any, selfPeer?: boolean): boolean {
+  return selfPeer ? true : !!m.out;
 }
 
 function isUrlMessage(m: any): boolean {
@@ -736,8 +741,8 @@ function fwdFromLabel(fwd: any): string {
 
 export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, documentSources, inactiveButtons, buttonNotice, selfPeer, reactions, onReact, onOpenPhoto, onOpenPeer }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; documentSources?: Record<number | string, string>; inactiveButtons?: Record<string, true>; buttonNotice?: ButtonNoticeData | null; selfPeer?: boolean; reactions?: MessageReaction[]; onOpenPeer?: (peer: PeerInfo) => void; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
   const timeStr = formatMessageTime(m.date);
-  const out = selfPeer ? true : m.out;
-  const status = msgStatus(m, readOutboxMaxId);
+  const out = effectiveOut(m, selfPeer);
+  const status = msgStatus(m, readOutboxMaxId, out);
   const mediaType = getMediaType(m.media);
   if (!loggedMsgTypes.has(String(m.id))) {
     loggedMsgTypes.add(String(m.id));
@@ -1105,8 +1110,8 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
             const nextRow = rows[i + 1];
             const prevM = prevRow ? prevRow.msgs[prevRow.msgs.length - 1] : undefined;
             const nextM = nextRow ? nextRow.msgs[0] : undefined;
-            const sameSenderPrev = prevM && prevM.out === m.out && prevM.sender === m.sender && prevM.date - m.date < 300;
-            const sameSenderNext = nextM && nextM.out === m.out && nextM.sender === m.sender && m.date - nextM.date < 300;
+            const sameSenderPrev = prevM && effectiveOut(prevM, selfPeer) === effectiveOut(m, selfPeer) && prevM.sender === m.sender && prevM.date - m.date < 300;
+            const sameSenderNext = nextM && effectiveOut(nextM, selfPeer) === effectiveOut(m, selfPeer) && nextM.sender === m.sender && m.date - nextM.date < 300;
             const showDaySep = !!m.date && (i === 0 || !prevM?.date || new Date(m.date * 1000).toDateString() !== new Date(prevM.date * 1000).toDateString());
             const emojiUrls = state.documentUrls || {};
             const msgReactions = state.reactions?.[m.id];
@@ -1144,8 +1149,8 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
                 return img ? { kind: 'photo', m: mm, image: img } : null;
               }).filter((x): x is MediaViewerItem => !!x);
               const last = row.msgs[row.msgs.length - 1];
-              const out = m.out;
-              const status = msgStatus(last, readOutboxMaxId);
+              const out = effectiveOut(m, selfPeer);
+              const status = msgStatus(last, readOutboxMaxId, out);
               const timeStr = formatMessageTime(last.date || m.date);
               const capMsg = row.msgs.find(mm => mm.message) || last;
               const openAlbum = (at: number) => {
