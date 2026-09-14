@@ -34,7 +34,9 @@ export function useState<T>(initial: T | (() => T)): [T, (v: T | ((prev: T) => T
   const idx = inst.hookIndex++;
 
   if (inst.hookStates.length <= idx) {
-    inst.hookStates[idx] = typeof initial === 'function' ? (initial as () => T)() : initial;
+    const value = typeof initial === 'function' ? (initial as () => T)() : initial;
+    hookJournal.push({ inst, idx, prevLen: inst.hookStates.length, prevVal: undefined, had: false });
+    inst.hookStates[idx] = value;
   }
 
   const cache = ((inst as unknown as { __stateSetters?: Map<number, (v: T | ((prev: T) => T)) => void> }).__stateSetters ??= new Map());
@@ -81,7 +83,7 @@ export function useEffect(fn: () => (() => void) | void, deps?: any[]) {
   }
 }
 
-interface MemoEntry {
+interface HookStateEntry {
   inst: ComponentInstance;
   idx: number;
   prevLen: number;
@@ -89,10 +91,10 @@ interface MemoEntry {
   had: boolean;
 }
 
-const memoJournal: MemoEntry[] = [];
+const hookJournal: HookStateEntry[] = [];
 
 export function snapshotEffectQueues(): [number, number, number] {
-  return [pendingEffects.length, pendingLayoutEffects.length, memoJournal.length];
+  return [pendingEffects.length, pendingLayoutEffects.length, hookJournal.length];
 }
 
 export function rollbackEffectQueues(snap: [number, number, number]): void {
@@ -114,9 +116,9 @@ export function rollbackEffectQueues(snap: [number, number, number]): void {
     }
     pendingLayoutEffects.length = snap[1];
   }
-  if (memoJournal.length > snap[2]) {
-    for (let i = memoJournal.length - 1; i >= snap[2]; i--) {
-      const entry = memoJournal[i];
+  if (hookJournal.length > snap[2]) {
+    for (let i = hookJournal.length - 1; i >= snap[2]; i--) {
+      const entry = hookJournal[i];
       try {
         if (entry.had) {
           entry.inst.hookStates[entry.idx] = entry.prevVal;
@@ -125,7 +127,7 @@ export function rollbackEffectQueues(snap: [number, number, number]): void {
         }
       } catch {}
     }
-    memoJournal.length = snap[2];
+    hookJournal.length = snap[2];
   }
 }
 
@@ -169,6 +171,7 @@ export function useRef<T>(initial: T): { current: T } {
   const idx = inst.hookIndex++;
 
   if (inst.hookStates.length <= idx) {
+    hookJournal.push({ inst, idx, prevLen: inst.hookStates.length, prevVal: undefined, had: false });
     inst.hookStates[idx] = { current: initial };
   }
 
@@ -188,7 +191,7 @@ export function useMemo<T>(fn: () => T, deps: any[]): T {
 
   if (changed) {
     const had = inst.hookStates.length > idx;
-    memoJournal.push({ inst, idx, prevLen: inst.hookStates.length, prevVal: inst.hookStates[idx], had });
+    hookJournal.push({ inst, idx, prevLen: inst.hookStates.length, prevVal: inst.hookStates[idx], had });
     const value = fn();
     inst.hookStates[idx] = { deps: deps ? [...deps] : deps, value };
     return value;
@@ -226,7 +229,7 @@ export function useDomEvent(
     const dispatch = (e: any) => handlerRef.current?.(e);
     t.addEventListener(type, dispatch, opts);
     return () => t.removeEventListener(type, dispatch, opts);
-  }, [type, target, options?.capture, options?.passive, options?.once, ...deps]);
+  }, [type, target, options?.capture, options?.passive, options?.once, options?.signal, ...deps]);
 }
 
 export function useReducer<S, A>(
@@ -321,6 +324,15 @@ export function flushLayoutEffects() {
     if (typeof cleanup === 'function') {
       inst.unmountCleanups.push(cleanup);
     }
+  }
+}
+
+export function purgeDeadEffects(): void {
+  for (let i = pendingEffects.length - 1; i >= 0; i--) {
+    if (!pendingEffects[i].inst._mounted) pendingEffects.splice(i, 1);
+  }
+  for (let i = pendingLayoutEffects.length - 1; i >= 0; i--) {
+    if (!pendingLayoutEffects[i].inst._mounted) pendingLayoutEffects.splice(i, 1);
   }
 }
 

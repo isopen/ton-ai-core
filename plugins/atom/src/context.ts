@@ -79,15 +79,19 @@ export function flushPendingContexts(): void {
   const entries = [...pendingCtx.entries()];
   pendingCtx.clear();
   ctxJournal.length = 0;
-  for (const [ctx] of entries) {
+  const changed: Array<[AtomContext<any>, unknown]> = [];
+  for (const [ctx, value] of entries) {
+    if (!Object.is(ctx._current, value)) changed.push([ctx, value]);
+  }
+  for (const [ctx] of changed) {
     ctx._version++;
   }
-  for (const [ctx, value] of entries) {
+  for (const [ctx, value] of changed) {
     try {
       ctx._current = value as never;
     } catch {}
   }
-  for (const [ctx] of entries) {
+  for (const [ctx] of changed) {
     const subs = [...ctx._subs];
     for (const cb of subs) {
       try { cb(); } catch {}
@@ -102,12 +106,11 @@ export function createContext<T>(defaultValue: T): AtomContext<T> {
     _version: 0,
     _subs: new Set(),
     Provider: (props: Record<string, any>): VNode => {
-      const prev = readRenderValue(ctx);
       const inst = currentInstance;
-      if (inst) {
-        const stack = ((inst as any).__atomProvidesStack ??= []) as Array<{ ctx: AtomContext<any>; prev: unknown }>;
-        stack.push({ ctx, prev });
-      }
+      if (!inst) return { type: FRAGMENT, props: {}, children: normalizeChildren(props.children), key: null };
+      const prev = readRenderValue(ctx);
+      const stack = ((inst as any).__atomProvidesStack ??= []) as Array<{ ctx: AtomContext<any>; prev: unknown }>;
+      stack.push({ ctx, prev });
       pushRenderValue(ctx, props.value);
       const hadLast = !!inst && '__atomLastValue' in (inst as any);
       const last = hadLast ? (inst as any).__atomLastValue : undefined;

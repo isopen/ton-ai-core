@@ -41,8 +41,11 @@ export function startTransition(fn: () => void): void {
   if (transitionFlusher) transitionFlusher();
 }
 
-export function onTransitionSettled(cb: () => void): void {
+export function onTransitionSettled(cb: () => void): () => void {
   transitionSettled.add(cb);
+  return () => {
+    transitionSettled.delete(cb);
+  };
 }
 
 export function drainTransitionSettled(): void {
@@ -60,13 +63,14 @@ export function useTransition(): [boolean, (fn: () => void) => void] {
   const start = useCallback((fn: () => void) => {
     inflight.current++;
     setPending(true);
-    onTransitionSettled(() => {
+    const removeSettled = onTransitionSettled(() => {
       inflight.current = Math.max(0, inflight.current - 1);
       if (inflight.current === 0) setPending(false);
     });
     try {
       startTransition(fn);
     } catch (e) {
+      removeSettled();
       inflight.current = Math.max(0, inflight.current - 1);
       if (inflight.current === 0) setPending(false);
       throw e;

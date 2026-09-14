@@ -1,6 +1,6 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { ComponentInstance, setMountRoot, PORTAL, SLOT, type VNode, type ComponentType } from './vdom.js';
-import { __setReroot, flushAllEffects, flushLayoutEffects, snapshotEffectQueues, rollbackEffectQueues } from './hooks.js';
+import { __setReroot, flushAllEffects, flushLayoutEffects, snapshotEffectQueues, rollbackEffectQueues, purgeDeadEffects } from './hooks.js';
 import { snapshotContextQueue, rollbackContextQueue, flushPendingContexts, resetRenderCursor } from './context.js';
 import { createDOM, patch, flushPendingRefs, removePortalNodes, dropPendingRefsFor } from './reconciler.js';
 import { inTransition, drainTransitionSettled, setTransitionFlusher, setTransitionDiscarder, getTransitionGen } from './scheduler.js';
@@ -114,9 +114,16 @@ function flushRenderInternal(rd: RootData) {
     newVNode = instance.render();
   } catch (e) {
     log.error('[atom] render error in ' + instance.displayName + ' — keeping previous DOM:', e);
-    instance._dirty = false;
     rollbackEffectQueues(fxSnap);
     rollbackContextQueue(ctxSnap);
+    if (!rd.retried) {
+      rd.retried = true;
+      instance._dirty = true;
+      scheduleFlush(rd);
+    } else {
+      rd.retried = false;
+      instance._dirty = false;
+    }
     return;
   }
 
@@ -201,7 +208,13 @@ export function render(component: ComponentType, container: HTMLElement): Node {
   __setReroot((inst) => {
     if (inst && !inst._mounted) return;
     const target = (inst?.rootRef as RootData | undefined) ?? defaultRoot;
-    if (target) scheduleFlush(target);
+    if (!target) return;
+    for (const rd of roots.values()) {
+      if (rd === target) {
+        scheduleFlush(target);
+        return;
+      }
+    }
   });
 
   flushPendingContexts();
@@ -237,6 +250,7 @@ function unmountRoot(container: HTMLElement): void {
   }
   inst.unmountCleanups.length = 0;
   runUnmountTree(rd.instance.vnode);
+  purgeDeadEffects();
   if (rd.rootDom && rd.rootDom.parentNode) {
     rd.rootDom.parentNode.removeChild(rd.rootDom);
   }
@@ -253,6 +267,11 @@ function runUnmountTree(vnode: VNode | null): void {
   if (inst) {
     inst._mounted = false;
     inst.rootRef = undefined;
+    try {
+      const ref = (vnode as VNode).props.ref;
+      if (typeof ref === 'function') ref(null);
+      else if (ref && typeof ref === 'object') (ref as any).current = null;
+    } catch (e) { log.error('[atom] unmount ref release error:', e); }
     for (const fn of inst.unmountCleanups) {
       try { fn(); } catch (e) { log.error('[atom] unmount cleanup error:', e); }
     }

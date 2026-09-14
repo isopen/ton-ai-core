@@ -56,8 +56,8 @@ export function requestOnce<TDetail = any>(
       (timer as unknown as { unref?: () => void }).unref?.();
     } catch {}
 
-    target.addEventListener(responseEvent, onResponse);
     try {
+      target.addEventListener(responseEvent, onResponse);
       target.dispatchEvent(new CustomEvent(requestEvent, { detail: payload }));
     } catch (err) {
       if (done) return;

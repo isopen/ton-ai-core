@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from './hooks.js';
+import { useState, useEffect, useRef, useCallback, useMemo } from './hooks.js';
 import type { VNode } from './vdom.js';
 import { getLogger } from '@ton-ai/gram-debug';
 
@@ -104,6 +104,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
   const observedElRef = useRef<HTMLDivElement | null>(null);
   const scrollToRetryRef = useRef(0);
+  const firstPaintRef = useRef(true);
 
   function pruneCaches(alive: Set<string>): boolean {
     let pruned = false;
@@ -286,7 +287,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
           if (!el) return;
 
           if (wasAtBottom && el.scrollTop === oldST) {
-            const maxTop = el.scrollHeight - el.clientHeight;
+            const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
             if (el.scrollTop !== maxTop) {
               armSuppress(maxTop);
               el.scrollTop = maxTop;
@@ -384,7 +385,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   function computeVisibleRange(): { start: number; end: number } {
     const len = data.length;
     if (len === 0 || containerHeight <= 0) return { start: 0, end: len };
-    const rawPos = Math.max(0, Math.min(scrollTop, vh - containerHeight));
+    const rawPos = Math.max(0, Math.min(scrollTop, totalHeight() - containerHeight));
     const stPos = Math.max(0, rawPos - (topLoader ? TOP_LOADER_H : 0));
     if (dynamicMode) {
       const prefix = ensurePrefix();
@@ -454,7 +455,15 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     const suppressed = Date.now() < suppressUntilRef.current;
     const expected = programmaticTopRef.current;
     if (scrollToRetryRef.current !== 0) {
-      programmaticTopRef.current = el.scrollTop;
+      if (Math.abs(el.scrollTop - st.current.lastST) > estH * 2) {
+        if (scrollToRetryRef.current) cancelAnimationFrame(scrollToRetryRef.current);
+        scrollToRetryRef.current = 0;
+        userScrolledRef.current = true;
+        suppressUntilRef.current = 0;
+        programmaticTopRef.current = -1;
+      } else {
+        programmaticTopRef.current = el.scrollTop;
+      }
     } else if (!suppressed || Math.abs(el.scrollTop - expected) > 1) {
       userScrolledRef.current = true;
       if (suppressed) {
@@ -520,7 +529,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     if (!startAtBottom || data.length === 0) return;
     const el = containerRef.current;
     if (!el) return;
-    const pinKey = data.length + '|' + (startAtBottom ? 1 : 0) + '|' + containerHeight;
+    const pinKey = data.length + '|' + st.current.prevKeys + '|' + (startAtBottom ? 1 : 0) + '|' + containerHeight;
     if (pinKey !== lastPinKeyRef.current) {
       lastPinKeyRef.current = pinKey;
       if (userScrolledRef.current && !st.current.wasAtBottom) return;
@@ -577,16 +586,26 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         updateThumb();
         return;
       }
+      const oldSH = st.current.lastSH;
+      if (oldSH > 0 && el.scrollTop === st.current.lastST) {
+        const diff = el.scrollHeight - oldSH;
+        if (diff !== 0) {
+          armSuppress(el.scrollTop + diff);
+          el.scrollTop = el.scrollTop + diff;
+        }
+      }
     }
     st.current.lastST = el.scrollTop;
     st.current.lastSH = el.scrollHeight;
     updateThumb();
-  }, [data.length, startAtBottom, measTick, vh, containerHeight]);
+  }, [data, data.length, startAtBottom, measTick, vh, containerHeight]);
 
   const scrollToSeenRef = useRef<string | number | null>(null);
+  const scrollToIdxRef = useRef(-1);
   useEffect(() => {
     if (scrollToKey == null) {
       scrollToSeenRef.current = null;
+      scrollToIdxRef.current = -1;
       scrollToFiredRef.current = false;
       return;
     }
@@ -594,7 +613,6 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       scrollToSeenRef.current = scrollToKey;
       scrollToFiredRef.current = false;
     }
-    if (scrollToFiredRef.current) return;
     const el = containerRef.current;
     if (!el || data.length === 0 || el.clientHeight <= 0) return;
     const k = String(scrollToKey);
@@ -608,12 +626,24 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       }
     } else {
       const ki = parseInt(k, 10);
-      if (!isNaN(ki) && ki >= 0 && ki < data.length) idx = ki;
+      if (!isNaN(ki) && String(ki) === k && ki >= 0 && ki < data.length) idx = ki;
+      if (idx < 0) {
+        const map = keyByIndexRef.current;
+        for (let i = 0; i < map.length && i < data.length; i++) {
+          if (map[i] === k) {
+            idx = i;
+            break;
+          }
+        }
+      }
     }
     if (idx < 0) return;
+    if (scrollToFiredRef.current && idx === scrollToIdxRef.current) return;
+    scrollToIdxRef.current = idx;
 
     scrollToFiredRef.current = true;
-    const pos = dynamicMode ? ensurePrefix()[idx] : idx * itemHeight!;
+    const rawPos = dynamicMode ? ensurePrefix()[idx] : idx * itemHeight!;
+    const pos = rawPos + (topLoader ? TOP_LOADER_H : 0);
     const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
     const target = Math.max(0, Math.min(pos, maxTop));
     if (el.scrollTop !== target) {
@@ -630,39 +660,54 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     if (scrollToRetryRef.current) cancelAnimationFrame(scrollToRetryRef.current);
     scrollToRetryRef.current = requestAnimationFrame(() => {
       scrollToRetryRef.current = 0;
+      if (!el.isConnected || containerRef.current !== el) {
+        scrollToFiredRef.current = false;
+        return;
+      }
+      const rePos = (dynamicMode ? ensurePrefix()[idx] : idx * itemHeight!) + (topLoader ? TOP_LOADER_H : 0);
+      const reMax = Math.max(0, el.scrollHeight - el.clientHeight);
+      const reTarget = Math.max(0, Math.min(rePos, reMax));
+      if (el.scrollTop !== reTarget) {
+        armSuppress(reTarget);
+        el.scrollTop = reTarget;
+        st.current.lastST = el.scrollTop;
+        st.current.lastSH = el.scrollHeight;
+        setScrollTop(el.scrollTop);
+      }
       let node: HTMLElement | null = null;
       try {
         node = el.querySelector<HTMLElement>('[data-vl-key="' + vlEscapeKey(k) + '"]');
       } catch {
         node = null;
       }
-      if (node) {
-        try {
-          node.scrollIntoView({ block: 'start' });
-        } catch {}
-      } else if (containerRef.current === el && scrollToSeenRef.current === scrollToKey) {
+      if (!node && containerRef.current === el && scrollToSeenRef.current === scrollToKey) {
         scrollToFiredRef.current = false;
         scrollToRetryRef.current = requestAnimationFrame(() => {
           scrollToRetryRef.current = 0;
           if (containerRef.current !== el || scrollToSeenRef.current !== scrollToKey) return;
+          const rePos2 = (dynamicMode ? ensurePrefix()[idx] : idx * itemHeight!) + (topLoader ? TOP_LOADER_H : 0);
+          const reMax2 = Math.max(0, el.scrollHeight - el.clientHeight);
+          const reTarget2 = Math.max(0, Math.min(rePos2, reMax2));
+          if (el.scrollTop !== reTarget2) {
+            armSuppress(reTarget2);
+            el.scrollTop = reTarget2;
+            st.current.lastST = el.scrollTop;
+            st.current.lastSH = el.scrollHeight;
+            setScrollTop(el.scrollTop);
+          }
           let retry: HTMLElement | null = null;
           try {
             retry = el.querySelector<HTMLElement>('[data-vl-key="' + vlEscapeKey(k) + '"]');
           } catch {
             retry = null;
           }
-          if (retry) {
-            try {
-              retry.scrollIntoView({ block: 'start' });
-            } catch {}
-            scrollToFiredRef.current = true;
-          }
+          if (retry) scrollToFiredRef.current = true;
           updateThumb();
         });
       }
       updateThumb();
     });
-  }, [scrollToKey, data.length, containerHeight]);
+  }, [scrollToKey, data, data.length, containerHeight]);
 
   useEffect(() => {
     if (!dynamicMode) return;
@@ -759,9 +804,13 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         key: 'spacer-top',
       });
     }
-    const rEnd = visibleEndIndex > visibleStartIndex
+    let rEnd = visibleEndIndex > visibleStartIndex
       ? visibleEndIndex
       : Math.min(data.length, safeInitial);
+    if (firstPaintRef.current && rEnd - visibleStartIndex < safeInitial) {
+      rEnd = Math.min(data.length, visibleStartIndex + safeInitial);
+    }
+    if (rEnd > visibleStartIndex) firstPaintRef.current = false;
     for (let i = visibleStartIndex; i < rEnd; i++) {
       items.push(makeItemVNode(data[i], i, true));
     }
@@ -798,18 +847,21 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
   if (keyByIndexRef.current.length > data.length) keyByIndexRef.current.length = data.length;
 
-  const containerStyle: Record<string, any> = {
-    overflowY: 'auto',
-    overflowX: 'hidden',
-    scrollbarWidth: 'none',
-  };
-  if (ch != null) {
-    containerStyle.height = ch + 'px';
-  } else {
-    containerStyle.flex = 1;
-    containerStyle.alignSelf = 'stretch';
-    containerStyle.minHeight = 0;
-  }
+  const containerStyle: Record<string, any> = useMemo(() => {
+    const s: Record<string, any> = {
+      overflowY: 'auto',
+      overflowX: 'hidden',
+      scrollbarWidth: 'none',
+    };
+    if (ch != null) {
+      s.height = ch + 'px';
+    } else {
+      s.flex = 1;
+      s.alignSelf = 'stretch';
+      s.minHeight = 0;
+    }
+    return s;
+  }, [ch]);
 
   const wrapperStyle: Record<string, any> = {
     position: 'relative',
@@ -822,7 +874,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
   const observedAutoRef = useRef(false);
 
-  function onContainerRef(el: HTMLDivElement | null) {
+  const onContainerRef = useCallback((el: HTMLDivElement | null) => {
     containerRef.current = el;
     if (!el) {
       observedElRef.current = null;
@@ -883,15 +935,15 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         onReadyContent?.(el);
       });
     }
-  }
+  }, [ch, startAtBottom, onReadyContent]);
 
-  function onThumbRef(el: HTMLDivElement | null) {
+  const onThumbRef = useCallback((el: HTMLDivElement | null) => {
     thumbRef.current = el;
     if (el && !(el as any).__thumbBound) {
       (el as any).__thumbBound = true;
       el.addEventListener('mousedown', onThumbDown);
     }
-  }
+  }, []);
 
   const scrollProps: Record<string, any> = {
     ref: onContainerRef,

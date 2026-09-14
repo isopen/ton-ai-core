@@ -24,7 +24,8 @@ function runUnmountCleanups(vnode: VNode) {
     const inst = vnode.componentInstance!;
     inst._mounted = false;
     inst.rootRef = undefined;
-    const cleanups = inst.unmountCleanups;
+    releaseRef(null as unknown as Element, vnode.props.ref);
+    const cleanups = inst.unmountCleanups ?? [];
     for (const fn of cleanups) {
       try { fn(); } catch (e) { log.error('useEffect unmount cleanup error:', e); }
     }
@@ -178,6 +179,10 @@ function setEventBinding(el: Element, key: string, type: string, value: any): vo
   if (!byKey) { byKey = new Map(); elementBindings.set(el, byKey); }
 
   const prev = byKey.get(key);
+  if (signal && signal.aborted) {
+    if (prev) removeEventBinding(el, key);
+    return;
+  }
   if (!prev) {
     const binding: EventBinding = {
       type, handle, capture: wantCapture, passive, once, signal,
@@ -208,10 +213,21 @@ function setEventBinding(el: Element, key: string, type: string, value: any): vo
         }
       };
       binding.abortHandler = onAbort;
-      signal.addEventListener('abort', onAbort, { once: true });
+      try {
+        signal.addEventListener('abort', onAbort, { once: true });
+      } catch {}
+    }
+    try {
+      el.addEventListener(type, binding.bound, { capture: wantCapture, passive, signal });
+    } catch (e) {
+      if (signal && binding.abortHandler) {
+        try {
+          signal.removeEventListener('abort', binding.abortHandler);
+        } catch {}
+      }
+      throw e;
     }
     byKey.set(key, binding);
-    el.addEventListener(type, binding.bound, { capture: wantCapture, passive, signal });
     return;
   }
 
@@ -237,23 +253,36 @@ function setEventBinding(el: Element, key: string, type: string, value: any): vo
         prev.signal.removeEventListener('abort', prev.abortHandler);
       } catch {}
     }
+    const rollbackType = prev.type;
+    const rollbackCapture = prev.capture;
     prev.type = type;
     prev.capture = wantCapture;
     prev.passive = passive;
     prev.signal = signal;
     prev.abortHandler = undefined;
-    if (signal) {
-      const onAbort = () => {
-        const live = elementBindings.get(el);
-        if (live && live.get(key) === prev) {
-          live.delete(key);
-          if (live.size === 0) elementBindings.delete(el);
-        }
-      };
-      prev.abortHandler = onAbort;
-      signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      if (signal) {
+        const onAbort = () => {
+          const live = elementBindings.get(el);
+          if (live && live.get(key) === prev) {
+            live.delete(key);
+            if (live.size === 0) elementBindings.delete(el);
+          }
+        };
+        prev.abortHandler = onAbort;
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+      el.addEventListener(type, prev.bound, { capture: wantCapture, passive, signal });
+    } catch (e) {
+      prev.type = rollbackType;
+      prev.capture = rollbackCapture;
+      try {
+        el.addEventListener(rollbackType, prev.bound, { capture: rollbackCapture });
+      } catch {
+        removeEventBinding(el, key);
+      }
+      throw e;
     }
-    el.addEventListener(type, prev.bound, { capture: wantCapture, passive, signal });
   }
   prev.handle = handle;
   if (handlerChanged) prev.consumed = false;
@@ -307,7 +336,15 @@ function setDelegateBinding(el: Element, key: string, type: string, value: any):
       },
     };
     byKey.set(key, entry);
-    el.addEventListener(type, entry.bound);
+    try {
+      el.addEventListener(type, entry.bound);
+    } catch (e) {
+      if (byKey.get(key) === entry) {
+        byKey.delete(key);
+        if (byKey.size === 0) delegateBindings.delete(el);
+      }
+      throw e;
+    }
     return;
   }
   entry.selectors = selectors;
@@ -323,6 +360,31 @@ function removeDelegateBinding(el: Element, key: string): boolean {
   byKey.delete(key);
   if (byKey.size === 0) delegateBindings.delete(el);
   return true;
+}
+
+function dropElementBindings(el: Element, props: Record<string, any>): void {
+  if (!props) return;
+  for (const key of Object.keys(props)) {
+    try {
+      if (delegateEventType(key)) removeDelegateBinding(el, key);
+      else if (eventPropType(key)) removeEventBinding(el, key);
+    } catch {}
+  }
+}
+
+function setStyleProp(style: CSSStyleDeclaration, key: string, value: string): void {
+  try {
+    if (key.startsWith('--')) style.setProperty(key, value);
+    else if (key.indexOf('-') !== -1) style.setProperty(key, value);
+    else (style as any)[key] = value;
+  } catch {}
+}
+
+function clearStyleProp(style: CSSStyleDeclaration, key: string): void {
+  try {
+    if (key.startsWith('--') || key.indexOf('-') !== -1) style.removeProperty(key);
+    else (style as any)[key] = '';
+  } catch {}
 }
 
 function styleObjToCss(style: Record<string, any>): string {
@@ -350,6 +412,20 @@ function releaseRef(el: Element, ref: any): void {
     if (typeof ref === 'function') ref(null);
     else if (typeof ref === 'object') ref.current = null;
   } catch (e) { log.error('[recon] ref release error:', e); }
+}
+
+function setComponentRef(ref: any, instance: unknown): void {
+  if (ref == null) return;
+  try {
+    if (typeof ref === 'function') ref(instance);
+    else if (typeof ref === 'object') ref.current = instance;
+  } catch (e) { log.error('[recon] component ref error:', e); }
+}
+
+function syncComponentRef(oldRef: any, newRef: any, instance: unknown): void {
+  if (oldRef === newRef) return;
+  releaseRef(null as unknown as Element, oldRef);
+  setComponentRef(newRef, instance);
 }
 
 export function flushPendingRefs(): void {
@@ -415,6 +491,10 @@ function setProp(el: Element, key: string, value: any) {
   }
 
   if (typeof value === 'boolean') {
+    if (key === 'checked') {
+      (el as HTMLInputElement).checked = value;
+      return;
+    }
     if (value) el.setAttribute(key, '');
     else el.removeAttribute(key);
     return;
@@ -455,6 +535,16 @@ function removeProp(el: Element, key: string, oldValue: any) {
     el.removeAttribute('style');
     return;
   }
+  if (key === 'value') {
+    const tag = (el as HTMLElement).tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') (el as HTMLInputElement).value = '';
+    else if (tag === 'SELECT') (el as HTMLSelectElement).selectedIndex = -1;
+    return;
+  }
+  if (key === 'checked') {
+    (el as HTMLInputElement).checked = false;
+    return;
+  }
   if (key === 'dangerouslySetInnerHTML') {
     el.innerHTML = '';
     return;
@@ -477,12 +567,13 @@ function updateProp(el: Element, key: string, oldValue: any, newValue: any) {
   }
   if (key === 'style') {
     if (typeof newValue === 'object' && newValue !== null) {
+      const st = (el as HTMLElement).style;
       if (typeof oldValue === 'object' && oldValue !== null) {
         for (const k in oldValue) {
-          if (!(k in newValue)) (el as HTMLElement).style[k as any] = '';
+          if (!(k in newValue)) clearStyleProp(st, k);
         }
         for (const k in newValue) {
-          if (oldValue[k] !== newValue[k]) (el as HTMLElement).style[k as any] = newValue[k];
+          if (oldValue[k] !== newValue[k]) setStyleProp(st, k, String(newValue[k]));
         }
       } else {
         (el as HTMLElement).style.cssText = styleObjToCss(newValue);
@@ -492,6 +583,15 @@ function updateProp(el: Element, key: string, oldValue: any, newValue: any) {
     } else {
       el.removeAttribute('style');
     }
+    return;
+  }
+  if (key === 'checked') {
+    (el as HTMLInputElement).checked = newValue != null && newValue !== false;
+    return;
+  }
+  if (key === 'dangerouslySetInnerHTML') {
+    const html = newValue && (newValue as any).__html;
+    el.innerHTML = html != null ? String(html) : '';
     return;
   }
   if (newValue == null || newValue === false) {
@@ -591,6 +691,25 @@ function resolveSlotVNode(vnode: VNode): VNode {
     props: mergeSlotProps(child.props, vnode.props),
   };
   return merged;
+}
+
+function stabilizeSlotHandlers(oldVNode: VNode, newVNode: VNode, oldResolved: VNode, resolved: VNode): void {
+  if (resolved === newVNode || oldResolved === oldVNode) return;
+  const prev = oldResolved.props ?? {};
+  const next = resolved.props ?? {};
+  const oldChild = (oldVNode.children[0] as VNode | undefined)?.props ?? {};
+  const newChild = (newVNode.children[0] as VNode | undefined)?.props ?? {};
+  const oldSlot = oldVNode.props ?? {};
+  const newSlot = newVNode.props ?? {};
+  for (const key of Object.keys(next)) {
+    const nv = (next as any)[key];
+    if (typeof nv !== 'function') continue;
+    const pv = (prev as any)[key];
+    if (typeof pv !== 'function') continue;
+    if ((oldChild as any)[key] === (newChild as any)[key] && (oldSlot as any)[key] === (newSlot as any)[key]) {
+      (next as any)[key] = pv;
+    }
+  }
 }
 
 export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node {
@@ -704,16 +823,19 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
           const dom = createDOM(result);
           vnode.dom = dom;
           vnode.componentInstance = instance;
+          setComponentRef(vnode.props.ref, instance);
           return dom;
         }
         const empty = document.createTextNode('');
         vnode.dom = empty;
         vnode.componentInstance = instance;
+        setComponentRef(vnode.props.ref, instance);
         return empty;
       } catch (e) {
         if (frame && boundaryStack[boundaryStack.length - 1] === frame && frame.handle(e)) {
           rollbackEffectQueues(fxSnapMount);
           rollbackContextQueue(ctxSnapMount);
+          restoreProvided(instance);
           const fb = safeFallback(frame);
           instance.vnode = fb;
           if (fb) {
@@ -721,6 +843,8 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
               const dom = createDOM(fb);
               vnode.dom = dom;
               vnode.componentInstance = instance;
+              setComponentRef(vnode.props.ref, instance);
+              restoreProvided(frame.instance);
               return dom;
             } catch (e2) {
               instance.vnode = null;
@@ -732,6 +856,8 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
           const empty = document.createTextNode('');
           vnode.dom = empty;
           vnode.componentInstance = instance;
+          setComponentRef(vnode.props.ref, instance);
+          restoreProvided(frame.instance);
           return empty;
         }
         instance.vnode = null;
@@ -770,6 +896,7 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
   } catch (e) {
     destroyCreated(doneEl);
     dropPendingRefsFor(el);
+    dropElementBindings(el, vnode.props);
     rollbackEffectQueues(fxSnapEl);
     rollbackContextQueue(ctxSnapEl);
     throw e;
@@ -793,8 +920,16 @@ function findDomNode(vnode: VNode): Node | null {
       if (found) return found;
     }
   }
+  if (vnode.type === FRAGMENT || vnode.type === SLOTTABLE) {
+    for (const child of vnode.children) {
+      const dom = findDomNode(child);
+      if (dom) return dom;
+    }
+    if (vnode.dom) return vnode.dom;
+    return null;
+  }
   if (vnode.dom) return vnode.dom;
-  if (vnode.type === FRAGMENT || vnode.type === SLOTTABLE || vnode.type === SLOT || vnode.type === PORTAL) {
+  if (vnode.type === SLOT || vnode.type === PORTAL) {
     for (const child of vnode.children) {
       const dom = findDomNode(child);
       if (dom) return dom;
@@ -808,6 +943,7 @@ function findAllDomNodes(vnode: VNode): Node[] {
   if (vnode.type === SLOT) {
     const resolved = (vnode as any).__resolved as VNode | undefined;
     if (resolved) return findAllDomNodes(resolved);
+    if (vnode.dom) return [vnode.dom];
   }
   if (vnode.type === FRAGMENT || vnode.type === SLOTTABLE || vnode.type === SLOT || vnode.type === PORTAL) {
     const nodes: Node[] = [];
@@ -845,6 +981,27 @@ function removePortalPlaceholder(vnode: VNode): void {
   if (ph && ph.parentNode) ph.parentNode.removeChild(ph);
 }
 
+function removeDeepPlaceholders(vnode: VNode | null): void {
+  if (!vnode) return;
+  if (vnode.type === PORTAL) {
+    removePortalPlaceholder(vnode);
+    return;
+  }
+  if (typeof vnode.type === 'function') {
+    const inner = vnode.componentInstance?.vnode;
+    if (inner && inner !== vnode) removeDeepPlaceholders(inner);
+    return;
+  }
+  if (vnode.type === SLOT) {
+    const resolved = (vnode as any).__resolved as VNode | undefined;
+    if (resolved) {
+      removeDeepPlaceholders(resolved);
+      return;
+    }
+  }
+  for (const child of vnode.children) removeDeepPlaceholders(child);
+}
+
 function reorderNodes(vnode: VNode): Node[] {
   const nodes = findAllDomNodes(vnode);
   if (vnode.type === PORTAL && vnode.dom && !nodes.includes(vnode.dom)) nodes.push(vnode.dom);
@@ -854,16 +1011,26 @@ function reorderNodes(vnode: VNode): Node[] {
 export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   if (oldVNode === newVNode) return dom;
   if (!isSameNodeType(oldVNode, newVNode)) {
+    const oldRef = oldVNode.props?.ref;
     const newDom = createDOM(newVNode);
     runUnmountCleanups(oldVNode);
+    if (oldRef != null && oldRef === newVNode.props?.ref && typeof newVNode.type === 'function' && newVNode.componentInstance) {
+      setComponentRef(oldRef, newVNode.componentInstance);
+    }
     const anchor = (oldVNode.type === PORTAL ? oldVNode.dom : null) || findDomNode(oldVNode) || dom;
     const host = (anchor && anchor.parentNode) || (dom && dom.parentNode);
-    if (host && anchor) {
+    if (host && anchor && anchor.parentNode === host) {
       host.replaceChild(newDom, anchor);
       const oldNodes = findAllDomNodes(oldVNode);
       for (const node of oldNodes) {
         if (node !== anchor && node !== newDom && node.parentNode) node.parentNode.removeChild(node);
       }
+    } else if (host) {
+      const oldNodes = findAllDomNodes(oldVNode);
+      for (const node of oldNodes) {
+        if (node !== newDom && node.parentNode) node.parentNode.removeChild(node);
+      }
+      host.appendChild(newDom);
     }
     return newDom;
   }
@@ -893,14 +1060,15 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   }
 
   if (newVNode.type === SLOT) {
-    const oldResolved = resolveSlotVNode(oldVNode);
+    const oldResolved = (oldVNode as any).__resolved ?? resolveSlotVNode(oldVNode);
     const resolved = resolveSlotVNode(newVNode);
+    stabilizeSlotHandlers(oldVNode, newVNode, oldResolved, resolved);
     if (resolved === newVNode) {
       if (oldResolved !== oldVNode) {
         runUnmountCleanups(oldResolved);
-        if (dom && dom.parentNode) dom.parentNode.removeChild(dom);
         const empty = document.createTextNode('');
         newVNode.dom = empty;
+        if (dom && dom.parentNode) dom.parentNode.replaceChild(empty, dom);
         return empty;
       }
       newVNode.dom = dom;
@@ -957,6 +1125,8 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
     const component = newVNode.type as ComponentType;
     let instance = oldVNode.componentInstance;
     const prevProps = instance ? instance.props : newVNode.props;
+    const prevMounted = instance ? instance._mounted : true;
+    const prevCompRef = oldVNode.props.ref;
     if (!instance) {
       instance = new ComponentInstance(component, newVNode.props);
       if (instance.rootRef === undefined) instance.rootRef = getMountRoot();
@@ -980,6 +1150,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
       result = instance.render();
     } catch (e) {
       instance.props = prevProps;
+      instance._mounted = prevMounted;
       rollbackEffectQueues(fxSnapPatch);
       rollbackContextQueue(ctxSnapPatch);
       setCurrentInstance(prevPatchInst);
@@ -1006,9 +1177,11 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
           for (const node of findAllDomNodes(oldResult)) {
             if (node.parentNode) node.parentNode.removeChild(node);
           }
+          removeDeepPlaceholders(oldResult);
         }
         const empty = dom && dom.nodeType === 3 ? dom : document.createTextNode('');
         newVNode.dom = empty;
+        syncComponentRef(prevCompRef, newVNode.props.ref, instance);
         return empty;
       }
 
@@ -1016,16 +1189,19 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
         const freshDom = createDOM(result);
         if (dom && dom.parentNode) dom.parentNode.replaceChild(freshDom, dom);
         newVNode.dom = freshDom;
+        syncComponentRef(prevCompRef, newVNode.props.ref, instance);
         return freshDom;
       }
 
       const newDom = patch(dom, oldResult, result);
       newVNode.dom = newDom;
+      syncComponentRef(prevCompRef, newVNode.props.ref, instance);
       return newDom;
     } catch (e) {
       if (frame && boundaryStack[boundaryStack.length - 1] === frame && frame.handle(e)) {
         rollbackEffectQueues(fxSnapPatch);
         rollbackContextQueue(ctxSnapPatch);
+        restoreProvided(instance);
         const fb = safeFallback(frame);
         const oldResult = isComponentBoundary(oldVNode) && oldVNode.componentInstance?.vnode ? oldVNode.componentInstance.vnode : oldVNode;
         instance._dirty = false;
@@ -1035,16 +1211,22 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
           for (const node of findAllDomNodes(oldResult)) {
             if (node.parentNode) node.parentNode.removeChild(node);
           }
+          removeDeepPlaceholders(oldResult);
           const empty = document.createTextNode('');
           newVNode.dom = empty;
+          syncComponentRef(prevCompRef, newVNode.props.ref, instance);
+          restoreProvided(frame.instance);
           return empty;
         }
         try {
           const fbDom = patch(dom, oldResult, fb);
           newVNode.dom = fbDom;
+          syncComponentRef(prevCompRef, newVNode.props.ref, instance);
+          restoreProvided(frame.instance);
           return fbDom;
         } catch (e2) {
           instance.props = prevProps;
+          instance._mounted = prevMounted;
           instance.vnode = prevCommitted;
           instance._dirty = true;
           rollbackEffectQueues(fxSnapPatch);
@@ -1053,6 +1235,7 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
         }
       }
       instance.props = prevProps;
+      instance._mounted = prevMounted;
       instance.vnode = prevCommitted;
       instance._dirty = true;
       rollbackEffectQueues(fxSnapPatch);
@@ -1092,16 +1275,13 @@ function reconcileChildren(
 
   if (oldChildren === newChildren) return;
 
+  const dupOldFirst: VNode[] = [];
   const oldKeyed = new Map<string, { vnode: VNode; nodes: Node[]; origKey: string }>();
   for (let i = 0; i < oldLen; i++) {
     const key = childMapKey(oldChildren[i], i);
     if (oldKeyed.has(key)) {
       log.warn('[recon] DUP-KEY key=' + String(key));
-      runUnmountCleanups(oldChildren[i]);
-      for (const node of findAllDomNodes(oldChildren[i])) {
-        if (node.parentNode) node.parentNode.removeChild(node);
-      }
-      removePortalPlaceholder(oldChildren[i]);
+      dupOldFirst.push(oldChildren[i]);
       continue;
     }
     oldKeyed.set(key, { vnode: oldChildren[i], nodes: findAllDomNodes(oldChildren[i]), origKey: key });
@@ -1110,37 +1290,52 @@ function reconcileChildren(
   const usedKeys = new Set<string>();
   interface PatchEntry { nodes: Node[] }
   const patches: PatchEntry[] = [];
+  const freshCreated: VNode[] = [];
 
   for (let i = 0; i < newLen; i++) {
     const newChild = newChildren[i];
     const key = childMapKey(newChild, i);
     const oldEntry = oldKeyed.get(key);
 
-    if (oldEntry && !usedKeys.has(key)) {
-      usedKeys.add(key);
-      const oldDom = oldEntry.nodes[0];
-      if (oldDom && oldDom.parentNode) {
-        const newDom = patch(oldDom, oldEntry.vnode, newChild);
-        newChild.dom = newDom;
-        patches.push({ nodes: reorderNodes(newChild) });
-      } else {
-        for (const node of oldEntry.nodes) {
-          if (node.parentNode) node.parentNode.removeChild(node);
+    try {
+      if (oldEntry && !usedKeys.has(key)) {
+        usedKeys.add(key);
+        const oldDom = oldEntry.nodes[0];
+        const attached = oldEntry.nodes.filter((n) => n.parentNode);
+        const inPlace = attached.length > 0 && attached.every((n) => {
+          const par = n.parentNode;
+          return !!par && par.nodeType !== 11;
+        });
+        if (oldDom && oldDom.parentNode && inPlace) {
+          const newDom = patch(oldDom, oldEntry.vnode, newChild);
+          newChild.dom = newDom;
+          patches.push({ nodes: reorderNodes(newChild) });
+        } else {
+          runUnmountCleanups(oldEntry.vnode);
+          for (const node of oldEntry.nodes) {
+            if (node.parentNode) node.parentNode.removeChild(node);
+          }
+          removePortalPlaceholder(oldEntry.vnode);
+          const newDom = createDOM(newChild);
+          newChild.dom = newDom;
+          freshCreated.push(newChild);
+          patches.push({ nodes: reorderNodes(newChild) });
         }
-        removePortalPlaceholder(oldEntry.vnode);
+      } else if (oldEntry) {
+        log.warn('[recon] DUP-KEY key=' + String(key) + ' parent=' + (parentEl as HTMLElement).className);
         const newDom = createDOM(newChild);
         newChild.dom = newDom;
+        freshCreated.push(newChild);
+        patches.push({ nodes: reorderNodes(newChild) });
+      } else {
+        const newDom = createDOM(newChild);
+        newChild.dom = newDom;
+        freshCreated.push(newChild);
         patches.push({ nodes: reorderNodes(newChild) });
       }
-    } else if (oldEntry) {
-      log.warn('[recon] DUP-KEY key=' + String(key) + ' parent=' + (parentEl as HTMLElement).className);
-      const newDom = createDOM(newChild);
-      newChild.dom = newDom;
-      patches.push({ nodes: reorderNodes(newChild) });
-    } else {
-      const newDom = createDOM(newChild);
-      newChild.dom = newDom;
-      patches.push({ nodes: reorderNodes(newChild) });
+    } catch (e) {
+      destroyCreated(freshCreated);
+      throw e;
     }
   }
 
@@ -1153,6 +1348,14 @@ function reconcileChildren(
       }
       removePortalPlaceholder(entry.vnode);
     }
+  }
+
+  for (const dup of dupOldFirst) {
+    runUnmountCleanups(dup);
+    for (const node of findAllDomNodes(dup)) {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    }
+    removePortalPlaceholder(dup);
   }
 
   if (patches.length === 0) return;

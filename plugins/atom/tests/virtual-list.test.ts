@@ -790,8 +790,6 @@ describe('VirtualList', () => {
 
     test('scrollToKey scrolls to the keyed item via keyExtractor', (done) => {
       const items = generateItems(100);
-      const scrollIntoView = jest.fn();
-      (HTMLElement.prototype as any).scrollIntoView = scrollIntoView;
       Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 200 });
       Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 2500 });
 
@@ -819,7 +817,7 @@ describe('VirtualList', () => {
           const rendered = container.querySelectorAll('[data-testid="item"]');
           const ids = Array.from(rendered).map((n) => n.getAttribute('data-id'));
           expect(ids).toContain('42');
-          expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+          expect(listEl.scrollTop).toBe(2100);
           done();
         });
       });

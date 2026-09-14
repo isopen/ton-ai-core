@@ -146,8 +146,15 @@ function shallowEqual(a: Record<string, any>, b: Record<string, any>): boolean {
 
 export function normalizeChild(child: any): VNode | null {
   if (child == null || child === false || child === true) return null;
-  if (typeof child === 'string' || typeof child === 'number') {
+  if (typeof child === 'string' || typeof child === 'number' || typeof child === 'bigint') {
     return { type: TEXT, props: { nodeValue: String(child) }, children: [], key: null };
+  }
+  if (typeof child === 'symbol') {
+    return { type: TEXT, props: { nodeValue: child.description ?? '' }, children: [], key: null };
+  }
+  if (typeof child === 'function') {
+    log.warn('[atom] function child is not supported and was skipped');
+    return null;
   }
 
   if (typeof child === 'object' && !child.type) {
@@ -163,11 +170,19 @@ export function normalizeChild(child: any): VNode | null {
 
 export function normalizeChildren(children: any): VNode[] {
   if (children == null || children === false || children === true) return [];
-  if (!Array.isArray(children)) children = [children];
+  if (!Array.isArray(children)) {
+    if (typeof children === 'object' && typeof (children as any)[Symbol.iterator] === 'function') {
+      children = Array.from(children as Iterable<unknown>);
+    } else {
+      children = [children];
+    }
+  }
   const result: VNode[] = [];
   for (const child of children) {
     if (Array.isArray(child)) {
       result.push(...normalizeChildren(child));
+    } else if (child && typeof child === 'object' && typeof (child as any)[Symbol.iterator] === 'function') {
+      result.push(...normalizeChildren(Array.from(child as Iterable<unknown>)));
     } else {
       const n = normalizeChild(child);
       if (n) result.push(n);

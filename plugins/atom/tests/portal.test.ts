@@ -3,7 +3,7 @@
  */
 
 import { render } from '../src/render.js';
-import { useState } from '../src/hooks.js';
+import { useState, useEffect, useRef } from '../src/hooks.js';
 import { createPortal } from '../src/portal.js';
 import type { ComponentType } from '../src/vdom.js';
 
@@ -99,5 +99,40 @@ describe('createPortal', () => {
     await tick();
     expect(a.querySelector('#mv')).toBeNull();
     expect(b.querySelector('#mv')?.textContent).toBe('m');
+  });
+
+  test('stateful portal child is patched in place, not remounted per flush', async () => {
+    let renders = 0;
+    let lastRef = 0;
+    const Child: ComponentType = ({ id }: any) => {
+      renders++;
+      const rc = useRef(0);
+      rc.current++;
+      lastRef = rc.current;
+      const [off, setOff] = useState({ x: 0, y: 0 });
+      useEffect(() => {
+        setOff({ x: 0, y: 0 });
+      }, [id]);
+      return h('span', { id: 'pc-state' }, id + ':' + off.x + ',' + off.y);
+    };
+    const Root: ComponentType = () => {
+      const [id, setId] = useState('a');
+      (Root as any).setId = setId;
+      return h('div', { id: 'host' }, createPortal(h(Child as any, { id }), document.body));
+    };
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(Root, container);
+    await tick(50);
+    await tick(50);
+    expect(document.body.querySelector('#pc-state')?.textContent).toBe('a:0,0');
+    expect(renders).toBeLessThan(10);
+    expect(lastRef).toBe(renders);
+    (Root as any).setId('b');
+    await tick(50);
+    await tick(50);
+    expect(document.body.querySelector('#pc-state')?.textContent).toBe('b:0,0');
+    expect(renders).toBeLessThan(20);
+    expect(lastRef).toBe(renders);
   });
 });

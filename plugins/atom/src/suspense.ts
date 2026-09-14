@@ -3,6 +3,7 @@ import { requestRerender } from './hooks.js';
 
 interface SuspenseState {
   pending: Promise<any> | null;
+  pendingEpoch: number;
   error: any;
   hasError: boolean;
   errorEpoch: number;
@@ -11,7 +12,7 @@ interface SuspenseState {
 let suspendEpoch = 0;
 
 function stateOf(inst: any): SuspenseState {
-  if (!inst.__atomSuspenseState) inst.__atomSuspenseState = { pending: null, error: null, hasError: false, errorEpoch: suspendEpoch };
+  if (!inst.__atomSuspenseState) inst.__atomSuspenseState = { pending: null, pendingEpoch: suspendEpoch, error: null, hasError: false, errorEpoch: suspendEpoch };
   return inst.__atomSuspenseState as SuspenseState;
 }
 
@@ -34,8 +35,12 @@ export function Suspense(props: SuspenseProps): VNode | null {
     }
   }
   if (st.pending) {
-    clearBoundaryFrame(inst);
-    return normalizeChild(props.fallback);
+    if (st.pendingEpoch !== suspendEpoch) {
+      st.pending = null;
+    } else {
+      clearBoundaryFrame(inst);
+      return normalizeChild(props.fallback);
+    }
   }
   (inst as any).__atomBoundary = {
     kind: 'suspense',
@@ -43,6 +48,7 @@ export function Suspense(props: SuspenseProps): VNode | null {
       if (!thrown || typeof thrown.then !== 'function') return false;
       if (st.pending !== thrown) {
         st.pending = thrown;
+        st.pendingEpoch = suspendEpoch;
         thrown.then(
           () => {
             if (st.pending === thrown) {
@@ -96,7 +102,9 @@ function suspendSet(key: string, entry: SuspendEntry): void {
 function rerenderOwners(key: string): void {
   const owners = suspendCache.get(key)?.owners;
   if (!owners || owners.size === 0) return;
-  for (const owner of [...owners]) {
+  const wake = [...owners];
+  owners.clear();
+  for (const owner of wake) {
     try {
       requestRerender(owner ?? undefined);
     } catch {}
