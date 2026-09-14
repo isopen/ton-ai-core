@@ -1,7 +1,7 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { TEXT, FRAGMENT, PORTAL, SLOT, SLOTTABLE, ComponentInstance, setCurrentInstance, getMountRoot, boundaryStack, takeBoundaryFrame, clearBoundaryFrame, currentInstance, type BoundaryFrame, type VNode, type ComponentType } from './vdom.js';
 import { snapshotEffectQueues, rollbackEffectQueues } from './hooks.js';
-import { snapshotContextQueue, rollbackContextQueue } from './context.js';
+import { snapshotContextQueue, rollbackContextQueue, popRenderValue } from './context.js';
 import { isTraced, diffProps } from './dev.js';
 
 const log = getLogger('atom');
@@ -29,12 +29,17 @@ function runUnmountCleanups(vnode: VNode) {
       try { fn(); } catch (e) { log.error('useEffect unmount cleanup error:', e); }
     }
     cleanups.length = 0;
-    if (inst.vnode) {
-      for (const child of inst.vnode.children) {
-        runUnmountCleanups(child);
-      }
+    if (inst.vnode && inst.vnode !== vnode) {
+      runUnmountCleanups(inst.vnode);
     }
     return;
+  }
+  if (vnode.type === SLOT) {
+    const resolved = (vnode as any).__resolved as VNode | undefined;
+    if (resolved) {
+      runUnmountCleanups(resolved);
+      return;
+    }
   }
   if (typeof vnode.type === 'string' && vnode.props && vnode.props.ref != null) {
     const dom = vnode.dom as Element | undefined;
@@ -54,7 +59,7 @@ function restoreProvided(instance: ComponentInstance) {
   (instance as any).__atomProvidesStack = [];
   for (let i = stack.length - 1; i >= 0; i--) {
     try {
-      stack[i].ctx._current = stack[i].prev;
+      popRenderValue(stack[i].ctx as any);
     } catch {}
   }
 }
@@ -70,17 +75,32 @@ function popFrame(frame: BoundaryFrame) {
 }
 
 function safeFallback(frame: BoundaryFrame): VNode | null {
+  const prev = currentInstance;
+  setCurrentInstance(frame.instance);
   try {
     return frame.renderFallback();
   } catch (e) {
     log.error('[atom] boundary fallback render failed:', e);
     return null;
+  } finally {
+    setCurrentInstance(prev);
   }
 }
 
 export function removePortalNodes(vnode: VNode): void {
   for (const node of findAllDomNodes(vnode)) {
     if (node.parentNode) node.parentNode.removeChild(node);
+  }
+}
+
+function destroyCreated(children: VNode[]): void {
+  for (const child of children) {
+    try {
+      for (const node of findAllDomNodes(child)) dropPendingRefsFor(node);
+    } catch {}
+    try {
+      runUnmountCleanups(child);
+    } catch {}
   }
 }
 
@@ -108,6 +128,7 @@ interface EventBinding {
   passive: boolean;
   once: boolean;
   signal?: AbortSignal;
+  abortHandler?: () => void;
   consumed: boolean;
   swaps: number;
   warnedChurn: boolean;
@@ -163,9 +184,32 @@ function setEventBinding(el: Element, key: string, type: string, value: any): vo
       consumed: false, swaps: 0, warnedChurn: false,
       bound: (ev: Event) => {
         if (binding.once && binding.consumed) return;
-        try { binding.handle(ev); } finally { if (binding.once) binding.consumed = true; }
+        try {
+          binding.handle(ev);
+        } finally {
+          if (binding.once) {
+            binding.consumed = true;
+            el.removeEventListener(binding.type, binding.bound, { capture: binding.capture });
+            const live = elementBindings.get(el);
+            if (live && live.get(key) === binding) {
+              live.delete(key);
+              if (live.size === 0) elementBindings.delete(el);
+            }
+          }
+        }
       },
     };
+    if (signal) {
+      const onAbort = () => {
+        const live = elementBindings.get(el);
+        if (live && live.get(key) === binding) {
+          live.delete(key);
+          if (live.size === 0) elementBindings.delete(el);
+        }
+      };
+      binding.abortHandler = onAbort;
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
     byKey.set(key, binding);
     el.addEventListener(type, binding.bound, { capture: wantCapture, passive, signal });
     return;
@@ -188,10 +232,27 @@ function setEventBinding(el: Element, key: string, type: string, value: any): vo
 
   if (needsRebind) {
     el.removeEventListener(prev.type, prev.bound, { capture: prev.capture });
+    if (prev.signal && prev.abortHandler) {
+      try {
+        prev.signal.removeEventListener('abort', prev.abortHandler);
+      } catch {}
+    }
     prev.type = type;
     prev.capture = wantCapture;
     prev.passive = passive;
     prev.signal = signal;
+    prev.abortHandler = undefined;
+    if (signal) {
+      const onAbort = () => {
+        const live = elementBindings.get(el);
+        if (live && live.get(key) === prev) {
+          live.delete(key);
+          if (live.size === 0) elementBindings.delete(el);
+        }
+      };
+      prev.abortHandler = onAbort;
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
     el.addEventListener(type, prev.bound, { capture: wantCapture, passive, signal });
   }
   prev.handle = handle;
@@ -204,13 +265,21 @@ function removeEventBinding(el: Element, key: string): boolean {
   const b = byKey.get(key);
   if (!b) return false;
   el.removeEventListener(b.type, b.bound, { capture: b.capture });
+  if (b.signal && b.abortHandler) {
+    try {
+      b.signal.removeEventListener('abort', b.abortHandler);
+    } catch {}
+  }
   byKey.delete(key);
   if (byKey.size === 0) elementBindings.delete(el);
   return true;
 }
 
 function setDelegateBinding(el: Element, key: string, type: string, value: any): void {
-  if (!value || typeof value !== 'object') return;
+  if (!value || typeof value !== 'object') {
+    removeDelegateBinding(el, key);
+    return;
+  }
   let byKey = delegateBindings.get(el);
   if (!byKey) { byKey = new Map(); delegateBindings.set(el, byKey); }
   const selectors = Object.keys(value).filter((s) => typeof (value as any)[s] === 'function');
@@ -468,10 +537,17 @@ function mergeSlotProps(childProps: Record<string, any>, slotProps: Record<strin
     const sv = slotProps[key];
     if (key === 'class' || key === 'className') {
       const merged = ((cv || '') + ' ' + (sv || '')).trim();
-      if (merged) result.class = merged;
+      if (merged) result.class = (result.class ? result.class + ' ' : '') + merged;
       continue;
     }
     if (key === 'style') {
+      if (typeof cv === 'string' || typeof sv === 'string') {
+        const left = typeof cv === 'string' ? cv : styleObjToCss(cv || {});
+        const right = typeof sv === 'string' ? sv : styleObjToCss(sv || {});
+        const merged = (left ? left + ';' : '') + right;
+        if (merged) result.style = merged;
+        continue;
+      }
       result.style = { ...(cv || {}), ...(sv || {}) };
       continue;
     }
@@ -510,16 +586,34 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
 
   if (vnode.type === FRAGMENT || vnode.type === SLOTTABLE) {
     const fragment = document.createDocumentFragment();
-    for (const child of vnode.children) {
-      fragment.appendChild(createDOM(child));
+    const fxSnapFrag = snapshotEffectQueues();
+    const ctxSnapFrag = snapshotContextQueue();
+    const doneFrag: VNode[] = [];
+    try {
+      for (const child of vnode.children) {
+        fragment.appendChild(createDOM(child));
+        doneFrag.push(child);
+      }
+    } catch (e) {
+      destroyCreated(doneFrag);
+      rollbackEffectQueues(fxSnapFrag);
+      rollbackContextQueue(ctxSnapFrag);
+      throw e;
     }
     return fragment;
   }
 
   if (vnode.type === SLOT) {
     const resolved = resolveSlotVNode(vnode);
-    if (resolved === vnode) return document.createTextNode('');
-    return createDOM(resolved);
+    if (resolved === vnode) {
+      const empty = document.createTextNode('');
+      vnode.dom = empty;
+      return empty;
+    }
+    const node = createDOM(resolved);
+    vnode.dom = node;
+    (vnode as any).__resolved = resolved;
+    return node;
   }
 
   if (vnode.type === PORTAL) {
@@ -527,17 +621,22 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
     vnode.dom = placeholder;
     const container = vnode.props.container as Element | null;
     if (container) {
-      const created: Node[] = [];
+      const fxSnapPortal = snapshotEffectQueues();
+      const ctxSnapPortal = snapshotContextQueue();
+      const donePortal: VNode[] = [];
       try {
         for (const child of vnode.children) {
           const childDom = createDOM(child);
           container.appendChild(childDom);
-          created.push(childDom);
+          donePortal.push(child);
         }
       } catch (e) {
-        for (const node of created) {
+        destroyCreated(donePortal);
+        for (const node of findAllDomNodes(vnode)) {
           if (node.parentNode === container) container.removeChild(node);
         }
+        rollbackEffectQueues(fxSnapPortal);
+        rollbackContextQueue(ctxSnapPortal);
         throw e;
       }
     }
@@ -620,10 +719,22 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
   }
 
   if (vnode.children.length > 0) {
+    const fxSnapEl = snapshotEffectQueues();
+    const ctxSnapEl = snapshotContextQueue();
+    const doneEl: VNode[] = [];
     const frag = document.createDocumentFragment();
-    for (const child of vnode.children) {
-      const childDom = createDOM(child);
-      if (childDom) frag.appendChild(childDom);
+    try {
+      for (const child of vnode.children) {
+        const childDom = createDOM(child);
+        if (childDom) frag.appendChild(childDom);
+        doneEl.push(child);
+      }
+    } catch (e) {
+      destroyCreated(doneEl);
+      dropPendingRefsFor(el);
+      rollbackEffectQueues(fxSnapEl);
+      rollbackContextQueue(ctxSnapEl);
+      throw e;
     }
     el.appendChild(frag);
   }
@@ -632,6 +743,13 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
 }
 
 function findDomNode(vnode: VNode): Node | null {
+  if (typeof vnode.type === 'function') {
+    const inner = vnode.componentInstance?.vnode;
+    if (inner && inner !== vnode) {
+      const found = findDomNode(inner);
+      if (found) return found;
+    }
+  }
   if (vnode.dom) return vnode.dom;
   if (vnode.type === FRAGMENT || vnode.type === SLOTTABLE || vnode.type === SLOT || vnode.type === PORTAL) {
     for (const child of vnode.children) {
@@ -640,15 +758,14 @@ function findDomNode(vnode: VNode): Node | null {
     }
     return null;
   }
-  if (typeof vnode.type === 'function') {
-    const inner = vnode.componentInstance?.vnode;
-    if (inner && inner !== vnode) return findDomNode(inner);
-    return null;
-  }
   return null;
 }
 
 function findAllDomNodes(vnode: VNode): Node[] {
+  if (vnode.type === SLOT) {
+    const resolved = (vnode as any).__resolved as VNode | undefined;
+    if (resolved) return findAllDomNodes(resolved);
+  }
   if (vnode.type === FRAGMENT || vnode.type === SLOTTABLE || vnode.type === SLOT || vnode.type === PORTAL) {
     const nodes: Node[] = [];
     for (const child of vnode.children) {
@@ -719,11 +836,17 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
       if (oldResolved !== oldVNode) {
         runUnmountCleanups(oldResolved);
         if (dom && dom.parentNode) dom.parentNode.removeChild(dom);
-        return document.createTextNode('');
+        const empty = document.createTextNode('');
+        newVNode.dom = empty;
+        return empty;
       }
+      newVNode.dom = dom;
       return dom;
     }
-    return patch(dom, oldResolved, resolved);
+    const out = patch(dom, oldResolved, resolved);
+    newVNode.dom = (resolved as VNode).dom ?? out;
+    (newVNode as any).__resolved = resolved;
+    return out;
   }
 
   if (newVNode.type === PORTAL) {
@@ -948,11 +1071,14 @@ function reconcileChildren(
     if (ordered && matched === flat.length) return;
   }
 
-  let cur = parentEl.firstChild;
+  let cur: Node | null = parentEl.firstChild;
+  if (anchor && anchor.parentNode === parentEl) cur = anchor;
   for (let i = 0; i < patches.length; i++) {
     const nodes = patches[i].nodes;
     for (let j = 0; j < nodes.length; j++) {
       const node = nodes[j];
+      const par = node.parentNode;
+      if (par && par !== parentEl && par.nodeType !== 11) continue;
       if (node === cur) {
         cur = cur!.nextSibling;
       } else {

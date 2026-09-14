@@ -52,9 +52,19 @@ export function requestOnce<TDetail = any>(
       cleanup();
       reject(new Error(`requestOnce: ${responseEvent} timeout after ${timeoutMs}ms`));
     }, timeoutMs);
+    try {
+      (timer as unknown as { unref?: () => void }).unref?.();
+    } catch {}
 
     target.addEventListener(responseEvent, onResponse);
-    target.dispatchEvent(new CustomEvent(requestEvent, { detail: payload }));
+    try {
+      target.dispatchEvent(new CustomEvent(requestEvent, { detail: payload }));
+    } catch (err) {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
   });
 }
 
@@ -65,7 +75,20 @@ export function bindLifetimeListeners(
   listeners: LifetimeListenerMap,
 ): () => void {
   const entries = Object.entries(listeners);
-  for (const [type, fn] of entries) target.addEventListener(type, fn);
+  const bound: Array<[string, EventListenerOrEventListenerObject]> = [];
+  try {
+    for (const [type, fn] of entries) {
+      target.addEventListener(type, fn);
+      bound.push([type, fn]);
+    }
+  } catch (err) {
+    for (const [type, fn] of bound) {
+      try {
+        target.removeEventListener(type, fn);
+      } catch {}
+    }
+    throw err;
+  }
   return () => {
     for (const [type, fn] of entries) target.removeEventListener(type, fn);
   };

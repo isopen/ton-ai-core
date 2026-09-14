@@ -5,7 +5,16 @@ const log = getLogger('atom');
 
 let reroot: ((inst?: ComponentInstance) => void) | null = null;
 
-const pendingEffects: Array<{ inst: ComponentInstance; fn: () => (() => void) | void; oldCleanup?: (() => void); cleanupIdx: number }> = [];
+interface EffectEntry {
+  inst: ComponentInstance;
+  fn: () => (() => void) | void;
+  oldCleanup?: (() => void);
+  cleanupIdx: number;
+  depsIdx: number;
+  oldDeps: any[] | undefined;
+}
+
+const pendingEffects: EffectEntry[] = [];
 
 export function __setReroot(fn: (inst?: ComponentInstance) => void) {
   reroot = fn;
@@ -59,12 +68,15 @@ export function useEffect(fn: () => (() => void) | void, deps?: any[]) {
   }
 
   if (changed) {
+    const old = inst.hookStates[depsIdx] as any[] | undefined;
     inst.hookStates[depsIdx] = deps ? [...deps] : deps;
     pendingEffects.push({
       inst,
       fn,
       oldCleanup: inst.hookStates[cleanupIdx] as (() => void) | undefined,
       cleanupIdx,
+      depsIdx,
+      oldDeps: old,
     });
   }
 }
@@ -74,12 +86,40 @@ export function snapshotEffectQueues(): [number, number] {
 }
 
 export function rollbackEffectQueues(snap: [number, number]): void {
-  if (pendingEffects.length > snap[0]) pendingEffects.length = snap[0];
-  if (pendingLayoutEffects.length > snap[1]) pendingLayoutEffects.length = snap[1];
+  if (pendingEffects.length > snap[0]) {
+    for (let i = pendingEffects.length - 1; i >= snap[0]; i--) {
+      const entry = pendingEffects[i];
+      try {
+        entry.inst.hookStates[entry.depsIdx] = entry.oldDeps;
+      } catch {}
+    }
+    pendingEffects.length = snap[0];
+  }
+  if (pendingLayoutEffects.length > snap[1]) {
+    for (let i = pendingLayoutEffects.length - 1; i >= snap[1]; i--) {
+      const entry = pendingLayoutEffects[i];
+      try {
+        entry.inst.hookStates[entry.depsIdx] = entry.oldDeps;
+      } catch {}
+    }
+    pendingLayoutEffects.length = snap[1];
+  }
+}
+
+function hasNewerEntry(queue: Array<{ inst: ComponentInstance; cleanupIdx: number }>, from: number, inst: ComponentInstance, cleanupIdx: number): boolean {
+  for (let i = from; i < queue.length; i++) {
+    if (queue[i].inst === inst && queue[i].cleanupIdx === cleanupIdx) return true;
+  }
+  return false;
 }
 
 export function flushAllEffects() {
   while (pendingEffects.length > 0) {
+    const head = pendingEffects[0];
+    if (hasNewerEntry(pendingEffects, 1, head.inst, head.cleanupIdx)) {
+      pendingEffects.shift();
+      continue;
+    }
     const { inst, fn, oldCleanup, cleanupIdx } = pendingEffects.shift()!;
     if (!inst._mounted) continue;
     if (oldCleanup) {
@@ -199,6 +239,8 @@ interface LayoutEffectEntry {
   fn: () => (() => void) | void;
   oldCleanup?: (() => void);
   cleanupIdx: number;
+  depsIdx: number;
+  oldDeps: any[] | undefined;
 }
 
 const pendingLayoutEffects: LayoutEffectEntry[] = [];
@@ -216,18 +258,26 @@ export function useLayoutEffect(fn: () => (() => void) | void, deps?: any[]) {
   }
 
   if (changed) {
+    const old = inst.hookStates[depsIdx] as any[] | undefined;
     inst.hookStates[depsIdx] = deps ? [...deps] : deps;
     pendingLayoutEffects.push({
       inst,
       fn,
       oldCleanup: inst.hookStates[cleanupIdx] as (() => void) | undefined,
       cleanupIdx,
+      depsIdx,
+      oldDeps: old,
     });
   }
 }
 
 export function flushLayoutEffects() {
   while (pendingLayoutEffects.length > 0) {
+    const head = pendingLayoutEffects[0];
+    if (hasNewerEntry(pendingLayoutEffects, 1, head.inst, head.cleanupIdx)) {
+      pendingLayoutEffects.shift();
+      continue;
+    }
     const { inst, fn, oldCleanup, cleanupIdx } = pendingLayoutEffects.shift()!;
     if (!inst._mounted) continue;
     if (oldCleanup) {
@@ -252,6 +302,7 @@ export function flushLayoutEffects() {
 export function useSyncExternalStore<T>(
   subscribe: (onChange: () => void) => () => void,
   getSnapshot: () => T,
+  isEqual: (a: T, b: T) => boolean = Object.is,
 ): T {
   const inst = getInstance();
   const snapshot = getSnapshot();
@@ -263,14 +314,14 @@ export function useSyncExternalStore<T>(
   useEffect(() => {
     const check = () => {
       const next = ref.current.getSnapshot();
-      if (!Object.is(ref.current.snapshot, next)) {
+      if (!isEqual(ref.current.snapshot, next)) {
         ref.current.snapshot = next;
         setTick((t) => t + 1);
       }
     };
     check();
     return subscribe(check);
-  }, [subscribe]);
+  }, [subscribe, getSnapshot]);
   return snapshot;
 }
 
@@ -302,6 +353,7 @@ export function useSelector<S, T>(
     }
     return ref.current.value;
   }, [store]);
-  useSyncExternalStore(store.subscribe, getSnapshot);
+  const checkEqual = useCallback((a: T, b: T) => ref.current.isEqual(a, b), []);
+  useSyncExternalStore(store.subscribe, getSnapshot, checkEqual);
   return ref.current.value;
 }

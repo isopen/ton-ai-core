@@ -42,7 +42,12 @@ export function ErrorBoundary(props: ErrorBoundaryProps): VNode | null {
   st.prevKeys = props.resetKeys ? [...props.resetKeys] : props.resetKeys;
   if (st.hasError) {
     clearBoundaryFrame(inst);
-    return toFallback(props.fallback, st.error);
+    try {
+      return toFallback(props.fallback, st.error);
+    } catch (e) {
+      log.error('[atom] ErrorBoundary fallback render failed:', e);
+      return null;
+    }
   }
   (inst as any).__atomBoundary = {
     kind: 'error',

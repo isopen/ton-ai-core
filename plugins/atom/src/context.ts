@@ -11,22 +11,81 @@ export interface AtomContext<T> {
 
 const pendingCtx = new Map<AtomContext<any>, unknown>();
 
+const renderCursor = new Map<AtomContext<any>, unknown[]>();
+
+export function readRenderValue<T>(ctx: AtomContext<T>): T {
+  const stack = renderCursor.get(ctx);
+  if (stack && stack.length > 0) return stack[stack.length - 1] as T;
+  return ctx.defaultValue;
+}
+
+export function pushRenderValue<T>(ctx: AtomContext<T>, value: T): void {
+  let stack = renderCursor.get(ctx);
+  if (!stack) {
+    stack = [];
+    renderCursor.set(ctx, stack);
+  }
+  stack.push(value);
+}
+
+export function popRenderValue(ctx: AtomContext<any>): void {
+  const stack = renderCursor.get(ctx);
+  if (!stack || stack.length === 0) return;
+  stack.pop();
+  if (stack.length === 0) renderCursor.delete(ctx);
+}
+
+export function resetRenderCursor(): void {
+  if (renderCursor.size > 0) renderCursor.clear();
+}
+
+interface CtxChange {
+  ctx: AtomContext<any>;
+  value: unknown;
+  inst: unknown;
+  hadLast: boolean;
+  lastOld: unknown;
+}
+
+const ctxJournal: CtxChange[] = [];
+
 export function snapshotContextQueue(): number {
-  return pendingCtx.size;
+  return ctxJournal.length;
 }
 
 export function rollbackContextQueue(snap: number): void {
-  if (pendingCtx.size === snap) return;
-  const keys = [...pendingCtx.keys()];
-  for (let i = snap; i < keys.length; i++) pendingCtx.delete(keys[i]);
+  if (ctxJournal.length <= snap) return;
+  const dropped = ctxJournal.splice(snap);
+  const restored = new Set<unknown>();
+  for (let i = dropped.length - 1; i >= 0; i--) {
+    const entry = dropped[i];
+    if (entry.inst != null && !restored.has(entry.inst)) {
+      restored.add(entry.inst);
+      try {
+        if (entry.hadLast) (entry.inst as any).__atomLastValue = entry.lastOld;
+        else delete (entry.inst as any).__atomLastValue;
+      } catch {}
+    }
+  }
+  pendingCtx.clear();
+  for (const kept of ctxJournal) pendingCtx.set(kept.ctx, kept.value);
 }
 
 export function flushPendingContexts(): void {
-  if (pendingCtx.size === 0) return;
+  if (pendingCtx.size === 0) {
+    ctxJournal.length = 0;
+    return;
+  }
   const entries = [...pendingCtx.entries()];
   pendingCtx.clear();
+  ctxJournal.length = 0;
   for (const [ctx] of entries) {
     ctx._version++;
+  }
+  for (const [ctx, value] of entries) {
+    try {
+      ctx._current = value as never;
+    } catch {}
   }
   for (const [ctx] of entries) {
     const subs = [...ctx._subs];
@@ -43,16 +102,17 @@ export function createContext<T>(defaultValue: T): AtomContext<T> {
     _version: 0,
     _subs: new Set(),
     Provider: (props: Record<string, any>): VNode => {
-      const prev = ctx._current;
+      const prev = readRenderValue(ctx);
       const inst = currentInstance;
       if (inst) {
         const stack = ((inst as any).__atomProvidesStack ??= []) as Array<{ ctx: AtomContext<any>; prev: unknown }>;
         stack.push({ ctx, prev });
       }
-      ctx._current = props.value;
+      pushRenderValue(ctx, props.value);
       const hadLast = !!inst && '__atomLastValue' in (inst as any);
       const last = hadLast ? (inst as any).__atomLastValue : undefined;
       if (!hadLast || !Object.is(last, props.value)) {
+        ctxJournal.push({ ctx, value: props.value, inst: inst ?? null, hadLast, lastOld: last });
         if (inst) (inst as any).__atomLastValue = props.value;
         pendingCtx.set(ctx, props.value);
       }
@@ -66,7 +126,7 @@ export function useContext<T>(ctx: AtomContext<T>): T {
   const [, setTick] = useState(0);
   const lastVersion = useRef(ctx._version);
   lastVersion.current = ctx._version;
-  const value = ctx._current;
+  const value = readRenderValue(ctx);
   useEffect(() => {
     const onNotify = () => {
       if (lastVersion.current !== ctx._version) {
@@ -75,6 +135,10 @@ export function useContext<T>(ctx: AtomContext<T>): T {
       }
     };
     ctx._subs.add(onNotify);
+    if (lastVersion.current !== ctx._version) {
+      lastVersion.current = ctx._version;
+      setTick((t) => t + 1);
+    }
     return () => {
       ctx._subs.delete(onNotify);
     };

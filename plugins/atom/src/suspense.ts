@@ -5,10 +5,13 @@ interface SuspenseState {
   pending: Promise<any> | null;
   error: any;
   hasError: boolean;
+  errorEpoch: number;
 }
 
+let suspendEpoch = 0;
+
 function stateOf(inst: any): SuspenseState {
-  if (!inst.__atomSuspenseState) inst.__atomSuspenseState = { pending: null, error: null, hasError: false };
+  if (!inst.__atomSuspenseState) inst.__atomSuspenseState = { pending: null, error: null, hasError: false, errorEpoch: suspendEpoch };
   return inst.__atomSuspenseState as SuspenseState;
 }
 
@@ -22,8 +25,13 @@ export function Suspense(props: SuspenseProps): VNode | null {
   if (!inst) return normalizeChild(props.children);
   const st = stateOf(inst);
   if (st.hasError) {
-    clearBoundaryFrame(inst);
-    throw st.error;
+    if (st.errorEpoch !== suspendEpoch) {
+      st.hasError = false;
+      st.error = null;
+    } else {
+      clearBoundaryFrame(inst);
+      throw st.error;
+    }
   }
   if (st.pending) {
     clearBoundaryFrame(inst);
@@ -47,6 +55,7 @@ export function Suspense(props: SuspenseProps): VNode | null {
               st.pending = null;
               st.hasError = true;
               st.error = err;
+              st.errorEpoch = suspendEpoch;
               requestRerender(inst);
             }
           },
@@ -68,38 +77,49 @@ interface SuspendEntry {
 
 const suspendCache = new Map<string, SuspendEntry>();
 
+const SUSPEND_CACHE_LIMIT = 500;
+
+function suspendSet(key: string, entry: SuspendEntry): void {
+  suspendCache.set(key, entry);
+  if (suspendCache.size > SUSPEND_CACHE_LIMIT) {
+    const oldest = suspendCache.keys().next();
+    if (!oldest.done && oldest.value !== key) suspendCache.delete(oldest.value);
+  }
+}
+
 export function suspend<T>(key: string, loader: () => Promise<T>): T {
+  const owner: ComponentInstance | null = currentInstance;
   const entry = suspendCache.get(key);
   if (entry) {
     if (entry.status === 'ok') return entry.value as T;
     if (entry.status === 'fail') throw entry.error;
     throw entry.promise;
   }
-  const owner: ComponentInstance | null = currentInstance;
   let raw: Promise<T>;
   try {
     raw = loader();
   } catch (error) {
-    suspendCache.set(key, { status: 'fail', error });
+    suspendSet(key, { status: 'fail', error });
     throw error;
   }
   raw.then(
     (value: T) => {
       if (suspendCache.get(key)?.promise !== raw) return;
-      suspendCache.set(key, { status: 'ok', value });
+      suspendSet(key, { status: 'ok', value });
       requestRerender(owner ?? undefined);
     },
     (error: any) => {
       if (suspendCache.get(key)?.promise !== raw) return;
-      suspendCache.set(key, { status: 'fail', error });
+      suspendSet(key, { status: 'fail', error });
       requestRerender(owner ?? undefined);
     },
   );
-  suspendCache.set(key, { status: 'pending', promise: raw });
+  suspendSet(key, { status: 'pending', promise: raw });
   throw raw;
 }
 
 export function clearSuspended(key?: string): void {
   if (key === undefined) suspendCache.clear();
   else suspendCache.delete(key);
+  suspendEpoch++;
 }

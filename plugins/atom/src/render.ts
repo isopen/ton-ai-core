@@ -1,9 +1,9 @@
 import { getLogger } from '@ton-ai/gram-debug';
-import { ComponentInstance, setMountRoot, type VNode, type ComponentType } from './vdom.js';
+import { ComponentInstance, setMountRoot, PORTAL, SLOT, type VNode, type ComponentType } from './vdom.js';
 import { __setReroot, flushAllEffects, flushLayoutEffects, snapshotEffectQueues, rollbackEffectQueues } from './hooks.js';
-import { snapshotContextQueue, rollbackContextQueue, flushPendingContexts } from './context.js';
+import { snapshotContextQueue, rollbackContextQueue, flushPendingContexts, resetRenderCursor } from './context.js';
 import { createDOM, patch, flushPendingRefs, removePortalNodes, dropPendingRefsFor } from './reconciler.js';
-import { inTransition, drainTransitionSettled, setTransitionFlusher } from './scheduler.js';
+import { inTransition, drainTransitionSettled, setTransitionFlusher, setTransitionDiscarder, getTransitionGen } from './scheduler.js';
 
 const log = getLogger('atom');
 
@@ -13,6 +13,7 @@ interface RootData {
   container: HTMLElement;
   rootDom: Node;
   retried?: boolean;
+  tgen?: number;
 }
 
 const roots = new Map<HTMLElement, RootData>();
@@ -34,6 +35,7 @@ export function setUseRafBatching(v: boolean) {
 
 function scheduleFlush(rd: RootData) {
   if (inTransition()) {
+    rd.tgen = getTransitionGen();
     transitionRoots.add(rd);
     scheduleTransitionFlush();
     return;
@@ -72,6 +74,11 @@ function flushTransitionRoots() {
 }
 
 setTransitionFlusher(scheduleTransitionFlush);
+setTransitionDiscarder((gen: number) => {
+  for (const rd of [...transitionRoots]) {
+    if (rd.tgen === gen) transitionRoots.delete(rd);
+  }
+});
 
 function flushPending() {
   renderScheduled = false;
@@ -82,6 +89,7 @@ function flushPending() {
 }
 
 function flushRenderInternal(rd: RootData) {
+  resetRenderCursor();
   const now = Date.now();
   if (now - sameTaskWindowStart > SAME_TASK_WINDOW_MS) {
     sameTaskWindowStart = now;
@@ -151,6 +159,7 @@ export function flushRender(rd?: RootData): void {
 }
 
 export function render(component: ComponentType, container: HTMLElement): Node {
+  resetRenderCursor();
   const existing = roots.get(container);
   if (existing) {
     log.warn('[atom] render() on an already-mounted container — unmounting previous tree');
@@ -235,7 +244,7 @@ function unmountRoot(container: HTMLElement): void {
 
 function runUnmountTree(vnode: VNode | null): void {
   if (!vnode) return;
-  if (vnode.type === 'PORTAL_NODE') {
+  if (vnode.type === PORTAL) {
     for (const child of vnode.children) runUnmountTree(child);
     removePortalNodes(vnode);
     return;
@@ -249,10 +258,17 @@ function runUnmountTree(vnode: VNode | null): void {
     }
     inst.unmountCleanups.length = 0;
 
-    if (inst.vnode) {
-      for (const child of inst.vnode.children) runUnmountTree(child);
+    if (inst.vnode && inst.vnode !== vnode) {
+      runUnmountTree(inst.vnode);
     }
     return;
+  }
+  if (vnode.type === SLOT) {
+    const resolved = (vnode as any).__resolved as VNode | undefined;
+    if (resolved) {
+      runUnmountTree(resolved);
+      return;
+    }
   }
   if (typeof vnode.type === 'string' && vnode.props && vnode.props.ref != null) {
     const dom = vnode.dom as Element | undefined;

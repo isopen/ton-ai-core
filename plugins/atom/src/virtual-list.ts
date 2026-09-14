@@ -79,7 +79,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   function vlEscapeKey(key: string): string {
     const w = window as unknown as { CSS?: { escape?: (v: string) => string } };
     if (w.CSS && typeof w.CSS.escape === 'function') return w.CSS.escape(key);
-    return key.replace(/["\\]/g, '\\$&');
+    return key.replace(/["\\\[\]]/g, '\\$&');
   }
 
   function vlKeysSignature(): string {
@@ -101,6 +101,25 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   const scrollToFiredRef = useRef(false);
   const dragRef = useRef({ dragging: false, dragY: 0, dragTop: 0 });
 
+  const observedElRef = useRef<HTMLDivElement | null>(null);
+  const scrollToRetryRef = useRef(0);
+
+  function pruneCaches(alive: Set<string>): boolean {
+    let pruned = false;
+    for (const k of [...st.current.heights.keys()]) {
+      if (!alive.has(k)) {
+        st.current.heights.delete(k);
+        pruned = true;
+      }
+    }
+    const refs = measureRefsRef.current;
+    for (const k of [...refs.keys()]) {
+      if (!alive.has(k)) refs.delete(k);
+    }
+    if (pruned) st.current.heightsVersion++;
+    return pruned;
+  }
+
   const st = useRef<{
     heights: Map<string, number>;
     prevKeys: string;
@@ -110,9 +129,11 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     prevST: number;
     heightsVersion: number;
     prefix: Float64Array | null;
+    prefixData: unknown;
     prefixLen: number;
     prefixVersion: number;
-    prefixKeys: string;
+    prefixEst: number;
+    prefixEstimator: unknown;
     anchor?: { key: string; top: number };
     wasAtBottom: boolean;
   }>({
@@ -124,9 +145,11 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     prevST: -1,
     heightsVersion: 0,
     prefix: null,
+    prefixData: null,
     prefixLen: -1,
     prefixVersion: -1,
-    prefixKeys: '',
+    prefixEst: -1,
+    prefixEstimator: null,
     anchor: undefined,
     wasAtBottom: true,
   });
@@ -238,14 +261,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       if (grew) {
         const alive = new Set<string>();
         for (let i = 0; i < len; i++) alive.add(vlKeyOf(data[i], i));
-        let pruned = false;
-        for (const k of [...st.current.heights.keys()]) {
-          if (!alive.has(k)) {
-            st.current.heights.delete(k);
-            pruned = true;
-          }
-        }
-        if (pruned) st.current.heightsVersion++;
+        pruneCaches(alive);
         const anchor = st.current.anchor;
         const oldSH = st.current.lastSH;
         const oldST = st.current.lastST;
@@ -296,10 +312,10 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
           }
         });
       } else {
-        st.current.heights.clear();
-        const refs = measureRefsRef.current;
-        if (refs.size > 0) refs.clear();
-        st.current.heightsVersion++;
+        const alive = new Set<string>();
+        for (let i = 0; i < len; i++) alive.add(vlKeyOf(data[i], i));
+        pruneCaches(alive);
+        if (len === 0) st.current.heightsVersion++;
       }
       st.current.prevKeys = sig;
       st.current.prevLen = len;
@@ -313,8 +329,10 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       const known = st.current.heights.get(vlKeyOf(item, i));
       if (known != null && known > 0) return known;
       if (estimateItem) {
-        const est = estimateItem(item, i);
-        if (Number.isFinite(est) && est > 0) return est;
+        try {
+          const est = estimateItem(item, i);
+          if (Number.isFinite(est) && est > 0) return est;
+        } catch {}
       }
     }
     return estH;
@@ -323,20 +341,23 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   function ensurePrefix(): Float64Array {
     const s = st.current;
     const len = data.length;
-    const sig = vlKeysSignature() + '|' + s.heightsVersion;
-    if (s.prefix && s.prefixLen === len && s.prefixVersion === s.heightsVersion && s.prefixKeys === sig) return s.prefix;
+    if (s.prefix && s.prefixData === data && s.prefixLen === len && s.prefixVersion === s.heightsVersion && s.prefixEst === estH && s.prefixEstimator === estimateItem) return s.prefix;
     const prefix = new Float64Array(len + 1);
     for (let i = 0; i < len; i++) prefix[i + 1] = prefix[i] + getHeight(i);
     s.prefix = prefix;
+    s.prefixData = data;
     s.prefixLen = len;
     s.prefixVersion = s.heightsVersion;
-    s.prefixKeys = sig;
+    s.prefixEst = estH;
+    s.prefixEstimator = estimateItem;
     return prefix;
   }
 
+  const TOP_LOADER_H = 48;
+
   function totalHeight(): number {
-    if (!dynamicMode) return data.length * itemHeight!;
-    return ensurePrefix()[data.length];
+    const base = !dynamicMode ? data.length * itemHeight! : ensurePrefix()[data.length];
+    return base + (topLoader ? TOP_LOADER_H : 0);
   }
 
   function computeVisibleRange(): { start: number; end: number } {
@@ -581,7 +602,9 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     st.current.wasAtBottom = atBottomRef.current;
     setScrollTop(el.scrollTop);
     updateThumb();
-    requestAnimationFrame(() => {
+    if (scrollToRetryRef.current) cancelAnimationFrame(scrollToRetryRef.current);
+    scrollToRetryRef.current = requestAnimationFrame(() => {
+      scrollToRetryRef.current = 0;
       let node: HTMLElement | null = null;
       try {
         node = el.querySelector<HTMLElement>('[data-vl-key="' + vlEscapeKey(k) + '"]');
@@ -589,9 +612,28 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         node = null;
       }
       if (node) {
-        node.scrollIntoView({ block: 'start' });
-      } else {
+        try {
+          node.scrollIntoView({ block: 'start' });
+        } catch {}
+      } else if (containerRef.current === el && scrollToSeenRef.current === scrollToKey) {
         scrollToFiredRef.current = false;
+        scrollToRetryRef.current = requestAnimationFrame(() => {
+          scrollToRetryRef.current = 0;
+          if (containerRef.current !== el || scrollToSeenRef.current !== scrollToKey) return;
+          let retry: HTMLElement | null = null;
+          try {
+            retry = el.querySelector<HTMLElement>('[data-vl-key="' + vlEscapeKey(k) + '"]');
+          } catch {
+            retry = null;
+          }
+          if (retry) {
+            try {
+              retry.scrollIntoView({ block: 'start' });
+            } catch {}
+            scrollToFiredRef.current = true;
+          }
+          updateThumb();
+        });
       }
       updateThumb();
     });
@@ -611,6 +653,10 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       if (measRafRef.current) {
         cancelAnimationFrame(measRafRef.current);
         measRafRef.current = 0;
+      }
+      if (scrollToRetryRef.current) {
+        cancelAnimationFrame(scrollToRetryRef.current);
+        scrollToRetryRef.current = 0;
       }
       if (dragRef.current.dragging) {
         dragRef.current.dragging = false;
@@ -748,11 +794,16 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
   function onContainerRef(el: HTMLDivElement | null) {
     containerRef.current = el;
-    if (el && !readyFired.current) {
-      readyFired.current = true;
+    if (el && observedElRef.current !== el) {
+      observedElRef.current = el;
+      if (resizeObserverRef.current) {
+        resizeObserverRef.current.disconnect();
+        resizeObserverRef.current = null;
+      }
       if (ch == null && typeof ResizeObserver !== 'undefined') {
+        const target = el;
         resizeObserverRef.current = new ResizeObserver(() => {
-          const h = el.clientHeight;
+          const h = target.clientHeight;
           if (h > 0 && h !== measuredHRef.current) {
             measuredHRef.current = h;
             setMeasuredH(h);
@@ -765,6 +816,9 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
           setMeasuredH(el.clientHeight);
         }
       }
+    }
+    if (el && !readyFired.current) {
+      readyFired.current = true;
       queueMicrotask(() => {
         st.current.lastST = el.scrollTop;
         st.current.lastSH = el.scrollHeight;
