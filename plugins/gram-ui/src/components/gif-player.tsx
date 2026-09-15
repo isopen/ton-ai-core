@@ -4,6 +4,8 @@ import { buildDocumentThumb } from '../utils.js';
 import { PhotoLoader } from './photo-loader.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import { requestDocument } from './media-source.js';
+import type { MediaViewerItem } from './media-viewer.js';
+import type { ImageSpec } from '../types.js';
 
 interface GifPlayerProps {
   m: any;
@@ -11,10 +13,11 @@ interface GifPlayerProps {
   documentProgress?: Record<number, number>;
   documentSources?: Record<number, string>;
   maxWidth?: number;
+  onOpenViewer?: (item: MediaViewerItem) => void;
 }
 
 export function GifPlayer(props: GifPlayerProps) {
-  const { m, documentUrls, documentProgress, documentSources, maxWidth = 320 } = props;
+  const { m, documentUrls, documentProgress, documentSources, maxWidth = 320, onOpenViewer } = props;
   const cacheSource = documentSources?.[m.id];
   const doc = m.media?.document;
   const url = documentUrls[m.id] || '';
@@ -107,12 +110,23 @@ export function GifPlayer(props: GifPlayerProps) {
   }, [doc, url, m.id]);
 
   const handleClick = () => {
+    if (onOpenViewer) {
+      onOpenViewer({ kind: 'video', m, thumbUrl: thumb?.url || '' });
+      return;
+    }
     if (!videoRef.current) return;
     if (videoRef.current.paused) {
       videoRef.current.play();
     } else {
       videoRef.current.pause();
     }
+  };
+
+  const handleImageClick = () => {
+    if (!onOpenViewer || !url) return;
+    const source = { url, width: videoW || 0, height: videoH || 0 };
+    const image: ImageSpec = { id: 'gif:' + String(m.id), thumbnail: source, medium: source, original: source, width: videoW || 0, height: videoH || 0, maxSizeDownloaded: true };
+    onOpenViewer({ kind: 'photo', m, image });
   };
 
   return (
@@ -122,7 +136,7 @@ export function GifPlayer(props: GifPlayerProps) {
           {isVideoGif ? (
             <video
               ref={videoRef}
-              class="tgui-media-video tgui-media-gif"
+              class={'tgui-media-video tgui-media-gif' + (onOpenViewer ? ' tgui-media-gif_viewer' : '')}
               src={url}
               autoPlay
               loop
@@ -132,9 +146,10 @@ export function GifPlayer(props: GifPlayerProps) {
             />
           ) : (
             <img
-              class="tgui-media-gif"
+              class={'tgui-media-gif' + (onOpenViewer ? ' tgui-media-gif_viewer' : '')}
               src={url}
               alt="GIF"
+              onClick={onOpenViewer ? handleImageClick : undefined}
             />
           )}
           {cacheSource ? <MediaSourceBadge source={cacheSource} /> : null}

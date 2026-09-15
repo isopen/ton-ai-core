@@ -1885,6 +1885,10 @@ body {
   background: #000;
 }
 
+.tgui-media-gif_viewer {
+  cursor: zoom-in;
+}
+
 .video-message__frame[data-loaded="false"] .video-message__top,
 .video-message__frame[data-loaded="false"] .video-message__meta-overlay,
 .video-message__frame[data-loaded="false"] .video-message__mini-progress,

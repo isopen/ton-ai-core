@@ -7,6 +7,7 @@ import { GifPlayer } from './gif-player.js';
 import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import { requestDocument } from './media-source.js';
+import type { MediaViewerItem } from './media-viewer.js';
 
 const log = getLogger('gram-ui');
 
@@ -21,10 +22,11 @@ interface MediaPlayerProps {
   sameSenderPrev?: boolean;
   sameSenderNext?: boolean;
   maxWidth?: number;
+  onOpenViewer?: (item: MediaViewerItem) => void;
 }
 
 export function MediaPlayer(props: MediaPlayerProps) {
-  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext, maxWidth = 320 } = props;
+  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext, maxWidth = 320, onOpenViewer } = props;
   const doc = m.media?.document;
   const url = documentUrls[m.id] || '';
   const progress = documentProgress?.[m.id] ?? -1;
@@ -47,7 +49,7 @@ export function MediaPlayer(props: MediaPlayerProps) {
     return (
       <div class={cls}>
         <div class="tgui-media-container" style={containerStyle}>
-          <GifPlayer m={m} documentUrls={documentUrls} documentProgress={documentProgress} documentSources={documentSources} maxWidth={maxWidth} />
+          <GifPlayer m={m} documentUrls={documentUrls} documentProgress={documentProgress} documentSources={documentSources} maxWidth={maxWidth} onOpenViewer={onOpenViewer} />
           {!m.message ? (
             <div class="MessageBubble__meta MessageBubble__meta_overlay">
               <span class="MessageBubble__time">{timeStr}</span>
