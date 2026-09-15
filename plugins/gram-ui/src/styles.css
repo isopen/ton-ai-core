@@ -5918,7 +5918,7 @@ img.tgui-poll-optthumb {
 .rich-slideshow_edges .rich-slideshow-item { flex-basis: 100%; max-width: 100%; }
 .rich-slideshow_edges .rich-slideshow-strip { gap: 0; }
 .rich-slideshow-item .TelegramImage { max-width: 100%; }
-.md-body .md-image { display: block; max-width: 100%; height: auto; border-radius: 8px; }
+.md-body .md-image { display: block; max-width: 100%; height: auto; border-radius: 8px; cursor: zoom-in; }
 .md-body a.md-link:has(> img.md-image) { display: block; max-width: 100%; }
 .rich-slideshow-controls { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; outline: none; }
 .rich-slideshow-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; border-radius: 50%; background: var(--rich-btn-bg); color: var(--rich-btn-text); cursor: pointer; }

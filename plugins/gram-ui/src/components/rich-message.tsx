@@ -47,6 +47,7 @@ function buildRichImageSpec(photo: any, url: string | null, stripped: string | n
     id: String(photo.id || 'rich'),
     width: w,
     height: h,
+    maxSizeDownloaded: true,
     thumbnail: thumbUrl ? { url: thumbUrl, width: Math.min(w, 32), height: Math.min(h, 32) } : undefined,
     medium: origUrl ? { url: origUrl, width: w, height: h } : undefined,
     original: origUrl ? { url: origUrl, width: w, height: h } : undefined,
@@ -54,7 +55,7 @@ function buildRichImageSpec(photo: any, url: string | null, stripped: string | n
   return spec;
 }
 
-function RichPhoto({ photo, caption, spoiler, richMessage, maxWidth = 480, fluid = false }: { photo: any; caption?: any; spoiler?: boolean; richMessage?: any; maxWidth?: number; fluid?: boolean }): any {
+function RichPhoto({ photo, caption, spoiler, richMessage, maxWidth = 480, fluid = false, onOpenPhoto }: { photo: any; caption?: any; spoiler?: boolean; richMessage?: any; maxWidth?: number; fluid?: boolean; onOpenPhoto?: (image: ImageSpec, index: number) => void }): any {
   const stripped = getRichStrippedUrl(photo);
   const [url, setUrl] = useState<string | null>(() => getRichPhotoUrl(photo));
   const [failed, setFailed] = useState(false);
@@ -97,9 +98,9 @@ function RichPhoto({ photo, caption, spoiler, richMessage, maxWidth = 480, fluid
   }
   return (
     <div class={`rich-photo${spoiler ? ' rich-photo_spoiler' : ''}${isStripped ? ' rich-photo_placeholder' : ''}`}>
-      <Image image={spec} maxWidth={maxWidth} fluid={fluid} lazy={false} rounded onOpenViewer={() => setViewerOpen(true)} />
+      <Image image={spec} maxWidth={maxWidth} fluid={fluid} lazy={false} rounded onOpenViewer={onOpenPhoto ? () => onOpenPhoto(spec, 0) : () => setViewerOpen(true)} />
       {caption ? <div class="rich-photo-caption"><RichText node={caption.text || caption} />{caption.credit ? <div class="rich-photo-credit"><RichText node={caption.credit} /></div> : null}</div> : null}
-      {viewerOpen ? (
+      {!onOpenPhoto && viewerOpen ? (
         <div class="rich-photo-viewer" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;padding:24px" onClick={() => setViewerOpen(false)}>
           <img src={url || stripped || ''} alt="photo" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px" onClick={(e: any) => e.stopPropagation()} />
           <button class="rich-photo-viewer-close" style="position:absolute;top:16px;right:16px;background:rgba(255,255,255,0.9);border:none;border-radius:50%;width:36px;height:36px;cursor:pointer" onClick={() => setViewerOpen(false)}>✕</button>
@@ -375,7 +376,7 @@ function ListItemContent({ item, messageId, onButton, documentUrls, inactiveButt
   return <RichText node={item?.text} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} />;
 }
 
-function Block({ block, messageId, onButton, documentUrls, inactiveButtons, richMessage, photoMaxWidth = 480, photoFluid = false }: { block: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true>; richMessage?: any; photoMaxWidth?: number; photoFluid?: boolean }): any {
+function Block({ block, messageId, onButton, documentUrls, inactiveButtons, richMessage, photoMaxWidth = 480, photoFluid = false, onOpenPhoto }: { block: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true>; richMessage?: any; photoMaxWidth?: number; photoFluid?: boolean; onOpenPhoto?: (image: ImageSpec, index: number) => void }): any {
   switch (block._) {
     case 'pageBlockPhoto': {
       const pid = block.photo_id != null ? String(block.photo_id) : (block as any).photo?.id ? String((block as any).photo.id) : '';
@@ -387,7 +388,7 @@ function Block({ block, messageId, onButton, documentUrls, inactiveButtons, rich
         log.warn('[RichMessage] pageBlockPhoto photo not found', pid, 'photos', photos.length);
         return <div class="rich-unknown">[photo {pid}]</div>;
       }
-      return <RichPhoto photo={photo} caption={block.caption} spoiler={!!block.spoiler} richMessage={richMessage} maxWidth={photoMaxWidth} fluid />;
+      return <RichPhoto photo={photo} caption={block.caption} spoiler={!!block.spoiler} richMessage={richMessage} maxWidth={photoMaxWidth} fluid onOpenPhoto={onOpenPhoto} />;
     }
     case 'pageBlockSlideshow':
     case 'pageBlockCollage': {
@@ -398,7 +399,7 @@ function Block({ block, messageId, onButton, documentUrls, inactiveButtons, rich
           <Slideshow
             count={items.length}
             nav="edges"
-            renderItem={(i: number) => <SafeBlock block={items[i]} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={480} photoFluid />}
+            renderItem={(i: number) => <SafeBlock block={items[i]} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={480} photoFluid onOpenPhoto={onOpenPhoto} />}
           />
           {cap ? <div class="rich-photo-caption"><RichText node={cap.text || cap} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} />{cap.credit ? <div class="rich-photo-credit"><RichText node={cap.credit} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></div> : null}</div> : null}
         </div>
@@ -468,7 +469,7 @@ function Block({ block, messageId, onButton, documentUrls, inactiveButtons, rich
         <blockquote class="rich-quote">
           {(bqb.blocks || []).map((sub: any, i: number) => (
             <div key={'bqb' + i} class="rich-block">
-              <SafeBlock block={sub} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={photoMaxWidth} photoFluid={photoFluid} />
+              <SafeBlock block={sub} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={photoMaxWidth} photoFluid={photoFluid} onOpenPhoto={onOpenPhoto} />
             </div>
           ))}
           {bqb.caption ? <div class="rich-quote-caption"><RichText node={bqb.caption} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></div> : null}
@@ -498,7 +499,7 @@ function Block({ block, messageId, onButton, documentUrls, inactiveButtons, rich
           <div class="rich-details-body">
             {(det.blocks || []).map((b: any, i: number) => (
               <div key={'det' + i} class="rich-block">
-                <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={photoMaxWidth} photoFluid={photoFluid} />
+                <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={photoMaxWidth} photoFluid={photoFluid} onOpenPhoto={onOpenPhoto} />
               </div>
             ))}
           </div>
@@ -535,13 +536,14 @@ function Block({ block, messageId, onButton, documentUrls, inactiveButtons, rich
   }
 }
 
-export function RichMessageView({ richMessage, messageId, onButton, documentUrls, inactiveButtons, className = '' }: {
+export function RichMessageView({ richMessage, messageId, onButton, documentUrls, inactiveButtons, className = '', onOpenPhoto }: {
   richMessage: any;
   messageId: number | string;
   onButton?: (data: string, e?: any) => void;
   documentUrls?: Record<number | string, string>;
   inactiveButtons?: Record<string, true>;
   className?: string;
+  onOpenPhoto?: (image: ImageSpec, index: number) => void;
 }) {
   const blocks = richMessage?.blocks || [];
   if (blocks.length === 0) return null;
@@ -550,7 +552,7 @@ export function RichMessageView({ richMessage, messageId, onButton, documentUrls
       <div class={'rich-body' + (className ? ' ' + className : '')}>
         {blocks.map((b: any, i: number) => (
           <div key={'rblk' + i} class="rich-block">
-            <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} />
+            <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} onOpenPhoto={onOpenPhoto} />
           </div>
         ))}
       </div>
@@ -561,9 +563,9 @@ export function RichMessageView({ richMessage, messageId, onButton, documentUrls
   }
 }
 
-function SafeBlock({ block, messageId, onButton, documentUrls, inactiveButtons, richMessage, photoMaxWidth = 480, photoFluid = false }: { block: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true>; richMessage?: any; photoMaxWidth?: number; photoFluid?: boolean }): any {
+function SafeBlock({ block, messageId, onButton, documentUrls, inactiveButtons, richMessage, photoMaxWidth = 480, photoFluid = false, onOpenPhoto }: { block: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true>; richMessage?: any; photoMaxWidth?: number; photoFluid?: boolean; onOpenPhoto?: (image: ImageSpec, index: number) => void }): any {
   try {
-    return <Block block={block} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={photoMaxWidth} photoFluid={photoFluid} />;
+    return <Block block={block} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={photoMaxWidth} photoFluid={photoFluid} onOpenPhoto={onOpenPhoto} />;
   } catch (e: any) {
     log.error('[RichMessage] block render failed', block?._ || '?', e);
     return <div class="rich-error">block error: {block?._ || '?'} — {String(e?.message || e)}</div>;

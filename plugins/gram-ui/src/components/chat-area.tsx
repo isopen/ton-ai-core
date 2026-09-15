@@ -814,7 +814,7 @@ export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOu
             ? <GeoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} />
           : isLinkMsg
             ? <WebPageBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
-            : <MessageBubble text={showUnsupported ? unsupportedText : bubbleText} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} documentSources={documentSources} inactiveButtons={inactiveButtons} buttonNotice={buttonNotice} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} messageId={m.id} replyMarkup={m.replyMarkup} richMessage={m.richMessage} richDocumentUrls={emojiUrls}
+            : <MessageBubble text={showUnsupported ? unsupportedText : bubbleText} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} documentSources={documentSources} inactiveButtons={inactiveButtons} buttonNotice={buttonNotice} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} messageId={m.id} replyMarkup={m.replyMarkup} richMessage={m.richMessage} richDocumentUrls={emojiUrls} onOpenPhoto={onOpenPhoto}
               onKbButton={onKbButton} onRichButton={(data, mid, e) => onKbButton({ kind: 'callback', data }, mid, e)} />
       }
     </div>

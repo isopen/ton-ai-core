@@ -2,6 +2,7 @@ import { h } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useMemo } from '@ton-ai/atom/hooks';
 import { parseTmdEntities, remapEntities, applyEntitiesHtml, hasCommonTmd, renderCommonMark } from '@ton-ai/tmd';
 import { getLogger } from '@ton-ai/gram-debug';
+import type { ImageSpec } from '../types.js';
 import { AnimatedEmoji, EmojiText } from './emoji-text.js';
 import { matchEmojiRuns, getEmojiDocId } from './emoji-store.js';
 import { render } from '@ton-ai/atom/render';
@@ -90,7 +91,7 @@ function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, str
   }
 }
 
-export function TmdView({ text, foreignEntities, documentUrls, inactiveButtons, className = '', time, status, out, messageId }: {
+export function TmdView({ text, foreignEntities, documentUrls, inactiveButtons, className = '', time, status, out, messageId, onOpenPhoto }: {
   text: string;
   foreignEntities?: any[];
   documentUrls?: Record<number, string>;
@@ -100,6 +101,7 @@ export function TmdView({ text, foreignEntities, documentUrls, inactiveButtons, 
   status?: string;
   out?: boolean;
   messageId?: number | string;
+  onOpenPhoto?: (image: ImageSpec, index: number) => void;
 }) {
   if (!text) return null;
 
@@ -200,7 +202,30 @@ export function TmdView({ text, foreignEntities, documentUrls, inactiveButtons, 
     }
   };
 
-  const handleContentClick = (e: any) => { handleTableClick(e); handleQuoteClick(e); };
+  const handleImageClick = (e: any): boolean => {
+    try {
+      if (!onOpenPhoto) return false;
+      const target = e?.target as HTMLElement | null;
+      if (!target || typeof (target as any).closest !== 'function') return false;
+      const img = (target as any).closest?.('img.md-image') as HTMLImageElement | null;
+      if (!img) return false;
+      const src = img.currentSrc || img.getAttribute('src') || '';
+      if (!src) return false;
+      e.preventDefault();
+      e.stopPropagation();
+      const w = (img as any).naturalWidth || Number(img.getAttribute('width')) || 0;
+      const h = (img as any).naturalHeight || Number(img.getAttribute('height')) || 0;
+      const source = { url: src, width: w, height: h };
+      const spec: ImageSpec = { id: 'md:' + src, thumbnail: source, medium: source, original: source, width: w, height: h, maxSizeDownloaded: true };
+      onOpenPhoto(spec, 0);
+      return true;
+    } catch (err) {
+      tmdLog.error('[TmdView] image click failed', err);
+      return false;
+    }
+  };
+
+  const handleContentClick = (e: any) => { if (handleImageClick(e)) return; handleTableClick(e); handleQuoteClick(e); };
 
   return h('div', { class: 'tmd-body md-body' + (className ? ' ' + className : ''), onClick: handleContentClick },
     h('div', { ref: (e: HTMLDivElement | null) => { ref.current = e; }, dangerouslySetInnerHTML: { __html: html } } as any),

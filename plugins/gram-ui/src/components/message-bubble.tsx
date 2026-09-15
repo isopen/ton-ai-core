@@ -1,6 +1,7 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { hasTmd } from '@ton-ai/tmd';
 import { getLogger } from '@ton-ai/gram-debug';
+import type { ImageSpec } from '../types.js';
 
 const tmdLog = getLogger('gram-ui:tmd');
 import { Checkmark } from './checkmark.js';
@@ -47,6 +48,7 @@ interface MessageBubbleProps {
   onKbButton?: (button: KbButton, messageId: number | string, e?: any) => void;
 
   onRichButton?: (data: string, messageId: number | string, e?: any) => void;
+  onOpenPhoto?: (image: ImageSpec, index: number) => void;
 }
 
 export function MessageBubble(props: MessageBubbleProps) {
@@ -72,6 +74,7 @@ export function MessageBubble(props: MessageBubbleProps) {
     buttonNotice,
     onKbButton,
     onRichButton,
+    onOpenPhoto,
   } = props;
 
   const isTmd = !richMessage && hasTmd(text);
@@ -93,9 +96,10 @@ export function MessageBubble(props: MessageBubbleProps) {
               messageId={messageId ?? ''}
               documentUrls={richDocumentUrls || documentUrls || {}}
               inactiveButtons={inactiveButtons}
-              onButton={(data: string, e?: any) => onRichButton?.(data, messageId ?? '', e)} />
+              onButton={(data: string, e?: any) => onRichButton?.(data, messageId ?? '', e)}
+              onOpenPhoto={onOpenPhoto} />
           : isTmd
-            ? <TmdView text={text} foreignEntities={entities} documentUrls={documentUrls || {}} inactiveButtons={inactiveButtons} time={time} status={status} out={out} messageId={messageId ?? ''} />
+            ? <TmdView text={text} foreignEntities={entities} documentUrls={documentUrls || {}} inactiveButtons={inactiveButtons} time={time} status={status} out={out} messageId={messageId ?? ''} onOpenPhoto={onOpenPhoto} />
             : <EmojiText text={text} entities={entities} documentUrls={documentUrls || {}} documentSources={documentSources} />}
       </div>
       {buttonNotice ? <ButtonNotice notice={buttonNotice} /> : null}
