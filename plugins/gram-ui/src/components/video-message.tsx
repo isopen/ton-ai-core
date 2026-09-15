@@ -4,6 +4,7 @@ import { buildDocumentThumb, animationsOff } from '../utils.js';
 import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import { requestDocument, requestDocumentThumb } from './media-source.js';
+import type { MediaViewerItem } from './media-viewer.js';
 
 const RING_CIRC = 2 * Math.PI * 28;
 
@@ -111,12 +112,12 @@ interface VideoMessageProps {
   documentSources?: Record<number, string>;
   sameSenderPrev?: boolean;
   sameSenderNext?: boolean;
-  onFullscreen?: (messageId: number) => void;
+  onOpenViewer?: (item: MediaViewerItem) => void;
   maxWidth?: number;
 }
 
 export function VideoMessage(props: VideoMessageProps) {
-  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext, onFullscreen, maxWidth = 480 } = props;
+  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext, onOpenViewer, maxWidth = 480 } = props;
 
   const frameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -534,7 +535,7 @@ export function VideoMessage(props: VideoMessageProps) {
           <div class="video-message__controls">
             <span class="ctrl-time">{fmt(ct)} / {durLabel}</span>
             <span style="flex:1" />
-            <button type="button" class="ctrl-btn" data-action="fullscreen" onClick={(e: any) => { e.stopPropagation(); onFullscreen?.(m.id); }}>
+            <button type="button" class="ctrl-btn" data-action="fullscreen" onClick={(e: any) => { e.stopPropagation(); onOpenViewer?.({ kind: 'video', m, thumbUrl: thumb?.url || '' }); }}>
               <IconFullscreen />
             </button>
           </div>
