@@ -171,7 +171,7 @@ export function currentPeerKey(s: GramState): string {
   return peer ? `${peer.type}_${peer.id}` : '';
 }
 
-async function processLocalEmojiClick(s: GramState, messageId: string, x?: number, y?: number, slotIndex?: number, docId?: string): Promise<void> {
+async function processLocalEmojiClick(s: GramState, messageId: string, x?: number, y?: number, slotIndex?: number, docId?: string, glyph?: string): Promise<void> {
   const set = await ensureEmojiAnimSet();
   const cache = s.messagesCache.current.get(currentPeerKey(s));
   let msg = cache?.find((m: Message) => String(m.id) === messageId);
@@ -191,6 +191,11 @@ async function processLocalEmojiClick(s: GramState, messageId: string, x?: numbe
       if (alt) emoticon = alt;
     } catch {}
   }
+  if (!emoticon && glyph) {
+    try {
+      if (findAnimPack(glyph)) emoticon = glyph;
+    } catch {}
+  }
   if (!emoticon && emots.length > 0) {
     emoticon = slotIndex != null && slotIndex >= 0 && slotIndex < emots.length
       ? emots[slotIndex]
@@ -203,7 +208,7 @@ async function processLocalEmojiClick(s: GramState, messageId: string, x?: numbe
     return;
   }
   const index = 1 + Math.floor(Math.random() * ids.length);
-  log.info('[gram-app] local emoji click: msg=' + messageId + ' emoticon=' + JSON.stringify(emoticon) + ' (' + (slotIndex != null ? slotIndex : 0) + '/' + emots.length + ') animIndex=' + index + '/' + ids.length);
+  log.info('[gram-app] local emoji click: msg=' + messageId + ' emoticon=' + JSON.stringify(emoticon) + ' (' + (slotIndex != null ? slotIndex : 0) + '/' + emots.length + ')' + (glyph ? ' glyph=' + JSON.stringify(glyph) : '') + ' animIndex=' + index + '/' + ids.length);
   const interaction = { v: 1, a: [{ t: 0, i: index }] };
   s.tgService.current?.sendTyping(s.selectedPeerRef.current!, {
     _: 'sendMessageEmojiInteraction',
@@ -737,14 +742,14 @@ export function setupEventListeners(s: GramState): void {
   };
   window.addEventListener('tg-emoji-interaction', onEmojiInteraction);
   const onLocalEmojiClick = (e: Event) => {
-    const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; mediaType?: string; x?: number; y?: number; slotIndex?: number; docId?: string };
+    const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; mediaType?: string; x?: number; y?: number; slotIndex?: number; docId?: string; glyph?: string };
     if (detail.mediaType !== 'emoji') return;
     log.info('[gram-app] tg-interaction-request received: messageId=' + detail?.messageId);
     if (detail.messageId == null || !s.selectedPeerRef.current) {
       log.warn('[gram-app] tg-interaction-request dropped: messageId=' + detail?.messageId + ' peer=' + JSON.stringify(s.selectedPeerRef.current));
       return;
     }
-    void processLocalEmojiClick(s, String(detail.messageId), detail.x, detail.y, detail.slotIndex, detail.docId);
+    void processLocalEmojiClick(s, String(detail.messageId), detail.x, detail.y, detail.slotIndex, detail.docId, detail.glyph);
   };
   const onBotCallback = (e: Event) => {
     const detail = ((e as CustomEvent).detail || {}) as { messageId?: number | string; data?: string; text?: string; rel?: { x: number; y: number; w: number; h: number } | null };

@@ -277,7 +277,7 @@ export function StaticEmojiText({ value, size }: { value: string; size: number }
   let key = 0;
   for (const r of runs) {
     if (r.start > pos) parts.push(<span key={'t' + key++}>{value.slice(pos, r.start)}</span>);
-    parts.push(<span key={'e' + key++} style={`display:inline-block;min-width:${size}px;height:${size}px;line-height:${size}px;text-align:center;vertical-align:middle;overflow:hidden`}>{r.emoji}</span>);
+    parts.push(<span key={'e' + key++} class="tgui-emoji-static" data-emoji={r.emoji} style={`display:inline-block;min-width:${size}px;height:${size}px;line-height:${size}px;text-align:center;vertical-align:middle;overflow:hidden;cursor:pointer`}>{r.emoji}</span>);
     pos = r.end;
   }
   if (pos < value.length) parts.push(<span key={'t' + key++}>{value.slice(pos)}</span>);

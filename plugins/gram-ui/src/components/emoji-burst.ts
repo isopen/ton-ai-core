@@ -243,6 +243,7 @@ function dispatchInteractionRequest(detail: {
     y?: number;
     slotIndex?: number;
     docId?: string;
+    glyph?: string;
     hasCanvasFx?: boolean;
 }): void {
     if (!detail.messageId) return;
@@ -328,17 +329,21 @@ export function attachEmojiBurst(): void {
             return;
         }
 
+        const atPoint = typeof document.elementFromPoint === 'function'
+            ? (document.elementFromPoint(x, y) as Element | null)
+            : null;
         const slotEl = (target.closest('.tgui-emoji-slot'))
-            ?? ((document.elementFromPoint(x, y) as Element | null)?.closest('.tgui-emoji-slot') ?? null);
+            ?? (atPoint?.closest('.tgui-emoji-slot') ?? null);
+        const staticEl = target.closest('.tgui-emoji-static') as HTMLElement | null;
 
         const row = bubble.closest('[id^="msg-"]') as HTMLElement | null;
         const rowId = row ? row.id.slice(4) : '';
 
-        const emojiHit = !!target.closest('.tgui-emoji-slot, .tgui-emoji-canvas-wrap')
+        const emojiHit = !!slotEl || !!staticEl
             || (target instanceof HTMLCanvasElement && target.classList.contains('tgui-animated-sticker'));
         let glyphHit = false;
         if (!emojiHit) {
-            const under = document.elementFromPoint(x, y);
+            const under = typeof document.elementFromPoint === 'function' ? document.elementFromPoint(x, y) : null;
             const el = under && bubble.contains(under) ? under : null;
             if (el && el.children.length === 0
                 && !(el instanceof HTMLImageElement) && !(el instanceof HTMLCanvasElement) && !(el instanceof HTMLVideoElement)
@@ -359,13 +364,14 @@ export function attachEmojiBurst(): void {
                 x, y,
                 slotIndex: slotIdx >= 0 ? slotIdx : undefined,
                 docId: slotEl?.getAttribute('data-doc') || undefined,
+                glyph: staticEl?.getAttribute('data-emoji') || undefined,
             });
         }
     }, { passive: true });
 }
 
-function pickInteractionAnchor(bubble: Element, x?: number, y?: number): Element | null {
-    const candidates = Array.from(bubble.querySelectorAll<Element>('.tgui-emoji-slot, .tgui-sticker-preview, canvas.tgui-animated-sticker'))
+export function pickInteractionAnchor(bubble: Element, x?: number, y?: number): Element | null {
+    const candidates = Array.from(bubble.querySelectorAll<Element>('.tgui-emoji-slot, .tgui-emoji-static, .tgui-sticker-preview, canvas.tgui-animated-sticker'))
         .filter((el) => {
             const r = el.getBoundingClientRect();
             return r.width > 2 && r.height > 2 && r.bottom > 0 && r.top < window.innerHeight;
@@ -440,6 +446,11 @@ function playBurstFallback(bubble: HTMLElement, x?: number, y?: number): void {
         const r = bubble.getBoundingClientRect();
         px = r.left + r.width / 2;
         py = r.top + Math.min(r.height / 2, 60);
+    }
+    const tappedGlyph = el instanceof HTMLElement ? el.getAttribute('data-emoji') : null;
+    if (tappedGlyph) {
+        spawnEmojiBurst(px, py, { kind: 'text', value: tappedGlyph }, bubble, undefined, big);
+        return;
     }
     let node: Element | null = null;
     if (el instanceof HTMLCanvasElement || el instanceof HTMLImageElement || el instanceof HTMLVideoElement) node = el;
