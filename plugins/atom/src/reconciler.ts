@@ -1,6 +1,6 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { TEXT, FRAGMENT, PORTAL, SLOT, SLOTTABLE, ComponentInstance, setCurrentInstance, getMountRoot, boundaryStack, takeBoundaryFrame, clearBoundaryFrame, currentInstance, type BoundaryFrame, type VNode, type ComponentType } from './vdom.js';
-import { snapshotEffectQueues, rollbackEffectQueues } from './hooks.js';
+import { snapshotEffectQueues, rollbackEffectQueues, purgeDeadEffects } from './hooks.js';
 import { snapshotContextQueue, rollbackContextQueue, popRenderValue } from './context.js';
 import { isTraced, diffProps } from './dev.js';
 
@@ -33,6 +33,7 @@ function runUnmountCleanups(vnode: VNode) {
     if (inst.vnode && inst.vnode !== vnode) {
       runUnmountCleanups(inst.vnode);
     }
+    purgeDeadEffects();
     return;
   }
   if (vnode.type === SLOT) {
@@ -232,12 +233,13 @@ function setEventBinding(el: Element, key: string, type: string, value: any): vo
   }
 
   const handlerChanged = prev.handle !== handle;
+  const onceChanged = prev.once !== once;
   const needsRebind = prev.type !== type
     || prev.capture !== wantCapture
     || prev.passive !== passive
     || prev.signal !== signal;
 
-  if (!handlerChanged && !needsRebind) return;
+  if (!handlerChanged && !needsRebind && !onceChanged) return;
 
   prev.swaps++;
 
@@ -255,10 +257,17 @@ function setEventBinding(el: Element, key: string, type: string, value: any): vo
     }
     const rollbackType = prev.type;
     const rollbackCapture = prev.capture;
+    const rollbackPassive = prev.passive;
+    const rollbackSignal = prev.signal;
+    const rollbackAbortHandler = prev.abortHandler;
+    const rollbackOnce = prev.once;
+    const rollbackConsumed = prev.consumed;
     prev.type = type;
     prev.capture = wantCapture;
     prev.passive = passive;
     prev.signal = signal;
+    prev.once = once;
+    if (!once) prev.consumed = false;
     prev.abortHandler = undefined;
     try {
       if (signal) {
@@ -276,13 +285,22 @@ function setEventBinding(el: Element, key: string, type: string, value: any): vo
     } catch (e) {
       prev.type = rollbackType;
       prev.capture = rollbackCapture;
+      prev.passive = rollbackPassive;
+      prev.signal = rollbackSignal;
+      prev.abortHandler = rollbackAbortHandler;
+      prev.once = rollbackOnce;
+      prev.consumed = rollbackConsumed;
       try {
-        el.addEventListener(rollbackType, prev.bound, { capture: rollbackCapture });
+        el.addEventListener(rollbackType, prev.bound, { capture: rollbackCapture, passive: rollbackPassive, signal: rollbackSignal ?? undefined });
       } catch {
         removeEventBinding(el, key);
       }
       throw e;
     }
+  } else if (onceChanged) {
+    prev.once = once;
+    if (!once) prev.consumed = false;
+    if (once && !handlerChanged) prev.consumed = false;
   }
   prev.handle = handle;
   if (handlerChanged) prev.consumed = false;
@@ -885,13 +903,17 @@ export function createDOM(vnode: VNode, reuseInstance?: ComponentInstance): Node
     }
 
     if (vnode.children.length > 0) {
-      const frag = document.createDocumentFragment();
-      for (const child of vnode.children) {
-        const childDom = createDOM(child);
-        if (childDom) frag.appendChild(childDom);
-        doneEl.push(child);
+      const htmlProp = (vnode.props as Record<string, any>).dangerouslySetInnerHTML;
+      const hasHtml = htmlProp != null && (htmlProp as any).__html != null;
+      if (!hasHtml) {
+        const frag = document.createDocumentFragment();
+        for (const child of vnode.children) {
+          const childDom = createDOM(child);
+          if (childDom) frag.appendChild(childDom);
+          doneEl.push(child);
+        }
+        el.appendChild(frag);
       }
-      el.appendChild(frag);
     }
   } catch (e) {
     destroyCreated(doneEl);
@@ -1254,8 +1276,17 @@ export function patch(dom: Node, oldVNode: VNode, newVNode: VNode): Node {
   const ctxSnapElP = snapshotContextQueue();
   try {
     updateProps(el, oldVNode.props, newVNode.props);
-    reconcileChildren(el, oldVNode.children, newVNode.children, null);
+    const nextHtml = (newVNode.props as Record<string, any>).dangerouslySetInnerHTML;
+    const nextHasHtml = nextHtml != null && (nextHtml as any).__html != null;
+    if (nextHasHtml) {
+      reconcileChildren(el, oldVNode.children, [], null);
+    } else {
+      reconcileChildren(el, oldVNode.children, newVNode.children, null);
+    }
   } catch (e) {
+    try {
+      updateProps(el, newVNode.props, oldVNode.props);
+    } catch {}
     rollbackEffectQueues(fxSnapElP);
     rollbackContextQueue(ctxSnapElP);
     throw e;

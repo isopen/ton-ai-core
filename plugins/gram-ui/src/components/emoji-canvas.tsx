@@ -1,5 +1,5 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
-import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
+import { useCallback, useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedSticker } from './animated-sticker.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import { matchEmojiRuns, requestEmojiDownload } from './emoji-store.js';
@@ -484,6 +484,57 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
   const shared = hasEmoji && emojiSegs.length >= SHARED_MIN;
 
   const [live, setLive] = useState<Record<string, { url: string; kind: 'video' | 'tgs' | 'img' }>>({});
+  const pendingUrlRef = useRef<Record<string, { url: string; kind: 'video' | 'tgs' | 'img' }>>({});
+  const urlFlushRef = useRef(0);
+  const flushPendingUrls = () => {
+    urlFlushRef.current = 0;
+    const batch = pendingUrlRef.current;
+    pendingUrlRef.current = {};
+    const ids = Object.keys(batch);
+    if (ids.length === 0) return;
+    setFailedDocs((prev) => {
+      let next = prev;
+      for (const did of ids) {
+        if (next[did]) {
+          if (next === prev) next = { ...prev };
+          next[did] = false;
+        }
+      }
+      return next;
+    });
+    setKinds((prev) => {
+      let next = prev;
+      for (const did of ids) {
+        const k = batch[did].kind;
+        if (next[did] !== k) {
+          if (next === prev) next = { ...prev };
+          next[did] = k;
+        }
+      }
+      return next;
+    });
+    setLive((prev) => {
+      let next = prev;
+      for (const did of ids) {
+        const cur = next[did];
+        const b = batch[did];
+        if (!cur || cur.url !== b.url) {
+          if (next === prev) next = { ...prev };
+          next[did] = { url: b.url, kind: b.kind };
+        }
+      }
+      return next;
+    });
+  };
+  const scheduleUrlFlush = () => {
+    if (urlFlushRef.current) return;
+    if (typeof requestAnimationFrame === 'function') {
+      urlFlushRef.current = requestAnimationFrame(() => flushPendingUrls());
+    } else {
+      urlFlushRef.current = 1;
+      queueMicrotask(() => flushPendingUrls());
+    }
+  };
   useEffect(() => {
     const on = (e: Event) => {
       const { docId, url, kind } = (e as CustomEvent).detail || {};
@@ -494,19 +545,21 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
       resolvedKinds.set(did, k);
       trackLastUrl(did, url);
       if (revokedUrls.has(url)) log.info('[gram-app] emoji-received-revoked-url doc=' + did);
-      setFailedDocs((prev) => {
-        if (prev[did]) log.info('[gram-app] emoji-recovered doc=' + did);
-        return prev[did] ? { ...prev, [did]: false } : prev;
-      });
-      setKinds((prev) => (prev[did] === k ? prev : { ...prev, [did]: k }));
-      setLive((prev) => {
-        const cur = prev[did];
-        if (cur && cur.url === url) return prev;
-        return { ...prev, [did]: { url, kind: k } };
-      });
+      const prev = pendingUrlRef.current[did];
+      if (!prev || prev.url !== url) pendingUrlRef.current[did] = { url, kind: k };
+      scheduleUrlFlush();
     };
     window.addEventListener('tg-emoji-url', on);
-    return () => window.removeEventListener('tg-emoji-url', on);
+    return () => {
+      window.removeEventListener('tg-emoji-url', on);
+      if (urlFlushRef.current) {
+        if (typeof cancelAnimationFrame === 'function' && urlFlushRef.current !== 1) {
+          try { cancelAnimationFrame(urlFlushRef.current); } catch {}
+        }
+        urlFlushRef.current = 0;
+      }
+      pendingUrlRef.current = {};
+    };
   }, []);
 
   const urlFor = (docId: string) => {
@@ -520,6 +573,12 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const sharedCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [sharedCanvasNode, setSharedCanvasNode] = useState<HTMLCanvasElement | null>(null);
+  const handleSharedCanvasRef = useCallback((el: HTMLCanvasElement | null) => {
+    if (sharedCanvasRef.current !== el) {
+      sharedCanvasRef.current = el;
+      setSharedCanvasNode(el);
+    }
+  }, []);
   const [inView, setInView] = useState(false);
   const [everShown, setEverShown] = useState(() => everShownCache.has(slotsKey));
   const [playing, setPlaying] = useState(false);
@@ -603,10 +662,45 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
     }, 700);
     return () => window.clearInterval(timer);
   }, [slotsKey, urlsKey, kinds, failedDocs, loadedDocs, stuckDocs, inView, everShown, positions, shared]);
+  const pendingPaintedRef = useRef<Record<string, boolean>>({});
+  const paintedFlushRef = useRef(0);
+  const flushPaintedDocs = () => {
+    paintedFlushRef.current = 0;
+    const batch = pendingPaintedRef.current;
+    pendingPaintedRef.current = {};
+    const ids = Object.keys(batch);
+    if (ids.length === 0) return;
+    setLoadedDocs((prev) => {
+      let next = prev;
+      for (const did of ids) {
+        if (!next[did]) {
+          if (next === prev) next = { ...prev };
+          next[did] = true;
+        }
+      }
+      return next;
+    });
+    setStuckDocs((prev) => {
+      let next = prev;
+      for (const did of ids) {
+        if (next[did]) {
+          if (next === prev) next = { ...prev };
+          next[did] = false;
+        }
+      }
+      return next;
+    });
+  };
   const onSlotLoaded = (docId: string) => {
     everPaintedDocs.add(docId);
-    setLoadedDocs((prev) => (prev[docId] ? prev : { ...prev, [docId]: true }));
-    setStuckDocs((prev) => (prev[docId] ? { ...prev, [docId]: false } : prev));
+    pendingPaintedRef.current[docId] = true;
+    if (paintedFlushRef.current) return;
+    if (typeof requestAnimationFrame === 'function') {
+      paintedFlushRef.current = requestAnimationFrame(() => flushPaintedDocs());
+    } else {
+      paintedFlushRef.current = 1;
+      queueMicrotask(() => flushPaintedDocs());
+    }
   };
   const tgsPaintable = (docId: string) => loadedDocs[docId] || !stuckDocs[docId];
 
@@ -918,12 +1012,7 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
           </span>
         );
       })}
-      {shared && <canvas ref={(el: HTMLCanvasElement | null) => {
-        if (sharedCanvasRef.current !== el) {
-          sharedCanvasRef.current = el;
-          setSharedCanvasNode(el);
-        }
-      }} class="tgui-emoji-shared-canvas" style="position:absolute;left:0;top:0;pointer-events:none" />}
+      {shared && <canvas ref={handleSharedCanvasRef} class="tgui-emoji-shared-canvas" style="position:absolute;left:0;top:0;pointer-events:none" />}
     </div>
   );
 }

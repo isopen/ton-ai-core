@@ -1,5 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
-import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
+import { useCallback, useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { initAnimatedRenderer } from '../utils/animated-renderer/index.js';
 import type { IAnimatedRenderer } from '../utils/animated-renderer/types.js';
 import { getIsHeavyAnimating, useHeavyAnimation } from '../utils/heavy-animation.js';
@@ -189,6 +189,13 @@ export function AnimatedSticker({
   const isPaused = (noPlay || isFrozen) && !forceAlways;
   const container = sharedCanvas || canvasNode;
 
+  const handleCanvasRef = useCallback((el: HTMLCanvasElement | null) => {
+    if (canvasRef.current !== el) {
+      canvasRef.current = el;
+      setCanvasNode(el);
+    }
+  }, []);
+
   useEffect(() => {
     if (!tgsUrl || !container) return;
     if (rendererRef.current) {
@@ -258,12 +265,7 @@ export function AnimatedSticker({
 
   return (
     <canvas
-      ref={(el: HTMLCanvasElement | null) => {
-        if (canvasRef.current !== el) {
-          canvasRef.current = el;
-          setCanvasNode(el);
-        }
-      }}
+      ref={handleCanvasRef}
       class="tgui-animated-sticker"
       style={`width:${size}px;height:${size}px;vertical-align:middle`}
     />

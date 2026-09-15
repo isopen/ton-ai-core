@@ -78,8 +78,12 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
   }
 
   function vlEscapeKey(key: string): string {
-    const w = window as unknown as { CSS?: { escape?: (v: string) => string } };
-    if (w.CSS && typeof w.CSS.escape === 'function') return w.CSS.escape(key);
+    try {
+      if (typeof window !== 'undefined') {
+        const w = window as unknown as { CSS?: { escape?: (v: string) => string } };
+        if (w.CSS && typeof w.CSS.escape === 'function') return w.CSS.escape(key);
+      }
+    } catch {}
     return key.replace(/["\\\[\]]/g, '\\$&');
   }
 
@@ -88,12 +92,16 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     if (len === 0) return '0';
     const first = vlKeyOf(data[0], 0);
     const last = vlKeyOf(data[len - 1], len - 1);
-    return len + '|' + first + '|' + last;
+    const mid = vlKeyOf(data[len >> 1], len >> 1);
+    const q = vlKeyOf(data[(len >> 2)], (len >> 2));
+    return len + '|' + first + '|' + q + '|' + mid + '|' + last;
   }
   const endReachedRef = useRef(false);
   const nearTopFiredRef = useRef(false);
   const readyFired = useRef(false);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const rowObserverRef = useRef<ResizeObserver | null>(null);
+  const observedRowsRef = useRef<Map<string, Element>>(new Map());
   const userScrolledRef = useRef(false);
   const suppressUntilRef = useRef(0);
   const lastPinKeyRef = useRef('');
@@ -186,6 +194,34 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       measRafRef.current = 0;
       setMeasTick((t) => t + 1);
     });
+  }
+
+  function ensureRowObserver(): ResizeObserver | null {
+    if (rowObserverRef.current) return rowObserverRef.current;
+    if (typeof ResizeObserver === 'undefined') return null;
+    try {
+      const ro = new ResizeObserver((entries) => {
+        let changed = false;
+        for (const entry of entries) {
+          const target = entry.target as HTMLElement;
+          const keyAttr = target.getAttribute ? target.getAttribute('data-vl-key') : null;
+          if (!keyAttr) continue;
+          const h = target.offsetHeight;
+          if (h > 0 && st.current.heights.get(keyAttr) !== h) {
+            st.current.heights.set(keyAttr, h);
+            changed = true;
+          }
+        }
+        if (changed) {
+          st.current.heightsVersion++;
+          scheduleMeasTick();
+        }
+      });
+      rowObserverRef.current = ro;
+      return ro;
+    } catch {
+      return null;
+    }
   }
 
   function updateThumb() {
@@ -625,8 +661,12 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         }
       }
     } else {
-      const ki = parseInt(k, 10);
-      if (!isNaN(ki) && String(ki) === k && ki >= 0 && ki < data.length) idx = ki;
+      const trimmed = k.trim();
+      const isStrictInt = /^\d+$/.test(trimmed) && String(Number(trimmed)) === trimmed;
+      if (isStrictInt) {
+        const ki = Number(trimmed);
+        if (ki >= 0 && ki < data.length) idx = ki;
+      }
       if (idx < 0) {
         const map = keyByIndexRef.current;
         for (let i = 0; i < map.length && i < data.length; i++) {
@@ -638,7 +678,18 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       }
     }
     if (idx < 0) return;
-    if (scrollToFiredRef.current && idx === scrollToIdxRef.current) return;
+    const rawPosEarly = dynamicMode ? ensurePrefix()[idx] : idx * itemHeight!;
+    const posEarly = rawPosEarly + (topLoader ? TOP_LOADER_H : 0);
+    if (scrollToFiredRef.current && idx === scrollToIdxRef.current) {
+      const elEarly = containerRef.current;
+      if (elEarly) {
+        const maxEarly = Math.max(0, elEarly.scrollHeight - elEarly.clientHeight);
+        const targetEarly = Math.max(0, Math.min(posEarly, maxEarly));
+        if (Math.abs(elEarly.scrollTop - targetEarly) <= 1) return;
+      } else {
+        return;
+      }
+    }
     scrollToIdxRef.current = idx;
 
     scrollToFiredRef.current = true;
@@ -658,7 +709,8 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     setScrollTop(el.scrollTop);
     updateThumb();
     if (scrollToRetryRef.current) cancelAnimationFrame(scrollToRetryRef.current);
-    scrollToRetryRef.current = requestAnimationFrame(() => {
+    let attempts = 0;
+    const retrySeek = () => {
       scrollToRetryRef.current = 0;
       if (!el.isConnected || containerRef.current !== el) {
         scrollToFiredRef.current = false;
@@ -680,33 +732,16 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       } catch {
         node = null;
       }
-      if (!node && containerRef.current === el && scrollToSeenRef.current === scrollToKey) {
+      if (!node && containerRef.current === el && scrollToSeenRef.current === scrollToKey && attempts < 8) {
+        attempts++;
         scrollToFiredRef.current = false;
-        scrollToRetryRef.current = requestAnimationFrame(() => {
-          scrollToRetryRef.current = 0;
-          if (containerRef.current !== el || scrollToSeenRef.current !== scrollToKey) return;
-          const rePos2 = (dynamicMode ? ensurePrefix()[idx] : idx * itemHeight!) + (topLoader ? TOP_LOADER_H : 0);
-          const reMax2 = Math.max(0, el.scrollHeight - el.clientHeight);
-          const reTarget2 = Math.max(0, Math.min(rePos2, reMax2));
-          if (el.scrollTop !== reTarget2) {
-            armSuppress(reTarget2);
-            el.scrollTop = reTarget2;
-            st.current.lastST = el.scrollTop;
-            st.current.lastSH = el.scrollHeight;
-            setScrollTop(el.scrollTop);
-          }
-          let retry: HTMLElement | null = null;
-          try {
-            retry = el.querySelector<HTMLElement>('[data-vl-key="' + vlEscapeKey(k) + '"]');
-          } catch {
-            retry = null;
-          }
-          if (retry) scrollToFiredRef.current = true;
-          updateThumb();
-        });
+        scrollToRetryRef.current = requestAnimationFrame(retrySeek);
+        return;
       }
+      if (node) scrollToFiredRef.current = true;
       updateThumb();
-    });
+    };
+    scrollToRetryRef.current = requestAnimationFrame(retrySeek);
   }, [scrollToKey, data, data.length, containerHeight]);
 
   useEffect(() => {
@@ -737,16 +772,20 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         resizeObserverRef.current.disconnect();
         resizeObserverRef.current = null;
       }
+      if (rowObserverRef.current) {
+        rowObserverRef.current.disconnect();
+        rowObserverRef.current = null;
+      }
+      observedRowsRef.current.clear();
     };
   }, []);
 
   const items: VNode[] = [];
 
   function makeItemVNode(item: T, i: number, withRef: boolean): VNode {
-    const vnode = renderItem({ item, index: i });
-    const k = keyExtractor ? keyExtractor(item, i) : (vnode.key ?? i);
-    vnode.key = k;
-    const prev = vnode.props;
+    const src = renderItem({ item, index: i });
+    const k = keyExtractor ? keyExtractor(item, i) : (src.key ?? i);
+    const prev = src.props;
     const keyStr = String(k);
     keyByIndexRef.current[i] = keyStr;
     const extraProps: Record<string, any> = { 'data-vl-key': keyStr };
@@ -754,17 +793,32 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       let refCb = measureRefsRef.current.get(keyStr);
       if (!refCb) {
         refCb = (el2: HTMLDivElement | null) => {
-          if (!el2) return;
+          const prevEl = observedRowsRef.current.get(keyStr);
+          if (!el2) {
+            if (prevEl && rowObserverRef.current) {
+              try { rowObserverRef.current.unobserve(prevEl); } catch {}
+            }
+            observedRowsRef.current.delete(keyStr);
+            return;
+          }
+          if (prevEl && prevEl !== el2 && rowObserverRef.current) {
+            try { rowObserverRef.current.unobserve(prevEl); } catch {}
+          }
+          observedRowsRef.current.set(keyStr, el2);
           const h = el2.offsetHeight;
           if (h > 0 && st.current.heights.get(keyStr) !== h) {
             st.current.heights.set(keyStr, h);
             st.current.heightsVersion++;
             scheduleMeasTick();
           }
+          const ro = ensureRowObserver();
+          if (ro) {
+            try { ro.observe(el2); } catch {}
+          }
         };
         measureRefsRef.current.set(keyStr, refCb);
       }
-      const userRef = (vnode.props as Record<string, any>).ref;
+      const userRef = (prev as Record<string, any>).ref;
       if (typeof userRef === 'function' || (userRef && typeof userRef === 'object')) {
         const measureCb = refCb;
         extraProps.ref = (el2: HTMLDivElement | null) => {
@@ -778,8 +832,8 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         extraProps.ref = refCb;
       }
     }
-    vnode.props = { ...prev, ...extraProps };
-    return vnode;
+    const out: VNode = { ...src, key: k, props: { ...prev, ...extraProps } };
+    return out;
   }
 
   const loaderNode: VNode | null = topLoader

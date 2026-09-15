@@ -159,6 +159,7 @@ export function flushAllEffects() {
       log.error('useEffect error:', e);
       cleanup = undefined;
     }
+    if (!inst._mounted) continue;
     inst.hookStates[cleanupIdx] = typeof cleanup === 'function' ? cleanup : undefined;
     if (typeof cleanup === 'function') {
       inst.unmountCleanups.push(cleanup);
@@ -320,6 +321,7 @@ export function flushLayoutEffects() {
       log.error('useLayoutEffect error:', e);
       cleanup = undefined;
     }
+    if (!inst._mounted) continue;
     inst.hookStates[cleanupIdx] = typeof cleanup === 'function' ? cleanup : undefined;
     if (typeof cleanup === 'function') {
       inst.unmountCleanups.push(cleanup);
