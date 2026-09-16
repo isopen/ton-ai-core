@@ -294,6 +294,24 @@ export function playVideoEmojiFx(anchor: Element, vid: HTMLVideoElement, x?: num
     spawnEmojiBurst(px, py, { kind: 'video', value: vid.src }, vid, snapshotVideoFrame(vid), big);
 }
 
+function playStickerTapBurst(stickerEl: HTMLElement, mainCv: Element | null, x: number, y: number): void {
+    try {
+        const r = stickerEl.getBoundingClientRect();
+        const px = r.width > 0 ? Math.max(r.left, Math.min(x, r.right)) : x;
+        const py = r.height > 0 ? Math.max(r.top, Math.min(y, r.bottom)) : y;
+        let value = '';
+        if (mainCv instanceof HTMLCanvasElement) value = resolveDrawableValue(mainCv, px, py);
+        if (!value) {
+            const still = stickerEl.querySelector('.tgui-sticker-preview img, .tgui-sticker-preview video, img, video');
+            if (still instanceof HTMLCanvasElement) value = resolveDrawableValue(still, px, py);
+            else if (still instanceof HTMLImageElement) value = still.src || '';
+            else if (still instanceof HTMLVideoElement) value = snapshotVideoFrame(still);
+        }
+        if (!value) return;
+        spawnEmojiBurst(px, py, { kind: 'image', value }, stickerEl, undefined, true);
+    } catch {}
+}
+
 let burstAttached = false;
 let interactionsAttached = false;
 
@@ -316,8 +334,9 @@ export function attachEmojiBurst(): void {
             const rowId0 = stickerEl.closest('[id^="msg-"]')?.id || '';
             const mainCv = stickerEl.querySelector(':scope > .tgui-sticker-preview canvas.tgui-animated-sticker');
 
-            if (mainCv instanceof HTMLCanvasElement) {
+            if (!stickerEl.hasAttribute('data-server-fx') && mainCv instanceof HTMLCanvasElement) {
                 scheduleStickerClickFx(stickerEl, mainCv, rowId0.slice(4), x, y);
+                playStickerTapBurst(stickerEl, mainCv, x, y);
             }
 
             dispatchInteractionRequest({
@@ -393,6 +412,7 @@ export function pickInteractionAnchor(bubble: Element, x?: number, y?: number): 
 function runLocalInteractionFx(messageId: string, x?: number, y?: number): void {
     const bubble = document.getElementById('msg-' + messageId);
     if (!bubble) return;
+    if (bubble.querySelector('.tgui-sticker[data-server-fx]')) return;
 
     if (bubble.querySelector('.tgui-sticker-preview canvas.tgui-animated-sticker')) return;
 

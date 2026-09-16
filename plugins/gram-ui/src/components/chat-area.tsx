@@ -51,6 +51,8 @@ const wallLog = getLogger('gram-ui:wallpaper');
 
 const loggedMsgTypes = new Set<string>();
 
+let stickerFxTapSeq = 0;
+
 const STICKER_DOWNLOAD_RETRY_MS = 2500;
 const STICKER_DOWNLOAD_MAX_ATTEMPTS = 8;
 const STICKER_ANIM_RETRY_MAX = 2;
@@ -326,7 +328,8 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
       if (!match || detail.mediaType !== 'sticker' || !rootRef.current) return;
       if (fxUrlRef.current) {
         fxLog.info('[gram-app] sticker-fx overlay for msg=' + m.id + ' (interaction server fx)');
-        playStickerFxOverlay('fx' + m.id, fxUrlRef.current, rootRef.current, rootRef.current.getBoundingClientRect());
+        stickerFxTapSeq = (stickerFxTapSeq + 1) % 1000000;
+        playStickerFxOverlay('fx' + m.id + '_' + Date.now() + '_' + stickerFxTapSeq, fxUrlRef.current, rootRef.current, rootRef.current.getBoundingClientRect());
       } else if (!detail.hasCanvasFx) {
         window.dispatchEvent(new CustomEvent('tg-interaction-local', { detail: { messageId: String(mid), x: detail.x, y: detail.y } }));
       }
@@ -362,7 +365,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
   }, [url, isTgs, doc?.file_name, doc?.id, m.id]);
 
   return (
-    <div class="tgui-sticker" ref={handleRef} style="position:relative">
+    <div class="tgui-sticker" ref={handleRef} style="position:relative" data-server-fx={effectUrl ? '1' : undefined}>
       <div class="tgui-sticker-preview" style={{ width: '150px', height: '150px', position: 'relative' }}>
         {staticThumb?.url ? (
           <img class="tgui-sticker-thumb" src={staticThumb.url} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
