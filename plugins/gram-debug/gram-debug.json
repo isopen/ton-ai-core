@@ -65,12 +65,16 @@
       "enabled": false,
       "level": "info"
     },
+    "gram-ui:wallpaper": {
+      "enabled": true,
+      "level": "info"
+    },
     "gram-ui:media-source-badge": {
       "enabled": true,
       "level": "debug"
     },
     "gram-ui:emoji-diag": {
-      "enabled": true,
+      "enabled": false,
       "level": "debug"
     },
     "gram-ui:emoji-canvas": {

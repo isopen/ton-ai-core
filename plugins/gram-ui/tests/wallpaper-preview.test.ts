@@ -65,7 +65,7 @@ describe('wallpaper fullscreen preview on hold', () => {
     cell.dispatchEvent(pointerEvent('pointerdown', { clientX: 10, clientY: 10 }));
     await settle(550);
     expect(container.querySelector('.MediaViewer')).not.toBeNull();
-    const firstClose = Array.from(container.querySelectorAll('.MediaViewer__actions button')).find((b) => b.textContent === 'Close preview') as HTMLElement;
+    const firstClose = Array.from(container.querySelectorAll('.tgui-wall-preview-bar button')).find((b) => b.textContent === 'Close preview') as HTMLElement;
     expect(firstClose).toBeTruthy();
     firstClose.click();
     await settle();
@@ -80,15 +80,19 @@ describe('wallpaper fullscreen preview on hold', () => {
     document.body.removeChild(container);
   });
 
-  test('preview inherits the frozen cell angle', async () => {
-    const grad = { _: 'wallPaperNoFile', id: '3', settings: { background_color: 0xFF112233, second_background_color: 0xFF445566 } };
+  test('preview inherits the frozen cell angle', async () => {    const grad = { _: 'wallPaperNoFile', id: '3', settings: { background_color: 0xFF112233, second_background_color: 0xFF445566 } };
     const { container } = mountPicker({ ...defaultState(), accountWallpapers: [grad], documentUrls: {} });
     await settle();
     cellOf(container).dispatchEvent(pointerEvent('pointerdown', { clientX: 10, clientY: 10 }));
     await settle(550);
     const bg = container.querySelector('.tgui-wall-preview-bg') as HTMLElement;
     expect(bg).not.toBeNull();
+    expect(bg.parentElement?.classList.contains('tgui-wall-preview-card')).toBe(true);
     expect(bg.getAttribute('style') || '').toContain('--wall-from:');
+    expect(bg.parentElement?.classList.contains('tgui-wall-preview-card')).toBe(true);
+    const bar = container.querySelector('.tgui-wall-preview-bar') as HTMLElement;
+    expect(bar).not.toBeNull();
+    expect(bar.parentElement?.classList.contains('tgui-wall-preview-card')).toBe(true);
     document.body.removeChild(container);
   });
 
@@ -146,7 +150,7 @@ describe('wallpaper fullscreen preview on hold', () => {
       expect(container.querySelector('.MediaViewer')).not.toBeNull();
     };
     await open();
-    const closeBtn = Array.from(container.querySelectorAll('.MediaViewer__actions button')).find((b) => b.textContent === 'Close preview') as HTMLElement;
+    const closeBtn = Array.from(container.querySelectorAll('.tgui-wall-preview-bar button')).find((b) => b.textContent === 'Close preview') as HTMLElement;
     expect(closeBtn).toBeTruthy();
     closeBtn.click();
     await settle();
@@ -156,5 +160,28 @@ describe('wallpaper fullscreen preview on hold', () => {
     await settle();
     expect(container.querySelector('.MediaViewer')).toBeNull();
     document.body.removeChild(container);
+  });
+
+  test('preview paints gallery image at once and upgrades to full', async () => {
+    const photo = {
+      _: 'wallPaper', id: '7', slug: 's7',
+      document: { _: 'document', id: 'd7', mime_type: 'image/jpeg' },
+    };
+    const openWith = async (urls: Record<string, string>) => {
+      const { container } = mountPicker({ ...defaultState(), accountWallpapers: [photo], documentUrls: urls });
+      await settle();
+      cellOf(container).dispatchEvent(pointerEvent('pointerdown', { clientX: 10, clientY: 10 }));
+      await settle(550);
+      const bg = container.querySelector('.tgui-wall-preview-bg') as HTMLElement;
+      expect(bg).not.toBeNull();
+      const style = bg.getAttribute('style') || '';
+      document.body.removeChild(container);
+      return style;
+    };
+    const thumbStyle = await openWith({ ['wallpaper-pick-7-s7']: 'blob:thumb' });
+    expect(thumbStyle).toContain('blob:thumb');
+    const fullStyle = await openWith({ ['wallpaper-pick-7-s7']: 'blob:thumb', ['wallpaper-preview-7-s7']: 'blob:full' });
+    expect(fullStyle).toContain('blob:full');
+    expect(fullStyle).not.toContain('blob:thumb');
   });
 });

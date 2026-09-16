@@ -1498,11 +1498,16 @@ body {
   pointer-events: none;
   background-repeat: repeat;
   background-size: auto;
+  animation: tgui-wall-flow 18s linear infinite;
 }
 
 .tgui-chat-body > *:not(.tgui-chat-wallpattern) {
   position: relative;
   z-index: 1;
+}
+
+.tgui-chat-body_flow {
+  animation: tgui-wall-flow 18s linear infinite;
 }
 
 .tgui-msg-list {
@@ -3132,27 +3137,48 @@ body {
   .tgui-wall-cell::after {
     display: none;
   }
-  .tgui-wall-preview-bg {
-    animation: none;
-  }
 }
 
-.MediaViewer__actions {
+.tgui-wall-preview-card {
+  position: relative;
+  width: min(480px, calc(100vw - 32px));
+  height: 100vh;
+  height: 100dvh;
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.tgui-wall-preview-bar {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 3;
+  z-index: 2;
   display: flex;
+  justify-content: center;
+  align-items: center;
   gap: 8px;
-  width: 100%;
-  max-width: 480px;
-  margin: 0 auto;
   padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  pointer-events: auto;
 }
 
-.MediaViewer__actions .Button {
-  flex: 1;
+.tgui-wall-preview-bar .Button {
+  flex: 0 1 auto;
+  min-width: 120px;
+  max-width: 200px;
+}
+
+.tgui-wall-preview-bar .Button_variant_ghost {
+  --Button-bg: rgba(115, 120, 128, 0.55);
+  --Button-fg: #fff;
+  --Button-bg-hover: rgba(115, 120, 128, 0.68);
+  --Button-bg-active: rgba(115, 120, 128, 0.78);
+}
+
+.tgui-wall-preview-bar .Button_variant_primary {
+  --Button-bg: rgba(0, 122, 255, 0.72);
+  --Button-bg-hover: rgba(51, 149, 255, 0.82);
+  --Button-bg-active: rgba(0, 102, 214, 0.88);
 }
 
 .tgui-wall-preview-bg {
@@ -3168,6 +3194,7 @@ body {
   inset: 0;
   pointer-events: none;
   background-repeat: repeat;
+  animation: tgui-wall-flow 18s linear infinite;
 }
 
 .tgui-wall-pattern {
@@ -3181,9 +3208,7 @@ body {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 480px;
-  max-height: 100%;
-  margin: auto;
+  height: 100%;
   overflow-y: auto;
   display: flex;
   flex-direction: column;

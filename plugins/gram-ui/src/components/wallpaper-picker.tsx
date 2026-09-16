@@ -183,11 +183,10 @@ export function WallpaperPicker({ state, dispatch }: { state: AppState; dispatch
           </div>)}
       {preview ? (
         <MediaViewer
-          items={[{ kind: 'wallpaper', content: <WallpaperPreviewContent wallpaper={preview.w} angle={preview.angle} urls={urls} /> }]}
+          items={[{ kind: 'wallpaper', content: <WallpaperPreviewContent wallpaper={preview.w} angle={preview.angle} urls={urls} fallbackUrl={urls[pickKey(preview.w)] || ''} onClose={closePreview} onApply={applyPreview} /> }]}
           index={0}
           documentUrls={urls}
           onClose={closePreview}
-          actions={{ applyLabel: t(S.WALLPAPER_APPLY), closeLabel: t(S.WALLPAPER_PREVIEW_CLOSE), onApply: applyPreview }}
         />
       ) : null}
     </>

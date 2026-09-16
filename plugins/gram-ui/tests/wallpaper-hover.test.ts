@@ -68,10 +68,39 @@ describe('wallpaper gradient flow', () => {
         expect(bgBlock!).toContain('tgui-wall-flow');
     });
 
-    test('reduced motion disables the flow', () => {
+    test('chat body flows like preview when background uses the angle', () => {
+        const css = builtCss();
+        const flowBlock = /\.tgui-chat-body_flow\s*\{[^}]*\}/.exec(css);
+        expect(flowBlock).not.toBeNull();
+        expect(flowBlock![0]).toContain('tgui-wall-flow');
+        expect(flowBlock![0]).toContain('18s');
+    });
+
+    test('background flow ignores OS reduced motion, app toggle kills it', () => {
         const css = builtCss();
         expect(css).toContain('.tgui-wall-preview-bg');
-        const reduced = /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.tgui-wall-preview-bg\s*\{[^}]*animation:\s*none/.exec(css);
-        expect(reduced).not.toBeNull();
+        const blocks = [...css.matchAll(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{(?:[^{}]|\{[^{}]*\})*\}/g)].map((m) => m[0]);
+        expect(blocks.length).toBeGreaterThan(0);
+        for (const b of blocks) {
+            expect(b).not.toContain('.tgui-wall-preview-bg');
+            expect(b).not.toContain('.tgui-wall-preview-pattern');
+            expect(b).not.toContain('.tgui-chat-body_flow');
+            expect(b).not.toContain('.tgui-chat-wallpattern');
+        }
+        expect(css).toContain('[data-animations="off"]');
+        expect(css).toContain('animation: none !important');
     });
 });
+
+describe('wallpaper preview card', () => {
+    test('card is a top-level rule right after the reduced-motion block', () => {
+        const css = builtCss();
+        const anchor = '}\n\n.tgui-wall-preview-card {';
+        expect(css).toContain(anchor);
+        const cardBlock = /\.tgui-wall-preview-card\s*\{[^}]*\}/.exec(css.slice(css.indexOf(anchor)));
+        expect(cardBlock).not.toBeNull();
+        expect(cardBlock![0]).toContain('border-radius: 16px');
+        expect(cardBlock![0]).toContain('overflow: hidden');
+        expect(cardBlock![0]).toContain('480px');
+        expect(cardBlock![0]).toContain('100dvh');
+    });

@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
 import { buildImageSpec, VIEWER_PHOTO_PRIO, getPhotoQuality } from './photo-spec.js';
 import { requestPhoto, requestDocument } from './media-source.js';
-import { Button } from '../primitives/button.js';
 
 export interface MediaViewerPhotoItem {
   kind: 'photo';
@@ -24,12 +23,6 @@ export interface MediaViewerWallpaperItem {
 }
 
 export type MediaViewerItem = MediaViewerPhotoItem | MediaViewerVideoItem | MediaViewerWallpaperItem;
-
-export interface MediaViewerActions {
-  applyLabel: string;
-  closeLabel: string;
-  onApply: () => void;
-}
 
 function photoKeyOf(image: ImageSpec | null): string {
   if (!image) return '';
@@ -61,7 +54,6 @@ export function MediaViewer({
   getMessage,
   onClose,
   onNavigate,
-  actions,
 }: {
   items: MediaViewerItem[];
   index: number;
@@ -69,7 +61,6 @@ export function MediaViewer({
   getMessage?: (messageId: number) => any | null;
   onClose: () => void;
   onNavigate?: (index: number) => void;
-  actions?: MediaViewerActions;
 }) {
   const item = items[index] || null;
   const isPhoto = item?.kind === 'photo';
@@ -254,12 +245,6 @@ export function MediaViewer({
       ) : (
         <VideoViewerContent item={item as MediaViewerVideoItem} documentUrls={documentUrls} />
       )}
-      {actions ? (
-        <div class="MediaViewer__actions">
-          <Button variant="ghost" onClick={onClose}>{actions.closeLabel}</Button>
-          <Button variant="primary" onClick={actions.onApply}>{actions.applyLabel}</Button>
-        </div>
-      ) : null}
     </div>
   );
 }

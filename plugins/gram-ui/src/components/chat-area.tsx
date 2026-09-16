@@ -832,6 +832,7 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
   const rowsRef = useRef<AlbumRow[]>([]);
   const sabPrev = useRef<boolean | null>(null);
   const wallReqRef = useRef<Record<string, string>>({});
+  const wallSigRef = useRef('');
 
   const handlerCacheRef = useRef(new Map<string, { onReact: (emoji: string, adding: boolean) => void; onOpenPhoto: (image: ImageSpec) => void; onOpenViewer: (item: MediaViewerItem) => void; onOpenPeer: (peer: PeerInfo) => void }>());
   const handlerPeerKey = peer?.id != null ? String(peer.id) : '';
@@ -1053,7 +1054,7 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
     const skill = skills.find(s => s.id === state.activeSkill);
     if (skill) {
       return (
-        <div class="tgui-plugin-panel" style="flex:1;overflow-y:auto;min-height:0">
+        <div class="tgui-plugin-panel" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0">
           <div class="tgui-plugin-panel-header">
             <Button variant="ghost" onClick={() => dispatch({ type: 'SET_ACTIVE_SKILL', id: null })}>
               ← Back
@@ -1102,6 +1103,12 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
   const hasMessages = msgs.length > 0;
 
   const wallRender = wallpaperRender(activeWallpaper, activeUrl);
+  const wallFlow = wallRender.body.indexOf('var(--wall-angle') >= 0 || wallRender.pattern.indexOf('var(--wall-angle') >= 0;
+  const wallSig = activeKey + '|' + (peerWallpaper ? 'peer' : (activeWallpaper ? 'default' : 'none')) + '|' + (wallFlow ? 'flow' : 'static') + '|' + (wallRender.showPattern ? 'tile' : 'notile');
+  if (wallSigRef.current !== wallSig) {
+    wallSigRef.current = wallSig;
+    wallLog.info('[wallpaper] active ' + wallSig);
+  }
 
   if (!hasMessages) {
     if (state.loadingMessages) {
@@ -1121,7 +1128,7 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
   }
 
   return (
-    <div class="tgui-chat-body" style={wallRender.body}>
+    <div class={'tgui-chat-body' + (wallFlow ? ' tgui-chat-body_flow' : '')} style={wallRender.body}>
       {wallRender.showPattern ? <div class="tgui-chat-wallpattern" style={wallRender.pattern} /> : null}
       <div class="tgui-chat-header">
         <Avatar
