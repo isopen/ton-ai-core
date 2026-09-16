@@ -10,7 +10,7 @@ import { t, S } from '@ton-ai/gram-lang';
 import { WallpaperPicker } from './wallpaper-picker.js';
 
 export function SettingsView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
-  const [page, setPage] = useState<'main' | 'chat'>('main');
+  const [page, setPage] = useState<'main' | 'chat' | 'devices'>('main');
   if (page === 'chat') {
     return (
       <Scrollable className="tgui-settings">
@@ -29,6 +29,49 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
       </Scrollable>
     );
   }
+  if (page === 'devices') {
+    return (
+      <Scrollable className="tgui-settings">
+        <button class="tgui-menu-back" onClick={() => setPage('main')}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>{t(S.SETTINGS_TITLE)}</span>
+        </button>
+        <div class="tgui-settings-section">
+          <div class="tgui-settings-section-label">{t(S.SETTINGS_DEVICES)}</div>
+          <div class="tgui-settings-card">
+            <div class="tgui-settings-row">
+              <span class="tgui-settings-label">{t(S.SETTINGS_SESSION_ID)}</span>
+              <span class="tgui-settings-value tgui-settings-value-mono">{(state.sessionId || '').slice(0, 12)}...</span>
+            </div>
+            <div class="tgui-settings-row">
+              <span class="tgui-settings-label">{t(S.SETTINGS_STATUS)}</span>
+              <span class="tgui-settings-value tgui-settings-value-green">{t(S.SETTINGS_CONNECTED)}</span>
+            </div>
+            <div class="tgui-settings-row">
+              <span class="tgui-settings-label">{t(S.SETTINGS_DIALOGS_COUNT)}</span>
+              <span class="tgui-settings-value">{String(state.dialogs.length)}</span>
+            </div>
+          </div>
+          <div class="tgui-settings-actions" style="margin-top:12px">
+            <div
+              id="tg-clear-cache-action"
+              class="tgui-settings-action"
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('tg-clear-cache'));
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" class="tgui-settings-action-icon">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" fill="#ff9800" />
+              </svg>
+              <span class="tgui-settings-action-text" style="color:#ff9800">{t(S.SETTINGS_CLEAR_CACHE)}</span>
+            </div>
+          </div>
+        </div>
+      </Scrollable>
+    );
+  }
   return (
     <Scrollable className="tgui-settings">
       <div class="tgui-settings-title">{t(S.SETTINGS_TITLE)}</div>
@@ -40,40 +83,15 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
               <path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </button>
+          <button class="tgui-menu-item" onClick={() => setPage('devices')}>
+            <span class="tgui-menu-label">{t(S.SETTINGS_DEVICES)}</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="tgui-menu-chevron">
+              <path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
         </div>
       </div>
 
-      <div class="tgui-settings-section">
-        <div class="tgui-settings-section-label">{t(S.SETTINGS_SESSION)}</div>
-        <div class="tgui-settings-card">
-          <div class="tgui-settings-row">
-            <span class="tgui-settings-label">{t(S.SETTINGS_SESSION_ID)}</span>
-            <span class="tgui-settings-value tgui-settings-value-mono">{(state.sessionId || '').slice(0, 12)}...</span>
-          </div>
-          <div class="tgui-settings-row">
-            <span class="tgui-settings-label">{t(S.SETTINGS_STATUS)}</span>
-            <span class="tgui-settings-value tgui-settings-value-green">{t(S.SETTINGS_CONNECTED)}</span>
-          </div>
-          <div class="tgui-settings-row">
-            <span class="tgui-settings-label">{t(S.SETTINGS_DIALOGS_COUNT)}</span>
-            <span class="tgui-settings-value">{String(state.dialogs.length)}</span>
-          </div>
-        </div>
-        <div class="tgui-settings-actions" style="margin-top:12px">
-          <div
-            id="tg-clear-cache-action"
-            class="tgui-settings-action"
-            onClick={() => {
-              window.dispatchEvent(new CustomEvent('tg-clear-cache'));
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" class="tgui-settings-action-icon">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" fill="#ff9800" />
-            </svg>
-            <span class="tgui-settings-action-text" style="color:#ff9800">{t(S.SETTINGS_CLEAR_CACHE)}</span>
-          </div>
-        </div>
-      </div>
       <div class="tgui-settings-section">
         <div class="tgui-settings-section-label">{t(S.SETTINGS_PHOTO_QUALITY)}</div>
         <div class="tgui-settings-card">

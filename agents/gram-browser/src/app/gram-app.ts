@@ -4,6 +4,8 @@ import { setStrings, t, tpl, S } from '@ton-ai/gram-lang';
 import { getBuiltinStrings } from '@ton-ai/gram-lang';
 import type { AppState, TelegramUICallbacks } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbCompact, setEncryptionKey } from '@/utils/db';
+import { getGramDb } from '@/utils/gram-db';
+import { setGramDb } from '@ton-ai/gram-db';
 import { ingestUrlApiCreds, preloadApiCreds } from '@/utils/api-creds';
 import { genId, LANG_CACHE_VERSION } from './gram-constants';
 import type { GramState } from './gram-state';
@@ -70,6 +72,7 @@ export class GramApp {
     }
 
     const bgSetup = (async () => {
+      setGramDb(getGramDb());
       await preloadApiCreds();
       const saved = await dbGet<string>('sessionId');
       if (saved) { s.sessionIdRef.current = saved; }

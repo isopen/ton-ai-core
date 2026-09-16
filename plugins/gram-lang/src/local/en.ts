@@ -179,7 +179,7 @@ export const BUILTIN_STRINGS: Record<string, Record<string, string>> = {
     settingsTitle: 'Settings',
     settingsTheme: 'Theme',
     chatSettings: 'Chat Settings',
-    settingsSession: 'Sessions',
+    settingsDevices: 'Devices',
     settingsStatus: 'Status',
     settingsClearCache: 'Clear cache',
     settingsLogout: 'Log out',

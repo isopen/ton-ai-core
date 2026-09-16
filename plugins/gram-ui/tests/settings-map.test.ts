@@ -83,18 +83,40 @@ describe('SettingsView map provider radios', () => {
         expect(seen.some((a) => a.type === 'SET_IMAGE_QUALITY' && a.quality === 'max')).toBe(true);
     });
 
-    test('clear cache action lives in sessions section below its card', () => {
+    test('devices menu item opens devices page with session info', async () => {
         const seen: any[] = [];
         const c = mount(baseState('google'), (a: any) => seen.push(a));
-        const btn = c.querySelector('#tg-clear-cache-action') as HTMLElement;
+        const items = Array.from(c.querySelectorAll('.tgui-menu-item')) as HTMLElement[];
+        const devices = items.find((el) => el.textContent === 'Devices');
+        expect(devices).toBeTruthy();
+        devices!.click();
+        let btn: HTMLElement | null = null;
+        for (let i = 0; i < 40 && !btn; i++) {
+            await new Promise((r) => setTimeout(r, 25));
+            btn = c.querySelector('#tg-clear-cache-action') as HTMLElement | null;
+        }
+        expect(btn).toBeTruthy();
+    });
+
+    test('clear cache action lives in devices section below its card', async () => {
+        const seen: any[] = [];
+        const c = mount(baseState('google'), (a: any) => seen.push(a));
+        const items = Array.from(c.querySelectorAll('.tgui-menu-item')) as HTMLElement[];
+        const devices = items.find((el) => el.textContent === 'Devices')!;
+        expect(devices).toBeTruthy();
+        devices.click();
+        let btn: HTMLElement | null = null;
+        for (let i = 0; i < 40 && !btn; i++) {
+            await new Promise((r) => setTimeout(r, 25));
+            btn = c.querySelector('#tg-clear-cache-action') as HTMLElement | null;
+        }
         expect(btn).toBeTruthy();
         const section = btn.closest('.tgui-settings-section') as HTMLElement;
         expect(section).toBeTruthy();
-        expect(section.querySelector('.tgui-settings-section-label')?.textContent).toContain('Session');
+        expect(section.querySelector('.tgui-settings-section-label')?.textContent).toContain('Devices');
         const card = section.querySelector('.tgui-settings-card') as HTMLElement;
         expect(card).toBeTruthy();
         expect(btn.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
-        const logout = c.querySelector('#tg-logout-action') as HTMLElement;
-        expect(logout.closest('.tgui-settings-section')).not.toBe(section);
+        expect(c.querySelector('#tg-logout-action')).toBeNull();
     });
 });
