@@ -2695,13 +2695,43 @@ async function checkPassword(password: string): Promise<void> {
     setTimeout(() => initUpdates().catch(() => {}), 100);
 }
 
-async function sendMessageAction(params: { message: string; peer: Record<string, any> }): Promise<any> {
+async function sendMessageAction(params: { message: string; peer: Record<string, any>; entities?: Array<{ offset: number; length: number; document_id: string }> }): Promise<any> {
     const randomId = crypton.getRandomBytes(8).readBigUInt64LE(0);
+    const entities = Array.isArray(params.entities)
+        ? params.entities
+            .filter((e) => e && Number.isFinite(e.offset) && Number.isFinite(e.length) && e.document_id != null)
+            .map((e) => ({ _: 'messageEntityCustomEmoji', offset: e.offset, length: e.length, document_id: BigInt(String(e.document_id)) }))
+        : undefined;
     return await callRpc('messages.sendMessage', {
         flags: 0,
         peer: params.peer,
         message: params.message,
         random_id: randomId,
+        ...(entities && entities.length > 0 ? { entities } : {}),
+    });
+}
+
+function inputDocumentOf(document: any): Record<string, any> | null {
+    if (!document || document.id == null || document.access_hash == null || document.file_reference == null) return null;
+    const id = typeof document.id === 'string' ? BigInt(document.id) : document.id;
+    const accessHash = typeof document.access_hash === 'string' ? BigInt(document.access_hash) : document.access_hash;
+    const buf = typeof document.file_reference === 'string'
+        ? Buffer.from(document.file_reference, 'hex')
+        : Buffer.from(document.file_reference);
+    return { _: 'inputDocument', id, access_hash: accessHash, file_reference: buf };
+}
+
+async function sendMediaAction(params: { peer: Record<string, any>; document: any; sticker?: boolean }): Promise<any> {
+    const inputDocument = inputDocumentOf(params.document);
+    if (!inputDocument) throw new Error('Document reference expired, reopen the picker');
+    const randomId = crypton.getRandomBytes(8).readBigUInt64LE(0);
+    return await callRpc('messages.sendMedia', {
+        flags: 0,
+        peer: params.peer,
+        media: { _: 'inputMediaDocument', flags: 0, id: inputDocument },
+        message: '',
+        random_id: randomId,
+        ...(params.sticker ? { update_stickersets_order: true } : {}),
     });
 }
 
@@ -4331,7 +4361,7 @@ export { callRpc, callRpcOnDc, resolvePeer, sendCode, resendCode, importLoginTok
 export { handleConnectInternal as handleConnect };
 export { handleDisconnect as disconnect };
 export { handleLogout as logout };
-export { sendMessageAction as sendMessage_ };
+export { sendMessageAction as sendMessage_, sendMediaAction as sendMedia_ };
 export function isConnected(): boolean { return connected; }
 export function isAuthenticated(): boolean { return authenticated; }
 export function getAuthState(): 'none' | 'code_sent' | 'password_needed' | 'authenticated' {

@@ -25,14 +25,15 @@ import { SlotMachineSticker, resetSlotMachineDone } from './slot-machine.js';
 import { resetCompletedAnimations } from './tgs-player.js';
 import { observeVisibility } from './emoji-canvas.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
-import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText, isInactiveButtonData, buttonBubbleRel, resolveAvatar, resolveDisplayPeer } from '../utils.js';
+import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText, isInactiveButtonData, buttonBubbleRel, resolveAvatar, resolveDisplayPeer, peerKeyOf, findChatWallpaper, wallpaperUrlKey, wallpaperPhotoDoc, wallpaperRender, wallpaperDownloadPlan } from '../utils.js';
+import { loadDefaultWallpaper } from './wallpaper-store.js';
 import { MediaPlayer } from './media-player.js';
 import { VideoMessage } from './video-message.js';
 import { PhotoLoader } from './photo-loader.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import { WebPageBubble } from './link-preview.js';
 import { MediaCollage, type MediaCollageItem } from './media-collage.js';
-import { MediaViewer, type MediaViewerItem } from './media-viewer.js';
+import { MediaViewer, type MediaViewerItem, type MediaViewerPhotoItem, type MediaViewerVideoItem } from './media-viewer.js';
 import { AnimatedEmoji } from './emoji-text.js';
 import { PollBubble } from './poll-bubble.js';
 import { GeoBubble } from './geo-bubble.js';
@@ -46,6 +47,7 @@ const photoLog = getLogger('gram-ui:photo');
 const fxLog = getLogger('gram-ui:sticker-fx');
 const fallbackLog = getLogger('gram-ui:fallback');
 const kbLog = getLogger('gram-ui:kb');
+const wallLog = getLogger('gram-ui:wallpaper');
 
 const loggedMsgTypes = new Set<string>();
 
@@ -829,6 +831,7 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
   const [viewer, setViewer] = useState<{ items: MediaViewerItem[]; index: number } | null>(null);
   const rowsRef = useRef<AlbumRow[]>([]);
   const sabPrev = useRef<boolean | null>(null);
+  const wallReqRef = useRef<Record<string, string>>({});
 
   const handlerCacheRef = useRef(new Map<string, { onReact: (emoji: string, adding: boolean) => void; onOpenPhoto: (image: ImageSpec) => void; onOpenViewer: (item: MediaViewerItem) => void; onOpenPeer: (peer: PeerInfo) => void }>());
   const handlerPeerKey = peer?.id != null ? String(peer.id) : '';
@@ -888,6 +891,45 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
     if (!peer?.id) return undefined;
     return beginHeavyAnimation(600);
   }, [peer?.id]);
+
+  const peerKey = peer ? peerKeyOf(peer) : '';
+  const peerWallpaper = (peerKey && state.peerWallpapers?.[peerKey]) || null;
+  const activeWallpaper = peerWallpaper || state.defaultWallpaper || null;
+  const wallpaperKey = peerKey ? wallpaperUrlKey(peerKey) : '';
+  const defaultWallpaperKey = 'wallpaper-default';
+  const activeKey = peerWallpaper ? wallpaperKey : (activeWallpaper ? defaultWallpaperKey : '');
+  const activeUrl = (activeKey && (state.documentUrls as any)?.[activeKey]) || '';
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadDefaultWallpaper().then((w) => {
+      if (!cancelled && w) dispatch({ type: 'SET_DEFAULT_WALLPAPER', wallpaper: w });
+    });
+    return () => { cancelled = true; };
+  }, [dispatch]);
+
+  useEffect(() => {
+    if (!peerKey || !Array.isArray(state.messages)) return;
+    if ((state.peerWallpapers || {})[peerKey]) return;
+    const found = findChatWallpaper(state.messages);
+    if (!found) {
+      wallLog.info('[wallpaper] history empty peer=' + peerKey + ' n=' + state.messages.length);
+      return;
+    }
+    wallLog.info('[wallpaper] history peer=' + peerKey + ' kind=' + String(found._));
+    dispatch({ type: 'SET_PEER_WALLPAPER', peerKey, wallpaper: found });
+  }, [peerKey, state.messages, dispatch]);
+
+  useEffect(() => {
+    const plan = wallpaperDownloadPlan(wallReqRef.current, activeKey, activeWallpaper, activeUrl);
+    if (plan.kind === 'request') {
+      const doc = wallpaperPhotoDoc(activeWallpaper);
+      wallLog.info('[wallpaper] download key=' + activeKey + ' doc=' + String(doc?.id));
+      requestDocument(doc, activeKey, 1, { tag: 'ChatWallpaper' });
+    } else if (plan.kind === 'gradient') {
+      wallLog.info('[wallpaper] gradient key=' + activeKey + ' kind=' + String(activeWallpaper?._));
+    }
+  }, [activeKey, activeWallpaper, activeUrl]);
 
   useEffect(() => {
     const msgs = Array.isArray(state.messages) ? state.messages : [];
@@ -1059,6 +1101,8 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
 
   const hasMessages = msgs.length > 0;
 
+  const wallRender = wallpaperRender(activeWallpaper, activeUrl);
+
   if (!hasMessages) {
     if (state.loadingMessages) {
       msgListChildren.push(
@@ -1077,7 +1121,8 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
   }
 
   return (
-    <div class="tgui-chat-body">
+    <div class="tgui-chat-body" style={wallRender.body}>
+      {wallRender.showPattern ? <div class="tgui-chat-wallpattern" style={wallRender.pattern} /> : null}
       <div class="tgui-chat-header">
         <Avatar
           url={headerAvatar.url}
@@ -1148,7 +1193,7 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
                 }
                 const img = buildImageSpec(mm);
                 return img ? { kind: 'photo', m: mm, image: img } : null;
-              }).filter((x): x is MediaViewerItem => !!x);
+              }).filter((x): x is MediaViewerPhotoItem | MediaViewerVideoItem => !!x);
               const last = row.msgs[row.msgs.length - 1];
               const out = effectiveOut(m, selfPeer);
               const status = msgStatus(last, readOutboxMaxId, out);
@@ -1220,6 +1265,8 @@ export const areChatAreaPropsEqual = (a: any, b: any): boolean =>
   a.state.sessionId === b.state.sessionId &&
   a.state.imageQuality === b.state.imageQuality &&
   a.state.mapProvider === b.state.mapProvider &&
-  a.state.animationsEnabled === b.state.animationsEnabled;
+  a.state.animationsEnabled === b.state.animationsEnabled &&
+  a.state.peerWallpapers === b.state.peerWallpapers &&
+  a.state.defaultWallpaper === b.state.defaultWallpaper;
 
 export const ChatArea = memo(ChatAreaView as ComponentType, areChatAreaPropsEqual);

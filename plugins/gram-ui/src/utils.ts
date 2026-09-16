@@ -53,7 +53,7 @@ export function getMediaType(media: any): string {
         const doc = media.document;
         if (!doc || doc._ === 'documentEmpty') return 'none';
         const attrs: any[] = doc.attributes || [];
-        const hasSticker = attrs.some((a: any) => a._ === 'documentAttributeSticker');
+        const hasSticker = attrs.some((a: any) => a._ === 'documentAttributeSticker' || a._ === 'documentAttributeCustomEmoji');
         const hasAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
         const hasVideo = attrs.some((a: any) => a._ === 'documentAttributeVideo');
         const hasAudio = attrs.some((a: any) => a._ === 'documentAttributeAudio');
@@ -72,7 +72,7 @@ export function getMediaType(media: any): string {
 
 export function getStickerEmoji(doc: any): string {
     if (!doc) return '';
-    const attr = (doc.attributes || []).find((a: any) => a._ === 'documentAttributeSticker');
+    const attr = (doc.attributes || []).find((a: any) => a._ === 'documentAttributeSticker' || a._ === 'documentAttributeCustomEmoji');
     return attr?.alt || '';
 }
 
@@ -395,4 +395,150 @@ const SENDER_COLORS = ['#6bc3ff', '#f5a623', '#4cd964', '#ff6b6b', '#a6a6ff', '#
 export function senderColor(name: string): string {
     const hash = name.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
     return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length];
+}
+
+export function peerKeyOf(p: any): string {
+    if (!p || p.id == null) return '';
+    return `${p.type || 'user'}_${p.id}`;
+}
+
+export function findChatWallpaper(messages: Array<{ id?: number; action?: any }>): any | null {
+    if (!Array.isArray(messages)) return null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const action = (messages[i] as any)?.action;
+        if (action && action._ === 'messageActionSetChatWallPaper' && action.wallpaper) return action.wallpaper;
+    }
+    return null;
+}
+
+export function wallpaperIdentity(wallpaper: any): string {
+    if (!wallpaper) return '';
+    const base = String(wallpaper.id ?? '') + '|' + String(wallpaper.slug ?? '');
+    const settings = wallpaper.settings;
+    if (!settings || typeof settings !== 'object') return base;
+    const keys = Object.keys(settings).sort();
+    if (keys.length === 0) return base;
+    return base + '|' + keys.map((k) => k + '=' + String((settings as any)[k])).join(';');
+}
+
+export function wallpaperUrlKey(peerKey: string): string {
+    return 'wallpaper-' + peerKey;
+}
+
+export function isPatternWallpaper(wallpaper: any): boolean {
+    return !!wallpaper && !!wallpaper.pattern;
+}
+
+export function wallpaperPhotoDoc(wallpaper: any): any | null {
+    const doc = wallpaper?.document;
+    if (!doc || doc._ === 'documentEmpty' || doc.id == null) return null;
+    return doc;
+}
+
+export function wallpaperThumbType(doc: any): string | null {
+    const thumbs = doc?.thumbs;
+    if (!Array.isArray(thumbs) || thumbs.length === 0) return null;
+    const types = thumbs.map((t: any) => t?.type).filter((t: any) => typeof t === 'string');
+    for (const want of ['m', 's', 'x', 'y', 'w', 'z']) {
+        if (types.includes(want)) return want;
+    }
+    return types.length > 0 ? types[0] : null;
+}
+
+export function wallColorToCss(color: unknown): string {
+    if (typeof color !== 'number' || !Number.isFinite(color)) return '';
+    const u = color >>> 0;
+    const r = (u >>> 16) & 255;
+    const g = (u >>> 8) & 255;
+    const b = u & 255;
+    return '#' + r.toString(16).padStart(2, '0') + g.toString(16).padStart(2, '0') + b.toString(16).padStart(2, '0');
+}
+
+export function wallpaperSettingsColors(wallpaper: any): string[] {
+    const settings = wallpaper?.settings;
+    if (!settings || typeof settings !== 'object') return [];
+    const raw = [settings.background_color, settings.second_background_color, settings.third_background_color, settings.fourth_background_color];
+    const out: string[] = [];
+    for (const c of raw) {
+        if (c == null) break;
+        const css = wallColorToCss(c);
+        if (css) out.push(css);
+    }
+    return out;
+}
+
+export function wallpaperRotation(wallpaper: any): number {
+    const rotation = wallpaper?.settings?.rotation;
+    return typeof rotation === 'number' && Number.isFinite(rotation) ? rotation : 135;
+}
+
+export function wallpaperGradient(wallpaper: any): string {
+    const colors = wallpaperSettingsColors(wallpaper);
+    if (colors.length === 0) return '';
+    if (colors.length === 1) return colors[0];
+    return 'linear-gradient(' + wallpaperRotation(wallpaper) + 'deg,' + colors.join(',') + ')';
+}
+
+export function wallpaperFlowValue(wallpaper: any): string {
+    const colors = wallpaperSettingsColors(wallpaper);
+    if (colors.length === 0) return '';
+    if (colors.length === 1) return colors[0];
+    return 'linear-gradient(var(--wall-angle,' + wallpaperRotation(wallpaper) + 'deg),' + colors.join(',') + ')';
+}
+
+export function wallpaperFlowProps(wallpaper: any, seed?: string): string {
+    if (wallpaperSettingsColors(wallpaper).length < 2) return '';
+    const rotation = wallpaperRotation(wallpaper);
+    const angle = typeof seed === 'string' && /^-?[\d.]+deg$/.test(seed) ? seed : rotation + 'deg';
+    return '--wall-from:' + angle + ';--wall-angle:' + angle + ';';
+}
+
+export function wallpaperPatternOpacity(wallpaper: any): number {
+    const intensity = wallpaper?.settings?.intensity;
+    if (typeof intensity === 'number' && Number.isFinite(intensity)) {
+        return Math.min(1, Math.max(0, Math.abs(intensity) / 100));
+    }
+    return 0.4;
+}
+
+export function wallpaperIntensityOf(wallpaper: any): number | null {
+    const v = wallpaper?.settings?.intensity;
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+export interface WallpaperRenderModel {
+    body: string;
+    pattern: string;
+    showPattern: boolean;
+}
+
+export type WallpaperDownloadPlan = { kind: 'request' } | { kind: 'gradient' } | { kind: 'none' };
+export function wallpaperDownloadPlan(seen: Record<string, string>, key: string, wallpaper: any, url: string): WallpaperDownloadPlan {
+    if (!key || !wallpaper) return { kind: 'none' };
+    const ident = wallpaperIdentity(wallpaper);
+    if (seen[key] !== ident) seen[key] = ident;
+    else if (url) return { kind: 'none' };
+    return wallpaperPhotoDoc(wallpaper) ? { kind: 'request' } : { kind: 'gradient' };
+}
+
+export function wallpaperRender(wallpaper: any, url: string, seedAngle?: string): WallpaperRenderModel {
+    const doc = wallpaperPhotoDoc(wallpaper);
+    const pattern = !!wallpaper && isPatternWallpaper(wallpaper);
+    const photoActive = !!wallpaper && !pattern && !!doc && !!url;
+    const flowValue = wallpaper && (pattern || !doc) ? wallpaperFlowValue(wallpaper) : '';
+    const flowProps = wallpaper && (pattern || !doc) ? wallpaperFlowProps(wallpaper, seedAngle) : '';
+    const intensity = wallpaperIntensityOf(wallpaper);
+    const masked = pattern && !!url && !!flowValue && intensity != null && intensity < 0;
+    const body = photoActive
+        ? `background-image:url("${url}");background-size:cover;background-position:center;`
+        : (masked ? 'background:#0e1621;' : (flowValue ? `background:${flowValue};${flowProps}` : ''));
+    const showPattern = pattern && !!url;
+    let patternStyle = '';
+    if (showPattern) {
+        const opacity = wallpaperPatternOpacity(wallpaper);
+        patternStyle = masked
+            ? `background:${flowValue};${flowProps}-webkit-mask-image:url("${url}");mask-image:url("${url}");-webkit-mask-repeat:repeat;mask-repeat:repeat;opacity:${opacity};`
+            : `background-image:url("${url}");opacity:${opacity};`;
+    }
+    return { body, pattern: patternStyle, showPattern };
 }

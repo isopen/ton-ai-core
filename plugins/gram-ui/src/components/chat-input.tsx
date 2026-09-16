@@ -14,9 +14,10 @@ function ChatInputView({ state, dispatch }: { state: AppState; dispatch: Dispatc
     <div class={`tgui-chat-input-area${hidden ? ' tgui-chat-input-hidden' : ''}`}>
       <SendInput
         dispatch={dispatch}
+        documentUrls={(state.documentUrls || {}) as Record<string, string>}
         onEmojiToggle={() => dispatch({ type: 'SET_EMOJI_PICKER', v: !state.showEmojiPicker })}
       />
-      {state.showEmojiPicker ? <EmojiPicker dispatch={dispatch} documentUrls={(state.documentUrls || {}) as Record<string, string>} /> : null}
+      {state.showEmojiPicker ? <EmojiPicker dispatch={dispatch} documentUrls={(state.documentUrls || {}) as Record<string, string>} onClose={() => dispatch({ type: 'SET_EMOJI_PICKER', v: false })} /> : null}
     </div>
   );
 }

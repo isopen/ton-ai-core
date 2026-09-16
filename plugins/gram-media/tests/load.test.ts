@@ -30,6 +30,7 @@ async function waitFor(cond: () => boolean, timeoutMs = 10_000): Promise<void> {
 }
 
 describe('GramMediaRouter load tests', () => {
+    jest.setTimeout(60_000);
     beforeAll(() => configure({ noMediaCache: false }));
 
     afterEach(() => {

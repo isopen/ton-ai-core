@@ -58,6 +58,9 @@ export function defaultState(): AppState {
     inactiveButtons: {},
     buttonNotice: null,
     reactions: {},
+    peerWallpapers: {},
+    accountWallpapers: null,
+    defaultWallpaper: null,
   };
 }
 
@@ -337,6 +340,27 @@ export function reducer(state: AppState, action: UIAction): AppState {
       if (JSON.stringify(state.reactions[action.messageId]) === JSON.stringify(action.reactions)) return state;
       return { ...state, reactions: { ...state.reactions, [action.messageId]: action.reactions } };
     }
+    case 'SET_PEER_WALLPAPER': {
+      if (!action.peerKey) return state;
+      if (action.wallpaper == null) {
+        if (!(action.peerKey in (state.peerWallpapers || {}))) return state;
+        const peerWallpapers = { ...(state.peerWallpapers || {}) };
+        delete peerWallpapers[action.peerKey];
+        return { ...state, peerWallpapers };
+      }
+      if ((state.peerWallpapers || {})[action.peerKey] === action.wallpaper) return state;
+      return { ...state, peerWallpapers: { ...(state.peerWallpapers || {}), [action.peerKey]: action.wallpaper } };
+    }
+    case 'SET_ACCOUNT_WALLPAPERS': {
+      const next = Array.isArray(action.wallpapers) ? action.wallpapers : [];
+      const prev = state.accountWallpapers || [];
+      if (prev.length === next.length && prev.every((w, i) => w === next[i])) return state;
+      return { ...state, accountWallpapers: next };
+    }
+    case 'SET_DEFAULT_WALLPAPER': {
+      if (state.defaultWallpaper === action.wallpaper) return state;
+      return { ...state, defaultWallpaper: action.wallpaper ?? null };
+    }
     case 'TOGGLE_REACTION': {
       const prev = state.reactions[action.messageId] || [];
       let found = false;
@@ -399,7 +423,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
 
     documentProgress: {},
 
-    documentSources: {}, photoSources: {}, avatarSources: {}, inactiveButtons: {}, buttonNotice: null, reactions: {} };
+    documentSources: {}, photoSources: {}, avatarSources: {}, inactiveButtons: {}, buttonNotice: null, reactions: {}, peerWallpapers: {}, accountWallpapers: null, defaultWallpaper: null };
     case 'TICK': return { ...state, renderTick: state.renderTick + 1 };
     default: return state;
   }

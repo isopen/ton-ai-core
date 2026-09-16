@@ -107,6 +107,10 @@ export function getEmojiDocId(alt: string): string | undefined {
   return emojiMap[normalizeEmoji(alt)];
 }
 
+export function isEmojiStickersLoaded(): boolean {
+  return !!emojiMap && Object.keys(emojiMap).length > 0;
+}
+
 export function subscribeEmojiMap(cb: (changed?: EmojiChange[]) => void): () => void {
   if (emojiMap && Object.keys(emojiMap).length > 0) cb();
   listeners.add(cb);
@@ -207,6 +211,12 @@ export function ensureEmojiPicker(): void {
   };
   window.addEventListener('tg-emoji-picker-ready', onReady, { once: true });
   window.dispatchEvent(new CustomEvent('tg-fetch-emoji-picker'));
+  window.setTimeout(() => {
+    if (pickerLoading) {
+      pickerLoading = false;
+      window.removeEventListener('tg-emoji-picker-ready', onReady);
+    }
+  }, 15000);
 }
 
 export function getPickerCategories(): EmojiPickerCategory[] | null {

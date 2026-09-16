@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useDomEvent } from '@ton-ai/atom/hooks';
 import { EmojiCanvas, StaticEmojiText, fetchEmojiData, getCachedEmojiData, subscribeEmojiData } from './emoji-canvas.js';
 import type { EmojiSegment } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
-import { ensureEmojiStickers, getEmojiAlt, getEmojiDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
+import { ensureEmojiStickers, getEmojiAlt, getEmojiDocId, isEmojiStickersLoaded, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
 import { getLogger } from '@ton-ai/gram-debug';
 
 const log = getLogger('gram-ui:emoji-text');
@@ -214,6 +214,7 @@ export function EmojiText({ text, entities, documentUrls, documentSources, inlin
 
   const singleEmoji = getSingleRegularEmoji(text, entities);
   const [mapVersion, setMapVersion] = useState(0);
+  const [stickersLoaded, setStickersLoaded] = useState(() => isEmojiStickersLoaded());
   const [settledVersion, setSettledVersion] = useState(0);
   const settleTimer = useRef(0);
   const lastEmojiSigRef = useRef('');
@@ -229,6 +230,7 @@ export function EmojiText({ text, entities, documentUrls, documentSources, inlin
     }
 
     return subscribeEmojiMap((changed) => {
+      setStickersLoaded(isEmojiStickersLoaded());
       if (!changed) {
         setMapVersion((v) => v + 1);
         return;
@@ -275,6 +277,10 @@ export function EmojiText({ text, entities, documentUrls, documentSources, inlin
   const loneEmoji = singleEmoji !== undefined
     || (emojiOnly && segments.filter((s) => s.type === 'emoji').length === 1);
   const size = isDialog ? inlineSize : (loneEmoji ? SINGLE_EMOJI_SIZE : (emojiOnly ? EMOJI_ONLY_SIZE : inlineSize));
+
+  if (singleEmoji !== undefined && !isDialog && !getEmojiDocId(singleEmoji) && !stickersLoaded) {
+    return <span class="tgui-emoji-pending" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle`} />;
+  }
 
   if (typeof localStorage !== 'undefined' && localStorage.getItem('tg-debug-emoji') === '1' && !isDialog) {
     log.info('[gram-app] EmojiText:', JSON.stringify(text), 'len=' + text.length,

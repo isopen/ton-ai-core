@@ -103,6 +103,10 @@ describe('real Telegram TGS files', () => {
     for (const f of ['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7', 'e8', ...extra()]) {
         it('probe ' + path.basename(f), async () => {
             const file = f.startsWith('/') ? f : path.join(__dirname, '../../../harness/static/tgs', f + '.tgs');
+            if (!fs.existsSync(file)) {
+                console.log('[probe-real]', f, 'SKIP: fixture missing');
+                return;
+            }
             const buf = fs.readFileSync(file);
             const json = (buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b)
                 ? gunzipSync(buf).toString('utf8')

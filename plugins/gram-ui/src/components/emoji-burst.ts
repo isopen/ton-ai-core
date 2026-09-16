@@ -410,11 +410,16 @@ export function attachEmojiInteractions(): void {
 
     const onServerFx = (e: Event) => {
         if (document.hidden) return;
-        const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; url?: string; key?: string; x?: number; y?: number };
+        const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; url?: string; key?: string; x?: number; y?: number; exact?: boolean };
         if (!detail.url || detail.messageId == null) return;
         const bubble = document.getElementById('msg-' + detail.messageId);
         if (!bubble) return;
 
+        if (detail.exact === true && Number.isFinite(detail.x) && Number.isFinite(detail.y)) {
+            const point = { left: detail.x as number, top: detail.y as number, width: 0, height: 0 } as DOMRect;
+            playStickerFxOverlay('emoji-fx-' + (detail.key || String(detail.messageId)), detail.url, null, point);
+            return;
+        }
         const anchorEl = pickInteractionAnchor(bubble, detail.x, detail.y);
         const anchorRect = anchorEl ? anchorEl.getBoundingClientRect() : bubble.getBoundingClientRect();
         playStickerFxOverlay('emoji-fx-' + (detail.key || String(detail.messageId)), detail.url, anchorEl ?? bubble, anchorRect);

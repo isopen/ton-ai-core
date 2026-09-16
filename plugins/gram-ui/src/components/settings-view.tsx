@@ -1,4 +1,5 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
+import { useState } from '@ton-ai/atom/hooks';
 import { Scrollable } from '../primitives/scrollable.js';
 import { Radio } from '../primitives/radio.js';
 import { normalizeMapProvider } from '../utils.js';
@@ -6,11 +7,41 @@ import { Tumbler } from '../primitives/tumbler.js';
 import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';
 import { t, S } from '@ton-ai/gram-lang';
+import { WallpaperPicker } from './wallpaper-picker.js';
 
 export function SettingsView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
+  const [page, setPage] = useState<'main' | 'chat'>('main');
+  if (page === 'chat') {
+    return (
+      <Scrollable className="tgui-settings">
+        <button class="tgui-menu-back" onClick={() => setPage('main')}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>{t(S.SETTINGS_TITLE)}</span>
+        </button>
+        <div class="tgui-settings-section">
+          <div class="tgui-settings-section-label">{t(S.SETTINGS_THEME)}</div>
+          <div class="tgui-settings-card">
+            <WallpaperPicker state={state} dispatch={dispatch} />
+          </div>
+        </div>
+      </Scrollable>
+    );
+  }
   return (
     <Scrollable className="tgui-settings">
       <div class="tgui-settings-title">{t(S.SETTINGS_TITLE)}</div>
+      <div class="tgui-settings-section">
+        <div class="tgui-settings-card tgui-menu-list">
+          <button class="tgui-menu-item" onClick={() => setPage('chat')}>
+            <span class="tgui-menu-label">{t(S.CHAT_SETTINGS)}</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="tgui-menu-chevron">
+              <path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+      </div>
 
       <div class="tgui-settings-section">
         <div class="tgui-settings-section-label">{t(S.SETTINGS_SESSION)}</div>

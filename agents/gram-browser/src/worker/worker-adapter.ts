@@ -60,8 +60,12 @@ export class TelegramWorkerClient {
         await this.client.clearPendingAuth(phoneNumber);
     }
 
-    async sendMessage(message: string, peer: Record<string, any>): Promise<any> {
-        return await this.client.sendMessage(message, peer);
+    async sendMessage(message: string, peer: Record<string, any>, entities?: Array<{ offset: number; length: number; document_id: string }>): Promise<any> {
+        return await this.client.sendMessage(message, peer, entities);
+    }
+
+    async sendMedia(peer: Record<string, any>, document: any, sticker?: boolean): Promise<any> {
+        return await this.client.sendMedia(peer, document, sticker);
     }
 
     async callRpc(methodName: string, params: Record<string, any> = {}): Promise<any> {

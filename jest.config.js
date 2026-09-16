@@ -68,6 +68,7 @@ module.exports = {
   },
   transformIgnorePatterns: ['/node_modules/(?!(@ton-ai)/)'],
   moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/agents/gram-browser/src/$1',
     '^@ton/walletkit$': stubPath + '/@ton/walletkit.js',
     '^@ton/mcp$': stubPath + '/@ton/mcp.js',
     '^@ton/core$': stubPath + '/@ton/core.js',

@@ -217,8 +217,12 @@ async function _handleMessage(msg: Record<string, any>): Promise<any> {
             return { type: 'cleared' };
         }
         case 'sendMessage': {
-            const sendResult = await TW.sendMessage_({ message: msg.message, peer: msg.peer });
+            const sendResult = await TW.sendMessage_({ message: msg.message, peer: msg.peer, entities: msg.entities });
             return { type: 'messageSent', data: sendResult };
+        }
+        case 'sendMedia': {
+            const mediaResult = await TW.sendMedia_({ peer: msg.peer, document: msg.document, sticker: msg.sticker });
+            return { type: 'messageSent', data: mediaResult };
         }
         case 'callRpc': {
             await ensureConnected();

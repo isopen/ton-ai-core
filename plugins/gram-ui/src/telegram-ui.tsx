@@ -35,16 +35,25 @@ import { THEME_TOGGLE_SELECTOR, supportsViewTransitions, themeRevealOverlayCss, 
 import type { RevealHandle } from './components/theme-reveal.js';
 export type { AppState, UIAction, PeerInfo, Dialog, Message };
 
+export interface CustomEmojiEntity {
+  offset: number;
+  length: number;
+  document_id: string;
+}
+
 export interface TelegramUICallbacks {
   sendCode: (phone: string) => Promise<void>;
   resendCode?: () => Promise<void>;
   signIn: (code: string) => Promise<void>;
   checkPassword: (password: string) => Promise<void>;
   signUp: (firstname: string, lastname: string) => Promise<void>;
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, entities?: CustomEmojiEntity[]) => Promise<void>;
+  sendSticker?: (document: any, setId?: string, accessHash?: string) => Promise<void>;
+  sendGif?: (document: any) => Promise<void>;
   loadHistory: () => Promise<void>;
   logout: () => Promise<void>;
   selectPeer: (peer: PeerInfo) => void;
+  fetchWallpapers?: () => void;
   requestQrCode: () => Promise<void>;
   requestQrPreview?: () => Promise<void>;
   sendTyping: () => void;
@@ -184,6 +193,9 @@ export class TelegramUI {
         if (action.type === 'SET_SELECTED_PEER' && action.peer) {
           self.callbacks.selectPeer(action.peer);
         }
+        if (action.type === 'SET_ACTIVE_SKILL' && action.id === '_settings_') {
+          try { self.callbacks.fetchWallpapers?.(); } catch {}
+        }
         if (action.type === 'LOAD_MORE') {
           self.callbacks.loadHistory();
         }
@@ -278,7 +290,16 @@ export class TelegramUI {
       'tg-auth-sign-in': (e: any) => { const code = e?.detail?.code ?? this._state.code; this.callbacks.signIn(code); },
       'tg-auth-check-password': (e: any) => { const pw = e?.detail?.password ?? this._state.password; this.callbacks.checkPassword(pw); },
       'tg-auth-sign-up': (e: any) => { const fn = e?.detail?.firstname ?? this._state.signupFirstname; const ln = e?.detail?.lastname ?? this._state.signupLastname; this.callbacks.signUp(fn, ln); },
-      'tg-send-message': (e: any) => { this.callbacks.sendMessage(e.detail.text); },
+      'tg-send-message': (e: any) => { this.callbacks.sendMessage(e.detail.text, e.detail.entities); },
+      'tg-send-sticker': (e: any) => { this.callbacks.sendSticker?.(e.detail.document, e.detail.setId, e.detail.accessHash); },
+      'tg-send-gif': (e: any) => { this.callbacks.sendGif?.(e.detail.document); },
+      'tg-send-voice': () => { log.info('[TGUI] voice send unavailable'); this.setError(t(S.VOICE_SEND_UNAVAILABLE)); },
+      'tg-send-gift': () => { log.info('[TGUI] gift send unavailable'); this.setError(t(S.GIFT_SEND_UNAVAILABLE)); },
+      'tg-attach-file': () => { log.info('[TGUI] attach unavailable file'); this.setError(t(S.ATTACH_UNAVAILABLE)); },
+      'tg-attach-gallery': () => { log.info('[TGUI] attach unavailable gallery'); this.setError(t(S.ATTACH_UNAVAILABLE)); },
+      'tg-attach-camera': () => { log.info('[TGUI] attach unavailable camera'); this.setError(t(S.ATTACH_UNAVAILABLE)); },
+      'tg-attach-location': () => { log.info('[TGUI] attach unavailable location'); this.setError(t(S.ATTACH_UNAVAILABLE)); },
+      'tg-attach-more': () => { log.info('[TGUI] attach unavailable more'); this.setError(t(S.ATTACH_UNAVAILABLE)); },
       'tg-typing': () => { this.callbacks.sendTyping(); },
       'tg-typing-stop': () => { this.callbacks.sendTypingCancel(); },
       'tg-auth-resend-code': () => { if (this.callbacks.resendCode) this.callbacks.resendCode(); else this.callbacks.sendCode(this._state.phone); },

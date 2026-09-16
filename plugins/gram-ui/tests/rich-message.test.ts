@@ -180,7 +180,7 @@ describe('MessageBubble with layer-229 rich_message', () => {
         expect(container.textContent).not.toContain('[block: pageBlockSlideshow]');
         const frame = container.querySelector('div.rich-slideshow-frame') as HTMLElement;
         expect(frame.style.maxWidth).toBe('');
-        const slideBoxes = Array.from(container.querySelectorAll('div.rich-slideshow-item div.TelegramImage')) as HTMLElement[];
+        const slideBoxes = Array.from(container.querySelectorAll('div.rich-slideshow-item div.TguiImage')) as HTMLElement[];
         expect(slideBoxes.length).toBe(2);
         for (const box of slideBoxes) {
           expect(box.style.width).toBe('100%');
@@ -463,7 +463,7 @@ describe('MessageBubble list with block items', () => {
         expect(container.querySelectorAll('li.rich-list-item').length).toBe(2);
         expect(container.textContent).toContain('First point');
         expect(container.textContent).toContain('Second point');
-        expect(container.querySelectorAll('li.rich-list-item div.TelegramImage').length).toBe(1);
+        expect(container.querySelectorAll('li.rich-list-item div.TguiImage').length).toBe(1);
     });
 });
 
@@ -516,7 +516,7 @@ describe('MessageBubble standalone rich photo', () => {
             richMessage: coverRich,
         });
         expect(() => render(Comp, container)).not.toThrow();
-        const box = container.querySelector('div.rich-photo div.TelegramImage') as HTMLElement;
+        const box = container.querySelector('div.rich-photo div.TguiImage') as HTMLElement;
         expect(box).toBeTruthy();
         expect(box.style.width).toBe('100%');
         expect(box.style.maxWidth).toBe('480px');

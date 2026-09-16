@@ -2,6 +2,7 @@ import { getLogger } from '@ton-ai/gram-debug';
 import type { MediaHost, MediaTransport, MediaMessageLike, PhotoCacheProbeResult, EmojiKind } from './types.js';
 import type { EmojiPipeline } from './emoji.js';
 import { EmojiPipelineImpl } from './emoji.js';
+import { PickerPipelineImpl } from './picker.js';
 
 const log = getLogger('gram-media');
 
@@ -83,10 +84,12 @@ export class GramMediaRouter {
     private retryPendingDocs = new Set<number | string>();
 
     readonly emoji: EmojiPipeline;
+    readonly picker: PickerPipelineImpl;
 
     constructor(private host: MediaHost) {
         this.debug = host.debug ?? true;
         this.emoji = new EmojiPipelineImpl(this);
+        this.picker = new PickerPipelineImpl(this);
     }
 
     get transport(): MediaTransport | null {
@@ -166,6 +169,7 @@ export class GramMediaRouter {
         w.addEventListener('tg-media-viewport', onMediaViewport);
 
         this.emoji.attach(w);
+        this.picker.attach(w);
 
         this.host.cleanupFns.push(() => {
             w.removeEventListener('tg-download-photo', onDownloadPhoto);
@@ -173,6 +177,7 @@ export class GramMediaRouter {
             w.removeEventListener('tg-download-document', onDownloadDocument);
             w.removeEventListener('tg-media-viewport', onMediaViewport);
             this.emoji.detach(w);
+            this.picker.detach(w);
         });
     }
 
@@ -443,6 +448,10 @@ export class GramMediaRouter {
     async emojiKindAndUrlFor(bytes: ArrayBuffer, mime: string): Promise<{ kind: EmojiKind; url: string }> {
         const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
         const head = u8.length >= 12 ? new TextDecoder('latin1').decode(u8.slice(0, 12)) : '';
+        const m0 = (mime || '').toLowerCase();
+        if (m0 === 'application/x-tgwallpattern') {
+            return { kind: 'img', url: await this.wallpaperPatternToSvgUrl(bytes) };
+        }
         if (u8.length >= 2 && u8[0] === 0x1f && u8[1] === 0x8b) {
             return { kind: 'tgs', url: await this.tgsToJsonUrl(u8) };
         }
@@ -461,6 +470,34 @@ export class GramMediaRouter {
         if (m.startsWith('image/')) return { kind: 'img', url: this.bytesToBlobUrl(bytes, m) };
         if (m === 'application/x-tgsticker') return { kind: 'tgs', url: await this.tgsToJsonUrl(u8) };
         return { kind: null, url: this.bytesToBlobUrl(bytes, m || 'application/octet-stream') };
+    }
+
+    async inflateGzipBytes(bytes: ArrayBuffer): Promise<ArrayBuffer | null> {
+        try {
+            const DS = (globalThis as any).DecompressionStream;
+            if (typeof DS !== 'function') return null;
+            const src = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+            const copy = src.buffer.slice(src.byteOffset, src.byteOffset + src.byteLength) as ArrayBuffer;
+            const out = await new Response(
+                new Blob([copy]).stream().pipeThrough(new DS('gzip')),
+            ).arrayBuffer();
+            return out.byteLength > 0 ? out : null;
+        } catch {
+            return null;
+        }
+    }
+
+    async wallpaperPatternToSvgUrl(bytes: ArrayBuffer): Promise<string> {
+        const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        if (u8.length >= 2 && u8[0] === 0x1f && u8[1] === 0x8b) {
+            const out = await this.inflateGzipBytes(bytes);
+            if (out) return this.bytesToBlobUrl(out, 'image/svg+xml');
+        } else if (u8.length >= 4 && u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4e && u8[3] === 0x47) {
+            return this.bytesToBlobUrl(bytes, 'image/png');
+        } else if (u8.length >= 1 && u8[0] === 0x3c) {
+            return this.bytesToBlobUrl(bytes, 'image/svg+xml');
+        }
+        return this.bytesToBlobUrl(bytes, 'image/png');
     }
 
     toArrayBuffer(b: string | ArrayBuffer | Uint8Array): ArrayBuffer {
@@ -497,7 +534,7 @@ export class GramMediaRouter {
 
     private isSyntheticDocId(messageId: any): boolean {
         return typeof messageId === 'string'
-            && (messageId.startsWith('emojipack-') || messageId.startsWith('emoji-'));
+            && (messageId.startsWith('emojipack-') || messageId.startsWith('emoji-') || messageId.startsWith('sticker-') || messageId.startsWith('gif-') || messageId.startsWith('gift-'));
     }
 
     private downloadProgressLast = new Map<number | string, number>();
@@ -963,6 +1000,60 @@ export class GramMediaRouter {
         return s.startsWith('emoji-') || s.startsWith('emojipack-');
     }
 
+    private isWallpaperKey(s: string): boolean {
+        return s.startsWith('wallpaper-');
+    }
+
+    private isWallpaperRefError(msg: string): boolean {
+        return msg.includes('FILE_REFERENCE_EXPIRED') || msg.includes('INPUT_FETCH_ERROR');
+    }
+
+    private wallpaperListCache: { at: number; list: any[] } | null = null;
+
+    private async refreshWallpaperDoc(docId: string): Promise<any | null> {
+        try {
+            const now = Date.now();
+            if (!this.wallpaperListCache || now - this.wallpaperListCache.at > 60000) {
+                const res = await this.transport?.callRpc('account.getWallPapers', { hash: BigInt(0) });
+                this.wallpaperListCache = { at: now, list: Array.isArray(res?.wallpapers) ? res.wallpapers : [] };
+            }
+            const hit = this.wallpaperListCache.list.find((d: any) => d?.id != null && String(d.id) === String(docId));
+            if (hit) log.info('[gram-media] wallpaper doc refreshed id=' + docId);
+            else log.warn('[gram-media] wallpaper doc miss id=' + docId);
+            return hit || null;
+        } catch (e: any) {
+            log.warn('[gram-media] wallpaper list refresh failed:', e?.message || e);
+            return null;
+        }
+    }
+
+    private async retryWallpaperDownload(document: any, messageId: string, mime: string, gen: number): Promise<void> {
+        const docId = document?.id != null ? String(document.id) : '';
+        if (!docId) return;
+        const fresh = await this.refreshWallpaperDoc(docId);
+        if (gen !== this.documentDownloadGen) return;
+        if (!fresh) return;
+        try {
+            const retry = await this.transport?.downloadFile({ document: fresh });
+            if (gen !== this.documentDownloadGen) return;
+            if (retry?.bytes) {
+                const bytes = this.toArrayBuffer(retry.bytes);
+                if (bytes.byteLength) {
+                    const m = (fresh.mime_type || mime || 'application/octet-stream').toLowerCase();
+                    const url = m === 'application/x-tgsticker'
+                        ? await this.tgsToJsonUrl(bytes)
+                        : m === 'application/x-tgwallpattern'
+                            ? await this.wallpaperPatternToSvgUrl(bytes)
+                            : this.bytesToBlobUrl(bytes, m);
+                    this.announceDownloadedUrl(messageId, fresh, m, url, retry.cacheSource);
+                    this.dispatchDownloadProgress(messageId, 100, true);
+                }
+            }
+        } catch (e2: any) {
+            log.warn('[gram-media] wallpaper retry failed:', e2?.message || e2, messageId);
+        }
+    }
+
     private emojiDocIdOf(s: string): string {
         if (s.startsWith('emojipack-')) return s.slice('emojipack-'.length);
         if (s.startsWith('emoji-')) return s.slice('emoji-'.length);
@@ -1216,6 +1307,14 @@ export class GramMediaRouter {
             if (error) log.warn('[gram-media] emoji batch item error:', error, item.messageId, docId);
             return;
         }
+        if (typeof item.messageId === 'string' && this.isWallpaperKey(item.messageId) && this.isWallpaperRefError(error)) {
+            const fresh = await this.refreshWallpaperDoc(String(item.document?.id ?? ''));
+            if (fresh) {
+                this.documentPending.delete(item.messageId);
+                this.queueDocumentDownload(fresh, item.messageId, 1);
+            }
+            return;
+        }
         if (typeof item.messageId !== 'number') return;
         if (error.includes('FILE_REFERENCE_EXPIRED')) {
             if (this.debug) log.info('[gram-media] batch FILE_REFERENCE_EXPIRED, re-fetching message', item.messageId);
@@ -1231,7 +1330,9 @@ export class GramMediaRouter {
                         if (bytes.byteLength) {
                             const url = m === 'application/x-tgsticker'
                                 ? await this.tgsToJsonUrl(bytes)
-                                : this.bytesToBlobUrl(bytes, m);
+                                : m === 'application/x-tgwallpattern'
+                                    ? await this.wallpaperPatternToSvgUrl(bytes)
+                                    : this.bytesToBlobUrl(bytes, m);
                             this.notifyEmojiUrlKind(url, this.emojiKindFor(m));
                             this.notifyEmojiUrl(String(freshMsg.media.document.id), url, m);
                             this.dispatchDocumentUrl(item.messageId, url, retry.cacheSource);
@@ -1469,7 +1570,9 @@ export class GramMediaRouter {
                         }
                         const url = mime === 'application/x-tgsticker'
                             ? await this.tgsToJsonUrl(bytes)
-                            : this.bytesToBlobUrl(bytes, mime);
+                            : mime === 'application/x-tgwallpattern'
+                                ? await this.wallpaperPatternToSvgUrl(bytes)
+                                : this.bytesToBlobUrl(bytes, mime);
                         this.announceDownloadedUrl(messageId, document, mime, url, result.cacheSource);
                         this.dispatchDownloadProgress(messageId, 100, true);
                     } else if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
@@ -1484,7 +1587,8 @@ export class GramMediaRouter {
                 }
             } catch (err: any) {
                 if (gen !== this.documentDownloadGen) return;
-                if (err.message?.includes('FILE_REFERENCE_EXPIRED')) {
+                const wallpaperRefError = typeof messageId === 'string' && this.isWallpaperKey(messageId) && this.isWallpaperRefError(err?.message || '');
+                if (err.message?.includes('FILE_REFERENCE_EXPIRED') || wallpaperRefError) {
                     const freshMsg = typeof messageId === 'number' ? await this.refreshMessage(messageId) : null;
                     if (gen !== this.documentDownloadGen) return;
                     if (freshMsg?.media?.document) {
@@ -1500,13 +1604,15 @@ export class GramMediaRouter {
                                 this.announceDownloadedUrl(messageId, freshMsg.media.document, m, url, retry.cacheSource);
                             }
                         }
+                    } else if (typeof messageId === 'string' && this.isWallpaperKey(messageId) && this.isWallpaperRefError(err?.message || '')) {
+                        await this.retryWallpaperDownload(document, messageId, mime, gen);
                     } else if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
-                        this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(messageId));
+                        this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(messageId), err?.message || 'FILE_REFERENCE_EXPIRED');
                     }
                 } else {
                     log.error('[gram-media] document download error:', err.message, messageId);
                     if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
-                        this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(messageId));
+                        this.emoji.onEmojiDownloadFailed(this.emojiDocIdOf(messageId), err?.message || err);
                     } else if (typeof messageId === 'number') {
                         this.scheduleDocumentRetry(messageId, document);
                     }
@@ -1542,7 +1648,7 @@ export class GramMediaRouter {
         }, delay));
     }
 
-    private async downloadDocumentThumb(document: any, messageId: number, thumbType: string): Promise<void> {
+    private async downloadDocumentThumb(document: any, messageId: number, thumbType: string, isRetry = false): Promise<void> {
         const thumbKey = String(document.id) + ':' + thumbType;
         if (this.thumbInflight.has(thumbKey)) return;
         const cachedUrl = this.thumbUrlCache.get(thumbKey);
@@ -1569,6 +1675,9 @@ export class GramMediaRouter {
             }
             if (freshDoc?.id) this.registerStickerDoc(freshDoc);
             this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_THUMB', messageId, thumbType, url });
+            if (typeof messageId === 'string' && this.isWallpaperKey(messageId)) {
+                this.dispatchDocumentUrl(messageId, url, undefined);
+            }
         };
         try {
             const result = await this.transport?.downloadFile({ document: { ...document, thumb_size: thumbType } });
@@ -1580,8 +1689,14 @@ export class GramMediaRouter {
         } catch (err: any) {
             const msg = String(err?.message || err);
 
-            if (msg.includes('FILE_REFERENCE_EXPIRED')) {
-                try {
+            if (typeof messageId === 'string' && this.isWallpaperKey(messageId) && this.isWallpaperRefError(msg) && !isRetry) {
+                this.thumbInflight.delete(thumbKey);
+                const fresh = await this.refreshWallpaperDoc(String(document?.id ?? ''));
+                if (fresh) await this.downloadDocumentThumb(fresh, messageId, thumbType, true);
+                return;
+            }
+
+            if (msg.includes('FILE_REFERENCE_EXPIRED')) {                try {
                     const freshMsg = await withDeadline(this.refreshMessage(messageId), PHOTO_REFRESH_TIMEOUT_MS, 'thumb message refresh exceeded');
                     const freshDoc = freshMsg?.media?.document;
                     if (freshDoc?.id) {

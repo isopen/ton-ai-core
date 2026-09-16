@@ -41,11 +41,29 @@ const SPECIAL_SET_RETRY_MAX_MS = 600;
 
 const normalizeEmoji = (e: string): string => e.replace(/[\uFE00-\uFE0F\u200D]/g, '');
 
+const stickerAltOf = (doc: any): string | null => {
+    const attrs = Array.isArray(doc?.attributes) ? doc.attributes : [];
+    const found = attrs.find((a: any) => (a?._ === 'documentAttributeSticker' || a?._ === 'documentAttributeCustomEmoji') && typeof a.alt === 'string' && a.alt);
+    return found ? String(found.alt) : null;
+};
+
 const isStubEmojiDoc = (d: any): boolean => {
     if (!d || d.id == null) return true;
     if (d._ === 'documentEmpty') return true;
     return d.file_reference == null && d.mime_type == null && d.size == null && d.dc_id == null;
 };
+
+const normalizeFileReference = (v: any): string => {
+    if (v == null) return '';
+    if (typeof v === 'string') return v;
+    try {
+        if (typeof Buffer !== 'undefined' && Buffer.isBuffer(v)) return v.toString('base64');
+        if (v instanceof Uint8Array) return Buffer.from(v).toString('base64');
+    } catch {}
+    return String(v);
+};
+
+const sameFileReference = (a: any, b: any): boolean => normalizeFileReference(a) === normalizeFileReference(b);
 
 const DICE_SETS: string[] = ['🎲', '🎯', '🎳', '🎰', '🏀', '⚽', '🎱', '🏈', '⚾', '🎾', '🏏'];
 
@@ -258,8 +276,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     }
 
     private notifyCustomEmojiAlt(doc: any): void {
-        const attrs = Array.isArray(doc?.attributes) ? doc.attributes : [];
-        const alt = attrs.find((a: any) => a?._ === 'documentAttributeSticker' && a.alt)?.alt;
+        const alt = stickerAltOf(doc);
         if (alt) {
             this.router.emitWindow('tg-custom-emoji-alt', { docId: String(doc.id), alt });
         }
@@ -297,6 +314,10 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                         this.markEmojiDocStub(id);
                         if (this.debug) log.info('[gram-media] custom emoji STUB (no file_reference)', id);
                         continue;
+                    }
+                    const prev = this.findEmojiDoc(id);
+                    if (!prev || !sameFileReference(prev.file_reference, d.file_reference)) {
+                        this.resetEmojiAttempts(id);
                     }
                     docs.push(d);
                 }
@@ -380,7 +401,11 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 this.indexEmojiDocs();
                 return undefined;
             }
+            const prev = this.findEmojiDoc(docId);
             this.emojiCustomDocsById.set(docId, fresh);
+            if (!prev || !sameFileReference(prev.file_reference, fresh.file_reference)) {
+                this.resetEmojiAttempts(docId);
+            }
             this.indexEmojiDocs();
             return fresh;
         } catch (err: any) {
@@ -546,8 +571,8 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             log.info('[gram-media] set', (full?.short_name || '?').toString(), 'docs=' + docs.length, 'mimes=' + JSON.stringify(counts));
             if (docs.length <= 300) {
                 const alts = docs.map((d: any) => {
-                    const a = Array.isArray(d?.attributes) ? d.attributes.find((x: any) => x?._ === 'documentAttributeSticker' && x.alt) : undefined;
-                    return String(d.id) + '#' + (a?.alt ? JSON.stringify(a.alt) : '-');
+                    const alt = stickerAltOf(d);
+                    return String(d.id) + '#' + (alt ? JSON.stringify(alt) : '-');
                 });
                 log.info('[gram-media] set alts', alts.join(' '));
             }
@@ -573,9 +598,8 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     const ids = pack.documents.map(String);
                     if (ids.length > 1 || /^[0-9#*]+$/.test(key.replace(/[^\d#*]/g, ''))) {
                         const alts = ids.map((id: string) => {
-                            const d = docsById.get(id);
-                            const a = Array.isArray(d?.attributes) ? d.attributes.find((x: any) => x?._ === 'documentAttributeSticker' && x.alt) : undefined;
-                            return id + '#' + (a?.alt ? JSON.stringify(a.alt) : '-');
+                            const alt = stickerAltOf(docsById.get(id));
+                            return id + '#' + (alt ? JSON.stringify(alt) : '-');
                         });
                         log.info('[gram-media] pack', JSON.stringify(pack.emoticon), 'key=' + key, 'docs=' + alts.join(','));
                     }
@@ -586,8 +610,8 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 let doc: any;
                 if (ids.length > 1) {
                     doc = ids.map((id: string) => docsById.get(id)).find((d: any) => {
-                        const a = Array.isArray(d?.attributes) ? d.attributes.find((x: any) => x?._ === 'documentAttributeSticker' && x.alt) : undefined;
-                        return a && normalizeEmoji(a.alt) === nAlt;
+                        const alt = stickerAltOf(d);
+                        return alt != null && normalizeEmoji(alt) === nAlt;
                     }) || docsById.get(String(pack.documents[0]));
                 } else {
                     doc = docsById.get(String(pack.documents[0]));
@@ -601,14 +625,12 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         for (const doc of docs) {
             if (!doc?.id) continue;
             this.router.registerStickerDoc(doc);
-            const attrs = Array.isArray(doc.attributes) ? doc.attributes : [];
-            for (const a of attrs) {
-                if (a?._ === 'documentAttributeSticker' && typeof a.alt === 'string' && a.alt) {
-                    const key = normalizeEmoji(a.alt);
-                    if (key && !map[key]) map[key] = doc;
-                    if (key === '1\u20E3' && !this.emojiKeycapDocs.some((k) => String(k.id) === String(doc.id))) {
-                        this.emojiKeycapDocs.push(doc);
-                    }
+            const alt = stickerAltOf(doc);
+            if (alt) {
+                const key = normalizeEmoji(alt);
+                if (key && !map[key]) map[key] = doc;
+                if (key === '1\u20E3' && !this.emojiKeycapDocs.some((k) => String(k.id) === String(doc.id))) {
+                    this.emojiKeycapDocs.push(doc);
                 }
             }
         }
@@ -752,9 +774,8 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             if (docs.length > 0) {
                 diceDoc = docs.find((d: any) => {
                     if (!d?.id) return false;
-                    const attrs = Array.isArray(d.attributes) ? d.attributes : [];
-                    const a = attrs.find((x: any) => x?._ === 'documentAttributeSticker' && typeof x.alt === 'string');
-                    return a && normalizeEmoji(a.alt) === key;
+                    const alt = stickerAltOf(d);
+                    return alt != null && normalizeEmoji(alt) === key;
                 }) || null;
             }
             for (const [k, v] of Object.entries(map)) this.emojiStickerDocs[k] = v;
@@ -822,6 +843,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private onFetchEmojiStickers = async () => {
         if (this.emojiStickerDocs && Object.keys(this.emojiStickerDocs).length > 0) {
             this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
+            void this.emitPickerReady();
             return;
         }
         if (this.emojiStickersLoading) return;
@@ -852,6 +874,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.emojiStickerDocs = map;
         this.indexEmojiDocs();
         this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
+        void this.emitPickerReady();
         this.flushPendingEmojiAlts();
         this.emojiStickersLoading = false;
         void this.expandEmojiMap();
@@ -883,8 +906,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             if (this.debug) {
                 log.info('[gram-media] keycap probe docs =', this.emojiKeycapDocs.map((d) => String(d.id)).join(','));
                 log.info('[gram-media] keycap probe alts =', this.emojiKeycapDocs.map((d) => {
-                    const a = Array.isArray(d?.attributes) ? d.attributes.find((x: any) => x?._ === 'documentAttributeSticker' && x.alt) : undefined;
-                    return JSON.stringify(a?.alt);
+                    return JSON.stringify(stickerAltOf(d));
                 }).join(','));
             }
         }
@@ -908,11 +930,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
     };
 
-    private onFetchEmojiPicker = async () => {
-        if (!this.emojiStickerDocs || Object.keys(this.emojiStickerDocs).length === 0) {
-            if (!this.emojiStickersLoading) this.onFetchEmojiStickers();
-            return;
-        }
+    private emitPickerReady = async (): Promise<void> => {
         if (!this.emojiPickerKeywordsLoaded) {
             this.emojiPickerKeywordsLoaded = true;
             try {
@@ -930,6 +948,14 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             categories: this.emojiPickerCategories.filter((c) => c.emojis.length > 0),
             keywords: this.emojiPickerKeywords,
         });
+    };
+
+    private onFetchEmojiPicker = async () => {
+        if (!this.emojiStickerDocs || Object.keys(this.emojiStickerDocs).length === 0) {
+            if (!this.emojiStickersLoading) void this.onFetchEmojiStickers();
+            return;
+        }
+        void this.emitPickerReady();
     };
 
     private onDownloadEmoji = async (e: Event) => {

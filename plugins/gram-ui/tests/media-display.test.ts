@@ -115,7 +115,7 @@ describe('photo display', () => {
         const m = baseMsg({ media: photoMedia([{ _: 'photoSize', type: 'x', w: 640, h: 480, url: 'blob:photo1' }]) });
         const c = mount(h(MessageItem as any, itemProps(m)));
         await new Promise((r) => setTimeout(r, 50));
-        expect(c.querySelectorAll('div.TelegramImage').length).toBe(1);
+        expect(c.querySelectorAll('div.TguiImage').length).toBe(1);
     });
 
     test('photo without sizes renders placeholder text', async () => {

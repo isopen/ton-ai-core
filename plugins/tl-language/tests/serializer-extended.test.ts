@@ -114,14 +114,14 @@ describe('SchemaSerializer Extended', () => {
         const ser = new SchemaSerializer(registry);
         (ser as any).writeFieldValue('true', null);
         const buf = ser.toBuffer();
-        assert.strictEqual(buf.readUInt32LE(0), 0x997275b5);
+        assert.strictEqual(buf.length, 0);
     });
 
     test('writeFieldValue with false literal', () => {
         const ser = new SchemaSerializer(registry);
         (ser as any).writeFieldValue('false', null);
         const buf = ser.toBuffer();
-        assert.strictEqual(buf.readUInt32LE(0), 0xbc799737);
+        assert.strictEqual(buf.length, 0);
     });
 
     test('writeFieldValue with unknown type and number value', () => {

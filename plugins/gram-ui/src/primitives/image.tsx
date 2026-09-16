@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
 import { getLogger } from '@ton-ai/gram-debug';
 
-const imgLog = getLogger('gram-ui:telegram-image');
+const imgLog = getLogger('gram-ui:image');
 
 function imageLoad(url: string, signal: AbortSignal): Promise<{ url: string; w: number; h: number }> {
   return new Promise((resolve, reject) => {
@@ -79,7 +79,7 @@ export function Image(props: {
     if (image.medium?.url) srcs.push(image.medium.url);
     if (image.original?.url) srcs.push(image.original.url);
     if (image.thumbnail?.url) srcs.push(image.thumbnail.url);
-    imgLog.info('[TelegramImage] load start', image.id, 'srcs:', srcs.length, 'visible:', visible, 'thumb:', !!image.thumbnail?.url, 'medium:', !!image.medium?.url, 'original:', !!image.original?.url);
+    imgLog.info('[Image] load start', image.id, 'srcs:', srcs.length, 'visible:', visible, 'thumb:', !!image.thumbnail?.url, 'medium:', !!image.medium?.url, 'original:', !!image.original?.url);
 
     if (srcs.length === 0) {
       return;
@@ -95,7 +95,7 @@ export function Image(props: {
         try {
           const res = await imageLoad(url, ac.signal);
           if (!ac.signal.aborted) {
-            imgLog.info('[TelegramImage] loaded', image.id, 'len:', url.length, 'natural:', res.w + 'x' + res.h);
+            imgLog.info('[Image] loaded', image.id, 'len:', url.length, 'natural:', res.w + 'x' + res.h);
             setCurrentSrc(res.url);
             if (res.w > 0 && res.h > 0) setNatural({ w: res.w, h: res.h });
 
@@ -105,12 +105,12 @@ export function Image(props: {
             return;
           }
         } catch {
-          imgLog.info('[TelegramImage] load FAIL', image.id, 'len:', url.length);
+          imgLog.info('[Image] load FAIL', image.id, 'len:', url.length);
           continue;
         }
       }
       if (!ac.signal.aborted) {
-        imgLog.info('[TelegramImage] all srcs failed', image.id);
+        imgLog.info('[Image] all srcs failed', image.id);
         setError(true);
       }
     })();
@@ -151,16 +151,16 @@ export function Image(props: {
 
   if (!visible) {
     return (
-      <div ref={handleRef} class={'TelegramImage' + (rounded ? ' TelegramImage_rounded' : '')} style={dimStyle}>
-        <div class="TelegramImage__placeholder" />
+      <div ref={handleRef} class={'TguiImage' + (rounded ? ' TguiImage_rounded' : '')} style={dimStyle}>
+        <div class="TguiImage__placeholder" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div ref={handleRef} class={'TelegramImage TelegramImage_error' + (rounded ? ' TelegramImage_rounded' : '')} style={dimStyle}>
-        <div class="TelegramImage__error" />
+      <div ref={handleRef} class={'TguiImage TguiImage_error' + (rounded ? ' TguiImage_rounded' : '')} style={dimStyle}>
+        <div class="TguiImage__error" />
       </div>
     );
   }
@@ -169,7 +169,7 @@ export function Image(props: {
   const showThumb = !!image.thumbnail?.url && !usingFullSrc;
 
   if (imgLog.enabled && currentSrc) {
-    imgLog.info('[TelegramImage] render', image.id, 'currentSrc len:', currentSrc.length, 'loaded:', loaded, 'visible:', visible, 'src == original:', currentSrc === image.original?.url);
+    imgLog.info('[Image] render', image.id, 'currentSrc len:', currentSrc.length, 'loaded:', loaded, 'visible:', visible, 'src == original:', currentSrc === image.original?.url);
   }
 
   const handleClick = () => {
@@ -179,22 +179,22 @@ export function Image(props: {
   return (
     <div
       ref={handleRef}
-      class={'TelegramImage' + (loaded ? ' TelegramImage_loaded' : '') + (rounded ? ' TelegramImage_rounded' : '')}
+      class={'TguiImage' + (loaded ? ' TguiImage_loaded' : '') + (rounded ? ' TguiImage_rounded' : '')}
       style={dimStyle}
       onClick={handleClick}
     >
       {showThumb ? (
-        <img class="TelegramImage__thumb" src={image.thumbnail!.url} decoding="async" alt="" />
+        <img class="TguiImage__thumb" src={image.thumbnail!.url} decoding="async" alt="" />
       ) : null}
       {currentSrc ? (
         <img
-          class={'TelegramImage__img' + (loaded ? ' TelegramImage__img_loaded' : '')}
+          class={'TguiImage__img' + (loaded ? ' TguiImage__img_loaded' : '')}
           src={currentSrc}
           decoding="async"
           alt=""
         />
       ) : (
-        <div class="TelegramImage__placeholder" />
+        <div class="TguiImage__placeholder" />
       )}
     </div>
   );

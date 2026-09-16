@@ -187,10 +187,17 @@ export class WorkerTelegramService extends TelegramService {
         await this.workerClient.clearPendingAuth(phoneNumber);
     }
 
-    async sendMessage(message: string, peer: Record<string, any>): Promise<any> {
+    async sendMessage(message: string, peer: Record<string, any>, entities?: Array<{ offset: number; length: number; document_id: string }>): Promise<any> {
         this.onLog?.('→ messages.sendMessage');
         if (!this.workerClient) throw new Error('not connected');
-        const r = await this.workerClient.sendMessage(message, peer);
+        const r = await this.workerClient.sendMessage(message, peer, entities);
+        return r;
+    }
+
+    async sendMedia(peer: Record<string, any>, document: any, sticker?: boolean): Promise<any> {
+        this.onLog?.('→ messages.sendMedia');
+        if (!this.workerClient) throw new Error('not connected');
+        const r = await this.workerClient.sendMedia(peer, document, sticker);
         return r;
     }
 

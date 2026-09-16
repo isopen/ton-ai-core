@@ -101,6 +101,9 @@ export interface AppState {
   inactiveButtons: Record<string, true>;
   buttonNotice: { messageId: number | string; text: string; version: number; rel?: { x: number; y: number; w: number; h: number } | null } | null;
   reactions: Record<number, MessageReaction[]>;
+  peerWallpapers: Record<string, any>;
+  accountWallpapers: any[] | null;
+  defaultWallpaper: any | null;
 }
 
 export interface MessageReaction {
@@ -136,7 +139,7 @@ export interface ImageProps {
   onOpenViewer?: (id: string) => void;
 }
 
-export type TelegramImageProps = ImageProps;
+export type TguiImageProps = ImageProps;
 
 export type UIAction =
     | { type: 'SET_THEME'; theme: AppState['theme'] }
@@ -188,6 +191,9 @@ export type UIAction =
     | { type: 'UPDATE_MESSAGE_DOCUMENT_THUMB'; messageId: number | string; thumbType: string; url: string }
     | { type: 'UPDATE_MESSAGE_DOCUMENT_SOURCE'; messageId: number | string; cacheSource: string }
     | { type: 'SET_MESSAGE_REACTIONS'; messageId: number; reactions: MessageReaction[] }
+    | { type: 'SET_PEER_WALLPAPER'; peerKey: string; wallpaper: any }
+    | { type: 'SET_ACCOUNT_WALLPAPERS'; wallpapers: any[] }
+    | { type: 'SET_DEFAULT_WALLPAPER'; wallpaper: any | null }
     | { type: 'TOGGLE_REACTION'; messageId: number; emoji: string }
     | { type: 'CLEAR_EMPTY_CHAT_DOCUMENT' }
     | { type: 'CLEAR_EMOJI_DOCUMENTS'; keys?: string[] }

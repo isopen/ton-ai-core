@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
 import { buildImageSpec, VIEWER_PHOTO_PRIO, getPhotoQuality } from './photo-spec.js';
 import { requestPhoto, requestDocument } from './media-source.js';
+import { Button } from '../primitives/button.js';
 
 export interface MediaViewerPhotoItem {
   kind: 'photo';
@@ -17,7 +18,18 @@ export interface MediaViewerVideoItem {
   thumbUrl: string;
 }
 
-export type MediaViewerItem = MediaViewerPhotoItem | MediaViewerVideoItem;
+export interface MediaViewerWallpaperItem {
+  kind: 'wallpaper';
+  content: any;
+}
+
+export type MediaViewerItem = MediaViewerPhotoItem | MediaViewerVideoItem | MediaViewerWallpaperItem;
+
+export interface MediaViewerActions {
+  applyLabel: string;
+  closeLabel: string;
+  onApply: () => void;
+}
 
 function photoKeyOf(image: ImageSpec | null): string {
   if (!image) return '';
@@ -49,6 +61,7 @@ export function MediaViewer({
   getMessage,
   onClose,
   onNavigate,
+  actions,
 }: {
   items: MediaViewerItem[];
   index: number;
@@ -56,9 +69,11 @@ export function MediaViewer({
   getMessage?: (messageId: number) => any | null;
   onClose: () => void;
   onNavigate?: (index: number) => void;
+  actions?: MediaViewerActions;
 }) {
   const item = items[index] || null;
   const isPhoto = item?.kind === 'photo';
+  const isWallpaper = item?.kind === 'wallpaper';
   const image = isPhoto && item ? item.image : null;
 
   if (!(window as any).__MV_BUILD__) (window as any).__MV_BUILD__ = 'mv3-hqgate';
@@ -188,7 +203,7 @@ export function MediaViewer({
       : { onClick: (e: MouseEvent) => { e.stopPropagation(); onNavigate?.(index + delta); } };
 
   return (
-    <div class="MediaViewer" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+    <div class="MediaViewer" role="dialog" aria-modal="true" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
       <div class="MediaViewer__backdrop" onClick={handleBackdropClick} />
       {items.length > 1 ? (
         <span class="MediaViewer__counter">{index + 1} / {items.length}</span>
@@ -232,9 +247,19 @@ export function MediaViewer({
             <div class="MediaViewer__spinner" />
           )}
         </div>
+      ) : isWallpaper ? (
+        <div class="MediaViewer__container">
+          {(item as MediaViewerWallpaperItem).content}
+        </div>
       ) : (
         <VideoViewerContent item={item as MediaViewerVideoItem} documentUrls={documentUrls} />
       )}
+      {actions ? (
+        <div class="MediaViewer__actions">
+          <Button variant="ghost" onClick={onClose}>{actions.closeLabel}</Button>
+          <Button variant="primary" onClick={actions.onApply}>{actions.applyLabel}</Button>
+        </div>
+      ) : null}
     </div>
   );
 }

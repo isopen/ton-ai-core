@@ -12,6 +12,19 @@ import { getLogger } from '@ton-ai/gram-debug';
 
 const updLog = getLogger('gram-browser:updates');
 
+export function applyPeerWallpaper(s: GramState, upd: any): void {
+  if (!upd || upd._ !== 'updatePeerWallpaper' || !upd.peer) return;
+  try {
+    const peerType = upd.peer._ === 'peerUser' ? 'user' : upd.peer._ === 'peerChat' ? 'chat' : 'channel';
+    const peerId = upd.peer.user_id?.toString() || upd.peer.chat_id?.toString() || upd.peer.channel_id?.toString();
+    if (!peerId) return;
+    const peerKey = `${peerType}_${peerId}`;
+    const wallpaper = upd.wallpaper_overridden ? upd.wallpaper : null;
+    updLog.info('[wallpaper] peer=' + peerKey + ' overridden=' + !!upd.wallpaper_overridden);
+    s.tgui.current?.dispatch({ type: 'SET_PEER_WALLPAPER', peerKey, wallpaper });
+  } catch {}
+}
+
 function dialogPreviewText(m: any): { text: string; entities: any[] | undefined } {
   const plain = (m.message || '').trim();
   const hasRich = !!(m.richMessage && Array.isArray(m.richMessage.blocks) && m.richMessage.blocks.length > 0);
@@ -367,9 +380,12 @@ export function createHandleUpdate(s: GramState) {
         };
         if (u._ === 'updateReadHistoryInbox') { handleReadHistoryInbox(u); }
         if (u._ === 'updateShort' && u.update?._ === 'updateReadHistoryInbox') { handleReadHistoryInbox(u.update); }
+        if (u._ === 'updatePeerWallpaper') { applyPeerWallpaper(s, u); }
+        if (u._ === 'updateShort' && u.update?._ === 'updatePeerWallpaper') { applyPeerWallpaper(s, u.update); }
         if ((u._ === 'updates' || u._ === 'updatesCombined') && Array.isArray(u.updates)) {
           for (const upd of u.updates) {
             if (upd._ === 'updateMessagePoll') applyUpdateMessagePoll(s, upd);
+            if (upd._ === 'updatePeerWallpaper') applyPeerWallpaper(s, upd);
             if (upd._ === 'updateNewMessage' || upd._ === 'updateNewChannelMessage') processNewMsg(upd.message);
             if (upd._ === 'updateEditMessage' || upd._ === 'updateEditChannelMessage') processNewMsg(upd.message);
             const applyMsgDeletions = (peerKey: string, deletedIds: Set<number>, deleteIncoming: boolean): boolean => {

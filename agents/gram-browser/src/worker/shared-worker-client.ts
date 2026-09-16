@@ -132,8 +132,12 @@ export class SharedWorkerClient {
         this.setStatus('connected');
     }
 
-    async sendMessage(message: string, peer: Record<string, any>): Promise<any> {
-        return this.send({ type: 'sendMessage', message, peer });
+    async sendMessage(message: string, peer: Record<string, any>, entities?: Array<{ offset: number; length: number; document_id: string }>): Promise<any> {
+        return this.send({ type: 'sendMessage', message, peer, entities });
+    }
+
+    async sendMedia(peer: Record<string, any>, document: any, sticker?: boolean): Promise<any> {
+        return this.send({ type: 'sendMedia', peer, document, sticker });
     }
 
     async callRpc(methodName: string, params: Record<string, any> = {}): Promise<any> {

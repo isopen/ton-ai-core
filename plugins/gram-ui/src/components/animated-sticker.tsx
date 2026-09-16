@@ -41,6 +41,7 @@ function fxCenterOf(anchorEl: Element | null): { x: number; y: number } | null {
 function fxSyncEntry(key: string): void {
   const entry = activeFxOverlays.get(key);
   if (!entry) return;
+  if (!entry.anchorEl) return;
   const c = fxCenterOf(entry.anchorEl);
   if (!c) {
     disposeStickerFxOverlay(key);

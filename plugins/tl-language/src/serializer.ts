@@ -260,10 +260,8 @@ export class SchemaSerializer {
             this.writeInt256(value);
         } else if (bareType === 'bytes') {
             this.writeBytes(value);
-        } else if (bareType === 'true') {
-            this.writeBoolTrue();
-        } else if (bareType === 'false') {
-            this.writeBoolFalse();
+        } else if (bareType === 'true' || bareType === 'false') {
+            return;
         } else {
             if (value && typeof value === 'object' && value._) {
                 this.writeBoxedField(bareType, value);
