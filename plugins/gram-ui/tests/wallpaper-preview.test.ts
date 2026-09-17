@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 import { render } from '@ton-ai/atom';
-import { WallpaperPicker } from '../dist/components/wallpaper-picker.js';
+import { WallpaperGallery } from '../dist/components/wallpaper-picker.js';
 import { defaultState } from '../dist/state.js';
 
 function h(type: any, props: Record<string, any> = {}, ...children: any[]): any {
@@ -15,7 +15,7 @@ function mountPicker(state: any): { container: HTMLElement; actions: any[] } {
   const actions: any[] = [];
   const container = document.createElement('div');
   document.body.appendChild(container);
-  const Probe: any = () => h(WallpaperPicker as any, { state, dispatch: (a: any) => { actions.push(a); } });
+  const Probe: any = () => h(WallpaperGallery as any, { state, dispatch: (a: any) => { actions.push(a); } });
   render(Probe, container);
   return { container, actions };
 }

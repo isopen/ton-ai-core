@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 import { render } from '@ton-ai/atom';
-import { WallpaperPicker } from '../dist/components/wallpaper-picker.js';
+import { WallpaperGallery } from '../dist/components/wallpaper-picker.js';
 import { SettingsView } from '../dist/components/settings-view.js';
 import { defaultState } from '../dist/state.js';
 
@@ -25,12 +25,20 @@ function mountPicker(state: any): { container: HTMLElement; actions: any[] } {
   const actions: any[] = [];
   const container = document.createElement('div');
   document.body.appendChild(container);
-  const Probe: any = () => h(WallpaperPicker as any, { state, dispatch: (a: any) => { actions.push(a); } });
+  const Probe: any = () => h(WallpaperGallery as any, { state, dispatch: (a: any) => { actions.push(a); } });
   render(Probe, container);
   return { container, actions };
 }
 
 describe('wallpaper gallery in settings', () => {
+  test('gallery renders without own frame', async () => {
+    const { container } = mountPicker({ ...defaultState(), accountWallpapers: [FILL], documentUrls: {} });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(container.querySelector('.tgui-menu-list')).toBeNull();
+    expect(container.querySelector('.tgui-wall-grid')).not.toBeNull();
+    document.body.removeChild(container);
+  });
+
   test('loading hint before server list arrives', async () => {
     const { container } = mountPicker({ ...defaultState(), accountWallpapers: null });
     await new Promise((r) => setTimeout(r, 30));
@@ -139,6 +147,11 @@ describe('settings chat-settings navigation', () => {
     expect(container.querySelector('.tgui-wall-grid')).toBeNull();
     item!.click();
     await new Promise((r) => setTimeout(r, 60));
+    const headers = Array.from(container.querySelectorAll('.tgui-settings-section .tgui-menu-item')) as HTMLElement[];
+    expect(headers.map((el) => el.textContent)).toEqual(['Chat background']);
+    expect(headers[0].getAttribute('aria-expanded')).toBe('false');
+    headers[0].click();
+    await new Promise((r) => setTimeout(r, 50));
     expect(container.querySelector('.tgui-wall-grid')).not.toBeNull();
     expect(container.querySelector('.tgui-menu-back')).not.toBeNull();
     (container.querySelector('.tgui-menu-back') as HTMLElement).click();

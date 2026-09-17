@@ -90,6 +90,20 @@ describe('wallpaper gradient flow', () => {
         expect(css).toContain('[data-animations="off"]');
         expect(css).toContain('animation: none !important');
     });
+
+    test('gallery shows three cells per row', () => {
+        const css = builtCss();
+        const gridBlock = /\.tgui-wall-grid\s*\{[^}]*\}/.exec(css);
+        expect(gridBlock).not.toBeNull();
+        expect(gridBlock![0]).toContain('repeat(3, 1fr)');
+        expect(gridBlock![0]).toContain('480px');
+    });
+
+    test('collapsible frame pads gallery content like menu items', () => {
+        const css = builtCss();
+        const blocks = [...css.matchAll(/\.tgui-menu-content\s*\{[^}]*\}/g)].map((m) => m[0]);
+        expect(blocks.some((b) => b.includes('var(--spacing-lg)'))).toBe(true);
+    });
 });
 
 describe('wallpaper preview card', () => {

@@ -3062,8 +3062,9 @@ body {
 
 .tgui-wall-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
+  max-width: 480px;
 }
 
 .tgui-wall-cell {
@@ -3145,7 +3146,8 @@ body {
 
 @media (max-width: 520px) {
   .tgui-wall-grid {
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(3, 1fr);
+    max-width: 100%;
   }
 }
 

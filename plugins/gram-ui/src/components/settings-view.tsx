@@ -8,7 +8,7 @@ import { MenuList } from '../primitives/menu-list.js';
 import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';
 import { t, S } from '@ton-ai/gram-lang';
-import { WallpaperPicker } from './wallpaper-picker.js';
+import { WallpaperGallery } from './wallpaper-picker.js';
 
 export function SettingsView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
   const [page, setPage] = useState<'main' | 'chat' | 'devices'>('main');
@@ -22,9 +22,10 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
           <span>{t(S.SETTINGS_TITLE)}</span>
         </button>
         <div class="tgui-settings-section">
-          <div class="tgui-settings-section-label">{t(S.SETTINGS_THEME)}</div>
-          <div class="tgui-settings-card">
-            <WallpaperPicker state={state} dispatch={dispatch} />
+          <div class="tgui-settings-card tgui-settings-group">
+            <MenuList bare={true} title={t(S.WALLPAPER_TITLE)} collapsible={true} defaultExpanded={false}>
+              <WallpaperGallery state={state} dispatch={dispatch} />
+            </MenuList>
           </div>
         </div>
       </Scrollable>

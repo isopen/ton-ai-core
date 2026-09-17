@@ -130,7 +130,7 @@ function WallpaperCell({ wallpaper, selected, url, onPick, onPreview }: { wallpa
   );
 }
 
-export function WallpaperPicker({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
+export function WallpaperGallery({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
   const list = Array.isArray(state.accountWallpapers) ? state.accountWallpapers : null;
   const urls = (state.documentUrls || {}) as Record<string, string>;
   useEffect(() => {
@@ -153,34 +153,32 @@ export function WallpaperPicker({ state, dispatch }: { state: AppState; dispatch
     setPreview(null);
   };
   const selectedIdentity = wallpaperIdentity(state.defaultWallpaper || null);
+  const gallery = list == null
+    ? <div class="tgui-wall-hint">{t(S.WALLPAPER_LOADING)}</div>
+    : (list.length === 0
+      ? <div class="tgui-wall-hint">{t(S.WALLPAPER_EMPTY)}</div>
+      : <div class="tgui-wall-grid">
+        <button
+          class={'tgui-wall-cell tgui-wall-default' + (state.defaultWallpaper ? '' : ' is-selected')}
+          onClick={() => pick(null)}
+          aria-label="default wallpaper"
+        >
+          <span>{t(S.WALLPAPER_DEFAULT)}</span>
+        </button>
+        {list.map((w) => (
+          <WallpaperCell
+            key={wallpaperIdentity(w)}
+            wallpaper={w}
+            selected={!!selectedIdentity && wallpaperIdentity(w) === selectedIdentity}
+            url={urls[pickKey(w)] || ''}
+            onPick={() => pick(w)}
+            onPreview={(angle) => setPreview({ w, angle })}
+          />
+        ))}
+      </div>);
   return (
     <>
-      <div class="tgui-settings-row">
-        <span class="tgui-settings-label">{t(S.WALLPAPER_TITLE)}</span>
-      </div>
-      {list == null
-        ? <div class="tgui-wall-hint">{t(S.WALLPAPER_LOADING)}</div>
-        : (list.length === 0
-          ? <div class="tgui-wall-hint">{t(S.WALLPAPER_EMPTY)}</div>
-          : <div class="tgui-wall-grid">
-            <button
-              class={'tgui-wall-cell tgui-wall-default' + (state.defaultWallpaper ? '' : ' is-selected')}
-              onClick={() => pick(null)}
-              aria-label="default wallpaper"
-            >
-              <span>{t(S.WALLPAPER_DEFAULT)}</span>
-            </button>
-            {list.map((w) => (
-              <WallpaperCell
-                key={wallpaperIdentity(w)}
-                wallpaper={w}
-                selected={!!selectedIdentity && wallpaperIdentity(w) === selectedIdentity}
-                url={urls[pickKey(w)] || ''}
-                onPick={() => pick(w)}
-                onPreview={(angle) => setPreview({ w, angle })}
-              />
-            ))}
-          </div>)}
+      {gallery}
       {preview ? (
         <MediaViewer
           items={[{ kind: 'wallpaper', content: <WallpaperPreviewContent wallpaper={preview.w} angle={preview.angle} urls={urls} fallbackUrl={urls[pickKey(preview.w)] || ''} onClose={closePreview} onApply={applyPreview} /> }]}
