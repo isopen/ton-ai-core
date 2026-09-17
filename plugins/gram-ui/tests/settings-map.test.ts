@@ -118,5 +118,17 @@ describe('SettingsView map provider radios', () => {
         expect(card).toBeTruthy();
         expect(btn.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
         expect(c.querySelector('#tg-logout-action')).toBeNull();
+        document.body.removeChild(c);
+    });
+
+    test('logout block is narrow like other main-page cards', () => {
+        const seen: any[] = [];
+        const c = mount(baseState('google'), (a: any) => seen.push(a));
+        const logout = c.querySelector('#tg-logout-action') as HTMLElement | null;
+        expect(logout).not.toBeNull();
+        const block = logout!.closest('.tgui-settings-actions') as HTMLElement | null;
+        expect(block).not.toBeNull();
+        expect(block!.classList.contains('tgui-settings-card_narrow')).toBe(true);
+        document.body.removeChild(c);
     });
 });

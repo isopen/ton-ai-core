@@ -89,7 +89,7 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
 
       <div class="tgui-settings-section">
         <div class="tgui-settings-section-label">{t(S.SETTINGS_PHOTO_QUALITY)}</div>
-        <div class="tgui-settings-card">
+        <div class="tgui-settings-card tgui-settings-card_narrow">
           <div class="tgui-settings-row" style="flex-direction:column;align-items:stretch;gap:6px">
             <span class="tgui-settings-label">{t(S.SETTINGS_IMAGES_HINT)}</span>
             <div class="tgui-settings-radio-list">
@@ -109,7 +109,7 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
       </div>
       <div class="tgui-settings-section">
         <div class="tgui-settings-section-label">{t(S.SETTINGS_ANIMATIONS)}</div>
-        <div class="tgui-settings-card">
+        <div class="tgui-settings-card tgui-settings-card_narrow">
           <div class="tgui-settings-row" style="align-items:center">
             <Tumbler
               size="medium"
@@ -122,7 +122,7 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
       </div>
       <div class="tgui-settings-section">
         <div class="tgui-settings-section-label">{t(S.SETTINGS_MAP_PROVIDER)}</div>
-        <div class="tgui-settings-card">
+        <div class="tgui-settings-card tgui-settings-card_narrow">
           <div class="tgui-settings-row" style="flex-direction:column;align-items:stretch;gap:6px">
             <span class="tgui-settings-label">{t(S.SETTINGS_MAP_HINT)}</span>
             <div class="tgui-settings-radio-list">
@@ -142,7 +142,7 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
       </div>
       <div class="tgui-settings-section">
         <div class="tgui-settings-section-label">{t(S.SETTINGS_ACTIONS)}</div>
-        <div class="tgui-settings-actions">
+        <div class="tgui-settings-actions tgui-settings-card_narrow">
           <div
             id="tg-logout-action"
             class="tgui-settings-action"
@@ -153,14 +153,6 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
               <path d="M20 3H9c-1.1 0-2 .9-2 2v4h2V5h11v14H9v-4H7v4c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" fill="#e74c3c" />
             </svg>
             <span class="tgui-settings-action-text" style="color:#e74c3c">{t(S.SETTINGS_LOGOUT)}</span>
-          </div>
-        </div>
-      </div>
-      <div class="tgui-settings-section">
-        <div class="tgui-settings-section-label">{t(S.SETTINGS_ABOUT)}</div>
-        <div class="tgui-settings-card">
-          <div class="tgui-settings-about-text">
-            {t(S.SETTINGS_ABOUT_TEXT)}
           </div>
         </div>
       </div>

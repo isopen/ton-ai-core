@@ -2964,6 +2964,11 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
+.tgui-settings-card_narrow {
+  width: 300px;
+  max-width: 100%;
+}
+
 .tgui-menu-list {
   padding: 4px 0;
 }
