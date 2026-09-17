@@ -78,7 +78,7 @@ export function refreshEmojiPreviews(root: HTMLDivElement | null, documentUrls: 
     const alt = typeof el.getAttribute === 'function' ? el.getAttribute('data-alt') || '' : '';
     if (!docId || !alt) continue;
     try {
-      render(() => h(EmojiCanvas as any, { segments: [{ type: 'emoji', docId, value: alt, custom: true }], documentUrls: documentUrls || {}, size: 22 } as any), el);
+      render(() => h(EmojiCanvas as any, { segments: [{ type: 'emoji', docId, value: alt, custom: true }], documentUrls: documentUrls || {}, size: 22, fontScaled: true } as any), el);
     } catch {
       el.textContent = alt;
     }

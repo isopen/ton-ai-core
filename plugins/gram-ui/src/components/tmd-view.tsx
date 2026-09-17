@@ -24,7 +24,7 @@ function mountCustomEmojis(root: HTMLElement, documentUrls: Record<string, strin
     (span as any).__tmdMounted = cacheKey;
     span.innerHTML = '';
     try {
-      render(() => h(AnimatedEmoji as any, { docId, alt, url, size: 20 } as any), span);
+      render(() => h(AnimatedEmoji as any, { docId, alt, url, size: 20, fontScaled: true } as any), span);
     } catch (e) {
       tmdLog.error('[TmdView] mount custom emoji failed', e);
     }
@@ -43,7 +43,7 @@ function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, str
     (span as any).__tmdStdMounted = cacheKey;
     span.innerHTML = '';
     try {
-      render(() => h(AnimatedEmoji as any, { docId: docId || undefined, alt, url: url || '', size: 20 } as any), span);
+      render(() => h(AnimatedEmoji as any, { docId: docId || undefined, alt, url: url || '', size: 20, fontScaled: true } as any), span);
     } catch {}
   });
   if (existing.length > 0) return;
@@ -82,7 +82,7 @@ function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, str
       const url = docId ? ((documentUrls as any)['emojipack-' + docId] || '') : '';
       (span as any).__tmdStdMounted = (docId || emoji) + '|' + url;
       try {
-        render(() => h(AnimatedEmoji as any, { docId: docId || undefined, alt: emoji, url: url || '', size: 20 } as any), span);
+        render(() => h(AnimatedEmoji as any, { docId: docId || undefined, alt: emoji, url: url || '', size: 20, fontScaled: true } as any), span);
       } catch {}
       pos = r.end;
     }

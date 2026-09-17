@@ -213,7 +213,7 @@ function renderPlainWithEmojis(text: string, documentUrls?: Record<string, strin
     if (!docId) {
       parts.push(emoji);
     } else {
-      parts.push(<AnimatedEmoji key={'e' + i} docId={docId} alt={emoji} url={url} size={16} />);
+      parts.push(<AnimatedEmoji key={'e' + i} docId={docId} alt={emoji} url={url} size={16} fontScaled={true} />);
     }
     pos = r.end;
   }
@@ -240,7 +240,7 @@ function CustomEmojiNode({ documentId, alt, documentUrls }: { documentId: string
     log.debug('[rich-ce-miss]', documentId, alt, Object.keys(documentUrls || {}).slice(0,5));
   }
   if (String(url).startsWith('blob:ce')) return <img class="rich-ce-img" src={url} alt={alt} draggable={false} />;
-  return <AnimatedEmoji docId={documentId} url={url || ''} alt={alt} size={20} />;
+  return <AnimatedEmoji docId={documentId} url={url || ''} alt={alt} size={20} fontScaled={true} />;
 }
 
 function RichTextNode({ node, messageId, onButton, documentUrls, inactiveButtons }: { node: any; messageId?: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true> }): any {

@@ -221,7 +221,7 @@ function isEmojiOnlyText(text: string, entities?: any[]): boolean {
   return !/\S/.test(text.slice(pos));
 }
 
-export function EmojiText({ text, entities, documentUrls, documentSources, inlineSize = INLINE_EMOJI_SIZE, singleLine = false, ctx = 'chat', fontScaled = false }: { text: string; entities?: any[]; documentUrls: Record<number, string>; documentSources?: Record<number | string, string>; inlineSize?: number; singleLine?: boolean; ctx?: 'dialog' | 'chat'; fontScaled?: boolean }) {
+export function EmojiText({ text, entities, documentUrls, documentSources, inlineSize = INLINE_EMOJI_SIZE, singleLine = false, ctx = 'chat', fontScaled = true }: { text: string; entities?: any[]; documentUrls: Record<number, string>; documentSources?: Record<number | string, string>; inlineSize?: number; singleLine?: boolean; ctx?: 'dialog' | 'chat'; fontScaled?: boolean }) {
   const emojiEntities = (entities || [])
     .filter((e: any) => e?._ === 'messageEntityCustomEmoji' && typeof e.offset === 'number' && typeof e.length === 'number' && e.length > 0)
     .sort((a: any, b: any) => a.offset - b.offset);

@@ -5,7 +5,7 @@ import { AnimatedEmoji } from './emoji-text.js';
 import { matchEmojiRuns, getEmojiDocId } from './emoji-store.js';
 import { hasTmd, parseTmdEntities, applyEntitiesHtml } from '@ton-ai/tmd';
 import { render } from '@ton-ai/atom/render';
-import { buttonStyleClass, isInactiveButtonData, isButtonInactive, isDisabledButtonType, decodeButtonAction } from '../utils.js';
+import { buttonStyleClass, isInactiveButtonData, isButtonInactive, isDisabledButtonType, decodeButtonAction, messageFontPx } from '../utils.js';
 
 const kbLog = getLogger('gram-ui:kb');
 const kbLoggedSigs = new Set<string>();
@@ -96,7 +96,7 @@ function ButtonText({ text, documentUrls }: { text: string; documentUrls?: Recor
       if ((s as any).__mounted === cacheKey) return;
       (s as any).__mounted = cacheKey;
       s.innerHTML = '';
-      try { render(() => h(AnimatedEmoji as any, { docId, alt, url, size: 16 } as any), s); } catch {}
+      try { render(() => h(AnimatedEmoji as any, { docId, alt, url, size: 16, fontScaled: true } as any), s); } catch {}
     });
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
     const tNodes: Text[] = [];
@@ -120,12 +120,12 @@ function ButtonText({ text, documentUrls }: { text: string; documentUrls?: Recor
         const docId = getEmojiDocId(emoji);
         const span = document.createElement('span');
         span.style.display = 'inline-block';
-        span.style.width = '16px';
-        span.style.height = '16px';
-        span.style.verticalAlign = 'middle';
+        span.style.width = messageFontPx(16);
+        span.style.height = messageFontPx(16);
+        span.style.verticalAlign = '-0.06em';
         span.style.margin = '0 1px';
         const url2 = docId ? ((documentUrls as any)?.['emojipack-' + docId] || '') : '';
-        try { render(() => h(AnimatedEmoji as any, { docId: docId || undefined, alt: emoji, url: url2 || '', size: 16 } as any), span); } catch {}
+        try { render(() => h(AnimatedEmoji as any, { docId: docId || undefined, alt: emoji, url: url2 || '', size: 16, fontScaled: true } as any), span); } catch {}
         frag.appendChild(span);
         pos = r.end;
       }
@@ -147,7 +147,7 @@ function ButtonText({ text, documentUrls }: { text: string; documentUrls?: Recor
     const emoji = r.emoji;
     const docId = getEmojiDocId(emoji);
     const url = docId ? ((documentUrls as any)?.['emojipack-' + docId] || '') : '';
-    parts.push(<span key={'e' + idx} style="display:inline-flex;align-items:center;vertical-align:middle;margin:0 2px"><AnimatedEmoji docId={docId} alt={emoji} url={url} size={16} /></span>);
+    parts.push(<span key={'e' + idx} style="display:inline-flex;align-items:center;vertical-align:middle;margin:0 2px"><AnimatedEmoji docId={docId} alt={emoji} url={url} size={16} fontScaled={true} /></span>);
     pos = r.end;
   }
   if (pos < text.length) parts.push(<span key="tend">{text.slice(pos)}</span>);

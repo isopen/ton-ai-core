@@ -498,6 +498,8 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
   }
   const hasEmoji = emojiSegs.length > 0;
   const shared = hasEmoji && emojiSegs.length >= SHARED_MIN;
+  const liveFont = useMessageFontSize();
+  const effSize = fontScaled ? Math.round(size * liveFont / MESSAGE_FONT_DEFAULT) : size;
 
   const [live, setLive] = useState<Record<string, { url: string; kind: 'video' | 'tgs' | 'img' }>>({});
   const pendingUrlRef = useRef<Record<string, { url: string; kind: 'video' | 'tgs' | 'img' }>>({});
@@ -944,7 +946,7 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
         const url = urlFor(docId);
         const kind = kinds[docId];
         const pos = positions[idx];
-        const renderId = renderIdFor(docId, size);
+        const renderId = renderIdFor(docId, effSize);
         const failed = !!failedDocs[docId];
         const onError = () => {
           const hadPainted = everPaintedDocs.has(docId);
@@ -959,15 +961,15 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
           <span key={s.type + ':' + (s.docId || s.value) + ':' + i} class="tgui-emoji-slot" data-doc={docId} style={slotStyle}>
             {kind === 'video' && url && !failed ? (
               (inView || everShown) ? (
-                <VideoSlot url={url} size={size} playing={playing} onError={onError} />
+                <VideoSlot url={url} size={effSize} playing={playing} onError={onError} />
               ) : (
                 <span style="display:block;width:100%;height:100%" />
               )
             ) : kind === 'img' && url && !failed ? (
               <img
                 src={url}
-                width={size}
-                height={size}
+                width={effSize}
+                height={effSize}
                 style="display:block;width:100%;height:100%;object-fit:contain"
                 loading="eager"
                 decoding="async"
@@ -981,7 +983,7 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
                       key={'stk-' + renderId + ':' + idx}
                       tgsUrl={url}
                       renderId={renderId}
-                      size={size}
+                      size={effSize}
                       sharedCanvas={sharedCanvasNode}
                       coords={{ x: pos.x, y: pos.y }}
                       isLowPriority
@@ -996,7 +998,7 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
                       key={'stk-fallback-' + renderId + ':' + idx}
                       tgsUrl={url}
                       renderId={renderId}
-                      size={size}
+                      size={effSize}
                       isLowPriority
                       noPlay={!playing}
                       onLoad={() => onSlotLoaded(docId)}
@@ -1012,7 +1014,7 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
                     key={'stk-' + renderId + ':' + idx}
                     tgsUrl={url}
                     renderId={renderId}
-                    size={size}
+                    size={effSize}
                     isLowPriority
                     noPlay={!playing}
                     onLoad={() => onSlotLoaded(docId)}

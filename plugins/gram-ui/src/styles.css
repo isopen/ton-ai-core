@@ -4128,7 +4128,7 @@ body {
   justify-content: center;
   cursor: pointer;
   border-radius: 4px;
-  font-size: 26px;
+  font-size: calc(var(--message-font-size, 14px) * 1.8571);
   overflow: hidden;
 }
 
@@ -4161,20 +4161,38 @@ body {
 
 .tgui-emoji-inline {
   display: inline-block;
-  vertical-align: middle;
+  vertical-align: -0.06em;
   margin: 0 1px;
 }
 
 .tgui-emoji-placeholder {
   display: inline-block;
   margin: 0 1px;
-  vertical-align: middle;
+  vertical-align: -0.06em;
 }
 
 .tgui-emoji-pending {
   border-radius: 12px;
   background: var(--bg-hover);
   animation: pickerPulse 1.2s ease-in-out infinite;
+}
+
+.tgui-emoji-scaled {
+  display: inline-block;
+  vertical-align: -0.06em;
+  margin: 0 1px;
+  overflow: hidden;
+}
+
+.tgui-emoji-scaled > * {
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+}
+
+.tgui-emoji-slot canvas.tgui-animated-sticker {
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .tgui-reactions {

@@ -1,13 +1,14 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { memo, type ComponentType } from '@ton-ai/atom';
 import { useEffect, useRef, useState, useCallback } from '@ton-ai/atom/hooks';
-import { checkEmojiKind, observeVisibility, EmojiCanvas } from './emoji-canvas.js';
+import { checkEmojiKind, observeVisibility, EmojiCanvas, useMessageFontSize } from './emoji-canvas.js';
 import { AnimatedSticker } from './animated-sticker.js';
 import { ensureEmojiStickers, getEmojiDocId, requestEmojiDownload, subscribeEmojiMap, ensureEmojiPicker, subscribeEmojiPicker, searchServerEmojis } from './emoji-store.js';
 import { ensureStickerSets, ensureStickerPack, loadMoreStickerPack, searchStickers, subscribeStickers, getStickerSets, getStickerPack, findStickerSetForDoc, getStickerRecent, getStickerSearch, ensureSavedGifs, subscribeGifs, getSavedGifs, searchGifsLocal, ensureStarGifts, subscribeGifts, getStarGifts, getGiftDocs, ensureEmojiSets, subscribeEmojiSets, getEmojiSets, ensureFeaturedStickers, ensureFeaturedEmojiSets, getFeaturedStickers, getFeaturedEmojiSets, resolveDocGlyph, loadPickerRecent, savePickerRecent, PICKER_DOCS_PAGE, PICKER_SETS_PAGE, type StickerPackState, type RecentEmoji } from './picker-store.js';
 import { requestDocument } from './media-source.js';
 import { Tabs } from '../primitives/tabs.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
+import { clampMessageFontSize, readMessageFontSize, MESSAGE_FONT_DEFAULT, messageFontPx } from '../utils.js';
 import { getLogger } from '@ton-ai/gram-debug';
 import { t, S } from '@ton-ai/gram-lang';
 import type { Dispatch } from '../state.js';
@@ -18,6 +19,11 @@ const ITEM_SIZE = 40;
 const GAP = 2;
 const PADDING = 8;
 const HEADER_H = 24;
+
+export function pickerCellSize(fontSize?: number): number {
+  const f = clampMessageFontSize(fontSize ?? readMessageFontSize(), MESSAGE_FONT_DEFAULT);
+  return Math.round(ITEM_SIZE * f / MESSAGE_FONT_DEFAULT);
+}
 const RECENT_MAX = 40;
 const RECENT_KEY = 'tg-recent-emoji';
 
@@ -49,6 +55,8 @@ function PickerCellImpl({ emoji, docId, size, url, coords, sharedCanvas, onPlayi
   const [playing, setPlaying] = useState(false);
   const [shown, setShown] = useState(false);
   const [kind, setKind] = useState<'video' | 'tgs' | 'img' | null>(null);
+  const liveFont = useMessageFontSize();
+  const esize = Math.round(size * liveFont / MESSAGE_FONT_DEFAULT);
   const playingRef = useRef(false);
   playingRef.current = playing;
 
@@ -94,27 +102,28 @@ function PickerCellImpl({ emoji, docId, size, url, coords, sharedCanvas, onPlayi
   }, [playing, url]);
 
   const animate = !!docId && !!url && kind === 'tgs' && !!coords && !!sharedCanvas;
+  const box = messageFontPx(size);
   return (
     <span
       ref={ref}
       class="tgui-emoji-cell"
-      style={`width:${size}px;height:${size}px`}
+      style={`width:${box};height:${box}`}
       onClick={() => onPick(emoji)}
     >
       {animate ? (
         <AnimatedSticker
           tgsUrl={url}
-          renderId={'emojipack-' + docId + ':' + size}
-          size={size}
+          renderId={'emojipack-' + docId + ':' + esize}
+          size={esize}
           sharedCanvas={sharedCanvas}
           coords={{ x: coords.x, y: coords.y }}
           isLowPriority
           noPlay={!playing}
         />
       ) : playing && kind === 'video' ? (
-        <video src={url} width={size} height={size} style={`width:${size}px;height:${size}px`} loop muted playsinline autoplay />
+        <video src={url} width={size} height={size} style={`width:${box};height:${box}`} loop muted playsinline autoplay />
       ) : playing && kind === 'img' ? (
-        <img src={url} width={size} height={size} style={`width:${size}px;height:${size}px;object-fit:contain`} loading="lazy" decoding="async" />
+        <img src={url} width={size} height={size} style={`width:${box};height:${box};object-fit:contain`} loading="lazy" decoding="async" />
       ) : (
         <span class="tgui-emoji-cell-glyph">{emoji}</span>
       )}
@@ -146,8 +155,9 @@ function CategorySection({ cat, index, mounted, limit, columns, documentUrls, on
   const totalItems = cat.emojis.length;
   const visibleCount = Math.min(limit ?? totalItems, totalItems);
   const hasMore = visibleCount < totalItems;
+  const cell = pickerCellSize();
   const rows = Math.max(1, Math.ceil(visibleCount / columns));
-  const reservedH = HEADER_H + rows * (ITEM_SIZE + GAP) + (hasMore ? ITEM_SIZE + GAP : 0) - GAP;
+  const reservedH = HEADER_H + rows * (cell + GAP) + (hasMore ? cell + GAP : 0) - GAP;
 
   const setCellPlaying = useCallback((i: number) => (p: boolean) => {
     setPlayingMap((prev) => (prev[i] === p ? prev : { ...prev, [i]: p }));
@@ -245,10 +255,10 @@ function CategorySection({ cat, index, mounted, limit, columns, documentUrls, on
     <div class="tgui-emoji-cat" style={`height:${reservedH}px`}>
       <div class="tgui-emoji-cat-header">{cat.name}</div>
       {mounted ? (
-        <div ref={gridRef} class="tgui-emoji-grid" style="position:relative">
+        <div ref={gridRef} class="tgui-emoji-grid" style={`position:relative;grid-template-columns:repeat(auto-fill, ${cell}px)`}>
           {cells}
           {hasMore && (
-            <div ref={moreRef} class="tgui-emoji-cat-more" style={`width:${columns * (ITEM_SIZE + GAP) - GAP}px`} />
+            <div ref={moreRef} class="tgui-emoji-cat-more" style={`width:${columns * (cell + GAP) - GAP}px`} />
           )}
           <canvas ref={canvasRef} class="tgui-emoji-shared-canvas" style="position:absolute;left:0;top:0;pointer-events:none" />
         </div>
@@ -303,12 +313,10 @@ function StickerCell({ doc, documentUrls, size = 72, onPick }: { doc: any; docum
   );
 }
 
-const EMOJI_DOC_SIZE = 40;
-
 export function EmojiDocCell({ docId, glyph, documentUrls, onPick }: { docId: string; glyph: string; documentUrls: Record<string, string>; onPick: () => void }) {
   return (
     <button type="button" class="emoji-doc" onClick={onPick} aria-label="Emoji">
-      <EmojiCanvas segments={[{ type: 'emoji', docId, value: glyph, custom: true }]} documentUrls={documentUrls} size={EMOJI_DOC_SIZE} />
+      <EmojiCanvas segments={[{ type: 'emoji', docId, value: glyph, custom: true }]} documentUrls={documentUrls} size={ITEM_SIZE} fontScaled={true} />
     </button>
   );
 }
@@ -410,6 +418,7 @@ function PickerIcon({ name }: { name: string }) {
 }
 
 export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className = '' }: { dispatch?: Dispatch; documentUrls: Record<string, string>; onPick?: (emoji: string) => void; onClose?: () => void; className?: string }) {
+  const cell = pickerCellSize();
   const [tab, setTab] = useState<PickerTab>('emoji');
   const [recent, setRecent] = useState<RecentEmoji[]>([]);
   const [columns, setColumns] = useState(8);
@@ -523,7 +532,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
     if (!el) return;
     let raf = 0;
     const measure = () => {
-      const next = Math.max(1, Math.floor((el.clientWidth - PADDING * 2 + GAP) / (ITEM_SIZE + GAP)));
+      const next = Math.max(1, Math.floor((el.clientWidth - PADDING * 2 + GAP) / (cell + GAP)));
       setColumns((prev) => (prev === next ? prev : next));
     };
     const onResize = () => {
@@ -540,7 +549,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
       ro.disconnect();
       cancelAnimationFrame(raf);
     };
-  }, []);
+  }, [cell]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -717,7 +726,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
     return (
       <div key={s.id}>
         <div class="pack-head section-title--spaced"><b>{pack?.title || s.title || t(S.PICKER_EMOJI)}</b></div>
-        <div class="emoji-grid">
+        <div class="emoji-grid" style={`grid-template-columns:repeat(auto-fill, ${cell}px)`}>
           {docs.map((d: any) => (
             <EmojiDocCell key={String(d?.id)} docId={String(d?.id ?? '')} glyph={resolveDocGlyph(d, getStickerPack(s.id)) || ''} documentUrls={documentUrls} onPick={() => onPickEmojiDoc(d, getStickerPack(s.id))} />
           ))}
