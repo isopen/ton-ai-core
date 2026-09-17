@@ -1747,7 +1747,7 @@ body {
 }
 
 .tgui-sticker {
-  max-width: 200px;
+  max-width: calc(var(--message-font-size, 14px) * 14.2857);
 }
 
 .tgui-sticker-dl {
@@ -1781,8 +1781,8 @@ body {
 }
 
 .tgui-sticker-preview {
-  width: 150px;
-  height: 150px;
+  width: calc(var(--message-font-size, 14px) * 10.7143);
+  height: calc(var(--message-font-size, 14px) * 10.7143);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1793,7 +1793,7 @@ body {
 }
 
 .tgui-sticker-emoji {
-  font-size: 48px;
+  font-size: calc(var(--message-font-size, 14px) * 3.4286);
 }
 
 .tgui-sticker-meta {

@@ -1,5 +1,11 @@
 type Sample = { u: number; v: number; color: string };
 
+import { readMessageFontSize, MESSAGE_FONT_DEFAULT } from '../utils.js';
+
+export function fxLayerScale(): number {
+  return readMessageFontSize() / MESSAGE_FONT_DEFAULT;
+}
+
 const rand = (a: number, b: number): number => a + Math.random() * (b - a);
 const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
@@ -985,6 +991,10 @@ export function scheduleStickerClickFx(stickerEl: HTMLElement, cv: HTMLCanvasEle
 function runRandomEffect(stickerEl: HTMLElement, cv: HTMLCanvasElement, x: number, y: number): void {
   try {
     if (!cv.isConnected) return;
+    const k = fxLayerScale();
+    const layer = ensureLayer();
+    layer.style.transform = k === 1 ? '' : 'scale(' + k.toFixed(3) + ')';
+    layer.style.transformOrigin = x + 'px ' + y + 'px';
     let kind = pick([...KINDS]);
     if (kind === lastKind) kind = pick([...KINDS]);
     lastKind = kind;

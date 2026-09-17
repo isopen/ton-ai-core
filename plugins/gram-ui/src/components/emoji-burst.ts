@@ -3,6 +3,12 @@ import { scheduleStickerClickFx } from './sticker-click-fx.js';
 import { isEmojiAtTextOffset } from './emoji-store.js';
 import { bindLifetimeListeners } from '@ton-ai/atom';
 import { getLogger } from '@ton-ai/gram-debug';
+import { readMessageFontSize, MESSAGE_FONT_DEFAULT } from '../utils.js';
+
+export function burstParticleSize(big: boolean): number {
+  const base = big ? 56 : 30;
+  return Math.round(base * readMessageFontSize() / MESSAGE_FONT_DEFAULT);
+}
 
 const log = getLogger('gram-ui:emoji-burst');
 
@@ -224,8 +230,8 @@ export function spawnEmojiBurst(x: number, y: number, source: BurstSource, key: 
 
     const layers = session.count;
     const perLayer = PARTICLES_PER_LAYER_BASE + layers * 2;
-    const size = big ? 56 : 30;
-    const spread = big ? 1.35 : 1;
+    const size = burstParticleSize(big);
+    const spread = (big ? 1.35 : 1) * readMessageFontSize() / MESSAGE_FONT_DEFAULT;
 
     for (let l = 0; l < layers; l++) {
         const n = Math.ceil(perLayer / layers);

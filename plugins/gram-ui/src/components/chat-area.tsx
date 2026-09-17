@@ -240,7 +240,7 @@ function GreetingSticker({ documentUrls }: { documentUrls: Record<number, string
   return <AnimatedSticker tgsUrl={url} renderId="greeting-sticker" size={180} />;
 }
 
-function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress, documentSource }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; documentUrls: Record<number, string>; documentProgress?: Record<number, number>; documentSource?: string }) {
+export function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress, documentSource }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; documentUrls: Record<number, string>; documentProgress?: Record<number, number>; documentSource?: string }) {
   const doc = m.media?.document;
   const emoji = getStickerEmoji(doc);
   const mimeLc = (doc?.mime_type || '').toLowerCase();
@@ -308,7 +308,9 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
     return () => clearTimeout(t);
   }, [animFailed, animRetries]);
 
-  const renderId = 'sticker-' + String(doc?.id || m.id);
+  const liveFont = useMessageFontSize();
+  const stickerSize = Math.round(150 * liveFont / MESSAGE_FONT_DEFAULT);
+  const renderId = 'sticker-' + String(doc?.id || m.id) + '-' + stickerSize;
   const showTgs = isTgs && !!url && !animFailed;
   const showImg = !isTgs && !!url;
 
@@ -366,7 +368,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
 
   return (
     <div class="tgui-sticker" ref={handleRef} style="position:relative" data-server-fx={effectUrl ? '1' : undefined}>
-      <div class="tgui-sticker-preview" style={{ width: '150px', height: '150px', position: 'relative' }}>
+      <div class="tgui-sticker-preview" style={{ position: 'relative' }}>
         {staticThumb?.url ? (
           <img class="tgui-sticker-thumb" src={staticThumb.url} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
         ) : null}
@@ -374,7 +376,7 @@ function StickerBubble({ m, timeStr, out, status, documentUrls, documentProgress
           <button class="tgui-sticker-dl" type="button" title={t(S.DEBUG_DOWNLOAD_TGS)} onClick={downloadStickerSource}>⤓</button>
         ) : null}
         {showTgs
-          ? <AnimatedSticker tgsUrl={url} renderId={renderId} size={150} noPlay={!playing} onError={() => setAnimFailed(true)} />
+          ? <AnimatedSticker tgsUrl={url} renderId={renderId} size={stickerSize} noPlay={!playing} onError={() => setAnimFailed(true)} />
           : showImg && isVideoSticker
             ? <video src={url} autoplay loop muted playsinline preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             : showImg
