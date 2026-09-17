@@ -148,7 +148,7 @@ describe('message text size control', () => {
     render(Probe, container);
     await new Promise((r) => setTimeout(r, 30));
     try {
-      expect(container.querySelector('.tgui-fontsize-value')?.textContent).toBe('15.57');
+      expect(container.querySelector('.tgui-fontsize-value')?.textContent).toBe('16');
       expect((container.querySelector('input.Slider__input') as HTMLInputElement).step).toBe('1');
       const toggle = container.querySelector('.tgui-fontsize-frac input') as HTMLInputElement;
       expect(toggle).not.toBeNull();
@@ -171,6 +171,64 @@ describe('message text size control', () => {
       expect(container2.querySelector('.tgui-fontsize-value')?.textContent).toBe('15.5');
     } finally {
       document.body.removeChild(container2);
+    }
+  });
+
+  test('disabling fractional rounds committed size to nearest integer', async () => {
+    const actions: any[] = [];
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const Probe: any = () => h(FontSizeControl as any, {
+      state: { ...defaultState(), messageFontSize: 15.567, messageFontFractional: true },
+      dispatch: (a: any) => { actions.push(a); },
+    });
+    render(Probe, container);
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      expect(container.querySelector('.tgui-fontsize-value')?.textContent).toBe('15.57');
+      expect((container.querySelector('input.Slider__input') as HTMLInputElement).step).toBe('0.01');
+      (container.querySelector('.tgui-fontsize-frac input') as HTMLInputElement).click();
+      await new Promise((r) => setTimeout(r, 30));
+      expect(actions).toEqual([{ type: 'SET_MESSAGE_FONT_FRACTIONAL', v: false }]);
+    } finally {
+      document.body.removeChild(container);
+    }
+  });
+
+  test('reducer rounds size when fractional is disabled', () => {
+    const s1 = reducer(
+      { ...defaultState(), messageFontSize: 15.567, messageFontFractional: true },
+      { type: 'SET_MESSAGE_FONT_FRACTIONAL', v: false } as any,
+    );
+    expect(s1.messageFontFractional).toBe(false);
+    expect(s1.messageFontSize).toBe(16);
+    const s2 = reducer(
+      { ...defaultState(), messageFontSize: 15.4, messageFontFractional: true },
+      { type: 'SET_MESSAGE_FONT_FRACTIONAL', v: false } as any,
+    );
+    expect(s2.messageFontSize).toBe(15);
+    const s3 = reducer(
+      { ...defaultState(), messageFontSize: 15.567, messageFontFractional: false },
+      { type: 'SET_MESSAGE_FONT_FRACTIONAL', v: true } as any,
+    );
+    expect(s3.messageFontFractional).toBe(true);
+    expect(s3.messageFontSize).toBe(15.567);
+  });
+
+  test('integer mode never displays fractions, even for fractional drafts', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const Probe: any = () => h(FontSizeControl as any, {
+      state: { ...defaultState(), messageFontSize: 15.4, messageFontFractional: false },
+      dispatch: () => {},
+    });
+    render(Probe, container);
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      expect(container.querySelector('.tgui-fontsize-value')?.textContent).toBe('15');
+      expect((container.querySelector('input.Slider__input') as HTMLInputElement).value).toBe('15');
+    } finally {
+      document.body.removeChild(container);
     }
   });
 

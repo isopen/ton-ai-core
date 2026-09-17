@@ -11,7 +11,8 @@ export function FontSizeControl({ state, dispatch }: { state: AppState; dispatch
   const [draft, setDraft] = useState<number | null>(null);
   const fractional = state.messageFontFractional === true;
   const saved = clampMessageFontSize(state.messageFontSize, MESSAGE_FONT_DEFAULT);
-  const shown = draft !== null && draft !== saved ? draft : saved;
+  const draftShown = draft !== null && draft !== saved ? draft : saved;
+  const shown = fractional ? draftShown : Math.round(draftShown);
   return (
     <Fragment>
       <div class="tgui-fontsize-row">
@@ -38,7 +39,10 @@ export function FontSizeControl({ state, dispatch }: { state: AppState; dispatch
           name="font-fractional"
           label={t(S.MESSAGE_FONT_FRACTIONAL)}
           checked={fractional}
-          onChange={(v) => dispatch({ type: 'SET_MESSAGE_FONT_FRACTIONAL', v })}
+          onChange={(v) => {
+            if (!v) setDraft(Math.round(clampMessageFontSize(state.messageFontSize, MESSAGE_FONT_DEFAULT)));
+            dispatch({ type: 'SET_MESSAGE_FONT_FRACTIONAL', v });
+          }}
         />
       </div>
     </Fragment>

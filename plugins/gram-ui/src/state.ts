@@ -112,7 +112,10 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_ANIMATIONS_ENABLED': return { ...state, animationsEnabled: action.v };
     case 'SET_MAP_PROVIDER': return { ...state, mapProvider: action.provider };
     case 'SET_MESSAGE_FONT_SIZE': return { ...state, messageFontSize: clampMessageFontSize(action.size, state.messageFontSize) };
-    case 'SET_MESSAGE_FONT_FRACTIONAL': return { ...state, messageFontFractional: action.v };
+    case 'SET_MESSAGE_FONT_FRACTIONAL': {
+      if (action.v) return { ...state, messageFontFractional: true };
+      return { ...state, messageFontFractional: false, messageFontSize: Math.round(clampMessageFontSize(state.messageFontSize, MESSAGE_FONT_DEFAULT)) };
+    }
     case 'SET_ACTIVE_SKILL': return { ...state, activeSkill: action.id, ...(action.id ? { selectedPeer: null } : {}) };
     case 'SET_LANG_OPTIONS': return { ...state, langOptions: action.options };
     case 'UPDATE_MESSAGE_PHOTO': {
