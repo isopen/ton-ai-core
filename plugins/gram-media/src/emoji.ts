@@ -38,6 +38,7 @@ const DICE_SET_MAX_CONCURRENT = 3;
 
 const SPECIAL_SET_RETRY_MIN_MS = 300;
 const SPECIAL_SET_RETRY_MAX_MS = 600;
+const EMOJI_PACK_SNAPSHOT_MAX_DOCS = 2500;
 
 const normalizeEmoji = (e: string): string => e.replace(/[\uFE00-\uFE0F\u200D]/g, '');
 
@@ -95,6 +96,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiCustomDocsById = new Map<string, any>();
     private emojiDocsById = new Map<string, any>();
     private emojiStickersLoading = false;
+    private emojiMapStale = false;
     private requestedEmojiDocIds = new Set<string>();
     private emojiInFlightSince = new Map<string, number>();
     private requestedEmojiAlts = new Set<string>();
@@ -840,8 +842,47 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }, delay);
     }
 
+    private onHydrateEmojiMap = (e: Event) => {
+        const docs = (e as CustomEvent).detail?.docs;
+        if (!docs || typeof docs !== 'object') return;
+        if (this.emojiStickerDocs && Object.keys(this.emojiStickerDocs).length > 0) return;
+        const map: Record<string, any> = {};
+        for (const [k, d] of Object.entries(docs)) {
+            if (typeof k !== 'string' || !(d as any)?.id) continue;
+            map[k] = d;
+            if (Object.keys(map).length >= EMOJI_PACK_SNAPSHOT_MAX_DOCS) break;
+        }
+        if (Object.keys(map).length === 0) return;
+        this.emojiStickerDocs = map;
+        this.emojiMapStale = true;
+        this.indexEmojiDocs();
+        for (const d of Object.values(map)) this.notifyCustomEmojiAlt(d);
+        this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
+        this.flushPendingEmojiAlts();
+        if (this.debug) log.info('[gram-media] emoji pack map hydrated docs=' + Object.keys(map).length);
+    };
+
+    private emitPackSnapshot(): void {
+        try {
+            const docs = this.emojiStickerDocs || {};
+            const keys = Object.keys(docs);
+            if (keys.length === 0) return;
+            const out: Record<string, any> = {};
+            for (const k of keys) {
+                const d = docs[k];
+                if (d?.id == null) continue;
+                out[k] = d;
+                if (Object.keys(out).length >= EMOJI_PACK_SNAPSHOT_MAX_DOCS) break;
+            }
+            if (Object.keys(out).length === 0) return;
+            this.router.emitWindow('tg-emoji-map-snapshot', { docs: out });
+        } catch (err: any) {
+            if (this.debug) log.warn('[gram-media] pack snapshot skipped: ' + (err?.message || err));
+        }
+    };
+
     private onFetchEmojiStickers = async () => {
-        if (this.emojiStickerDocs && Object.keys(this.emojiStickerDocs).length > 0) {
+        if (this.emojiStickerDocs && Object.keys(this.emojiStickerDocs).length > 0 && !this.emojiMapStale) {
             this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
             void this.emitPickerReady();
             return;
@@ -871,9 +912,16 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             return;
         }
         this.emojiStickersRetryCount = 0;
+        if (this.emojiStickerDocs) {
+            for (const [k, d] of Object.entries(this.emojiStickerDocs)) {
+                if (!(k in map)) map[k] = d;
+            }
+        }
         this.emojiStickerDocs = map;
+        this.emojiMapStale = false;
         this.indexEmojiDocs();
         this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
+        this.emitPackSnapshot();
         void this.emitPickerReady();
         this.flushPendingEmojiAlts();
         this.emojiStickersLoading = false;
@@ -928,6 +976,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             log.info('[gram-media] keycap map', rows.join(' '));
         }
         this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
+        this.emitPackSnapshot();
     };
 
     private emitPickerReady = async (): Promise<void> => {
@@ -1475,6 +1524,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         const events: Array<[string, (e: Event) => void]> = [
             ['tg-fetch-custom-emoji', this.onFetchCustomEmoji],
             ['tg-fetch-emoji-stickers', this.onFetchEmojiStickers],
+            ['tg-emoji-map-hydrate', this.onHydrateEmojiMap],
             ['tg-fetch-emoji-picker', this.onFetchEmojiPicker],
             ['tg-request-dice-set', this.onRequestDiceSet],
             ['tg-download-emoji', this.onDownloadEmoji],

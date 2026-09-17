@@ -3,7 +3,7 @@ import { tpl } from '@ton-ai/gram-lang';
 import { buildPeerBlurThumb, requestPhoto } from '@ton-ai/gram-ui';
 import type { Dialog, Message, PeerInfo } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbGetMany, dbKeys } from '@/utils/db';
-import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, ORPHANED_KEY, ORPHAN_MAX, ORPHAN_TTL_MS } from './gram-constants';
+import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, EMOJI_PACK_MAP_KEY, ORPHANED_KEY, ORPHAN_MAX, ORPHAN_TTL_MS } from './gram-constants';
 import { maxPositiveHistoryId, trimHistoryMessages, HISTORY_MAX_CACHED_PEERS } from './gram-history';
 import type { GramState } from './gram-state';
 import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
@@ -138,6 +138,17 @@ export async function loadCachedDialogs(s: GramState) {
     log.error('[dialog-cache] LOAD error', e?.message);
     await dbDel(DIALOG_CACHE_KEY);
   }
+}
+
+export async function loadEmojiPackMap() {
+  try {
+    const snap = await dbGet<{ docs?: Record<string, any> }>(EMOJI_PACK_MAP_KEY);
+    const docs = snap?.docs;
+    if (!docs || typeof docs !== 'object') return;
+    const keys = Object.keys(docs);
+    if (keys.length === 0) return;
+    window.dispatchEvent(new CustomEvent('tg-emoji-map-hydrate', { detail: { docs } }));
+  } catch {}
 }
 
 export function scheduleDialogsFlush(s: GramState) {

@@ -7,7 +7,7 @@ import { dbGet, dbSet, dbDel, dbKeys, dbClearCacheKeepSession, dbDeleteAvatarByO
 import { GramMediaRouter } from '@ton-ai/gram-media';
 import type { MediaMessageLike } from '@ton-ai/gram-media';
 import type { GramState } from './gram-state';
-import { DIALOG_CACHE_KEY } from './gram-constants';
+import { DIALOG_CACHE_KEY, EMOJI_PACK_MAP_KEY } from './gram-constants';
 import { AUTH_PRESERVE_KEYS } from './gram-auth';
 import { API_CREDS_PRESERVE_KEYS } from '@/utils/api-creds';
 import { fetchCachedCountries, fetchLangOptions } from './gram-lang';
@@ -661,6 +661,12 @@ export function setupEventListeners(s: GramState): void {
     }
   };
   window.addEventListener('tg-message-font-fractional-changed', onMessageFontFractionalChanged);
+  const onEmojiMapSnapshot = (e: Event) => {
+    const docs = (e as CustomEvent).detail?.docs;
+    if (!docs || typeof docs !== 'object') return;
+    dbSet(EMOJI_PACK_MAP_KEY, { docs }).catch(() => {});
+  };
+  window.addEventListener('tg-emoji-map-snapshot', onEmojiMapSnapshot);
 
   mediaRouter = new GramMediaRouter({
     tgService: s.tgService,

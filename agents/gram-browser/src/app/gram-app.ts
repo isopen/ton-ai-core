@@ -14,7 +14,7 @@ import {
   addLog, loadMessageCache,
   setDialogsFromServer, loadCachedDialogs,
   fetchSelfUserId,
-  loadOrphanedDialogs,
+  loadOrphanedDialogs, loadEmojiPackMap,
 } from './gram-utils';
 import { loadStrings, fetchLangOptions, fetchCachedCountries } from './gram-lang';
 import { createHandleUpdate } from './gram-updates';
@@ -136,6 +136,7 @@ export class GramApp {
       s.tgui.current = tguiEarly;
       try { container.style.visibility = ''; } catch {}
       await Promise.allSettled([
+        loadEmojiPackMap(),
         loadOrphanedDialogs(s),
         loadMessageCache(s),
         loadCachedDialogs(s),
