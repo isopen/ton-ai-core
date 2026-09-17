@@ -27,5 +27,6 @@ export const ChatInput = memo(ChatInputView as ComponentType, (a, b) =>
   a.state.selectedPeer === b.state.selectedPeer &&
   a.state.showEmojiPicker === b.state.showEmojiPicker &&
   a.state.documentUrls === b.state.documentUrls &&
+  a.state.messageFontSize === b.state.messageFontSize &&
   a.state.langCode === b.state.langCode,
 );

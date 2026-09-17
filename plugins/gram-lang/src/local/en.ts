@@ -52,6 +52,8 @@ export const BUILTIN_STRINGS: Record<string, Record<string, string>> = {
     settingsAnimations: 'Animations',
     settingsMapProvider: 'Map provider',
     settingsMapHint: 'Load maps in messages from',
+    messageTextSize: 'Message text size',
+    messageFontFractional: 'Fractional sizes',
     emojiRecent: 'Recent',
     emojiSearchResults: 'Search results',
     pickerEmoji: 'Emoji',

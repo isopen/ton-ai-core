@@ -9,6 +9,7 @@ import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';
 import { t, S } from '@ton-ai/gram-lang';
 import { WallpaperGallery } from './wallpaper-picker.js';
+import { FontSizeControl } from './message-text-size.js';
 
 export function SettingsView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
   const [page, setPage] = useState<'main' | 'chat' | 'devices'>('main');
@@ -25,6 +26,9 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
           <div class="tgui-settings-card tgui-settings-group">
             <MenuList bare={true} title={t(S.WALLPAPER_TITLE)} collapsible={true} defaultExpanded={false}>
               <WallpaperGallery state={state} dispatch={dispatch} />
+            </MenuList>
+            <MenuList bare={true} title={t(S.MESSAGE_TEXT_SIZE)} collapsible={true} defaultExpanded={false}>
+              <FontSizeControl state={state} dispatch={dispatch} />
             </MenuList>
           </div>
         </div>

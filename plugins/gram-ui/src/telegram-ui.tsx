@@ -12,7 +12,7 @@ import { SkillPlugin } from './plugin/skill-plugin.js';
 import { PluginManager } from '@ton-ai/core';
 import { defaultState, reducer } from './state.js';
 import { injectStyles } from './styles.js';
-import { normalizeMapProvider } from './utils.js';
+import { normalizeMapProvider, clampMessageFontSize, writeMessageFontSizeVar, MESSAGE_FONT_DEFAULT } from './utils.js';
 import { setPhotoQuality } from './components/photo-spec.js';
 import { attachEmojiBurst, attachEmojiInteractions } from './components/emoji-burst.js';
 
@@ -221,6 +221,17 @@ export class TelegramUI {
         try { (document.documentElement as any).dataset.mapProvider = provider; } catch {}
         try { window.dispatchEvent(new CustomEvent('tg-map-provider-changed', { detail: { provider } })); } catch {}
       }, [state.mapProvider]);
+
+      useEffect(() => {
+        const size = clampMessageFontSize(state.messageFontSize, MESSAGE_FONT_DEFAULT);
+        writeMessageFontSizeVar(size);
+        try { window.dispatchEvent(new CustomEvent('tg-message-font-size-changed', { detail: { size } })); } catch {}
+      }, [state.messageFontSize]);
+
+      useEffect(() => {
+        const fractional = state.messageFontFractional === true;
+        try { window.dispatchEvent(new CustomEvent('tg-message-font-fractional-changed', { detail: { fractional } })); } catch {}
+      }, [state.messageFontFractional]);
 
       useEffect(() => {
         if (!state.error && !state.buttonNotice) return;

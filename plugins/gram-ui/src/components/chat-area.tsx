@@ -23,9 +23,9 @@ import { t, tpl, S } from '@ton-ai/gram-lang';
 import { flushEmojiBatch, getEmojiDocId, getDiceDocId, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeDiceSets, ensureEmojiStickers } from './emoji-store.js';
 import { SlotMachineSticker, resetSlotMachineDone } from './slot-machine.js';
 import { resetCompletedAnimations } from './tgs-player.js';
-import { observeVisibility } from './emoji-canvas.js';
+import { observeVisibility, useMessageFontSize } from './emoji-canvas.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
-import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText, isInactiveButtonData, buttonBubbleRel, resolveAvatar, resolveDisplayPeer, peerKeyOf, findChatWallpaper, wallpaperUrlKey, wallpaperPhotoDoc, wallpaperRender, wallpaperDownloadPlan } from '../utils.js';
+import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText, isInactiveButtonData, buttonBubbleRel, resolveAvatar, resolveDisplayPeer, peerKeyOf, findChatWallpaper, wallpaperUrlKey, wallpaperPhotoDoc, wallpaperRender, wallpaperDownloadPlan, MESSAGE_FONT_DEFAULT } from '../utils.js';
 import { loadDefaultWallpaper } from './wallpaper-store.js';
 import { MediaPlayer } from './media-player.js';
 import { VideoMessage } from './video-message.js';
@@ -1275,6 +1275,8 @@ export const areChatAreaPropsEqual = (a: any, b: any): boolean =>
   a.state.sessionId === b.state.sessionId &&
   a.state.imageQuality === b.state.imageQuality &&
   a.state.mapProvider === b.state.mapProvider &&
+  a.state.messageFontSize === b.state.messageFontSize &&
+  a.state.messageFontFractional === b.state.messageFontFractional &&
   a.state.animationsEnabled === b.state.animationsEnabled &&
   a.state.peerWallpapers === b.state.peerWallpapers &&
   a.state.defaultWallpaper === b.state.defaultWallpaper;

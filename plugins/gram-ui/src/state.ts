@@ -1,5 +1,6 @@
 import type { AppState, UIAction } from './types.js';
 import { normalizeLangCode } from '@ton-ai/gram-lang';
+import { clampMessageFontSize, MESSAGE_FONT_DEFAULT } from './utils.js';
 
 export type Dispatch = (action: UIAction) => void;
 
@@ -37,6 +38,8 @@ export function defaultState(): AppState {
     imageQuality: 'max',
     animationsEnabled: true,
     mapProvider: 'google',
+    messageFontSize: MESSAGE_FONT_DEFAULT,
+    messageFontFractional: false,
     loadingMessages: false,
     connectionStatus: 'disconnected',
     langCode: detectBrowserLang(),
@@ -108,6 +111,8 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_IMAGE_QUALITY': return { ...state, imageQuality: action.quality };
     case 'SET_ANIMATIONS_ENABLED': return { ...state, animationsEnabled: action.v };
     case 'SET_MAP_PROVIDER': return { ...state, mapProvider: action.provider };
+    case 'SET_MESSAGE_FONT_SIZE': return { ...state, messageFontSize: clampMessageFontSize(action.size, state.messageFontSize) };
+    case 'SET_MESSAGE_FONT_FRACTIONAL': return { ...state, messageFontFractional: action.v };
     case 'SET_ACTIVE_SKILL': return { ...state, activeSkill: action.id, ...(action.id ? { selectedPeer: null } : {}) };
     case 'SET_LANG_OPTIONS': return { ...state, langOptions: action.options };
     case 'UPDATE_MESSAGE_PHOTO': {

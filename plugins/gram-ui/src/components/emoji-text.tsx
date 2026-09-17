@@ -1,9 +1,10 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState, useDomEvent } from '@ton-ai/atom/hooks';
-import { EmojiCanvas, StaticEmojiText, fetchEmojiData, getCachedEmojiData, subscribeEmojiData } from './emoji-canvas.js';
+import { EmojiCanvas, StaticEmojiText, fetchEmojiData, getCachedEmojiData, subscribeEmojiData, useMessageFontSize } from './emoji-canvas.js';
 import type { EmojiSegment } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
 import { ensureEmojiStickers, getEmojiAlt, getEmojiDocId, isEmojiStickersLoaded, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
+import { messageFontPx, MESSAGE_FONT_DEFAULT } from '../utils.js';
 import { getLogger } from '@ton-ai/gram-debug';
 
 const log = getLogger('gram-ui:emoji-text');
@@ -15,7 +16,7 @@ const SINGLE_EMOJI_SIZE = INLINE_EMOJI_SIZE * 8;
 
 export { releaseEmojiCache } from './emoji-canvas.js';
 
-function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, playKey, showLastFrame }: { docId?: string; url: string; alt?: string; size: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean }) {
+function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, playKey, showLastFrame, fontScaled = false }: { docId?: string; url: string; alt?: string; size: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; fontScaled?: boolean }) {
   const [data, setData] = useState<any>(() => (url ? getCachedEmojiData(url) ?? null : null));
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoIoRef = useRef<IntersectionObserver | null>(null);
@@ -89,10 +90,11 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
     [data?.kind, data?.value, showLastFrame], { once: true });
 
   if (data?.kind === 'tgs') {
-    return <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={size} height={size} loop={loop} autoplay={autoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} playKey={playKey} showLastFrame={showLastFrame} />;
+    var tgsNode = <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={size} height={size} loop={loop} autoplay={autoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} playKey={playKey} showLastFrame={showLastFrame} />;
+    return fontScaled ? scaleWrap(size, tgsNode) : tgsNode;
   }
   if (data?.kind === 'video') {
-    return (
+    var videoNode = (
       <video
         ref={videoRef}
         class="tgui-emoji-inline"
@@ -109,23 +111,36 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
         }}
       />
     );
+    return fontScaled ? scaleWrap(size, videoNode) : videoNode;
   }
   if (data?.kind === 'img') {
-    return <img class="tgui-emoji-inline" src={data.value} style={`width:${size}px;height:${size}px;vertical-align:middle`} />;
+    var imgNode = <img class="tgui-emoji-inline" src={data.value} style={`width:${size}px;height:${size}px;vertical-align:-0.06em`} />;
+    return fontScaled ? scaleWrap(size, imgNode) : imgNode;
   }
-  return <span class="tgui-emoji-placeholder" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle`} />;
+  var phNode = <span class="tgui-emoji-placeholder" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:-0.06em`} />;
+  return fontScaled ? scaleWrap(size, phNode) : phNode;
 }
 
-export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loop = true, playKey, showLastFrame }: { docId?: string; url: string; alt?: string; size?: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean }) {
+function scaleWrap(size: number, node: any): any {
+  const box = messageFontPx(size);
+  return <span class="tgui-emoji-scaled" style={`width:${box};height:${box}`}>{node}</span>;
+}
+
+export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loop = true, playKey, showLastFrame, fontScaled = false }: { docId?: string; url: string; alt?: string; size?: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; fontScaled?: boolean }) {
   useEffect(() => {
     if (!url) {
       requestEmojiDownload(docId, alt, 2);
     }
   }, [docId, url, alt]);
+  const liveFont = useMessageFontSize();
   if (!docId && !url) {
-    return <span class="tgui-emoji-inline" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle`} />;
+    const stub = <span class="tgui-emoji-inline" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:-0.06em`} />;
+    if (!fontScaled) return stub;
+    const box = messageFontPx(size);
+    return <span class="tgui-emoji-scaled" style={`width:${box};height:${box}`}>{stub}</span>;
   }
-  return <EmojiInline docId={docId} url={url} alt={alt} size={size} autoplay={autoplay} loop={loop} playKey={playKey} showLastFrame={showLastFrame} />;
+  const esize = fontScaled ? Math.round(size * liveFont / MESSAGE_FONT_DEFAULT) : size;
+  return <EmojiInline docId={docId} url={url} alt={alt} size={esize} autoplay={autoplay} loop={loop} playKey={playKey} showLastFrame={showLastFrame} fontScaled={fontScaled} />;
 }
 
 function appendMappedRuns(segments: EmojiSegment[], value: string): void {
@@ -206,7 +221,7 @@ function isEmojiOnlyText(text: string, entities?: any[]): boolean {
   return !/\S/.test(text.slice(pos));
 }
 
-export function EmojiText({ text, entities, documentUrls, documentSources, inlineSize = INLINE_EMOJI_SIZE, singleLine = false, ctx = 'chat' }: { text: string; entities?: any[]; documentUrls: Record<number, string>; documentSources?: Record<number | string, string>; inlineSize?: number; singleLine?: boolean; ctx?: 'dialog' | 'chat' }) {
+export function EmojiText({ text, entities, documentUrls, documentSources, inlineSize = INLINE_EMOJI_SIZE, singleLine = false, ctx = 'chat', fontScaled = false }: { text: string; entities?: any[]; documentUrls: Record<number, string>; documentSources?: Record<number | string, string>; inlineSize?: number; singleLine?: boolean; ctx?: 'dialog' | 'chat'; fontScaled?: boolean }) {
   const emojiEntities = (entities || [])
     .filter((e: any) => e?._ === 'messageEntityCustomEmoji' && typeof e.offset === 'number' && typeof e.length === 'number' && e.length > 0)
     .sort((a: any, b: any) => a.offset - b.offset);
@@ -279,7 +294,8 @@ export function EmojiText({ text, entities, documentUrls, documentSources, inlin
   const size = isDialog ? inlineSize : (loneEmoji ? SINGLE_EMOJI_SIZE : (emojiOnly ? EMOJI_ONLY_SIZE : inlineSize));
 
   if (singleEmoji !== undefined && !isDialog && !getEmojiDocId(singleEmoji) && !stickersLoaded) {
-    return <span class="tgui-emoji-pending" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:middle`} />;
+    const box = fontScaled ? messageFontPx(size) : size + 'px';
+    return <span class="tgui-emoji-pending" style={`display:inline-block;width:${box};height:${box};vertical-align:-0.06em`} />;
   }
 
   if (typeof localStorage !== 'undefined' && localStorage.getItem('tg-debug-emoji') === '1' && !isDialog) {
@@ -289,8 +305,8 @@ export function EmojiText({ text, entities, documentUrls, documentSources, inlin
   }
   const hasEmoji = segments.some((s) => s.type === 'emoji');
   if (!hasEmoji) {
-    return <StaticEmojiText value={text} size={size} />;
+    return <StaticEmojiText value={text} size={size} fontScaled={fontScaled} />;
   }
 
-  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} documentSources={documentSources as Record<string, string> | undefined} size={size} singleLine={singleLine} vAlign={isDialog ? 'middle' : 'top'} />;
+  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} documentSources={documentSources as Record<string, string> | undefined} size={size} singleLine={singleLine} vAlign={isDialog ? 'middle' : 'top'} fontScaled={fontScaled} />;
 }

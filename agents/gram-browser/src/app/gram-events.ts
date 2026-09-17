@@ -426,6 +426,8 @@ export function setupEventListeners(s: GramState): void {
       'imageQuality',
       'animationsEnabled',
       'mapProvider',
+      'messageFontSize',
+      'messageFontFractional',
       ...AUTH_PRESERVE_KEYS,
       ...API_CREDS_PRESERVE_KEYS,
     ];
@@ -645,6 +647,20 @@ export function setupEventListeners(s: GramState): void {
     }
   };
   window.addEventListener('tg-map-provider-changed', onMapProviderChanged);
+  const onMessageFontSizeChanged = (e: Event) => {
+    const size = (e as CustomEvent).detail?.size;
+    if (typeof size === 'number' && Number.isFinite(size)) {
+      dbSet('messageFontSize', Math.min(30, Math.max(12, size))).catch(() => {});
+    }
+  };
+  window.addEventListener('tg-message-font-size-changed', onMessageFontSizeChanged);
+  const onMessageFontFractionalChanged = (e: Event) => {
+    const fractional = (e as CustomEvent).detail?.fractional;
+    if (typeof fractional === 'boolean') {
+      dbSet('messageFontFractional', fractional).catch(() => {});
+    }
+  };
+  window.addEventListener('tg-message-font-fractional-changed', onMessageFontFractionalChanged);
 
   mediaRouter = new GramMediaRouter({
     tgService: s.tgService,

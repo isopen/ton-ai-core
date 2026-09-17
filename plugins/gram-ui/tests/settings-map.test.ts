@@ -5,6 +5,7 @@
 import { render } from '@ton-ai/atom';
 import { SettingsView } from '../dist/components/settings-view.js';
 import { areChatAreaPropsEqual } from '../dist/components/chat-area.js';
+import { defaultState } from '../dist/state.js';
 
 function h(type: any, props: Record<string, any> = {}, ...children: any[]): any {
     return { type, props: { ...props }, children: children.flat(), key: (props as any)?.key ?? null };
@@ -53,6 +54,16 @@ describe('SettingsView map provider radios', () => {
         const c = mount(baseState('qqq'), (a: any) => seen.push(a));
         const checked = Array.from(c.querySelectorAll('input[name="map-provider"]') as unknown as HTMLInputElement[]).filter((r) => (r as any).checked);
         expect(checked.length).toBe(1);
+    });
+
+    test('chat area memo tracks font size and fractional flag for settings re-render', () => {
+        const dispatch = () => {};
+        const skills: any[] = [];
+        const base: any = { dispatch, skills, state: defaultState() };
+        const changedSize: any = { dispatch, skills, state: { ...defaultState(), messageFontSize: 21 } };
+        const changedFlag: any = { dispatch, skills, state: { ...defaultState(), messageFontFractional: true } };
+        expect(areChatAreaPropsEqual(base, changedSize)).toBe(false);
+        expect(areChatAreaPropsEqual(base, changedFlag)).toBe(false);
     });
 
     test('chat area memo tracks mapProvider so settings re-render', () => {

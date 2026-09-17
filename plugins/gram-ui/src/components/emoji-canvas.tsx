@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedSticker } from './animated-sticker.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import { matchEmojiRuns, requestEmojiDownload } from './emoji-store.js';
+import { messageFontPx, readMessageFontSize, MESSAGE_FONT_DEFAULT } from '../utils.js';
 import { inflateTgs } from '@ton-ai/tgs';
 import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 
@@ -269,15 +270,30 @@ export interface EmojiSegment {
   custom?: boolean;
 }
 
-export function StaticEmojiText({ value, size }: { value: string; size: number }) {
+export function useMessageFontSize(): number {
+  const [font, setFont] = useState(() => readMessageFontSize());
+  useEffect(() => {
+    const onFont = () => setFont(readMessageFontSize());
+    window.addEventListener('tg-message-font-size-changed', onFont);
+    return () => window.removeEventListener('tg-message-font-size-changed', onFont);
+  }, []);
+  return font;
+}
+
+export function scaledEmojiSize(base: number): number {
+  return Math.round(base * readMessageFontSize() / MESSAGE_FONT_DEFAULT);
+}
+
+export function StaticEmojiText({ value, size, fontScaled = false }: { value: string; size: number; fontScaled?: boolean }) {
   const runs = matchEmojiRuns(value);
   if (runs.length === 0) return <>{value}</>;
   const parts: any[] = [];
   let pos = 0;
   let key = 0;
+  const box = fontScaled ? messageFontPx(size) : size + 'px';
   for (const r of runs) {
     if (r.start > pos) parts.push(<span key={'t' + key++}>{value.slice(pos, r.start)}</span>);
-    parts.push(<span key={'e' + key++} class="tgui-emoji-static" data-emoji={r.emoji} style={`display:inline-block;min-width:${size}px;height:${size}px;line-height:${size}px;text-align:center;vertical-align:middle;overflow:hidden;cursor:pointer`}>{r.emoji}</span>);
+    parts.push(<span key={'e' + key++} class="tgui-emoji-static" data-emoji={r.emoji} style={`display:inline-block;min-width:${box};height:${box};line-height:${box};text-align:center;vertical-align:-0.06em;overflow:hidden;cursor:pointer`}>{r.emoji}</span>);
     pos = r.end;
   }
   if (pos < value.length) parts.push(<span key={'t' + key++}>{value.slice(pos)}</span>);
@@ -475,7 +491,7 @@ export function VideoSlot({ url, size, playing, onError }: { url: string; size: 
   );
 }
 
-export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30, singleLine = false, vAlign = 'top' }: { segments: EmojiSegment[]; documentUrls: Record<string, string>; documentSources?: Record<string, string>; size?: number; singleLine?: boolean; vAlign?: 'top' | 'middle' }) {
+export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30, singleLine = false, vAlign = 'top', fontScaled = false }: { segments: EmojiSegment[]; documentUrls: Record<string, string>; documentSources?: Record<string, string>; size?: number; singleLine?: boolean; vAlign?: 'top' | 'middle'; fontScaled?: boolean }) {
   const emojiSegs: Array<{ docId: string; value?: string; custom?: boolean }> = [];
   for (const s of segments) {
     if (s.type === 'emoji' && s.docId) emojiSegs.push({ docId: s.docId, value: s.value, custom: s.custom });
@@ -910,17 +926,18 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
   if (!hasEmoji) {
     return <>{segments.map((s: EmojiSegment, i: number) => s.type === 'emoji'
       ? <span key={s.type + ':' + (s.docId || s.value) + ':' + i}>{s.value}</span>
-      : <StaticEmojiText key={s.type + ':' + (s.docId || s.value) + ':' + i} value={s.value || ''} size={size} />)}</>;
+      : <StaticEmojiText key={s.type + ':' + (s.docId || s.value) + ':' + i} value={s.value || ''} size={size} fontScaled={fontScaled} />)}</>;
   }
 
-  const slotStyle = `display:inline-block;width:${size}px;height:${size}px;vertical-align:middle;overflow:hidden;position:relative`;
+  const box = fontScaled ? messageFontPx(size) : size + 'px';
+  const slotStyle = `display:inline-block;width:${box};height:${box};vertical-align:-0.06em;overflow:hidden;position:relative`;
   let emojiIdx = -1;
   const align = vAlign === 'middle' ? 'middle' : 'top';
 
   return (
     <div ref={wrapRef} class="tgui-emoji-canvas-wrap" style={singleLine ? `position:relative;display:inline-block;max-width:none;white-space:nowrap;vertical-align:${align}` : `position:relative;display:inline-block;max-width:100%;vertical-align:${align}`}>
       {segments.map((s: EmojiSegment, i: number) => {
-        if (s.type === 'text') return <StaticEmojiText key={s.type + ':' + s.value + ':' + i} value={s.value || ''} size={size} />;
+        if (s.type === 'text') return <StaticEmojiText key={s.type + ':' + s.value + ':' + i} value={s.value || ''} size={size} fontScaled={fontScaled} />;
         emojiIdx++;
         const idx = emojiIdx;
         const docId = s.docId!;

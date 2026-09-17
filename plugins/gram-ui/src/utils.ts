@@ -97,6 +97,39 @@ export function normalizeMapProvider(v: unknown): MapProvider {
   return 'google';
 }
 
+export const MESSAGE_FONT_MIN = 12;
+export const MESSAGE_FONT_MAX = 30;
+export const MESSAGE_FONT_DEFAULT = 14;
+
+export function clampMessageFontSize(v: unknown, fallback: number): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return fallback;
+  return Math.min(MESSAGE_FONT_MAX, Math.max(MESSAGE_FONT_MIN, v));
+}
+
+export function formatFontSize(v: number): string {
+  return String(Math.round(v * 100) / 100);
+}
+
+export function writeMessageFontSizeVar(px: number): void {
+  try {
+    (document.documentElement as any)?.style?.setProperty('--message-font-size', px + 'px');
+  } catch {}
+}
+
+export function messageFontPx(px: number): string {
+  const ratio = (px / MESSAGE_FONT_DEFAULT).toFixed(4).replace(/\.?0+$/, '');
+  return 'calc(var(--message-font-size, ' + MESSAGE_FONT_DEFAULT + 'px) * ' + ratio + ')';
+}
+
+export function readMessageFontSize(): number {
+  try {
+    const raw = (document.documentElement as any)?.style?.getPropertyValue('--message-font-size');
+    const v = typeof raw === 'string' ? Number.parseFloat(raw) : NaN;
+    if (Number.isFinite(v)) return clampMessageFontSize(v, MESSAGE_FONT_DEFAULT);
+  } catch {}
+  return MESSAGE_FONT_DEFAULT;
+}
+
 export function isMapEmbeddable(provider?: MapProvider): boolean {
   const p = provider || currentMapProvider();
   return p !== 'dgis';

@@ -106,6 +106,16 @@ export class GramApp {
         const mp = await dbGet<string>('mapProvider');
         if (mp === 'google' || mp === 'yandex' || mp === 'dgis') initialMapProvider = mp;
       } catch {}
+      let initialFontSize = 14;
+      try {
+        const fs = await dbGet<number>('messageFontSize');
+        if (typeof fs === 'number' && Number.isFinite(fs)) initialFontSize = Math.min(30, Math.max(12, fs));
+      } catch {}
+      let initialFontFractional = false;
+      try {
+        const ff = await dbGet<boolean>('messageFontFractional');
+        if (typeof ff === 'boolean') initialFontFractional = ff;
+      } catch {}
       const [bootAuthenticated, bootInvalidated] = await Promise.all([
         dbGet<string>('authenticated'),
         dbGet<string>('authInvalidated'),
@@ -118,6 +128,8 @@ export class GramApp {
         imageQuality: initialQuality as AppState['imageQuality'],
         animationsEnabled: initialAnimations,
         mapProvider: initialMapProvider,
+        messageFontSize: initialFontSize,
+        messageFontFractional: initialFontFractional,
         dialogs: [],
         connectionStatus: 'connecting' as AppState['connectionStatus'],
       });

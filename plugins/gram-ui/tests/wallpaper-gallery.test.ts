@@ -148,7 +148,7 @@ describe('settings chat-settings navigation', () => {
     item!.click();
     await new Promise((r) => setTimeout(r, 60));
     const headers = Array.from(container.querySelectorAll('.tgui-settings-section .tgui-menu-item')) as HTMLElement[];
-    expect(headers.map((el) => el.textContent)).toEqual(['Chat background']);
+    expect(headers.map((el) => el.textContent)).toEqual(['Chat background', 'Message text size']);
     expect(headers[0].getAttribute('aria-expanded')).toBe('false');
     headers[0].click();
     await new Promise((r) => setTimeout(r, 50));
@@ -158,6 +158,33 @@ describe('settings chat-settings navigation', () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(container.querySelector('.tgui-wall-grid')).toBeNull();
     expect(container.querySelector('.tgui-menu-item')).not.toBeNull();
+    document.body.removeChild(container);
+  });
+
+  test('group holds two independent collapses', async () => {
+    const { container } = mountSettings({ ...defaultState(), accountWallpapers: [FILL], documentUrls: {} });
+    await new Promise((r) => setTimeout(r, 30));
+    (container.querySelector('.tgui-menu-item') as HTMLElement).click();
+    await new Promise((r) => setTimeout(r, 60));
+    const group = container.querySelector('.tgui-settings-group') as HTMLElement;
+    expect(group).not.toBeNull();
+    const headers = Array.from(group.querySelectorAll(':scope > .tgui-menu-list_bare > .tgui-menu-item')) as HTMLElement[];
+    expect(headers.map((el) => el.textContent)).toEqual(['Chat background', 'Message text size']);
+    expect(headers.map((el) => el.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
+    expect(group.querySelector('.tgui-wall-grid')).toBeNull();
+    expect(group.querySelector('.tgui-fontsize-row')).toBeNull();
+    headers[0].click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(group.querySelector('.tgui-wall-grid')).not.toBeNull();
+    expect(group.querySelector('.tgui-fontsize-row')).toBeNull();
+    headers[1].click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(group.querySelector('.tgui-fontsize-row input.Slider__input')).not.toBeNull();
+    expect(group.querySelector('.tgui-wall-grid')).not.toBeNull();
+    headers[0].click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(group.querySelector('.tgui-wall-grid')).toBeNull();
+    expect(group.querySelector('.tgui-fontsize-row')).not.toBeNull();
     document.body.removeChild(container);
   });
 });
