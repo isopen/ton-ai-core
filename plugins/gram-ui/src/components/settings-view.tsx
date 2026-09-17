@@ -4,6 +4,7 @@ import { Scrollable } from '../primitives/scrollable.js';
 import { Radio } from '../primitives/radio.js';
 import { normalizeMapProvider } from '../utils.js';
 import { Tumbler } from '../primitives/tumbler.js';
+import { MenuList } from '../primitives/menu-list.js';
 import type { AppState } from '../types.js';
 import type { Dispatch } from '../state.js';
 import { t, S } from '@ton-ai/gram-lang';
@@ -76,20 +77,13 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
     <Scrollable className="tgui-settings">
       <div class="tgui-settings-title">{t(S.SETTINGS_TITLE)}</div>
       <div class="tgui-settings-section">
-        <div class="tgui-settings-card tgui-menu-list">
-          <button class="tgui-menu-item" onClick={() => setPage('chat')}>
-            <span class="tgui-menu-label">{t(S.CHAT_SETTINGS)}</span>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="tgui-menu-chevron">
-              <path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
-          <button class="tgui-menu-item" onClick={() => setPage('devices')}>
-            <span class="tgui-menu-label">{t(S.SETTINGS_DEVICES)}</span>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="tgui-menu-chevron">
-              <path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
-        </div>
+        <MenuList
+          width={300}
+          items={[
+            { id: 'chat', label: t(S.CHAT_SETTINGS), onSelect: () => setPage('chat') },
+            { id: 'devices', label: t(S.SETTINGS_DEVICES), onSelect: () => setPage('devices') },
+          ]}
+        />
       </div>
 
       <div class="tgui-settings-section">
