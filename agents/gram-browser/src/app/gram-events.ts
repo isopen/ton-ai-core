@@ -428,6 +428,8 @@ export function setupEventListeners(s: GramState): void {
       'mapProvider',
       'messageFontSize',
       'messageFontFractional',
+      'messageBubbleRadius',
+      'avatarRadius',
       ...AUTH_PRESERVE_KEYS,
       ...API_CREDS_PRESERVE_KEYS,
     ];
@@ -661,6 +663,20 @@ export function setupEventListeners(s: GramState): void {
     }
   };
   window.addEventListener('tg-message-font-fractional-changed', onMessageFontFractionalChanged);
+  const onMessageBubbleRadiusChanged = (e: Event) => {
+    const radius = (e as CustomEvent).detail?.radius;
+    if (typeof radius === 'number' && Number.isFinite(radius)) {
+      dbSet('messageBubbleRadius', Math.min(24, Math.max(0, Math.round(radius)))).catch(() => {});
+    }
+  };
+  window.addEventListener('tg-message-bubble-radius-changed', onMessageBubbleRadiusChanged);
+  const onAvatarRadiusChanged = (e: Event) => {
+    const radius = (e as CustomEvent).detail?.radius;
+    if (typeof radius === 'number' && Number.isFinite(radius)) {
+      dbSet('avatarRadius', Math.min(28, Math.max(0, Math.round(radius)))).catch(() => {});
+    }
+  };
+  window.addEventListener('tg-avatar-radius-changed', onAvatarRadiusChanged);
   const onEmojiMapSnapshot = (e: Event) => {
     const docs = (e as CustomEvent).detail?.docs;
     if (!docs || typeof docs !== 'object') return;

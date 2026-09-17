@@ -12,7 +12,7 @@ import { SkillPlugin } from './plugin/skill-plugin.js';
 import { PluginManager } from '@ton-ai/core';
 import { defaultState, reducer } from './state.js';
 import { injectStyles } from './styles.js';
-import { normalizeMapProvider, clampMessageFontSize, writeMessageFontSizeVar, MESSAGE_FONT_DEFAULT } from './utils.js';
+import { normalizeMapProvider, clampMessageFontSize, writeMessageFontSizeVar, MESSAGE_FONT_DEFAULT, clampMessageBubbleRadius, writeMessageBubbleRadiusVar, MESSAGE_BUBBLE_RADIUS_DEFAULT, clampAvatarRadius, writeAvatarRadiusVar, AVATAR_RADIUS_DEFAULT } from './utils.js';
 import { setPhotoQuality } from './components/photo-spec.js';
 import { attachEmojiBurst, attachEmojiInteractions } from './components/emoji-burst.js';
 
@@ -227,6 +227,18 @@ export class TelegramUI {
         writeMessageFontSizeVar(size);
         try { window.dispatchEvent(new CustomEvent('tg-message-font-size-changed', { detail: { size } })); } catch {}
       }, [state.messageFontSize]);
+
+      useEffect(() => {
+        const radius = clampMessageBubbleRadius(state.messageBubbleRadius, MESSAGE_BUBBLE_RADIUS_DEFAULT);
+        writeMessageBubbleRadiusVar(radius);
+        try { window.dispatchEvent(new CustomEvent('tg-message-bubble-radius-changed', { detail: { radius } })); } catch {}
+      }, [state.messageBubbleRadius]);
+
+      useEffect(() => {
+        const radius = clampAvatarRadius(state.avatarRadius, AVATAR_RADIUS_DEFAULT);
+        writeAvatarRadiusVar(radius);
+        try { window.dispatchEvent(new CustomEvent('tg-avatar-radius-changed', { detail: { radius } })); } catch {}
+      }, [state.avatarRadius]);
 
       useEffect(() => {
         const fractional = state.messageFontFractional === true;

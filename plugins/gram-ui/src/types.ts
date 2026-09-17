@@ -82,6 +82,8 @@ export interface AppState {
     mapProvider: 'google' | 'yandex' | 'dgis';
     messageFontSize: number;
     messageFontFractional: boolean;
+    messageBubbleRadius: number;
+    avatarRadius: number;
     loadingMessages: boolean;
     connectionStatus: 'disconnected' | 'connecting' | 'connected';
     langCode: string;
@@ -179,6 +181,8 @@ export type UIAction =
     | { type: 'SET_MAP_PROVIDER'; provider: 'google' | 'yandex' | 'dgis' }
     | { type: 'SET_MESSAGE_FONT_SIZE'; size: number }
     | { type: 'SET_MESSAGE_FONT_FRACTIONAL'; v: boolean }
+    | { type: 'SET_MESSAGE_BUBBLE_RADIUS'; radius: number }
+    | { type: 'SET_AVATAR_RADIUS'; radius: number }
     | { type: 'SET_ACTIVE_SKILL'; id: string | null }
     | { type: 'SET_LANG_OPTIONS'; options: LangOption[] }
     | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number | string; sizeType: string; url: string; cacheSource?: string }

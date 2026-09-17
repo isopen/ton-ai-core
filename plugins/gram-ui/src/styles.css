@@ -1249,7 +1249,7 @@ body {
 
 .Avatar {
   position: relative;
-  border-radius: 50%;
+  border-radius: var(--avatar-radius, 50%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1570,40 +1570,43 @@ body {
   word-wrap: break-word;
   position: relative;
   box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  --bubble-r: var(--message-bubble-radius, 16px);
+  --bubble-r-group: max(0px, calc(var(--bubble-r) - 10px));
+  --bubble-r-tail: calc(var(--bubble-r) * 0.25);
 }
 
 .MessageBubble_out {
   background: var(--bubble-out);
-  border-radius: 16px 16px 4px 16px;
+  border-radius: var(--bubble-r) var(--bubble-r) var(--bubble-r-tail) var(--bubble-r);
 }
 
 .MessageBubble_out.MessageBubble_group_prev {
-  border-radius: 16px 6px 4px 16px;
+  border-radius: var(--bubble-r) var(--bubble-r-group) var(--bubble-r-tail) var(--bubble-r);
 }
 
 .MessageBubble_out.MessageBubble_group_next {
-  border-radius: 16px 16px 4px 6px;
+  border-radius: var(--bubble-r) var(--bubble-r) var(--bubble-r-tail) var(--bubble-r-group);
 }
 
 .MessageBubble_out.MessageBubble_group_prev.MessageBubble_group_next {
-  border-radius: 16px 6px 4px 6px;
+  border-radius: var(--bubble-r) var(--bubble-r-group) var(--bubble-r-tail) var(--bubble-r-group);
 }
 
 .MessageBubble_in {
   background: var(--bubble-in);
-  border-radius: 16px 16px 16px 4px;
+  border-radius: var(--bubble-r) var(--bubble-r) var(--bubble-r) var(--bubble-r-tail);
 }
 
 .MessageBubble_in.MessageBubble_group_prev {
-  border-radius: 6px 16px 16px 4px;
+  border-radius: var(--bubble-r-group) var(--bubble-r) var(--bubble-r) var(--bubble-r-tail);
 }
 
 .MessageBubble_in.MessageBubble_group_next {
-  border-radius: 16px 16px 6px 4px;
+  border-radius: var(--bubble-r) var(--bubble-r) var(--bubble-r-group) var(--bubble-r-tail);
 }
 
 .MessageBubble_in.MessageBubble_group_prev.MessageBubble_group_next {
-  border-radius: 6px 16px 6px 4px;
+  border-radius: var(--bubble-r-group) var(--bubble-r) var(--bubble-r-group) var(--bubble-r-tail);
 }
 
 .MessageBubble__text {
@@ -2955,6 +2958,10 @@ body {
   font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: var(--spacing-sm);
+}
+
+.tgui-settings-section-label_gap {
+  margin-top: var(--spacing-md);
 }
 
 .tgui-settings-card {

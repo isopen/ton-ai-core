@@ -148,7 +148,7 @@ describe('settings chat-settings navigation', () => {
     item!.click();
     await new Promise((r) => setTimeout(r, 60));
     const headers = Array.from(container.querySelectorAll('.tgui-settings-section .tgui-menu-item')) as HTMLElement[];
-    expect(headers.map((el) => el.textContent)).toEqual(['Chat background', 'Message text size']);
+    expect(headers.map((el) => el.textContent)).toEqual(['Chat background', 'Message text size', 'Corners']);
     expect(headers[0].getAttribute('aria-expanded')).toBe('false');
     headers[0].click();
     await new Promise((r) => setTimeout(r, 50));
@@ -161,7 +161,7 @@ describe('settings chat-settings navigation', () => {
     document.body.removeChild(container);
   });
 
-  test('group holds two independent collapses', async () => {
+  test('group holds three independent collapses', async () => {
     const { container } = mountSettings({ ...defaultState(), accountWallpapers: [FILL], documentUrls: {} });
     await new Promise((r) => setTimeout(r, 30));
     (container.querySelector('.tgui-menu-item') as HTMLElement).click();
@@ -169,22 +169,28 @@ describe('settings chat-settings navigation', () => {
     const group = container.querySelector('.tgui-settings-group') as HTMLElement;
     expect(group).not.toBeNull();
     const headers = Array.from(group.querySelectorAll(':scope > .tgui-menu-list_bare > .tgui-menu-item')) as HTMLElement[];
-    expect(headers.map((el) => el.textContent)).toEqual(['Chat background', 'Message text size']);
-    expect(headers.map((el) => el.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
+    expect(headers.map((el) => el.textContent)).toEqual(['Chat background', 'Message text size', 'Corners']);
+    expect(headers.map((el) => el.getAttribute('aria-expanded'))).toEqual(['false', 'false', 'false']);
     expect(group.querySelector('.tgui-wall-grid')).toBeNull();
-    expect(group.querySelector('.tgui-fontsize-row')).toBeNull();
+    expect(group.querySelectorAll('.tgui-fontsize-row').length).toBe(0);
     headers[0].click();
     await new Promise((r) => setTimeout(r, 50));
     expect(group.querySelector('.tgui-wall-grid')).not.toBeNull();
-    expect(group.querySelector('.tgui-fontsize-row')).toBeNull();
+    expect(group.querySelectorAll('.tgui-fontsize-row').length).toBe(0);
     headers[1].click();
     await new Promise((r) => setTimeout(r, 50));
-    expect(group.querySelector('.tgui-fontsize-row input.Slider__input')).not.toBeNull();
+    expect(group.querySelectorAll('.tgui-fontsize-row input.Slider__input').length).toBe(1);
+    expect(group.querySelector('.tgui-wall-grid')).not.toBeNull();
+    headers[2].click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(group.querySelectorAll('.tgui-fontsize-row input.Slider__input').length).toBe(3);
+    const sublabels = Array.from(group.querySelectorAll('.tgui-menu-content .tgui-settings-section-label')).map((el) => el.textContent);
+    expect(sublabels).toEqual(['Bubble corners', 'Avatar corners']);
     expect(group.querySelector('.tgui-wall-grid')).not.toBeNull();
     headers[0].click();
     await new Promise((r) => setTimeout(r, 50));
     expect(group.querySelector('.tgui-wall-grid')).toBeNull();
-    expect(group.querySelector('.tgui-fontsize-row')).not.toBeNull();
+    expect(group.querySelectorAll('.tgui-fontsize-row input.Slider__input').length).toBe(3);
     document.body.removeChild(container);
   });
 });

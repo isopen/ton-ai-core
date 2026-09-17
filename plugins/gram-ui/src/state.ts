@@ -1,6 +1,6 @@
 import type { AppState, UIAction } from './types.js';
 import { normalizeLangCode } from '@ton-ai/gram-lang';
-import { clampMessageFontSize, MESSAGE_FONT_DEFAULT } from './utils.js';
+import { clampMessageFontSize, MESSAGE_FONT_DEFAULT, clampMessageBubbleRadius, MESSAGE_BUBBLE_RADIUS_DEFAULT, clampAvatarRadius, AVATAR_RADIUS_DEFAULT } from './utils.js';
 
 export type Dispatch = (action: UIAction) => void;
 
@@ -40,6 +40,8 @@ export function defaultState(): AppState {
     mapProvider: 'google',
     messageFontSize: MESSAGE_FONT_DEFAULT,
     messageFontFractional: false,
+    messageBubbleRadius: MESSAGE_BUBBLE_RADIUS_DEFAULT,
+    avatarRadius: AVATAR_RADIUS_DEFAULT,
     loadingMessages: false,
     connectionStatus: 'disconnected',
     langCode: detectBrowserLang(),
@@ -112,6 +114,8 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_ANIMATIONS_ENABLED': return { ...state, animationsEnabled: action.v };
     case 'SET_MAP_PROVIDER': return { ...state, mapProvider: action.provider };
     case 'SET_MESSAGE_FONT_SIZE': return { ...state, messageFontSize: clampMessageFontSize(action.size, state.messageFontSize) };
+    case 'SET_MESSAGE_BUBBLE_RADIUS': return { ...state, messageBubbleRadius: clampMessageBubbleRadius(action.radius, state.messageBubbleRadius) };
+    case 'SET_AVATAR_RADIUS': return { ...state, avatarRadius: clampAvatarRadius(action.radius, state.avatarRadius) };
     case 'SET_MESSAGE_FONT_FRACTIONAL': {
       if (action.v) return { ...state, messageFontFractional: true };
       return { ...state, messageFontFractional: false, messageFontSize: Math.round(clampMessageFontSize(state.messageFontSize, MESSAGE_FONT_DEFAULT)) };

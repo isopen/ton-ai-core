@@ -130,6 +130,36 @@ export function readMessageFontSize(): number {
   return MESSAGE_FONT_DEFAULT;
 }
 
+export const MESSAGE_BUBBLE_RADIUS_MIN = 0;
+export const MESSAGE_BUBBLE_RADIUS_MAX = 24;
+export const MESSAGE_BUBBLE_RADIUS_DEFAULT = 16;
+
+export function clampMessageBubbleRadius(v: unknown, fallback: number): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return fallback;
+  return Math.round(Math.min(MESSAGE_BUBBLE_RADIUS_MAX, Math.max(MESSAGE_BUBBLE_RADIUS_MIN, v)));
+}
+
+export function writeMessageBubbleRadiusVar(px: number): void {
+  try {
+    (document.documentElement as any)?.style?.setProperty('--message-bubble-radius', px + 'px');
+  } catch {}
+}
+
+export const AVATAR_RADIUS_MIN = 0;
+export const AVATAR_RADIUS_MAX = 28;
+export const AVATAR_RADIUS_DEFAULT = 28;
+
+export function clampAvatarRadius(v: unknown, fallback: number): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return fallback;
+  return Math.round(Math.min(AVATAR_RADIUS_MAX, Math.max(AVATAR_RADIUS_MIN, v)));
+}
+
+export function writeAvatarRadiusVar(px: number): void {
+  try {
+    (document.documentElement as any)?.style?.setProperty('--avatar-radius', px + 'px');
+  } catch {}
+}
+
 export function isMapEmbeddable(provider?: MapProvider): boolean {
   const p = provider || currentMapProvider();
   return p !== 'dgis';

@@ -10,6 +10,8 @@ import type { Dispatch } from '../state.js';
 import { t, S } from '@ton-ai/gram-lang';
 import { WallpaperGallery } from './wallpaper-picker.js';
 import { FontSizeControl } from './message-text-size.js';
+import { BubbleCornersControl } from './message-bubble-corners.js';
+import { AvatarCornersControl } from './avatar-corners.js';
 
 export function SettingsView({ state, dispatch }: { state: AppState; dispatch: Dispatch }) {
   const [page, setPage] = useState<'main' | 'chat' | 'devices'>('main');
@@ -29,6 +31,12 @@ export function SettingsView({ state, dispatch }: { state: AppState; dispatch: D
             </MenuList>
             <MenuList bare={true} title={t(S.MESSAGE_TEXT_SIZE)} collapsible={true} defaultExpanded={false}>
               <FontSizeControl state={state} dispatch={dispatch} />
+            </MenuList>
+            <MenuList bare={true} title={t(S.CORNERS_TITLE)} collapsible={true} defaultExpanded={false}>
+              <div class="tgui-settings-section-label">{t(S.MESSAGE_BUBBLE_CORNERS)}</div>
+              <BubbleCornersControl state={state} dispatch={dispatch} />
+              <div class="tgui-settings-section-label tgui-settings-section-label_gap">{t(S.AVATAR_CORNERS)}</div>
+              <AvatarCornersControl state={state} dispatch={dispatch} />
             </MenuList>
           </div>
         </div>

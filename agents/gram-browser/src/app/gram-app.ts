@@ -116,6 +116,16 @@ export class GramApp {
         const ff = await dbGet<boolean>('messageFontFractional');
         if (typeof ff === 'boolean') initialFontFractional = ff;
       } catch {}
+      let initialBubbleRadius = 16;
+      try {
+        const br = await dbGet<number>('messageBubbleRadius');
+        if (typeof br === 'number' && Number.isFinite(br)) initialBubbleRadius = Math.min(24, Math.max(0, Math.round(br)));
+      } catch {}
+      let initialAvatarRadius = 28;
+      try {
+        const ar = await dbGet<number>('avatarRadius');
+        if (typeof ar === 'number' && Number.isFinite(ar)) initialAvatarRadius = Math.min(28, Math.max(0, Math.round(ar)));
+      } catch {}
       const [bootAuthenticated, bootInvalidated] = await Promise.all([
         dbGet<string>('authenticated'),
         dbGet<string>('authInvalidated'),
@@ -130,6 +140,8 @@ export class GramApp {
         mapProvider: initialMapProvider,
         messageFontSize: initialFontSize,
         messageFontFractional: initialFontFractional,
+        messageBubbleRadius: initialBubbleRadius,
+        avatarRadius: initialAvatarRadius,
         dialogs: [],
         connectionStatus: 'connecting' as AppState['connectionStatus'],
       });

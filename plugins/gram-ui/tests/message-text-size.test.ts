@@ -246,7 +246,7 @@ describe('message text size control', () => {
     expect(group.querySelector('.tgui-wall-grid')).toBeNull();
     expect(group.querySelector('.tgui-fontsize-row')).toBeNull();
     const headers = Array.from(group.querySelectorAll(':scope > .tgui-menu-list_bare > .tgui-menu-item')) as HTMLElement[];
-    expect(headers.map((el) => el.textContent)).toEqual(['Chat background', 'Message text size']);
+    expect(headers.map((el) => el.textContent)).toEqual(['Chat background', 'Message text size', 'Corners']);
     headers[1].click();
     await new Promise((r) => setTimeout(r, 50));
     expect(group.querySelector('.tgui-fontsize-row input.Slider__input')).not.toBeNull();
