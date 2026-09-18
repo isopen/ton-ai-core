@@ -130,6 +130,10 @@ function findFloodWaitSeconds(msg: string): number | null {
 }
 let msgIdCounter = 0;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
+let lastPongAt = 0;
+let pingFails = 0;
+const PING_FAIL_THRESHOLD = 2;
+const STALE_PONG_MS = 75_000;
 let connectionInitialized = false;
 let homeSession: TgSession | null = null;
 let tdBinlog: TdBinlog | null = null;
@@ -1943,8 +1947,10 @@ function startReadLoop(): void {
     (async () => {
         while (connected && thisConn?.isConnected()) {
             try {
-                const data = await thisConn.readPacket();
-                if (!connected) break;
+            const data = await thisConn.readPacket();
+            if (!connected) break;
+            lastPongAt = Date.now();
+            if (pingFails !== 0) pingFails = 0;
 
                 if (data.length >= 8 && data.readBigUInt64LE(0) === 0n) {
                     wlog('[worker] unencrypted msg, auth_key_id=0, len=' + data.length);
@@ -2024,6 +2030,28 @@ async function waitReadLoopEnd(): Promise<void> {
 let reconnectTimer: any = null;
 let reconnectAttempts = 0;
 
+function dropMainConnection(reason: string): void {
+    if (!conn) return;
+    wlog('[worker] dropping dead main connection: ' + reason);
+    try { conn.close(); } catch {}
+    conn = null;
+    connected = false;
+    connectionInitialized = false;
+    readLoopRunning = false;
+    rejectAllPending(new Error('Reconnecting'));
+    pingFails = 0;
+}
+
+function recycleDeadConnection(reason: string): void {
+    if (!conn || !authenticated || migratingDc !== 0) return;
+    dropMainConnection(reason);
+    if (ses && curSessionId) scheduleReconnect();
+}
+
+export function isConnectionStale(): boolean {
+    return authenticated && lastPongAt > 0 && Date.now() - lastPongAt > STALE_PONG_MS;
+}
+
 async function scheduleReconnect(): Promise<void> {
     if (reconnectTimer) return;
 
@@ -2085,6 +2113,9 @@ async function sendPing(): Promise<void> {
         if (m.includes('AUTH_KEY_UNREGISTERED') && authenticated) {
             wlog('[worker] ping detected AUTH_KEY_UNREGISTERED, invalidating session');
             notifyAuthInvalidated();
+        } else if (authenticated && !m.includes('AUTH_KEY_UNREGISTERED')) {
+            pingFails += 1;
+            if (pingFails >= PING_FAIL_THRESHOLD) recycleDeadConnection('ping-timeout');
         }
         throw e;
     }
@@ -2967,7 +2998,10 @@ function doReq(payload: Buffer, host: string, port: number, timeout = 15000): Pr
 }
 
 async function handleConnectInternal(reqSessionId: string, dcId: number): Promise<void> {
-    if (conn?.isConnected()) return;
+    if (conn?.isConnected()) {
+        if (!isConnectionStale()) return;
+        dropMainConnection('stale-on-connect');
+    }
     curSessionId = reqSessionId;
     await getGramDb().init();
     await setAvatarEncryptionKey(reqSessionId);

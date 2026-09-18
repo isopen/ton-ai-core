@@ -139,7 +139,7 @@ ctx.onconnect = (e: { ports: PortLike[] }) => {
 };
 
 async function ensureConnected(): Promise<void> {
-    if (!TW.isConnected() && lastSessionId) {
+    if ((!TW.isConnected() || TW.isConnectionStale()) && lastSessionId) {
         if (!connectInFlight) {
             connectInFlight = TW.handleConnect(lastSessionId, lastDcId)
                 .catch((e: any) => { log.warn('[worker] connect failed:', e?.message || e); throw e; })

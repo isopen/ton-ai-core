@@ -339,6 +339,20 @@ export function warmupEmojiPipeline(s: GramState): void {
   }
 }
 
+export const WAKE_RELOAD_AFTER_MS = 60_000;
+
+export function handleWakeVisible(s: GramState, hiddenMs: number): void {
+  if (hiddenMs < WAKE_RELOAD_AFTER_MS) return;
+  cbLog.info('[wake] long absence, revalidating connection and history');
+  try {
+    const p = s.tgService.current?.connect(2);
+    if (p) void p.catch(() => {});
+  } catch {}
+  try {
+    if (s.selectedPeerRef.current) s.reloadHistoryRef.current?.();
+  } catch {}
+}
+
 export function setupEventListeners(s: GramState): void {
   const onSetLang = (e: Event) => {
     const detail = (e as CustomEvent).detail;
@@ -683,6 +697,25 @@ export function setupEventListeners(s: GramState): void {
     dbSet(EMOJI_PACK_MAP_KEY, { docs }).catch(() => {});
   };
   window.addEventListener('tg-emoji-map-snapshot', onEmojiMapSnapshot);
+  let hiddenAt = 0;
+  const onVisibilityWake = () => {
+    if (document.hidden) {
+      hiddenAt = Date.now();
+      return;
+    }
+    const away = hiddenAt > 0 ? Date.now() - hiddenAt : 0;
+    hiddenAt = 0;
+    handleWakeVisible(s, away);
+  };
+  const onOnlineWake = () => {
+    handleWakeVisible(s, WAKE_RELOAD_AFTER_MS);
+  };
+  window.addEventListener('online', onOnlineWake);
+  document.addEventListener('visibilitychange', onVisibilityWake);
+  s.cleanupFns.push(() => {
+    window.removeEventListener('online', onOnlineWake);
+    document.removeEventListener('visibilitychange', onVisibilityWake);
+  });
 
   mediaRouter = new GramMediaRouter({
     tgService: s.tgService,
