@@ -243,7 +243,7 @@ describe('GramMediaRouter load tests', () => {
         expect(photos).toHaveLength(40);
         for (const d of photos) {
             expect(d.url).toMatch(/^blob:probed-/);
-            expect(d.cacheSource).toBeUndefined();
+            expect(d.cacheSource).toBe('memory');
         }
     });
 

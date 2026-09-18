@@ -799,7 +799,7 @@ export class GramMediaRouter {
             const cached = this.photoUrlCache.get(ck);
             if (cached) {
                 this.photoQueuedKeys.delete(String(item.messageId) + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
-                this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached });
+                this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached, cacheSource: 'memory' });
                 if (String(item.messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(item.photo?.id ?? ''), url: cached, messageId: item.messageId });
                 continue;
             }
@@ -840,7 +840,7 @@ export class GramMediaRouter {
             const cached = this.photoUrlCache.get(ck);
             if (cached) {
                 this.avatarQueuedKeys.delete(item.messageId + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
-                this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached });
+                this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached, cacheSource: 'memory' });
                 continue;
             }
             if (this.avatarInFlightByKey.has(ck) || this.avatarInFlight >= MAX_PARALLEL_AVATARS) {

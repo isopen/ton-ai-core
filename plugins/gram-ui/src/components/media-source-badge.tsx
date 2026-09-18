@@ -32,13 +32,16 @@ export function MediaSourceBadge({ source, className, absolute = true, variant =
 
   if (!source || !enabled) return null;
   if (variant === 'dot') {
-    const dotColor = source === 'memory' ? '#22c55e' : source === 'persisted' ? '#eab308' : '#ef4444';
+    const mod = source === 'memory'
+      ? 'tgui-media-source-badge--mem'
+      : source === 'persisted'
+        ? 'tgui-media-source-badge--db'
+        : 'tgui-media-source-badge--srv';
     const pos = absolute ? 'position:absolute;bottom:0;right:0;z-index:2;' : '';
-    const size = 'width:10px;height:10px;border-radius:50%;border:2px solid var(--bg-surface);box-sizing:border-box;';
     return (
       <span
-        class={`tgui-media-source-badge tgui-media-source-badge--dot${className ? ' ' + className : ''}`}
-        style={`${pos}${size}background:${dotColor}`}
+        class={`tgui-media-source-badge tgui-media-source-badge--dot ${mod}${className ? ' ' + className : ''}`}
+        style={pos}
         title={mediaSourceLabel(source)}
       />
     );
