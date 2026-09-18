@@ -377,9 +377,9 @@ function ButtonRow({ block, messageId, onButton, documentUrls, inactiveButtons }
             title={debugTitle}
             disabled={inactive}
             onClick={(e: any) => pressButton(b, messageId, onButton, e)}
-            style="display:flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;text-align:center"
+            style="display:flex;align-items:center;justify-content:center;gap:6px;white-space:normal;overflow:visible;min-width:min(9em,100%);max-width:100%;text-align:center;overflow-wrap:break-word;word-break:break-word;line-height:1.3;flex:1 1 auto"
           >
-            <span style="display:inline-flex;align-items:center;gap:6px;justify-content:center;white-space:nowrap"><RichText node={txt} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></span>
+            <span style="display:inline-flex;align-items:center;gap:6px;justify-content:center;white-space:normal;flex-wrap:wrap;max-width:100%;overflow-wrap:break-word"><RichText node={txt} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} /></span>
           </button>
         );
       })}
