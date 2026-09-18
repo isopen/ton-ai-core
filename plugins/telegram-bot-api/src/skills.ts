@@ -9,7 +9,6 @@ import {
     File,
     ChatMember,
     BotCommand,
-    BotCommandScope,
     WebhookInfo,
     ChatAdministratorRights,
     MenuButton,
@@ -24,7 +23,6 @@ import {
     ChatInviteLink,
     ChatMemberUpdated,
     ChatJoinRequest,
-    CallbackQuery,
     InlineQuery,
     ChosenInlineResult,
     ShippingQuery,
@@ -32,6 +30,9 @@ import {
     PollAnswer,
     ChatBoost,
     UserChatBoosts,
+    BotSubscriptionUpdated,
+    MessageGenerationStopped,
+    ManagedBotUpdated,
     MessageId,
     BotDescription,
     BotName,
@@ -48,6 +49,8 @@ import {
     InputMediaAnimation,
     InputMediaAudio,
     InputMediaDocument,
+    InputMediaLivePhoto,
+    InputMediaVoiceNote,
     SendMessageParams,
     SendPhotoParams,
     SendAudioParams,
@@ -159,8 +162,42 @@ import {
     SetStickerKeywordsParams,
     SetStickerMaskPositionParams,
     SendMessageDraftParams,
-    SetChatMemberTagParams
+    SetChatMemberTagParams,
+    AnswerGuestQueryParams,
+    AnswerChatJoinRequestQueryParams,
+    SendChatJoinRequestWebAppParams,
+    SendLivePhotoParams,
+    SendRichMessageParams,
+    SendRichMessageDraftParams,
+    EditEphemeralMessageTextParams,
+    EditEphemeralMessageMediaParams,
+    EditEphemeralMessageCaptionParams,
+    EditEphemeralMessageReplyMarkupParams,
+    DeleteEphemeralMessageParams,
+    GetUserPersonalChatMessagesParams,
+    GetManagedBotAccessSettingsParams,
+    SetManagedBotAccessSettingsParams,
+    GetManagedBotTokenParams,
+    ReplaceManagedBotTokenParams,
+    DeleteMessageReactionParams,
+    DeleteAllMessageReactionsParams,
+    SetMessageReactionParams,
+    CopyMessagesParams,
+    ForwardMessagesParams,
+    DeleteMessagesParams,
+    EditMessageLiveLocationParams,
+    StopMessageLiveLocationParams,
+    EditMessageChecklistParams,
+    SendChecklistParams,
+    CreateChatSubscriptionInviteLinkParams,
+    EditChatSubscriptionInviteLinkParams,
+    GetUserProfileAudiosParams,
+    ApproveSuggestedPostParams,
+    DeclineSuggestedPostParams,
+    ReplaceStickerInSetParams
 } from './types';
+
+const DEFAULT_ADMIN_RIGHTS_KEY = 0;
 
 export class TelegramBotSkills {
     private context: PluginContext;
@@ -325,12 +362,61 @@ export class TelegramBotSkills {
 
             if (params.reply_markup) {
                 this.components.messages.setReplyMarkup(
-                    message.message_id, 
+                    message.message_id,
                     params.reply_markup as InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | ForceReply
                 );
             }
         }
+        this.logReplyMarkup(params.reply_markup);
         return message;
+    }
+
+    private logReplyMarkup(replyMarkup: SendMessageParams['reply_markup']): void {
+        if (!replyMarkup) return;
+        if ('force_reply' in replyMarkup) {
+            const forceReply = replyMarkup as ForceReply;
+            this.context.logger.debug('Sending message with force reply:', forceReply.force_reply);
+            if (forceReply.input_field_placeholder) {
+                this.context.logger.debug('Force reply placeholder:', forceReply.input_field_placeholder);
+            }
+        } else if ('inline_keyboard' in replyMarkup) {
+            const inlineKeyboard = replyMarkup as InlineKeyboardMarkup;
+            const buttonCount = inlineKeyboard.inline_keyboard.reduce((acc, row) => acc + row.length, 0);
+            this.context.logger.debug(`Sending message with inline keyboard containing ${buttonCount} buttons`);
+
+            for (const row of inlineKeyboard.inline_keyboard) {
+                for (const button of row) {
+                    if (button.callback_data) {
+                        this.context.logger.debug(`Inline button with callback: ${button.text}`);
+                    } else if (button.url) {
+                        this.context.logger.debug(`Inline button with URL: ${button.text} -> ${button.url}`);
+                    }
+                }
+            }
+        } else if ('keyboard' in replyMarkup) {
+            const replyKeyboard = replyMarkup as ReplyKeyboardMarkup;
+            const buttonCount = replyKeyboard.keyboard.reduce((acc, row) => acc + row.length, 0);
+            this.context.logger.debug(`Sending message with reply keyboard containing ${buttonCount} buttons`);
+
+            if (replyKeyboard.is_persistent) {
+                this.context.logger.debug('Reply keyboard is persistent');
+            }
+            if (replyKeyboard.one_time_keyboard) {
+                this.context.logger.debug('Reply keyboard is one-time');
+            }
+            if (replyKeyboard.resize_keyboard) {
+                this.context.logger.debug('Reply keyboard is resized');
+            }
+            if (replyKeyboard.input_field_placeholder) {
+                this.context.logger.debug('Input field placeholder:', replyKeyboard.input_field_placeholder);
+            }
+        } else if ('remove_keyboard' in replyMarkup) {
+            const removeKeyboard = replyMarkup as ReplyKeyboardRemove;
+            this.context.logger.debug('Removing reply keyboard');
+            if (removeKeyboard.selective) {
+                this.context.logger.debug('Keyboard removal is selective');
+            }
+        }
     }
 
     async sendPhoto(params: SendPhotoParams): Promise<Message> {
@@ -439,6 +525,7 @@ export class TelegramBotSkills {
     }
 
     async sendMediaGroup(params: SendMediaGroupParams): Promise<Message[]> {
+        this.logMediaGroup(params.media);
         const messages = await this.request<Message[]>('sendMediaGroup', params);
         for (const message of messages) {
             if (message.chat && message.message_id) {
@@ -449,10 +536,90 @@ export class TelegramBotSkills {
                 }
             }
         }
+        this.context.logger.debug(`Media group sent successfully, received ${messages.length} messages`);
         return messages;
     }
 
-    private validateInputMedia(media: InputMediaPhoto | InputMediaVideo | InputMediaAnimation | InputMediaAudio | InputMediaDocument): void {
+    private summarizeCaption(caption: string | undefined): string {
+        if (!caption) return '';
+        return ` - caption: ${caption.substring(0, 50)}${caption.length > 50 ? '...' : ''}`;
+    }
+
+    private logMediaGroup(media: SendMediaGroupParams['media']): void {
+        this.context.logger.debug(`Sending media group with ${media.length} items`);
+
+        for (let i = 0; i < media.length; i++) {
+            const item = media[i];
+            switch (item.type) {
+                case 'photo': {
+                    const photoMedia = item as InputMediaPhoto;
+                    this.context.logger.debug(`Media ${i + 1}: Photo${photoMedia.has_spoiler ? ' with spoiler' : ''}${this.summarizeCaption(photoMedia.caption)}`);
+                    break;
+                }
+                case 'video': {
+                    const videoMedia = item as InputMediaVideo;
+                    let videoInfo = `Video`;
+                    if (videoMedia.width && videoMedia.height) {
+                        videoInfo += ` ${videoMedia.width}x${videoMedia.height}`;
+                    }
+                    if (videoMedia.duration) {
+                        videoInfo += ` duration: ${videoMedia.duration}s`;
+                    }
+                    if (videoMedia.has_spoiler) {
+                        videoInfo += ` with spoiler`;
+                    }
+                    this.context.logger.debug(`Media ${i + 1}: ${videoInfo}${this.summarizeCaption(videoMedia.caption)}`);
+                    break;
+                }
+                case 'animation': {
+                    const animationMedia = item as InputMediaAnimation;
+                    let animInfo = `Animation`;
+                    if (animationMedia.width && animationMedia.height) {
+                        animInfo += ` ${animationMedia.width}x${animationMedia.height}`;
+                    }
+                    if (animationMedia.duration) {
+                        animInfo += ` duration: ${animationMedia.duration}s`;
+                    }
+                    if (animationMedia.has_spoiler) {
+                        animInfo += ` with spoiler`;
+                    }
+                    this.context.logger.debug(`Media ${i + 1}: ${animInfo}${this.summarizeCaption(animationMedia.caption)}`);
+                    break;
+                }
+                case 'audio': {
+                    const audioMedia = item as InputMediaAudio;
+                    let audioInfo = `Audio`;
+                    if (audioMedia.performer) {
+                        audioInfo += ` by ${audioMedia.performer}`;
+                    }
+                    if (audioMedia.title) {
+                        audioInfo += ` - ${audioMedia.title}`;
+                    }
+                    if (audioMedia.duration) {
+                        audioInfo += ` (${audioMedia.duration}s)`;
+                    }
+                    this.context.logger.debug(`Media ${i + 1}: ${audioInfo}${this.summarizeCaption(audioMedia.caption)}`);
+                    break;
+                }
+                case 'document': {
+                    const documentMedia = item as InputMediaDocument;
+                    let docInfo = `Document`;
+                    if (documentMedia.disable_content_type_detection) {
+                        docInfo += ` (content type detection disabled)`;
+                    }
+                    this.context.logger.debug(`Media ${i + 1}: ${docInfo}${this.summarizeCaption(documentMedia.caption)}`);
+                    break;
+                }
+                case 'live_photo': {
+                    const livePhotoMedia = item as InputMediaLivePhoto;
+                    this.context.logger.debug(`Media ${i + 1}: LivePhoto${livePhotoMedia.has_spoiler ? ' with spoiler' : ''}${this.summarizeCaption(livePhotoMedia.caption)}`);
+                    break;
+                }
+            }
+        }
+    }
+
+    private validateInputMedia(media: InputMediaPhoto | InputMediaVideo | InputMediaAnimation | InputMediaAudio | InputMediaDocument | InputMediaLivePhoto | InputMediaVoiceNote | any): void {
         const validationErrors: string[] = [];
 
         if (!media.media) {
@@ -578,6 +745,10 @@ export class TelegramBotSkills {
                 if (documentMedia.disable_content_type_detection) {
                     this.context.logger.debug('Content type detection disabled for document');
                 }
+                break;
+
+            case 'live_photo':
+            case 'voice_note':
                 break;
 
             default:
@@ -723,7 +894,7 @@ export class TelegramBotSkills {
                 const fallbackMessage = await this.request<Message>('sendMessage', {
                     chat_id: params.chat_id,
                     text: '❌ Sticker could not be sent. Please try another sticker.',
-                    reply_to_message_id: params.reply_parameters
+                    reply_parameters: params.reply_parameters
                 });
 
                 return fallbackMessage;
@@ -745,7 +916,7 @@ export class TelegramBotSkills {
         const result = await this.request<MessageId>('copyMessage', params);
 
         if (params.reply_parameters) {
-            this.components.messages.setResponseParameters(params.chat_id, params.reply_parameters as ResponseParameters);
+            this.components.messages.setResponseParameters(params.chat_id, params.reply_parameters as unknown as ResponseParameters);
         }
 
         return result;
@@ -782,6 +953,7 @@ export class TelegramBotSkills {
     }
 
     async editMessageMedia(params: EditMessageMediaParams): Promise<Message | boolean> {
+        this.context.logger.debug(`Editing message media${this.describeMessageTarget(params)} with: ${this.summarizeMedia(params.media)}`);
         const result = await this.request<Message | boolean>('editMessageMedia', params);
 
         if (typeof result === 'object' && result && 'chat' in result && 'message_id' in result) {
@@ -793,9 +965,162 @@ export class TelegramBotSkills {
             if (params.reply_markup) {
                 this.components.messages.setReplyMarkup(message.message_id, params.reply_markup);
             }
+            this.context.logger.debug(`Message media edited successfully`);
+        } else {
+            this.context.logger.debug(`Message media edit operation completed: ${result}`);
         }
 
         return result;
+    }
+
+    private describePaidMedia(item: SendPaidMediaParams['media'][number], index: number): string {
+        const caption = 'caption' in item && typeof item.caption === 'string'
+            ? ` - caption: ${item.caption.substring(0, 50)}${item.caption.length > 50 ? '...' : ''}`
+            : '';
+        const spoiler = 'has_spoiler' in item && item.has_spoiler;
+        switch (item.type) {
+            case 'photo':
+                return `Photo ${index + 1}${spoiler ? ` (with spoiler)` : ''}${caption}`;
+            case 'video': {
+                const videoMedia = item as InputMediaVideo;
+                let info = `Video ${index + 1}`;
+                if (videoMedia.width && videoMedia.height) {
+                    info += ` ${videoMedia.width}x${videoMedia.height}`;
+                }
+                if (videoMedia.duration) {
+                    info += ` (${videoMedia.duration}s)`;
+                }
+                if (spoiler) {
+                    info += ` (with spoiler)`;
+                }
+                return `${info}${caption}`;
+            }
+            case 'animation': {
+                const animationMedia = item as InputMediaAnimation;
+                let info = `Animation ${index + 1}`;
+                if (animationMedia.width && animationMedia.height) {
+                    info += ` ${animationMedia.width}x${animationMedia.height}`;
+                }
+                if (animationMedia.duration) {
+                    info += ` (${animationMedia.duration}s)`;
+                }
+                if (spoiler) {
+                    info += ` (with spoiler)`;
+                }
+                return `${info}${caption}`;
+            }
+            case 'audio': {
+                const audioMedia = item as InputMediaAudio;
+                let info = `Audio ${index + 1}`;
+                if (audioMedia.performer) {
+                    info += ` by ${audioMedia.performer}`;
+                }
+                if (audioMedia.title) {
+                    info += ` - ${audioMedia.title}`;
+                }
+                if (audioMedia.duration) {
+                    info += ` (${audioMedia.duration}s)`;
+                }
+                return `${info}${caption}`;
+            }
+            case 'document': {
+                const documentMedia = item as InputMediaDocument;
+                let info = `Document ${index + 1}`;
+                if (documentMedia.disable_content_type_detection) {
+                    info += ` (content type detection disabled)`;
+                }
+                return `${info}${caption}`;
+            }
+            case 'live_photo':
+                return `LivePhoto ${index + 1}${spoiler ? ` (with spoiler)` : ''}${caption}`;
+            default:
+                return `${(item as { type: string }).type} ${index + 1}${caption}`;
+        }
+    }
+
+    private describeMessageTarget(params: { chat_id?: number | string; message_id?: number; inline_message_id?: string }): string {
+        let locationInfo = '';
+        if (params.chat_id) {
+            locationInfo += ` in chat ${params.chat_id}`;
+        }
+        if (params.message_id) {
+            locationInfo += ` message ${params.message_id}`;
+        }
+        if (params.inline_message_id) {
+            locationInfo += ` inline message ${params.inline_message_id}`;
+        }
+        return locationInfo;
+    }
+
+    private summarizeMedia(media: EditMessageMediaParams['media']): string {
+        let mediaInfo = '';
+        switch (media.type) {
+            case 'photo': {
+                const photoMedia = media as InputMediaPhoto;
+                mediaInfo = `Photo${photoMedia.has_spoiler ? ' with spoiler' : ''}${this.summarizeCaption(photoMedia.caption)}`;
+                break;
+            }
+            case 'video': {
+                const videoMedia = media as InputMediaVideo;
+                mediaInfo = `Video`;
+                if (videoMedia.width && videoMedia.height) {
+                    mediaInfo += ` ${videoMedia.width}x${videoMedia.height}`;
+                }
+                if (videoMedia.duration) {
+                    mediaInfo += ` (${videoMedia.duration}s)`;
+                }
+                if (videoMedia.has_spoiler) {
+                    mediaInfo += ` with spoiler`;
+                }
+                mediaInfo += this.summarizeCaption(videoMedia.caption);
+                break;
+            }
+            case 'animation': {
+                const animationMedia = media as InputMediaAnimation;
+                mediaInfo = `Animation`;
+                if (animationMedia.width && animationMedia.height) {
+                    mediaInfo += ` ${animationMedia.width}x${animationMedia.height}`;
+                }
+                if (animationMedia.duration) {
+                    mediaInfo += ` (${animationMedia.duration}s)`;
+                }
+                if (animationMedia.has_spoiler) {
+                    mediaInfo += ` with spoiler`;
+                }
+                mediaInfo += this.summarizeCaption(animationMedia.caption);
+                break;
+            }
+            case 'audio': {
+                const audioMedia = media as InputMediaAudio;
+                mediaInfo = `Audio`;
+                if (audioMedia.performer) {
+                    mediaInfo += ` by ${audioMedia.performer}`;
+                }
+                if (audioMedia.title) {
+                    mediaInfo += ` - ${audioMedia.title}`;
+                }
+                if (audioMedia.duration) {
+                    mediaInfo += ` (${audioMedia.duration}s)`;
+                }
+                mediaInfo += this.summarizeCaption(audioMedia.caption);
+                break;
+            }
+            case 'document': {
+                const documentMedia = media as InputMediaDocument;
+                mediaInfo = `Document`;
+                if (documentMedia.disable_content_type_detection) {
+                    mediaInfo += ` (content type detection disabled)`;
+                }
+                mediaInfo += this.summarizeCaption(documentMedia.caption);
+                break;
+            }
+            case 'live_photo': {
+                const livePhotoMedia = media as InputMediaLivePhoto;
+                mediaInfo = `LivePhoto${livePhotoMedia.has_spoiler ? ' with spoiler' : ''}${this.summarizeCaption(livePhotoMedia.caption)}`;
+                break;
+            }
+        }
+        return mediaInfo;
     }
 
     async editMessageReplyMarkup(params: EditMessageReplyMarkupParams): Promise<Message | boolean> {
@@ -832,8 +1157,8 @@ export class TelegramBotSkills {
         return result;
     }
 
-    async getChat(params: GetChatParams): Promise<Chat> {
-        const chat = await this.request<Chat>('getChat', params);
+    async getChat(params: GetChatParams): Promise<import('./types').ChatFullInfo> {
+        const chat = await this.request<import('./types').ChatFullInfo>('getChat', params);
         this.components.chats.setChat(params.chat_id, chat);
         return chat;
     }
@@ -877,146 +1202,36 @@ export class TelegramBotSkills {
     }
 
     async setChatPermissions(params: SetChatPermissionsParams): Promise<boolean> {
+        this.context.logger.debug(`Setting chat permissions for chat ${params.chat_id}: ${this.summarizePermissions(params.permissions)}`);
         const result = await this.request<boolean>('setChatPermissions', params);
         if (result) {
             this.components.chats.setPermissions(params.chat_id, params.permissions);
             this.validateChatPermissions(params.permissions);
+            this.context.logger.info(`Chat permissions updated successfully for chat ${params.chat_id}`);
+        } else {
+            this.context.logger.warn(`Failed to update chat permissions for chat ${params.chat_id}`);
         }
         return result;
     }
 
-    private validateChatPermissions(permissions: ChatPermissions): void {
-        const canSendMessages = permissions.can_send_messages;
-        const canSendAudios = permissions.can_send_audios;
-        const canSendDocuments = permissions.can_send_documents;
-        const canSendPhotos = permissions.can_send_photos;
-        const canSendVideos = permissions.can_send_videos;
-        const canSendVideoNotes = permissions.can_send_video_notes;
-        const canSendVoiceNotes = permissions.can_send_voice_notes;
-        const canSendPolls = permissions.can_send_polls;
-        const canSendOtherMessages = permissions.can_send_other_messages;
-        const canAddWebPagePreviews = permissions.can_add_web_page_previews;
-        const canChangeInfo = permissions.can_change_info;
-        const canInviteUsers = permissions.can_invite_users;
-        const canPinMessages = permissions.can_pin_messages;
-        const canManageTopics = permissions.can_manage_topics;
+    private summarizePermissions(permissions: ChatPermissions): string {
+        return Object.entries(permissions)
+            .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean')
+            .map(([key, value]) => `${key.replace(/^can_/, '')}: ${value}`)
+            .join(', ');
+    }
 
+    private validateChatPermissions(permissions: ChatPermissions): void {
         const validationErrors: string[] = [];
 
-        if (canSendMessages !== undefined && typeof canSendMessages !== 'boolean') {
-            validationErrors.push('can_send_messages must be a boolean');
-        }
-
-        if (canSendAudios !== undefined && typeof canSendAudios !== 'boolean') {
-            validationErrors.push('can_send_audios must be a boolean');
-        }
-
-        if (canSendDocuments !== undefined && typeof canSendDocuments !== 'boolean') {
-            validationErrors.push('can_send_documents must be a boolean');
-        }
-
-        if (canSendPhotos !== undefined && typeof canSendPhotos !== 'boolean') {
-            validationErrors.push('can_send_photos must be a boolean');
-        }
-
-        if (canSendVideos !== undefined && typeof canSendVideos !== 'boolean') {
-            validationErrors.push('can_send_videos must be a boolean');
-        }
-
-        if (canSendVideoNotes !== undefined && typeof canSendVideoNotes !== 'boolean') {
-            validationErrors.push('can_send_video_notes must be a boolean');
-        }
-
-        if (canSendVoiceNotes !== undefined && typeof canSendVoiceNotes !== 'boolean') {
-            validationErrors.push('can_send_voice_notes must be a boolean');
-        }
-
-        if (canSendPolls !== undefined && typeof canSendPolls !== 'boolean') {
-            validationErrors.push('can_send_polls must be a boolean');
-        }
-
-        if (canSendOtherMessages !== undefined && typeof canSendOtherMessages !== 'boolean') {
-            validationErrors.push('can_send_other_messages must be a boolean');
-        }
-
-        if (canAddWebPagePreviews !== undefined && typeof canAddWebPagePreviews !== 'boolean') {
-            validationErrors.push('can_add_web_page_previews must be a boolean');
-        }
-
-        if (canChangeInfo !== undefined && typeof canChangeInfo !== 'boolean') {
-            validationErrors.push('can_change_info must be a boolean');
-        }
-
-        if (canInviteUsers !== undefined && typeof canInviteUsers !== 'boolean') {
-            validationErrors.push('can_invite_users must be a boolean');
-        }
-
-        if (canPinMessages !== undefined && typeof canPinMessages !== 'boolean') {
-            validationErrors.push('can_pin_messages must be a boolean');
-        }
-
-        if (canManageTopics !== undefined && typeof canManageTopics !== 'boolean') {
-            validationErrors.push('can_manage_topics must be a boolean');
+        for (const [key, value] of Object.entries(permissions)) {
+            if (value !== undefined && typeof value !== 'boolean') {
+                validationErrors.push(`${key} must be a boolean`);
+            }
         }
 
         if (validationErrors.length > 0) {
             throw new Error(`Invalid chat permissions: ${validationErrors.join(', ')}`);
-        }
-
-        if (canSendMessages !== undefined) {
-            this.context.logger.debug(`Setting can_send_messages: ${canSendMessages}`);
-        }
-
-        if (canSendAudios !== undefined) {
-            this.context.logger.debug(`Setting can_send_audios: ${canSendAudios}`);
-        }
-
-        if (canSendDocuments !== undefined) {
-            this.context.logger.debug(`Setting can_send_documents: ${canSendDocuments}`);
-        }
-
-        if (canSendPhotos !== undefined) {
-            this.context.logger.debug(`Setting can_send_photos: ${canSendPhotos}`);
-        }
-
-        if (canSendVideos !== undefined) {
-            this.context.logger.debug(`Setting can_send_videos: ${canSendVideos}`);
-        }
-
-        if (canSendVideoNotes !== undefined) {
-            this.context.logger.debug(`Setting can_send_video_notes: ${canSendVideoNotes}`);
-        }
-
-        if (canSendVoiceNotes !== undefined) {
-            this.context.logger.debug(`Setting can_send_voice_notes: ${canSendVoiceNotes}`);
-        }
-
-        if (canSendPolls !== undefined) {
-            this.context.logger.debug(`Setting can_send_polls: ${canSendPolls}`);
-        }
-
-        if (canSendOtherMessages !== undefined) {
-            this.context.logger.debug(`Setting can_send_other_messages: ${canSendOtherMessages}`);
-        }
-
-        if (canAddWebPagePreviews !== undefined) {
-            this.context.logger.debug(`Setting can_add_web_page_previews: ${canAddWebPagePreviews}`);
-        }
-
-        if (canChangeInfo !== undefined) {
-            this.context.logger.debug(`Setting can_change_info: ${canChangeInfo}`);
-        }
-
-        if (canInviteUsers !== undefined) {
-            this.context.logger.debug(`Setting can_invite_users: ${canInviteUsers}`);
-        }
-
-        if (canPinMessages !== undefined) {
-            this.context.logger.debug(`Setting can_pin_messages: ${canPinMessages}`);
-        }
-
-        if (canManageTopics !== undefined) {
-            this.context.logger.debug(`Setting can_manage_topics: ${canManageTopics}`);
         }
     }
 
@@ -1233,27 +1448,19 @@ export class TelegramBotSkills {
         return buffer;
     }
 
-    async setMyCommands(commands: BotCommand[], scope?: BotCommandScope, languageCode?: string): Promise<boolean> {
-        const params: SetMyCommandsParams = { commands };
-        if (scope) params.scope = scope;
-        if (languageCode) params.language_code = languageCode;
-
+    async setMyCommands(params: SetMyCommandsParams): Promise<boolean> {
         const result = await this.request<boolean>('setMyCommands', params);
         if (result) {
-            this.components.bot.setCommands(commands);
+            this.components.bot.setCommands(params.commands);
 
-            if (scope && scope.chat_id) {
-                this.components.stickers.setBotCommandScope(scope.chat_id, scope);
+            if (params.scope && params.scope.chat_id) {
+                this.components.bot.setBotCommandScope(params.scope.chat_id, params.scope);
             }
         }
         return result;
     }
 
-    async deleteMyCommands(scope?: BotCommandScope, languageCode?: string): Promise<boolean> {
-        const params: DeleteMyCommandsParams = {};
-        if (scope) params.scope = scope;
-        if (languageCode) params.language_code = languageCode;
-
+    async deleteMyCommands(params?: DeleteMyCommandsParams): Promise<boolean> {
         const result = await this.request<boolean>('deleteMyCommands', params);
         if (result) {
             this.components.bot.setCommands([]);
@@ -1261,65 +1468,43 @@ export class TelegramBotSkills {
         return result;
     }
 
-    async getMyCommands(scope?: BotCommandScope, languageCode?: string): Promise<BotCommand[]> {
-        const params: GetMyCommandsParams = {};
-        if (scope) params.scope = scope;
-        if (languageCode) params.language_code = languageCode;
-
+    async getMyCommands(params?: GetMyCommandsParams): Promise<BotCommand[]> {
         return this.request<BotCommand[]>('getMyCommands', params);
     }
 
-    async setMyName(name: string, languageCode?: string): Promise<boolean> {
-        const params: SetMyNameParams = { name };
-        if (languageCode) params.language_code = languageCode;
-
+    async setMyName(params: SetMyNameParams): Promise<boolean> {
         const result = await this.request<boolean>('setMyName', params);
         if (result) {
-            this.components.bot.setName(name);
+            this.components.bot.setName(params.name);
         }
         return result;
     }
 
-    async getMyName(languageCode?: string): Promise<BotName> {
-        const params: GetMyNameParams = {};
-        if (languageCode) params.language_code = languageCode;
-
+    async getMyName(params?: GetMyNameParams): Promise<BotName> {
         return this.request<BotName>('getMyName', params);
     }
 
-    async setMyDescription(description: string, languageCode?: string): Promise<boolean> {
-        const params: SetMyDescriptionParams = { description };
-        if (languageCode) params.language_code = languageCode;
-
+    async setMyDescription(params: SetMyDescriptionParams): Promise<boolean> {
         const result = await this.request<boolean>('setMyDescription', params);
         if (result) {
-            this.components.bot.setDescription(description);
+            this.components.bot.setDescription(params.description);
         }
         return result;
     }
 
-    async getMyDescription(languageCode?: string): Promise<BotDescription> {
-        const params: GetMyDescriptionParams = {};
-        if (languageCode) params.language_code = languageCode;
-
+    async getMyDescription(params?: GetMyDescriptionParams): Promise<BotDescription> {
         return this.request<BotDescription>('getMyDescription', params);
     }
 
-    async setMyShortDescription(shortDescription: string, languageCode?: string): Promise<boolean> {
-        const params: SetMyShortDescriptionParams = { short_description: shortDescription };
-        if (languageCode) params.language_code = languageCode;
-
+    async setMyShortDescription(params: SetMyShortDescriptionParams): Promise<boolean> {
         const result = await this.request<boolean>('setMyShortDescription', params);
         if (result) {
-            this.components.bot.setShortDescription(shortDescription);
+            this.components.bot.setShortDescription(params.short_description);
         }
         return result;
     }
 
-    async getMyShortDescription(languageCode?: string): Promise<BotShortDescription> {
-        const params: GetMyShortDescriptionParams = {};
-        if (languageCode) params.language_code = languageCode;
-
+    async getMyShortDescription(params?: GetMyShortDescriptionParams): Promise<BotShortDescription> {
         return this.request<BotShortDescription>('getMyShortDescription', params);
     }
 
@@ -1338,7 +1523,7 @@ export class TelegramBotSkills {
     async setMyDefaultAdministratorRights(params?: SetMyDefaultAdministratorRightsParams): Promise<boolean> {
         const result = await this.request<boolean>('setMyDefaultAdministratorRights', params);
         if (result && params?.rights) {
-            this.components.chats.setAdministratorRights(0, params.rights);
+            this.components.chats.setAdministratorRights(DEFAULT_ADMIN_RIGHTS_KEY, params.rights);
         }
         return result;
     }
@@ -1355,15 +1540,13 @@ export class TelegramBotSkills {
         return result;
     }
 
-    async answerWebAppQuery(webAppQueryId: string, result: InlineQueryResult): Promise<any> {
-        const params: AnswerWebAppQueryParams = {
-            web_app_query_id: webAppQueryId,
-            result
-        };
+    async answerWebAppQuery(params: AnswerWebAppQueryParams): Promise<any> {
         return this.request<any>('answerWebAppQuery', params);
     }
 
     async sendInvoice(params: SendInvoiceParams): Promise<Message> {
+        this.logInvoicePrices(params.prices, params.currency, params.title, params.description, `Sending invoice to chat ${params.chat_id}:`);
+        this.logPriceRequirements(params);
         const message = await this.request<Message>('sendInvoice', params);
         if (message.chat && message.message_id) {
             this.components.messages.addMessage(message.chat.id, message);
@@ -1376,7 +1559,54 @@ export class TelegramBotSkills {
                 this.components.messages.setReplyMarkup(message.message_id, params.reply_markup);
             }
         }
+        this.context.logger.info(`Invoice sent successfully, message ID: ${message.message_id}`);
         return message;
+    }
+
+    private summarizePrices(prices: LabeledPrice[], currency: string): { total: number; items: string[] } {
+        let total = 0;
+        const items: string[] = [];
+        const suffix = currency ? ` ${currency.toUpperCase()}` : '';
+        for (const price of prices) {
+            total += price.amount;
+            items.push(`${price.label}: ${price.amount / 100}${suffix}`);
+        }
+        return { total, items };
+    }
+
+    private logInvoicePrices(prices: LabeledPrice[], currency: string, title: string, description: string, header: string): void {
+        const { total, items } = this.summarizePrices(prices, currency);
+        this.context.logger.debug(header);
+        this.context.logger.debug(`Title: ${title}`);
+        this.context.logger.debug(`Description: ${description.substring(0, 100)}${description.length > 100 ? '...' : ''}`);
+        this.context.logger.debug(`Items: ${items.join(', ')}`);
+        this.context.logger.debug(`Total: ${total / 100} ${currency.toUpperCase()}`);
+    }
+
+    private logPriceRequirements(params: {
+        max_tip_amount?: number;
+        suggested_tip_amounts?: number[];
+        currency: string;
+        need_name?: boolean;
+        need_phone_number?: boolean;
+        need_email?: boolean;
+        need_shipping_address?: boolean;
+        provider_token?: string;
+    }): void {
+        if (params.max_tip_amount) {
+            this.context.logger.debug(`Max tip amount: ${params.max_tip_amount / 100} ${params.currency.toUpperCase()}`);
+        }
+        if (params.suggested_tip_amounts && params.suggested_tip_amounts.length > 0) {
+            const tips = params.suggested_tip_amounts.map(t => `${t / 100} ${params.currency.toUpperCase()}`).join(', ');
+            this.context.logger.debug(`Suggested tips: ${tips}`);
+        }
+        if (params.provider_token) {
+            this.context.logger.debug(`Provider token: ${params.provider_token.substring(0, 5)}...`);
+        }
+        if (params.need_name) this.context.logger.debug('Customer name required');
+        if (params.need_phone_number) this.context.logger.debug('Phone number required');
+        if (params.need_email) this.context.logger.debug('Email required');
+        if (params.need_shipping_address) this.context.logger.debug('Shipping address required');
     }
 
     private validateLabeledPrices(prices: LabeledPrice[]): void {
@@ -1384,23 +1614,50 @@ export class TelegramBotSkills {
             const label = price.label;
             const amount = price.amount;
             if (label && amount) {
-                // Валидация цен
             }
         }
     }
 
     async createInvoiceLink(params: CreateInvoiceLinkParams): Promise<string> {
+        this.logInvoicePrices(params.prices, params.currency, params.title, params.description, `Creating invoice link:`);
+        this.context.logger.debug(`Payload: ${params.payload}`);
+        this.logPriceRequirements(params);
         this.validateLabeledPrices(params.prices);
-        return this.request<string>('createInvoiceLink', params);
+        const invoiceLink = await this.request<string>('createInvoiceLink', params);
+        this.context.logger.info(`Invoice link created successfully: ${invoiceLink}`);
+        return invoiceLink;
     }
 
     async answerShippingQuery(params: AnswerShippingQueryParams): Promise<boolean> {
+        this.context.logger.debug(`Answering shipping query: ${params.shipping_query_id}`);
+        this.context.logger.debug(`OK: ${params.ok}`);
+
+        if (params.shipping_options) {
+            this.context.logger.debug(`Providing ${params.shipping_options.length} shipping options:`);
+
+            for (let i = 0; i < params.shipping_options.length; i++) {
+                const shippingOption = params.shipping_options[i];
+                const { total, items } = this.summarizePrices(shippingOption.prices, '');
+
+                this.context.logger.debug(`  Option ${i + 1}: ${shippingOption.id} - ${shippingOption.title}`);
+                this.context.logger.debug(`    Prices: ${items.join(', ')}`);
+                this.context.logger.debug(`    Total: ${total / 100}`);
+            }
+        }
+
+        if (params.error_message) {
+            this.context.logger.debug(`Error message: ${params.error_message}`);
+        }
+
         const result = await this.request<boolean>('answerShippingQuery', params);
         if (result && params.shipping_options) {
             for (const option of params.shipping_options) {
                 this.validateShippingOption(option);
             }
             this.components.payments.setShippingOptions(params.shipping_query_id, params.shipping_options);
+            this.context.logger.info(`Shipping query ${params.shipping_query_id} answered successfully`);
+        } else if (!result) {
+            this.context.logger.warn(`Failed to answer shipping query ${params.shipping_query_id}`);
         }
         return result;
     }
@@ -1426,6 +1683,25 @@ export class TelegramBotSkills {
     }
 
     async sendPaidMedia(params: SendPaidMediaParams): Promise<Message> {
+        this.context.logger.debug(`Sending paid media to chat ${params.chat_id}:`);
+        this.context.logger.debug(`Star count: ${params.star_count}`);
+        this.context.logger.debug(`Media items: ${params.media.length}`);
+
+        if (params.payload) {
+            this.context.logger.debug(`Payload: ${params.payload}`);
+        }
+
+        for (let i = 0; i < params.media.length; i++) {
+            this.context.logger.debug(`  ${this.describePaidMedia(params.media[i], i)}`);
+        }
+
+        if (params.caption) {
+            this.context.logger.debug(`Global caption: ${params.caption.substring(0, 100)}${params.caption.length > 100 ? '...' : ''}`);
+        }
+        if (params.show_caption_above_media) {
+            this.context.logger.debug('Caption shown above media');
+        }
+
         const message = await this.request<Message>('sendPaidMedia', params);
         if (message.chat && message.message_id) {
             this.components.messages.addMessage(message.chat.id, message);
@@ -1438,6 +1714,7 @@ export class TelegramBotSkills {
                 this.components.messages.setReplyMarkup(message.message_id, params.reply_markup);
             }
         }
+        this.context.logger.info(`Paid media sent successfully, message ID: ${message.message_id}`);
         return message;
     }
 
@@ -1474,11 +1751,6 @@ export class TelegramBotSkills {
     async getUserChatBoosts(params: GetUserChatBoostsParams): Promise<UserChatBoosts> {
         const boosts = await this.request<UserChatBoosts>('getUserChatBoosts', params);
         this.components.polls.setUserChatBoosts(params.chat_id, params.user_id, boosts);
-
-        for (const boost of boosts.boosts) {
-            this.handleChatBoost(boost);
-        }
-
         return boosts;
     }
 
@@ -1545,15 +1817,11 @@ export class TelegramBotSkills {
     }
 
     handleChatMemberUpdated(update: ChatMemberUpdated): void {
-        this.components.business.addChatMemberUpdate(update.chat.id, update);
+        this.components.chats.addChatMemberUpdate(update.chat.id, update);
     }
 
     handleChatJoinRequest(request: ChatJoinRequest): void {
-        this.components.business.addChatJoinRequest(request.chat.id, request);
-    }
-
-    handleCallbackQuery(query: CallbackQuery): void {
-        this.components.updates.getLastCallbackQuery(query.id);
+        this.components.chats.addChatJoinRequest(request.chat.id, request);
     }
 
     handleInlineQuery(query: InlineQuery): void {
@@ -1576,23 +1844,27 @@ export class TelegramBotSkills {
         this.components.polls.setPollAnswer(answer.poll_id, answer.user.id, answer);
     }
 
-    handleChatBoost(boost: ChatBoost): void {
+    handleChatBoost(boost: ChatBoost | import('./types').ChatBoostUpdated): void {
         try {
-            const boostId = boost.boost_id;
+            const inner: any = (boost as any).boost ?? boost;
+            const boostId = inner.boost_id;
 
             let chatId: number | undefined;
-            if (boost.source && typeof boost.source === 'object') {
-                if ('chat' in boost.source && boost.source.chat) {
-                    chatId = (boost.source.chat as Chat).id;
+            if (inner.source && typeof inner.source === 'object') {
+                if ('chat' in inner.source && inner.source.chat) {
+                    chatId = (inner.source.chat as Chat).id;
                 }
+            }
+            if (!chatId && (boost as any).chat) {
+                chatId = ((boost as any).chat as Chat).id;
             }
 
             if (chatId) {
-                this.components.polls.addPollBoost(chatId.toString(), boost);
+                this.components.polls.addPollBoost(chatId.toString(), inner);
 
                 this.context.events.emit('telegram-bot:chat-boost', {
                     chatId,
-                    boost,
+                    boost: inner,
                     timestamp: Date.now()
                 });
             }
@@ -1615,6 +1887,28 @@ export class TelegramBotSkills {
         }
     }
 
+    handleGuestMessage(message: Message): void {
+        this.context.events.emit('telegram-bot:guest-message', message);
+    }
+
+    handleSubscription(subscription: BotSubscriptionUpdated): void {
+        this.components.subscriptions.setSubscription(subscription.user.id, subscription);
+        this.context.events.emit('telegram-bot:subscription', subscription);
+    }
+
+    handleStoppedMessageGeneration(event: MessageGenerationStopped): void {
+        this.context.events.emit('telegram-bot:generation-stopped', event);
+    }
+
+    handleManagedBot(event: ManagedBotUpdated): void {
+        this.context.events.emit('telegram-bot:managed-bot', event);
+    }
+
+    handlePoll(poll: Poll): void {
+        this.components.polls.setPoll(poll.id, poll);
+        this.context.events.emit('telegram-bot:poll', poll);
+    }
+
     async getChatBoosts(chatId: number): Promise<ChatBoost[]> {
         try {
             const cachedBoosts = this.components.polls.getPollBoosts(chatId.toString());
@@ -1634,11 +1928,178 @@ export class TelegramBotSkills {
         return this.request<boolean>('setChatMemberTag', params);
     }
 
-    async sendMessageDraft(params: SendMessageDraftParams): Promise<Message> {
-        const message = await this.request<Message>('sendMessageDraft', params);
+    async sendMessageDraft(params: SendMessageDraftParams): Promise<boolean> {
+        return this.request<boolean>('sendMessageDraft', params);
+    }
+
+
+    async answerGuestQuery(params: AnswerGuestQueryParams): Promise<import('./types').SentGuestMessage> {
+        return this.request<import('./types').SentGuestMessage>('answerGuestQuery', params);
+    }
+
+    async answerChatJoinRequestQuery(params: AnswerChatJoinRequestQueryParams): Promise<boolean> {
+        return this.request<boolean>('answerChatJoinRequestQuery', params);
+    }
+
+    async sendChatJoinRequestWebApp(params: SendChatJoinRequestWebAppParams): Promise<boolean> {
+        return this.request<boolean>('sendChatJoinRequestWebApp', params);
+    }
+
+    async sendLivePhoto(params: SendLivePhotoParams): Promise<Message> {
+        const message = await this.request<Message>('sendLivePhoto', params);
+        if (message.chat && message.message_id) {
+            this.components.messages.addMessage(message.chat.id, message);
+            if (params.reply_markup) {
+                this.components.messages.setReplyMarkup(message.message_id, params.reply_markup as any);
+            }
+        }
+        return message;
+    }
+
+    async sendRichMessage(params: SendRichMessageParams): Promise<Message> {
+        const message = await this.request<Message>('sendRichMessage', params);
+        if (message.chat && message.message_id) {
+            this.components.messages.addMessage(message.chat.id, message);
+            if (params.reply_markup) {
+                this.components.messages.setReplyMarkup(message.message_id, params.reply_markup as any);
+            }
+        }
+        return message;
+    }
+
+    async sendRichMessageDraft(params: SendRichMessageDraftParams): Promise<boolean> {
+        return this.request<boolean>('sendRichMessageDraft', params);
+    }
+
+    async editEphemeralMessageText(params: EditEphemeralMessageTextParams): Promise<boolean> {
+        return this.request<boolean>('editEphemeralMessageText', params);
+    }
+
+    async editEphemeralMessageMedia(params: EditEphemeralMessageMediaParams): Promise<boolean> {
+        return this.request<boolean>('editEphemeralMessageMedia', params);
+    }
+
+    async editEphemeralMessageCaption(params: EditEphemeralMessageCaptionParams): Promise<boolean> {
+        return this.request<boolean>('editEphemeralMessageCaption', params);
+    }
+
+    async editEphemeralMessageReplyMarkup(params: EditEphemeralMessageReplyMarkupParams): Promise<boolean> {
+        return this.request<boolean>('editEphemeralMessageReplyMarkup', params);
+    }
+
+    async deleteEphemeralMessage(params: DeleteEphemeralMessageParams): Promise<boolean> {
+        return this.request<boolean>('deleteEphemeralMessage', params);
+    }
+
+    async getUserPersonalChatMessages(params: GetUserPersonalChatMessagesParams): Promise<Message[]> {
+        return this.request<Message[]>('getUserPersonalChatMessages', params);
+    }
+
+    async getManagedBotAccessSettings(params: GetManagedBotAccessSettingsParams): Promise<import('./types').BotAccessSettings> {
+        return this.request<import('./types').BotAccessSettings>('getManagedBotAccessSettings', params);
+    }
+
+    async setManagedBotAccessSettings(params: SetManagedBotAccessSettingsParams): Promise<boolean> {
+        return this.request<boolean>('setManagedBotAccessSettings', params);
+    }
+
+    async getManagedBotToken(params: GetManagedBotTokenParams): Promise<string> {
+        return this.request<string>('getManagedBotToken', params);
+    }
+
+    async replaceManagedBotToken(params: ReplaceManagedBotTokenParams): Promise<string> {
+        return this.request<string>('replaceManagedBotToken', params);
+    }
+
+    async deleteMessageReaction(params: DeleteMessageReactionParams): Promise<boolean> {
+        return this.request<boolean>('deleteMessageReaction', params);
+    }
+
+    async deleteAllMessageReactions(params: DeleteAllMessageReactionsParams): Promise<boolean> {
+        return this.request<boolean>('deleteAllMessageReactions', params);
+    }
+
+    async setMessageReaction(params: SetMessageReactionParams): Promise<boolean> {
+        return this.request<boolean>('setMessageReaction', params);
+    }
+
+    async copyMessages(params: CopyMessagesParams): Promise<MessageId[]> {
+        return this.request<MessageId[]>('copyMessages', params);
+    }
+
+    async forwardMessages(params: ForwardMessagesParams): Promise<MessageId[]> {
+        return this.request<MessageId[]>('forwardMessages', params);
+    }
+
+    async deleteMessages(params: DeleteMessagesParams): Promise<boolean> {
+        const result = await this.request<boolean>('deleteMessages', params);
+        if (result) {
+            for (const messageId of params.message_ids) {
+                this.components.messages.deleteMessage(params.chat_id, messageId);
+            }
+        }
+        return result;
+    }
+
+    async editMessageLiveLocation(params: EditMessageLiveLocationParams): Promise<Message | boolean> {
+        const result = await this.request<Message | boolean>('editMessageLiveLocation', params);
+        if (typeof result === 'object' && result && 'chat' in result && 'message_id' in result) {
+            const message = result as Message;
+            this.components.messages.addMessage(message.chat.id, message);
+        }
+        return result;
+    }
+
+    async stopMessageLiveLocation(params: StopMessageLiveLocationParams): Promise<Message | boolean> {
+        const result = await this.request<Message | boolean>('stopMessageLiveLocation', params);
+        if (typeof result === 'object' && result && 'chat' in result && 'message_id' in result) {
+            const message = result as Message;
+            this.components.messages.addMessage(message.chat.id, message);
+        }
+        return result;
+    }
+
+    async editMessageChecklist(params: EditMessageChecklistParams): Promise<Message> {
+        const message = await this.request<Message>('editMessageChecklist', params);
         if (message.chat && message.message_id) {
             this.components.messages.addMessage(message.chat.id, message);
         }
         return message;
+    }
+
+    async sendChecklist(params: SendChecklistParams): Promise<Message> {
+        const message = await this.request<Message>('sendChecklist', params);
+        if (message.chat && message.message_id) {
+            this.components.messages.addMessage(message.chat.id, message);
+        }
+        return message;
+    }
+
+    async createChatSubscriptionInviteLink(params: CreateChatSubscriptionInviteLinkParams): Promise<ChatInviteLink> {
+        const link = await this.request<ChatInviteLink>('createChatSubscriptionInviteLink', params);
+        this.components.chats.setInviteLink(link.invite_link, link);
+        return link;
+    }
+
+    async editChatSubscriptionInviteLink(params: EditChatSubscriptionInviteLinkParams): Promise<ChatInviteLink> {
+        const link = await this.request<ChatInviteLink>('editChatSubscriptionInviteLink', params);
+        this.components.chats.setInviteLink(link.invite_link, link);
+        return link;
+    }
+
+    async getUserProfileAudios(params: GetUserProfileAudiosParams): Promise<import('./types').UserProfileAudios> {
+        return this.request<import('./types').UserProfileAudios>('getUserProfileAudios', params);
+    }
+
+    async approveSuggestedPost(params: ApproveSuggestedPostParams): Promise<boolean> {
+        return this.request<boolean>('approveSuggestedPost', params);
+    }
+
+    async declineSuggestedPost(params: DeclineSuggestedPostParams): Promise<boolean> {
+        return this.request<boolean>('declineSuggestedPost', params);
+    }
+
+    async replaceStickerInSet(params: ReplaceStickerInSetParams): Promise<boolean> {
+        return this.request<boolean>('replaceStickerInSet', params);
     }
 }

@@ -47,6 +47,7 @@ export class BotInfoCache {
     private description: BotDescription['description'] = '';
     private shortDescription: BotShortDescription['short_description'] = '';
     private name: BotName['name'] = '';
+    private botCommandScopes: Map<number | string, BotCommandScope> = new Map();
     private lastUpdated: number = 0;
     private maxAge: number = 3600000;
 
@@ -96,6 +97,14 @@ export class BotInfoCache {
         return this.name;
     }
 
+    setBotCommandScope(chatId: number | string, scope: BotCommandScope): void {
+        this.botCommandScopes.set(chatId, scope);
+    }
+
+    getBotCommandScope(chatId: number | string): BotCommandScope | null {
+        return this.botCommandScopes.get(chatId) || null;
+    }
+
     isExpired(): boolean {
         return Date.now() - this.lastUpdated > this.maxAge;
     }
@@ -106,58 +115,61 @@ export class BotInfoCache {
         this.description = '';
         this.shortDescription = '';
         this.name = '';
+        this.botCommandScopes.clear();
         this.lastUpdated = 0;
     }
 }
 
 export class ChatCache {
-    private chats: Map<number, Chat> = new Map();
-    private administrators: Map<number, ChatMember[]> = new Map();
-    private memberCounts: Map<number, number> = new Map();
+    private chats: Map<number | string, Chat> = new Map();
+    private administrators: Map<number | string, ChatMember[]> = new Map();
+    private memberCounts: Map<number | string, number> = new Map();
     private member: Map<string, ChatMember> = new Map();
-    private menuButtons: Map<number, MenuButton> = new Map();
+    private menuButtons: Map<number | string, MenuButton> = new Map();
     private inviteLinks: Map<string, ChatInviteLink> = new Map();
-    private permissions: Map<number, ChatPermissions> = new Map();
-    private administratorRights: Map<number, ChatAdministratorRights> = new Map();
+    private permissions: Map<number | string, ChatPermissions> = new Map();
+    private administratorRights: Map<number | string, ChatAdministratorRights> = new Map();
+    private chatMemberUpdates: Map<string, ChatMemberUpdated[]> = new Map();
+    private chatJoinRequests: Map<string, ChatJoinRequest[]> = new Map();
     private lastUpdated: number = 0;
 
-    setChat(chatId: number, chat: Chat): void {
+    setChat(chatId: number | string, chat: Chat): void {
         this.chats.set(chatId, chat);
     }
 
-    getChat(chatId: number): Chat | null {
+    getChat(chatId: number | string): Chat | null {
         return this.chats.get(chatId) || null;
     }
 
-    setAdministrators(chatId: number, admins: ChatMember[]): void {
+    setAdministrators(chatId: number | string, admins: ChatMember[]): void {
         this.administrators.set(chatId, admins);
     }
 
-    getAdministrators(chatId: number): ChatMember[] | null {
+    getAdministrators(chatId: number | string): ChatMember[] | null {
         return this.administrators.get(chatId) || null;
     }
 
-    setMemberCount(chatId: number, count: number): void {
+    setMemberCount(chatId: number | string, count: number): void {
         this.memberCounts.set(chatId, count);
     }
 
-    getMemberCount(chatId: number): number | null {
+    getMemberCount(chatId: number | string): number | null {
         return this.memberCounts.get(chatId) || null;
     }
 
-    setMember(chatId: number, userId: number, member: ChatMember): void {
+    setMember(chatId: number | string, userId: number, member: ChatMember): void {
         this.member.set(`${chatId}:${userId}`, member);
     }
 
-    getMember(chatId: number, userId: number): ChatMember | null {
+    getMember(chatId: number | string, userId: number): ChatMember | null {
         return this.member.get(`${chatId}:${userId}`) || null;
     }
 
-    setMenuButton(chatId: number, button: MenuButton): void {
+    setMenuButton(chatId: number | string, button: MenuButton): void {
         this.menuButtons.set(chatId, button);
     }
 
-    getMenuButton(chatId: number): MenuButton | null {
+    getMenuButton(chatId: number | string): MenuButton | null {
         return this.menuButtons.get(chatId) || null;
     }
 
@@ -169,20 +181,52 @@ export class ChatCache {
         return this.inviteLinks.get(link) || null;
     }
 
-    setPermissions(chatId: number, permissions: ChatPermissions): void {
+    setPermissions(chatId: number | string, permissions: ChatPermissions): void {
         this.permissions.set(chatId, permissions);
     }
 
-    getPermissions(chatId: number): ChatPermissions | null {
+    getPermissions(chatId: number | string): ChatPermissions | null {
         return this.permissions.get(chatId) || null;
     }
 
-    setAdministratorRights(chatId: number, rights: ChatAdministratorRights): void {
+    setAdministratorRights(chatId: number | string, rights: ChatAdministratorRights): void {
         this.administratorRights.set(chatId, rights);
     }
 
-    getAdministratorRights(chatId: number): ChatAdministratorRights | null {
+    getAdministratorRights(chatId: number | string): ChatAdministratorRights | null {
         return this.administratorRights.get(chatId) || null;
+    }
+
+    addChatMemberUpdate(chatId: number | string, update: ChatMemberUpdated): void {
+        const key = `member:${chatId}`;
+        if (!this.chatMemberUpdates.has(key)) {
+            this.chatMemberUpdates.set(key, []);
+        }
+        const updates = this.chatMemberUpdates.get(key)!;
+        updates.push(update);
+        if (updates.length > 20) {
+            updates.shift();
+        }
+    }
+
+    getChatMemberUpdates(chatId: number | string): ChatMemberUpdated[] {
+        return this.chatMemberUpdates.get(`member:${chatId}`) || [];
+    }
+
+    addChatJoinRequest(chatId: number | string, request: ChatJoinRequest): void {
+        const key = `join:${chatId}`;
+        if (!this.chatJoinRequests.has(key)) {
+            this.chatJoinRequests.set(key, []);
+        }
+        const requests = this.chatJoinRequests.get(key)!;
+        requests.push(request);
+        if (requests.length > 20) {
+            requests.shift();
+        }
+    }
+
+    getChatJoinRequests(chatId: number | string): ChatJoinRequest[] {
+        return this.chatJoinRequests.get(`join:${chatId}`) || [];
     }
 
     clear(): void {
@@ -194,12 +238,14 @@ export class ChatCache {
         this.inviteLinks.clear();
         this.permissions.clear();
         this.administratorRights.clear();
+        this.chatMemberUpdates.clear();
+        this.chatJoinRequests.clear();
     }
 }
 
 export class MessageCache {
-    private messages: Map<number, Map<number, Message>> = new Map();
-    private pinnedMessages: Map<number, MessageId[]> = new Map();
+    private messages: Map<number | string, Map<number, Message>> = new Map();
+    private pinnedMessages: Map<number | string, MessageId[]> = new Map();
     private maxMessagesPerChat: number = 100;
     private replyMarkups: Map<string, InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | ForceReply> = new Map();
     private responseParameters: Map<number, ResponseParameters> = new Map();
@@ -208,7 +254,7 @@ export class MessageCache {
         this.maxMessagesPerChat = maxMessagesPerChat;
     }
 
-    addMessage(chatId: number, message: Message): void {
+    addMessage(chatId: number | string, message: Message): void {
         if (!this.messages.has(chatId)) {
             this.messages.set(chatId, new Map());
         }
@@ -222,11 +268,11 @@ export class MessageCache {
         }
     }
 
-    getMessage(chatId: number, messageId: number): Message | null {
+    getMessage(chatId: number | string, messageId: number): Message | null {
         return this.messages.get(chatId)?.get(messageId) || null;
     }
 
-    getMessages(chatId: number, limit: number = 50, offsetId: number = 0): Message[] {
+    getMessages(chatId: number | string, limit: number = 50, offsetId: number = 0): Message[] {
         const chatMessages = this.messages.get(chatId);
         if (!chatMessages) return [];
 
@@ -236,26 +282,26 @@ export class MessageCache {
             .slice(0, limit);
     }
 
-    updateMessage(chatId: number, messageId: number, updates: Partial<Message>): void {
+    updateMessage(chatId: number | string, messageId: number, updates: Partial<Message>): void {
         const message = this.getMessage(chatId, messageId);
         if (message) {
             Object.assign(message, updates);
         }
     }
 
-    deleteMessage(chatId: number, messageId: number): void {
+    deleteMessage(chatId: number | string, messageId: number): void {
         this.messages.get(chatId)?.delete(messageId);
     }
 
-    setPinnedMessages(chatId: number, messageIds: MessageId[]): void {
+    setPinnedMessages(chatId: number | string, messageIds: MessageId[]): void {
         this.pinnedMessages.set(chatId, messageIds);
     }
 
-    getPinnedMessages(chatId: number): MessageId[] {
+    getPinnedMessages(chatId: number | string): MessageId[] {
         return this.pinnedMessages.get(chatId) || [];
     }
 
-    addPinnedMessage(chatId: number, messageId: number): void {
+    addPinnedMessage(chatId: number | string, messageId: number): void {
         const pinned = this.pinnedMessages.get(chatId) || [];
         if (!pinned.some(m => m.message_id === messageId)) {
             pinned.push({ message_id: messageId });
@@ -263,7 +309,7 @@ export class MessageCache {
         }
     }
 
-    removePinnedMessage(chatId: number, messageId: number): void {
+    removePinnedMessage(chatId: number | string, messageId: number): void {
         const pinned = this.pinnedMessages.get(chatId) || [];
         this.pinnedMessages.set(chatId, pinned.filter(m => m.message_id !== messageId));
     }
@@ -276,15 +322,15 @@ export class MessageCache {
         return this.replyMarkups.get(`markup:${messageId}`) || null;
     }
 
-    setResponseParameters(chatId: number, params: ResponseParameters): void {
-        this.responseParameters.set(chatId, params);
+    setResponseParameters(chatId: number | string, params: ResponseParameters): void {
+        this.responseParameters.set(chatId as number, params);
     }
 
-    getResponseParameters(chatId: number): ResponseParameters | null {
-        return this.responseParameters.get(chatId) || null;
+    getResponseParameters(chatId: number | string): ResponseParameters | null {
+        return this.responseParameters.get(chatId as number) || null;
     }
 
-    clearChat(chatId: number): void {
+    clearChat(chatId: number | string): void {
         this.messages.delete(chatId);
         this.pinnedMessages.delete(chatId);
     }
@@ -351,6 +397,10 @@ export class UpdateManager {
     private lastChosenInlineResult: Map<string, ChosenInlineResult> = new Map();
     private lastShippingQuery: Map<string, ShippingQuery> = new Map();
     private lastPreCheckoutQuery: Map<string, PreCheckoutQuery> = new Map();
+    private lastGuestMessage: Message | null = null;
+    private lastSubscription: import('./types').BotSubscriptionUpdated | null = null;
+    private lastStoppedGeneration: import('./types').MessageGenerationStopped | null = null;
+    private lastManagedBot: import('./types').ManagedBotUpdated | null = null;
 
     constructor(maxPending: number = 1000) {
         this.maxPending = maxPending;
@@ -383,6 +433,18 @@ export class UpdateManager {
         }
         if (update.pre_checkout_query) {
             this.lastPreCheckoutQuery.set(update.pre_checkout_query.id, update.pre_checkout_query);
+        }
+        if (update.guest_message) {
+            this.lastGuestMessage = update.guest_message;
+        }
+        if (update.subscription) {
+            this.lastSubscription = update.subscription;
+        }
+        if (update.stopped_message_generation) {
+            this.lastStoppedGeneration = update.stopped_message_generation;
+        }
+        if (update.managed_bot) {
+            this.lastManagedBot = update.managed_bot;
         }
 
         if (this.isPolling) {
@@ -460,6 +522,22 @@ export class UpdateManager {
         return this.lastPreCheckoutQuery.get(id) || null;
     }
 
+    getLastGuestMessage(): Message | null {
+        return this.lastGuestMessage;
+    }
+
+    getLastSubscription(): import('./types').BotSubscriptionUpdated | null {
+        return this.lastSubscription;
+    }
+
+    getLastStoppedGeneration(): import('./types').MessageGenerationStopped | null {
+        return this.lastStoppedGeneration;
+    }
+
+    getLastManagedBot(): import('./types').ManagedBotUpdated | null {
+        return this.lastManagedBot;
+    }
+
     clear(): void {
         this.callbacks.clear();
         this.pendingUpdates = [];
@@ -470,6 +548,10 @@ export class UpdateManager {
         this.lastChosenInlineResult.clear();
         this.lastShippingQuery.clear();
         this.lastPreCheckoutQuery.clear();
+        this.lastGuestMessage = null;
+        this.lastSubscription = null;
+        this.lastStoppedGeneration = null;
+        this.lastManagedBot = null;
 
         if (this.pollTimeout) {
             clearTimeout(this.pollTimeout);
@@ -483,37 +565,37 @@ export class ForumCache {
     private generalTopicId: Map<number, number> = new Map();
     private topicMessages: Map<string, Message[]> = new Map();
 
-    setTopic(chatId: number, topic: ForumTopic): void {
-        if (!this.topics.has(chatId)) {
-            this.topics.set(chatId, new Map());
+    setTopic(chatId: number | string, topic: ForumTopic): void {
+        if (!this.topics.has(chatId as number)) {
+            this.topics.set(chatId as number, new Map());
         }
 
-        const chatTopics = this.topics.get(chatId)!;
+        const chatTopics = this.topics.get(chatId as number)!;
         chatTopics.set(topic.message_thread_id, topic);
     }
 
-    getTopic(chatId: number, threadId: number): ForumTopic | null {
-        return this.topics.get(chatId)?.get(threadId) || null;
+    getTopic(chatId: number | string, threadId: number): ForumTopic | null {
+        return this.topics.get(chatId as number)?.get(threadId) || null;
     }
 
-    getTopics(chatId: number): ForumTopic[] {
-        const chatTopics = this.topics.get(chatId);
+    getTopics(chatId: number | string): ForumTopic[] {
+        const chatTopics = this.topics.get(chatId as number);
         return chatTopics ? Array.from(chatTopics.values()) : [];
     }
 
-    deleteTopic(chatId: number, threadId: number): void {
-        this.topics.get(chatId)?.delete(threadId);
+    deleteTopic(chatId: number | string, threadId: number): void {
+        this.topics.get(chatId as number)?.delete(threadId);
     }
 
-    setGeneralTopicId(chatId: number, threadId: number): void {
-        this.generalTopicId.set(chatId, threadId);
+    setGeneralTopicId(chatId: number | string, threadId: number): void {
+        this.generalTopicId.set(chatId as number, threadId);
     }
 
-    getGeneralTopicId(chatId: number): number | null {
-        return this.generalTopicId.get(chatId) || null;
+    getGeneralTopicId(chatId: number | string): number | null {
+        return this.generalTopicId.get(chatId as number) || null;
     }
 
-    addTopicMessage(chatId: number, threadId: number, message: Message): void {
+    addTopicMessage(chatId: number | string, threadId: number, message: Message): void {
         const key = `${chatId}:${threadId}`;
         if (!this.topicMessages.has(key)) {
             this.topicMessages.set(key, []);
@@ -525,13 +607,13 @@ export class ForumCache {
         }
     }
 
-    getTopicMessages(chatId: number, threadId: number): Message[] {
+    getTopicMessages(chatId: number | string, threadId: number): Message[] {
         return this.topicMessages.get(`${chatId}:${threadId}`) || [];
     }
 
-    clearChat(chatId: number): void {
-        this.topics.delete(chatId);
-        this.generalTopicId.delete(chatId);
+    clearChat(chatId: number | string): void {
+        this.topics.delete(chatId as number);
+        this.generalTopicId.delete(chatId as number);
 
         for (const [key, _] of this.topicMessages) {
             if (key.startsWith(`${chatId}:`)) {
@@ -550,8 +632,6 @@ export class ForumCache {
 export class BusinessCache {
     private connections: Map<string, BusinessConnection> = new Map();
     private connectionIds: string[] = [];
-    private chatMemberUpdates: Map<string, ChatMemberUpdated[]> = new Map();
-    private chatJoinRequests: Map<string, ChatJoinRequest[]> = new Map();
 
     setConnection(connection: BusinessConnection): void {
         this.connections.set(connection.id, connection);
@@ -579,43 +659,9 @@ export class BusinessCache {
             .filter((c): c is BusinessConnection => c !== undefined);
     }
 
-    addChatMemberUpdate(chatId: number, update: ChatMemberUpdated): void {
-        const key = `member:${chatId}`;
-        if (!this.chatMemberUpdates.has(key)) {
-            this.chatMemberUpdates.set(key, []);
-        }
-        const updates = this.chatMemberUpdates.get(key)!;
-        updates.push(update);
-        if (updates.length > 20) {
-            updates.shift();
-        }
-    }
-
-    getChatMemberUpdates(chatId: number): ChatMemberUpdated[] {
-        return this.chatMemberUpdates.get(`member:${chatId}`) || [];
-    }
-
-    addChatJoinRequest(chatId: number, request: ChatJoinRequest): void {
-        const key = `join:${chatId}`;
-        if (!this.chatJoinRequests.has(key)) {
-            this.chatJoinRequests.set(key, []);
-        }
-        const requests = this.chatJoinRequests.get(key)!;
-        requests.push(request);
-        if (requests.length > 20) {
-            requests.shift();
-        }
-    }
-
-    getChatJoinRequests(chatId: number): ChatJoinRequest[] {
-        return this.chatJoinRequests.get(`join:${chatId}`) || [];
-    }
-
     clear(): void {
         this.connections.clear();
         this.connectionIds = [];
-        this.chatMemberUpdates.clear();
-        this.chatJoinRequests.clear();
     }
 }
 
@@ -690,11 +736,11 @@ export class PaymentCache {
         return this.prices.get(invoicePayload) || null;
     }
 
-    setInvoicePayload(chatId: number, payload: string): void {
+    setInvoicePayload(chatId: number | string, payload: string): void {
         this.invoicePayloads.set(`chat:${chatId}`, payload);
     }
 
-    getInvoicePayload(chatId: number): string | null {
+    getInvoicePayload(chatId: number | string): string | null {
         return this.invoicePayloads.get(`chat:${chatId}`) || null;
     }
 
@@ -726,7 +772,6 @@ export class PaymentCache {
 export class StickerCache {
     private stickerSets: Map<string, StickerSet> = new Map();
     private customEmojiStickers: Map<string, StickerSet['stickers']> = new Map();
-    private botCommandScope: Map<number, BotCommandScope> = new Map();
 
     setStickerSet(name: string, set: StickerSet): void {
         this.stickerSets.set(name, set);
@@ -744,18 +789,9 @@ export class StickerCache {
         return this.customEmojiStickers.get(emojiId) || null;
     }
 
-    setBotCommandScope(chatId: number, scope: BotCommandScope): void {
-        this.botCommandScope.set(chatId, scope);
-    }
-
-    getBotCommandScope(chatId: number): BotCommandScope | null {
-        return this.botCommandScope.get(chatId) || null;
-    }
-
     clear(): void {
         this.stickerSets.clear();
         this.customEmojiStickers.clear();
-        this.botCommandScope.clear();
     }
 }
 
@@ -802,11 +838,11 @@ export class PollCache {
         return this.pollBoosts.get(pollId) || [];
     }
 
-    setUserChatBoosts(chatId: number, userId: number, boosts: UserChatBoosts): void {
+    setUserChatBoosts(chatId: number | string, userId: number, boosts: UserChatBoosts): void {
         this.userChatBoosts.set(`${chatId}:${userId}`, boosts);
     }
 
-    getUserChatBoosts(chatId: number, userId: number): UserChatBoosts | null {
+    getUserChatBoosts(chatId: number | string, userId: number): UserChatBoosts | null {
         return this.userChatBoosts.get(`${chatId}:${userId}`) || null;
     }
 
@@ -908,6 +944,88 @@ export class RateLimiter {
     }
 }
 
+export class RichCache {
+    private messages: Map<string, import('./types').RichMessage> = new Map();
+    private drafts: Map<string, import('./types').InputRichMessage> = new Map();
+
+    setRichMessage(key: string, message: import('./types').RichMessage): void {
+        this.messages.set(key, message);
+    }
+
+    getRichMessage(key: string): import('./types').RichMessage | null {
+        return this.messages.get(key) || null;
+    }
+
+    setDraft(chatId: number | string, draft: import('./types').InputRichMessage): void {
+        this.drafts.set(`draft:${chatId}`, draft);
+    }
+
+    getDraft(chatId: number | string): import('./types').InputRichMessage | null {
+        return this.drafts.get(`draft:${chatId}`) || null;
+    }
+
+    clear(): void {
+        this.messages.clear();
+        this.drafts.clear();
+    }
+}
+
+export class EphemeralCache {
+    private messages: Map<string, Message> = new Map();
+
+    private key(chatId: number | string, receiverUserId: number, ephemeralMessageId: number): string {
+        return `${chatId}:${receiverUserId}:${ephemeralMessageId}`;
+    }
+
+    setMessage(chatId: number | string, receiverUserId: number, ephemeralMessageId: number, message: Message): void {
+        this.messages.set(this.key(chatId, receiverUserId, ephemeralMessageId), message);
+    }
+
+    getMessage(chatId: number | string, receiverUserId: number, ephemeralMessageId: number): Message | null {
+        return this.messages.get(this.key(chatId, receiverUserId, ephemeralMessageId)) || null;
+    }
+
+    deleteMessage(chatId: number | string, receiverUserId: number, ephemeralMessageId: number): void {
+        this.messages.delete(this.key(chatId, receiverUserId, ephemeralMessageId));
+    }
+
+    clear(): void {
+        this.messages.clear();
+    }
+}
+
+export class CommunityCache {
+    private communities: Map<number, import('./types').Community> = new Map();
+
+    setCommunity(community: import('./types').Community): void {
+        this.communities.set(community.id, community);
+    }
+
+    getCommunity(id: number): import('./types').Community | null {
+        return this.communities.get(id) || null;
+    }
+
+    clear(): void {
+        this.communities.clear();
+    }
+}
+
+export class SubscriptionCache {
+    private subscriptions: Map<number, import('./types').BotSubscriptionUpdated> = new Map();
+
+    setSubscription(userId: number, sub: import('./types').BotSubscriptionUpdated): void {
+        this.subscriptions.set(userId, sub);
+    }
+
+    getSubscription(userId: number): import('./types').BotSubscriptionUpdated | null {
+        return this.subscriptions.get(userId) || null;
+    }
+
+    clear(): void {
+        this.subscriptions.clear();
+    }
+}
+
 export class TelegramBotComponents {
     public bot: BotInfoCache;
     public chats: ChatCache;
@@ -922,6 +1040,10 @@ export class TelegramBotComponents {
     public polls: PollCache;
     public webhook: WebhookCache;
     public rateLimiter: RateLimiter;
+    public rich: RichCache;
+    public ephemeral: EphemeralCache;
+    public communities: CommunityCache;
+    public subscriptions: SubscriptionCache;
     private context: PluginContext;
     private config: any;
     private intervals: Map<string, NodeJS.Timeout> = new Map();
@@ -943,6 +1065,10 @@ export class TelegramBotComponents {
         this.polls = new PollCache();
         this.webhook = new WebhookCache();
         this.rateLimiter = new RateLimiter();
+        this.rich = new RichCache();
+        this.ephemeral = new EphemeralCache();
+        this.communities = new CommunityCache();
+        this.subscriptions = new SubscriptionCache();
     }
 
     updateConfig(newConfig: any): void {
@@ -995,5 +1121,9 @@ export class TelegramBotComponents {
         this.polls.clear();
         this.webhook.clear();
         this.rateLimiter.clear();
+        this.rich.clear();
+        this.ephemeral.clear();
+        this.communities.clear();
+        this.subscriptions.clear();
     }
 }

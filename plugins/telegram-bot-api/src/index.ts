@@ -10,17 +10,12 @@ import {
     File,
     ChatMember,
     BotCommand,
-    BotCommandScope,
     WebhookInfo,
     ChatAdministratorRights,
     MenuButton,
-    InlineQueryResult,
-    LabeledPrice,
-    ShippingOption,
     Poll,
     PollAnswer,
     StickerSet,
-    ChatPermissions,
     ForumTopic,
     BusinessConnection,
     ChatInviteLink,
@@ -32,23 +27,16 @@ import {
     ShippingQuery,
     PreCheckoutQuery,
     ChatBoost,
+    ChatBoostRemoved,
+    MessageReactionUpdated,
+    MessageReactionCountUpdated,
+    BusinessMessagesDeleted,
     UserChatBoosts,
     MessageId,
     BotDescription,
     BotName,
     BotShortDescription,
-    ForceReply,
-    InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-    ResponseParameters,
     InputFile,
-    InputMedia,
-    InputMediaPhoto,
-    InputMediaVideo,
-    InputMediaAnimation,
-    InputMediaAudio,
-    InputMediaDocument,
     SendMessageParams,
     SendPhotoParams,
     SendAudioParams,
@@ -162,7 +150,49 @@ import {
     LogOutParams,
     CloseParams,
     SendMessageDraftParams,
-    SetChatMemberTagParams
+    SetChatMemberTagParams,
+    BOT_API_VERSION,
+    ChatFullInfo,
+    EphemeralMessageParameters,
+    RichMessage,
+    InputRichMessage,
+    SendLivePhotoParams,
+    SendRichMessageParams,
+    SendRichMessageDraftParams,
+    EditEphemeralMessageTextParams,
+    EditEphemeralMessageMediaParams,
+    EditEphemeralMessageCaptionParams,
+    EditEphemeralMessageReplyMarkupParams,
+    DeleteEphemeralMessageParams,
+    AnswerGuestQueryParams,
+    AnswerChatJoinRequestQueryParams,
+    SendChatJoinRequestWebAppParams,
+    GetUserPersonalChatMessagesParams,
+    GetManagedBotAccessSettingsParams,
+    SetManagedBotAccessSettingsParams,
+    GetManagedBotTokenParams,
+    ReplaceManagedBotTokenParams,
+    DeleteMessageReactionParams,
+    DeleteAllMessageReactionsParams,
+    SetMessageReactionParams,
+    CopyMessagesParams,
+    ForwardMessagesParams,
+    DeleteMessagesParams,
+    EditMessageLiveLocationParams,
+    StopMessageLiveLocationParams,
+    EditMessageChecklistParams,
+    SendChecklistParams,
+    CreateChatSubscriptionInviteLinkParams,
+    EditChatSubscriptionInviteLinkParams,
+    GetUserProfileAudiosParams,
+    ApproveSuggestedPostParams,
+    DeclineSuggestedPostParams,
+    ReplaceStickerInSetParams,
+    BotSubscriptionUpdated,
+    MessageGenerationStopped,
+    Community,
+    SentGuestMessage,
+    BotAccessSettings
 } from './types';
 
 export * from './components';
@@ -172,8 +202,9 @@ export * from './types';
 export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
     readonly metadata = {
         name: 'telegram-bot-api',
-        version: '0.1.0',
-        description: 'Complete Telegram Bot API integration',
+        version: '0.2.0',
+        botApiVersion: BOT_API_VERSION,
+        description: 'Complete Telegram Bot API integration (Bot API 10.3)',
         author: 'TON AI Core Team',
         dependencies: [] as string[]
     };
@@ -307,9 +338,6 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
                     if (update.poll_answer) {
                         this.skills.handlePollAnswer(update.poll_answer);
                     }
-                    if (update.callback_query) {
-                        this.skills.handleCallbackQuery(update.callback_query);
-                    }
                     if (update.inline_query) {
                         this.skills.handleInlineQuery(update.inline_query);
                     }
@@ -330,6 +358,21 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
                     }
                     if (update.chat_join_request) {
                         this.skills.handleChatJoinRequest(update.chat_join_request);
+                    }
+                    if (update.guest_message) {
+                        this.skills.handleGuestMessage(update.guest_message);
+                    }
+                    if (update.subscription) {
+                        this.skills.handleSubscription(update.subscription);
+                    }
+                    if (update.stopped_message_generation) {
+                        this.skills.handleStoppedMessageGeneration(update.stopped_message_generation);
+                    }
+                    if (update.managed_bot) {
+                        this.skills.handleManagedBot(update.managed_bot);
+                    }
+                    if (update.poll) {
+                        this.skills.handlePoll(update.poll);
                     }
                 }
 
@@ -464,57 +507,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
 
     async sendMessage(params: SendMessageParams): Promise<Message> {
         this.checkInitialized();
-        const message = await this.skills.sendMessage(params);
-
-        if (params.reply_markup) {
-            const replyMarkup = params.reply_markup;
-            if ('force_reply' in replyMarkup) {
-                const forceReply = replyMarkup as ForceReply;
-                this.logger.debug('Sending message with force reply:', forceReply.force_reply);
-                if (forceReply.input_field_placeholder) {
-                    this.logger.debug('Force reply placeholder:', forceReply.input_field_placeholder);
-                }
-            } else if ('inline_keyboard' in replyMarkup) {
-                const inlineKeyboard = replyMarkup as InlineKeyboardMarkup;
-                const buttonCount = inlineKeyboard.inline_keyboard.reduce((acc, row) => acc + row.length, 0);
-                this.logger.debug(`Sending message with inline keyboard containing ${buttonCount} buttons`);
-
-                for (const row of inlineKeyboard.inline_keyboard) {
-                    for (const button of row) {
-                        if (button.callback_data) {
-                            this.logger.debug(`Inline button with callback: ${button.text}`);
-                        } else if (button.url) {
-                            this.logger.debug(`Inline button with URL: ${button.text} -> ${button.url}`);
-                        }
-                    }
-                }
-            } else if ('keyboard' in replyMarkup) {
-                const replyKeyboard = replyMarkup as ReplyKeyboardMarkup;
-                const buttonCount = replyKeyboard.keyboard.reduce((acc, row) => acc + row.length, 0);
-                this.logger.debug(`Sending message with reply keyboard containing ${buttonCount} buttons`);
-
-                if (replyKeyboard.is_persistent) {
-                    this.logger.debug('Reply keyboard is persistent');
-                }
-                if (replyKeyboard.one_time_keyboard) {
-                    this.logger.debug('Reply keyboard is one-time');
-                }
-                if (replyKeyboard.resize_keyboard) {
-                    this.logger.debug('Reply keyboard is resized');
-                }
-                if (replyKeyboard.input_field_placeholder) {
-                    this.logger.debug('Input field placeholder:', replyKeyboard.input_field_placeholder);
-                }
-            } else if ('remove_keyboard' in replyMarkup) {
-                const removeKeyboard = replyMarkup as ReplyKeyboardRemove;
-                this.logger.debug('Removing reply keyboard');
-                if (removeKeyboard.selective) {
-                    this.logger.debug('Keyboard removal is selective');
-                }
-            }
-        }
-
-        return message;
+        return this.skills.sendMessage(params);
     }
 
     async sendPhoto(params: SendPhotoParams): Promise<Message> {
@@ -554,88 +547,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
 
     async sendMediaGroup(params: SendMediaGroupParams): Promise<Message[]> {
         this.checkInitialized();
-        const messages = await this.skills.sendMediaGroup(params);
-
-        this.logger.debug(`Sending media group with ${params.media.length} items`);
-
-        for (let i = 0; i < params.media.length; i++) {
-            const media = params.media[i];
-            switch (media.type) {
-                case 'photo':
-                    const photoMedia = media as InputMediaPhoto;
-                    this.logger.debug(`Media ${i + 1}: Photo${photoMedia.has_spoiler ? ' with spoiler' : ''}`);
-                    if (photoMedia.caption) {
-                        this.logger.debug(`Photo caption: ${photoMedia.caption.substring(0, 50)}${photoMedia.caption.length > 50 ? '...' : ''}`);
-                    }
-                    break;
-                case 'video':
-                    const videoMedia = media as InputMediaVideo;
-                    let videoInfo = `Video`;
-                    if (videoMedia.width && videoMedia.height) {
-                        videoInfo += ` ${videoMedia.width}x${videoMedia.height}`;
-                    }
-                    if (videoMedia.duration) {
-                        videoInfo += ` duration: ${videoMedia.duration}s`;
-                    }
-                    if (videoMedia.has_spoiler) {
-                        videoInfo += ` with spoiler`;
-                    }
-                    this.logger.debug(`Media ${i + 1}: ${videoInfo}`);
-                    if (videoMedia.caption) {
-                        this.logger.debug(`Video caption: ${videoMedia.caption.substring(0, 50)}${videoMedia.caption.length > 50 ? '...' : ''}`);
-                    }
-                    break;
-                case 'animation':
-                    const animationMedia = media as InputMediaAnimation;
-                    let animInfo = `Animation`;
-                    if (animationMedia.width && animationMedia.height) {
-                        animInfo += ` ${animationMedia.width}x${animationMedia.height}`;
-                    }
-                    if (animationMedia.duration) {
-                        animInfo += ` duration: ${animationMedia.duration}s`;
-                    }
-                    if (animationMedia.has_spoiler) {
-                        animInfo += ` with spoiler`;
-                    }
-                    this.logger.debug(`Media ${i + 1}: ${animInfo}`);
-                    if (animationMedia.caption) {
-                        this.logger.debug(`Animation caption: ${animationMedia.caption.substring(0, 50)}${animationMedia.caption.length > 50 ? '...' : ''}`);
-                    }
-                    break;
-                case 'audio':
-                    const audioMedia = media as InputMediaAudio;
-                    let audioInfo = `Audio`;
-                    if (audioMedia.performer) {
-                        audioInfo += ` by ${audioMedia.performer}`;
-                    }
-                    if (audioMedia.title) {
-                        audioInfo += ` - ${audioMedia.title}`;
-                    }
-                    if (audioMedia.duration) {
-                        audioInfo += ` (${audioMedia.duration}s)`;
-                    }
-                    this.logger.debug(`Media ${i + 1}: ${audioInfo}`);
-                    if (audioMedia.caption) {
-                        this.logger.debug(`Audio caption: ${audioMedia.caption.substring(0, 50)}${audioMedia.caption.length > 50 ? '...' : ''}`);
-                    }
-                    break;
-                case 'document':
-                    const documentMedia = media as InputMediaDocument;
-                    let docInfo = `Document`;
-                    if (documentMedia.disable_content_type_detection) {
-                        docInfo += ` (content type detection disabled)`;
-                    }
-                    this.logger.debug(`Media ${i + 1}: ${docInfo}`);
-                    if (documentMedia.caption) {
-                        this.logger.debug(`Document caption: ${documentMedia.caption.substring(0, 50)}${documentMedia.caption.length > 50 ? '...' : ''}`);
-                    }
-                    break;
-            }
-        }
-
-        this.logger.debug(`Media group sent successfully, received ${messages.length} messages`);
-
-        return messages;
+        return this.skills.sendMediaGroup(params);
     }
 
     async sendLocation(params: SendLocationParams): Promise<Message> {
@@ -680,13 +592,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
 
     async copyMessage(params: CopyMessageParams): Promise<MessageId> {
         this.checkInitialized();
-        const result = await this.skills.copyMessage(params);
-
-        if (params.reply_parameters) {
-            const responseParams = params.reply_parameters as ResponseParameters;
-        }
-
-        return result;
+        return this.skills.copyMessage(params);
     }
 
     async editMessageText(params: EditMessageTextParams): Promise<Message | boolean> {
@@ -701,100 +607,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
 
     async editMessageMedia(params: EditMessageMediaParams): Promise<Message | boolean> {
         this.checkInitialized();
-
-        const media = params.media;
-        let mediaInfo = '';
-
-        switch (media.type) {
-            case 'photo':
-                const photoMedia = media as InputMediaPhoto;
-                mediaInfo = `Photo${photoMedia.has_spoiler ? ' with spoiler' : ''}`;
-                if (photoMedia.caption) {
-                    mediaInfo += ` - caption: ${photoMedia.caption.substring(0, 50)}${photoMedia.caption.length > 50 ? '...' : ''}`;
-                }
-                break;
-            case 'video':
-                const videoMedia = media as InputMediaVideo;
-                mediaInfo = `Video`;
-                if (videoMedia.width && videoMedia.height) {
-                    mediaInfo += ` ${videoMedia.width}x${videoMedia.height}`;
-                }
-                if (videoMedia.duration) {
-                    mediaInfo += ` (${videoMedia.duration}s)`;
-                }
-                if (videoMedia.has_spoiler) {
-                    mediaInfo += ` with spoiler`;
-                }
-                if (videoMedia.caption) {
-                    mediaInfo += ` - caption: ${videoMedia.caption.substring(0, 50)}${videoMedia.caption.length > 50 ? '...' : ''}`;
-                }
-                break;
-            case 'animation':
-                const animationMedia = media as InputMediaAnimation;
-                mediaInfo = `Animation`;
-                if (animationMedia.width && animationMedia.height) {
-                    mediaInfo += ` ${animationMedia.width}x${animationMedia.height}`;
-                }
-                if (animationMedia.duration) {
-                    mediaInfo += ` (${animationMedia.duration}s)`;
-                }
-                if (animationMedia.has_spoiler) {
-                    mediaInfo += ` with spoiler`;
-                }
-                if (animationMedia.caption) {
-                    mediaInfo += ` - caption: ${animationMedia.caption.substring(0, 50)}${animationMedia.caption.length > 50 ? '...' : ''}`;
-                }
-                break;
-            case 'audio':
-                const audioMedia = media as InputMediaAudio;
-                mediaInfo = `Audio`;
-                if (audioMedia.performer) {
-                    mediaInfo += ` by ${audioMedia.performer}`;
-                }
-                if (audioMedia.title) {
-                    mediaInfo += ` - ${audioMedia.title}`;
-                }
-                if (audioMedia.duration) {
-                    mediaInfo += ` (${audioMedia.duration}s)`;
-                }
-                if (audioMedia.caption) {
-                    mediaInfo += ` - caption: ${audioMedia.caption.substring(0, 50)}${audioMedia.caption.length > 50 ? '...' : ''}`;
-                }
-                break;
-            case 'document':
-                const documentMedia = media as InputMediaDocument;
-                mediaInfo = `Document`;
-                if (documentMedia.disable_content_type_detection) {
-                    mediaInfo += ` (content type detection disabled)`;
-                }
-                if (documentMedia.caption) {
-                    mediaInfo += ` - caption: ${documentMedia.caption.substring(0, 50)}${documentMedia.caption.length > 50 ? '...' : ''}`;
-                }
-                break;
-        }
-
-        let locationInfo = '';
-        if (params.chat_id) {
-            locationInfo += ` in chat ${params.chat_id}`;
-        }
-        if (params.message_id) {
-            locationInfo += ` message ${params.message_id}`;
-        }
-        if (params.inline_message_id) {
-            locationInfo += ` inline message ${params.inline_message_id}`;
-        }
-
-        this.logger.debug(`Editing message media${locationInfo} with: ${mediaInfo}`);
-
-        const result = await this.skills.editMessageMedia(params);
-
-        if (typeof result === 'object' && result) {
-            this.logger.debug(`Message media edited successfully`);
-        } else {
-            this.logger.debug(`Message media edit operation completed: ${result}`);
-        }
-
-        return result;
+        return this.skills.editMessageMedia(params);
     }
 
     async editMessageReplyMarkup(params: EditMessageReplyMarkupParams): Promise<Message | boolean> {
@@ -812,9 +625,9 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.skills.deleteMessage(params);
     }
 
-    async getChat(params: GetChatParams): Promise<Chat> {
+    async getChat(params: GetChatParams): Promise<ChatFullInfo> {
         this.checkInitialized();
-        return this.skills.getChat(params);
+        return this.skills.getChat(params) as unknown as ChatFullInfo;
     }
 
     async getChatAdministrators(params: GetChatAdministratorsParams): Promise<ChatMember[]> {
@@ -859,64 +672,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
 
     async setChatPermissions(params: SetChatPermissionsParams): Promise<boolean> {
         this.checkInitialized();
-
-        const permissions = params.permissions as ChatPermissions;
-        const permissionChanges: string[] = [];
-
-        if (permissions.can_send_messages !== undefined) {
-            permissionChanges.push(`send_messages: ${permissions.can_send_messages}`);
-        }
-        if (permissions.can_send_audios !== undefined) {
-            permissionChanges.push(`send_audios: ${permissions.can_send_audios}`);
-        }
-        if (permissions.can_send_documents !== undefined) {
-            permissionChanges.push(`send_documents: ${permissions.can_send_documents}`);
-        }
-        if (permissions.can_send_photos !== undefined) {
-            permissionChanges.push(`send_photos: ${permissions.can_send_photos}`);
-        }
-        if (permissions.can_send_videos !== undefined) {
-            permissionChanges.push(`send_videos: ${permissions.can_send_videos}`);
-        }
-        if (permissions.can_send_video_notes !== undefined) {
-            permissionChanges.push(`send_video_notes: ${permissions.can_send_video_notes}`);
-        }
-        if (permissions.can_send_voice_notes !== undefined) {
-            permissionChanges.push(`send_voice_notes: ${permissions.can_send_voice_notes}`);
-        }
-        if (permissions.can_send_polls !== undefined) {
-            permissionChanges.push(`send_polls: ${permissions.can_send_polls}`);
-        }
-        if (permissions.can_send_other_messages !== undefined) {
-            permissionChanges.push(`send_other_messages: ${permissions.can_send_other_messages}`);
-        }
-        if (permissions.can_add_web_page_previews !== undefined) {
-            permissionChanges.push(`add_web_page_previews: ${permissions.can_add_web_page_previews}`);
-        }
-        if (permissions.can_change_info !== undefined) {
-            permissionChanges.push(`change_info: ${permissions.can_change_info}`);
-        }
-        if (permissions.can_invite_users !== undefined) {
-            permissionChanges.push(`invite_users: ${permissions.can_invite_users}`);
-        }
-        if (permissions.can_pin_messages !== undefined) {
-            permissionChanges.push(`pin_messages: ${permissions.can_pin_messages}`);
-        }
-        if (permissions.can_manage_topics !== undefined) {
-            permissionChanges.push(`manage_topics: ${permissions.can_manage_topics}`);
-        }
-
-        this.logger.debug(`Setting chat permissions for chat ${params.chat_id}: ${permissionChanges.join(', ')}`);
-
-        const result = await this.skills.setChatPermissions(params);
-
-        if (result) {
-            this.logger.info(`Chat permissions updated successfully for chat ${params.chat_id}`);
-        } else {
-            this.logger.warn(`Failed to update chat permissions for chat ${params.chat_id}`);
-        }
-
-        return result;
+        return this.skills.setChatPermissions(params);
     }
 
     async exportChatInviteLink(params: ExportChatInviteLinkParams): Promise<string> {
@@ -1099,79 +855,49 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.skills.downloadFile(fileId, destinationPath);
     }
 
-    async setMyCommands(commands: BotCommand[], scope?: BotCommandScope, languageCode?: string): Promise<boolean> {
+    async setMyCommands(params: SetMyCommandsParams): Promise<boolean> {
         this.checkInitialized();
-        const params: SetMyCommandsParams = { commands };
-        if (scope) params.scope = scope;
-        if (languageCode) params.language_code = languageCode;
-
-        return this.skills.setMyCommands(commands, scope, languageCode);
+        return this.skills.setMyCommands(params);
     }
 
-    async deleteMyCommands(scope?: BotCommandScope, languageCode?: string): Promise<boolean> {
+    async deleteMyCommands(params?: DeleteMyCommandsParams): Promise<boolean> {
         this.checkInitialized();
-        const params: DeleteMyCommandsParams = {};
-        if (scope) params.scope = scope;
-        if (languageCode) params.language_code = languageCode;
-
-        return this.skills.deleteMyCommands(scope, languageCode);
+        return this.skills.deleteMyCommands(params);
     }
 
-    async getMyCommands(scope?: BotCommandScope, languageCode?: string): Promise<BotCommand[]> {
+    async getMyCommands(params?: GetMyCommandsParams): Promise<BotCommand[]> {
         this.checkInitialized();
-        const params: GetMyCommandsParams = {};
-        if (scope) params.scope = scope;
-        if (languageCode) params.language_code = languageCode;
-
-        return this.skills.getMyCommands(scope, languageCode);
+        return this.skills.getMyCommands(params);
     }
 
-    async setMyName(name: string, languageCode?: string): Promise<boolean> {
+    async setMyName(params: SetMyNameParams): Promise<boolean> {
         this.checkInitialized();
-        const params: SetMyNameParams = { name };
-        if (languageCode) params.language_code = languageCode;
-
-        return this.skills.setMyName(name, languageCode);
+        return this.skills.setMyName(params);
     }
 
-    async getMyName(languageCode?: string): Promise<BotName> {
+    async getMyName(params?: GetMyNameParams): Promise<BotName> {
         this.checkInitialized();
-        const params: GetMyNameParams = {};
-        if (languageCode) params.language_code = languageCode;
-
-        return this.skills.getMyName(languageCode);
+        return this.skills.getMyName(params);
     }
 
-    async setMyDescription(description: string, languageCode?: string): Promise<boolean> {
+    async setMyDescription(params: SetMyDescriptionParams): Promise<boolean> {
         this.checkInitialized();
-        const params: SetMyDescriptionParams = { description };
-        if (languageCode) params.language_code = languageCode;
-
-        return this.skills.setMyDescription(description, languageCode);
+        return this.skills.setMyDescription(params);
     }
 
-    async getMyDescription(languageCode?: string): Promise<BotDescription> {
+    async getMyDescription(params?: GetMyDescriptionParams): Promise<BotDescription> {
         this.checkInitialized();
-        const params: GetMyDescriptionParams = {};
-        if (languageCode) params.language_code = languageCode;
-
-        return this.skills.getMyDescription(languageCode);
+        return this.skills.getMyDescription(params);
     }
 
-    async setMyShortDescription(shortDescription: string, languageCode?: string): Promise<boolean> {
+    async setMyShortDescription(params: SetMyShortDescriptionParams): Promise<boolean> {
         this.checkInitialized();
-        const params: SetMyShortDescriptionParams = { short_description: shortDescription };
-        if (languageCode) params.language_code = languageCode;
-
-        return this.skills.setMyShortDescription(shortDescription, languageCode);
+        return this.skills.setMyShortDescription(params);
     }
 
-    async getMyShortDescription(languageCode?: string): Promise<BotShortDescription> {
+    async getMyShortDescription(params?: GetMyShortDescriptionParams): Promise<BotShortDescription> {
         this.checkInitialized();
-        const params: GetMyShortDescriptionParams = {};
-        if (languageCode) params.language_code = languageCode;
-
-        return this.skills.getMyShortDescription(languageCode);
+        return this.skills.getMyShortDescription(params);
     }
 
     async setChatMenuButton(params?: SetChatMenuButtonParams): Promise<boolean> {
@@ -1199,134 +925,24 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.skills.answerInlineQuery(params);
     }
 
-    async answerWebAppQuery(webAppQueryId: string, result: InlineQueryResult): Promise<any> {
+    async answerWebAppQuery(params: AnswerWebAppQueryParams): Promise<any> {
         this.checkInitialized();
-        const params: AnswerWebAppQueryParams = {
-            web_app_query_id: webAppQueryId,
-            result
-        };
-
-        return this.skills.answerWebAppQuery(webAppQueryId, result);
+        return this.skills.answerWebAppQuery(params);
     }
 
     async sendInvoice(params: SendInvoiceParams): Promise<Message> {
         this.checkInitialized();
-
-        let totalAmount = 0;
-        const priceItems: string[] = [];
-
-        for (const price of params.prices) {
-            const labeledPrice = price as LabeledPrice;
-            totalAmount += labeledPrice.amount;
-            priceItems.push(`${labeledPrice.label}: ${labeledPrice.amount / 100} ${params.currency.toUpperCase()}`);
-        }
-
-        this.logger.debug(`Sending invoice to chat ${params.chat_id}:`);
-        this.logger.debug(`Title: ${params.title}`);
-        this.logger.debug(`Description: ${params.description.substring(0, 100)}${params.description.length > 100 ? '...' : ''}`);
-        this.logger.debug(`Items: ${priceItems.join(', ')}`);
-        this.logger.debug(`Total: ${totalAmount / 100} ${params.currency.toUpperCase()}`);
-
-        if (params.max_tip_amount) {
-            this.logger.debug(`Max tip amount: ${params.max_tip_amount / 100} ${params.currency.toUpperCase()}`);
-        }
-        if (params.suggested_tip_amounts && params.suggested_tip_amounts.length > 0) {
-            const tips = params.suggested_tip_amounts.map(t => `${t / 100} ${params.currency.toUpperCase()}`).join(', ');
-            this.logger.debug(`Suggested tips: ${tips}`);
-        }
-        if (params.need_name) this.logger.debug('Customer name required');
-        if (params.need_phone_number) this.logger.debug('Phone number required');
-        if (params.need_email) this.logger.debug('Email required');
-        if (params.need_shipping_address) this.logger.debug('Shipping address required');
-
-        const message = await this.skills.sendInvoice(params);
-
-        this.logger.info(`Invoice sent successfully, message ID: ${message.message_id}`);
-
-        return message;
+        return this.skills.sendInvoice(params);
     }
 
     async createInvoiceLink(params: CreateInvoiceLinkParams): Promise<string> {
         this.checkInitialized();
-
-        let totalAmount = 0;
-        const priceItems: string[] = [];
-
-        for (const price of params.prices) {
-            const labeledPrice = price as LabeledPrice;
-            totalAmount += labeledPrice.amount;
-            priceItems.push(`${labeledPrice.label}: ${labeledPrice.amount / 100} ${params.currency.toUpperCase()}`);
-        }
-
-        this.logger.debug(`Creating invoice link:`);
-        this.logger.debug(`Title: ${params.title}`);
-        this.logger.debug(`Description: ${params.description.substring(0, 100)}${params.description.length > 100 ? '...' : ''}`);
-        this.logger.debug(`Items: ${priceItems.join(', ')}`);
-        this.logger.debug(`Total: ${totalAmount / 100} ${params.currency.toUpperCase()}`);
-        this.logger.debug(`Payload: ${params.payload}`);
-
-        if (params.max_tip_amount) {
-            this.logger.debug(`Max tip amount: ${params.max_tip_amount / 100} ${params.currency.toUpperCase()}`);
-        }
-        if (params.suggested_tip_amounts && params.suggested_tip_amounts.length > 0) {
-            const tips = params.suggested_tip_amounts.map(t => `${t / 100} ${params.currency.toUpperCase()}`).join(', ');
-            this.logger.debug(`Suggested tips: ${tips}`);
-        }
-        if (params.provider_token) {
-            this.logger.debug(`Provider token: ${params.provider_token.substring(0, 5)}...`);
-        }
-        if (params.need_name) this.logger.debug('Customer name required');
-        if (params.need_phone_number) this.logger.debug('Phone number required');
-        if (params.need_email) this.logger.debug('Email required');
-        if (params.need_shipping_address) this.logger.debug('Shipping address required');
-
-        const invoiceLink = await this.skills.createInvoiceLink(params);
-
-        this.logger.info(`Invoice link created successfully: ${invoiceLink}`);
-
-        return invoiceLink;
+        return this.skills.createInvoiceLink(params);
     }
 
     async answerShippingQuery(params: AnswerShippingQueryParams): Promise<boolean> {
         this.checkInitialized();
-
-        this.logger.debug(`Answering shipping query: ${params.shipping_query_id}`);
-        this.logger.debug(`OK: ${params.ok}`);
-
-        if (params.shipping_options) {
-            this.logger.debug(`Providing ${params.shipping_options.length} shipping options:`);
-
-            for (let i = 0; i < params.shipping_options.length; i++) {
-                const option = params.shipping_options[i];
-                const shippingOption = option as ShippingOption;
-
-                let optionTotal = 0;
-                const priceDetails: string[] = [];
-
-                for (const price of shippingOption.prices) {
-                    optionTotal += price.amount;
-                    priceDetails.push(`${price.label}: ${price.amount / 100}`);
-                }
-
-                this.logger.debug(`  Option ${i + 1}: ${shippingOption.id} - ${shippingOption.title}`);
-                this.logger.debug(`    Prices: ${priceDetails.join(', ')}`);
-                this.logger.debug(`    Total: ${optionTotal / 100}`);
-            }
-        }
-
-        if (params.error_message) {
-            this.logger.debug(`Error message: ${params.error_message}`);
-        }
-
-        const result = await this.skills.answerShippingQuery(params);
-
-        if (result) {
-            this.logger.info(`Shipping query ${params.shipping_query_id} answered successfully`);
-        } else {
-            this.logger.warn(`Failed to answer shipping query ${params.shipping_query_id}`);
-        }
-
-        return result;
+        return this.skills.answerShippingQuery(params);
     }
 
     async answerPreCheckoutQuery(params: AnswerPreCheckoutQueryParams): Promise<boolean> {
@@ -1346,106 +962,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
 
     async sendPaidMedia(params: SendPaidMediaParams): Promise<Message> {
         this.checkInitialized();
-
-        this.logger.debug(`Sending paid media to chat ${params.chat_id}:`);
-        this.logger.debug(`Star count: ${params.star_count}`);
-        this.logger.debug(`Media items: ${params.media.length}`);
-
-        if (params.payload) {
-            this.logger.debug(`Payload: ${params.payload}`);
-        }
-
-        for (let i = 0; i < params.media.length; i++) {
-            const media = params.media[i];
-            switch (media.type) {
-                case 'photo':
-                    const photoMedia = media as InputMediaPhoto;
-                    let photoInfo = `Photo ${i + 1}`;
-                    if (photoMedia.has_spoiler) {
-                        photoInfo += ` (with spoiler)`;
-                    }
-                    if (photoMedia.caption) {
-                        photoInfo += ` - caption: ${photoMedia.caption.substring(0, 50)}${photoMedia.caption.length > 50 ? '...' : ''}`;
-                    }
-                    this.logger.debug(`  ${photoInfo}`);
-                    break;
-                case 'video':
-                    const videoMedia = media as InputMediaVideo;
-                    let videoInfo = `Video ${i + 1}`;
-                    if (videoMedia.width && videoMedia.height) {
-                        videoInfo += ` ${videoMedia.width}x${videoMedia.height}`;
-                    }
-                    if (videoMedia.duration) {
-                        videoInfo += ` (${videoMedia.duration}s)`;
-                    }
-                    if (videoMedia.has_spoiler) {
-                        videoInfo += ` (with spoiler)`;
-                    }
-                    if (videoMedia.caption) {
-                        videoInfo += ` - caption: ${videoMedia.caption.substring(0, 50)}${videoMedia.caption.length > 50 ? '...' : ''}`;
-                    }
-                    this.logger.debug(`  ${videoInfo}`);
-                    break;
-                case 'animation':
-                    const animationMedia = media as InputMediaAnimation;
-                    let animInfo = `Animation ${i + 1}`;
-                    if (animationMedia.width && animationMedia.height) {
-                        animInfo += ` ${animationMedia.width}x${animationMedia.height}`;
-                    }
-                    if (animationMedia.duration) {
-                        animInfo += ` (${animationMedia.duration}s)`;
-                    }
-                    if (animationMedia.has_spoiler) {
-                        animInfo += ` (with spoiler)`;
-                    }
-                    if (animationMedia.caption) {
-                        animInfo += ` - caption: ${animationMedia.caption.substring(0, 50)}${animationMedia.caption.length > 50 ? '...' : ''}`;
-                    }
-                    this.logger.debug(`  ${animInfo}`);
-                    break;
-                case 'audio':
-                    const audioMedia = media as InputMediaAudio;
-                    let audioInfo = `Audio ${i + 1}`;
-                    if (audioMedia.performer) {
-                        audioInfo += ` by ${audioMedia.performer}`;
-                    }
-                    if (audioMedia.title) {
-                        audioInfo += ` - ${audioMedia.title}`;
-                    }
-                    if (audioMedia.duration) {
-                        audioInfo += ` (${audioMedia.duration}s)`;
-                    }
-                    if (audioMedia.caption) {
-                        audioInfo += ` - caption: ${audioMedia.caption.substring(0, 50)}${audioMedia.caption.length > 50 ? '...' : ''}`;
-                    }
-                    this.logger.debug(`  ${audioInfo}`);
-                    break;
-                case 'document':
-                    const documentMedia = media as InputMediaDocument;
-                    let docInfo = `Document ${i + 1}`;
-                    if (documentMedia.disable_content_type_detection) {
-                        docInfo += ` (content type detection disabled)`;
-                    }
-                    if (documentMedia.caption) {
-                        docInfo += ` - caption: ${documentMedia.caption.substring(0, 50)}${documentMedia.caption.length > 50 ? '...' : ''}`;
-                    }
-                    this.logger.debug(`  ${docInfo}`);
-                    break;
-            }
-        }
-
-        if (params.caption) {
-            this.logger.debug(`Global caption: ${params.caption.substring(0, 100)}${params.caption.length > 100 ? '...' : ''}`);
-        }
-        if (params.show_caption_above_media) {
-            this.logger.debug('Caption shown above media');
-        }
-
-        const message = await this.skills.sendPaidMedia(params);
-
-        this.logger.info(`Paid media sent successfully, message ID: ${message.message_id}`);
-
-        return message;
+        return this.skills.sendPaidMedia(params);
     }
 
     async setPassportDataErrors(params: SetPassportDataErrorsParams): Promise<boolean> {
@@ -1684,7 +1201,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         });
     }
 
-    onDeletedBusinessMessages(callback: (messages: any) => void): string {
+    onDeletedBusinessMessages(callback: (messages: BusinessMessagesDeleted) => void): string {
         return this.onUpdate((update) => {
             if (update.deleted_business_messages) {
                 callback(update.deleted_business_messages);
@@ -1692,7 +1209,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         });
     }
 
-    onMessageReaction(callback: (reaction: any) => void): string {
+    onMessageReaction(callback: (reaction: MessageReactionUpdated) => void): string {
         return this.onUpdate((update) => {
             if (update.message_reaction) {
                 callback(update.message_reaction);
@@ -1700,7 +1217,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         });
     }
 
-    onMessageReactionCount(callback: (reaction: any) => void): string {
+    onMessageReactionCount(callback: (reaction: MessageReactionCountUpdated) => void): string {
         return this.onUpdate((update) => {
             if (update.message_reaction_count) {
                 callback(update.message_reaction_count);
@@ -1708,15 +1225,15 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         });
     }
 
-    onChatBoost(callback: (boost: ChatBoost) => void): string {
+    onChatBoost(callback: (boost: ChatBoost | import('./types').ChatBoostUpdated) => void): string {
         return this.onUpdate((update) => {
             if (update.chat_boost) {
-                callback(update.chat_boost);
+                callback(update.chat_boost as any);
             }
         });
     }
 
-    onRemovedChatBoost(callback: (boost: any) => void): string {
+    onRemovedChatBoost(callback: (boost: ChatBoostRemoved) => void): string {
         return this.onUpdate((update) => {
             if (update.removed_chat_boost) {
                 callback(update.removed_chat_boost);
@@ -1734,12 +1251,12 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.components.rateLimiter.getRemaining(key);
     }
 
-    getCachedMessage(chatId: number, messageId: number): Message | null {
+    getCachedMessage(chatId: number | string, messageId: number): Message | null {
         this.checkInitialized();
         return this.components.messages.getMessage(chatId, messageId);
     }
 
-    getCachedChat(chatId: number): Chat | null {
+    getCachedChat(chatId: number | string): Chat | null {
         this.checkInitialized();
         return this.components.chats.getChat(chatId);
     }
@@ -1758,8 +1275,205 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.skills.setChatMemberTag(params);
     }
 
-    async sendMessageDraft(params: SendMessageDraftParams): Promise<Message> {
+    async sendMessageDraft(params: SendMessageDraftParams): Promise<boolean> {
         this.checkInitialized();
         return this.skills.sendMessageDraft(params);
+    }
+
+
+    async answerGuestQuery(params: AnswerGuestQueryParams): Promise<SentGuestMessage> {
+        this.checkInitialized();
+        return this.skills.answerGuestQuery(params);
+    }
+
+    async answerChatJoinRequestQuery(params: AnswerChatJoinRequestQueryParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.answerChatJoinRequestQuery(params);
+    }
+
+    async sendChatJoinRequestWebApp(params: SendChatJoinRequestWebAppParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.sendChatJoinRequestWebApp(params);
+    }
+
+    async sendLivePhoto(params: SendLivePhotoParams): Promise<Message> {
+        this.checkInitialized();
+        return this.skills.sendLivePhoto(params);
+    }
+
+    async sendRichMessage(params: SendRichMessageParams): Promise<Message> {
+        this.checkInitialized();
+        return this.skills.sendRichMessage(params);
+    }
+
+    async sendRichMessageDraft(params: SendRichMessageDraftParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.sendRichMessageDraft(params);
+    }
+
+    async editEphemeralMessageText(params: EditEphemeralMessageTextParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.editEphemeralMessageText(params);
+    }
+
+    async editEphemeralMessageMedia(params: EditEphemeralMessageMediaParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.editEphemeralMessageMedia(params);
+    }
+
+    async editEphemeralMessageCaption(params: EditEphemeralMessageCaptionParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.editEphemeralMessageCaption(params);
+    }
+
+    async editEphemeralMessageReplyMarkup(params: EditEphemeralMessageReplyMarkupParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.editEphemeralMessageReplyMarkup(params);
+    }
+
+    async deleteEphemeralMessage(params: DeleteEphemeralMessageParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.deleteEphemeralMessage(params);
+    }
+
+    async getUserPersonalChatMessages(params: GetUserPersonalChatMessagesParams): Promise<Message[]> {
+        this.checkInitialized();
+        return this.skills.getUserPersonalChatMessages(params);
+    }
+
+    async getManagedBotAccessSettings(params: GetManagedBotAccessSettingsParams): Promise<BotAccessSettings> {
+        this.checkInitialized();
+        return this.skills.getManagedBotAccessSettings(params);
+    }
+
+    async setManagedBotAccessSettings(params: SetManagedBotAccessSettingsParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.setManagedBotAccessSettings(params);
+    }
+
+    async getManagedBotToken(params: GetManagedBotTokenParams): Promise<string> {
+        this.checkInitialized();
+        return this.skills.getManagedBotToken(params);
+    }
+
+    async replaceManagedBotToken(params: ReplaceManagedBotTokenParams): Promise<string> {
+        this.checkInitialized();
+        return this.skills.replaceManagedBotToken(params);
+    }
+
+    async deleteMessageReaction(params: DeleteMessageReactionParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.deleteMessageReaction(params);
+    }
+
+    async deleteAllMessageReactions(params: DeleteAllMessageReactionsParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.deleteAllMessageReactions(params);
+    }
+
+    async setMessageReaction(params: SetMessageReactionParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.setMessageReaction(params);
+    }
+
+    async copyMessages(params: CopyMessagesParams): Promise<MessageId[]> {
+        this.checkInitialized();
+        return this.skills.copyMessages(params);
+    }
+
+    async forwardMessages(params: ForwardMessagesParams): Promise<MessageId[]> {
+        this.checkInitialized();
+        return this.skills.forwardMessages(params);
+    }
+
+    async deleteMessages(params: DeleteMessagesParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.deleteMessages(params);
+    }
+
+    async editMessageLiveLocation(params: EditMessageLiveLocationParams): Promise<Message | boolean> {
+        this.checkInitialized();
+        return this.skills.editMessageLiveLocation(params);
+    }
+
+    async stopMessageLiveLocation(params: StopMessageLiveLocationParams): Promise<Message | boolean> {
+        this.checkInitialized();
+        return this.skills.stopMessageLiveLocation(params);
+    }
+
+    async editMessageChecklist(params: EditMessageChecklistParams): Promise<Message> {
+        this.checkInitialized();
+        return this.skills.editMessageChecklist(params);
+    }
+
+    async sendChecklist(params: SendChecklistParams): Promise<Message> {
+        this.checkInitialized();
+        return this.skills.sendChecklist(params);
+    }
+
+    async createChatSubscriptionInviteLink(params: CreateChatSubscriptionInviteLinkParams): Promise<ChatInviteLink> {
+        this.checkInitialized();
+        return this.skills.createChatSubscriptionInviteLink(params);
+    }
+
+    async editChatSubscriptionInviteLink(params: EditChatSubscriptionInviteLinkParams): Promise<ChatInviteLink> {
+        this.checkInitialized();
+        return this.skills.editChatSubscriptionInviteLink(params);
+    }
+
+    async getUserProfileAudios(params: GetUserProfileAudiosParams): Promise<import('./types').UserProfileAudios> {
+        this.checkInitialized();
+        return this.skills.getUserProfileAudios(params);
+    }
+
+    async approveSuggestedPost(params: ApproveSuggestedPostParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.approveSuggestedPost(params);
+    }
+
+    async declineSuggestedPost(params: DeclineSuggestedPostParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.declineSuggestedPost(params);
+    }
+
+    async replaceStickerInSet(params: ReplaceStickerInSetParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.replaceStickerInSet(params);
+    }
+
+    onGuestMessage(callback: (message: Message) => void): string {
+        return this.onUpdate((update) => {
+            if (update.guest_message) {
+                callback(update.guest_message);
+            }
+        });
+    }
+
+    onSubscription(callback: (sub: BotSubscriptionUpdated) => void): string {
+        return this.onUpdate((update) => {
+            if (update.subscription) {
+                callback(update.subscription);
+            }
+        });
+    }
+
+    onStoppedMessageGeneration(callback: (event: MessageGenerationStopped) => void): string {
+        return this.onUpdate((update) => {
+            if (update.stopped_message_generation) {
+                callback(update.stopped_message_generation);
+            }
+        });
+    }
+
+    onManagedBot(callback: (event: import('./types').ManagedBotUpdated) => void): string {
+        return this.onUpdate((update) => {
+            if (update.managed_bot) {
+                callback(update.managed_bot);
+            }
+        });
+    }
+
+    getBotApiVersion(): string {
+        return BOT_API_VERSION;
     }
 }

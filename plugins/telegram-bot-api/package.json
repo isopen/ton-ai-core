@@ -1,7 +1,7 @@
 {
   "name": "@ton-ai/telegram-bot-api",
-  "version": "0.1.0",
-  "description": "Telegram Bot API plugin for TON AI Framework",
+  "version": "0.2.0",
+  "description": "Telegram Bot API plugin for TON AI Framework (Bot API 10.3)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "author": "testertesterov",
