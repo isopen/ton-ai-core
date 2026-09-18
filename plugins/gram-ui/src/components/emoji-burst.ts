@@ -357,14 +357,18 @@ export function attachEmojiBurst(): void {
         const atPoint = typeof document.elementFromPoint === 'function'
             ? (document.elementFromPoint(x, y) as Element | null)
             : null;
+        if (target.closest('button, a')) return;
         const slotEl = (target.closest('.tgui-emoji-slot'))
             ?? (atPoint?.closest('.tgui-emoji-slot') ?? null);
         const staticEl = target.closest('.tgui-emoji-static') as HTMLElement | null;
+        const richSelector = '.tgui-emoji-scaled, .TgsPlayer, .tgui-emoji-inline, img.rich-ce-img';
+        const richEl = (target.closest(richSelector) ?? atPoint?.closest(richSelector) ?? null) as HTMLElement | null;
+        const richDocAnchor = richEl?.closest('[data-doc], [data-doc-id]') as HTMLElement | null;
 
         const row = bubble.closest('[id^="msg-"]') as HTMLElement | null;
         const rowId = row ? row.id.slice(4) : '';
 
-        const emojiHit = !!slotEl || !!staticEl
+        const emojiHit = !!slotEl || !!staticEl || !!richEl
             || (target instanceof HTMLCanvasElement && target.classList.contains('tgui-animated-sticker'));
         let glyphHit = false;
         if (!emojiHit) {
@@ -388,7 +392,7 @@ export function attachEmojiBurst(): void {
                 mediaType: 'emoji',
                 x, y,
                 slotIndex: slotIdx >= 0 ? slotIdx : undefined,
-                docId: slotEl?.getAttribute('data-doc') || undefined,
+                docId: slotEl?.getAttribute('data-doc') || richDocAnchor?.getAttribute('data-doc') || richDocAnchor?.getAttribute('data-doc-id') || undefined,
                 glyph: staticEl?.getAttribute('data-emoji') || undefined,
             });
         }
@@ -396,7 +400,7 @@ export function attachEmojiBurst(): void {
 }
 
 export function pickInteractionAnchor(bubble: Element, x?: number, y?: number): Element | null {
-    const candidates = Array.from(bubble.querySelectorAll<Element>('.tgui-emoji-slot, .tgui-emoji-static, .tgui-sticker-preview, canvas.tgui-animated-sticker'))
+    const candidates = Array.from(bubble.querySelectorAll<Element>('.tgui-emoji-slot, .tgui-emoji-static, .tgui-sticker-preview, canvas.tgui-animated-sticker, .tgui-emoji-scaled, .TgsPlayer, .tgui-emoji-inline, img.rich-ce-img'))
         .filter((el) => {
             const r = el.getBoundingClientRect();
             return r.width > 2 && r.height > 2 && r.bottom > 0 && r.top < window.innerHeight;

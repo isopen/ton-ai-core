@@ -44,6 +44,20 @@ describe('emoji font scaling', () => {
     document.body.removeChild(c2);
   });
 
+  test('font scaling applies once at non-default font size', async () => {
+    document.documentElement.style.setProperty('--message-font-size', '20px');
+    try {
+      const c = mount(h(AnimatedEmoji as any, { docId: 'd9', url: 'blob:zz', size: 20, fontScaled: true }));
+      await new Promise((r) => setTimeout(r, 30));
+      const wrap = c.querySelector('.tgui-emoji-scaled') as HTMLElement;
+      expect(wrap).not.toBeNull();
+      expect(wrap.getAttribute('style') || '').toContain('calc(var(--message-font-size, 14px) * 1.4286)');
+      expect(wrap.getAttribute('style') || '').not.toContain('2.0714');
+      document.body.removeChild(c);
+    } finally {
+      document.documentElement.style.removeProperty('--message-font-size');
+    }
+  });
   test('animated fallback wraps into scaled box when enabled', async () => {
     const c = mount(h(AnimatedEmoji as any, { docId: '', url: '', size: 20, fontScaled: true }));
     await new Promise((r) => setTimeout(r, 30));

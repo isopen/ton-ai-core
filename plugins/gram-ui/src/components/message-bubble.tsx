@@ -95,6 +95,7 @@ export function MessageBubble(props: MessageBubbleProps) {
               richMessage={richMessage}
               messageId={messageId ?? ''}
               documentUrls={richDocumentUrls || documentUrls || {}}
+              documentSources={documentSources}
               inactiveButtons={inactiveButtons}
               onButton={(data: string, e?: any) => onRichButton?.(data, messageId ?? '', e)}
               onOpenPhoto={onOpenPhoto} />

@@ -196,7 +196,7 @@ function isHiddenEmojiAlt(alt: string): boolean {
   const n = normalizeEmoji(alt || '');
   return n === '🙂' || n === '🫣' || n === '⬛' || n === '';
 }
-function renderPlainWithEmojis(text: string, documentUrls?: Record<string, string>): any {
+function renderPlainWithEmojis(text: string, documentUrls?: Record<string, string>, messageId?: number | string): any {
   if (isHiddenEmojiAlt(text.trim())) return null;
   const runs = matchEmojiRuns(text);
   if (runs.length === 0) return <>{text}</>;
@@ -213,7 +213,7 @@ function renderPlainWithEmojis(text: string, documentUrls?: Record<string, strin
     if (!docId) {
       parts.push(emoji);
     } else {
-      parts.push(<AnimatedEmoji key={'e' + i} docId={docId} alt={emoji} url={url} size={16} fontScaled={true} />);
+      parts.push(<span key={'e' + i} data-doc={docId} style="display:contents"><AnimatedEmoji docId={docId} alt={emoji} url={url} size={16} fontScaled={true} source={richSourceFor(messageId, docId)} /></span>);
     }
     pos = r.end;
   }
@@ -225,8 +225,31 @@ function renderPlainWithEmojis(text: string, documentUrls?: Record<string, strin
   return <>{parts}</>;
 }
 
-function CustomEmojiNode({ documentId, alt, documentUrls }: { documentId: string; alt: string; documentUrls?: Record<number | string, string> }): any {
+export const richSourcesByMessage = new Map<number | string, Record<number | string, string>>();
+const RICH_SOURCES_MAX = 200;
+
+export function setRichSources(messageId: number | string, sources?: Record<number | string, string>): void {
+  if (messageId === '' || messageId == null || !sources) return;
+  if (!richSourcesByMessage.has(messageId)) {
+    while (richSourcesByMessage.size >= RICH_SOURCES_MAX) {
+      const oldest = richSourcesByMessage.keys().next().value;
+      if (oldest === undefined) break;
+      richSourcesByMessage.delete(oldest);
+    }
+  }
+  richSourcesByMessage.set(messageId, sources);
+}
+
+function richSourceFor(messageId: number | string | undefined, docId: string): string | undefined {
+  if (messageId === '' || messageId == null) return undefined;
+  const m = richSourcesByMessage.get(messageId);
+  if (!m) return undefined;
+  return m['emojipack-' + docId] || m['emoji-' + docId] || m[docId];
+}
+
+export function CustomEmojiNode({ documentId, alt, documentUrls, messageId }: { documentId: string; alt: string; documentUrls?: Record<number | string, string>; messageId?: number | string }): any {
   const url = (documentUrls || {})['emojipack-' + documentId] || (documentUrls || {})['emoji-' + documentId] || (documentUrls || {})[documentId];
+  const source = richSourceFor(messageId, documentId);
   useEffect(() => {
     if (!url && documentId) {
       try {
@@ -240,7 +263,7 @@ function CustomEmojiNode({ documentId, alt, documentUrls }: { documentId: string
     log.debug('[rich-ce-miss]', documentId, alt, Object.keys(documentUrls || {}).slice(0,5));
   }
   if (String(url).startsWith('blob:ce')) return <img class="rich-ce-img" src={url} alt={alt} draggable={false} />;
-  return <AnimatedEmoji docId={documentId} url={url || ''} alt={alt} size={20} fontScaled={true} />;
+  return <span data-doc={documentId} style="display:contents"><AnimatedEmoji docId={documentId} url={url || ''} alt={alt} size={20} fontScaled={true} source={source} /></span>;
 }
 
 function RichTextNode({ node, messageId, onButton, documentUrls, inactiveButtons }: { node: any; messageId?: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true> }): any {
@@ -263,7 +286,7 @@ function RichTextNode({ node, messageId, onButton, documentUrls, inactiveButtons
         log.warn('[RichMessage] custom emoji without document id', String(node.alt || ''));
         return null;
       }
-      return <CustomEmojiNode documentId={String(node.document_id)} alt={node.alt || ''} documentUrls={documentUrls} />;
+      return <CustomEmojiNode documentId={String(node.document_id)} alt={node.alt || ''} documentUrls={documentUrls} messageId={messageId} />;
     }
     case 'textButton': {
       const type = node.type || {};
@@ -284,10 +307,10 @@ function RichTextNode({ node, messageId, onButton, documentUrls, inactiveButtons
     }
     default: {
       if (node._ === 'textPlain' && typeof node.text === 'string') {
-        return renderPlainWithEmojis(node.text, documentUrls);
+        return renderPlainWithEmojis(node.text, documentUrls, messageId);
       }
       const plain = deepRichText(node);
-      if (plain) return renderPlainWithEmojis(plain, documentUrls);
+      if (plain) return renderPlainWithEmojis(plain, documentUrls, messageId);
       if (node.text !== undefined) return <>{RichTextChildren(node, ctx)}</>;
       return <span class="rich-unknown">[{node._}]</span>;
     }
@@ -536,17 +559,19 @@ function Block({ block, messageId, onButton, documentUrls, inactiveButtons, rich
   }
 }
 
-export function RichMessageView({ richMessage, messageId, onButton, documentUrls, inactiveButtons, className = '', onOpenPhoto }: {
+export function RichMessageView({ richMessage, messageId, onButton, documentUrls, documentSources, inactiveButtons, className = '', onOpenPhoto }: {
   richMessage: any;
   messageId: number | string;
   onButton?: (data: string, e?: any) => void;
   documentUrls?: Record<number | string, string>;
+  documentSources?: Record<number | string, string>;
   inactiveButtons?: Record<string, true>;
   className?: string;
   onOpenPhoto?: (image: ImageSpec, index: number) => void;
 }) {
   const blocks = richMessage?.blocks || [];
   if (blocks.length === 0) return null;
+  setRichSources(messageId, documentSources);
   try {
     return (
       <div class={'rich-body' + (className ? ' ' + className : '')}>

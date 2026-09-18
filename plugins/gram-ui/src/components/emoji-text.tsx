@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useDomEvent } from '@ton-ai/atom/hooks';
 import { EmojiCanvas, StaticEmojiText, fetchEmojiData, getCachedEmojiData, subscribeEmojiData, useMessageFontSize } from './emoji-canvas.js';
 import type { EmojiSegment } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
+import { MediaSourceBadge } from './media-source-badge.js';
 import { ensureEmojiStickers, getEmojiAlt, getEmojiDocId, isEmojiStickersLoaded, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
 import { messageFontPx, MESSAGE_FONT_DEFAULT } from '../utils.js';
 import { getLogger } from '@ton-ai/gram-debug';
@@ -89,8 +90,11 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
   useDomEvent(() => videoRef.current, 'loadedmetadata', seekToEnd,
     [data?.kind, data?.value, showLastFrame], { once: true });
 
+  const liveFont = useMessageFontSize();
+  const esize = fontScaled ? Math.round(size * liveFont / MESSAGE_FONT_DEFAULT) : size;
+
   if (data?.kind === 'tgs') {
-    var tgsNode = <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={size} height={size} loop={loop} autoplay={autoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} playKey={playKey} showLastFrame={showLastFrame} />;
+    var tgsNode = <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={esize} height={esize} loop={loop} autoplay={autoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} playKey={playKey} showLastFrame={showLastFrame} />;
     return fontScaled ? scaleWrap(size, tgsNode) : tgsNode;
   }
   if (data?.kind === 'video') {
@@ -99,8 +103,8 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
         ref={videoRef}
         class="tgui-emoji-inline"
         src={data.value}
-        width={size}
-        height={size}
+        width={esize}
+        height={esize}
         loop={loop}
         muted
         playsinline
@@ -114,10 +118,10 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
     return fontScaled ? scaleWrap(size, videoNode) : videoNode;
   }
   if (data?.kind === 'img') {
-    var imgNode = <img class="tgui-emoji-inline" src={data.value} style={`width:${size}px;height:${size}px;vertical-align:-0.06em`} />;
+    var imgNode = <img class="tgui-emoji-inline" src={data.value} style={`width:${esize}px;height:${esize}px;vertical-align:-0.06em`} />;
     return fontScaled ? scaleWrap(size, imgNode) : imgNode;
   }
-  var phNode = <span class="tgui-emoji-placeholder" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:-0.06em`} />;
+  var phNode = <span class="tgui-emoji-placeholder" style={`display:inline-block;width:${esize}px;height:${esize}px;vertical-align:-0.06em`} />;
   return fontScaled ? scaleWrap(size, phNode) : phNode;
 }
 
@@ -126,21 +130,21 @@ function scaleWrap(size: number, node: any): any {
   return <span class="tgui-emoji-scaled" style={`width:${box};height:${box}`}>{node}</span>;
 }
 
-export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loop = true, playKey, showLastFrame, fontScaled = false }: { docId?: string; url: string; alt?: string; size?: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; fontScaled?: boolean }) {
+export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loop = true, playKey, showLastFrame, fontScaled = false, source }: { docId?: string; url: string; alt?: string; size?: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; fontScaled?: boolean; source?: string }) {
   useEffect(() => {
     if (!url) {
       requestEmojiDownload(docId, alt, 2);
     }
   }, [docId, url, alt]);
-  const liveFont = useMessageFontSize();
   if (!docId && !url) {
     const stub = <span class="tgui-emoji-inline" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:-0.06em`} />;
     if (!fontScaled) return stub;
     const box = messageFontPx(size);
     return <span class="tgui-emoji-scaled" style={`width:${box};height:${box}`}>{stub}</span>;
   }
-  const esize = fontScaled ? Math.round(size * liveFont / MESSAGE_FONT_DEFAULT) : size;
-  return <EmojiInline docId={docId} url={url} alt={alt} size={esize} autoplay={autoplay} loop={loop} playKey={playKey} showLastFrame={showLastFrame} fontScaled={fontScaled} />;
+  const inner = <EmojiInline docId={docId} url={url} alt={alt} size={size} autoplay={autoplay} loop={loop} playKey={playKey} showLastFrame={showLastFrame} fontScaled={fontScaled} />;
+  if (!source) return inner;
+  return <span style="position:relative;display:inline-block">{inner}<MediaSourceBadge source={source} variant="dot" absolute={true} /></span>;
 }
 
 function appendMappedRuns(segments: EmojiSegment[], value: string): void {
