@@ -144,7 +144,7 @@ export class TelegramBotApiAgent extends BaseAgentSimple {
             { command: 'feedback', description: 'Send feedback' }
         ];
 
-        await this.telegramPlugin.setMyCommands(commands);
+        await this.telegramPlugin.setMyCommands({ commands });
         console.log('Bot commands configured');
     }
 

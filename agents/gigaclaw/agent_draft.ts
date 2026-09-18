@@ -181,11 +181,11 @@ export class GigaClawAgent extends BaseAgentSimple {
         if (!telegram) return;
 
         try {
-            await telegram.setMyCommands([
+            await telegram.setMyCommands({ commands: [
                 { command: 'start', description: 'Start the bot' },
                 { command: 'help', description: 'Show help' },
                 { command: 'clear', description: 'Clear conversation history' }
-            ]);
+            ] });
             console.log('Bot commands registered');
         } catch (error) {
             console.error('Failed to register bot commands:', error);
