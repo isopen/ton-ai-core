@@ -498,7 +498,7 @@ export class TelegramBotApiAgent extends BaseAgentSimple {
                 return;
             }
 
-            const randomIndex = crypton.getSecureRandomNumber(this.stickerFileIds.length);
+            const randomIndex = await crypton.getSecureRandomNumber(0, this.stickerFileIds.length);
             const randomSticker = this.stickerFileIds[randomIndex];
 
             await this.telegramPlugin.sendSticker({
