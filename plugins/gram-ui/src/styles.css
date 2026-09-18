@@ -6791,12 +6791,11 @@ img.tgui-poll-optthumb {
 }
 .rich-table .rich-cell_header { color: #1b222b !important; background: #f0f0f0 !important; font-weight: 600; }
 [data-theme='dark'] .rich-table .rich-cell_header { color: #e8eaed !important; background: #2a2a2a !important; }
-.rich-table .rich-piece { color: var(--rich-text); font-size: calc(var(--message-font-size, 14px) * 1.4286); }
 .rich-table .rich-cell {
   border: 1px solid color-mix(in srgb, var(--rich-bg) 85%, black 12%);
   background: transparent;
   color: var(--rich-text);
-  height: 34px;
+  min-height: 34px;
 }
 .rich-table_compact .rich-cell { padding: 5px 7px; }
 .rich-cell {

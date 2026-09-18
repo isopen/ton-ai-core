@@ -61,3 +61,17 @@ describe('TmdView quote collapse toggle', () => {
         }
     });
 });
+
+describe('TmdView emoji mount boxes', () => {
+    test('standard emoji mount reserves minimum box, grows with content', async () => {
+        const c = mount({ text: 'hi 🔥' });
+        await new Promise((r) => setTimeout(r, 100));
+        const span = c.querySelector('span.tmd-emoji-std') as HTMLElement;
+        expect(span).not.toBeNull();
+        expect(span.style.minWidth).toBe('20px');
+        expect(span.style.minHeight).toBe('20px');
+        expect(span.style.width).toBe('');
+        expect(span.style.height).toBe('');
+        document.body.removeChild(c);
+    });
+});

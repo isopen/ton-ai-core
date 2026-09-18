@@ -74,8 +74,8 @@ function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, str
       if (docId) span.setAttribute('data-doc-id', docId);
       span.setAttribute('data-alt', emoji);
       span.style.display = 'inline-block';
-      span.style.width = '20px';
-      span.style.height = '20px';
+      span.style.minWidth = '20px';
+      span.style.minHeight = '20px';
       span.style.verticalAlign = 'middle';
       span.style.margin = '0 1px';
       frag.appendChild(span);

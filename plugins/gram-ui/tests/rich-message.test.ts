@@ -117,6 +117,48 @@ describe('MessageBubble with layer-229 rich_message', () => {
         expect(seen[0]).toBe(seen[1]);
     });
 
+    test('piece tap keeps piece sizes stable across update', async () => {
+        const { attachEmojiBurst } = await import('../dist/components/emoji-burst.js');
+        attachEmojiBurst();
+        const seen: any[] = [];
+        const onReq = (e: Event) => { seen.push((e as CustomEvent).detail); };
+        window.addEventListener('tg-interaction-request', onReq);
+        try {
+            const container = document.createElement('div');
+            document.body.appendChild(container);
+            const pressed: string[] = [];
+            const Comp: any = () => h(MessageBubble, {
+                text: '',
+                time: '12:44',
+                out: false,
+                status: 'read',
+                messageId: 6181,
+                richMessage: CHESS_RICH,
+                richDocumentUrls: { 'emojipack-1': 'blob:xx1', 'emojipack-2': 'blob:xx2' },
+                onRichButton: (data: string) => {
+                    pressed.push(data);
+                },
+            });
+            render(Comp, container);
+            await new Promise((r) => setTimeout(r, 30));
+            const boxesBefore = Array.from(container.querySelectorAll('.tgui-emoji-scaled')).map((el) => (el as HTMLElement).getAttribute('style') || '');
+            expect(boxesBefore.length).toBeGreaterThan(0);
+            const cellBtn = container.querySelector('button.rich-cell-btn') as HTMLButtonElement;
+            expect(cellBtn).toBeTruthy();
+            cellBtn.click();
+            await new Promise((r) => setTimeout(r, 30));
+            expect(pressed.length).toBe(1);
+            expect(seen.length).toBe(0);
+            render(Comp, container);
+            await new Promise((r) => setTimeout(r, 30));
+            const boxesAfter = Array.from(container.querySelectorAll('.tgui-emoji-scaled')).map((el) => (el as HTMLElement).getAttribute('style') || '');
+            expect(boxesAfter).toEqual(boxesBefore);
+            document.body.removeChild(container);
+        } finally {
+            window.removeEventListener('tg-interaction-request', onReq);
+        }
+    });
+
     test('legal move marker renders dot', () => {
         const container = document.createElement('div');
         document.body.appendChild(container);
