@@ -1,13 +1,7 @@
 import { EventEmitter } from '../events/event-emitter';
 import { fromNano } from '@ton/core';
-import { createTonWalletMCP } from '@ton/mcp';
-import {
-  Signer,
-  WalletV5R1Adapter,
-  TonWalletKit,
-  Network,
-  MemoryStorageAdapter
-} from '@ton/walletkit';
+import type * as McpModule from '@ton/mcp';
+import type * as WalletKit from '@ton/walletkit';
 import { getRandomBytes } from '../crypton/utils';
 import { MCP_EVENTS } from '../events';
 import {
@@ -113,6 +107,10 @@ export class MCPClient extends EventEmitter {
 
       await this.setupProxy();
 
+      const { Network, TonWalletKit, MemoryStorageAdapter, Signer, WalletV5R1Adapter, WalletV4R2Adapter } =
+        require('@ton/walletkit') as typeof WalletKit;
+      const { createTonWalletMCP } = require('@ton/mcp') as typeof McpModule;
+
       const network = this.config.network === NETWORK.TESTNET
         ? Network.testnet()
         : Network.mainnet();
@@ -135,7 +133,6 @@ export class MCPClient extends EventEmitter {
       const walletVersion = this.config.walletVersion || WALLET_VERSION.V5R1;
       let walletAdapter;
       if (walletVersion === WALLET_VERSION.V4R2) {
-        const { WalletV4R2Adapter } = require('@ton/walletkit');
         walletAdapter = await WalletV4R2Adapter.create(signer, {
           client: this.kit.getApiClient(network),
           network: network,
