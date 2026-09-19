@@ -199,6 +199,68 @@ import {
 
 const DEFAULT_ADMIN_RIGHTS_KEY = 0;
 
+export class TelegramApiError extends Error {
+    readonly method: string;
+    readonly errorCode?: number;
+    readonly retryAfterSec?: number;
+    readonly migrateToChatId?: number;
+
+    constructor(method: string, description: string, options?: {
+        errorCode?: number;
+        retryAfterSec?: number;
+        migrateToChatId?: number;
+    }) {
+        super(`Telegram API error: ${description}`);
+        this.name = 'TelegramApiError';
+        this.method = method;
+        this.errorCode = options?.errorCode;
+        this.retryAfterSec = options?.retryAfterSec;
+        this.migrateToChatId = options?.migrateToChatId;
+    }
+}
+
+export function parseRetryAfter(
+    description: string | undefined,
+    parameters?: { retry_after?: number },
+): number | null {
+    if (parameters && typeof parameters.retry_after === 'number' && Number.isFinite(parameters.retry_after)) {
+        return Math.max(0, Math.floor(parameters.retry_after));
+    }
+    if (typeof description === 'string') {
+        const match = description.match(/retry after (\d+)/i);
+        if (match) {
+            const parsed = Number.parseInt(match[1], 10);
+            if (Number.isFinite(parsed)) return Math.max(0, parsed);
+        }
+    }
+    return null;
+}
+
+export function isRateLimitError(error: unknown): boolean {
+    if (error instanceof TelegramApiError) {
+        if (error.errorCode === 429) return true;
+        if (error.retryAfterSec !== undefined) return true;
+    }
+    return (
+        error instanceof Error &&
+        /too many requests|retry after|flood/i.test(error.message)
+    );
+}
+
+export function getRetryAfterSec(error: unknown): number | null {
+    if (error instanceof TelegramApiError && error.retryAfterSec !== undefined) {
+        return error.retryAfterSec;
+    }
+    if (error instanceof Error) {
+        return parseRetryAfter(error.message);
+    }
+    return null;
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class TelegramBotSkills {
     private context: PluginContext;
     private components: TelegramBotComponents;
@@ -206,6 +268,7 @@ export class TelegramBotSkills {
     private token: string;
     private ready: boolean = false;
     private maxRetries: number = 3;
+    private floodWaitUntil: number = 0;
 
     constructor(
         context: PluginContext,
@@ -274,6 +337,12 @@ export class TelegramBotSkills {
         }
 
         for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+            const gateWait = this.floodWaitUntil - Date.now();
+            if (gateWait > 0) {
+                await sleep(gateWait);
+            }
+
+            let responseData: any;
             try {
                 const response = await fetch(url, {
                     method: 'POST',
@@ -281,22 +350,65 @@ export class TelegramBotSkills {
                     body
                 });
 
-                const responseData = await response.json() as any;
-
-                if (!responseData.ok) {
-                    throw new Error(`Telegram API error: ${responseData.description}`);
+                try {
+                    responseData = await response.json() as any;
+                } catch {
+                    if (attempt === this.maxRetries) {
+                        throw new Error(`Telegram API error: invalid response (HTTP ${response.status})`);
+                    }
+                    await sleep(1000 * (attempt + 1));
+                    continue;
                 }
 
-                return responseData.result as T;
+                if (responseData.ok) {
+                    return responseData.result as T;
+                }
+
+                const description: string = String(responseData.description ?? `HTTP ${response.status}`);
+                const errorCode: number | undefined =
+                    typeof responseData.error_code === 'number' ? responseData.error_code : undefined;
+                const retryAfter = parseRetryAfter(description, responseData.parameters);
+                const apiError = new TelegramApiError(method, description, {
+                    errorCode,
+                    retryAfterSec: retryAfter ?? undefined,
+                    migrateToChatId: responseData.parameters?.migrate_to_chat_id,
+                });
+
+                if (errorCode === 429 || retryAfter !== null || /too many requests|flood/i.test(description)) {
+                    const waitSec = retryAfter ?? 5;
+                    this.floodWaitUntil = Math.max(this.floodWaitUntil, Date.now() + waitSec * 1000 + 500);
+                    if (attempt === this.maxRetries) {
+                        throw apiError;
+                    }
+                    await sleep(waitSec * 1000 + 500);
+                    continue;
+                }
+
+                const retryableStatus = errorCode === undefined || errorCode >= 500 || response.status >= 500;
+                if (!retryableStatus) {
+                    throw apiError;
+                }
+
+                if (attempt === this.maxRetries) {
+                    throw apiError;
+                }
+                await sleep(1000 * (attempt + 1));
             } catch (error) {
+                if (error instanceof TelegramApiError) {
+                    throw error;
+                }
                 if (attempt === this.maxRetries) {
                     throw error;
                 }
-                await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+                await sleep(1000 * (attempt + 1));
             }
         }
 
         throw new Error('Max retries exceeded');
+    }
+
+    getFloodWaitMs(): number {
+        return Math.max(0, this.floodWaitUntil - Date.now());
     }
 
     async getMe(): Promise<User> {
