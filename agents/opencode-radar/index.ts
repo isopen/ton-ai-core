@@ -69,14 +69,24 @@ const config: OpencodeRadarConfig = {
         retryOnError: true,
         maxRetries: 3,
     },
-    radar: {
+    opencode: {
+        baseUrl: process.env.OPENCODE_SERVER_URL || 'http://127.0.0.1:4096',
+        timeoutMs: optionalInt('OPENCODE_TIMEOUT_MS', 10000),
+        maxRetries: optionalInt('OPENCODE_MAX_RETRIES', 2),
         dbPath: process.env.RADAR_DB_PATH || join(homedir(), '.local', 'share', 'opencode', 'opencode.db'),
+        autoServe: optionalFlag('OPENCODE_AUTO_SERVE', true),
+        binPath: process.env.OPENCODE_BIN || 'opencode',
+    },
+    radar: {
         chatId: Number.parseInt(process.env.RADAR_CHAT_ID || '', 10),
         directory: process.env.RADAR_DIR || process.cwd(),
         sessionId: process.env.RADAR_SESSION_ID || undefined,
         sessionIds: sessionIdList(),
         maxSessions: optionalInt('RADAR_MAX_SESSIONS', 3),
         useThreads: optionalFlag('RADAR_USE_THREADS', true),
+        statePath:
+            process.env.RADAR_STATE_PATH ||
+            join(homedir(), '.local', 'share', 'opencode-radar', 'state.json'),
         pollMs: optionalInt('RADAR_POLL_MS', 2000),
         idleSec: optionalInt('RADAR_IDLE_SEC', 90),
     },

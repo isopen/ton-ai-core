@@ -35,10 +35,72 @@ export function formatDuration(startedAt: number, finishedAt: number): string {
     return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+export function displayModel(model: string): string {
+    const trimmed = model.trim();
+    if (!trimmed) return '';
+    try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const id = (parsed as Record<string, unknown>).id;
+            if (typeof id === 'string' && id.length > 0) return id;
+        }
+    } catch {
+        /* not JSON — use raw value */
+    }
+    return trimmed;
+}
+
+export type TodoState = 'done' | 'active' | 'queued';
+
+export interface TodoItem {
+    content: string;
+    state: TodoState;
+}
+
+export function toTodoState(status: string): TodoState {
+    if (status === 'completed') return 'done';
+    if (status === 'in_progress') return 'active';
+    return 'queued';
+}
+
+export function todoIcon(state: TodoState): string {
+    if (state === 'done') return '✅';
+    if (state === 'active') return '🔄';
+    return '⬜';
+}
+
+export type ToolState = 'ok' | 'fail' | 'running';
+
+export interface ToolItem {
+    text: string;
+    state: ToolState;
+}
+
+export function toToolState(status: string): ToolState {
+    if (status === 'completed') return 'ok';
+    if (status === 'error' || status === 'failed') return 'fail';
+    return 'running';
+}
+
+export function toolIcon(state: ToolState): string {
+    if (state === 'ok') return '✅';
+    if (state === 'fail') return '❌';
+    return '⚙️';
+}
+
+export interface ResultSnippet {
+    tool: string;
+    ok: boolean;
+    text: string;
+}
+
 export interface ProgressState {
     title: string;
     directory: string;
-    activity: string[];
+    model: string;
+    todos: TodoItem[];
+    tools: ToolItem[];
+    result: ResultSnippet | null;
     lastText: string;
     toolCalls: number;
     tokensIn: number;
@@ -52,23 +114,38 @@ export interface ProgressState {
 export function formatProgress(state: ProgressState): string {
     const lines: string[] = [];
     lines.push(`🔄 <b>${escapeHtml(truncate(state.title, 80))}</b>`);
-    lines.push(`<code>${escapeHtml(truncate(state.directory, 80))}</code>`);
-    const activity = state.activity.slice(-4);
-    for (const line of activity) {
-        lines.push(escapeHtml(truncate(line, 160)));
+    const model = displayModel(state.model);
+    lines.push(`📁 <code>${escapeHtml(truncate(state.directory, 60))}</code>${model ? ` · 🤖 ${escapeHtml(truncate(model, 40))}` : ''}`);
+    const todos = state.todos.slice(0, 8);
+    if (todos.length > 0) {
+        const done = todos.filter((t) => t.state === 'done').length;
+        lines.push(`📋 План ${done}/${todos.length}`);
+        for (const todo of todos) {
+            lines.push(`${todoIcon(todo.state)} ${escapeHtml(truncate(todo.content, 120))}`);
+        }
     }
-    if (state.lastText) {
-        lines.push(`💬 <i>${escapeHtml(truncate(state.lastText, 300))}</i>`);
+    for (const tool of state.tools.slice(-4)) {
+        lines.push(`${toolIcon(tool.state)} ${escapeHtml(truncate(tool.text, 140))}`);
     }
-    const files = state.files.slice(-5).map((f) => escapeHtml(truncate(repoRelative(f, state.directory), 90)));
-    const stats =
+    if (state.result && state.result.text) {
+        const mark = state.result.ok ? '✅' : '❌';
+        lines.push(`📄 ${escapeHtml(truncate(state.result.tool, 40))} ${mark}`);
+        lines.push(
+            `<tg-spoiler><code>${escapeHtml(truncate(state.result.text, 400))}</code></tg-spoiler>`,
+        );
+    }
+    const footer =
         `🧰 ${state.toolCalls} • 🪙 ${(state.tokensIn + state.tokensOut).toLocaleString('en-US')}` +
-        ` • 💰 $${state.cost.toFixed(4)} • 📁 ${state.files.length}`;
-    lines.push(stats);
-    if (files.length > 0) {
-        lines.push(`<code>${files.join('\n')}</code>`);
+            ` • 💰 $${state.cost.toFixed(4)} • 📁 ${state.files.length}` +
+            ` • ⏱ ${formatDuration(state.startedAt, state.updatedAt)} in`;
+    if (state.lastText) {
+        const top = lines.join('\n');
+        const room = RENDER_BUDGET - top.length - footer.length - 12;
+        if (room >= 2) {
+            lines.push(`💬 <i>${escapeHtml(truncate(state.lastText, room))}</i>`);
+        }
     }
-    lines.push(`<i>updated ${formatDuration(state.startedAt, state.updatedAt)} in</i>`);
+    lines.push(footer);
     const text = lines.join('\n');
     return text.length > RENDER_BUDGET ? `${text.slice(0, RENDER_BUDGET - 1)}…` : text;
 }
@@ -76,6 +153,8 @@ export function formatProgress(state: ProgressState): string {
 export interface SummaryState {
     title: string;
     directory: string;
+    model: string;
+    todos: TodoItem[];
     toolCalls: number;
     tokensIn: number;
     tokensOut: number;
@@ -89,7 +168,12 @@ export interface SummaryState {
 export function formatSummary(state: SummaryState): string {
     const lines: string[] = [];
     lines.push(`✅ <b>${escapeHtml(truncate(state.title, 80))}</b> — done in ${formatDuration(state.startedAt, state.finishedAt)}`);
-    lines.push(`<code>${escapeHtml(truncate(state.directory, 80))}</code>`);
+    const model = displayModel(state.model);
+    lines.push(`📁 <code>${escapeHtml(truncate(state.directory, 60))}</code>${model ? ` · 🤖 ${escapeHtml(truncate(model, 40))}` : ''}`);
+    if (state.todos.length > 0) {
+        const done = state.todos.filter((t) => t.state === 'done').length;
+        lines.push(`📋 План ${done}/${state.todos.length}`);
+    }
     lines.push(
         `🧰 tools: ${state.toolCalls} • 🪙 ${(state.tokensIn + state.tokensOut).toLocaleString('en-US')} ` +
             `(in ${state.tokensIn.toLocaleString('en-US')} / out ${state.tokensOut.toLocaleString('en-US')}) • 💰 $${state.cost.toFixed(4)}`,

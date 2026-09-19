@@ -11,6 +11,7 @@
   "license": "Boost Software License 1.0",
   "dependencies": {
     "@ton-ai/core": "*",
+    "@ton-ai/opencode": "*",
     "@ton-ai/telegram-bot-api": "*"
   },
   "devDependencies": {
