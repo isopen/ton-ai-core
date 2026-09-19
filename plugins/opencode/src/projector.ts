@@ -1,0 +1,155 @@
+import {
+    ApiMessage,
+    RadarEvent,
+    SessionApiInfo,
+    SessionRow,
+} from './types';
+
+export const TOOL_OUTPUT_SNIPPET = 300;
+
+const SUMMARY_KEYS = [
+    'filePath',
+    'file',
+    'path',
+    'command',
+    'query',
+    'pattern',
+    'prompt',
+    'question',
+    'url',
+    'text',
+    'content',
+] as const;
+
+export function asString(value: unknown): string {
+    return typeof value === 'string' ? value : '';
+}
+
+export function asNumber(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+export function parsePartData(data: string): Record<string, unknown> | null {
+    try {
+        const parsed: unknown = JSON.parse(data);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return parsed as Record<string, unknown>;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+export function summarizeToolInput(tool: string, input: unknown): string {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        return tool;
+    }
+    const record = input as Record<string, unknown>;
+    for (const key of SUMMARY_KEYS) {
+        const value = record[key];
+        if (typeof value === 'string' && value.length > 0) {
+            const oneLine = value.split('\n')[0] as string;
+            return `${tool} ${oneLine.length > 120 ? `${oneLine.slice(0, 120)}…` : oneLine}`;
+        }
+    }
+    if (Array.isArray(record.todos)) {
+        const done = record.todos.filter(
+            (t): boolean =>
+                typeof t === 'object' && t !== null && (t as Record<string, unknown>).status === 'completed',
+        ).length;
+        return `${tool} ${done}/${record.todos.length} done`;
+    }
+    return tool;
+}
+
+export function snippetOutput(raw: string): string {
+    return raw.length > TOOL_OUTPUT_SNIPPET ? `${raw.slice(0, TOOL_OUTPUT_SNIPPET)}…` : raw;
+}
+
+export function mapPart(row: { id: string; time_updated: number; data: string }): RadarEvent | null {
+    const data = parsePartData(row.data);
+    if (!data) return null;
+    const type = data.type;
+
+    if (type === 'text') {
+        const text = asString(data.text).trim();
+        if (!text) return null;
+        return { kind: 'text', text, time: row.time_updated };
+    }
+
+    if (type === 'tool') {
+        const tool = asString(data.tool) || 'tool';
+        const state = data.state as Record<string, unknown> | undefined;
+        const status = typeof state?.status === 'string' ? (state.status as string) : 'running';
+        const rawOutput = typeof state?.output === 'string' ? (state.output as string) : '';
+        const summary = summarizeToolInput(tool, state?.input);
+        return { kind: 'tool', tool, status, summary, output: snippetOutput(rawOutput), time: row.time_updated };
+    }
+
+    if (type === 'step-finish') {
+        const tokens = data.tokens as Record<string, unknown> | undefined;
+        const total = asNumber(tokens?.total);
+        const cost = asNumber(data.cost);
+        const finish = asString(data.reason) || asString(data.finish);
+        return { kind: 'step', tokens: total, cost, finish, time: row.time_updated };
+    }
+
+    if (type === 'patch') {
+        const files = Array.isArray(data.files)
+            ? (data.files as unknown[]).filter((f): f is string => typeof f === 'string')
+            : [];
+        if (files.length === 0) return null;
+        return { kind: 'files', files, time: row.time_updated };
+    }
+
+    return null;
+}
+
+export function mapApiMessages(messages: ApiMessage[]): RadarEvent[] {
+    const events: RadarEvent[] = [];
+    for (const message of messages) {
+        const time = asNumber(message.time?.created);
+        if (message.type === 'user' || message.type === 'synthetic') {
+            const text = asString(message.text).trim();
+            if (text) events.push({ kind: 'text', text, time });
+            continue;
+        }
+        if (message.type !== 'assistant' || !Array.isArray(message.content)) continue;
+        for (const part of message.content) {
+            if (!part || typeof part !== 'object') continue;
+            if (part.type === 'text') {
+                const text = asString(part.text).trim();
+                if (text) events.push({ kind: 'text', text, time });
+            } else if (part.type === 'tool') {
+                const tool = asString(part.name) || 'tool';
+                const status = asString(part.state?.status) || 'running';
+                events.push({
+                    kind: 'tool',
+                    tool,
+                    status,
+                    summary: summarizeToolInput(tool, part.state?.input),
+                    output: snippetOutput(asString(part.state?.output)),
+                    time,
+                });
+            }
+        }
+    }
+    return events;
+}
+
+export function normalizeSessionApi(info: SessionApiInfo): SessionRow {
+    return {
+        id: asString(info.id),
+        title: asString(info.title),
+        directory: asString(info.location?.directory),
+        agent: asString(info.agent),
+        model: info.model ? JSON.stringify(info.model) : '',
+        time_created: asNumber(info.time?.created),
+        time_updated: asNumber(info.time?.updated),
+        cost: asNumber(info.cost),
+        tokens_input: asNumber(info.tokens?.input),
+        tokens_output: asNumber(info.tokens?.output),
+        tokens_reasoning: asNumber(info.tokens?.reasoning),
+    };
+}
