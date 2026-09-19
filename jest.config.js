@@ -57,7 +57,8 @@ module.exports = {
     '<rootDir>/plugins/tmd/tests',
     '<rootDir>/plugins/gram-ui/tests',
     '<rootDir>/plugins/gram-lang/tests',
-    '<rootDir>/agents/gram-browser/tests'
+    '<rootDir>/agents/gram-browser/tests',
+    '<rootDir>/agents/opencode-radar/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
