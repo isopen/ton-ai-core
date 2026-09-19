@@ -143,7 +143,8 @@ describe('rich table structure', () => {
 describe('rich table size stability css', () => {
     const cssPath = path.join(__dirname, '..', 'src', 'styles.css');
     const css = fs.readFileSync(cssPath, 'utf8');
-    const tableBlock = (css.match(/\.rich-table\s*\{[^}]*\}/) || [''])[0];
+    const tableBlocks = css.match(/\.rich-table\s*\{[^}]*\}/g) || [];
+    const tableBlock = tableBlocks.find((b) => b.includes('table-layout')) || '';
     const cellBlock = (css.match(/\.rich-table\s+\.rich-cell\s*\{[^}]*\}/) || [''])[0];
 
     test('table uses fixed layout so columns never collapse', () => {
@@ -151,8 +152,9 @@ describe('rich table size stability css', () => {
         expect(tableBlock).toContain('width: 100%');
     });
 
-    test('cells pin height so rows never jump on piece moves', () => {
-        expect(cellBlock).toMatch(/height:\s*\d+px/);
+    test('cells pin minimum height in font units so rows never jump on piece moves', () => {
+        expect(cellBlock).toContain('min-height: 2.4286em');
+        expect(cellBlock).not.toMatch(/(^|;|\s)height:\s*\d+px/);
     });
 
     test('cell buttons are block-level so no inline strut inflates rows', () => {
