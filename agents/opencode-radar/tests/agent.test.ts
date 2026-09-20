@@ -430,6 +430,21 @@ describe('radar console feed', () => {
         assert.equal(state.threadId, 9);
     });
 
+    test('long message is delivered in several parts', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await agent.attachSession(telegram, SESSION)) as unknown as AnyState;
+        const before = calls.length;
+        const id = (await agent.deliverMessage(telegram, state, `${'a'.repeat(4000)}\n${'b'.repeat(4000)}`)) as unknown as number;
+        const sends = calls.slice(before).filter((c) => c.op === 'send');
+        assert.equal(sends.length, 2);
+        assert.ok(typeof id === 'number');
+        for (const send of sends) {
+            assert.equal((send.params as Record<string, unknown>).message_thread_id, 8);
+            assert.ok(String((send.params as Record<string, unknown>).text).length <= 4096);
+        }
+    });
+
     test('refreshContextLimit fetches once and caches', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram } = stubTelegram();

@@ -10,6 +10,7 @@ import {
     formatContextPin,
     formatSummary,
     formatTopicName,
+    splitTelegramHtml,
     toTodoState,
     toToolState,
     truncate,
@@ -387,36 +388,47 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         text: string,
     ): Promise<number> {
         const chatId = this.config.radar.chatId;
-        try {
-            const message = await telegram.sendMessage({
-                chat_id: chatId,
-                message_thread_id: state.threadId ?? undefined,
-                text,
-                parse_mode: 'HTML',
-            });
-            return message.message_id;
-        } catch (error) {
-            if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-            }
-            if (state.threadId !== null && isThreadGoneError(error)) {
-                state.threadId = null;
-                const fresh = await this.ensureThreadId(telegram, state);
-                const retry = await telegram.sendMessage({
+        const parts = splitTelegramHtml(text);
+        const sendOne = async (part: string): Promise<number> => {
+            try {
+                const message = await telegram.sendMessage({
                     chat_id: chatId,
-                    message_thread_id: fresh ?? undefined,
-                    text,
+                    message_thread_id: state.threadId ?? undefined,
+                    text: part,
                     parse_mode: 'HTML',
                 });
-                this.savePersisted();
-                return retry.message_id;
+                return message.message_id;
+            } catch (error) {
+                if (isRateLimitError(error)) {
+                    const waitSec = getRetryAfterSec(error) ?? 10;
+                    this.rateLimitedUntil = Math.max(
+                        this.rateLimitedUntil,
+                        Date.now() + waitSec * 1000 + 1000,
+                    );
+                }
+                if (state.threadId !== null && isThreadGoneError(error)) {
+                    state.threadId = null;
+                    const fresh = await this.ensureThreadId(telegram, state);
+                    const retry = await telegram.sendMessage({
+                        chat_id: chatId,
+                        message_thread_id: fresh ?? undefined,
+                        text: part,
+                        parse_mode: 'HTML',
+                    });
+                    this.savePersisted();
+                    return retry.message_id;
+                }
+                throw error;
             }
-            throw error;
+        };
+        const firstId = await sendOne(parts[0]);
+        for (const part of parts.slice(1)) {
+            if (Date.now() < this.rateLimitedUntil) {
+                throw new Error('Too Many Requests: radar backoff active');
+            }
+            await sendOne(part);
         }
+        return firstId;
     }
 
     private renderContextText(state: WatchedSession): string {

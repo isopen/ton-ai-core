@@ -58,6 +58,85 @@ export function markdownToTelegramHtml(text: string): string {
     return body;
 }
 
+export function splitTelegramHtml(text: string, limit: number = TELEGRAM_TEXT_LIMIT): string[] {
+    const max = Math.max(64, Math.floor(limit));
+    if (text.length <= max) return [text];
+    const known = new Set(['b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'em', 'strong', 'ins', 'strike', 'del']);
+    const stack: Array<{ name: string; open: string }> = [];
+    const scanInto = (s: string, target: Array<{ name: string; open: string }>): void => {
+        const re = /<\/?[a-zA-Z][^<>]*>/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(s)) !== null) {
+            const tag = m[0];
+            const close = tag.startsWith('</');
+            const self = tag.endsWith('/>');
+            const name = tag
+                .replace(/^<\/?/, '')
+                .replace(/[\s/>].*$/, '')
+                .toLowerCase();
+            if (!known.has(name) || self) continue;
+            if (close) {
+                for (let i = target.length - 1; i >= 0; i -= 1) {
+                    if (target[i].name === name) {
+                        target.splice(i, 1);
+                        break;
+                    }
+                }
+            } else {
+                target.push({ name, open: tag });
+            }
+        }
+    };
+    const parts: string[] = [];
+    let rest = text;
+    while (rest.length > 0) {
+        const head = stack.map((e) => e.open).join('');
+        if (rest.length + head.length <= max) {
+            parts.push(head + rest);
+            break;
+        }
+        const room = max - head.length;
+        let cut = room;
+        const nl = rest.lastIndexOf('\n', room);
+        if (nl > room * 0.25) cut = nl;
+        const probe = rest.slice(0, cut);
+        const lt = probe.lastIndexOf('<');
+        const gt = probe.lastIndexOf('>');
+        if (lt > gt) cut = lt;
+        const tail = rest.slice(0, cut);
+        const amp = tail.lastIndexOf('&');
+        const semi = tail.lastIndexOf(';');
+        if (amp > semi && cut - amp < 12) cut = amp;
+        if (cut < 1) cut = Math.max(1, Math.min(room, rest.length));
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+            const trial: Array<{ name: string; open: string }> = stack.map((e) => ({ name: e.name, open: e.open }));
+            scanInto(rest.slice(0, cut), trial);
+            const closingLen = trial.reduce((n, e) => n + e.name.length + 3, 0);
+            if (head.length + cut + closingLen <= max) break;
+            cut -= head.length + cut + closingLen - max;
+            if (cut < 1) {
+                cut = 1;
+                break;
+            }
+        }
+        const body = rest.slice(0, cut);
+        scanInto(body, stack);
+        const closing = stack
+            .slice()
+            .reverse()
+            .map((e) => `</${e.name}>`)
+            .join('');
+        parts.push(head + body + closing);
+        rest = rest.slice(cut);
+        if (rest.startsWith('\n')) rest = rest.slice(1);
+        if (parts.length > 200) {
+            parts.push(stack.map((e) => e.open).join('') + rest);
+            break;
+        }
+    }
+    return parts;
+}
+
 export function truncate(text: string, max: number): string {
     if (text.length <= max) return text;
     if (max <= 1) return '…';
@@ -236,38 +315,24 @@ export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | nul
     for (const event of events) {
         switch (event.kind) {
             case 'text':
-                chunks.push([markdownToTelegramHtml(truncate(event.text, 1200))]);
+                chunks.push([markdownToTelegramHtml(event.text)]);
                 break;
             case 'tool': {
-                const lines = [`${toolStateIcon(event.status)} ${escapeHtml(truncate(event.summary, 140))}`];
+                const lines = [`${toolStateIcon(event.status)} ${escapeHtml(event.summary)}`];
                 if (event.output) {
-                    lines.push(`<code>${escapeHtml(truncate(event.output, 800))}</code>`);
+                    lines.push(`<code>${escapeHtml(event.output)}</code>`);
                 }
                 chunks.push(lines);
                 break;
             }
             case 'files':
-                chunks.push([`📁 ${escapeHtml(truncate(event.files.join(', '), 200))}`]);
+                chunks.push([`📁 ${escapeHtml(event.files.join(', '))}`]);
                 break;
             case 'step':
                 break;
         }
     }
-    let text = '';
-    let skipped = 0;
-    for (const chunk of chunks) {
-        const piece = chunk.join('\n');
-        const candidate = text.length === 0 ? piece : `${text}\n${piece}`;
-        if (candidate.length > RENDER_BUDGET - 24) {
-            skipped += 1;
-            continue;
-        }
-        text = candidate;
-    }
-    if (skipped > 0 && text.length > 0) {
-        text += `\n… +${skipped} more`;
-    }
-    return text;
+    return chunks.map((chunk) => chunk.join('\n')).join('\n');
 }
 
 export interface SummaryState {
@@ -299,14 +364,11 @@ export function formatSummary(state: SummaryState): string {
             `(in ${state.tokensIn.toLocaleString('en-US')} / out ${state.tokensOut.toLocaleString('en-US')}) • 💰 $${state.cost.toFixed(4)}`,
     );
     if (state.files.length > 0) {
-        const files = state.files
-            .slice(-10)
-            .map((f) => escapeHtml(truncate(repoRelative(f, state.directory), 90)));
+        const files = state.files.map((f) => escapeHtml(repoRelative(f, state.directory)));
         lines.push(`📁 files (${state.files.length}):\n<code>${files.join('\n')}</code>`);
     }
     if (state.lastText) {
-        lines.push(`💬 <i>${markdownToTelegramHtml(truncate(state.lastText, 500))}</i>`);
+        lines.push(`💬 <i>${markdownToTelegramHtml(state.lastText)}</i>`);
     }
-    const text = lines.join('\n');
-    return text.length > TELEGRAM_TEXT_LIMIT ? `${text.slice(0, TELEGRAM_TEXT_LIMIT - 1)}…` : text;
+    return lines.join('\n');
 }

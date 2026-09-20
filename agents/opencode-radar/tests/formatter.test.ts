@@ -10,6 +10,7 @@ import {
     formatTopicName,
     formatContextPin,
     formatConsoleBatch,
+    splitTelegramHtml,
     displayModel,
     toTodoState,
     toToolState,
@@ -162,7 +163,7 @@ describe('formatter', () => {
         assert.ok(batch.indexOf('Plan') < batch.indexOf('bash ls'));
     });
 
-    test('formatConsoleBatch caps at budget without broken tags', () => {
+    test('formatConsoleBatch keeps every line without cuts', () => {
         const batch = formatConsoleBatch(
             Array.from({ length: 60 }, (_, i) => ({
                 kind: 'text' as const,
@@ -171,10 +172,12 @@ describe('formatter', () => {
             })),
             null,
         );
-        assert.ok(batch.length <= 3900);
-        assert.ok(batch.includes('+'));
-        assert.ok(batch.includes('more'));
-        assert.ok(!batch.includes('<now>'));
+        assert.ok(batch.includes('line-0'));
+        assert.ok(batch.includes('line-59'));
+        assert.ok(!batch.includes('more'));
+        const parts = splitTelegramHtml(batch);
+        assert.ok(parts.length > 1);
+        for (const part of parts) assert.ok(part.length <= TELEGRAM_TEXT_LIMIT);
     });
 
     test('formatConsoleBatch returns empty string for step-only input', () => {
@@ -192,7 +195,7 @@ describe('formatter', () => {
         assert.equal(formatTopicName('   ', '!!!'), '📡 Untitled session · session');
     });
 
-    test('formatSummary caps at Telegram limit and lists files', () => {
+    test('formatSummary lists all files and full lastText', () => {
         const text = formatSummary({
             title: 'Done',
             directory: '/repo',
@@ -203,15 +206,42 @@ describe('formatter', () => {
             tokensOut: 1500,
             cost: 0.02,
             files: Array.from({ length: 20 }, (_, i) => `/repo/f${i}.ts`),
-            lastText: 'all green',
+            lastText: `all green ${'y'.repeat(5000)}`,
             startedAt: 0,
             finishedAt: 120000,
         });
         assert.ok(text.startsWith('✅'));
         assert.ok(text.includes('files (20)'));
+        assert.ok(text.includes('f0.ts'));
+        assert.ok(text.includes('f19.ts'));
         assert.ok(text.includes('📋 План 1/1'));
         assert.ok(text.includes('🤖 model-1'));
-        assert.ok(text.length <= TELEGRAM_TEXT_LIMIT);
+        assert.ok(!text.includes('…'));
+        const parts = splitTelegramHtml(text);
+        for (const part of parts) assert.ok(part.length <= TELEGRAM_TEXT_LIMIT);
+    });
+
+    test('splitTelegramHtml passes short text through', () => {
+        assert.deepEqual(splitTelegramHtml('hello'), ['hello']);
+    });
+
+    test('splitTelegramHtml splits long text on newlines', () => {
+        const text = `${'a'.repeat(4000)}\n${'b'.repeat(4000)}`;
+        const parts = splitTelegramHtml(text);
+        assert.equal(parts.length, 2);
+        for (const part of parts) assert.ok(part.length <= TELEGRAM_TEXT_LIMIT);
+        assert.ok(parts[0].includes('a'));
+        assert.ok(parts[1].includes('b'));
+    });
+
+    test('splitTelegramHtml balances tags across parts', () => {
+        const text = `<b>${'x'.repeat(4050)}\nbold tail ${'y'.repeat(120)}</b>`;
+        const parts = splitTelegramHtml(text);
+        assert.ok(parts.length > 1);
+        for (const part of parts) assert.ok(part.length <= TELEGRAM_TEXT_LIMIT);
+        assert.ok(parts[0].endsWith('</b>'));
+        assert.ok(parts[1].startsWith('<b>'));
+        assert.ok(parts[1].includes('bold tail'));
     });
 
     test('displayModel parses provider JSON and passes plain names through', () => {
