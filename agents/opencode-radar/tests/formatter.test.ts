@@ -1,12 +1,15 @@
 import { strict as assert } from 'assert';
 import {
     escapeHtml,
+    markdownToTelegramHtml,
     truncate,
     repoRelative,
     formatDuration,
     formatProgress,
     formatSummary,
     formatTopicName,
+    formatContextPin,
+    formatConsoleBatch,
     displayModel,
     toTodoState,
     toToolState,
@@ -125,6 +128,59 @@ describe('formatter', () => {
         assert.ok(text.length <= 3900);
     });
 
+    test('formatContextPin shows usage percent when limit is known', () => {
+        const pin = formatContextPin({ total: 500000, input: 90000, output: 8000, reasoning: 2000, cacheRead: 390000, cacheWrite: 10000, limit: 1000000, cost: 0.0234 });
+        assert.ok(pin.includes('500,000 / 1,000,000 (50%)'));
+        assert.ok(pin.includes('90,000 in'));
+        assert.ok(pin.includes('8,000 out'));
+        assert.ok(pin.includes('2,000 reasoning'));
+        assert.ok(pin.includes('390,000 cache'));
+        assert.ok(pin.includes('$0.0234'));
+    });
+
+    test('formatContextPin works without limit', () => {
+        const pin = formatContextPin({ total: 15, input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, limit: null, cost: 0 });
+        assert.ok(pin.includes('15 tokens'));
+        assert.ok(!pin.includes('%'));
+    });
+
+    test('formatConsoleBatch renders console lines in order', () => {
+        const batch = formatConsoleBatch(
+            [
+                { kind: 'tool', tool: 'bash', status: 'completed', summary: 'bash ls', output: 'ok', time: 2 },
+                { kind: 'text', text: 'done <now>', time: 3 },
+                { kind: 'step', tokens: 5, cost: 0, finish: 'stop', time: 4 },
+                { kind: 'files', files: ['/repo/a.ts'], time: 5 },
+            ],
+            [{ content: 'write code', state: 'active' }],
+        );
+        assert.ok(batch.includes('📋 Plan 0/1'));
+        assert.ok(batch.includes('✅ bash ls'));
+        assert.ok(batch.includes('done &lt;now&gt;'));
+        assert.ok(batch.includes('/repo/a.ts'));
+        assert.ok(!batch.includes('<now>'));
+        assert.ok(batch.indexOf('Plan') < batch.indexOf('bash ls'));
+    });
+
+    test('formatConsoleBatch caps at budget without broken tags', () => {
+        const batch = formatConsoleBatch(
+            Array.from({ length: 60 }, (_, i) => ({
+                kind: 'text' as const,
+                text: `line-${i} ${'x'.repeat(200)}`,
+                time: i,
+            })),
+            null,
+        );
+        assert.ok(batch.length <= 3900);
+        assert.ok(batch.includes('+'));
+        assert.ok(batch.includes('more'));
+        assert.ok(!batch.includes('<now>'));
+    });
+
+    test('formatConsoleBatch returns empty string for step-only input', () => {
+        assert.equal(formatConsoleBatch([{ kind: 'step', tokens: 1, cost: 0, finish: 'stop', time: 1 }], null), '');
+    });
+
     test('formatTopicName fits the forum limit and tags the session', () => {
         const name = formatTopicName('My session', 'ses_f4cc46126ffeS3cq');
         assert.ok(name.startsWith('📡 My session · '));
@@ -174,5 +230,32 @@ describe('formatter', () => {
         assert.equal(toToolState('error'), 'fail');
         assert.equal(toToolState('failed'), 'fail');
         assert.equal(toToolState('running'), 'running');
+    });
+
+    test('markdownToTelegramHtml renders telegram tags', () => {
+        assert.equal(markdownToTelegramHtml('**bold**'), '<b>bold</b>');
+        assert.equal(markdownToTelegramHtml('*italic*'), '<i>italic</i>');
+        assert.equal(markdownToTelegramHtml('`code`'), '<code>code</code>');
+        assert.equal(markdownToTelegramHtml('~~strike~~'), '<s>strike</s>');
+        assert.equal(
+            markdownToTelegramHtml('[docs](https://example.com/a_b)'),
+            '<a href="https://example.com/a_b">docs</a>',
+        );
+        assert.ok(markdownToTelegramHtml('**<b>&</b>**').includes('&lt;b&gt;&amp;&lt;/b&gt;'));
+        assert.ok(!markdownToTelegramHtml('**bold**').includes('**'));
+    });
+
+    test('markdownToTelegramHtml keeps stars inside code literal', () => {
+        assert.equal(markdownToTelegramHtml('`a * b **c**`'), '<code>a * b **c**</code>');
+        const block = markdownToTelegramHtml('```\n**x**\n```');
+        assert.ok(block.includes('<pre>'));
+        assert.ok(block.includes('**x**'));
+    });
+
+    test('formatConsoleBatch converts markdown in text events', () => {
+        const batch = formatConsoleBatch([{ kind: 'text', text: '**done** and *fast*', time: 1 }], null);
+        assert.ok(batch.includes('<b>done</b>'));
+        assert.ok(batch.includes('<i>fast</i>'));
+        assert.ok(!batch.includes('**done**'));
     });
 });

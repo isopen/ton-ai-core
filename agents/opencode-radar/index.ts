@@ -49,6 +49,13 @@ function optionalFlag(name: string, fallback: boolean): boolean {
     return !['0', 'false', 'no', 'off'].includes(raw.toLowerCase());
 }
 
+function userIdList(): number[] {
+    return (process.env.RADAR_ALLOWED_USERS ?? '')
+        .split(',')
+        .map((id) => Number.parseInt(id.trim(), 10))
+        .filter((id) => Number.isFinite(id));
+}
+
 function sessionIdList(): string[] {
     const single = process.env.RADAR_SESSION_ID?.trim();
     const multiple = (process.env.RADAR_SESSION_IDS ?? '')
@@ -80,10 +87,13 @@ const config: OpencodeRadarConfig = {
     radar: {
         chatId: Number.parseInt(process.env.RADAR_CHAT_ID || '', 10),
         directory: process.env.RADAR_DIR || process.cwd(),
+        allowedUsers: userIdList(),
         sessionId: process.env.RADAR_SESSION_ID || undefined,
         sessionIds: sessionIdList(),
         maxSessions: optionalInt('RADAR_MAX_SESSIONS', 3),
         useThreads: optionalFlag('RADAR_USE_THREADS', true),
+        typingEnabled: optionalFlag('RADAR_TYPING', true),
+        newTopics: optionalFlag('RADAR_NEW_TOPICS', true),
         statePath:
             process.env.RADAR_STATE_PATH ||
             join(homedir(), '.local', 'share', 'opencode-radar', 'state.json'),
