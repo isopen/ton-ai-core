@@ -39,6 +39,7 @@ const CONTEXT_THROTTLE_MS = 15000;
 const TYPING_COOLDOWN_MS = 4000;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const MAX_QUEUED_PROMPTS = 5;
+const MAX_SEEN_INBOUND = 500;
 const DOC_MAX_BYTES = 512 * 1024;
 const DOC_MAX_CHARS = 20000;
 
@@ -154,6 +155,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     private inboundSub: string | null = null;
     private permReplies = new Map<number, PermissionReply>();
     private creatingThreads = new Map<number, Message[]>();
+    private seenInbound = new Set<string>();
 
     constructor(config: OpencodeRadarConfig) {
         super(config);
@@ -222,6 +224,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         this.watched.clear();
         this.permReplies.clear();
         this.creatingThreads.clear();
+        this.seenInbound.clear();
         if (this.inboundSub) {
             const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
             if (telegram) telegram.offUpdate(this.inboundSub);
@@ -639,6 +642,15 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         if (message.chat.id !== this.config.radar.chatId) return;
         const threadId = message.message_thread_id;
         if (!threadId) return;
+        if (typeof message.message_id === 'number') {
+            const seenKey = `${message.chat.id}:${message.message_id}`;
+            if (this.seenInbound.has(seenKey)) return;
+            this.seenInbound.add(seenKey);
+            if (this.seenInbound.size > MAX_SEEN_INBOUND) {
+                const oldest = this.seenInbound.values().next().value;
+                if (oldest !== undefined) this.seenInbound.delete(oldest);
+            }
+        }
         const state = this.findSessionByThread(threadId);
         if (!state) {
             await this.handleUnknownThread(telegram, opencode, message, threadId);

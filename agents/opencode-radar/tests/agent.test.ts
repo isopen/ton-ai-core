@@ -589,6 +589,18 @@ describe('radar forum control', () => {
         assert.deepEqual(state.promptQueue, ['do it']);
     });
 
+    test('redelivered update is processed once', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 701 }, now));
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 701 }, now));
+        assert.deepEqual(state.promptQueue, ['do it']);
+        await agent.pumpPrompts(telegram, fake.opencode, state);
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'do it' }]);
+    });
+
     test('denied users are ignored', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         (agent as unknown as { config: { radar: { allowedUsers: number[] } } }).config.radar.allowedUsers = [43];
@@ -598,7 +610,7 @@ describe('radar forum control', () => {
         await agent.handleInbound(telegram, fake.opencode, inboundMsg({}, now));
         assert.deepEqual(state.promptQueue, []);
         (agent as unknown as { config: { radar: { allowedUsers: number[] } } }).config.radar.allowedUsers = [42];
-        await agent.handleInbound(telegram, fake.opencode, inboundMsg({}, now));
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 702 }, now));
         assert.deepEqual(state.promptQueue, ['do it']);
     });
 
@@ -967,8 +979,8 @@ describe('radar new topics', () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram } = stubTelegram();
         const fake = stubOpencode();
-        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, text: 'first' }, now));
-        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, text: 'second' }, now));
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, message_id: 703, text: 'first' }, now));
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, message_id: 704, text: 'second' }, now));
         assert.equal(fake.created.length, 1);
         assert.deepEqual(fake.prompts, [{ sessionId: 'ses_new01', text: 'first' }]);
         const watched = (agent as unknown as { watched: Map<string, { promptQueue: string[] }> }).watched;
@@ -981,8 +993,8 @@ describe('radar new topics', () => {
         const fake = stubOpencode();
         let release!: (value: typeof SESSION) => void;
         fake.setCreateImpl(() => new Promise<typeof SESSION>((resolve) => { release = resolve; }));
-        const first = agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, text: 'one' }, now));
-        const second = agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, text: 'two' }, now));
+        const first = agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, message_id: 705, text: 'one' }, now));
+        const second = agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, message_id: 706, text: 'two' }, now));
         await Promise.resolve();
         await Promise.resolve();
         release({ ...SESSION, id: 'ses_new01' });
