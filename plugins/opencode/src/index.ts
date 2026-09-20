@@ -1,6 +1,6 @@
 import { BasePlugin } from '@ton-ai/core';
 import { OpencodeSkills } from './skills';
-import { OpencodeConfig, RadarEvent, SessionEvent, SessionRow, TodoRow } from './types';
+import { ContextSnapshot, OpencodeConfig, PermissionDecision, PermissionRequest, PromptReceipt, RadarEvent, SessionEvent, SessionRow, TodoRow } from './types';
 
 export * from './types';
 export * from './skills';
@@ -105,5 +105,35 @@ export class OpencodePlugin extends BasePlugin<OpencodeConfig> {
     async readTodos(sessionId: string): Promise<TodoRow[]> {
         this.checkInitialized();
         return this.skills.readTodos(sessionId);
+    }
+
+    async readContextSnapshot(sessionId: string): Promise<ContextSnapshot | null> {
+        this.checkInitialized();
+        return this.skills.readContextSnapshot(sessionId);
+    }
+
+    async getModelLimit(modelId: string): Promise<number | null> {
+        this.checkInitialized();
+        return this.skills.getModelLimit(modelId);
+    }
+
+    async sendPrompt(sessionId: string, text: string): Promise<PromptReceipt> {
+        this.checkInitialized();
+        return this.skills.sendPrompt(sessionId, text);
+    }
+
+    async createSession(directory: string): Promise<SessionRow> {
+        this.checkInitialized();
+        return this.skills.createSession(directory);
+    }
+
+    async listPermissions(sessionId: string): Promise<PermissionRequest[]> {
+        this.checkInitialized();
+        return this.skills.listPermissions(sessionId);
+    }
+
+    async replyPermission(sessionId: string, requestId: string, decision: PermissionDecision): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.replyPermission(sessionId, requestId, decision);
     }
 }

@@ -2,10 +2,15 @@ import { spawn } from 'node:child_process';
 import { PluginContext } from '@ton-ai/core';
 import { OpencodeStore } from './store';
 import { parseServeTarget, serveArgs, ServeTarget, SpawnedProcess, SpawnFn } from './serve';
-import { mapApiMessages, mapPart, normalizeSessionApi } from './projector';
+import { mapApiMessages, mapPart, normalizeSessionApi, snapshotTotal } from './projector';
 import {
     ApiMessageList,
+    ContextSnapshot,
+    ModelApiList,
     OpencodeConfig,
+    PermissionDecision,
+    PermissionRequest,
+    PromptReceipt,
     SessionApiList,
     SessionEvent,
     SessionRow,
@@ -42,6 +47,8 @@ function defaultSpawn(command: string, args: string[]): SpawnedProcess {
 }
 
 export class OpencodeSkills {
+    private static readonly MODEL_LIMIT_TTL_MS = 3600000;
+
     private context: PluginContext;
     private baseUrl: string;
     private timeoutMs: number;
@@ -56,6 +63,7 @@ export class OpencodeSkills {
     private serverError: string | null = null;
     private store: OpencodeStore | null = null;
     private storeFailed: boolean = false;
+    private modelLimits: Map<string, { limit: number | null; at: number }> = new Map();
     private ready: boolean = false;
 
     constructor(context: PluginContext, config: OpencodeConfig, spawnFn?: SpawnFn) {
@@ -249,6 +257,110 @@ export class OpencodeSkills {
         return fallback.readTodos(sessionId);
     }
 
+    async readContextSnapshot(sessionId: string, limit = 20): Promise<ContextSnapshot | null> {
+        try {
+            const list = await this.request<ApiMessageList>(
+                `/api/session/${encodeURIComponent(sessionId)}/message`,
+                'opencode readContextSnapshot',
+                { limit: String(limit), order: 'desc' },
+            );
+            for (const message of list.data || []) {
+                if (message.type !== 'assistant' || !message.tokens) continue;
+                const tokens = message.tokens;
+                const cache = tokens.cache || {};
+                const snapshot = {
+                    input: typeof tokens.input === 'number' ? tokens.input : 0,
+                    output: typeof tokens.output === 'number' ? tokens.output : 0,
+                    reasoning: typeof tokens.reasoning === 'number' ? tokens.reasoning : 0,
+                    cacheRead: typeof cache.read === 'number' ? cache.read : 0,
+                    cacheWrite: typeof cache.write === 'number' ? cache.write : 0,
+                };
+                if (snapshotTotal(snapshot) <= 0) continue;
+                return snapshot;
+            }
+        } catch (error) {
+            this.context.logger.debug('opencode server snapshot failed, trying local database:', error instanceof Error ? error.message : error);
+        }
+        const fallback = this.getStore();
+        if (!fallback) return null;
+        return fallback.readLastAssistantTokens(sessionId);
+    }
+
+    async createSession(directory: string): Promise<SessionRow> {
+        const created = await this.request<{ data: SessionApiList['data'][number] }>(
+            '/api/session',
+            'opencode createSession',
+            undefined,
+            { method: 'POST', body: JSON.stringify({ directory }) },
+        );
+        if (!created || !created.data || typeof created.data.id !== 'string') {
+            throw new OpencodeApiError('opencode createSession failed: empty response');
+        }
+        return normalizeSessionApi(created.data);
+    }
+
+    async sendPrompt(sessionId: string, text: string): Promise<PromptReceipt> {
+        try {
+            const admitted = await this.request<{ data: { id?: string } }>(
+                `/api/session/${encodeURIComponent(sessionId)}/prompt`,
+                'opencode sendPrompt',
+                undefined,
+                { method: 'POST', body: JSON.stringify({ prompt: { text } }) },
+            );
+            return { admitted: true, busy: false, messageId: admitted.data?.id };
+        } catch (error) {
+            if (error instanceof OpencodeApiError && error.status === 409) {
+                return { admitted: false, busy: true };
+            }
+            throw error;
+        }
+    }
+
+    async listPermissions(sessionId: string): Promise<PermissionRequest[]> {
+        const list = await this.request<{ data: PermissionRequest[] }>(
+            `/api/session/${encodeURIComponent(sessionId)}/permission`,
+            'opencode listPermissions',
+        );
+        if (!Array.isArray(list.data)) return [];
+        return list.data.filter(
+            (item): item is PermissionRequest =>
+                !!item && typeof item.id === 'string' && typeof item.sessionID === 'string',
+        );
+    }
+
+    async replyPermission(sessionId: string, requestId: string, decision: PermissionDecision): Promise<boolean> {
+        try {
+            await this.request<unknown>(
+                `/api/session/${encodeURIComponent(sessionId)}/permission/${encodeURIComponent(requestId)}/reply`,
+                'opencode replyPermission',
+                undefined,
+                { method: 'POST', body: JSON.stringify({ decision }) },
+            );
+            return true;
+        } catch (error) {
+            if (error instanceof OpencodeApiError && error.status === 404) return false;
+            throw error;
+        }
+    }
+
+    async getModelLimit(modelId: string): Promise<number | null> {
+        const id = (modelId || '').trim();
+        if (!id) return null;
+        const cached = this.modelLimits.get(id);
+        if (cached && Date.now() - cached.at < OpencodeSkills.MODEL_LIMIT_TTL_MS) return cached.limit;
+        try {
+            const list = await this.request<ModelApiList>('/api/model', 'opencode getModelLimit');
+            const found = (list.data || []).find((m) => m && m.id === id);
+            const context = found && found.limit ? found.limit.context : undefined;
+            const limit = typeof context === 'number' && context > 0 ? Math.floor(context) : null;
+            this.modelLimits.set(id, { limit, at: Date.now() });
+            return limit;
+        } catch (error) {
+            this.context.logger.debug('opencode model limit failed:', error instanceof Error ? error.message : error);
+            return cached ? cached.limit : null;
+        }
+    }
+
     close(): void {
         this.stopServer();
         this.closeStore();
@@ -296,7 +408,7 @@ export class OpencodeSkills {
                         `${label} failed: HTTP ${response.status}${detail ? ` ${detail}` : ''}`,
                         response.status,
                     );
-                    if (isPermanentStatus(response.status)) throw apiError;
+                    if (isPermanentStatus(response.status) || response.status === 409) throw apiError;
                     if (attempt === this.maxRetries) throw apiError;
                     await sleep(1000 * (attempt + 1));
                     continue;

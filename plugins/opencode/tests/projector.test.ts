@@ -3,7 +3,9 @@ import {
     mapApiMessages,
     mapPart,
     normalizeSessionApi,
+    parseAssistantTokens,
     parsePartData,
+    snapshotTotal,
     summarizeToolInput,
 } from '../src/projector';
 import { ApiMessage, PartRow, SessionApiInfo } from '../src/types';
@@ -121,6 +123,24 @@ describe('opencode projector', () => {
             { kind: 'tool', tool: 'bash', status: 'completed', summary: 'bash ls', output: 'ok', time: 200 },
             { kind: 'tool', tool: 'read', status: 'running', summary: 'read', output: '', time: 200 },
         ]);
+    });
+
+    test('parseAssistantTokens reads snapshot, skips user rows', () => {
+        assert.deepEqual(
+            parseAssistantTokens(JSON.stringify({ role: 'assistant', tokens: { input: 6, output: 2, reasoning: 1, cache: { read: 100, write: 5 } } })),
+            { input: 6, output: 2, reasoning: 1, cacheRead: 100, cacheWrite: 5 },
+        );
+        assert.equal(parseAssistantTokens(JSON.stringify({ role: 'user', text: 'hi' })), null);
+        assert.equal(parseAssistantTokens(JSON.stringify({ role: 'assistant' })), null);
+        assert.equal(
+            parseAssistantTokens(JSON.stringify({ role: 'assistant', tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })),
+            null,
+        );
+        assert.equal(parseAssistantTokens('nope'), null);
+    });
+
+    test('snapshotTotal adds all token kinds', () => {
+        assert.equal(snapshotTotal({ input: 6, output: 2, reasoning: 1, cacheRead: 100, cacheWrite: 5 }), 114);
     });
 
     test('normalizeSessionApi flattens server shape', () => {

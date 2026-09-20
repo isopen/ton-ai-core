@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
-import { PartRow, SessionRow, TodoRow } from './types';
+import { parseAssistantTokens } from './projector';
+import { ContextSnapshot, PartRow, SessionRow, TodoRow } from './types';
 
 function allRows<T>(db: DatabaseSync, sql: string, ...params: Array<string | number>): T[] {
     return db.prepare(sql).all(...params) as unknown as T[];
@@ -70,6 +71,19 @@ export class OpencodeStore {
              WHERE session_id = ? ORDER BY position`,
             sessionId,
         );
+    }
+
+    readLastAssistantTokens(sessionId: string): ContextSnapshot | null {
+        const rows = allRows<{ data: string }>(
+            this.db,
+            `SELECT data FROM message WHERE session_id = ? ORDER BY time_created DESC LIMIT 10`,
+            sessionId,
+        );
+        for (const row of rows) {
+            const snapshot = parseAssistantTokens(row.data);
+            if (snapshot) return snapshot;
+        }
+        return null;
     }
 
     close(): void {

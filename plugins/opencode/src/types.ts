@@ -111,6 +111,15 @@ export interface ApiMessage {
     };
     text?: string;
     content?: ApiAssistantContentPart[];
+    tokens?: {
+        input?: number;
+        output?: number;
+        reasoning?: number;
+        cache?: {
+            read?: number;
+            write?: number;
+        };
+    };
 }
 
 export interface ApiMessageList {
@@ -120,3 +129,39 @@ export interface ApiMessageList {
         next: string | null;
     };
 }
+
+export interface ModelApiInfo {
+    id: string;
+    limit?: {
+        context?: number;
+        output?: number;
+    };
+}
+
+export interface ModelApiList {
+    data: ModelApiInfo[];
+}
+
+export interface ContextSnapshot {
+    input: number;
+    output: number;
+    reasoning: number;
+    cacheRead: number;
+    cacheWrite: number;
+}
+
+export interface PromptReceipt {
+    admitted: boolean;
+    busy: boolean;
+    messageId?: string;
+}
+
+export interface PermissionRequest {
+    id: string;
+    sessionID: string;
+    action: string;
+    resources: string[];
+    message?: string;
+}
+
+export type PermissionDecision = 'once' | 'reject';

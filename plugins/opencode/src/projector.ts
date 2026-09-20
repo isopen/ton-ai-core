@@ -1,5 +1,6 @@
 import {
     ApiMessage,
+    ContextSnapshot,
     RadarEvent,
     SessionApiInfo,
     SessionRow,
@@ -65,6 +66,31 @@ export function summarizeToolInput(tool: string, input: unknown): string {
 
 export function snippetOutput(raw: string): string {
     return raw.length > TOOL_OUTPUT_SNIPPET ? `${raw.slice(0, TOOL_OUTPUT_SNIPPET)}…` : raw;
+}
+
+export function parseAssistantTokens(data: string): ContextSnapshot | null {
+    const parsed = parsePartData(data);
+    if (!parsed || parsed.role !== 'assistant') return null;
+    const tokens = parsed.tokens;
+    if (!tokens || typeof tokens !== 'object' || Array.isArray(tokens)) return null;
+    const record = tokens as Record<string, unknown>;
+    const cache = record.cache;
+    const cacheRecord = cache && typeof cache === 'object' && !Array.isArray(cache)
+        ? (cache as Record<string, unknown>)
+        : {};
+    const snapshot = {
+        input: asNumber(record.input),
+        output: asNumber(record.output),
+        reasoning: asNumber(record.reasoning),
+        cacheRead: asNumber(cacheRecord.read),
+        cacheWrite: asNumber(cacheRecord.write),
+    };
+    if (snapshotTotal(snapshot) <= 0) return null;
+    return snapshot;
+}
+
+export function snapshotTotal(snapshot: ContextSnapshot): number {
+    return snapshot.input + snapshot.output + snapshot.reasoning + snapshot.cacheRead + snapshot.cacheWrite;
 }
 
 export function mapPart(row: { id: string; time_updated: number; data: string }): RadarEvent | null {

@@ -39,4 +39,38 @@ describe('opencode store', () => {
     test('store constructor rejects missing database file', () => {
         assert.throws(() => new OpencodeStore('/definitely/not/here.db'), /not found/);
     });
+
+    test('readLastAssistantTokens picks latest assistant snapshot', () => {
+        const db = new DatabaseSync(':memory:');
+        db.exec(
+            `CREATE TABLE message (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+                time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL
+            )`,
+        );
+        const insert = db.prepare(
+            'INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)',
+        );
+        const user = { role: 'user', text: 'hi' };
+        const old = { role: 'assistant', tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 10, write: 0 } } };
+        const fresh = { role: 'assistant', tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 400, write: 50 } } };
+        insert.run('m1', 's1', 100, 100, JSON.stringify(old));
+        insert.run('m2', 's1', 200, 200, JSON.stringify(user));
+        insert.run('m3', 's1', 300, 300, JSON.stringify(fresh));
+        insert.run('m4', 's2', 400, 400, JSON.stringify(user));
+        try {
+            const store = new OpencodeStore(db);
+            assert.deepEqual(store.readLastAssistantTokens('s1'), {
+                input: 100,
+                output: 20,
+                reasoning: 5,
+                cacheRead: 400,
+                cacheWrite: 50,
+            });
+            assert.equal(store.readLastAssistantTokens('s2'), null);
+            assert.equal(store.readLastAssistantTokens('ghost'), null);
+        } finally {
+            db.close();
+        }
+    });
 });
