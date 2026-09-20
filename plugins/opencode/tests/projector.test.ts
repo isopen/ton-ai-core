@@ -7,6 +7,7 @@ import {
     parsePartData,
     snapshotTotal,
     summarizeToolInput,
+    toolChangeText,
 } from '../src/projector';
 import { ApiMessage, PartRow, SessionApiInfo } from '../src/types';
 
@@ -70,6 +71,46 @@ describe('opencode projector', () => {
     test('tool part without state defaults to running', () => {
         const event = mapPart(row({ type: 'tool', tool: 'bash' }));
         assert.deepEqual(event, { kind: 'tool', tool: 'bash', status: 'running', summary: 'bash', output: '', time: 1000 });
+    });
+
+    test('edit part exposes changed lines as diff', () => {
+        const event = mapPart(
+            row({
+                type: 'tool',
+                tool: 'edit',
+                state: {
+                    status: 'completed',
+                    input: { filePath: '/repo/a.ts', oldString: 'const a = 1;\nconst b = 2;', newString: 'const a = 1;\nconst b = 3;' },
+                    output: 'Edit applied successfully.',
+                },
+            }),
+        );
+        assert.deepEqual(event, {
+            kind: 'tool',
+            tool: 'edit',
+            status: 'completed',
+            summary: 'edit /repo/a.ts',
+            output: '- const a = 1;\n- const b = 2;\n+ const a = 1;\n+ const b = 3;',
+            time: 1000,
+        });
+    });
+
+    test('toolChangeText covers insert delete write and passthrough', () => {
+        assert.equal(toolChangeText('edit', { filePath: '/a', newString: 'x' }), '+ x');
+        assert.equal(toolChangeText('edit', { filePath: '/a', oldString: 'x' }), '- x');
+        assert.equal(toolChangeText('edit', { filePath: '/a', oldText: 'a', newText: 'b' }), '- a\n+ b');
+        assert.equal(toolChangeText('edit', { filePath: '/a' }), '');
+        assert.equal(toolChangeText('write', { filePath: '/a', content: 'body' }), 'body');
+        assert.equal(toolChangeText('bash', { command: 'ls' }), '');
+        assert.equal(toolChangeText('edit', null), '');
+    });
+
+    test('long tool output is kept in full', () => {
+        const big = `line\n${'z'.repeat(2000)}`;
+        const event = mapPart(
+            row({ type: 'tool', tool: 'bash', state: { status: 'completed', input: { command: 'cat' }, output: big } }),
+        );
+        assert.deepEqual((event as { output: string }).output, big);
     });
 
     test('step-finish maps tokens and cost', () => {

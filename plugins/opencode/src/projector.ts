@@ -6,8 +6,6 @@ import {
     SessionRow,
 } from './types';
 
-export const TOOL_OUTPUT_SNIPPET = 300;
-
 const SUMMARY_KEYS = [
     'filePath',
     'file',
@@ -64,8 +62,33 @@ export function summarizeToolInput(tool: string, input: unknown): string {
     return tool;
 }
 
-export function snippetOutput(raw: string): string {
-    return raw.length > TOOL_OUTPUT_SNIPPET ? `${raw.slice(0, TOOL_OUTPUT_SNIPPET)}…` : raw;
+export function toolChangeText(tool: string, input: unknown): string {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return '';
+    const record = input as Record<string, unknown>;
+    const field = (keys: string[]): string => {
+        for (const key of keys) {
+            const value = record[key];
+            if (typeof value === 'string' && value.length > 0) return value;
+        }
+        return '';
+    };
+    if (tool === 'edit') {
+        const lines: string[] = [];
+        const oldText = field(['oldString', 'oldText']);
+        const nextText = field(['newString', 'newText']);
+        if (!oldText && !nextText) return '';
+        if (oldText) {
+            for (const line of oldText.split('\n')) lines.push(`- ${line}`);
+        }
+        if (nextText) {
+            for (const line of nextText.split('\n')) lines.push(`+ ${line}`);
+        }
+        return lines.join('\n');
+    }
+    if (tool === 'write') {
+        return field(['content']);
+    }
+    return '';
 }
 
 export function parseAssistantTokens(data: string): ContextSnapshot | null {
@@ -110,7 +133,8 @@ export function mapPart(row: { id: string; time_updated: number; data: string })
         const status = typeof state?.status === 'string' ? (state.status as string) : 'running';
         const rawOutput = typeof state?.output === 'string' ? (state.output as string) : '';
         const summary = summarizeToolInput(tool, state?.input);
-        return { kind: 'tool', tool, status, summary, output: snippetOutput(rawOutput), time: row.time_updated };
+        const changeText = toolChangeText(tool, state?.input);
+        return { kind: 'tool', tool, status, summary, output: changeText || rawOutput, time: row.time_updated };
     }
 
     if (type === 'step-finish') {
@@ -150,12 +174,14 @@ export function mapApiMessages(messages: ApiMessage[]): RadarEvent[] {
             } else if (part.type === 'tool') {
                 const tool = asString(part.name) || 'tool';
                 const status = asString(part.state?.status) || 'running';
+                const changeText = toolChangeText(tool, part.state?.input);
+                const rawOutput = asString(part.state?.output);
                 events.push({
                     kind: 'tool',
                     tool,
                     status,
                     summary: summarizeToolInput(tool, part.state?.input),
-                    output: snippetOutput(asString(part.state?.output)),
+                    output: changeText || rawOutput,
                     time,
                 });
             }
