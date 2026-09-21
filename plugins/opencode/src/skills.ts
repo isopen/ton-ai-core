@@ -7,6 +7,7 @@ import {
     ContextSnapshot,
     ModelApiList,
     OpencodeConfig,
+    OpencodeServerEvent,
     PermissionDecision,
     PermissionRequest,
     PromptReceipt,
@@ -65,6 +66,7 @@ export class OpencodeSkills {
     private storeFailed: boolean = false;
     private modelLimits: Map<string, { limit: number | null; at: number }> = new Map();
     private cliRuns: Set<SpawnedProcess> = new Set();
+    private eventSources: Set<AbortController> = new Set();
     private ready: boolean = false;
 
     constructor(context: PluginContext, config: OpencodeConfig, spawnFn?: SpawnFn) {
@@ -286,6 +288,108 @@ export class OpencodeSkills {
         }
     }
 
+    async interruptSession(sessionId: string): Promise<boolean> {
+        let response: Response;
+        try {
+            response = await fetch(this.buildUrl(`/api/session/${encodeURIComponent(sessionId)}/interrupt`), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: AbortSignal.timeout(this.timeoutMs),
+            });
+        } catch (error) {
+            throw new OpencodeApiError(
+                `opencode interruptSession failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
+        if (response.status === 404) return false;
+        if (!response.ok) {
+            const detail = (await response.text().catch(() => '')).slice(0, 200);
+            throw new OpencodeApiError(
+                `opencode interruptSession failed: HTTP ${response.status}${detail ? ` ${detail}` : ''}`,
+                response.status,
+            );
+        }
+        const text = (await response.text().catch(() => '')).trim();
+        if (!text) return true;
+        try {
+            const parsed = JSON.parse(text) as { interrupted?: unknown; data?: { interrupted?: unknown } };
+            if (typeof parsed.interrupted === 'boolean') return parsed.interrupted;
+            if (parsed.data && typeof parsed.data.interrupted === 'boolean') return parsed.data.interrupted;
+        } catch {
+            this.context.logger.debug('opencode interrupt result parse failed');
+        }
+        return true;
+    }
+
+    subscribeEvents(handler: (event: OpencodeServerEvent) => void): () => void {
+        const controller = new AbortController();
+        this.eventSources.add(controller);
+        void this.runEventStream(handler, controller.signal).catch(() => undefined);
+        return () => {
+            controller.abort();
+            this.eventSources.delete(controller);
+        };
+    }
+
+    private async runEventStream(handler: (event: OpencodeServerEvent) => void, signal: AbortSignal): Promise<void> {
+        let delay = 1000;
+        while (!signal.aborted) {
+            try {
+                await this.readEventStream(handler, signal);
+                delay = 1000;
+            } catch (error) {
+                if (signal.aborted) return;
+                this.context.logger.debug(
+                    'opencode events failed, retrying:',
+                    error instanceof Error ? error.message : error,
+                );
+            }
+            await new Promise<void>((resolve) => {
+                const timer = setTimeout(resolve, delay);
+                signal.addEventListener('abort', () => {
+                    clearTimeout(timer);
+                    resolve();
+                }, { once: true });
+            });
+            delay = Math.min(delay * 2, 15000);
+        }
+    }
+
+    private async readEventStream(handler: (event: OpencodeServerEvent) => void, signal: AbortSignal): Promise<void> {
+        const response = await fetch(`${this.baseUrl}/api/event`, {
+            headers: { Accept: 'text/event-stream' },
+            signal,
+        });
+        if (!response.ok || !response.body) {
+            throw new OpencodeApiError(`opencode events failed: HTTP ${response.status}`);
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        try {
+            while (!signal.aborted) {
+                const { done, value } = await reader.read();
+                if (done) return;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() ?? '';
+                for (const line of lines) {
+                    if (!line.startsWith('data:')) continue;
+                    const text = line.slice(5).trim();
+                    if (!text) continue;
+                    try {
+                        const event = JSON.parse(text) as OpencodeServerEvent;
+                        if (event && typeof event.type === 'string') handler(event);
+                    } catch {
+                        this.context.logger.debug('opencode event parse failed');
+                    }
+                }
+            }
+        } finally {
+            reader.releaseLock();
+        }
+    }
+
     async listPermissions(sessionId: string): Promise<PermissionRequest[]> {
         const list = await this.request<{ data: PermissionRequest[] }>(
             `/api/session/${encodeURIComponent(sessionId)}/permission`,
@@ -362,6 +466,14 @@ export class OpencodeSkills {
     }
 
     close(): void {
+        for (const controller of this.eventSources) {
+            try {
+                controller.abort();
+            } catch (error) {
+                this.context.logger.debug('opencode events abort failed:', error instanceof Error ? error.message : error);
+            }
+        }
+        this.eventSources.clear();
         this.stopCliRuns();
         this.stopServer();
         this.closeStore();

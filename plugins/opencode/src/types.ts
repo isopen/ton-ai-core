@@ -184,3 +184,19 @@ export interface QuestionRequest {
 }
 
 export type PermissionDecision = 'once' | 'reject';
+
+export interface OpencodeServerError {
+    name?: string;
+    message?: string;
+    data?: { message?: string };
+}
+
+export interface OpencodeServerEvent {
+    id?: string;
+    type: string;
+    properties: {
+        sessionID?: string;
+        error?: OpencodeServerError | string;
+        status?: unknown;
+    };
+}

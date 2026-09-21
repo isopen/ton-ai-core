@@ -136,4 +136,113 @@ describe('opencode questions', () => {
         assert.equal(await skills.replyQuestion('ses_1', 'que_gone', [['A']]), false);
         skills.close();
     });
+
+    test('interruptSession posts interrupt and returns the flag', async () => {
+        const seen: string[] = [];
+        globalThis.fetch = (async (url: unknown) => {
+            seen.push(String(url));
+            return response(true, 200, { interrupted: true });
+        }) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        assert.equal(await skills.interruptSession('ses_1'), true);
+        assert.ok(seen[0].endsWith('/api/session/ses_1/interrupt'));
+        globalThis.fetch = (async () => response(false, 404, { _tag: 'SessionNotFoundError' })) as typeof fetch;
+        assert.equal(await skills.interruptSession('ses_gone'), false);
+        skills.close();
+    });
+
+    test('interruptSession treats empty body as success', async () => {
+        globalThis.fetch = (async () => ({ ok: true, status: 200, text: async () => '' })) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        assert.equal(await skills.interruptSession('ses_1'), true);
+        globalThis.fetch = (async () => ({ ok: true, status: 204, text: async () => '' })) as typeof fetch;
+        assert.equal(await skills.interruptSession('ses_1'), true);
+        skills.close();
+    });
+});
+
+describe('opencode server events', () => {
+    const realFetch = globalThis.fetch;
+
+    afterEach(() => {
+        globalThis.fetch = realFetch;
+    });
+
+    function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
+        const encoded = chunks.map((c) => new TextEncoder().encode(c));
+        return new ReadableStream<Uint8Array>({
+            start(controller) {
+                for (const part of encoded) controller.enqueue(part);
+                controller.close();
+            },
+        });
+    }
+
+    function openStream(): { body: ReadableStream<Uint8Array>; release: () => void } {
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                void gate.then(() => {
+                    controller.close();
+                });
+            },
+        });
+        return { body, release };
+    }
+
+    test('subscribeEvents parses split frames and skips noise', async () => {
+        let calls = 0;
+        let held: (() => void) | null = null;
+        globalThis.fetch = (async () => {
+            calls += 1;
+            if (calls === 1) {
+                return {
+                    ok: true,
+                    status: 200,
+                    body: streamOf([
+                        'data: {"type":"session.error","properties":{"sessionID":"ses_1","error":{"name":"ProviderError","data":{"message":"Rate limit exceeded"}}}}\n\n: heartbeat\n\nda',
+                        'ta: not-json\n\ndata: {"type":"server.connected","properties":{}}\n\n',
+                    ]),
+                };
+            }
+            const gate = openStream();
+            held = gate.release;
+            return { ok: true, status: 200, body: gate.body };
+        }) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        const got: Array<{ type: string }> = [];
+        const unsub = skills.subscribeEvents((event) => {
+            got.push({ type: event.type });
+        });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        assert.deepEqual(got.map((e) => e.type), ['session.error', 'server.connected']);
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        assert.ok(calls >= 2);
+        unsub();
+        if (held) held();
+        skills.close();
+    });
+
+    test('subscribeEvents backs off after a failed connect', async () => {
+        let calls = 0;
+        globalThis.fetch = (async () => {
+            calls += 1;
+            throw new Error('connect refused');
+        }) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        const got: unknown[] = [];
+        const unsub = skills.subscribeEvents((event) => {
+            got.push(event);
+        });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        assert.equal(calls, 1);
+        assert.deepEqual(got, []);
+        await new Promise((resolve) => setTimeout(resolve, 1300));
+        assert.ok(calls >= 2);
+        unsub();
+        skills.close();
+    });
 });

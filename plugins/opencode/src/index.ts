@@ -1,7 +1,7 @@
 import { BasePlugin } from '@ton-ai/core';
 import { OpencodeSkills } from './skills';
 import { SpawnedProcess } from './serve';
-import { ContextSnapshot, OpencodeConfig, PermissionDecision, PermissionRequest, PromptReceipt, QuestionRequest, RadarEvent, SessionEvent, SessionRow, TodoRow } from './types';
+import { ContextSnapshot, OpencodeConfig, OpencodeServerEvent, PermissionDecision, PermissionRequest, PromptReceipt, QuestionRequest, RadarEvent, SessionEvent, SessionRow, TodoRow } from './types';
 
 export * from './types';
 export * from './skills';
@@ -126,6 +126,16 @@ export class OpencodePlugin extends BasePlugin<OpencodeConfig> {
     async sendPrompt(sessionId: string, text: string): Promise<PromptReceipt> {
         this.checkInitialized();
         return this.skills.sendPrompt(sessionId, text);
+    }
+
+    async interruptSession(sessionId: string): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.interruptSession(sessionId);
+    }
+
+    subscribeEvents(handler: (event: OpencodeServerEvent) => void): () => void {
+        this.checkInitialized();
+        return this.skills.subscribeEvents(handler);
     }
 
     async hasMessage(sessionId: string, messageId: string): Promise<boolean> {
