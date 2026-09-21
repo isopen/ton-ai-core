@@ -62,6 +62,30 @@ export function summarizeToolInput(tool: string, input: unknown): string {
     return tool;
 }
 
+export function contentBlocksText(value: unknown): string {
+    if (!Array.isArray(value)) return '';
+    const texts: string[] = [];
+    for (const block of value) {
+        if (block && typeof block === 'object' && !Array.isArray(block)) {
+            const text = (block as Record<string, unknown>).text;
+            if (typeof text === 'string' && text.length > 0) texts.push(text);
+        }
+    }
+    return texts.join('\n');
+}
+
+export function toolResultText(tool: string, state: { input?: unknown; output?: unknown; content?: unknown } | undefined): string {
+    const changeText = toolChangeText(tool, state?.input);
+    if (changeText) return changeText;
+    if (state && typeof state === 'object') {
+        const blocks = contentBlocksText((state as Record<string, unknown>).content);
+        if (blocks) return blocks;
+        const raw = (state as Record<string, unknown>).output;
+        if (typeof raw === 'string') return raw;
+    }
+    return '';
+}
+
 export function toolChangeText(tool: string, input: unknown): string {
     if (!input || typeof input !== 'object' || Array.isArray(input)) return '';
     const record = input as Record<string, unknown>;
@@ -131,10 +155,8 @@ export function mapPart(row: { id: string; time_updated: number; data: string })
         const tool = asString(data.tool) || 'tool';
         const state = data.state as Record<string, unknown> | undefined;
         const status = typeof state?.status === 'string' ? (state.status as string) : 'running';
-        const rawOutput = typeof state?.output === 'string' ? (state.output as string) : '';
         const summary = summarizeToolInput(tool, state?.input);
-        const changeText = toolChangeText(tool, state?.input);
-        return { kind: 'tool', tool, status, summary, output: changeText || rawOutput, time: row.time_updated };
+        return { kind: 'tool', tool, status, summary, output: toolResultText(tool, state), time: row.time_updated };
     }
 
     if (type === 'step-finish') {
@@ -174,14 +196,12 @@ export function mapApiMessages(messages: ApiMessage[]): RadarEvent[] {
             } else if (part.type === 'tool') {
                 const tool = asString(part.name) || 'tool';
                 const status = asString(part.state?.status) || 'running';
-                const changeText = toolChangeText(tool, part.state?.input);
-                const rawOutput = asString(part.state?.output);
                 events.push({
                     kind: 'tool',
                     tool,
                     status,
                     summary: summarizeToolInput(tool, part.state?.input),
-                    output: changeText || rawOutput,
+                    output: toolResultText(tool, part.state),
                     time,
                 });
             }

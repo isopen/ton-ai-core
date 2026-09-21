@@ -2,15 +2,15 @@ import { spawn } from 'node:child_process';
 import { PluginContext } from '@ton-ai/core';
 import { OpencodeStore } from './store';
 import { parseServeTarget, serveArgs, ServeTarget, SpawnedProcess, SpawnFn } from './serve';
-import { mapApiMessages, mapPart, normalizeSessionApi, snapshotTotal } from './projector';
+import { mapPart, normalizeSessionApi } from './projector';
 import {
-    ApiMessageList,
     ContextSnapshot,
     ModelApiList,
     OpencodeConfig,
     PermissionDecision,
     PermissionRequest,
     PromptReceipt,
+    QuestionRequest,
     SessionApiList,
     SessionEvent,
     SessionRow,
@@ -64,6 +64,7 @@ export class OpencodeSkills {
     private store: OpencodeStore | null = null;
     private storeFailed: boolean = false;
     private modelLimits: Map<string, { limit: number | null; at: number }> = new Map();
+    private cliRuns: Set<SpawnedProcess> = new Set();
     private ready: boolean = false;
 
     constructor(context: PluginContext, config: OpencodeConfig, spawnFn?: SpawnFn) {
@@ -186,19 +187,10 @@ export class OpencodeSkills {
     }
 
     async listSessions(directory?: string, limit = 20, order: 'asc' | 'desc' = 'desc'): Promise<SessionRow[]> {
-        try {
-            const query: Record<string, string> = { limit: String(limit), order };
-            if (directory) query.directory = directory;
-            const list = await this.request<SessionApiList>('/api/session', 'opencode listSessions', query);
-            return (list.data || []).map(normalizeSessionApi);
-        } catch (error) {
-            const fallback = this.getStore();
-            if (fallback) {
-                this.context.logger.warn('opencode server list failed, using local database:', error instanceof Error ? error.message : error);
-                return fallback.listSessions(directory, limit);
-            }
-            throw error;
-        }
+        const query: Record<string, string> = { limit: String(limit), order };
+        if (directory) query.directory = directory;
+        const list = await this.request<SessionApiList>('/api/session', 'opencode listSessions', query);
+        return (list.data || []).map(normalizeSessionApi);
     }
 
     async getSession(sessionId: string): Promise<SessionRow | null> {
@@ -211,42 +203,17 @@ export class OpencodeSkills {
             return normalizeSessionApi(info.data);
         } catch (error) {
             if (error instanceof OpencodeApiError && error.status === 404) return null;
-            const fallback = this.getStore();
-            if (fallback) {
-                this.context.logger.warn('opencode server session failed, using local database:', error instanceof Error ? error.message : error);
-                return fallback.getSession(sessionId);
-            }
             throw error;
         }
     }
 
     async readEvents(sessionId: string, limit = 120): Promise<SessionEvent[]> {
-        try {
-            const list = await this.request<ApiMessageList>(
-                `/api/session/${encodeURIComponent(sessionId)}/message`,
-                'opencode readEvents',
-                { limit: String(limit), order: 'desc' },
-            );
-            const messages = [...(list.data || [])].reverse();
-            if (messages.length > 0) {
-                const keyed: SessionEvent[] = [];
-                for (const message of messages) {
-                    const events = mapApiMessages([message]);
-                    events.forEach((event, index) => {
-                        keyed.push({ key: `${message.id}:${index}`, event });
-                    });
-                }
-                return keyed;
-            }
-        } catch (error) {
-            this.context.logger.debug('opencode server messages failed, trying local database:', error instanceof Error ? error.message : error);
-        }
-        const fallback = this.getStore();
-        if (!fallback) return [];
+        const source = this.getStore();
+        if (!source) return [];
         const keyed: SessionEvent[] = [];
-        for (const row of fallback.readParts(sessionId, limit)) {
+        for (const row of source.readParts(sessionId, limit)) {
             const event = mapPart(row);
-            if (event) keyed.push({ key: row.id, event });
+            if (event) keyed.push({ key: `db:${row.id}`, event });
         }
         return keyed;
     }
@@ -257,33 +224,36 @@ export class OpencodeSkills {
         return fallback.readTodos(sessionId);
     }
 
-    async readContextSnapshot(sessionId: string, limit = 20): Promise<ContextSnapshot | null> {
-        try {
-            const list = await this.request<ApiMessageList>(
-                `/api/session/${encodeURIComponent(sessionId)}/message`,
-                'opencode readContextSnapshot',
-                { limit: String(limit), order: 'desc' },
-            );
-            for (const message of list.data || []) {
-                if (message.type !== 'assistant' || !message.tokens) continue;
-                const tokens = message.tokens;
-                const cache = tokens.cache || {};
-                const snapshot = {
-                    input: typeof tokens.input === 'number' ? tokens.input : 0,
-                    output: typeof tokens.output === 'number' ? tokens.output : 0,
-                    reasoning: typeof tokens.reasoning === 'number' ? tokens.reasoning : 0,
-                    cacheRead: typeof cache.read === 'number' ? cache.read : 0,
-                    cacheWrite: typeof cache.write === 'number' ? cache.write : 0,
-                };
-                if (snapshotTotal(snapshot) <= 0) continue;
-                return snapshot;
+    async hasMessage(sessionId: string, messageId: string): Promise<boolean> {
+        const source = this.getStore();
+        if (!source) return false;
+        return source.hasMessage(sessionId, messageId);
+    }
+
+    spawnRun(sessionId: string, text: string): SpawnedProcess {
+        const child = this.spawnFn(this.binPath, ['run', '-s', sessionId, text]);
+        this.cliRuns.add(child);
+        child.on('exit', () => {
+            this.cliRuns.delete(child);
+        });
+        return child;
+    }
+
+    stopCliRuns(): void {
+        for (const child of this.cliRuns) {
+            try {
+                child.kill('SIGTERM');
+            } catch (error) {
+                this.context.logger.debug('opencode run kill failed:', error instanceof Error ? error.message : error);
             }
-        } catch (error) {
-            this.context.logger.debug('opencode server snapshot failed, trying local database:', error instanceof Error ? error.message : error);
         }
-        const fallback = this.getStore();
-        if (!fallback) return null;
-        return fallback.readLastAssistantTokens(sessionId);
+        this.cliRuns.clear();
+    }
+
+    async readContextSnapshot(sessionId: string): Promise<ContextSnapshot | null> {
+        const source = this.getStore();
+        if (!source) return null;
+        return source.readLastAssistantTokens(sessionId);
     }
 
     async createSession(directory: string): Promise<SessionRow> {
@@ -343,6 +313,36 @@ export class OpencodeSkills {
         }
     }
 
+    async listQuestions(sessionId: string): Promise<QuestionRequest[]> {
+        const list = await this.request<{ data: QuestionRequest[] }>(
+            `/api/session/${encodeURIComponent(sessionId)}/question`,
+            'opencode listQuestions',
+        );
+        if (!Array.isArray(list.data)) return [];
+        return list.data.filter(
+            (item): item is QuestionRequest =>
+                !!item &&
+                typeof item.id === 'string' &&
+                typeof item.sessionID === 'string' &&
+                Array.isArray(item.questions),
+        );
+    }
+
+    async replyQuestion(sessionId: string, requestId: string, answers: string[][]): Promise<boolean> {
+        try {
+            await this.request<unknown>(
+                `/api/session/${encodeURIComponent(sessionId)}/question/${encodeURIComponent(requestId)}/reply`,
+                'opencode replyQuestion',
+                undefined,
+                { method: 'POST', body: JSON.stringify({ answers }) },
+            );
+            return true;
+        } catch (error) {
+            if (error instanceof OpencodeApiError && error.status === 404) return false;
+            throw error;
+        }
+    }
+
     async getModelLimit(modelId: string): Promise<number | null> {
         const id = (modelId || '').trim();
         if (!id) return null;
@@ -362,6 +362,7 @@ export class OpencodeSkills {
     }
 
     close(): void {
+        this.stopCliRuns();
         this.stopServer();
         this.closeStore();
         this.ready = false;

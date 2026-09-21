@@ -101,3 +101,39 @@ describe('opencode prompts and permissions', () => {
         skills.close();
     });
 });
+
+describe('opencode questions', () => {
+    const realFetch = globalThis.fetch;
+
+    afterEach(() => {
+        globalThis.fetch = realFetch;
+    });
+
+    test('listQuestions filters shaped requests', async () => {
+        const payload = {
+            data: [
+                { id: 'que_1', sessionID: 'ses_1', questions: [{ header: 'H', question: 'Q?', options: [{ label: 'A' }] }] },
+                { id: 7, sessionID: 'ses_1' },
+            ],
+        };
+        globalThis.fetch = (async () => response(true, 200, payload)) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        assert.deepEqual(await skills.listQuestions('ses_1'), [payload.data[0]]);
+        skills.close();
+    });
+
+    test('replyQuestion posts answers and maps missing to false', async () => {
+        const seen: Array<{ url: string; body: string }> = [];
+        globalThis.fetch = (async (url: unknown, init: unknown) => {
+            seen.push({ url: String(url), body: String((init as { body: string }).body) });
+            return response(true, 200, {});
+        }) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        assert.equal(await skills.replyQuestion('ses_1', 'que_1', [['A', 'B']]), true);
+        assert.ok(seen[0].url.endsWith('/api/session/ses_1/question/que_1/reply'));
+        assert.deepEqual(JSON.parse(seen[0].body), { answers: [['A', 'B']] });
+        globalThis.fetch = (async () => response(false, 404, { _tag: 'QuestionV2.NotFoundError' })) as typeof fetch;
+        assert.equal(await skills.replyQuestion('ses_1', 'que_gone', [['A']]), false);
+        skills.close();
+    });
+});

@@ -56,8 +56,12 @@ export class OpencodeStore {
     readParts(sessionId: string, limit = 120): PartRow[] {
         const rows = allRows<PartRow>(
             this.db,
-            `SELECT id, message_id, session_id, time_created, time_updated, data
-             FROM part WHERE session_id = ? ORDER BY time_created DESC LIMIT ?`,
+            `SELECT part.id, part.message_id, part.session_id, part.time_created, part.time_updated, part.data
+             FROM part JOIN message ON message.id = part.message_id
+             WHERE part.session_id = ?
+               AND (json_valid(message.data) = 0
+                    OR COALESCE(json_extract(message.data, '$.role'), 'assistant') != 'user')
+             ORDER BY part.time_created DESC LIMIT ?`,
             sessionId,
             limit,
         );
@@ -84,6 +88,16 @@ export class OpencodeStore {
             if (snapshot) return snapshot;
         }
         return null;
+    }
+
+    hasMessage(sessionId: string, messageId: string): boolean {
+        const row = oneRow<{ found: number }>(
+            this.db,
+            `SELECT 1 AS found FROM message WHERE id = ? AND session_id = ? LIMIT 1`,
+            messageId,
+            sessionId,
+        );
+        return row !== null;
     }
 
     close(): void {

@@ -1,6 +1,7 @@
 import { BasePlugin } from '@ton-ai/core';
 import { OpencodeSkills } from './skills';
-import { ContextSnapshot, OpencodeConfig, PermissionDecision, PermissionRequest, PromptReceipt, RadarEvent, SessionEvent, SessionRow, TodoRow } from './types';
+import { SpawnedProcess } from './serve';
+import { ContextSnapshot, OpencodeConfig, PermissionDecision, PermissionRequest, PromptReceipt, QuestionRequest, RadarEvent, SessionEvent, SessionRow, TodoRow } from './types';
 
 export * from './types';
 export * from './skills';
@@ -42,7 +43,7 @@ export class OpencodePlugin extends BasePlugin<OpencodeConfig> {
         if (reachable) {
             this.logger.info(`opencode server reachable at ${this.config.baseUrl}`);
         } else {
-            this.logger.warn('opencode server unavailable, content falls back to local database');
+            this.logger.warn('opencode server unavailable, session control is degraded');
         }
         this.events.emit('opencode:activated', { baseUrl: this.config.baseUrl, managed: this.skills.ownsManagedServer() });
     }
@@ -87,6 +88,11 @@ export class OpencodePlugin extends BasePlugin<OpencodeConfig> {
         return this.skills.health();
     }
 
+    async ensureServer(): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.ensureServer();
+    }
+
     async listSessions(directory?: string, limit?: number): Promise<SessionRow[]> {
         this.checkInitialized();
         return this.skills.listSessions(directory, limit);
@@ -122,6 +128,16 @@ export class OpencodePlugin extends BasePlugin<OpencodeConfig> {
         return this.skills.sendPrompt(sessionId, text);
     }
 
+    async hasMessage(sessionId: string, messageId: string): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.hasMessage(sessionId, messageId);
+    }
+
+    spawnRun(sessionId: string, text: string): SpawnedProcess {
+        this.checkInitialized();
+        return this.skills.spawnRun(sessionId, text);
+    }
+
     async createSession(directory: string): Promise<SessionRow> {
         this.checkInitialized();
         return this.skills.createSession(directory);
@@ -135,5 +151,15 @@ export class OpencodePlugin extends BasePlugin<OpencodeConfig> {
     async replyPermission(sessionId: string, requestId: string, decision: PermissionDecision): Promise<boolean> {
         this.checkInitialized();
         return this.skills.replyPermission(sessionId, requestId, decision);
+    }
+
+    async listQuestions(sessionId: string): Promise<QuestionRequest[]> {
+        this.checkInitialized();
+        return this.skills.listQuestions(sessionId);
+    }
+
+    async replyQuestion(sessionId: string, requestId: string, answers: string[][]): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.replyQuestion(sessionId, requestId, answers);
     }
 }

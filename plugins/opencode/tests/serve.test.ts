@@ -152,3 +152,24 @@ describe('opencode serve lifecycle', () => {
         skills.close();
     });
 });
+
+describe('opencode cli run', () => {
+    test('spawnRun tracks the child and stops it on close', () => {
+        const spawner = fakeSpawn();
+        const skills = new OpencodeSkills(stubContext(), config(), spawner.fn);
+        const child = skills.spawnRun('ses_1', 'hello');
+        assert.deepEqual(spawner.calls, [{ command: 'opencode-test-bin', args: ['run', '-s', 'ses_1', 'hello'] }]);
+        skills.close();
+        assert.deepEqual(spawner.killed, ['SIGTERM']);
+        void child;
+    });
+
+    test('exited run is forgotten', () => {
+        const spawner = fakeSpawn();
+        const skills = new OpencodeSkills(stubContext(), config(), spawner.fn);
+        skills.spawnRun('ses_1', 'hello');
+        spawner.fire('exit', 0);
+        skills.close();
+        assert.deepEqual(spawner.killed, []);
+    });
+});

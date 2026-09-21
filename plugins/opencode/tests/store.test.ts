@@ -74,3 +74,43 @@ describe('opencode store', () => {
         }
     });
 });
+
+describe('opencode part roles', () => {
+    test('readParts skips user texts so prompts are not echoed', () => {
+        const db = new DatabaseSync(':memory:');
+        db.exec(
+            `CREATE TABLE message (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+                time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL
+            )`,
+        );
+        db.exec(
+            `CREATE TABLE part (
+                id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL,
+                time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL
+            )`,
+        );
+        db.prepare('INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)')
+            .run('m1', 's1', 100, 100, JSON.stringify({ role: 'user' }));
+        db.prepare('INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)')
+            .run('m2', 's1', 200, 200, JSON.stringify({ role: 'assistant' }));
+        db.prepare('INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)')
+            .run('m3', 's1', 300, 300, 'not-json');
+        const insertPart = db.prepare(
+            'INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)',
+        );
+        insertPart.run('p1', 'm1', 's1', 100, 100, JSON.stringify({ type: 'text', text: 'my question' }));
+        insertPart.run('p2', 'm2', 's1', 200, 200, JSON.stringify({ type: 'text', text: 'the answer' }));
+        insertPart.run('p3', 'm3', 's1', 300, 300, JSON.stringify({ type: 'text', text: 'legacy' }));
+        try {
+            const store = new OpencodeStore(db);
+            const rows = store.readParts('s1', 10);
+            assert.equal(
+                rows.map((r) => r.id).join(','),
+                'p2,p3',
+            );
+        } finally {
+            db.close();
+        }
+    });
+});

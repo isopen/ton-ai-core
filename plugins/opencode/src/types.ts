@@ -5,6 +5,7 @@ export interface OpencodeConfig {
     dbPath: string;
     autoServe: boolean;
     binPath: string;
+    cliFallback?: boolean;
 }
 
 export interface SessionRow {
@@ -162,6 +163,24 @@ export interface PermissionRequest {
     action: string;
     resources: string[];
     message?: string;
+}
+
+export interface QuestionOption {
+    label: string;
+    description?: string;
+}
+
+export interface QuestionItem {
+    header?: string;
+    question: string;
+    options: QuestionOption[];
+    multiple?: boolean;
+}
+
+export interface QuestionRequest {
+    id: string;
+    sessionID: string;
+    questions: QuestionItem[];
 }
 
 export type PermissionDecision = 'once' | 'reject';

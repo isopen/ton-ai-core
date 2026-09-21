@@ -7,7 +7,9 @@ import {
     parsePartData,
     snapshotTotal,
     summarizeToolInput,
+    contentBlocksText,
     toolChangeText,
+    toolResultText,
 } from '../src/projector';
 import { ApiMessage, PartRow, SessionApiInfo } from '../src/types';
 
@@ -111,6 +113,45 @@ describe('opencode projector', () => {
             row({ type: 'tool', tool: 'bash', state: { status: 'completed', input: { command: 'cat' }, output: big } }),
         );
         assert.deepEqual((event as { output: string }).output, big);
+    });
+
+    test('toolResultText prefers diff, then content blocks, then raw output', () => {
+        assert.equal(
+            toolResultText('edit', { input: { filePath: '/a', oldString: 'x', newString: 'y' }, output: 'Edit applied.' }),
+            '- x\n+ y',
+        );
+        assert.equal(
+            toolResultText('bash', { input: { command: 'ls' }, content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] }),
+            'a\nb',
+        );
+        assert.equal(toolResultText('bash', { input: {}, output: 'ok' }), 'ok');
+        assert.equal(toolResultText('bash', undefined), '');
+        assert.equal(contentBlocksText([{ type: 'text', text: 'x' }, { type: 'other' }, 's', null]), 'x');
+    });
+
+    test('mapApiMessages reads http content blocks as tool output', () => {
+        const messages: ApiMessage[] = [
+            {
+                id: 'msg_9',
+                type: 'assistant',
+                time: { created: 900 },
+                content: [
+                    {
+                        type: 'tool',
+                        id: 't9',
+                        name: 'bash',
+                        state: {
+                            status: 'completed',
+                            input: { command: 'ls' },
+                            content: [{ type: 'text', text: 'file-a' }, { type: 'text', text: 'file-b' }],
+                        },
+                    },
+                ],
+            },
+        ];
+        assert.deepEqual(mapApiMessages(messages), [
+            { kind: 'tool', tool: 'bash', status: 'completed', summary: 'bash ls', output: 'file-a\nfile-b', time: 900 },
+        ]);
     });
 
     test('step-finish maps tokens and cost', () => {
