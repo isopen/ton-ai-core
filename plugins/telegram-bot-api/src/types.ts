@@ -15,6 +15,7 @@ export interface TelegramBotConfig {
     rateLimitWindow?: number;
     retryOnError?: boolean;
     maxRetries?: number;
+    requestTimeoutMs?: number;
 }
 
 export interface Update {

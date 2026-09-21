@@ -268,6 +268,7 @@ export class TelegramBotSkills {
     private token: string;
     private ready: boolean = false;
     private maxRetries: number = 3;
+    private requestTimeoutMs: number = 30000;
     private floodWaitUntil: number = 0;
 
     constructor(
@@ -280,6 +281,7 @@ export class TelegramBotSkills {
         this.baseUrl = config.apiBaseUrl || 'https://api.telegram.org/bot';
         this.token = config.token || '';
         this.maxRetries = config.maxRetries || 3;
+        this.requestTimeoutMs = config.requestTimeoutMs ?? 30000;
     }
 
     isReady(): boolean {
@@ -308,7 +310,8 @@ export class TelegramBotSkills {
 
     private async request<T>(
         method: string,
-        params?: Record<string, any>
+        params?: Record<string, any>,
+        timeoutMs: number = this.requestTimeoutMs
     ): Promise<T> {
         const url = this.getApiUrl(method);
 
@@ -347,7 +350,8 @@ export class TelegramBotSkills {
                 const response = await fetch(url, {
                     method: 'POST',
                     headers,
-                    body
+                    body,
+                    signal: AbortSignal.timeout(timeoutMs)
                 });
 
                 try {
@@ -432,7 +436,7 @@ export class TelegramBotSkills {
         timeout?: number;
         allowed_updates?: string[];
     }): Promise<Update[]> {
-        return this.request<Update[]>('getUpdates', params);
+        return this.request<Update[]>('getUpdates', params, (params?.timeout ?? 30) * 1000 + 5000);
     }
 
     async setWebhook(
@@ -1540,7 +1544,7 @@ export class TelegramBotSkills {
         }
 
         const url = await this.getFileUrl(file.file_path);
-        const response = await fetch(url);
+        const response = await fetch(url, { signal: AbortSignal.timeout(60000) });
         const buffer = Buffer.from(await response.arrayBuffer());
 
         this.components.files.setFilePath(fileId, file.file_path);
