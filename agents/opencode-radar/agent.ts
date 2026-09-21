@@ -1,14 +1,15 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
-import { TelegramBotPlugin, TelegramBotConfig, Message } from '@ton-ai/telegram-bot-api';
-import { ContextSnapshot, OpencodeConfig, OpencodePlugin, PermissionRequest, RadarEvent, SessionEvent, SessionRow, snapshotTotal } from '@ton-ai/opencode';
+import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup } from '@ton-ai/telegram-bot-api';
+import { ContextSnapshot, OpencodeConfig, OpencodePlugin, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionRow, snapshotTotal, SpawnedProcess } from '@ton-ai/opencode';
 import {
     displayModel,
     escapeHtml,
     formatConsoleBatch,
     formatContextPin,
-    formatSummary,
+    formatQuestion,
+    formatQuestionResolved,
     formatTopicName,
     splitTelegramHtml,
     toTodoState,
@@ -34,10 +35,39 @@ export function selectSessionIds(
     return latestIds.slice(0, Math.max(0, maxSessions));
 }
 
+export function hasSessionWork(session: SessionRow): boolean {
+    if (session.tokens_input + session.tokens_output + session.tokens_reasoning > 0) return true;
+    return session.time_updated !== session.time_created;
+}
+
+export function rankSessionIds(sessions: SessionRow[], maxSessions: number): string[] {
+    return sessions
+        .filter(hasSessionWork)
+        .slice(0, Math.max(0, maxSessions))
+        .map((s) => s.id);
+}
+
+export function isStaleEmptyWatch(
+    state: Pick<WatchedSession, 'toolCalls' | 'lastText' | 'promptQueue' | 'startedAt'>,
+    now: number,
+): boolean {
+    if (state.toolCalls > 0) return false;
+    if (state.lastText !== '') return false;
+    if (state.promptQueue.length > 0) return false;
+    return now - state.startedAt >= EMPTY_SESSION_GRACE_MS;
+}
+
 const EVENT_THROTTLE_MS = 5000;
+const WORKING_RECENCY_MS = 15000;
 const CONTEXT_THROTTLE_MS = 15000;
 const TYPING_COOLDOWN_MS = 4000;
+const PROMPT_BUSY_BACKOFF_MS = 8000;
+const PROMPT_TRANSIENT_BACKOFF_MS = 5000;
+const AUTO_PICK_WINDOW_MIN = 20;
+const AUTO_PICK_WINDOW_MULT = 5;
+const EMPTY_SESSION_GRACE_MS = 10 * 60 * 1000;
 const MAX_CONSECUTIVE_FAILURES = 3;
+const CONFIRM_TIMEOUT_MS = 20000;
 const MAX_QUEUED_PROMPTS = 5;
 const MAX_SEEN_INBOUND = 500;
 const DOC_MAX_BYTES = 512 * 1024;
@@ -68,6 +98,10 @@ export function isMessageGoneError(error: unknown): boolean {
 
 export function getRetryAfterSec(error: unknown): number | null {
     if (error instanceof Error) {
+        const structured = (error as { retryAfterSec?: unknown }).retryAfterSec;
+        if (typeof structured === 'number' && Number.isFinite(structured)) {
+            return Math.max(0, Math.floor(structured));
+        }
         const match = error.message.match(/retry after (\d+)/i);
         if (match) {
             const parsed = Number.parseInt(match[1], 10);
@@ -77,14 +111,27 @@ export function getRetryAfterSec(error: unknown): number | null {
     return null;
 }
 
+export function isPermanentPromptError(error: unknown): boolean {
+    const status = (error as { status?: unknown })?.status;
+    if (typeof status === 'number' && (status === 400 || status === 401 || status === 403 || status === 404)) {
+        return true;
+    }
+    return (
+        error instanceof Error &&
+        /session (not found|is gone|does not exist)|message_id_invalid/i.test(error.message)
+    );
+}
+
 export interface PersistedSession {
     threadId: number | null;
     contextMessageId: number | null;
     pinnedThreadId: number | null;
     lastSeen: number;
+    knownParts?: Record<string, number>;
 }
 
 const PERSISTED_TTL_MS = 30 * 24 * 3600 * 1000;
+const PERSISTED_CURSOR_CAP = 200;
 
 export interface RadarWatchConfig {
     chatId: number;
@@ -112,6 +159,7 @@ interface WatchedSession {
     contextMessageId: number | null;
     pinnedThreadId: number | null;
     threadId: number | null;
+    appliedTopicName: string | null;
     knownParts: Map<string, number>;
     todos: TodoItem[];
     recentTools: ToolItem[];
@@ -129,18 +177,41 @@ interface WatchedSession {
     snapshot: ContextSnapshot | null;
     limitChecked: boolean;
     pending: RadarEvent[];
+    pendingKeys: Map<string, number>;
     pendingTodos: boolean;
+    needsTodoBaseline: boolean;
     promptQueue: string[];
     promptBusyNotified: boolean;
+    cliRun: SpawnedProcess | null;
+    confirming: { messageId: string; text: string; since: number; notified: boolean } | null;
+    promptNextAttemptAt: number;
     knownPerms: string[];
     permTick: number;
+    knownQuestions: string[];
+    questTick: number;
     consecutiveFailures: number;
+    missingReads: number;
     finalized: boolean;
 }
 
 interface PermissionReply {
     sessionId: string;
     permId: string;
+}
+
+interface QuestionReply {
+    sessionId: string;
+    reqId: string;
+    questions: QuestionRequest['questions'];
+}
+
+interface QuestionPick {
+    sessionId: string;
+    reqId: string;
+    questions: QuestionRequest['questions'];
+    picks: string[][];
+    msgId: number;
+    token: string;
 }
 
 export class OpencodeRadarAgent extends BaseAgentSimple {
@@ -151,9 +222,14 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     private pollTimer: NodeJS.Timeout | null = null;
     private threadsEnabled: boolean = true;
     private rateLimitedUntil: number = 0;
+    private serverOutageNoticed: boolean = false;
     private pollInFlight: boolean = false;
     private inboundSub: string | null = null;
+    private callbackSub: string | null = null;
     private permReplies = new Map<number, PermissionReply>();
+    private questReplies = new Map<number, QuestionReply>();
+    private questPicks = new Map<string, QuestionPick>();
+    private questSeq: number = 0;
     private creatingThreads = new Map<number, Message[]>();
     private seenInbound = new Set<string>();
 
@@ -198,6 +274,11 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             if (!opencode) return;
             void this.handleInbound(telegram, opencode, message).catch((error) => console.error('Radar inbound failed:', error));
         });
+        this.callbackSub = telegram.onCallbackQuery((query) => {
+            const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
+            if (!opencode) return;
+            void this.handleCallback(telegram, opencode, query).catch((error) => console.error('Radar callback failed:', error));
+        });
 
         this.threadsEnabled = this.config.radar.useThreads;
         this.loadPersisted();
@@ -223,12 +304,19 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         }
         this.watched.clear();
         this.permReplies.clear();
+        this.questReplies.clear();
+        this.questPicks.clear();
         this.creatingThreads.clear();
         this.seenInbound.clear();
         if (this.inboundSub) {
             const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
             if (telegram) telegram.offUpdate(this.inboundSub);
             this.inboundSub = null;
+        }
+        if (this.callbackSub) {
+            const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
+            if (telegram) telegram.offUpdate(this.callbackSub);
+            this.callbackSub = null;
         }
         if (this.isPluginActive(PLUGIN_NAMES.TELEGRAM)) {
             await this.deactivatePlugin(PLUGIN_NAMES.TELEGRAM);
@@ -242,6 +330,10 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     private async waitForOpencode(opencode: OpencodePlugin): Promise<void> {
         const maxAttempts = 10;
         let lastError: unknown = null;
+        try {
+            await opencode.ensureServer();
+        } catch {
+        }
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             try {
                 await opencode.health();
@@ -306,12 +398,35 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 const pinnedThreadId =
                     typeof record.pinnedThreadId === 'number' ? record.pinnedThreadId : null;
                 if (threadId === null && contextMessageId === null) continue;
+                let cursor: Record<string, number> | undefined;
+                const rawCursor = record.knownParts;
+                if (rawCursor && typeof rawCursor === 'object' && !Array.isArray(rawCursor)) {
+                    const valid = Object.entries(rawCursor as Record<string, unknown>).filter(
+                        (entry): entry is [string, number] =>
+                            typeof entry[1] === 'number' && Number.isFinite(entry[1]),
+                    );
+                    if (valid.length > 0) cursor = Object.fromEntries(valid.slice(-PERSISTED_CURSOR_CAP));
+                }
                 this.persisted[id] = {
                     threadId,
                     contextMessageId,
                     pinnedThreadId,
                     lastSeen: typeof record.lastSeen === 'number' ? record.lastSeen : 0,
+                    ...(cursor ? { knownParts: cursor } : {}),
                 };
+            }
+            const winnerByThread = new Map<number, string>();
+            for (const [id, entry] of Object.entries(this.persisted)) {
+                if (entry.threadId === null) continue;
+                const winner = winnerByThread.get(entry.threadId);
+                if (winner === undefined) {
+                    winnerByThread.set(entry.threadId, id);
+                } else if (entry.lastSeen >= (this.persisted[winner]?.lastSeen ?? 0)) {
+                    delete this.persisted[winner];
+                    winnerByThread.set(entry.threadId, id);
+                } else {
+                    delete this.persisted[id];
+                }
             }
         } catch (error) {
             console.debug('Radar state load failed, starting fresh:', error);
@@ -327,11 +442,13 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 if (entry.lastSeen >= cutoff) sessions[id] = entry;
             }
             for (const [id, state] of this.watched) {
+                const cursor = [...state.knownParts.entries()].slice(-PERSISTED_CURSOR_CAP);
                 sessions[id] = {
                     threadId: state.threadId ?? this.persisted[id]?.threadId ?? null,
                     contextMessageId: state.contextMessageId,
                     pinnedThreadId: state.pinnedThreadId,
                     lastSeen: Date.now(),
+                    ...(cursor.length > 0 ? { knownParts: Object.fromEntries(cursor) } : {}),
                 };
             }
             mkdirSync(dirname(this.config.radar.statePath), { recursive: true });
@@ -354,8 +471,9 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         if (!opencode) return [];
         const explicit = this.explicitSessionIds();
         if (explicit.length > 0) return explicit;
-        const latest = await opencode.listSessions(this.config.radar.directory, this.config.radar.maxSessions);
-        return selectSessionIds([], latest.map((s) => s.id), this.config.radar.maxSessions);
+        const window = Math.max(AUTO_PICK_WINDOW_MIN, this.config.radar.maxSessions * AUTO_PICK_WINDOW_MULT);
+        const latest = await opencode.listSessions(this.config.radar.directory, window);
+        return rankSessionIds(latest, this.config.radar.maxSessions);
     }
 
     private async ensureThreadId(
@@ -389,16 +507,21 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         telegram: TelegramBotPlugin,
         state: WatchedSession,
         text: string,
+        markup?: InlineKeyboardMarkup,
     ): Promise<number> {
         const chatId = this.config.radar.chatId;
+        if (Date.now() < this.rateLimitedUntil) {
+            throw new Error('Too Many Requests: radar backoff active');
+        }
         const parts = splitTelegramHtml(text);
-        const sendOne = async (part: string): Promise<number> => {
+        const sendOne = async (part: string, withMarkup: boolean): Promise<number> => {
             try {
                 const message = await telegram.sendMessage({
                     chat_id: chatId,
                     message_thread_id: state.threadId ?? undefined,
                     text: part,
                     parse_mode: 'HTML',
+                    ...(withMarkup && markup ? { reply_markup: markup } : {}),
                 });
                 return message.message_id;
             } catch (error) {
@@ -417,6 +540,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                         message_thread_id: fresh ?? undefined,
                         text: part,
                         parse_mode: 'HTML',
+                        ...(withMarkup && markup ? { reply_markup: markup } : {}),
                     });
                     this.savePersisted();
                     return retry.message_id;
@@ -424,19 +548,19 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 throw error;
             }
         };
-        const firstId = await sendOne(parts[0]);
+        const firstId = await sendOne(parts[0], true);
         for (const part of parts.slice(1)) {
             if (Date.now() < this.rateLimitedUntil) {
                 throw new Error('Too Many Requests: radar backoff active');
             }
-            await sendOne(part);
+            await sendOne(part, false);
         }
         return firstId;
     }
 
     private renderContextText(state: WatchedSession): string {
         const snapshot = state.snapshot;
-        return formatContextPin({
+        const pin = formatContextPin({
             total: snapshot ? snapshotTotal(snapshot) : state.session.tokens_input + state.session.tokens_output + state.session.tokens_reasoning,
             input: snapshot ? snapshot.input : state.session.tokens_input,
             output: snapshot ? snapshot.output : state.session.tokens_output,
@@ -446,6 +570,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             limit: state.contextLimit,
             cost: state.session.cost,
         });
+        return `${pin}\n${this.isSessionActive(state) ? '🤔 thinking…' : '✅ done'}`;
     }
 
     private async pinContextMessage(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {
@@ -491,6 +616,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             contextMessageId: stored?.contextMessageId ?? null,
             pinnedThreadId: stored?.pinnedThreadId ?? null,
             threadId: this.threadsEnabled ? (stored?.threadId ?? null) : null,
+            appliedTopicName: null,
             knownParts: new Map(),
             todos: [],
             recentTools: [],
@@ -508,18 +634,34 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             snapshot: null,
             limitChecked: false,
             pending: [],
+            pendingKeys: new Map(),
             pendingTodos: false,
+            needsTodoBaseline: false,
             promptQueue: [],
             promptBusyNotified: false,
+            cliRun: null,
+            confirming: null,
+            promptNextAttemptAt: 0,
             knownPerms: [],
             permTick: 0,
+            knownQuestions: [],
+            questTick: 0,
             consecutiveFailures: 0,
+            missingReads: 0,
             finalized: false,
         };
         if (existingThreadId !== undefined) {
             state.threadId = this.threadsEnabled ? existingThreadId : null;
         }
         await this.ensureThreadId(telegram, state);
+        const storedCursor = stored?.knownParts;
+        if (storedCursor) {
+            for (const [key, time] of Object.entries(storedCursor)) state.knownParts.set(key, time);
+        }
+        state.needsTodoBaseline = state.knownParts.size > 0;
+        if (state.threadId !== null) {
+            state.appliedTopicName = formatTopicName(state.session.title, state.session.id);
+        }
         if (state.contextMessageId === null || state.pinnedThreadId !== state.threadId) {
             await this.sendFreshPin(telegram, state);
         } else {
@@ -530,6 +672,9 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             contextMessageId: state.contextMessageId,
             pinnedThreadId: state.pinnedThreadId,
             lastSeen: Date.now(),
+            ...(state.knownParts.size > 0
+                ? { knownParts: Object.fromEntries([...state.knownParts.entries()].slice(-PERSISTED_CURSOR_CAP)) }
+                : {}),
         };
         this.savePersisted();
         console.log(`Radar attached session ${session.id} (${session.title.slice(0, 60)})`);
@@ -565,24 +710,32 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             try {
                 const state = await this.attachSession(telegram, session);
                 this.watched.set(id, state);
+                if (state.threadId !== null) this.prunePersistedThreadRivals(id, state.threadId);
                 this.savePersisted();
             } catch (error) {
                 console.error(`Radar attach failed for session ${id}:`, error);
             }
         }
         for (const [id, state] of this.watched) {
-            if (!seen.has(id) && state.finalized) {
-                this.watched.delete(id);
-            }
+            if (seen.has(id)) continue;
+            if (!state.finalized && !isStaleEmptyWatch(state, Date.now())) continue;
+            this.watched.delete(id);
+            this.dropSessionRefs(id);
+            console.log(`Radar detached session ${id} (out of auto-pick window)`);
         }
         const cap = Math.max(10, this.config.radar.maxSessions * 2);
         if (this.watched.size > cap) {
             const byAge = [...this.watched.entries()].sort((a, b) => {
+                const aThreadless = a[1].threadId === null ? 0 : 1;
+                const bThreadless = b[1].threadId === null ? 0 : 1;
+                if (aThreadless !== bThreadless) return aThreadless - bThreadless;
                 if (a[1].finalized !== b[1].finalized) return a[1].finalized ? -1 : 1;
                 return a[1].lastEventAt - b[1].lastEventAt;
             });
             for (const [id] of byAge.slice(0, this.watched.size - cap)) {
                 this.watched.delete(id);
+                this.dropSessionRefs(id);
+                console.warn(`Radar evicted session ${id} (watched cap ${cap} exceeded)`);
             }
         }
     }
@@ -624,6 +777,36 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         return null;
     }
 
+    private findPersistedSessionIdByThread(threadId: number): string | null {
+        for (const [id, entry] of Object.entries(this.persisted)) {
+            if (entry?.threadId === threadId && !this.watched.has(id)) return id;
+        }
+        return null;
+    }
+
+    private dropSessionRefs(sessionId: string): void {
+        for (const [messageId, ref] of this.permReplies) {
+            if (ref.sessionId === sessionId) this.permReplies.delete(messageId);
+        }
+        for (const [messageId, ref] of this.questReplies) {
+            if (ref.sessionId === sessionId) this.questReplies.delete(messageId);
+        }
+        for (const [token, ctx] of this.questPicks) {
+            if (ctx.sessionId === sessionId) this.questPicks.delete(token);
+        }
+    }
+
+    private prunePersistedThreadRivals(keepId: string, threadId: number): void {
+        let pruned = false;
+        for (const [id, entry] of Object.entries(this.persisted)) {
+            if (id !== keepId && entry?.threadId === threadId) {
+                delete this.persisted[id];
+                pruned = true;
+            }
+        }
+        if (pruned) this.savePersisted();
+    }
+
     private async safeReply(telegram: TelegramBotPlugin, state: WatchedSession, text: string): Promise<void> {
         try {
             await this.deliverMessage(telegram, state, text);
@@ -634,14 +817,22 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
 
     private async handleInbound(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'replyPermission' | 'createSession' | 'sendPrompt'>,
+        opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion' | 'createSession' | 'sendPrompt' | 'getSession'>,
         message: Message,
     ): Promise<void> {
         const from = message.from;
         if (!from || from.is_bot) return;
-        if (message.chat.id !== this.config.radar.chatId) return;
+        if (message.chat.id !== this.config.radar.chatId) {
+            console.debug(`Radar inbound ignored: foreign chat ${message.chat.id} message ${message.message_id}.`);
+            return;
+        }
         const threadId = message.message_thread_id;
-        if (!threadId) return;
+        if (!threadId) {
+            console.debug(
+                `Radar inbound ignored: no topic (chat=${message.chat.id} message=${message.message_id} user=${from.id}).`,
+            );
+            return;
+        }
         if (typeof message.message_id === 'number') {
             const seenKey = `${message.chat.id}:${message.message_id}`;
             if (this.seenInbound.has(seenKey)) return;
@@ -658,7 +849,9 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         }
         const allowed = this.config.radar.allowedUsers;
         if (allowed.length > 0 && !allowed.includes(from.id)) {
-            console.warn(`Radar inbound denied for user ${from.id} (session=${state.session.id}).`);
+            console.warn(
+                `Radar inbound denied for user ${from.id} (session=${state.session.id} thread=${threadId}).`,
+            );
             return;
         }
         const text = (message.text || message.caption || '').trim();
@@ -670,24 +863,46 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 await this.answerPermission(telegram, opencode, state, pendingPerm.permId, replyTo, command === '/allow');
                 return;
             }
+            const pendingQuest = this.questReplies.get(replyTo);
+            if (pendingQuest && pendingQuest.sessionId === state.session.id && text) {
+                await this.answerQuestionText(telegram, opencode, state, pendingQuest, text);
+                return;
+            }
         }
         if (message.document) {
             await this.inboundDocument(telegram, state, message, text);
             return;
         }
-        if (!text) return;
+        if (!text) {
+            console.debug(
+                `Radar inbound ignored: empty text (session=${state.session.id} thread=${threadId} message=${message.message_id}).`,
+            );
+            return;
+        }
         this.enqueuePrompt(state, text);
+        console.debug(
+            `Radar prompt queued (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
+        );
     }
 
     private async handleUnknownThread(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'createSession' | 'sendPrompt'>,
+        opencode: Pick<OpencodePlugin, 'createSession' | 'sendPrompt' | 'getSession'>,
         message: Message,
         threadId: number,
     ): Promise<void> {
-        if (!this.threadsEnabled) return;
-        if (threadId === 1) return;
-        if (this.config.radar.newTopics === false) return;
+        if (!this.threadsEnabled) {
+            console.debug(`Radar unknown topic ignored: threads disabled (thread=${threadId}).`);
+            return;
+        }
+        if (threadId === 1) {
+            console.debug(`Radar unknown topic ignored: general topic (message=${message.message_id}).`);
+            return;
+        }
+        if (this.config.radar.newTopics === false) {
+            console.debug(`Radar unknown topic ignored: new topics disabled (thread=${threadId}).`);
+            return;
+        }
         const from = message.from;
         if (!from || from.is_bot) return;
         const allowed = this.config.radar.allowedUsers;
@@ -696,9 +911,15 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             return;
         }
         const replyTo = message.reply_to_message?.message_id;
-        if (replyTo !== undefined && this.permReplies.has(replyTo)) return;
+        if (replyTo !== undefined && this.permReplies.has(replyTo)) {
+            console.debug(`Radar unknown topic ignored: permission reply (thread=${threadId}).`);
+            return;
+        }
         const text = (message.text || message.caption || '').trim();
-        if (!text && !message.document) return;
+        if (!text && !message.document) {
+            console.debug(`Radar unknown topic ignored: empty text (thread=${threadId} message=${message.message_id}).`);
+            return;
+        }
         const pending = this.creatingThreads.get(threadId);
         if (pending) {
             pending.push(message);
@@ -706,9 +927,41 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         }
         this.creatingThreads.set(threadId, []);
         try {
+            const reboundId = this.findPersistedSessionIdByThread(threadId);
+            if (reboundId) {
+                let existing: SessionRow | null = null;
+                try {
+                    existing = await opencode.getSession(reboundId);
+                } catch (error) {
+                    console.debug('Radar rebind read failed:', error instanceof Error ? error.message : error);
+                }
+                if (!existing) {
+                    delete this.persisted[reboundId];
+                    this.savePersisted();
+                    console.warn(`Radar dropped stale topic binding: session ${reboundId} is gone, thread ${threadId} will get a fresh one`);
+                } else if (!this.watched.has(existing.id)) {
+                    const state = await this.attachSession(telegram, existing, threadId);
+                    this.watched.set(existing.id, state);
+                    this.prunePersistedThreadRivals(existing.id, threadId);
+                    this.savePersisted();
+                    console.log(`Radar rebound session ${existing.id} to topic ${threadId}`);
+                    const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
+                    for (const queuedMessage of queued) {
+                        const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
+                        if (queuedMessage.document) {
+                            await this.inboundDocument(telegram, state, queuedMessage, queuedText);
+                        } else if (queuedText) {
+                            this.enqueuePrompt(state, queuedText);
+                        }
+                    }
+                    await this.pumpPrompts(telegram, opencode, state);
+                    return;
+                }
+            }
             const session = await opencode.createSession(this.config.radar.directory);
             const state = await this.attachSession(telegram, session, threadId);
             this.watched.set(session.id, state);
+            this.prunePersistedThreadRivals(session.id, threadId);
             this.savePersisted();
             console.log(`Radar created session ${session.id} for new topic ${threadId}`);
             const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
@@ -781,15 +1034,25 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
 
     private async pumpPrompts(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'sendPrompt'>,
+        opencode: Pick<OpencodePlugin, 'sendPrompt'> & Partial<Pick<OpencodePlugin, 'ensureServer'>>,
         state: WatchedSession,
     ): Promise<void> {
         if (state.promptQueue.length === 0) return;
         if (Date.now() < this.rateLimitedUntil) return;
+        if (Date.now() < state.promptNextAttemptAt) return;
+        if (state.cliRun) {
+            state.promptNextAttemptAt = Date.now() + PROMPT_BUSY_BACKOFF_MS;
+            if (!state.promptBusyNotified) {
+                state.promptBusyNotified = true;
+                await this.safeReply(telegram, state, '⏳ Session is busy, your prompt is queued.');
+            }
+            return;
+        }
         const head = state.promptQueue[0];
         try {
             const receipt = await opencode.sendPrompt(state.session.id, head);
             if (receipt.busy) {
+                state.promptNextAttemptAt = Date.now() + PROMPT_BUSY_BACKOFF_MS;
                 if (!state.promptBusyNotified) {
                     state.promptBusyNotified = true;
                     await this.safeReply(telegram, state, '⏳ Session is busy, your prompt is queued.');
@@ -798,6 +1061,12 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             }
             state.promptQueue.shift();
             state.promptBusyNotified = false;
+            state.promptNextAttemptAt = 0;
+            state.confirming =
+                receipt.messageId !== undefined
+                    ? { messageId: receipt.messageId, text: head, since: Date.now(), notified: false }
+                    : null;
+            console.log(`Radar prompt sent (session=${state.session.id} thread=${state.threadId}).`);
             return;
         } catch (error) {
             if (isRateLimitError(error)) {
@@ -809,11 +1078,24 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 console.warn(`Radar prompt rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
-            state.promptQueue.shift();
-            await this.safeReply(
-                telegram,
-                state,
-                `❌ Prompt failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`,
+            if (isPermanentPromptError(error)) {
+                state.promptQueue.shift();
+                if (state.promptQueue.length === 0) state.promptNextAttemptAt = 0;
+                await this.safeReply(
+                    telegram,
+                    state,
+                    `❌ Prompt failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`,
+                );
+                return;
+            }
+            state.promptNextAttemptAt = Date.now() + PROMPT_TRANSIENT_BACKOFF_MS;
+            try {
+                await opencode.ensureServer?.();
+            } catch {
+            }
+            console.warn(
+                `Radar prompt transient failure, keeping it queued (session=${state.session.id}):`,
+                error instanceof Error ? error.message : error,
             );
         }
     }
@@ -888,6 +1170,237 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         }
     }
 
+    private questKeyboard(ctx: QuestionPick): InlineKeyboardMarkup {
+        const rows: InlineKeyboardMarkup['inline_keyboard'] = [];
+        ctx.questions.forEach((item, qIdx) => {
+            item.options.forEach((option, oIdx) => {
+                const picked = (ctx.picks[qIdx] || []).includes(option.label);
+                rows.push([{ text: `${picked ? '✅ ' : ''}${truncate(option.label, 60)}`, callback_data: `q${ctx.token}:${qIdx}:${oIdx}` }]);
+            });
+        });
+        if (ctx.questions.some((item) => item.multiple)) {
+            rows.push([{ text: 'Done', callback_data: `q${ctx.token}:done` }]);
+        }
+        return { inline_keyboard: rows };
+    }
+
+    private async pollQuestions(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'listQuestions'>,
+        state: WatchedSession,
+    ): Promise<void> {
+        state.questTick = (state.questTick + 1) % 3;
+        if (state.questTick !== 0) return;
+        let current: QuestionRequest[];
+        try {
+            current = await opencode.listQuestions(state.session.id);
+        } catch (error) {
+            console.debug('Radar questions read failed:', error instanceof Error ? error.message : error);
+            return;
+        }
+        const alive = new Set<string>();
+        for (const request of current) {
+            if (request.questions.length === 0) continue;
+            alive.add(request.id);
+            if (state.knownQuestions.includes(request.id)) continue;
+            state.knownQuestions.push(request.id);
+            const token = String((this.questSeq += 1));
+            const ctx: QuestionPick = {
+                sessionId: state.session.id,
+                reqId: request.id,
+                questions: request.questions,
+                picks: request.questions.map(() => []),
+                msgId: 0,
+                token,
+            };
+            try {
+                const sentId = await this.deliverMessage(telegram, state, formatQuestion(request), this.questKeyboard(ctx));
+                ctx.msgId = sentId;
+                this.questPicks.set(token, ctx);
+                this.questReplies.set(sentId, { sessionId: state.session.id, reqId: request.id, questions: request.questions });
+            } catch (error) {
+                console.debug('Radar question notice failed:', error instanceof Error ? error.message : error);
+            }
+        }
+        state.knownQuestions = state.knownQuestions.filter((id) => alive.has(id));
+        for (const [messageId, ref] of this.questReplies) {
+            if (ref.sessionId === state.session.id && !alive.has(ref.reqId)) {
+                this.questReplies.delete(messageId);
+            }
+        }
+    }
+
+    private dropQuestionRefs(sessionId: string, reqId: string): void {
+        for (const [token, ctx] of this.questPicks) {
+            if (ctx.sessionId === sessionId && ctx.reqId === reqId) this.questPicks.delete(token);
+        }
+        for (const [messageId, ref] of this.questReplies) {
+            if (ref.sessionId === sessionId && ref.reqId === reqId) this.questReplies.delete(messageId);
+        }
+    }
+
+    private async resolveQuestion(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'replyQuestion'>,
+        state: WatchedSession,
+        ref: QuestionReply,
+        answers: string[][],
+    ): Promise<void> {
+        let resolved = false;
+        try {
+            resolved = await opencode.replyQuestion(state.session.id, ref.reqId, answers);
+        } catch (error) {
+            if (isRateLimitError(error)) {
+                const waitSec = getRetryAfterSec(error) ?? 10;
+                this.rateLimitedUntil = Math.max(
+                    this.rateLimitedUntil,
+                    Date.now() + waitSec * 1000 + 1000,
+                );
+                console.warn(`Radar question rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                return;
+            }
+            console.debug('Radar question reply failed:', error instanceof Error ? error.message : error);
+            await this.safeReply(telegram, state, '❌ Could not send the answer, try again.');
+            return;
+        }
+        state.knownQuestions = state.knownQuestions.filter((id) => id !== ref.reqId);
+        const request: QuestionRequest = { id: ref.reqId, sessionID: state.session.id, questions: ref.questions };
+        const text = resolved
+            ? formatQuestionResolved(request, answers)
+            : '⚠️ Already resolved.';
+        await this.editQuestionMessage(telegram, state, request, text);
+        this.dropQuestionRefs(state.session.id, ref.reqId);
+    }
+
+    private async editQuestionMessage(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        request: QuestionRequest,
+        text: string,
+    ): Promise<void> {
+        let msgId: number | null = null;
+        for (const [messageId, ref] of this.questReplies) {
+            if (ref.sessionId === request.sessionID && ref.reqId === request.id) {
+                msgId = messageId;
+                break;
+            }
+        }
+        if (msgId === null) {
+            await this.safeReply(telegram, state, text);
+            return;
+        }
+        if (Date.now() < this.rateLimitedUntil) return;
+        try {
+            await telegram.editMessageText({
+                chat_id: this.config.radar.chatId,
+                message_id: msgId,
+                text,
+                parse_mode: 'HTML',
+                reply_markup: { inline_keyboard: [] },
+            });
+        } catch (error) {
+            console.debug('Radar question resolve edit failed:', error instanceof Error ? error.message : error);
+            await this.safeReply(telegram, state, text);
+        }
+    }
+
+    private async handleCallback(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'replyQuestion'>,
+        query: CallbackQuery,
+    ): Promise<void> {
+        const dismiss = async (text?: string): Promise<void> => {
+            try {
+                await telegram.answerCallbackQuery({ callback_query_id: query.id, ...(text ? { text } : {}) });
+            } catch (error) {
+                console.debug('Radar callback ack failed:', error instanceof Error ? error.message : error);
+            }
+        };
+        const data = query.data || '';
+        const match = data.match(/^q(\d+):(done|\d+:\d+)$/);
+        if (!match) {
+            await dismiss();
+            return;
+        }
+        const ctx = this.questPicks.get(match[1]);
+        if (!ctx) {
+            await dismiss('Outdated, ask again.');
+            return;
+        }
+        const from = query.from;
+        if (!from || from.is_bot) return;
+        if (query.message && query.message.chat.id !== this.config.radar.chatId) return;
+        const allowed = this.config.radar.allowedUsers;
+        if (allowed.length > 0 && !allowed.includes(from.id)) {
+            console.warn(`Radar question denied for user ${from.id} (session=${ctx.sessionId}).`);
+            await dismiss();
+            return;
+        }
+        const state = this.watched.get(ctx.sessionId);
+        if (!state) {
+            this.questPicks.delete(match[1]);
+            await dismiss();
+            return;
+        }
+        if (match[2] === 'done') {
+            const filled = ctx.picks.some((picked) => picked.length > 0);
+            if (!filled) {
+                await dismiss('Select at least one option.');
+                return;
+            }
+            await dismiss();
+            await this.resolveQuestion(telegram, opencode, state, { sessionId: ctx.sessionId, reqId: ctx.reqId, questions: ctx.questions }, ctx.picks);
+            return;
+        }
+        const [qIdxRaw, oIdxRaw] = match[2].split(':');
+        const qIdx = Number.parseInt(qIdxRaw, 10);
+        const oIdx = Number.parseInt(oIdxRaw, 10);
+        const item = ctx.questions[qIdx];
+        const option = item?.options[oIdx];
+        if (!item || !option) {
+            await dismiss();
+            return;
+        }
+        if (!item.multiple) {
+            await dismiss();
+            await this.resolveQuestion(
+                telegram,
+                opencode,
+                state,
+                { sessionId: ctx.sessionId, reqId: ctx.reqId, questions: ctx.questions },
+                ctx.questions.map((q, i) => (i === qIdx ? [option.label] : [])),
+            );
+            return;
+        }
+        const picked = ctx.picks[qIdx] || [];
+        ctx.picks[qIdx] = picked.includes(option.label) ? picked.filter((l) => l !== option.label) : [...picked, option.label];
+        await dismiss();
+        if (Date.now() < this.rateLimitedUntil) return;
+        try {
+            await telegram.editMessageReplyMarkup({
+                chat_id: this.config.radar.chatId,
+                message_id: ctx.msgId,
+                reply_markup: this.questKeyboard(ctx),
+            });
+        } catch (error) {
+            console.debug('Radar question toggle failed:', error instanceof Error ? error.message : error);
+        }
+    }
+
+    private async answerQuestionText(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'replyQuestion'>,
+        state: WatchedSession,
+        ref: QuestionReply,
+        text: string,
+    ): Promise<void> {
+        if (ref.questions.length !== 1) {
+            await this.safeReply(telegram, state, '⚠️ Tap an option or Done — free text fits single questions only.');
+            return;
+        }
+        await this.resolveQuestion(telegram, opencode, state, ref, [[text]]);
+    }
+
     private async pollTick(): Promise<void> {
         const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
         const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
@@ -895,25 +1408,143 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         if (this.pollInFlight) return;
         this.pollInFlight = true;
         try {
+            await this.checkServerHealth(telegram, opencode);
             await this.syncSessions();
             let staggered = false;
-            for (const state of this.watched.values()) {
+            for (const state of [...this.watched.values()]) {
                 try {
                     if (staggered) {
                         await new Promise((resolve) => setTimeout(resolve, 500));
                     }
                     staggered = true;
                     await this.updateSession(telegram, state);
+                    if (![...this.watched.values()].includes(state)) continue;
                     await this.pumpPrompts(telegram, opencode, state);
                     await this.pollPermissions(telegram, opencode, state);
-                    await this.pumpPrompts(telegram, opencode, state);
-                    await this.pollPermissions(telegram, opencode, state);
+                    await this.pollQuestions(telegram, opencode, state);
                 } catch (error) {
                     console.error(`Radar update failed for session ${state.session.id}:`, error);
                 }
             }
         } finally {
             this.pollInFlight = false;
+        }
+    }
+
+    private async checkServerHealth(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'health'>,
+    ): Promise<void> {
+        try {
+            await opencode.health();
+        } catch {
+            if (this.serverOutageNoticed) return;
+            console.warn(`Radar opencode server unreachable, retrying (source=${this.config.opencode.baseUrl}).`);
+            const sent = await this.noticeGeneral(
+                telegram,
+                '⚠️ opencode server unreachable, prompts are queued. Start it with: opencode serve --port 4096',
+            );
+            if (sent) this.serverOutageNoticed = true;
+            return;
+        }
+        if (this.serverOutageNoticed) {
+            this.serverOutageNoticed = false;
+            await this.noticeGeneral(telegram, '✅ opencode server is back, streaming resumed.');
+        }
+    }
+
+    private async noticeGeneral(telegram: TelegramBotPlugin, text: string): Promise<boolean> {
+        if (Date.now() < this.rateLimitedUntil) return false;
+        try {
+            await telegram.sendMessage({ chat_id: this.config.radar.chatId, text });
+            return true;
+        } catch (error) {
+            if (isRateLimitError(error)) {
+                const waitSec = getRetryAfterSec(error) ?? 10;
+                this.rateLimitedUntil = Math.max(
+                    this.rateLimitedUntil,
+                    Date.now() + waitSec * 1000 + 1000,
+                );
+            }
+            console.debug('Radar service notice failed:', error instanceof Error ? error.message : error);
+            return false;
+        }
+    }
+
+    private async syncTopicName(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        if (!this.threadsEnabled || state.threadId === null) return;
+        if (Date.now() < this.rateLimitedUntil) return;
+        const edit = (telegram as unknown as { editForumTopic?: unknown }).editForumTopic;
+        if (typeof edit !== 'function') return;
+        const name = formatTopicName(state.session.title, state.session.id);
+        if (name === state.appliedTopicName) return;
+        try {
+            await telegram.editForumTopic({
+                chat_id: this.config.radar.chatId,
+                message_thread_id: state.threadId,
+                name,
+            });
+            state.appliedTopicName = name;
+        } catch (error) {
+            if (isRateLimitError(error)) {
+                const waitSec = getRetryAfterSec(error) ?? 10;
+                this.rateLimitedUntil = Math.max(
+                    this.rateLimitedUntil,
+                    Date.now() + waitSec * 1000 + 1000,
+                );
+                console.warn(`Radar topic rename rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                return;
+            }
+            console.debug('Radar topic rename failed:', error instanceof Error ? error.message : error);
+        }
+    }
+
+    private async checkConfirm(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'hasMessage'> & Partial<Pick<OpencodePlugin, 'spawnRun'>>,
+        state: WatchedSession,
+    ): Promise<void> {
+        const pending = state.confirming;
+        if (!pending) return;
+        let landed = false;
+        try {
+            landed = await opencode.hasMessage(state.session.id, pending.messageId);
+        } catch (error) {
+            console.debug('Radar prompt confirm failed:', error instanceof Error ? error.message : error);
+            return;
+        }
+        if (landed) {
+            state.confirming = null;
+            return;
+        }
+        if (Date.now() - pending.since < CONFIRM_TIMEOUT_MS) return;
+        state.confirming = null;
+        if (this.config.opencode.cliFallback !== false && typeof opencode.spawnRun === 'function') {
+            try {
+                const child = opencode.spawnRun(state.session.id, pending.text);
+                state.cliRun = child;
+                child.on('exit', () => {
+                    if (state.cliRun === child) state.cliRun = null;
+                });
+                console.log(`Radar prompt executing via CLI fallback (session=${state.session.id}).`);
+                return;
+            } catch (error) {
+                console.debug('Radar CLI fallback failed:', error instanceof Error ? error.message : error);
+            }
+        }
+        state.promptQueue.unshift(pending.text);
+        console.error(
+            `Radar prompt stalled: server accepted but is not processing it ` +
+                `(session=${state.session.id} message=${pending.messageId}). ` +
+                `Check the opencode serve log for "Failed to drain Session".`,
+        );
+        if (!pending.notified) {
+            pending.notified = true;
+            await this.safeReply(
+                telegram,
+                state,
+                '❌ The server accepted the prompt but is not processing it. Check the opencode serve log for "Failed to drain Session".',
+            );
         }
     }
 
@@ -928,7 +1559,33 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             console.debug('Radar session read failed:', error);
             return;
         }
-        if (fresh) state.session = fresh;
+        if (!fresh) {
+            state.missingReads += 1;
+            if (state.missingReads >= 3) {
+                console.warn(
+                    `Radar session ${state.session.id} is gone in opencode ` +
+                        `(thread=${state.threadId}), unwatching after ${state.missingReads} empty reads.`,
+                );
+                try {
+                    await this.deliverMessage(
+                        telegram,
+                        state,
+                        '⚠️ Session is gone in opencode, it was unwatched. Write again in this topic to start a fresh session.',
+                    );
+                } catch (error) {
+                    console.debug('Radar gone-session notice failed:', error instanceof Error ? error.message : error);
+                }
+                this.watched.delete(state.session.id);
+                delete this.persisted[state.session.id];
+                this.dropSessionRefs(state.session.id);
+                this.savePersisted();
+            }
+            return;
+        }
+        state.missingReads = 0;
+        state.session = fresh;
+        await this.syncTopicName(telegram, state);
+        await this.checkConfirm(telegram, opencode, state);
 
         let pairs: SessionEvent[] = [];
         try {
@@ -949,16 +1606,30 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             }
             if (event.kind === 'tool') {
                 if (firstSeen) state.toolCalls += 1;
+                if (event.tool === 'question') continue;
             }
             this.applyEvent(state, event);
-            state.pending.push(event);
+            const queuedIdx = state.pendingKeys.get(key);
+            if (queuedIdx !== undefined && queuedIdx < state.pending.length) {
+                state.pending[queuedIdx] = event;
+            } else {
+                state.pendingKeys.set(key, state.pending.length);
+                state.pending.push(event);
+            }
+        }
+
+        if (state.finalized) {
+            return;
         }
 
         try {
             const todos = (await opencode.readTodos(state.session.id))
                 .slice(0, 12)
                 .map((t) => ({ content: t.content, state: toTodoState(t.status) }));
-            if (JSON.stringify(todos) !== JSON.stringify(state.todos)) {
+            if (state.needsTodoBaseline) {
+                state.todos = todos;
+                state.needsTodoBaseline = false;
+            } else if (JSON.stringify(todos) !== JSON.stringify(state.todos)) {
                 state.todos = todos;
                 state.pendingTodos = true;
             }
@@ -971,7 +1642,9 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         await this.updateContext(telegram, state);
 
         const idleFor = Date.now() - state.lastEventAt;
-        if (!state.finalized && idleFor >= this.config.radar.idleSec * 1000 && state.toolCalls > 0) {
+        const hasWork = state.toolCalls > 0 || state.lastText !== '';
+        if (!state.finalized && idleFor >= this.config.radar.idleSec * 1000 && hasWork && state.promptQueue.length === 0) {
+            if (Date.now() < this.rateLimitedUntil) return;
             await this.finalizeSession(telegram, state);
             return;
         }
@@ -984,7 +1657,8 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         if (state.finalized) return false;
         if (state.pending.length > 0 || state.pendingTodos) return true;
         if (state.promptQueue.length > 0) return true;
-        return Date.now() - state.lastEventAt < this.config.radar.idleSec * 1000;
+        if (state.cliRun) return true;
+        return Date.now() - state.lastEventAt < WORKING_RECENCY_MS;
     }
 
     private async sendProgressTyping(
@@ -1114,6 +1788,23 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 await this.sendFreshPin(telegram, state);
                 return;
             }
+            if (state.threadId !== null && isThreadGoneError(error)) {
+                console.warn(
+                    `Radar topic gone, recreating it ` +
+                        `(chat=${this.config.radar.chatId} thread=${state.threadId} ` +
+                        `session=${state.session.id}).`,
+                );
+                state.threadId = null;
+                state.contextMessageId = null;
+                state.consecutiveFailures = 0;
+                this.savePersisted();
+                try {
+                    await this.sendFreshPin(telegram, state);
+                } catch (pinError) {
+                    console.debug('Radar topic-heal pin failed:', pinError instanceof Error ? pinError.message : pinError);
+                }
+                return;
+            }
             state.consecutiveFailures += 1;
             if (state.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                 console.warn(
@@ -1138,6 +1829,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         const text = formatConsoleBatch(state.pending, todos);
         if (!text) {
             state.pending = [];
+            state.pendingKeys.clear();
             state.pendingTodos = false;
             return;
         }
@@ -1145,8 +1837,10 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         try {
             await this.deliverMessage(telegram, state, text);
             state.pending = [];
+            state.pendingKeys.clear();
             state.pendingTodos = false;
             state.lastEventMessageAt = Date.now();
+            this.savePersisted();
         } catch (error) {
             if (isRateLimitError(error)) {
                 const waitSec = getRetryAfterSec(error) ?? 10;
@@ -1166,35 +1860,13 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         state: WatchedSession,
     ): Promise<void> {
         state.finalized = true;
-        const summary = formatSummary({
-            title: state.session.title,
-            directory: state.session.directory,
-            model: state.session.model,
-            todos: state.todos,
-            toolCalls: state.toolCalls,
-            tokensIn: state.session.tokens_input,
-            tokensOut: state.session.tokens_output,
-            cost: state.session.cost,
-            files: state.files,
-            lastText: state.lastText,
-            startedAt: state.session.time_created,
-            finishedAt: Date.now(),
-        });
-        try {
-            await this.deliverMessage(telegram, state, summary);
-            console.log(`Radar finalized session ${state.session.id}`);
-        } catch (error) {
-            if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                console.warn(`Radar summary rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
-            } else {
-                console.error('Radar summary send failed:', error);
-            }
-        }
+        state.pending = [];
+        state.pendingKeys.clear();
+        state.pendingTodos = false;
+        state.promptBusyNotified = false;
+        console.log(`Radar finalized session ${state.session.id}`);
+        state.lastContextEditAt = 0;
+        await this.updateContext(telegram, state);
         this.savePersisted();
     }
 }

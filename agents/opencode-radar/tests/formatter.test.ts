@@ -6,16 +6,21 @@ import {
     repoRelative,
     formatDuration,
     formatProgress,
-    formatSummary,
     formatTopicName,
     formatContextPin,
     formatConsoleBatch,
+    formatQuestion,
+    formatQuestionResolved,
+    preBlock,
+    langFromPath,
     splitTelegramHtml,
+    truncateHtml,
     displayModel,
     toTodoState,
     toToolState,
     FORUM_TOPIC_NAME_LIMIT,
     TELEGRAM_TEXT_LIMIT,
+    RENDER_BUDGET,
 } from '../formatter';
 
 describe('formatter', () => {
@@ -195,32 +200,6 @@ describe('formatter', () => {
         assert.equal(formatTopicName('   ', '!!!'), '📡 Untitled session · session');
     });
 
-    test('formatSummary lists all files and full lastText', () => {
-        const text = formatSummary({
-            title: 'Done',
-            directory: '/repo',
-            model: 'model-1',
-            todos: [{ content: 'a', state: 'done' }],
-            toolCalls: 10,
-            tokensIn: 5000,
-            tokensOut: 1500,
-            cost: 0.02,
-            files: Array.from({ length: 20 }, (_, i) => `/repo/f${i}.ts`),
-            lastText: `all green ${'y'.repeat(5000)}`,
-            startedAt: 0,
-            finishedAt: 120000,
-        });
-        assert.ok(text.startsWith('✅'));
-        assert.ok(text.includes('files (20)'));
-        assert.ok(text.includes('f0.ts'));
-        assert.ok(text.includes('f19.ts'));
-        assert.ok(text.includes('📋 План 1/1'));
-        assert.ok(text.includes('🤖 model-1'));
-        assert.ok(!text.includes('…'));
-        const parts = splitTelegramHtml(text);
-        for (const part of parts) assert.ok(part.length <= TELEGRAM_TEXT_LIMIT);
-    });
-
     test('splitTelegramHtml passes short text through', () => {
         assert.deepEqual(splitTelegramHtml('hello'), ['hello']);
     });
@@ -287,5 +266,175 @@ describe('formatter', () => {
         assert.ok(batch.includes('<b>done</b>'));
         assert.ok(batch.includes('<i>fast</i>'));
         assert.ok(!batch.includes('**done**'));
+    });
+
+    test('formatConsoleBatch caps long tool output', () => {
+        const batch = formatConsoleBatch(
+            [{ kind: 'tool', tool: 'bash', status: 'completed', summary: 'run', output: 'x'.repeat(5000), time: 1 }],
+            null,
+        );
+        assert.ok(batch.length < 5000);
+        assert.ok(batch.includes('…'));
+        assert.ok(batch.includes('</code></tg-spoiler>'));
+        assert.ok(!batch.includes('x'.repeat(5000)));
+    });
+
+    test('truncateHtml never breaks tags or entities', () => {
+        assert.equal(truncateHtml('hello', 10), 'hello');
+        assert.equal(truncateHtml('<b>hello <i>world</i> end</b>', 15), '<b>hello …</b>');
+        const cut = truncateHtml('<i>a&lt;b&lt;c</i>', 8);
+        assert.ok(!/&[a-z]*$/.test(cut.replace(/…<\/i>$/, '')));
+        assert.ok(cut.endsWith('</i>'));
+        assert.ok(cut.length <= 8);
+    });
+
+    test('formatProgress keeps valid HTML and footer when lastText expands on escape', () => {
+        const text = formatProgress({
+            title: 'T',
+            directory: '/repo',
+            model: 'm',
+            todos: [],
+            tools: [],
+            result: null,
+            lastText: '<test> '.repeat(600),
+            toolCalls: 1,
+            tokensIn: 100,
+            tokensOut: 200,
+            cost: 0.001,
+            files: [],
+            startedAt: 0,
+            updatedAt: 60000,
+        });
+        assert.ok(text.length <= RENDER_BUDGET);
+        assert.equal((text.match(/<i>/g) || []).length, (text.match(/<\/i>/g) || []).length);
+        assert.ok(text.endsWith(' in'));
+        assert.ok(text.includes('🧰 1'));
+        assert.ok(!/&[a-zA-Z]*…/.test(text));
+    });
+
+    test('formatProgress does not leak raw markdown when lastText is cut mid-token', () => {
+        const text = formatProgress({
+            title: 'T',
+            directory: '/repo',
+            model: 'm',
+            todos: Array.from({ length: 8 }, (_, i) => ({ content: `todo-${i} ${'x'.repeat(110)}`, state: 'queued' as const })),
+            tools: [],
+            result: null,
+            lastText: '**done** and *fast* with a [link](https://example.com/very-long-path-here) plus ' + 'tail '.repeat(600),
+            toolCalls: 1,
+            tokensIn: 100,
+            tokensOut: 200,
+            cost: 0.001,
+            files: [],
+            startedAt: 0,
+            updatedAt: 60000,
+        });
+        assert.ok(text.length <= RENDER_BUDGET);
+        assert.ok(!text.includes('**'));
+        assert.ok(!text.includes('[docs]('));
+        assert.equal((text.match(/<i>/g) || []).length, (text.match(/<\/i>/g) || []).length);
+    });
+});
+
+describe('formatter questions', () => {
+    const REQUEST = {
+        id: 'que_1',
+        sessionID: 'ses_1',
+        questions: [
+            {
+                header: 'Pick',
+                question: 'Which <one>?',
+                options: [
+                    { label: 'Alpha', description: 'first' },
+                    { label: 'Beta' },
+                ],
+            },
+        ],
+    };
+
+    test('formatQuestion renders options with escaped markup', () => {
+        const text = formatQuestion(REQUEST);
+        assert.ok(text.includes('Which &lt;one&gt;?'));
+        assert.ok(text.includes('Alpha'));
+        assert.ok(text.includes('first'));
+        const resolved = formatQuestionResolved(REQUEST, [['Beta']]);
+        assert.ok(resolved.includes('✅'));
+        assert.ok(resolved.includes('Beta'));
+        assert.ok(!resolved.includes('Alpha'));
+    });
+});
+
+describe('formatter tmd markdown', () => {
+    test('gap text between entities stays outside tags', () => {
+        assert.equal(markdownToTelegramHtml('**done** and *fast*'), '<b>done</b> and <i>fast</i>');
+        assert.equal(markdownToTelegramHtml('*a*   and   _b_'), '<i>a</i>   and   <i>b</i>');
+    });
+
+    test('headers become bold and code spans survive around markup', () => {
+        assert.equal(markdownToTelegramHtml('# Title here'), '<b>Title here</b>');
+        assert.equal(markdownToTelegramHtml('## Sub `x` tail'), '<b>Sub <code>x</code> tail</b>');
+    });
+
+    test('spoiler underline and links with underscores', () => {
+        assert.equal(markdownToTelegramHtml('||hidden||'), '<tg-spoiler>hidden</tg-spoiler>');
+        assert.equal(markdownToTelegramHtml('__line__'), '<u>line</u>');
+        assert.equal(
+            markdownToTelegramHtml('[a_b](https://x.io/y_z)'),
+            '<a href="https://x.io/y_z">a_b</a>',
+        );
+    });
+});
+
+describe('formatter code blocks', () => {
+    test('fenced code keeps its language for highlighting', () => {
+        assert.equal(
+            markdownToTelegramHtml('```js\nconsole.log(1);\n```'),
+            '<pre><code class="language-javascript">console.log(1);\n</code></pre>',
+        );
+        assert.equal(markdownToTelegramHtml('```\nplain\n```'), '<pre>plain\n</pre>');
+    });
+
+    test('tool output with fences renders as highlightable blocks', () => {
+        const batch = formatConsoleBatch(
+            [{ kind: 'tool', tool: 'write', status: 'completed', summary: 'write f', output: '```solidity\ncontract C {}\n```', time: 1 }],
+            null,
+        );
+        assert.ok(batch.includes('<pre><code class="language-solidity">'));
+        assert.ok(!batch.includes('tg-spoiler'));
+    });
+
+    test('multiline tool output renders as a block, single line stays collapsed', () => {
+        const block = formatConsoleBatch(
+            [{ kind: 'tool', tool: 'bash', status: 'completed', summary: 'run', output: 'line1\nline2', time: 1 }],
+            null,
+        );
+        assert.ok(block.includes('<pre>line1\nline2</pre>'));
+        assert.ok(!block.includes('tg-spoiler'));
+        const inline = formatConsoleBatch(
+            [{ kind: 'tool', tool: 'bash', status: 'completed', summary: 'run', output: 'ok', time: 1 }],
+            null,
+        );
+        assert.ok(inline.includes('</code></tg-spoiler>'));
+    });
+});
+
+describe('formatter code collapse', () => {
+    test('long code folds into a spoiler keeping the language', () => {
+        assert.equal(langFromPath('write /a/counter.sol'), 'sol');
+        assert.equal(langFromPath('bash ls -la'), '');
+        const short = preBlock('a\nb', 'js');
+        assert.ok(!short.includes('blockquote'));
+        assert.ok(short.includes('language-javascript'));
+        const long = preBlock(Array.from({ length: 12 }, (_, i) => `line${i}`).join('\n'), 'sol');
+        assert.ok(long.startsWith('<blockquote expandable><pre>'));
+        assert.ok(long.includes('language-solidity'));
+    });
+
+    test('tool output derives the language from the summary path', () => {
+        const batch = formatConsoleBatch(
+            [{ kind: 'tool', tool: 'write', status: 'completed', summary: 'write /a/counter.sol', output: 'a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk', time: 1 }],
+            null,
+        );
+        assert.ok(batch.includes('<blockquote expandable><pre><code class="language-solidity">'));
     });
 });

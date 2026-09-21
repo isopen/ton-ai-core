@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { OpencodeRadarAgent, OpencodeRadarConfig } from './agent';
+import { acquireRadarLock, lockPathFor, releaseRadarLock, RadarLock } from './lock';
 import { AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
 
 function loadDotEnv(): void {
@@ -83,6 +84,7 @@ const config: OpencodeRadarConfig = {
         dbPath: process.env.RADAR_DB_PATH || join(homedir(), '.local', 'share', 'opencode', 'opencode.db'),
         autoServe: optionalFlag('OPENCODE_AUTO_SERVE', true),
         binPath: process.env.OPENCODE_BIN || 'opencode',
+        cliFallback: optionalFlag('OPENCODE_CLI_FALLBACK', true),
     },
     radar: {
         chatId: Number.parseInt(process.env.RADAR_CHAT_ID || '', 10),
@@ -142,16 +144,24 @@ async function main(): Promise<void> {
     });
 
     try {
+        const lock: RadarLock = acquireRadarLock(lockPathFor(config.radar.statePath));
+        console.log(`Radar lock acquired: ${lock.path}`);
         await agent.start();
 
         process.on('SIGINT', () => {
             console.log('\nShutting down...');
-            void agent.stop().then(() => process.exit(0));
+            void agent.stop().then(() => {
+                releaseRadarLock(lock);
+                process.exit(0);
+            });
         });
 
         process.on('SIGTERM', () => {
             console.log('\nShutting down...');
-            void agent.stop().then(() => process.exit(0));
+            void agent.stop().then(() => {
+                releaseRadarLock(lock);
+                process.exit(0);
+            });
         });
     } catch (error) {
         console.error('Failed to start agent:', error);

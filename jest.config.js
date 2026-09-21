@@ -59,7 +59,9 @@ module.exports = {
     '<rootDir>/plugins/gram-lang/tests',
     '<rootDir>/agents/gram-browser/tests',
     '<rootDir>/agents/opencode-radar/tests',
-    '<rootDir>/plugins/opencode/tests'
+    '<rootDir>/plugins/opencode/tests',
+    '<rootDir>/plugins/telegram-bot-api/tests',
+    '<rootDir>/plugins/fly-brain/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
@@ -77,6 +79,7 @@ module.exports = {
     '^@ton-ai/core$': '<rootDir>/packages/core/src/index.ts',
     '^@ton-ai/tl-language$': '<rootDir>/plugins/tl-language/src/index.ts',
     '^@ton-ai/agent-transport$': '<rootDir>/plugins/agent-transport/src/index.ts',
+    '^@ton-ai/fly-brain$': '<rootDir>/plugins/fly-brain/src/index.ts',
     '^@ton-ai/telegram$': '<rootDir>/plugins/telegram/src/index.ts',
     '^@ton-ai/mtproto$': '<rootDir>/plugins/mtproto/src/index.ts',
     '^@ton-ai/atom$': '<rootDir>/plugins/atom/src/index.ts',

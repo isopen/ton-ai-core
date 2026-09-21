@@ -1,8 +1,11 @@
 export const TELEGRAM_TEXT_LIMIT = 4096;
 export const RENDER_BUDGET = 3900;
 export const FORUM_TOPIC_NAME_LIMIT = 128;
+export const TOOL_OUTPUT_CAP = 1200;
+const CODE_SPOILER_LINES = 8;
 
-import type { RadarEvent } from '@ton-ai/opencode';
+import type { QuestionRequest, RadarEvent } from '@ton-ai/opencode';
+import { parseTmdEntities, safeHref, codeLangClass, TmdEntity } from '@ton-ai/tmd';
 
 export function formatTopicName(title: string, sessionId: string): string {
     const prefix = '📡 ';
@@ -18,50 +21,130 @@ export function escapeHtml(text: string): string {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+const TMD_TAG_BY_ENTITY: Record<string, [string, string]> = {
+    messageEntityBold: ['<b>', '</b>'],
+    messageEntityItalic: ['<i>', '</i>'],
+    messageEntityUnderline: ['<u>', '</u>'],
+    messageEntityStrike: ['<s>', '</s>'],
+    messageEntitySpoiler: ['<tg-spoiler>', '</tg-spoiler>'],
+    messageEntityCode: ['<code>', '</code>'],
+    messageEntityPre: ['<pre>', '</pre>'],
+    messageEntityBlockquote: ['<blockquote>', '</blockquote>'],
+    messageEntityExpandableBlockquote: ['<blockquote expandable>', '</blockquote>'],
+};
+
+function renderTmdEntities(text: string, entities: TmdEntity[]): string {
+    const esc = escapeHtml;
+    const sorted = [...entities]
+        .filter((e) => e.length > 0 && e.offset < text.length)
+        .sort((a, b) => a.offset - b.offset || b.length - a.length);
+    interface Open { open: string; close: string; end: number }
+    const stack: Open[] = [];
+    let out = '';
+    let pos = 0;
+    const tagsFor = (e: TmdEntity): Open | null => {
+        if (e._ === 'messageEntityTextLink') {
+            return {
+                open: `<a href="${esc(safeHref(e.url || '#'))}">`,
+                close: '</a>',
+                end: Math.min(e.offset + e.length, text.length),
+            };
+        }
+        const pair = TMD_TAG_BY_ENTITY[e._];
+        if (!pair) return null;
+        return { open: pair[0], close: pair[1], end: Math.min(e.offset + e.length, text.length) };
+    };
+    const advanceTo = (p: number): void => {
+        if (p <= pos) return;
+        while (stack.length > 0 && stack[stack.length - 1].end <= p) {
+            const top = stack.pop() as Open;
+            let end = top.end;
+            while (end > pos && /\s/.test(text[end - 1])) end--;
+            if (end > pos) {
+                out += esc(text.slice(pos, end));
+                pos = end;
+            }
+            out += top.close;
+        }
+        if (pos < p) {
+            out += esc(text.slice(pos, p));
+            pos = p;
+        }
+    };
+    for (const e of sorted) {
+        const end = Math.min(e.offset + e.length, text.length);
+        if (end <= e.offset) continue;
+        advanceTo(e.offset);
+        const tags = tagsFor(e);
+        if (!tags) continue;
+        out += tags.open;
+        stack.push(tags);
+    }
+    while (stack.length) {
+        const top = stack.pop() as Open;
+        const end = Math.min(top.end, text.length);
+        let trimmed = end;
+        while (trimmed > pos && /\s/.test(text[trimmed - 1])) trimmed--;
+        if (trimmed > pos) {
+            out += esc(text.slice(pos, trimmed));
+            pos = trimmed;
+        }
+        out += top.close;
+    }
+    if (pos < text.length) out += esc(text.slice(pos));
+    return out;
+}
+
+export function preBlock(code: string, lang?: string): string {
+    const cls = lang ? codeLangClass(lang) : '';
+    const open = cls && cls !== 'language-text' ? `<pre><code class="${cls}">` : '<pre>';
+    const close = cls && cls !== 'language-text' ? '</code></pre>' : '</pre>';
+    const block = `${open}${escapeHtml(code)}${close}`;
+    if (code.split('\n').length > CODE_SPOILER_LINES) {
+        return `<blockquote expandable>${block}</blockquote>`;
+    }
+    return block;
+}
+
+export function langFromPath(path: string): string {
+    const base = path.split(/[\\/]/).pop() || '';
+    const dot = base.lastIndexOf('.');
+    if (dot <= 0 || dot === base.length - 1) return '';
+    return base.slice(dot + 1).toLowerCase();
+}
+
 export function markdownToTelegramHtml(text: string): string {
-    const blocks: string[] = [];
+    const blocks: Array<{ code: string; lang: string }> = [];
     const codes: string[] = [];
-    const linkLabels: string[] = [];
-    const linkUrls: string[] = [];
-    let body = text.replace(/```\w*\n?([\s\S]*?)```/g, (_match: string, code: string): string => {
-        blocks.push(code ?? '');
+    let body = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_match: string, lang: string, code: string): string => {
+        blocks.push({ code: code ?? '', lang: lang ?? '' });
         return `\uE000B${blocks.length - 1}\uE000`;
     });
     body = body.replace(/`([^`\n]+?)`/g, (_match: string, code: string): string => {
         codes.push(code ?? '');
         return `\uE000C${codes.length - 1}\uE000`;
     });
-    body = escapeHtml(body);
-    body = body.replace(/\[([^\]\n]+?)\]\((https?:\/\/[^\s\)]+?)\)/g, (_match: string, label: string, url: string): string => {
-        linkLabels.push(label ?? '');
-        linkUrls.push((url ?? '').replace(/"/g, '&quot;'));
-        return `\uE000L${linkLabels.length - 1}\uE000`;
+    body = body.replace(/^#{1,6}\s+(.+)$/gm, '**$1**');
+    body = body.replace(/\*\*([^*]+?)\*\*|\*([^*\n]+?)\*/g, (_match: string, bold: string, italic: string): string => {
+        if (bold !== undefined) return `*${bold}*`;
+        return `_${italic}_`;
     });
-    const bold = (s: string): string =>
-        s.replace(/\*\*([^*\n]+?)\*\*/g, '<b>$1</b>').replace(/__([^_\n]+?)__/g, '<b>$1</b>');
-    const strike = (s: string): string => s.replace(/~~([^~\n]+?)~~/g, '<s>$1</s>');
-    const italic = (s: string): string =>
-        s.replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g, '<i>$1</i>').replace(/(?<!\w)_([^_\n]+?)_(?!\w)/g, '<i>$1</i>');
-    body = italic(strike(bold(body)));
-    body = body.replace(/\uE000L(\d+)\uE000/g, (_match: string, n: string): string => {
-        const i = Number(n);
-        const label = italic(strike(bold(linkLabels[i] ?? '')));
-        const url = linkUrls[i] ?? '';
-        return `<a href="${url}">${label}</a>`;
-    });
-    body = body.replace(/\uE000C(\d+)\uE000/g, (_match: string, n: string): string => {
+    const parsed = parseTmdEntities(body);
+    let html = renderTmdEntities(parsed.text, parsed.entities);
+    html = html.replace(/\uE000C(\d+)\uE000/g, (_match: string, n: string): string => {
         return `<code>${escapeHtml(codes[Number(n)] ?? '')}</code>`;
     });
-    body = body.replace(/\uE000B(\d+)\uE000/g, (_match: string, n: string): string => {
-        return `<pre>${escapeHtml(blocks[Number(n)] ?? '')}</pre>`;
+    html = html.replace(/\uE000B(\d+)\uE000/g, (_match: string, n: string): string => {
+        const block = blocks[Number(n)] ?? { code: '', lang: '' };
+        return preBlock(block.code, block.lang);
     });
-    return body;
+    return html;
 }
 
 export function splitTelegramHtml(text: string, limit: number = TELEGRAM_TEXT_LIMIT): string[] {
     const max = Math.max(64, Math.floor(limit));
     if (text.length <= max) return [text];
-    const known = new Set(['b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'em', 'strong', 'ins', 'strike', 'del']);
+    const known = new Set(['b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'blockquote', 'em', 'strong', 'ins', 'strike', 'del']);
     const stack: Array<{ name: string; open: string }> = [];
     const scanInto = (s: string, target: Array<{ name: string; open: string }>): void => {
         const re = /<\/?[a-zA-Z][^<>]*>/g;
@@ -231,6 +314,99 @@ export interface ProgressState {
     updatedAt: number;
 }
 
+const HTML_BALANCED_TAGS = new Set([
+    'b',
+    'i',
+    'u',
+    's',
+    'code',
+    'pre',
+    'a',
+    'tg-spoiler',
+    'em',
+    'strong',
+    'ins',
+    'strike',
+    'del',
+]);
+
+function parseHtmlTag(token: string): { name: string; close: boolean; self: boolean } {
+    const close = token.startsWith('</');
+    const self = token.endsWith('/>');
+    const name = token
+        .replace(/^<\/?/, '')
+        .replace(/[\s/>].*$/, '')
+        .toLowerCase();
+    return { name, close, self };
+}
+
+export function truncateHtml(html: string, max: number): string {
+    if (html.length <= max) return html;
+    if (max <= 1) return '…';
+    const tagRe = /<\/?[a-zA-Z][^<>]*>/y;
+    const entityRe = /&(?:#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);/y;
+    const tokens: string[] = [];
+    const stacks: Array<Array<{ name: string }>> = [[]];
+    let i = 0;
+    while (i < html.length) {
+        const ch = html[i];
+        if (ch === '<') {
+            tagRe.lastIndex = i;
+            const m = tagRe.exec(html);
+            if (m) {
+                const token = m[0];
+                tokens.push(token);
+                const prev = stacks[stacks.length - 1];
+                const next = prev.map((e) => ({ name: e.name }));
+                const { name, close, self } = parseHtmlTag(token);
+                if (HTML_BALANCED_TAGS.has(name) && !self) {
+                    if (close) {
+                        for (let k = next.length - 1; k >= 0; k -= 1) {
+                            if (next[k].name === name) {
+                                next.splice(k, 1);
+                                break;
+                            }
+                        }
+                    } else {
+                        next.push({ name });
+                    }
+                }
+                stacks.push(next);
+                i += token.length;
+                continue;
+            }
+        }
+        if (ch === '&') {
+            entityRe.lastIndex = i;
+            const m = entityRe.exec(html);
+            if (m) {
+                tokens.push(m[0]);
+                stacks.push(stacks[stacks.length - 1]);
+                i += m[0].length;
+                continue;
+            }
+        }
+        tokens.push(ch);
+        stacks.push(stacks[stacks.length - 1]);
+        i += 1;
+    }
+    const prefixLen: number[] = [0];
+    for (const t of tokens) prefixLen.push(prefixLen[prefixLen.length - 1] + t.length);
+    const closingFor = (k: number): string =>
+        stacks[k]
+            .slice()
+            .reverse()
+            .map((e) => `</${e.name}>`)
+            .join('');
+    for (let k = tokens.length - 1; k >= 0; k -= 1) {
+        const total = prefixLen[k] + 1 + closingFor(k).length;
+        if (total <= max) {
+            return tokens.slice(0, k).join('') + '…' + closingFor(k);
+        }
+    }
+    return '…';
+}
+
 export function formatProgress(state: ProgressState): string {
     const lines: string[] = [];
     lines.push(`🔄 <b>${escapeHtml(truncate(state.title, 80))}</b>`);
@@ -262,12 +438,24 @@ export function formatProgress(state: ProgressState): string {
         const top = lines.join('\n');
         const room = RENDER_BUDGET - top.length - footer.length - 12;
         if (room >= 2) {
-            lines.push(`💬 <i>${markdownToTelegramHtml(truncate(state.lastText, room))}</i>`);
+            lines.push(`💬 <i>${truncateHtml(markdownToTelegramHtml(state.lastText), room)}</i>`);
         }
     }
     lines.push(footer);
     const text = lines.join('\n');
-    return text.length > RENDER_BUDGET ? `${text.slice(0, RENDER_BUDGET - 1)}…` : text;
+    if (text.length <= RENDER_BUDGET) return text;
+    const lastIdx = lines.findIndex((line) => line.startsWith('💬 <i>'));
+    if (lastIdx >= 0) {
+        const overflow = text.length - RENDER_BUDGET;
+        const line = lines[lastIdx];
+        const inner = line.slice('💬 <i>'.length, -'</i>'.length);
+        const shrunk = truncateHtml(inner, Math.max(1, inner.length - overflow - 1));
+        lines[lastIdx] = `💬 <i>${shrunk}</i>`;
+        const retry = lines.join('\n');
+        if (retry.length <= RENDER_BUDGET) return retry;
+        return truncateHtml(retry, RENDER_BUDGET);
+    }
+    return truncateHtml(text, RENDER_BUDGET);
 }
 
 export function toolStateIcon(state: string): string {
@@ -302,6 +490,32 @@ export function formatContextPin(state: ContextState): string {
     );
 }
 
+export function formatQuestion(request: QuestionRequest): string {
+    const lines: string[] = [];
+    request.questions.forEach((item, index) => {
+        const head = item.header ? `${item.header}: ` : '';
+        const num = request.questions.length > 1 ? `${index + 1}) ` : '';
+        lines.push(`❓ <b>${escapeHtml(truncate(`${num}${head}${item.question}`, 300))}</b>`);
+        for (const option of item.options) {
+            const desc = option.description ? ` — ${escapeHtml(truncate(option.description, 120))}` : '';
+            lines.push(`▫️ <b>${escapeHtml(truncate(option.label, 60))}</b>${desc}`);
+        }
+        if (item.multiple) lines.push(`<i>Multiple choice: tap options, then Done.</i>`);
+    });
+    lines.push(`<i>Tap a button or reply with your own text.</i>`);
+    return lines.join('\n');
+}
+
+export function formatQuestionResolved(request: QuestionRequest, answers: string[][]): string {
+    const lines: string[] = [];
+    request.questions.forEach((item, index) => {
+        const head = item.header ? `${item.header}: ` : '';
+        const picked = (answers[index] || []).map((a) => escapeHtml(truncate(a, 80))).join(', ') || '—';
+        lines.push(`❓ <b>${escapeHtml(truncate(`${head}${item.question}`, 200))}</b>\n✅ ${picked}`);
+    });
+    return lines.join('\n');
+}
+
 export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | null): string {
     const chunks: string[][] = [];
     if (todos && todos.length > 0) {
@@ -320,7 +534,16 @@ export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | nul
             case 'tool': {
                 const lines = [`${toolStateIcon(event.status)} ${escapeHtml(event.summary)}`];
                 if (event.output) {
-                    lines.push(`<code>${escapeHtml(event.output)}</code>`);
+                    const clipped = truncate(event.output, TOOL_OUTPUT_CAP);
+                    if (clipped.includes('```')) {
+                        lines.push(markdownToTelegramHtml(clipped));
+                    } else if (clipped.includes('\n')) {
+                        lines.push(preBlock(clipped, langFromPath(event.summary)));
+                    } else {
+                        lines.push(
+                            `<tg-spoiler><code>${escapeHtml(clipped)}</code></tg-spoiler>`,
+                        );
+                    }
                 }
                 chunks.push(lines);
                 break;
@@ -333,42 +556,4 @@ export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | nul
         }
     }
     return chunks.map((chunk) => chunk.join('\n')).join('\n');
-}
-
-export interface SummaryState {
-    title: string;
-    directory: string;
-    model: string;
-    todos: TodoItem[];
-    toolCalls: number;
-    tokensIn: number;
-    tokensOut: number;
-    cost: number;
-    files: string[];
-    lastText: string;
-    startedAt: number;
-    finishedAt: number;
-}
-
-export function formatSummary(state: SummaryState): string {
-    const lines: string[] = [];
-    lines.push(`✅ <b>${escapeHtml(truncate(state.title, 80))}</b> — done in ${formatDuration(state.startedAt, state.finishedAt)}`);
-    const model = displayModel(state.model);
-    lines.push(`📁 <code>${escapeHtml(truncate(state.directory, 60))}</code>${model ? ` · 🤖 ${escapeHtml(truncate(model, 40))}` : ''}`);
-    if (state.todos.length > 0) {
-        const done = state.todos.filter((t) => t.state === 'done').length;
-        lines.push(`📋 План ${done}/${state.todos.length}`);
-    }
-    lines.push(
-        `🧰 tools: ${state.toolCalls} • 🪙 ${(state.tokensIn + state.tokensOut).toLocaleString('en-US')} ` +
-            `(in ${state.tokensIn.toLocaleString('en-US')} / out ${state.tokensOut.toLocaleString('en-US')}) • 💰 $${state.cost.toFixed(4)}`,
-    );
-    if (state.files.length > 0) {
-        const files = state.files.map((f) => escapeHtml(repoRelative(f, state.directory)));
-        lines.push(`📁 files (${state.files.length}):\n<code>${files.join('\n')}</code>`);
-    }
-    if (state.lastText) {
-        lines.push(`💬 <i>${markdownToTelegramHtml(state.lastText)}</i>`);
-    }
-    return lines.join('\n');
 }

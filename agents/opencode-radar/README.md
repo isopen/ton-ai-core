@@ -16,7 +16,7 @@ Built on `@ton-ai/core` + `@ton-ai/opencode` 0.1.0 + `@ton-ai/telegram-bot-api` 
 Each watched session gets its own Telegram status message (titled by session), its own event cursor, counters and idle timer — parallel sessions never mix. Selection per poll tick:
 
 - `RADAR_SESSION_IDS` (or legacy `RADAR_SESSION_ID`) → exactly those sessions; a typo fails fast at startup;
-- otherwise → up to `RADAR_MAX_SESSIONS` latest sessions in `RADAR_DIR`; new sessions attach automatically, finalized ones detach.
+- otherwise → up to `RADAR_MAX_SESSIONS` latest sessions in `RADAR_DIR`; new sessions attach automatically. Finalized or stale-empty sessions detach when they leave the window (topic binding persists for rebind); active sessions are kept. A message in a known-but-unwatched topic rebinds the persisted session instead of spawning a new one; only truly unknown topics create sessions.
 
 ## Threads
 
