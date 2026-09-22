@@ -2,13 +2,102 @@ export const TELEGRAM_TEXT_LIMIT = 4096;
 export const RENDER_BUDGET = 3900;
 export const FORUM_TOPIC_NAME_LIMIT = 128;
 export const TOOL_OUTPUT_CAP = 1200;
+
+export const EMOJI = {
+    stop: '⛔️',
+    coffee: '☕️',
+    hourglass: '⏳',
+    warn: '⚠️',
+    denied: '⛔️',
+    fail: '❌',
+    check: '✅',
+    question: '❓',
+    active: '🔄',
+    queued: '⬜',
+    plan: '📕',
+    folder: '📁',
+    doc: '📄',
+    cache: '🗂',
+    inbox: '📥',
+    outbox: '📤',
+    brain: '🧠',
+    gram: '💎',
+    coin: '🪙',
+    money: '💰',
+    bot: '🤖',
+    toolbox: '🧰',
+    timer: '⏱',
+    think: '🤔',
+    lock: '🔐',
+    chat: '💬',
+    thumbs: '👍',
+    soon: '🔜',
+    alien: '👽',
+    thinking: '💪',
+    gears: '⚙️',
+    rocket: '🚀',
+} as const;
+
+const ANIM_ID: Record<string, string> = {
+    stop: '5388942221305196361',
+    coffee: '5472223741708606653',
+    hourglass: '5451732530048802485',
+    warn: '5447644880824181073',
+    denied: '5388942221305196361',
+    fail: '5465665476971471368',
+    question: '5454231247532353910',
+    active: '5264727218734524899',
+    plan: '5258046117932711905',
+    folder: '5433653135799228968',
+    doc: '5359469829302525740',
+    cache: '5431736674147114227',
+    inbox: '5433811242135331842',
+    outbox: '5433614747381538714',
+    brain: '5859416770019856426',
+    gram: '5384090987024892581',
+    money: '5832384984593206481',
+    bot: '5372981976804366741',
+    toolbox: '5449428597922079323',
+    timer: '5373236586760651455',
+    chat: '5465300082628763143',
+    lock: '5472308992514464048',
+    alien: '5371018382181145040',
+    thumbs: '5766933926429854499',
+    soon: '5127731441462937337',
+    thinking: '5210679337396752310',
+    gears: '5411634513509885099',
+    rocket: '5348324105701574477',
+};
+
+export function icon(key: keyof typeof EMOJI): string {
+    const id: string | undefined = ANIM_ID[key];
+    if (!id) return EMOJI[key];
+    return `<tg-emoji emoji-id="${id}">${EMOJI[key]}</tg-emoji>`;
+}
+
+export function checkIcon(): string {
+    return icon('thumbs');
+}
+
+export function stopIcon(): string {
+    return icon('stop');
+}
+
+export function rocketIcon(): string {
+    return icon('rocket');
+}
+
+export function hourglassIcon(): string {
+    return icon('hourglass');
+}
+
 const CODE_SPOILER_LINES = 8;
 
 import type { QuestionRequest, RadarEvent } from '@ton-ai/opencode';
 import { parseTmdEntities, safeHref, codeLangClass, TmdEntity } from '@ton-ai/tmd';
 
 export function formatTopicName(title: string, sessionId: string): string {
-    const prefix = '📡 ';
+    const prefix = `${icon('gram')} `;
     const tag = sessionId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'session';
     const suffix = ` · ${tag}`;
     const cleanTitle = title.replace(/\s+/g, ' ').trim() || 'Untitled session';
@@ -144,7 +233,7 @@ export function markdownToTelegramHtml(text: string): string {
 export function splitTelegramHtml(text: string, limit: number = TELEGRAM_TEXT_LIMIT): string[] {
     const max = Math.max(64, Math.floor(limit));
     if (text.length <= max) return [text];
-    const known = new Set(['b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'blockquote', 'em', 'strong', 'ins', 'strike', 'del']);
+    const known = new Set(['b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'tg-emoji', 'blockquote', 'em', 'strong', 'ins', 'strike', 'del']);
     const stack: Array<{ name: string; open: string }> = [];
     const scanInto = (s: string, target: Array<{ name: string; open: string }>): void => {
         const re = /<\/?[a-zA-Z][^<>]*>/g;
@@ -202,6 +291,12 @@ export function splitTelegramHtml(text: string, limit: number = TELEGRAM_TEXT_LI
                 break;
             }
         }
+        while (cut > 1 && cut < rest.length) {
+            const prev = rest.charCodeAt(cut - 1);
+            const cur = rest.charCodeAt(cut);
+            if (prev < 0xd800 || prev > 0xdbff || cur < 0xdc00 || cur > 0xdfff) break;
+            cut -= 1;
+        }
         const body = rest.slice(0, cut);
         scanInto(body, stack);
         const closing = stack
@@ -223,7 +318,20 @@ export function splitTelegramHtml(text: string, limit: number = TELEGRAM_TEXT_LI
 export function truncate(text: string, max: number): string {
     if (text.length <= max) return text;
     if (max <= 1) return '…';
-    return `${text.slice(0, max - 1)}…`;
+    let end = max - 1;
+    while (end > 0 && end < text.length) {
+        const prev = text.charCodeAt(end - 1);
+        const cur = text.charCodeAt(end);
+        if (prev < 0xd800 || prev > 0xdbff || cur < 0xdc00 || cur > 0xdfff) break;
+        end -= 1;
+    }
+    return `${text.slice(0, end)}…`;
+}
+
+export function wellFormed(text: string): string {
+    const maybe = text as unknown as { toWellFormed?: () => string };
+    if (typeof maybe.toWellFormed === 'function') return maybe.toWellFormed();
+    return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�');
 }
 
 export function repoRelative(filePath: string, directory: string): string {
@@ -267,9 +375,9 @@ export function toTodoState(status: string): TodoState {
 }
 
 export function todoIcon(state: TodoState): string {
-    if (state === 'done') return '✅';
-    if (state === 'active') return '🔄';
-    return '⬜';
+    if (state === 'done') return checkIcon();
+    if (state === 'active') return icon('active');
+    return EMOJI.queued;
 }
 
 export type ToolState = 'ok' | 'fail' | 'running';
@@ -286,9 +394,9 @@ export function toToolState(status: string): ToolState {
 }
 
 export function toolIcon(state: ToolState): string {
-    if (state === 'ok') return '✅';
-    if (state === 'fail') return '❌';
-    return '⚙️';
+    if (state === 'ok') return checkIcon();
+    if (state === 'fail') return icon('fail');
+    return icon('gears');
 }
 
 export interface ResultSnippet {
@@ -409,13 +517,13 @@ export function truncateHtml(html: string, max: number): string {
 
 export function formatProgress(state: ProgressState): string {
     const lines: string[] = [];
-    lines.push(`🔄 <b>${escapeHtml(truncate(state.title, 80))}</b>`);
+    lines.push(`${icon('active')} <b>${escapeHtml(truncate(state.title, 80))}</b>`);
     const model = displayModel(state.model);
-    lines.push(`📁 <code>${escapeHtml(truncate(state.directory, 60))}</code>${model ? ` · 🤖 ${escapeHtml(truncate(model, 40))}` : ''}`);
+    lines.push(`${icon('folder')} <code>${escapeHtml(truncate(state.directory, 60))}</code>${model ? ` · ${icon('bot')} ${escapeHtml(truncate(model, 40))}` : ''}`);
     const todos = state.todos.slice(0, 8);
     if (todos.length > 0) {
         const done = todos.filter((t) => t.state === 'done').length;
-        lines.push(`📋 План ${done}/${todos.length}`);
+        lines.push(`${icon('plan')} План ${done}/${todos.length}`);
         for (const todo of todos) {
             lines.push(`${todoIcon(todo.state)} ${escapeHtml(truncate(todo.content, 120))}`);
         }
@@ -424,33 +532,33 @@ export function formatProgress(state: ProgressState): string {
         lines.push(`${toolIcon(tool.state)} ${escapeHtml(truncate(tool.text, 140))}`);
     }
     if (state.result && state.result.text) {
-        const mark = state.result.ok ? '✅' : '❌';
-        lines.push(`📄 ${escapeHtml(truncate(state.result.tool, 40))} ${mark}`);
+        const mark = state.result.ok ? checkIcon() : icon('fail');
+        lines.push(`${EMOJI.doc} ${escapeHtml(truncate(state.result.tool, 40))} ${mark}`);
         lines.push(
             `<tg-spoiler><code>${escapeHtml(truncate(state.result.text, 400))}</code></tg-spoiler>`,
         );
     }
     const footer =
-        `🧰 ${state.toolCalls} • 🪙 ${(state.tokensIn + state.tokensOut).toLocaleString('en-US')}` +
-            ` • 💰 $${state.cost.toFixed(4)} • 📁 ${state.files.length}` +
-            ` • ⏱ ${formatDuration(state.startedAt, state.updatedAt)} in`;
+        `${icon('toolbox')} ${state.toolCalls} • ${EMOJI.coin} ${(state.tokensIn + state.tokensOut).toLocaleString('en-US')}` +
+            ` • ${icon('money')} $${state.cost.toFixed(4)} • ${icon('folder')} ${state.files.length}` +
+            ` • ${icon('timer')} ${formatDuration(state.startedAt, state.updatedAt)} in`;
     if (state.lastText) {
         const top = lines.join('\n');
         const room = RENDER_BUDGET - top.length - footer.length - 12;
         if (room >= 2) {
-            lines.push(`💬 <i>${truncateHtml(markdownToTelegramHtml(state.lastText), room)}</i>`);
+            lines.push(`${icon('chat')} <i>${truncateHtml(markdownToTelegramHtml(state.lastText), room)}</i>`);
         }
     }
     lines.push(footer);
     const text = lines.join('\n');
     if (text.length <= RENDER_BUDGET) return text;
-    const lastIdx = lines.findIndex((line) => line.startsWith('💬 <i>'));
+    const lastIdx = lines.findIndex((line) => line.startsWith(`${icon('chat')} <i>`));
     if (lastIdx >= 0) {
         const overflow = text.length - RENDER_BUDGET;
         const line = lines[lastIdx];
-        const inner = line.slice('💬 <i>'.length, -'</i>'.length);
+        const inner = line.slice(`${icon('chat')} <i>`.length, -'</i>'.length);
         const shrunk = truncateHtml(inner, Math.max(1, inner.length - overflow - 1));
-        lines[lastIdx] = `💬 <i>${shrunk}</i>`;
+        lines[lastIdx] = `${icon('chat')} <i>${shrunk}</i>`;
         const retry = lines.join('\n');
         if (retry.length <= RENDER_BUDGET) return retry;
         return truncateHtml(retry, RENDER_BUDGET);
@@ -478,15 +586,15 @@ export interface ContextState {
 export function formatContextPin(state: ContextState): string {
     const head =
         state.limit && state.limit > 0
-            ? `🪙 Context ${state.total.toLocaleString('en-US')} / ${state.limit.toLocaleString('en-US')} (${Math.floor((state.total / state.limit) * 100)}%)`
-            : `🪙 Context ${state.total.toLocaleString('en-US')} tokens`;
+            ? `${EMOJI.coin} Context ${state.total.toLocaleString('en-US')} / ${state.limit.toLocaleString('en-US')} (${Math.floor((state.total / state.limit) * 100)}%)`
+            : `${EMOJI.coin} Context ${state.total.toLocaleString('en-US')} tokens`;
     return (
         `${head}\n` +
-        `📥 ${state.input.toLocaleString('en-US')} in • ` +
-        `📤 ${state.output.toLocaleString('en-US')} out • ` +
-        `🧠 ${state.reasoning.toLocaleString('en-US')} reasoning • ` +
-        `🗂 ${state.cacheRead.toLocaleString('en-US')} cache • ` +
-        `💰 $${state.cost.toFixed(4)}`
+        `${icon('inbox')} ${state.input.toLocaleString('en-US')} in • ` +
+        `${icon('outbox')} ${state.output.toLocaleString('en-US')} out • ` +
+        `${icon('brain')} ${state.reasoning.toLocaleString('en-US')} reasoning • ` +
+        `${icon('cache')} ${state.cacheRead.toLocaleString('en-US')} cache • ` +
+        `${EMOJI.money} $${state.cost.toFixed(4)}`
     );
 }
 
@@ -495,10 +603,10 @@ export function formatQuestion(request: QuestionRequest): string {
     request.questions.forEach((item, index) => {
         const head = item.header ? `${item.header}: ` : '';
         const num = request.questions.length > 1 ? `${index + 1}) ` : '';
-        lines.push(`❓ <b>${escapeHtml(truncate(`${num}${head}${item.question}`, 300))}</b>`);
+        lines.push(`${icon('question')} <b>${escapeHtml(truncate(`${num}${head}${item.question}`, 300))}</b>`);
         for (const option of item.options) {
             const desc = option.description ? ` — ${escapeHtml(truncate(option.description, 120))}` : '';
-            lines.push(`▫️ <b>${escapeHtml(truncate(option.label, 60))}</b>${desc}`);
+            lines.push(`<b>${escapeHtml(truncate(option.label, 60))}</b>${desc}`);
         }
         if (item.multiple) lines.push(`<i>Multiple choice: tap options, then Done.</i>`);
     });
@@ -511,16 +619,39 @@ export function formatQuestionResolved(request: QuestionRequest, answers: string
     request.questions.forEach((item, index) => {
         const head = item.header ? `${item.header}: ` : '';
         const picked = (answers[index] || []).map((a) => escapeHtml(truncate(a, 80))).join(', ') || '—';
-        lines.push(`❓ <b>${escapeHtml(truncate(`${head}${item.question}`, 200))}</b>\n✅ ${picked}`);
+        lines.push(`${icon('question')} <b>${escapeHtml(truncate(`${head}${item.question}`, 200))}</b>\n${checkIcon()} ${picked}`);
     });
     return lines.join('\n');
+}
+
+export function formatThinking(text: string): string {
+    const head = `${icon('soon')} Thinking`;
+    const cut = text.length > TOOL_OUTPUT_CAP;
+    let tail = cut ? text.slice(-TOOL_OUTPUT_CAP) : text;
+    if (cut && tail.length > 0) {
+        const prev = text.charCodeAt(text.length - tail.length - 1);
+        const cur = tail.charCodeAt(0);
+        if (prev >= 0xd800 && prev <= 0xdbff && cur >= 0xdc00 && cur <= 0xdfff) tail = tail.slice(1);
+    }
+    if (!tail) return head;
+    return `${head}\n<tg-spoiler>${escapeHtml(cut ? `…${tail}` : tail)}</tg-spoiler>`;
+}
+
+export function formatThinkingTime(ms: number): string {
+    const total = Math.max(0, ms) / 1000;
+    if (total < 60) return `${Math.round(total * 10) / 10}s`;
+    return `${Math.floor(total / 60)}m ${Math.round(total % 60)}s`;
+}
+
+export function formatThought(ms: number): string {
+    return `${icon('alien')} ${icon('thinking')} Thought (${formatThinkingTime(ms)})`;
 }
 
 export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | null): string {
     const chunks: string[][] = [];
     if (todos && todos.length > 0) {
         const done = todos.filter((t) => t.state === 'done').length;
-        const head: string[] = [`📋 Plan ${done}/${todos.length}`];
+        const head: string[] = [`${icon('plan')} Plan ${done}/${todos.length}`];
         for (const todo of todos) {
             head.push(`${todoIcon(todo.state)} ${escapeHtml(truncate(todo.content, 120))}`);
         }
@@ -549,7 +680,9 @@ export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | nul
                 break;
             }
             case 'files':
-                chunks.push([`📁 ${escapeHtml(event.files.join(', '))}`]);
+                chunks.push([`${icon('folder')} ${escapeHtml(event.files.join(', '))}`]);
+                break;
+            case 'reasoning':
                 break;
             case 'step':
                 break;

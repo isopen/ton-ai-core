@@ -32,16 +32,18 @@ With `RADAR_USE_THREADS=1` (default) every attached session gets its own forum t
 | `OPENCODE_SERVER_URL` | no | `http://127.0.0.1:4096` | Local opencode server (auto-started, see Run) |
 | `OPENCODE_AUTO_SERVE` | no | `1` | Start `opencode serve` when unreachable; `0` disables |
 | `OPENCODE_BIN` | no | `opencode` | opencode binary for auto-start |
+| `RADAR_CLI_FIRST` | no | `0` | Run prompts via `opencode run` directly, skipping the server queue; server stays for status, sessions and permissions |
 | `RADAR_DIR` | no | cwd | Project directory filter for session auto-pick |
 | `RADAR_SESSION_ID` | no | latest updated | Explicit session id to watch |
 | `RADAR_SESSION_IDS` | no | — | Comma-separated session ids to watch (overrides auto-pick) |
-| `RADAR_MAX_SESSIONS` | no | `3` | How many latest sessions to watch in auto-pick mode |
+| `RADAR_MAX_SESSIONS` | no | `10` | How many latest sessions to watch in auto-pick mode |
 | `RADAR_USE_THREADS` | no | `1` | One forum topic per session (status + summary inside); `0` disables |
 | `RADAR_TYPING` | no | `1` | Send `typing` chat action into the session topic while opencode is working; `0` disables |
 | `RADAR_NEW_TOPICS` | no | `1` | Create a fresh opencode session when you write in a manually created forum topic; `0` keeps unknown topics ignored |
 | `RADAR_STATE_PATH` | no | `~/.local/share/opencode-radar/state.json` | Topic/message mapping persisted across restarts |
 | `RADAR_ALLOWED_USERS` | no | open to all | Comma-separated Telegram user ids allowed to drive sessions; empty allows everyone |
-| `RADAR_POLL_MS` | no | `2000` | DB poll interval |
+| `RADAR_POLL_MS` | no | `1000` | DB poll interval |
+| `RADAR_POLL_FANOUT` | no | `3` | Sessions updated in parallel per tick |
 | `RADAR_IDLE_SEC` | no | `90` | Idle time before the final summary |
 
 ## Forum control
@@ -53,6 +55,8 @@ Write in a session topic and opencode executes it: the message text becomes a se
 - a prompt sent while the session is busy is queued per session (max 5, oldest drops) and sent when the session frees up, with a `⏳` notice;
 - permission requests raised by tools are posted into the topic; reply `/allow` or `/deny` to that message to decide (`once` / `reject`);
 - text documents are inlined into the prompt (up to 20000 chars, binaries declined); captions are prepended.
+- photos, GIFs, videos and PDF/video documents are downloaded into `<RADAR_DIR>/tmp/.radar-inbox/` (max 20 MB, filename sanitized, inbox capped at 200 files) and passed to opencode as a `[file name] saved to <path>` reference for the read tool; captions are prepended.
+- voice, video notes, audio and stickers can't be parsed yet — the bot replies with a notice suggesting photo/document/text instead.
 
 ## Run
 

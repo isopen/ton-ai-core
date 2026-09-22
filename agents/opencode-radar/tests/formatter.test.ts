@@ -71,14 +71,19 @@ describe('formatter', () => {
             updatedAt: 60000,
         });
         assert.ok(text.includes('Test session &lt;x&gt;'));
-        assert.ok(text.includes('📋 План 1/3'));
-        assert.ok(text.includes('✅ first'));
-        assert.ok(text.includes('🔄 second'));
+        assert.ok(text.includes('План 1/3'));
+        assert.ok(text.includes('5258046117932711905'));
+        assert.ok(text.includes('first'));
+        assert.ok(text.includes('5766933926429854499'));
+        assert.ok(text.includes('second'));
+        assert.ok(text.includes('5264727218734524899'));
         assert.ok(text.includes('⬜ third'));
-        assert.ok(text.includes('⚙️ edit /repo/b.ts'));
-        assert.ok(text.includes('🤖 model-1'));
+        assert.ok(text.includes('edit /repo/b.ts'));
+        assert.ok(text.includes('5411634513509885099'));
+        assert.ok(text.includes('model-1'));
+        assert.ok(text.includes('5372981976804366741'));
         assert.ok(text.includes('<tg-spoiler>'));
-        assert.ok(text.includes('🧰 2'));
+        assert.ok(text.includes('5449428597922079323'));
         assert.ok(!text.includes('<x>'));
         assert.ok(!text.includes('<soon>'));
         assert.ok(text.length <= 3900);
@@ -103,7 +108,7 @@ describe('formatter', () => {
             updatedAt: 60000,
         });
         assert.ok(text.includes(lastText));
-        assert.ok(text.includes('🧰 1'));
+        assert.ok(text.includes('5449428597922079323'));
         assert.ok(text.includes('</i>'));
         assert.ok(text.length <= 3900);
     });
@@ -127,7 +132,7 @@ describe('formatter', () => {
             updatedAt: 60000,
         });
         assert.ok(!text.includes(lastText));
-        assert.ok(text.includes('🧰 9'));
+        assert.ok(text.includes('5449428597922079323'));
         assert.ok(text.endsWith(' in'));
         assert.ok(text.includes('</i>'));
         assert.ok(text.includes('</code></tg-spoiler>'));
@@ -160,8 +165,10 @@ describe('formatter', () => {
             ],
             [{ content: 'write code', state: 'active' }],
         );
-        assert.ok(batch.includes('📋 Plan 0/1'));
-        assert.ok(batch.includes('✅ bash ls'));
+        assert.ok(batch.includes('Plan 0/1'));
+        assert.ok(batch.includes('5258046117932711905'));
+        assert.ok(batch.includes('bash ls'));
+        assert.ok(batch.includes('5766933926429854499'));
         assert.ok(batch.includes('done &lt;now&gt;'));
         assert.ok(batch.includes('/repo/a.ts'));
         assert.ok(!batch.includes('<now>'));
@@ -191,13 +198,14 @@ describe('formatter', () => {
 
     test('formatTopicName fits the forum limit and tags the session', () => {
         const name = formatTopicName('My session', 'ses_f4cc46126ffeS3cq');
-        assert.ok(name.startsWith('📡 My session · '));
+        assert.ok(name.includes('5384090987024892581'));
+        assert.ok(name.includes('My session · '));
         assert.ok(name.endsWith('feS3cq'));
         const long = formatTopicName('word '.repeat(60), 'ses_abc123');
         assert.ok(long.length <= FORUM_TOPIC_NAME_LIMIT);
         assert.ok(long.endsWith('abc123'));
         assert.ok(long.includes('…'));
-        assert.equal(formatTopicName('   ', '!!!'), '📡 Untitled session · session');
+        assert.equal(formatTopicName('   ', '!!!'), '<tg-emoji emoji-id="5384090987024892581">💎</tg-emoji> Untitled session · session');
     });
 
     test('splitTelegramHtml passes short text through', () => {
@@ -308,7 +316,7 @@ describe('formatter', () => {
         assert.ok(text.length <= RENDER_BUDGET);
         assert.equal((text.match(/<i>/g) || []).length, (text.match(/<\/i>/g) || []).length);
         assert.ok(text.endsWith(' in'));
-        assert.ok(text.includes('🧰 1'));
+        assert.ok(text.includes('5449428597922079323'));
         assert.ok(!/&[a-zA-Z]*…/.test(text));
     });
 
@@ -358,7 +366,7 @@ describe('formatter questions', () => {
         assert.ok(text.includes('Alpha'));
         assert.ok(text.includes('first'));
         const resolved = formatQuestionResolved(REQUEST, [['Beta']]);
-        assert.ok(resolved.includes('✅'));
+        assert.ok(resolved.includes('5766933926429854499'));
         assert.ok(resolved.includes('Beta'));
         assert.ok(!resolved.includes('Alpha'));
     });

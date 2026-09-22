@@ -1,20 +1,28 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
 import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup } from '@ton-ai/telegram-bot-api';
 import { ContextSnapshot, OpencodeConfig, OpencodePlugin, OpencodeServerEvent, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionRow, snapshotTotal, SpawnedProcess } from '@ton-ai/opencode';
 import {
+    EMOJI,
+    checkIcon,
     displayModel,
     escapeHtml,
     formatConsoleBatch,
     formatContextPin,
     formatQuestion,
     formatQuestionResolved,
+    formatThinking,
+    formatThought,
+    hourglassIcon,
+    icon,
+    rocketIcon,
     formatTopicName,
     splitTelegramHtml,
     toTodoState,
     toToolState,
     truncate,
+    wellFormed,
     TodoItem,
     ToolItem,
     ResultSnippet,
@@ -57,7 +65,9 @@ export function isStaleEmptyWatch(
     return now - state.startedAt >= EMPTY_SESSION_GRACE_MS;
 }
 
-const EVENT_THROTTLE_MS = 5000;
+const EVENT_THROTTLE_MS = 3000;
+const THINKING_EDIT_MS = 4000;
+const SLOW_TICK_MS = 3000;
 const WORKING_RECENCY_MS = 15000;
 const STOP_QUIET_MS = 10000;
 const STOP_DEDUP_MS = 10000;
@@ -75,6 +85,29 @@ const MAX_QUEUED_PROMPTS = 5;
 const MAX_SEEN_INBOUND = 500;
 const DOC_MAX_BYTES = 512 * 1024;
 const DOC_MAX_CHARS = 20000;
+const MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+const INBOX_DIR = 'tmp/.radar-inbox';
+const INBOX_MAX_FILES = 200;
+
+export function hasMediaMessage(message: Message): boolean {
+    return Boolean(
+        message.document ||
+        (message.photo && message.photo.length > 0) ||
+        message.voice ||
+        message.video ||
+        message.video_note ||
+        message.audio ||
+        message.animation ||
+        message.sticker,
+    );
+}
+
+function sanitizeInboxName(raw: string, fallback: string): string {
+    const base = basename(String(raw || '')).replace(/^[.]+/, '');
+    const cleaned = base.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_+/g, '_').slice(0, 100);
+    const name = cleaned.replace(/^[._-]+|[._-]+$/g, '') || fallback;
+    return name.includes('.') ? name : `${name}.bin`;
+}
 
 export function isMessageNotModifiedError(error: unknown): boolean {
     return error instanceof Error && error.message.includes('message is not modified');
@@ -93,9 +126,16 @@ export function isRateLimitError(error: unknown): boolean {
 export function isMessageGoneError(error: unknown): boolean {
     return (
         error instanceof Error &&
-        /message (to edit |to delete )?not found|message_id_invalid|message can't be edited|message is deleted/i.test(
+        /message (to edit |to delete |to pin )?not found|message_id_invalid|message can't be edited|message is deleted/i.test(
             error.message,
         )
+    );
+}
+
+export function isPinRightsError(error: unknown): boolean {
+    return (
+        error instanceof Error &&
+        /not enough rights|need administrator|chat_admin_required|bot_not_admin|bot is not an admin/i.test(error.message)
     );
 }
 
@@ -146,12 +186,28 @@ export function isAbortedServerError(error: unknown): boolean {
     return (error as Record<string, unknown>).name === 'MessageAbortedError';
 }
 
+export function eventSignature(event: RadarEvent): string {
+    switch (event.kind) {
+        case 'text':
+            return `text:${event.text}`;
+        case 'tool':
+            return `tool:${event.tool}|${event.status}|${event.summary}|${event.output}`;
+        case 'files':
+            return `files:${event.files.join('\n')}`;
+        case 'reasoning':
+            return `reasoning:${event.text}`;
+        case 'step':
+            return `step:${event.tokens}|${event.cost}|${event.finish}`;
+    }
+}
+
 export interface PersistedSession {
     threadId: number | null;
     contextMessageId: number | null;
     pinnedThreadId: number | null;
     lastSeen: number;
     knownParts?: Record<string, number>;
+    knownEventSig?: Record<string, string>;
 }
 
 const PERSISTED_TTL_MS = 30 * 24 * 3600 * 1000;
@@ -169,6 +225,7 @@ export interface RadarWatchConfig {
     newTopics?: boolean;
     statePath: string;
     pollMs: number;
+    pollFanout?: number;
     idleSec: number;
 }
 
@@ -185,6 +242,7 @@ interface WatchedSession {
     threadId: number | null;
     appliedTopicName: string | null;
     knownParts: Map<string, number>;
+    knownEventSig: Map<string, string>;
     todos: TodoItem[];
     recentTools: ToolItem[];
     lastResult: ResultSnippet | null;
@@ -206,9 +264,19 @@ interface WatchedSession {
     needsTodoBaseline: boolean;
     promptQueue: string[];
     promptBusyNotified: boolean;
+    promptErrorText: string | null;
+    promptPumping: boolean;
     cliRun: SpawnedProcess | null;
     stopButtonOn: boolean;
     stopMessageId: number | null;
+    stopControlSending: boolean;
+    stopControlText: string | null;
+    thinkingMessageId: number | null;
+    thinkingText: string;
+    thinkingRendered: string;
+    thinkingAt: number;
+    thinkingActive: boolean;
+    thinkingSince: number | null;
     serverErrorText: string | null;
     serverErrorAt: number;
     stoppedAt: number;
@@ -448,12 +516,22 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                     );
                     if (valid.length > 0) cursor = Object.fromEntries(valid.slice(-PERSISTED_CURSOR_CAP));
                 }
+                let sigs: Record<string, string> | undefined;
+                const rawSigs = record.knownEventSig;
+                if (rawSigs && typeof rawSigs === 'object' && !Array.isArray(rawSigs)) {
+                    const valid = Object.entries(rawSigs as Record<string, unknown>).filter(
+                        (entry): entry is [string, string] =>
+                            typeof entry[1] === 'string' && entry[1].length > 0 && entry[1].length <= 2000,
+                    );
+                    if (valid.length > 0) sigs = Object.fromEntries(valid.slice(-PERSISTED_CURSOR_CAP));
+                }
                 this.persisted[id] = {
                     threadId,
                     contextMessageId,
                     pinnedThreadId,
                     lastSeen: typeof record.lastSeen === 'number' ? record.lastSeen : 0,
                     ...(cursor ? { knownParts: cursor } : {}),
+                    ...(sigs ? { knownEventSig: sigs } : {}),
                 };
             }
             const winnerByThread = new Map<number, string>();
@@ -484,12 +562,14 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             }
             for (const [id, state] of this.watched) {
                 const cursor = [...state.knownParts.entries()].slice(-PERSISTED_CURSOR_CAP);
+                const sigCursor = [...state.knownEventSig.entries()].slice(-PERSISTED_CURSOR_CAP);
                 sessions[id] = {
                     threadId: state.threadId ?? this.persisted[id]?.threadId ?? null,
                     contextMessageId: state.contextMessageId,
                     pinnedThreadId: state.pinnedThreadId,
                     lastSeen: Date.now(),
                     ...(cursor.length > 0 ? { knownParts: Object.fromEntries(cursor) } : {}),
+                    ...(sigCursor.length > 0 ? { knownEventSig: Object.fromEntries(sigCursor) } : {}),
                 };
             }
             mkdirSync(dirname(this.config.radar.statePath), { recursive: true });
@@ -560,7 +640,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 const message = await telegram.sendMessage({
                     chat_id: chatId,
                     message_thread_id: state.threadId ?? undefined,
-                    text: part,
+                    text: wellFormed(part),
                     parse_mode: 'HTML',
                     ...(withMarkup && markup ? { reply_markup: markup } : {}),
                 });
@@ -611,27 +691,38 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             limit: state.contextLimit,
             cost: state.session.cost,
         });
-        return `${pin}\n${this.isSessionActive(state) ? '🤔 thinking…' : '✅ done'}`;
+        return `${pin}\n${this.isSessionActive(state) ? `${EMOJI.think} thinking…` : `${icon('alien')} ${checkIcon()} done`}`;
     }
 
-    private async pinContextMessage(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {
-        if (state.contextMessageId === null) return false;
+    private async pinContextMessage(telegram: TelegramBotPlugin, state: WatchedSession): Promise<'ok' | 'gone' | 'failed'> {
+        if (state.contextMessageId === null) return 'failed';
         try {
             await telegram.pinChatMessage({
                 chat_id: this.config.radar.chatId,
                 message_id: state.contextMessageId,
                 disable_notification: true,
             });
-            return true;
+            return 'ok';
         } catch (error) {
-            console.warn(
-                `Radar context pin failed ` +
-                    `(chat=${this.config.radar.chatId} thread=${state.threadId} ` +
-                    `message=${state.contextMessageId} session=${state.session.id}): ` +
-                    `${error instanceof Error ? error.message : error}. ` +
-                    `Give the bot the Pin Messages (can_pin_messages) admin right.`,
-            );
-            return false;
+            if (isMessageGoneError(error)) {
+                console.debug(
+                    `Radar context pin gone, will resend (chat=${this.config.radar.chatId} thread=${state.threadId} ` +
+                        `message=${state.contextMessageId} session=${state.session.id}).`,
+                );
+                return 'gone';
+            }
+            if (isPinRightsError(error)) {
+                console.warn(
+                    `Radar context pin failed ` +
+                        `(chat=${this.config.radar.chatId} thread=${state.threadId} ` +
+                        `message=${state.contextMessageId} session=${state.session.id}): ` +
+                        `${error instanceof Error ? error.message : error}. ` +
+                        `Give the bot the Pin Messages (can_pin_messages) admin right.`,
+                );
+                return 'failed';
+            }
+            console.debug('Radar context pin failed:', error instanceof Error ? error.message : error);
+            return 'failed';
         }
     }
 
@@ -644,6 +735,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         state.consecutiveFailures = 0;
         state.stopButtonOn = false;
         state.stopMessageId = null;
+        state.stopControlText = null;
         this.savePersisted();
         await this.pinContextMessage(telegram, state);
         await this.syncStopKeyboard(telegram, state);
@@ -662,6 +754,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             threadId: this.threadsEnabled ? (stored?.threadId ?? null) : null,
             appliedTopicName: null,
             knownParts: new Map(),
+            knownEventSig: new Map(),
             todos: [],
             recentTools: [],
             lastResult: null,
@@ -683,9 +776,19 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             needsTodoBaseline: false,
             promptQueue: [],
             promptBusyNotified: false,
+            promptErrorText: null,
+            promptPumping: false,
             cliRun: null,
             stopButtonOn: false,
             stopMessageId: null,
+            stopControlSending: false,
+            stopControlText: null,
+            thinkingMessageId: null,
+            thinkingText: '',
+            thinkingRendered: '',
+            thinkingAt: 0,
+            thinkingActive: false,
+            thinkingSince: null,
             serverErrorText: null,
             serverErrorAt: 0,
             stoppedAt: 0,
@@ -709,6 +812,10 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         if (storedCursor) {
             for (const [key, time] of Object.entries(storedCursor)) state.knownParts.set(key, time);
         }
+        const storedSigs = stored?.knownEventSig;
+        if (storedSigs) {
+            for (const [key, sig] of Object.entries(storedSigs)) state.knownEventSig.set(key, sig);
+        }
         state.needsTodoBaseline = state.knownParts.size > 0;
         if (state.threadId !== null) {
             state.appliedTopicName = formatTopicName(state.session.title, state.session.id);
@@ -716,21 +823,27 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         if (state.contextMessageId === null || state.pinnedThreadId !== state.threadId) {
             await this.sendFreshPin(telegram, state);
         } else {
-            await this.pinContextMessage(telegram, state);
-            const reusedPin = state.contextMessageId;
-            if (reusedPin !== null) {
-                try {
-                    await telegram.editMessageReplyMarkup({
-                        chat_id: this.config.radar.chatId,
-                        message_id: reusedPin,
-                        reply_markup: { inline_keyboard: [] },
-                    });
-                    state.stopButtonOn = false;
-                } catch (error) {
-                    if (!isMessageNotModifiedError(error)) {
-                        console.debug('Radar stop button reset failed:', error instanceof Error ? error.message : error);
-                    } else {
+            const pinResult = await this.pinContextMessage(telegram, state);
+            if (pinResult === 'gone') {
+                state.contextMessageId = null;
+                state.pinnedThreadId = null;
+                await this.sendFreshPin(telegram, state);
+            } else {
+                const reusedPin = state.contextMessageId;
+                if (reusedPin !== null) {
+                    try {
+                        await telegram.editMessageReplyMarkup({
+                            chat_id: this.config.radar.chatId,
+                            message_id: reusedPin,
+                            reply_markup: { inline_keyboard: [] },
+                        });
                         state.stopButtonOn = false;
+                    } catch (error) {
+                        if (!isMessageNotModifiedError(error) && !isMessageGoneError(error)) {
+                            console.debug('Radar stop button reset failed:', error instanceof Error ? error.message : error);
+                        } else {
+                            state.stopButtonOn = false;
+                        }
                     }
                 }
             }
@@ -742,6 +855,9 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             lastSeen: Date.now(),
             ...(state.knownParts.size > 0
                 ? { knownParts: Object.fromEntries([...state.knownParts.entries()].slice(-PERSISTED_CURSOR_CAP)) }
+                : {}),
+            ...(state.knownEventSig.size > 0
+                ? { knownEventSig: Object.fromEntries([...state.knownEventSig.entries()].slice(-PERSISTED_CURSOR_CAP)) }
                 : {}),
         };
         this.savePersisted();
@@ -809,6 +925,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     }
 
     private applyEvent(state: WatchedSession, event: RadarEvent): void {
+        if (state.finalized && event.kind === 'step') return;
         state.lastEventAt = Date.now();
         if (state.finalized) {
             state.finalized = false;
@@ -829,6 +946,8 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 break;
             }
             case 'step':
+                break;
+            case 'reasoning':
                 break;
             case 'files':
                 for (const file of event.files) {
@@ -942,9 +1061,14 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 return;
             }
         }
-        if (message.document) {
+        if (hasMediaMessage(message)) {
             const before = state.promptQueue.length;
-            await this.inboundDocument(telegram, state, message, text);
+            await this.inboundMediaMessage(telegram, state, message, text);
+            const inboundMark = Date.now();
+            await this.pumpPrompts(telegram, opencode, state);
+            console.log(
+                `Radar inbound pump took ${Date.now() - inboundMark}ms (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
+            );
             if (state.promptQueue.length > before) await this.syncStopKeyboard(telegram, state);
             return;
         }
@@ -958,7 +1082,16 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         console.debug(
             `Radar prompt queued (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
         );
+        const inboundMark = Date.now();
+        await this.pumpPrompts(telegram, opencode, state);
+        console.log(
+            `Radar inbound pump took ${Date.now() - inboundMark}ms (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
+        );
+        const syncMark = Date.now();
         await this.syncStopKeyboard(telegram, state);
+        console.log(
+            `Radar inbound sync took ${Date.now() - syncMark}ms (session=${state.session.id} thread=${threadId}).`,
+        );
     }
 
     private async handleUnknownThread(
@@ -992,7 +1125,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             return;
         }
         const text = (message.text || message.caption || '').trim();
-        if (!text && !message.document) {
+        if (!text && !hasMediaMessage(message)) {
             console.debug(`Radar unknown topic ignored: empty text (thread=${threadId} message=${message.message_id}).`);
             return;
         }
@@ -1024,8 +1157,8 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                     const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
                     for (const queuedMessage of queued) {
                         const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
-                        if (queuedMessage.document) {
-                            await this.inboundDocument(telegram, state, queuedMessage, queuedText);
+                        if (hasMediaMessage(queuedMessage)) {
+                            await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
                         } else if (queuedText) {
                             this.enqueuePrompt(state, queuedText);
                         }
@@ -1043,8 +1176,8 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
             for (const queuedMessage of queued) {
                 const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
-                if (queuedMessage.document) {
-                    await this.inboundDocument(telegram, state, queuedMessage, queuedText);
+                if (hasMediaMessage(queuedMessage)) {
+                    await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
                 } else if (queuedText) {
                     this.enqueuePrompt(state, queuedText);
                 }
@@ -1056,7 +1189,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 await telegram.sendMessage({
                     chat_id: this.config.radar.chatId,
                     message_thread_id: threadId,
-                    text: '❌ Could not create a session for this topic, try again.',
+                    text: `${icon('fail')} Could not create a session for this topic, try again.`,
                 });
             } catch {
             }
@@ -1075,6 +1208,149 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         if (wasEmpty) state.promptBusyNotified = false;
     }
 
+    private pruneInbox(dir: string): void {
+        let entries: string[];
+        try {
+            entries = readdirSync(dir);
+        } catch {
+            return;
+        }
+        if (entries.length <= INBOX_MAX_FILES) return;
+        const withTime = entries
+            .map((name) => {
+                try {
+                    return { name, mtime: statSync(join(dir, name)).mtimeMs };
+                } catch {
+                    return null;
+                }
+            })
+            .filter((e): e is { name: string; mtime: number } => e !== null)
+            .sort((a, b) => a.mtime - b.mtime);
+        for (const stale of withTime.slice(0, withTime.length - INBOX_MAX_FILES)) {
+            try {
+                unlinkSync(join(dir, stale.name));
+            } catch {
+            }
+        }
+    }
+
+    private async inboundMediaMessage(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        message: Message,
+        caption: string,
+    ): Promise<void> {
+        if (message.document) {
+            await this.inboundDocument(telegram, state, message, caption);
+            return;
+        }
+        if (message.photo && message.photo.length > 0) {
+            const best = message.photo.reduce((a, b) =>
+                (a.width * a.height > b.width * b.height ? a : b),
+            );
+            await this.inboundMedia(
+                telegram,
+                state,
+                best.file_id,
+                best.file_size,
+                `photo_${best.width}x${best.height}.jpg`,
+                caption,
+                'photo',
+            );
+            return;
+        }
+        if (message.video) {
+            await this.inboundMedia(
+                telegram,
+                state,
+                message.video.file_id,
+                message.video.file_size,
+                message.video.file_name || 'video.mp4',
+                caption,
+                'video',
+            );
+            return;
+        }
+        if (message.animation) {
+            await this.inboundMedia(
+                telegram,
+                state,
+                message.animation.file_id,
+                message.animation.file_size,
+                message.animation.file_name || 'animation.gif',
+                caption,
+                'animation',
+            );
+            return;
+        }
+        const label = message.voice
+            ? 'Voice'
+            : message.video_note
+                ? 'Video notes'
+                : message.audio
+                    ? 'Audio'
+                    : 'Stickers';
+        await this.safeReply(
+            telegram,
+            state,
+            `${icon('warn')} ${label} can't be parsed yet — send a photo, a video, a document, or text.`,
+        );
+    }
+
+    private async inboundMedia(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        fileId: string,
+        fileSize: number | undefined,
+        rawName: string,
+        caption: string,
+        kind: string,
+    ): Promise<void> {
+        if (fileSize !== undefined && fileSize > MEDIA_MAX_BYTES) {
+            await this.safeReply(telegram, state, `${icon('denied')} Media is too large (max 20 MB).`);
+            return;
+        }
+        let data: string | Buffer;
+        try {
+            data = await telegram.downloadFile(fileId);
+        } catch (error) {
+            console.debug('Radar media download failed:', error instanceof Error ? error.message : error);
+            await this.safeReply(telegram, state, `${icon('fail')} Could not download the file.`);
+            return;
+        }
+        const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+        if (buffer.length > MEDIA_MAX_BYTES) {
+            buffer.fill(0);
+            await this.safeReply(telegram, state, `${icon('denied')} Media is too large (max 20 MB).`);
+            return;
+        }
+        const name = sanitizeInboxName(rawName, `${kind}_file.bin`);
+        const dir = join(this.config.radar.directory, INBOX_DIR);
+        try {
+            mkdirSync(dir, { recursive: true });
+        } catch (error) {
+            console.debug('Radar inbox mkdir failed:', error instanceof Error ? error.message : error);
+            await this.safeReply(telegram, state, `${icon('fail')} Could not store the file.`);
+            return;
+        }
+        this.pruneInbox(dir);
+        const stored = `${state.session.id.slice(0, 12)}_${Date.now()}_${name}`;
+        const rel = `${INBOX_DIR}/${stored}`;
+        try {
+            writeFileSync(join(dir, stored), buffer);
+        } catch (error) {
+            console.debug('Radar inbox write failed:', error instanceof Error ? error.message : error);
+            await this.safeReply(telegram, state, `${icon('fail')} Could not store the file.`);
+            return;
+        } finally {
+            buffer.fill(0);
+        }
+        const promptText = caption
+            ? `${caption}\n\n[file ${name}] saved to ${rel}. Read it with the read tool and analyse it.`
+            : `[file ${name}] saved to ${rel}. Read it with the read tool and analyse it.`;
+        this.enqueuePrompt(state, promptText);
+    }
+
     private async inboundDocument(
         telegram: TelegramBotPlugin,
         state: WatchedSession,
@@ -1083,8 +1359,32 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     ): Promise<void> {
         const document = message.document;
         if (!document) return;
+        if (document.mime_type?.startsWith('image/')) {
+            await this.inboundMedia(
+                telegram,
+                state,
+                document.file_id,
+                document.file_size,
+                document.file_name || 'image',
+                caption,
+                'image',
+            );
+            return;
+        }
+        if (document.mime_type?.startsWith('video/') || document.mime_type === 'application/pdf') {
+            await this.inboundMedia(
+                telegram,
+                state,
+                document.file_id,
+                document.file_size,
+                document.file_name || (document.mime_type === 'application/pdf' ? 'document.pdf' : 'video.mp4'),
+                caption,
+                'document',
+            );
+            return;
+        }
         if (document.file_size !== undefined && document.file_size > DOC_MAX_BYTES) {
-            await this.safeReply(telegram, state, '⛔ File is too large, send it as text.');
+            await this.safeReply(telegram, state, `${icon('denied')} File is too large, send it as text.`);
             return;
         }
         let data: string | Buffer;
@@ -1092,12 +1392,12 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             data = await telegram.downloadFile(document.file_id);
         } catch (error) {
             console.debug('Radar document download failed:', error instanceof Error ? error.message : error);
-            await this.safeReply(telegram, state, '❌ Could not download the file.');
+            await this.safeReply(telegram, state, `${icon('fail')} Could not download the file.`);
             return;
         }
         const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
         if (buffer.length > DOC_MAX_BYTES || buffer.includes(0)) {
-            await this.safeReply(telegram, state, '⛔ Only text files are accepted.');
+            await this.safeReply(telegram, state, `${icon('denied')} Only text files are accepted.`);
             return;
         }
         let content = buffer.toString('utf8');
@@ -1109,46 +1409,108 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         this.enqueuePrompt(state, promptText);
     }
 
+    private async startCliRun(
+        telegram: TelegramBotPlugin,
+        opencode: Partial<Pick<OpencodePlugin, 'spawnRun'>>,
+        state: WatchedSession,
+        text: string,
+        announce: boolean,
+        unlandedSec: number | null,
+    ): Promise<boolean> {
+        if (typeof opencode.spawnRun !== 'function') return false;
+        const child = opencode.spawnRun(state.session.id, text);
+        state.cliRun = child;
+        child.on('exit', () => {
+            if (state.cliRun === child) state.cliRun = null;
+        });
+        console.log(
+            `Radar prompt executing via CLI fallback (session=${state.session.id})` +
+                (unlandedSec === null ? '.' : ` after ${unlandedSec}s unlanded.`),
+        );
+        if (announce) {
+            await this.safeReply(
+                telegram,
+                state,
+                `${icon('warn')} Server did not take the prompt, running it via CLI fallback.`,
+            );
+        }
+        await this.ensureStopControl(telegram, state);
+        return true;
+    }
+
     private async pumpPrompts(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'sendPrompt'> & Partial<Pick<OpencodePlugin, 'ensureServer'>>,
+        opencode: Pick<OpencodePlugin, 'sendPrompt'> & Partial<Pick<OpencodePlugin, 'ensureServer' | 'spawnRun'>>,
         state: WatchedSession,
     ): Promise<void> {
         if (state.promptQueue.length === 0) return;
+        const pumpMark = Date.now();
         if (Date.now() < this.rateLimitedUntil) return;
         if (Date.now() < state.promptNextAttemptAt) return;
         if (state.cliRun) {
             state.promptNextAttemptAt = Date.now() + PROMPT_BUSY_BACKOFF_MS;
             if (!state.promptBusyNotified) {
                 state.promptBusyNotified = true;
-                await this.safeReply(telegram, state, '⏳ Session is busy, your prompt is queued.');
+                await this.safeReply(telegram, state, `${hourglassIcon()} Session is busy, your prompt is queued.`);
             }
             return;
         }
         const head = state.promptQueue[0];
+        if (this.config.opencode.cliFirst === true && !state.promptPumping) {
+            state.promptPumping = true;
+            try {
+                if (await this.startCliRun(telegram, opencode, state, head, false, null)) {
+                    state.promptQueue.shift();
+                    state.promptBusyNotified = false;
+                    state.promptErrorText = null;
+                    state.promptNextAttemptAt = 0;
+                    return;
+                }
+            } catch (error) {
+                console.debug('Radar CLI-first spawn failed, trying server:', error instanceof Error ? error.message : error);
+            } finally {
+                state.promptPumping = false;
+            }
+        }
+        if (state.promptPumping) return;
+        state.promptPumping = true;
         try {
-            const receipt = await opencode.sendPrompt(state.session.id, head);
+            let receipt: Awaited<ReturnType<OpencodePlugin['sendPrompt']>>;
+            try {
+                receipt = await opencode.sendPrompt(state.session.id, head);
+            } finally {
+                state.promptPumping = false;
+            }
             if (receipt.busy) {
                 state.promptNextAttemptAt = Date.now() + PROMPT_BUSY_BACKOFF_MS;
                 if (!state.promptBusyNotified) {
                     state.promptBusyNotified = true;
-                    await this.safeReply(telegram, state, '⏳ Session is busy, your prompt is queued.');
+                    await this.safeReply(telegram, state, `${hourglassIcon()} Session is busy, your prompt is queued.`);
                 }
                 return;
             }
             state.promptQueue.shift();
             state.promptBusyNotified = false;
+            state.promptErrorText = null;
             state.promptNextAttemptAt = 0;
             state.confirming =
                 receipt.messageId !== undefined
                     ? { messageId: receipt.messageId, text: head, since: Date.now(), notified: false }
                     : null;
-            console.log(`Radar prompt sent (session=${state.session.id} thread=${state.threadId}).`);
+            console.log(`Radar prompt sent (session=${state.session.id} thread=${state.threadId}) in ${Date.now() - pumpMark}ms.`);
             await this.ensureStopControl(telegram, state);
             return;
         } catch (error) {
             if (isRateLimitError(error)) {
                 const waitSec = getRetryAfterSec(error) ?? 10;
+                if (state.promptErrorText !== 'ratelimit') {
+                    state.promptErrorText = 'ratelimit';
+                    await this.safeReply(
+                        telegram,
+                        state,
+                        `${hourglassIcon()} Rate limited, retry in ~${waitSec}s — your prompt stays queued.`,
+                    );
+                }
                 this.rateLimitedUntil = Math.max(
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
@@ -1162,11 +1524,20 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 await this.safeReply(
                     telegram,
                     state,
-                    `❌ Prompt failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`,
+                    `${icon('fail')} Prompt failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`,
                 );
                 return;
             }
             state.promptNextAttemptAt = Date.now() + PROMPT_TRANSIENT_BACKOFF_MS;
+            const errText = error instanceof Error ? error.message.slice(0, 200) : 'unknown error';
+            if (state.promptErrorText !== errText) {
+                state.promptErrorText = errText;
+                await this.safeReply(
+                    telegram,
+                    state,
+                    `${icon('warn')} opencode error: ${escapeHtml(errText)} — retrying, your prompt stays queued.`,
+                );
+            }
             try {
                 await opencode.ensureServer?.();
             } catch {
@@ -1179,21 +1550,157 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     }
 
     private stopMarkup(state: WatchedSession): InlineKeyboardMarkup {
-        return { inline_keyboard: [[{ text: '⏹ Stop', callback_data: `stop:${state.session.id}` }]] };
+        return { inline_keyboard: [[{ text: `${EMOJI.coffee} Stop`, callback_data: `stop:${state.session.id}` }]] };
     }
 
     private async ensureStopControl(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
-        if (state.stopMessageId !== null) return;
+        if (state.stopMessageId !== null || state.stopControlSending) return;
         if (Date.now() < this.rateLimitedUntil) return;
+        state.stopControlSending = true;
         try {
+            const text = this.renderStopControlText(state);
             state.stopMessageId = await this.deliverMessage(
                 telegram,
                 state,
-                '⏹ Running — tap Stop to interrupt and rewrite the task.',
+                text,
                 this.stopMarkup(state),
             );
+            state.stopControlText = text;
         } catch (error) {
             console.debug('Radar stop control failed:', error instanceof Error ? error.message : error);
+        } finally {
+            state.stopControlSending = false;
+        }
+    }
+
+    private renderStopControlText(state: WatchedSession): string {
+        const base = `${rocketIcon()} Running — tap Stop to interrupt and rewrite the task.`;
+        if (state.toolCalls <= 0) return base;
+        const last = state.recentTools[state.recentTools.length - 1];
+        const summary = last ? truncate(last.text, 60) : '';
+        if (!summary) return base;
+        return `${rocketIcon()} Running · step ${state.toolCalls}, ${escapeHtml(summary)} — tap Stop to interrupt.`;
+    }
+
+    private async updateStopControlText(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        if (state.stopMessageId === null) return;
+        if (Date.now() < this.rateLimitedUntil) return;
+        const text = this.renderStopControlText(state);
+        if (text === state.stopControlText) return;
+        try {
+            await telegram.editMessageText({
+                chat_id: this.config.radar.chatId,
+                message_id: state.stopMessageId,
+                text: wellFormed(text),
+                parse_mode: 'HTML',
+                reply_markup: this.stopMarkup(state),
+            });
+            state.stopControlText = text;
+            console.log(`Radar stop control updated (session=${state.session.id}).`);
+        } catch (error) {
+            if (isMessageNotModifiedError(error)) {
+                state.stopControlText = text;
+                return;
+            }
+            if (isMessageGoneError(error)) {
+                state.stopMessageId = null;
+                state.stopControlText = null;
+                return;
+            }
+            if (isRateLimitError(error)) {
+                const waitSec = getRetryAfterSec(error) ?? 10;
+                this.rateLimitedUntil = Math.max(
+                    this.rateLimitedUntil,
+                    Date.now() + waitSec * 1000 + 1000,
+                );
+                console.warn(`Radar stop control rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                return;
+            }
+            console.debug('Radar stop control update failed:', error instanceof Error ? error.message : error);
+        }
+    }
+
+    private async syncThinkingMessage(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        if (!state.thinkingActive && state.thinkingMessageId === null) return;
+        if (Date.now() < this.rateLimitedUntil) return;
+        const text = formatThinking(state.thinkingText);
+        if (state.thinkingMessageId === null) {
+            try {
+                state.thinkingMessageId = await this.deliverMessage(telegram, state, text);
+                state.thinkingRendered = text;
+                state.thinkingAt = Date.now();
+                console.log(`Radar thinking posted (session=${state.session.id}).`);
+            } catch (error) {
+                console.debug('Radar thinking post failed:', error instanceof Error ? error.message : error);
+            }
+            return;
+        }
+        if (text === state.thinkingRendered) return;
+        if (Date.now() - state.thinkingAt < THINKING_EDIT_MS) return;
+        try {
+            await telegram.editMessageText({
+                chat_id: this.config.radar.chatId,
+                message_id: state.thinkingMessageId,
+                text: wellFormed(text),
+                parse_mode: 'HTML',
+            });
+            state.thinkingRendered = text;
+            state.thinkingAt = Date.now();
+        } catch (error) {
+            if (isMessageNotModifiedError(error)) {
+                state.thinkingRendered = text;
+                state.thinkingAt = Date.now();
+                return;
+            }
+            if (isMessageGoneError(error)) {
+                state.thinkingMessageId = null;
+                state.thinkingRendered = '';
+                return;
+            }
+            if (isRateLimitError(error)) {
+                const waitSec = getRetryAfterSec(error) ?? 10;
+                this.rateLimitedUntil = Math.max(
+                    this.rateLimitedUntil,
+                    Date.now() + waitSec * 1000 + 1000,
+                );
+                console.warn(`Radar thinking rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                return;
+            }
+            console.debug('Radar thinking update failed:', error instanceof Error ? error.message : error);
+        }
+    }
+
+    private async clearThinkingMessage(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        const id = state.thinkingMessageId;
+        const since = state.thinkingSince ?? Date.now();
+        state.thinkingMessageId = null;
+        state.thinkingText = '';
+        state.thinkingRendered = '';
+        state.thinkingActive = false;
+        state.thinkingSince = null;
+        if (id === null) return;
+        if (Date.now() < this.rateLimitedUntil) return;
+        try {
+            await telegram.editMessageText({
+                chat_id: this.config.radar.chatId,
+                message_id: id,
+                text: wellFormed(formatThought(Date.now() - since)),
+                parse_mode: 'HTML',
+            });
+            console.log(`Radar thought finalized (session=${state.session.id}).`);
+        } catch (error) {
+            if (isMessageNotModifiedError(error)) return;
+            if (isMessageGoneError(error)) return;
+            if (isRateLimitError(error)) {
+                const waitSec = getRetryAfterSec(error) ?? 10;
+                this.rateLimitedUntil = Math.max(
+                    this.rateLimitedUntil,
+                    Date.now() + waitSec * 1000 + 1000,
+                );
+                console.warn(`Radar thought rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                return;
+            }
+            console.debug('Radar thought finalize failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -1201,9 +1708,11 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         const want = this.wantStopButton(state);
         if (want) {
             await this.ensureStopControl(telegram, state);
+            await this.updateStopControlText(telegram, state);
         } else if (state.stopMessageId !== null) {
             const controlId = state.stopMessageId;
             state.stopMessageId = null;
+            state.stopControlText = null;
             try {
                 await telegram.editMessageReplyMarkup({
                     chat_id: this.config.radar.chatId,
@@ -1284,16 +1793,18 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             state.pendingKeys.clear();
             state.pendingTodos = false;
             state.promptBusyNotified = false;
+            state.promptErrorText = null;
             state.promptNextAttemptAt = 0;
             state.lastText = '';
             state.toolCalls = 0;
             state.lastEventAt = 0;
+            await this.clearThinkingMessage(telegram, state);
             await this.syncStopKeyboard(telegram, state);
             if (now - state.lastStopMsgAt < STOP_DEDUP_MS) {
                 return true;
             }
             state.lastStopMsgAt = now;
-            await this.safeReply(telegram, state, '⏹ Stopped, send the task again.');
+            await this.safeReply(telegram, state, `${icon('stop')} Stopped, send the task again.`);
             return true;
         } finally {
             state.stopping = false;
@@ -1319,7 +1830,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             alive.add(request.id);
             if (state.knownPerms.includes(request.id)) continue;
             state.knownPerms.push(request.id);
-            const lines = ['🔐 Permission needed', `<b>${escapeHtml(request.action)}</b>`];
+            const lines = [`${icon('lock')} Permission needed`, `<b>${escapeHtml(request.action)}</b>`];
             if (request.resources.length > 0) {
                 lines.push(`<code>${escapeHtml(truncate(request.resources.join('\n'), 500))}</code>`);
             }
@@ -1354,7 +1865,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             const resolved = await opencode.replyPermission(state.session.id, permId, allow ? 'once' : 'reject');
             this.permReplies.delete(replyTo);
             state.knownPerms = state.knownPerms.filter((id) => id !== permId);
-            await this.safeReply(telegram, state, resolved ? (allow ? '✅ Allowed once.' : '⛔ Denied.') : '⚠️ Already resolved.');
+            await this.safeReply(telegram, state, resolved ? (allow ? `${checkIcon()} Allowed once.` : `${icon('denied')} Denied.`) : `${icon('warn')} Already resolved.`);
         } catch (error) {
             if (isRateLimitError(error)) {
                 const waitSec = getRetryAfterSec(error) ?? 10;
@@ -1366,7 +1877,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 return;
             }
             console.debug('Radar permission reply failed:', error instanceof Error ? error.message : error);
-            await this.safeReply(telegram, state, '❌ Could not send the decision, try again.');
+            await this.safeReply(telegram, state, `${icon('fail')} Could not send the decision, try again.`);
         }
     }
 
@@ -1375,7 +1886,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         ctx.questions.forEach((item, qIdx) => {
             item.options.forEach((option, oIdx) => {
                 const picked = (ctx.picks[qIdx] || []).includes(option.label);
-                rows.push([{ text: `${picked ? '✅ ' : ''}${truncate(option.label, 60)}`, callback_data: `q${ctx.token}:${qIdx}:${oIdx}` }]);
+                rows.push([{ text: `${picked ? `${EMOJI.check} ` : ''}${truncate(option.label, 60)}`, callback_data: `q${ctx.token}:${qIdx}:${oIdx}` }]);
             });
         });
         if (ctx.questions.some((item) => item.multiple)) {
@@ -1460,14 +1971,14 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 return;
             }
             console.debug('Radar question reply failed:', error instanceof Error ? error.message : error);
-            await this.safeReply(telegram, state, '❌ Could not send the answer, try again.');
+            await this.safeReply(telegram, state, `${icon('fail')} Could not send the answer, try again.`);
             return;
         }
         state.knownQuestions = state.knownQuestions.filter((id) => id !== ref.reqId);
         const request: QuestionRequest = { id: ref.reqId, sessionID: state.session.id, questions: ref.questions };
         const text = resolved
             ? formatQuestionResolved(request, answers)
-            : '⚠️ Already resolved.';
+            : `${icon('warn')} Already resolved.`;
         await this.editQuestionMessage(telegram, state, request, text);
         this.dropQuestionRefs(state.session.id, ref.reqId);
     }
@@ -1494,7 +2005,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             await telegram.editMessageText({
                 chat_id: this.config.radar.chatId,
                 message_id: msgId,
-                text,
+                text: wellFormed(text),
                 parse_mode: 'HTML',
                 reply_markup: { inline_keyboard: [] },
             });
@@ -1520,7 +2031,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         state.serverErrorAt = now;
         console.warn(`Radar server error (session=${sessionId}): ${text.slice(0, 200)}`);
         await this.flushEvents(telegram, state);
-        await this.safeReply(telegram, state, `⚠️ opencode error: ${escapeHtml(truncate(text, 800))}`);
+        await this.safeReply(telegram, state, `${icon('warn')} opencode error: ${escapeHtml(truncate(text, 800))}`);
         await this.finalizeSession(telegram, state);
     }
 
@@ -1635,7 +2146,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         text: string,
     ): Promise<void> {
         if (ref.questions.length !== 1) {
-            await this.safeReply(telegram, state, '⚠️ Tap an option or Done — free text fits single questions only.');
+            await this.safeReply(telegram, state, `${icon('warn')} Tap an option or Done — free text fits single questions only.`);
             return;
         }
         await this.resolveQuestion(telegram, opencode, state, ref, [[text]]);
@@ -1650,25 +2161,42 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         try {
             await this.checkServerHealth(telegram, opencode);
             await this.syncSessions();
+            const fanout = Math.max(1, Math.floor(this.config.radar.pollFanout ?? 3));
+            const states = [...this.watched.values()];
             let staggered = false;
-            for (const state of [...this.watched.values()]) {
-                try {
-                    if (staggered) {
-                        await new Promise((resolve) => setTimeout(resolve, 500));
-                    }
-                    staggered = true;
-                    await this.updateSession(telegram, state);
-                    if (![...this.watched.values()].includes(state)) continue;
-                    await this.pumpPrompts(telegram, opencode, state);
-                    await this.syncStopKeyboard(telegram, state);
-                    await this.pollPermissions(telegram, opencode, state);
-                    await this.pollQuestions(telegram, opencode, state);
-                } catch (error) {
-                    console.error(`Radar update failed for session ${state.session.id}:`, error);
+            for (let i = 0; i < states.length; i += fanout) {
+                if (staggered) {
+                    await new Promise((resolve) => setTimeout(resolve, 500));
                 }
+                staggered = true;
+                await Promise.allSettled(
+                    states.slice(i, i + fanout).map((state) => this.pollSession(telegram, opencode, state)),
+                );
             }
         } finally {
             this.pollInFlight = false;
+        }
+    }
+
+    private async pollSession(
+        telegram: TelegramBotPlugin,
+        opencode: OpencodePlugin,
+        state: WatchedSession,
+    ): Promise<void> {
+        const tickMark = Date.now();
+        try {
+            await this.updateSession(telegram, state);
+            if (![...this.watched.values()].includes(state)) return;
+            await this.pumpPrompts(telegram, opencode, state);
+            await this.syncStopKeyboard(telegram, state);
+            await this.pollPermissions(telegram, opencode, state);
+            await this.pollQuestions(telegram, opencode, state);
+        } catch (error) {
+            console.error(`Radar update failed for session ${state.session.id}:`, error);
+        }
+        const tickMs = Date.now() - tickMark;
+        if (tickMs > SLOW_TICK_MS) {
+            console.warn(`Radar slow session tick ${tickMs}ms (session=${state.session.id}).`);
         }
     }
 
@@ -1683,14 +2211,14 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             console.warn(`Radar opencode server unreachable, retrying (source=${this.config.opencode.baseUrl}).`);
             const sent = await this.noticeGeneral(
                 telegram,
-                '⚠️ opencode server unreachable, prompts are queued. Start it with: opencode serve --port 4096',
+                `${icon('warn')} opencode server unreachable, prompts are queued. Start it with: opencode serve --port 4096`,
             );
             if (sent) this.serverOutageNoticed = true;
             return;
         }
         if (this.serverOutageNoticed) {
             this.serverOutageNoticed = false;
-            await this.noticeGeneral(telegram, '✅ opencode server is back, streaming resumed.');
+            await this.noticeGeneral(telegram, `${checkIcon()} opencode server is back, streaming resumed.`);
         }
     }
 
@@ -1760,16 +2288,9 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         }
         if (Date.now() - pending.since < CONFIRM_TIMEOUT_MS) return;
         state.confirming = null;
-        if (this.config.opencode.cliFallback !== false && typeof opencode.spawnRun === 'function') {
+        if (this.config.opencode.cliFallback !== false) {
             try {
-                const child = opencode.spawnRun(state.session.id, pending.text);
-                state.cliRun = child;
-                child.on('exit', () => {
-                    if (state.cliRun === child) state.cliRun = null;
-                });
-                console.log(`Radar prompt executing via CLI fallback (session=${state.session.id}).`);
-                await this.ensureStopControl(telegram, state);
-                return;
+                if (await this.startCliRun(telegram, opencode, state, pending.text, true, Math.round((Date.now() - pending.since) / 1000))) return;
             } catch (error) {
                 console.debug('Radar CLI fallback failed:', error instanceof Error ? error.message : error);
             }
@@ -1785,7 +2306,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             await this.safeReply(
                 telegram,
                 state,
-                '❌ The server accepted the prompt but is not processing it. Check the opencode serve log for "Failed to drain Session".',
+                `${icon('fail')} The server accepted the prompt but is not processing it. Check the opencode serve log for "Failed to drain Session".`,
             );
         }
     }
@@ -1812,7 +2333,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                     await this.deliverMessage(
                         telegram,
                         state,
-                        '⚠️ Session is gone in opencode, it was unwatched. Write again in this topic to start a fresh session.',
+                        `${icon('warn')} Session is gone in opencode, it was unwatched. Write again in this topic to start a fresh session.`,
                     );
                 } catch (error) {
                     console.debug('Radar gone-session notice failed:', error instanceof Error ? error.message : error);
@@ -1844,9 +2365,26 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             state.knownParts.set(key, event.time);
             if (state.knownParts.size > 2000) {
                 const oldest = [...state.knownParts.keys()].slice(0, 500);
-                for (const stale of oldest) state.knownParts.delete(stale);
+                for (const stale of oldest) {
+                    state.knownParts.delete(stale);
+                    state.knownEventSig.delete(stale);
+                }
             }
             if (Date.now() - state.stoppedAt < STOP_QUIET_MS) continue;
+            const sig = eventSignature(event);
+            const prevSig = state.knownEventSig.get(key);
+            state.knownEventSig.set(key, sig);
+            if (!firstSeen && prevSig === sig) {
+                state.lastEventAt = Date.now();
+                continue;
+            }
+            if (event.kind === 'reasoning') {
+                this.applyEvent(state, event);
+                state.thinkingActive = true;
+                if (state.thinkingSince === null) state.thinkingSince = Date.now();
+                if (event.text || !state.thinkingText) state.thinkingText = event.text;
+                continue;
+            }
             if (event.kind === 'tool') {
                 if (firstSeen) state.toolCalls += 1;
                 if (event.tool === 'question') continue;
@@ -1884,6 +2422,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             console.debug('Radar todos read failed:', error);
         }
 
+        await this.flushEvents(telegram, state);
         await this.refreshContextLimit(opencode, state);
         await this.refreshSnapshot(opencode, state);
         await this.updateContext(telegram, state);
@@ -1896,9 +2435,9 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             return;
         }
 
-        await this.flushEvents(telegram, state);
         await this.sendProgressTyping(telegram, state);
         await this.syncStopKeyboard(telegram, state);
+        await this.syncThinkingMessage(telegram, state);
     }
 
     private isSessionActive(state: WatchedSession): boolean {
@@ -2018,7 +2557,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 await telegram.editMessageText({
                     chat_id: this.config.radar.chatId,
                     message_id: state.contextMessageId,
-                    text,
+                    text: wellFormed(text),
                     parse_mode: 'HTML',
                     reply_markup: { inline_keyboard: [] },
                 });
@@ -2104,12 +2643,21 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         }
         if (Date.now() - state.lastEventMessageAt < EVENT_THROTTLE_MS) return;
         try {
+            const flushMark = Date.now();
+            const flushedCount = state.pending.length + (state.pendingTodos ? 1 : 0);
+            const substantive = state.pending.some(
+                (event) => event.kind === 'text' || event.kind === 'files' || (event.kind === 'tool' && event.output !== ''),
+            );
             await this.deliverMessage(telegram, state, text);
+            console.log(
+                `Radar events delivered (session=${state.session.id} count=${flushedCount} in ${Date.now() - flushMark}ms).`,
+            );
             state.pending = [];
             state.pendingKeys.clear();
             state.pendingTodos = false;
             state.lastEventMessageAt = Date.now();
             this.savePersisted();
+            if (substantive) await this.clearThinkingMessage(telegram, state);
         } catch (error) {
             if (isRateLimitError(error)) {
                 const waitSec = getRetryAfterSec(error) ?? 10;
@@ -2133,8 +2681,10 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         state.pendingKeys.clear();
         state.pendingTodos = false;
         state.promptBusyNotified = false;
+        state.promptErrorText = null;
         console.log(`Radar finalized session ${state.session.id}`);
         state.lastContextEditAt = 0;
+        await this.clearThinkingMessage(telegram, state);
         await this.updateContext(telegram, state);
         await this.syncStopKeyboard(telegram, state);
         this.savePersisted();

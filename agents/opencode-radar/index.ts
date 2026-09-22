@@ -85,6 +85,7 @@ const config: OpencodeRadarConfig = {
         autoServe: optionalFlag('OPENCODE_AUTO_SERVE', true),
         binPath: process.env.OPENCODE_BIN || 'opencode',
         cliFallback: optionalFlag('OPENCODE_CLI_FALLBACK', true),
+        cliFirst: optionalFlag('RADAR_CLI_FIRST', false),
     },
     radar: {
         chatId: Number.parseInt(process.env.RADAR_CHAT_ID || '', 10),
@@ -92,14 +93,15 @@ const config: OpencodeRadarConfig = {
         allowedUsers: userIdList(),
         sessionId: process.env.RADAR_SESSION_ID || undefined,
         sessionIds: sessionIdList(),
-        maxSessions: optionalInt('RADAR_MAX_SESSIONS', 3),
+        maxSessions: optionalInt('RADAR_MAX_SESSIONS', 10),
         useThreads: optionalFlag('RADAR_USE_THREADS', true),
         typingEnabled: optionalFlag('RADAR_TYPING', true),
         newTopics: optionalFlag('RADAR_NEW_TOPICS', true),
         statePath:
             process.env.RADAR_STATE_PATH ||
             join(homedir(), '.local', 'share', 'opencode-radar', 'state.json'),
-        pollMs: optionalInt('RADAR_POLL_MS', 2000),
+        pollMs: optionalInt('RADAR_POLL_MS', 1000),
+        pollFanout: optionalInt('RADAR_POLL_FANOUT', 3),
         idleSec: optionalInt('RADAR_IDLE_SEC', 90),
     },
 };
