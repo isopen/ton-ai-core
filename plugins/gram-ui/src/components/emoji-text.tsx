@@ -174,6 +174,23 @@ function getSingleRegularEmoji(text: string, entities?: any[]): string | undefin
 
 const KEYCAP_NORM_RE = /^[\d#*]\u20E3$/;
 
+const droppedEntitiesWarned = new Set<string>();
+
+function warnEmojiEntitiesDropped(text: string, entities: any[]): void {
+  try {
+    const sig = entities.map((e: any) => [
+      typeof e?._ + ':' + String(e?._),
+      typeof e?.offset + ':' + String(e?.offset),
+      typeof e?.length + ':' + String(e?.length),
+      e?.document_id == null ? 'noid' : typeof e.document_id,
+    ].join(',')).join('|');
+    const key = text.length + ':' + sig;
+    if (droppedEntitiesWarned.has(key) || droppedEntitiesWarned.size > 50) return;
+    droppedEntitiesWarned.add(key);
+    log.warn('[emoji-alt] custom entities produced no emoji segments', 'textLen=' + text.length, 'ents=' + entities.length, sig);
+  } catch {}
+}
+
 function resolveEntityDocId(docId: string, fallbackAlt: string): string {
   const alt = getEmojiAlt(docId) || fallbackAlt;
   if (!alt) return docId;
@@ -227,8 +244,10 @@ function isEmojiOnlyText(text: string, entities?: any[]): boolean {
 
 export function EmojiText({ text, entities, documentUrls, documentSources, inlineSize = INLINE_EMOJI_SIZE, singleLine = false, ctx = 'chat', fontScaled = true }: { text: string; entities?: any[]; documentUrls: Record<number, string>; documentSources?: Record<number | string, string>; inlineSize?: number; singleLine?: boolean; ctx?: 'dialog' | 'chat'; fontScaled?: boolean }) {
   const emojiEntities = (entities || [])
-    .filter((e: any) => e?._ === 'messageEntityCustomEmoji' && typeof e.offset === 'number' && typeof e.length === 'number' && e.length > 0)
-    .sort((a: any, b: any) => a.offset - b.offset);
+    .map((e: any) => ({ e, off: Number(e?.offset), len: Number(e?.length) }))
+    .filter((x: any) => x.e?._ === 'messageEntityCustomEmoji' && Number.isFinite(x.off) && Number.isFinite(x.len) && x.len > 0)
+    .sort((a: any, b: any) => a.off - b.off)
+    .map((x: any) => ({ ...x.e, offset: x.off, length: x.len }));
   const emojiIdsKey = emojiEntities.map((e: any) => String(e.document_id)).join(',');
 
   const singleEmoji = getSingleRegularEmoji(text, entities);
@@ -289,6 +308,10 @@ export function EmojiText({ text, entities, documentUrls, documentSources, inlin
     segsRef.current = { key: segsKey, segments: buildSegments(text, emojiEntities) };
   }
   const segments = segsRef.current.segments;
+
+  if (typeof window !== 'undefined' && emojiEntities.length > 0 && !segments.some((s) => s.type === 'emoji')) {
+    warnEmojiEntitiesDropped(text, entities || []);
+  }
 
   const emojiOnly = isEmojiOnlyText(text, entities);
   const isDialog = ctx === 'dialog';

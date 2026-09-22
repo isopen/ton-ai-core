@@ -141,7 +141,7 @@ async function loadTgsFromGramDb(url: string): Promise<string | null> {
   } catch {}
   try {
     const mod: any = await import('@ton-ai/gram-db');
-    const db = mod.getGramDb?.() || mod.createStandaloneGramDb?.();
+    const db = mod.getGramDb?.() || (typeof mod.createStandaloneGramDb === 'function' ? mod.createStandaloneGramDb() : undefined);
     if (db?.getTgsJson) {
       const v = await db.getTgsJson(url);
       if (v) { tgsGramDbMem.set(url, v); return v; }
@@ -154,7 +154,7 @@ async function saveTgsToGramDb(url: string, json: string): Promise<void> {
   try { localStorage.setItem('gram-db:tgs:' + url, json); } catch {}
   try {
     const mod: any = await import('@ton-ai/gram-db');
-    const db = mod.getGramDb?.() || mod.createStandaloneGramDb?.();
+    const db = mod.getGramDb?.() || (typeof mod.createStandaloneGramDb === 'function' ? mod.createStandaloneGramDb() : undefined);
     if (db?.saveTgsJson) await db.saveTgsJson(url, json);
   } catch {}
 }
