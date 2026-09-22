@@ -199,7 +199,7 @@ pub fn cbc_encrypt_etm_checked(mac_key: &[u8], enc_key: &[u8], iv: &[u8], plaint
 
 pub fn cbc_decrypt_etm_checked(mac_key: &[u8], enc_key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
     require_key(mac_key)?;
-    if data.len() < 16 + 32 || (data.len() - 32) % 16 != 0 {
+    if data.len() < 32 || (data.len() - 32) % 16 != 0 {
         return Err(CryptoError::AuthenticationFailure);
     }
     let split = data.len() - 32;
@@ -228,7 +228,7 @@ pub fn cbc_seal_checked(mac_key: &[u8], enc_key: &[u8], plaintext: &[u8]) -> Res
 
 pub fn cbc_open_checked(mac_key: &[u8], enc_key: &[u8], sealed: &[u8]) -> Result<Vec<u8>, CryptoError> {
     require_key(mac_key)?;
-    if sealed.len() < 16 + 16 + 32 {
+    if sealed.len() < 16 + 32 {
         return Err(CryptoError::AuthenticationFailure);
     }
     let (iv, rest) = sealed.split_at(16);
@@ -380,19 +380,19 @@ pub fn ige_decrypt_checked(data: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>
     Ok(out)
 }
 
-pub fn ctr_process_checked(data: &[u8], key: &[u8], iv: &[u8], byte_offset: usize) -> Result<Vec<u8>, CryptoError> {
+pub fn ctr_process_checked(data: &[u8], key: &[u8], iv: &[u8], byte_offset: u64) -> Result<Vec<u8>, CryptoError> {
     require_key(key)?;
     require_iv(iv, 16)?;
     let mut rk = aes::key_expansion(key)?;
 
     let mut counter = [0u8; 16];
     counter.copy_from_slice(iv);
-    add_ctr(&mut counter, (byte_offset / 16) as u64);
+    add_ctr(&mut counter, byte_offset / 16);
 
     let mut block = [0u8; 16];
     block.copy_from_slice(&counter);
     aes::aes256_encrypt_block(&rk, &mut block);
-    let mut pos = byte_offset % 16;
+    let mut pos = (byte_offset % 16) as usize;
 
     let mut out = Vec::with_capacity(data.len());
     let mut idx = 0usize;
@@ -694,7 +694,7 @@ pub fn aes256_ige_decrypt(data: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>,
 }
 
 #[wasm_bindgen]
-pub fn aes256_ctr_process(data: &[u8], key: &[u8], iv: &[u8], byte_offset: usize) -> Result<Vec<u8>, JsError> {
+pub fn aes256_ctr_process(data: &[u8], key: &[u8], iv: &[u8], byte_offset: u64) -> Result<Vec<u8>, JsError> {
     ctr_process_checked(data, key, iv, byte_offset).map_err(|e| JsError::new(&e.to_string()))
 }
 

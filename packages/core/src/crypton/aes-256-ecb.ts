@@ -72,6 +72,7 @@ export class AES256ECB {
   private key: Buffer;
   private useNative: boolean;
   private roundKeys: Buffer[] = [];
+  private destroyed = false;
 
   private nativeEnc: any = null;
   private nativeDec: any = null;
@@ -87,6 +88,8 @@ export class AES256ECB {
   }
 
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     for (const ctx of [this.nativeEnc, this.nativeDec]) {
       if (ctx) {
         try { ctx.final(); } catch {}
@@ -142,7 +145,12 @@ export class AES256ECB {
     }
   }
 
+  assertAlive(): void {
+    if (this.destroyed) throw new Error('AES256ECB instance destroyed');
+  }
+
   encryptBlock(block: Uint8Array): Buffer {
+    this.assertAlive();
     if (!block) throw new Error('Block must not be null or undefined');
     if (block.length !== 16) throw new Error('Block must be 16 bytes');
     if (this.useNative) {
@@ -168,6 +176,7 @@ export class AES256ECB {
   }
 
   decryptBlock(block: Uint8Array): Buffer {
+    this.assertAlive();
     if (!block) throw new Error('Block must not be null or undefined');
     if (block.length !== 16) throw new Error('Block must be 16 bytes');
     if (this.useNative) {
@@ -192,6 +201,13 @@ export class AES256ECB {
   }
 
   decryptBlockInPlace(s: Buffer): Buffer {
+    this.assertAlive();
+    if (!s || s.length !== 16) throw new Error('Block must be 16 bytes');
+    if (this.useNative) {
+      const out = Buffer.from(this.getNativeDec().update(s));
+      out.copy(s);
+      return s;
+    }
     let i: number;
     xorKey(s, this.roundKeys[14]);
     for (let round = 13; round >= 1; round--) {

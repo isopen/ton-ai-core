@@ -218,4 +218,32 @@ describe('AesCtrCipher', () => {
     const result = dec.process(enc);
     assert.ok(Buffer.from(result).equals(Buffer.from(plain)));
   });
+
+  test('constructor validates key, iv and counter', () => {
+    const k = new Uint8Array(32);
+    const iv = new Uint8Array(16);
+    assert.throws(() => new AesCtrCipher(new Uint8Array(16), iv, 0), /32 bytes/);
+    assert.throws(() => new AesCtrCipher(k, new Uint8Array(8), 0), /16 bytes/);
+    assert.throws(() => new AesCtrCipher(k, iv, -1), /out of range/);
+    assert.throws(() => new AesCtrCipher(k, iv, 0x100000000), /out of range/);
+  });
+
+  test('streaming counter overflow throws instead of keystream reuse', () => {
+    const k = new Uint8Array(32).fill(0xAB);
+    const iv = new Uint8Array(16);
+    const c = new AesCtrCipher(k, iv, 0xFFFFFFFF);
+    assert.throws(() => c.process(new Uint8Array(32)), /overflow/i);
+  });
+
+  test('destroy wipes key material and blocks reuse', () => {
+    const k = new Uint8Array(32).fill(0xAB);
+    const iv = new Uint8Array(16).fill(0xCD);
+    const c = new AesCtrCipher(k, iv, 0);
+    c.process(new Uint8Array(16));
+    c.destroy();
+    assert.ok((c as any).key.every((b: number) => b === 0));
+    assert.ok((c as any).iv.every((b: number) => b === 0));
+    assert.throws(() => c.process(new Uint8Array(16)), /destroyed/);
+    c.destroy();
+  });
 });

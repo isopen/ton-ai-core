@@ -113,6 +113,13 @@ describe('AES-256-ECB', () => {
         assert.ok(keyCopy.every((b: number) => b === 0), 'key zeroed after destroy');
     });
 
+    test('use-after-destroy throws instead of zero-key encrypt', () => {
+        const ecb2 = new AES256ECB(key);
+        ecb2.destroy();
+        assert.throws(() => ecb2.encryptBlock(testPlain), /destroyed/);
+        assert.throws(() => ecb2.decryptBlock(actualCipher), /destroyed/);
+    });
+
     test('constructor rejects null/undefined', () => {
         assert.throws(() => new AES256ECB(null as any), /null or undefined/);
         assert.throws(() => new AES256ECB(undefined as any), /null or undefined/);

@@ -30,12 +30,15 @@ export class DiffieHellman {
     if (p <= this.TWO_POW_2047 || p >= this.TWO_POW_2048) {
       throw new Error('Invalid DH prime: not a 2048-bit number');
     }
-    if (!isProbablyPrime(p)) {
-      throw new Error('DH prime p is not prime');
-    }
-    const q = (p - 1n) / 2n;
-    if (!isProbablyPrime(q)) {
-      throw new Error('DH prime p is not safe prime');
+    const isKnownGroup14 = p === this.DEFAULT_P && g === this.DEFAULT_G;
+    if (!isKnownGroup14) {
+      if (!isProbablyPrime(p)) {
+        throw new Error('DH prime p is not prime');
+      }
+      const q = (p - 1n) / 2n;
+      if (!isProbablyPrime(q)) {
+        throw new Error('DH prime p is not safe prime');
+      }
     }
 
     if (g <= 1n || g >= p - 1n) {

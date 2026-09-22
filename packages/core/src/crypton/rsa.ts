@@ -1,6 +1,12 @@
 import { Buffer } from 'buffer';
 import { modPowBranchless } from './utils';
-import { sha1Sync } from './sha1';
+import { sha1Sync as defaultSha1Sync } from './sha1';
+
+type Sha1SyncFn = (data: Buffer) => Buffer;
+let sha1SyncImpl: Sha1SyncFn = defaultSha1Sync;
+export function setRsaSha1SyncImplementation(fn: Sha1SyncFn): void {
+  sha1SyncImpl = fn;
+}
 
 function extractPemBody(pem: string): string {
   const lines = pem.split(/\r?\n/);
@@ -160,7 +166,8 @@ export function rsaFingerprint(modulus: bigint, exponent: bigint): bigint {
   const eBytes = bigIntToRawBytes(exponent);
 
   const full = Buffer.concat([tlBytes(nBytes), tlBytes(eBytes)]);
-  const hash = sha1Sync(full);
+  const hash = sha1SyncImpl(full);
+  full.fill(0);
   return hash.readBigUInt64LE(12);
 }
 

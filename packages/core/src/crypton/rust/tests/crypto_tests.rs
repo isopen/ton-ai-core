@@ -68,7 +68,7 @@ fn aes256_ctr_offset_consistency() {
     let full_data = vec![0u8; 128];
     let full_ct = ctr_process_checked(&full_data, &key, &iv, 0).unwrap();
     for offset in [0usize, 1, 15, 16, 17, 31, 32, 63] {
-        let partial = ctr_process_checked(&full_data[offset..offset + 16], &key, &iv, offset).unwrap();
+        let partial = ctr_process_checked(&full_data[offset..offset + 16], &key, &iv, offset as u64).unwrap();
         assert_eq!(
             partial.to_vec(),
             full_ct[offset..offset + 16].to_vec(),
@@ -460,9 +460,9 @@ fn reject_rng_over_cap() {
 fn ctr_large_offset_streaming_no_alloc_bomb() {
     let key = hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4");
     let iv = hex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
-    let offset = 1 << 20;
+    let offset = 1usize << 20;
     let probe = vec![0u8; 32];
-    let a = ctr_process_checked(&probe, &key, &iv, offset).unwrap();
+    let a = ctr_process_checked(&probe, &key, &iv, offset as u64).unwrap();
     let seed = ctr_process_checked(&vec![0u8; offset + 32], &key, &iv, 0).unwrap();
     assert_eq!(a.to_vec(), seed[offset..offset + 32].to_vec());
 }

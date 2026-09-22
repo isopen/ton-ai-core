@@ -5,7 +5,13 @@ let sha256Impl: Sha256Fn = defaultSha256;
 export function setKdfSha256Implementation(fn: Sha256Fn): void {
     sha256Impl = fn;
 }
-import { sha1 } from './sha1';
+import { sha1 as defaultSha1 } from './sha1';
+
+type Sha1Fn = (data: Buffer) => Promise<Buffer>;
+let sha1Impl: Sha1Fn = defaultSha1;
+export function setKdfSha1Implementation(fn: Sha1Fn): void {
+    sha1Impl = fn;
+}
 import { Buffer } from 'buffer';
 import { bigIntToBufferLE } from './utils';
 
@@ -56,8 +62,17 @@ export class MTProtoKDF {
     }
 
     const x = isClient ? 0 : 8;
-    const sha256_a = await sha256Impl(Buffer.concat([msgKey, authKey.subarray(x, x + 36)]));
-    const sha256_b = await sha256Impl(Buffer.concat([authKey.subarray(40 + x, 40 + x + 36), msgKey]));
+    const inputA = Buffer.concat([msgKey, authKey.subarray(x, x + 36)]);
+    const inputB = Buffer.concat([authKey.subarray(40 + x, 40 + x + 36), msgKey]);
+    let sha256_a: Buffer;
+    let sha256_b: Buffer;
+    try {
+      sha256_a = await sha256Impl(inputA);
+      sha256_b = await sha256Impl(inputB);
+    } finally {
+      inputA.fill(0);
+      inputB.fill(0);
+    }
 
     const aesKey = Buffer.concat([
       sha256_a.subarray(0, 8),
@@ -81,7 +96,7 @@ export class MTProtoKDF {
     if (authKey.length !== this.AUTH_KEY_LENGTH) {
       throw new Error(`Invalid authKey length`);
     }
-    const hash = await sha1(authKey);
+    const hash = await sha1Impl(authKey);
     const id = hash.readBigUInt64LE(12);
     hash.fill(0);
     return id;

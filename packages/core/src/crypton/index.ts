@@ -1,12 +1,13 @@
 import { AES256IGE } from './aes-256-ige';
 import { AES256ECB } from './aes-256-ecb';
-import { AES256CTR, AesCtrCipher } from './aes-256-ctr';
+import { AES256CTR, AesCtrCipher, assertCtrRange } from './aes-256-ctr';
 import { AES256CBC } from './aes-256-cbc';
 import { AES256CBC_ETM } from './aes-256-cbc-etm';
 import { createObfuscationCipher } from './aes-256-ecb';
 import { MTProtoKDF } from './kdf';
-import { setKdfSha256Implementation } from './kdf';
-import { setModPowImplementation, setIsProbablyPrimeImplementation } from './utils';
+import { setKdfSha256Implementation, setKdfSha1Implementation } from './kdf';
+import { setRsaSha1SyncImplementation } from './rsa';
+import { setModPowImplementation, setIsProbablyPrimeImplementation, setRandomBytesImplementation, setHmacSha256Implementation } from './utils';
 import { DiffieHellman } from './diffie-hellman';
 
 import {
@@ -29,6 +30,7 @@ import {
   hkdfSha512,
   pbkdf2Sha256,
   modPowBranchless,
+  clearPrimeCache,
 } from './utils';
 
 import { sha1, sha1Sync } from './sha1';
@@ -77,6 +79,14 @@ import { initWasm, isWasmAvailable, isWasmLoggingEnabled,
          wasmHmacSha256, wasmModPow } from './wasm-adapter';
 
 let _wasmReady = false;
+let _wasmInitPromise: Promise<void> | null = null;
+let _wasmLegacySha1 = true;
+
+function checkModPowArgs(b: bigint, e: bigint, m: bigint): void {
+  if (m <= 0n) throw new Error('Modulus must be positive');
+  if (b < 0n) throw new Error('Negative base is not supported');
+  if (e < 0n) throw new Error('Negative exponent is not supported');
+}
 
 const OVERRIDDEN_OPS = [
   'getRandomBytes', 'sha1', 'sha1Sync', 'sha256', 'sha256_sync',
@@ -88,58 +98,83 @@ const OVERRIDDEN_OPS = [
 
 export function initWasmCrypton(options?: { legacySha1?: boolean }): Promise<void> {
   const legacySha1 = options?.legacySha1 ?? true;
-  if (_wasmReady) return Promise.resolve();
-  return initWasm().then(ok => {
-    if (!ok) return;
+  if (_wasmReady) {
+    if (legacySha1 !== _wasmLegacySha1) {
+      console.warn(`initWasmCrypton: legacySha1 option ${legacySha1} ignored, WASM already initialized with ${_wasmLegacySha1}`);
+    }
+    return Promise.resolve();
+  }
+  if (_wasmInitPromise) return _wasmInitPromise;
+  _wasmInitPromise = initWasm().then(ok => {
+    if (!ok) {
+      _wasmInitPromise = null;
+      return;
+    }
     _wasmReady = true;
+    _wasmLegacySha1 = legacySha1;
     const c = crypton as any;
 
-    c.getRandomBytes = (n: number) => wasmGetRandomBytes(n);
-    c.sha1Sync = (data: Buffer) => wasmSha1(data)!;
-    c.sha1 = (data: Buffer) => Promise.resolve(wasmSha1(data)!);
-    c.sha256_sync = (data: Buffer) => Buffer.from(wasmSha256(data)!);
-    c.sha256 = (data: Buffer) => Promise.resolve(Buffer.from(wasmSha256(data)!));
-    c.hmacSha256 = (key: Buffer, data: Buffer) => wasmHmacSha256(key, data)!;
+    const must = <T>(v: T | null, what: string): T => {
+      if (v === null || v === undefined) throw new Error(`crypton-rs ${what} unavailable`);
+      return v;
+    };
+    c.getRandomBytes = (n: number) => must(wasmGetRandomBytes(n), 'get_random_bytes');
+    setRandomBytesImplementation((n: number) => must(wasmGetRandomBytes(n), 'get_random_bytes'));
+    c.sha1Sync = (data: Buffer) => must(wasmSha1(data), 'sha1');
+    c.sha1 = async (data: Buffer) => must(wasmSha1(data), 'sha1');
+    c.sha256_sync = (data: Buffer) => Buffer.from(must(wasmSha256(data), 'sha256'));
+    c.sha256 = async (data: Buffer) => Buffer.from(must(wasmSha256(data), 'sha256'));
+    c.hmacSha256 = async (key: Buffer, data: Buffer) => must(wasmHmacSha256(key, data), 'hmac_sha256');
+    setHmacSha256Implementation(async (key: Buffer, data: Uint8Array) =>
+      must(wasmHmacSha256(key, Buffer.from(data)), 'hmac_sha256'));
     c.modPow = (b: bigint, e: bigint, m: bigint) => {
+      checkModPowArgs(b, e, m);
       const hex = (v: bigint) => v.toString(16);
-      const r = wasmModPow(hex(b), hex(e), hex(m))!;
+      const r = must(wasmModPow(hex(b), hex(e), hex(m)), 'mod_pow');
       return BigInt('0x' + r);
     };
     void c;
 
-    AES256CTR.process = ((data: Buffer, key: Buffer, iv: Buffer, startCounter: number) =>
-      wasmAes256CtrProcess(data, key, iv, startCounter * 16)!) as any;
-    AES256CTR.processAsync = ((data: Buffer, key: Buffer, iv: Buffer, startCounter: number) =>
-      Promise.resolve(wasmAes256CtrProcess(data, key, iv, startCounter * 16)!)) as any;
+    AES256CTR.process = ((data: Buffer, key: Buffer, iv: Buffer, startCounter: number) => {
+      assertCtrRange(startCounter, data.length);
+      return must(wasmAes256CtrProcess(data, key, iv, startCounter * 16), 'aes_ctr_process');
+    }) as any;
+    AES256CTR.processAsync = (async (data: Buffer, key: Buffer, iv: Buffer, startCounter: number) => {
+      assertCtrRange(startCounter, data.length);
+      return must(wasmAes256CtrProcess(data, key, iv, startCounter * 16), 'aes_ctr_process');
+    }) as any;
 
-    AES256IGE.encrypt = ((data: Buffer, key: Buffer, iv: Buffer) =>
-      Promise.resolve(wasmAes256IgeEncrypt(data, key, iv)!)) as any;
-    AES256IGE.decrypt = ((data: Buffer, key: Buffer, iv: Buffer) =>
-      Promise.resolve(wasmAes256IgeDecrypt(data, key, iv)!)) as any;
+    AES256IGE.encrypt = (async (data: Buffer, key: Buffer, iv: Buffer) =>
+      must(wasmAes256IgeEncrypt(data, key, iv), 'aes_ige_encrypt')) as any;
+    AES256IGE.decrypt = (async (data: Buffer, key: Buffer, iv: Buffer) =>
+      must(wasmAes256IgeDecrypt(data, key, iv), 'aes_ige_decrypt')) as any;
 
     AES256CBC.encrypt = ((pt: Buffer, key: Buffer, iv: Buffer) =>
-      wasmAes256CbcEncrypt(key, iv, pt)!) as any;
+      must(wasmAes256CbcEncrypt(key, iv, pt), 'aes_cbc_encrypt')) as any;
     AES256CBC.decrypt = ((ct: Buffer, key: Buffer, iv: Buffer) =>
-      wasmAes256CbcDecrypt(key, iv, ct)!) as any;
+      must(wasmAes256CbcDecrypt(key, iv, ct), 'aes_cbc_decrypt')) as any;
 
-    AES256CBC_ETM.encrypt = ((macKey: Buffer, encKey: Buffer, iv: Buffer, pt: Buffer) =>
-      Promise.resolve(wasmAes256CbcEncryptEtm(macKey, encKey, iv, pt)!)) as any;
-    AES256CBC_ETM.decrypt = ((macKey: Buffer, encKey: Buffer, iv: Buffer, data: Buffer) =>
-      Promise.resolve(wasmAes256CbcDecryptEtm(macKey, encKey, iv, data)!)) as any;
-    AES256CBC_ETM.seal = ((macKey: Buffer, encKey: Buffer, pt: Buffer) =>
-      Promise.resolve(wasmAes256CbcSeal(macKey, encKey, pt)!)) as any;
-    AES256CBC_ETM.open = ((macKey: Buffer, encKey: Buffer, sealed: Buffer) =>
-      Promise.resolve(wasmAes256CbcOpen(macKey, encKey, sealed)!)) as any;
+    AES256CBC_ETM.encrypt = (async (macKey: Buffer, encKey: Buffer, iv: Buffer, pt: Buffer) =>
+      must(wasmAes256CbcEncryptEtm(macKey, encKey, iv, pt), 'aes_cbc_etm_encrypt')) as any;
+    AES256CBC_ETM.decrypt = (async (macKey: Buffer, encKey: Buffer, iv: Buffer, data: Buffer) =>
+      must(wasmAes256CbcDecryptEtm(macKey, encKey, iv, data), 'aes_cbc_etm_decrypt')) as any;
+    AES256CBC_ETM.seal = (async (macKey: Buffer, encKey: Buffer, pt: Buffer) =>
+      must(wasmAes256CbcSeal(macKey, encKey, pt), 'aes_cbc_seal')) as any;
+    AES256CBC_ETM.open = (async (macKey: Buffer, encKey: Buffer, sealed: Buffer) =>
+      must(wasmAes256CbcOpen(macKey, encKey, sealed), 'aes_cbc_open')) as any;
 
-    setKdfSha256Implementation((data: Buffer) => {
+    setKdfSha256Implementation(async (data: Buffer) => {
       const out = wasmSha256(data);
       if (!out) throw new Error('crypton-rs sha256 unavailable');
-      return Promise.resolve(Buffer.from(out));
+      return Buffer.from(out);
     });
+    setKdfSha1Implementation(async (data: Buffer) => must(wasmSha1(data), 'sha1'));
+    setRsaSha1SyncImplementation((data: Buffer) => must(wasmSha1(data), 'sha1'));
 
     setModPowImplementation((b: bigint, e: bigint, m: bigint): bigint => {
+      checkModPowArgs(b, e, m);
       const hex = (v: bigint) => v.toString(16);
-      const r = wasmModPow(hex(b), hex(e), hex(m))!;
+      const r = must(wasmModPow(hex(b), hex(e), hex(m)), 'mod_pow');
       return BigInt('0x' + r);
     });
 
@@ -151,16 +186,18 @@ export function initWasmCrypton(options?: { legacySha1?: boolean }): Promise<voi
 
     const ecbProto = AES256ECB.prototype as any;
     ecbProto.encryptBlock = function(block: Uint8Array): Buffer {
-      return wasmAes256EcbEncrypt(this.key, Buffer.from(block))!;
+      (this as AES256ECB).assertAlive();
+      return must(wasmAes256EcbEncrypt(this.key, Buffer.from(block)), 'aes_ecb_encrypt');
     };
     ecbProto.decryptBlock = function(block: Uint8Array): Buffer {
-      return wasmAes256EcbDecrypt(this.key, Buffer.from(block))!;
+      (this as AES256ECB).assertAlive();
+      return must(wasmAes256EcbDecrypt(this.key, Buffer.from(block)), 'aes_ecb_decrypt');
     };
 
     if (!legacySha1) {
-      const deny = (): never => { throw new Error('SHA-1 disabled: initWasmCrypton({ legacySha1: false })'); };
-      c.sha1Sync = deny as any;
-      c.sha1 = (() => Promise.reject(deny())) as any;
+      const sha1Err = () => new Error('SHA-1 disabled: initWasmCrypton({ legacySha1: false })');
+      c.sha1Sync = (() => { throw sha1Err(); }) as any;
+      c.sha1 = (() => Promise.reject(sha1Err())) as any;
     }
 
     if (isWasmLoggingEnabled()) {
@@ -178,6 +215,7 @@ export function initWasmCrypton(options?: { legacySha1?: boolean }): Promise<voi
       ops: OVERRIDDEN_OPS,
     };
   });
+  return _wasmInitPromise;
 }
 
 export function isCryptonWasmActive(): boolean {
@@ -250,4 +288,5 @@ export const crypton = {
   isCryptonWasmActive,
   getWasmCallStats,
   resetWasmCallStats,
+  clearPrimeCache,
 };

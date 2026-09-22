@@ -5,7 +5,8 @@ export function isNode(): boolean {
   return typeof process !== 'undefined' && process.versions?.node !== undefined;
 }
 
-export function getRandomBytes(length: number): Buffer {
+type RandomBytesFn = (length: number) => Buffer;
+function defaultGetRandomBytes(length: number): Buffer {
   if (isNode()) {
     const crypto = require('crypto');
     return crypto.randomBytes(length);
@@ -17,12 +18,22 @@ export function getRandomBytes(length: number): Buffer {
   crypto.getRandomValues(arr);
   return Buffer.from(arr);
 }
+let randomBytesImpl: RandomBytesFn = defaultGetRandomBytes;
+export function setRandomBytesImplementation(fn: RandomBytesFn): void {
+  randomBytesImpl = fn;
+}
+export function getRandomBytes(length: number): Buffer {
+  if (!Number.isInteger(length) || length < 0) throw new Error(`Invalid random length: ${length}`);
+  return randomBytesImpl(length);
+}
 
 export function bufferToBigInt(buf: Buffer): bigint {
+  if (buf.length === 0) return 0n;
   return BigInt('0x' + buf.toString('hex'));
 }
 
 export function bigIntToBuffer(num: bigint, length: number): Buffer {
+  if (!Number.isInteger(length) || length < 0) throw new Error(`Invalid buffer length: ${length}`);
   if (num < 0n) {
     throw new Error(`Negative numbers are not supported (got ${num})`);
   }
@@ -69,7 +80,8 @@ export function constantTimeEqual(a: Buffer, b: Buffer): boolean {
     return result === 0;
 }
 
-export async function hmacSha256(key: Buffer, data: Uint8Array): Promise<Buffer> {
+type HmacSha256Fn = (key: Buffer, data: Uint8Array) => Promise<Buffer>;
+async function defaultHmacSha256(key: Buffer, data: Uint8Array): Promise<Buffer> {
   if (isNode()) {
     const crypto = require('crypto');
     return crypto.createHmac('sha256', key).update(data).digest();
@@ -81,6 +93,13 @@ export async function hmacSha256(key: Buffer, data: Uint8Array): Promise<Buffer>
   );
   const sig = await crypto.subtle.sign('HMAC', keyMaterial, data);
   return Buffer.from(sig);
+}
+let hmacSha256Impl: HmacSha256Fn = defaultHmacSha256;
+export function setHmacSha256Implementation(fn: HmacSha256Fn): void {
+  hmacSha256Impl = fn;
+}
+export async function hmacSha256(key: Buffer, data: Uint8Array): Promise<Buffer> {
+  return hmacSha256Impl(key, data);
 }
 
 export function bytesToHex(bytes: Uint8Array): string {
@@ -117,6 +136,7 @@ export function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint 
 function jsModPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
   if (modulus <= 0n) throw new Error('Modulus must be positive');
   if (base < 0n) throw new Error('Negative base is not supported');
+  if (exponent < 0n) throw new Error('Negative exponent is not supported');
   if (modulus === 1n) return 0n;
   let result = 1n;
   let b = base % modulus;
@@ -129,14 +149,20 @@ function jsModPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
   return result;
 }
 
-export function modPowBranchless(base: bigint, exponent: bigint, modulus: bigint, bitLength: number = 2048): bigint {
+export function modPowBranchless(base: bigint, exponent: bigint, modulus: bigint, bitLength?: number): bigint {
   if (modulus <= 0n) throw new Error('Modulus must be positive');
+  if (base < 0n) throw new Error('Negative base is not supported');
+  if (exponent < 0n) throw new Error('Negative exponent is not supported');
   if (modulus === 1n) return 0n;
+  const required = exponent === 0n ? 1 : exponent.toString(2).length;
+  const bits = bitLength ?? required;
+  if (!Number.isInteger(bits) || bits <= 0) throw new Error('bitLength must be a positive integer');
+  if (bits < required) throw new Error(`bitLength ${bits} too small for exponent (${required} bits)`);
 
   let result = 1n;
   let b = ((base % modulus) + modulus) % modulus;
 
-  for (let i = 0; i < bitLength; i++) {
+  for (let i = 0; i < bits; i++) {
     const bit = (exponent >> BigInt(i)) & 1n;
     const temp = (result * b) % modulus;
     result = (temp * bit + result * (1n - bit)) % modulus;
@@ -155,9 +181,15 @@ type IsPrimeFn = (n: bigint, k: number) => boolean;
 let isPrimeImpl: IsPrimeFn = (n, k) => isProbablyPrimeUncached(n, k);
 export function setIsProbablyPrimeImplementation(fn: IsPrimeFn): void {
   isPrimeImpl = fn;
+  primeCache.clear();
+}
+
+export function clearPrimeCache(): void {
+  primeCache.clear();
 }
 
 export function isProbablyPrime(n: bigint, k: number = 40): boolean {
+  if (!Number.isInteger(k) || k <= 0) throw new Error(`Invalid Miller-Rabin rounds: ${k}`);
   const cached = primeCache.get(n);
   if (cached !== undefined) return cached;
   const result = isPrimeImpl(n, k);
@@ -214,6 +246,7 @@ function isProbablyPrimeUncached(n: bigint, k: number): boolean {
 }
 
 export function bigIntToBufferLE(value: bigint, length: number): Buffer {
+  if (!Number.isInteger(length) || length < 0) throw new Error(`Invalid buffer length: ${length}`);
   if (value < 0n) {
     throw new Error(`Negative numbers are not supported (got ${value})`);
   }
@@ -231,22 +264,26 @@ export async function hkdfExtract(salt: Buffer, ikm: Buffer): Promise<Buffer> {
 }
 
 export async function hkdfExpand(prk: Buffer, info: Buffer, length: number): Promise<Buffer> {
+  if (!Number.isInteger(length) || length < 0) throw new Error(`Invalid HKDF length: ${length}`);
   const hashLen = 64;
   const n = Math.ceil(length / hashLen);
   if (n > 255) throw new Error('HKDF-Expand: length too large');
 
   const chunks: Buffer[] = [];
-  let prev: Buffer<ArrayBuffer> = Buffer.alloc(0);
+  let prev: Buffer = Buffer.alloc(0);
 
   for (let i = 1; i <= n; i++) {
     const h = await hmac_sha512(prk, Buffer.concat([prev, info, Buffer.from([i])]));
+    const block = Buffer.from(h);
+    h.fill(0);
     prev.fill(0);
-    prev = Buffer.from(h);
-    chunks.push(prev);
+    prev = block;
+    chunks.push(Buffer.from(block));
   }
 
   const result = Buffer.concat(chunks).subarray(0, length);
   for (const c of chunks) c.fill(0);
+  prev.fill(0);
   return result;
 }
 
@@ -270,6 +307,8 @@ export async function pbkdf2Sha256(
   iterations: number,
   keyLen: number,
 ): Promise<Buffer> {
+  if (!Number.isInteger(iterations) || iterations <= 0) throw new Error(`Invalid PBKDF2 iterations: ${iterations}`);
+  if (!Number.isInteger(keyLen) || keyLen <= 0) throw new Error(`Invalid PBKDF2 key length: ${keyLen}`);
   const gCrypto = globalThis.crypto;
   if (gCrypto?.subtle && typeof gCrypto.subtle.importKey === 'function') {
     const key = await gCrypto.subtle.importKey('raw', password, 'PBKDF2', false, ['deriveBits']);

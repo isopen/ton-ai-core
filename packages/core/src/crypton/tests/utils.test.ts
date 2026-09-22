@@ -211,6 +211,32 @@ describe('Utils', () => {
         assert.strictEqual(result2.length, 64);
     });
 
+    test('hkdfExpand multi-block matches RFC5869 Expand reference', async () => {
+        const crypto = require('crypto');
+        const prk = Buffer.alloc(64, 0x0b);
+        const info = Buffer.from('test info');
+        const refExpand = (len: number): Buffer => {
+            const out: Buffer[] = [];
+            let prev = Buffer.alloc(0);
+            let ctr = 1;
+            while (Buffer.concat(out).length < len) {
+                const h = crypto.createHmac('sha512', prk)
+                    .update(Buffer.concat([prev, info, Buffer.from([ctr])])).digest();
+                out.push(h);
+                prev = h;
+                ctr++;
+            }
+            return Buffer.concat(out).subarray(0, len);
+        };
+        for (const len of [65, 100, 128]) {
+            const result = await hkdfExpand(prk, info, len);
+            assert.strictEqual(result.length, len);
+            assert.ok(result.equals(refExpand(len)), `hkdfExpand(${len}) mismatch`);
+        }
+        const out100 = await hkdfExpand(prk, info, 100);
+        assert.ok(!out100.subarray(0, 64).equals(Buffer.alloc(64, 0)));
+    });
+
     test('hkdfExpand different info produces different output', async () => {
         const prk = getRandomBytes(64);
         const r1 = await hkdfExpand(prk, Buffer.from('info1'), 32);

@@ -16,7 +16,7 @@ function counterAdd(iv: Buffer, add: number): Buffer {
 
 const CTR_MAX_START_COUNTER = 0xFFFFFFFF;
 
-function assertCtrRange(startCounter: number, dataLength: number): void {
+export function assertCtrRange(startCounter: number, dataLength: number): void {
   if (!Number.isFinite(startCounter) || startCounter < 0 || startCounter > CTR_MAX_START_COUNTER) {
     throw new Error(`CTR start counter out of range: ${startCounter}`);
   }
@@ -129,20 +129,38 @@ export class AesCtrCipher {
   private key: Buffer;
   private iv: Buffer;
   private blockCounter: number;
+  private destroyed = false;
 
   constructor(key: Uint8Array, iv: Uint8Array, startCounter: number) {
+    if (!key || key.length !== 32) throw new Error(`AesCtrCipher key must be 32 bytes, got ${key?.length}`);
+    if (!iv || iv.length !== 16) throw new Error(`AesCtrCipher IV must be 16 bytes, got ${iv?.length}`);
+    assertCtrRange(startCounter, 0);
     this.key = Buffer.from(key);
     this.iv = Buffer.from(iv);
     this.blockCounter = startCounter >>> 0;
   }
 
   process(data: Uint8Array): Uint8Array {
+    if (this.destroyed) throw new Error('AesCtrCipher instance destroyed');
+    assertCtrRange(this.blockCounter, data.length);
+    const blocks = (data.length + 15) >>> 4;
+    if (this.blockCounter + blocks > CTR_MAX_START_COUNTER + 1) {
+      throw new Error('CTR counter overflow: streaming cipher spans past 2^32 blocks');
+    }
     const result = AES256CTR.process(Buffer.from(data), this.key, this.iv, this.blockCounter);
-    this.blockCounter += (data.length + 15) >>> 4;
+    this.blockCounter = (this.blockCounter + blocks) >>> 0;
     return new Uint8Array(result);
   }
 
   get counter(): number {
     return this.blockCounter;
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.key.fill(0);
+    this.iv.fill(0);
+    this.blockCounter = 0;
   }
 }

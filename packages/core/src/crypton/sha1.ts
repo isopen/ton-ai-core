@@ -12,19 +12,23 @@ export async function sha1(data: Buffer): Promise<Buffer> {
 export function sha1Sync(data: Buffer): Buffer {
   const words = new Uint32Array(80);
   const bytes = new Uint8Array(data);
-  const ml = bytes.length * 8;
+  const bitLenHi = Math.floor(bytes.length / 0x20000000);
+  const bitLenLo = (bytes.length << 3) >>> 0;
 
   const paddedLen = (((bytes.length + 9 + 63) >> 6) << 6);
   const padded = new Uint8Array(paddedLen);
   padded.set(bytes);
   padded[bytes.length] = 0x80;
-  new DataView(padded.buffer).setUint32(paddedLen - 4, ml, false);
+  const lenView = new DataView(padded.buffer);
+  lenView.setUint32(paddedLen - 8, bitLenHi, false);
+  lenView.setUint32(paddedLen - 4, bitLenLo, false);
 
   let h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;
 
+  const blockView = new DataView(padded.buffer);
   for (let block = 0; block < paddedLen; block += 64) {
     for (let i = 0; i < 16; i++) {
-      words[i] = new DataView(padded.buffer).getUint32(block + i * 4, false);
+      words[i] = blockView.getUint32(block + i * 4, false);
     }
     for (let i = 16; i < 80; i++) {
       words[i] = rotl(words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16], 1);

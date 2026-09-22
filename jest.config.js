@@ -60,8 +60,7 @@ module.exports = {
     '<rootDir>/agents/gram-browser/tests',
     '<rootDir>/agents/opencode-radar/tests',
     '<rootDir>/plugins/opencode/tests',
-    '<rootDir>/plugins/telegram-bot-api/tests',
-    '<rootDir>/plugins/fly-brain/tests'
+    '<rootDir>/plugins/telegram-bot-api/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
@@ -69,6 +68,7 @@ module.exports = {
     '^.+\\.tsx$': ['ts-jest', tsOpts],
     '^.+\\.ts$': ['ts-jest', tsOpts],
     'gram-ui/dist/.+\\.js$': '<rootDir>/jest.esm-transformer.cjs',
+    'packages/core/src/crypton/wasm/.+\\.js$': '<rootDir>/jest.esm-transformer.cjs',
   },
   transformIgnorePatterns: ['/node_modules/(?!(@ton-ai)/)'],
   moduleNameMapper: {
