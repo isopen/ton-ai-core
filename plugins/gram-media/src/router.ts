@@ -12,6 +12,9 @@ const PROBE_MSG_LIMIT = 60;
 const PROBE_LRU_MAX = 600;
 const MAX_ACTIVE_BLOB_URLS = 4096;
 const TGS_JSON_TTL_MS = 30 * 60 * 1000;
+const TGS_JSON_CACHE_MAX = 300;
+const TGS_JSON_HARD_MAX = 600;
+const TGS_JSON_EVICT_GRACE_MS = 5 * 60 * 1000;
 const STICKER_SET_TTL_MS = 30 * 60 * 1000;
 const MAX_PARALLEL_PHOTOS = 16;
 const MAX_PARALLEL_AVATARS = 32;
@@ -385,6 +388,7 @@ export class GramMediaRouter {
             keys.delete(key);
             if (keys.size === 0) this.emojiKeysByUrl.delete(url);
         }
+        if (!this.emojiUrlRefs.has(url)) this.emojiBlobUrls.delete(url);
     }
 
     emojiKeysForUrl(url: string): string[] {
@@ -688,13 +692,10 @@ export class GramMediaRouter {
         const jsonBlob = new Blob([jsonStr], { type: 'application/json' });
         const url = this.trackBlobUrl(URL.createObjectURL(jsonBlob));
         const now = Date.now();
-        if (this.tgsJsonByUrl.size >= 300) {
-            const oldest = this.tgsJsonByUrl.keys().next().value;
-            if (oldest !== undefined) {
-                this.revokeBlobUrl(oldest);
-                this.tgsJsonByUrl.delete(oldest);
-                this.tgsJsonByUrlTs.delete(oldest);
-            }
+        if (this.tgsJsonByUrl.size >= TGS_JSON_CACHE_MAX) {
+            const victim = this.pickTgsEvictVictim(now)
+                ?? (this.tgsJsonByUrl.size >= TGS_JSON_HARD_MAX ? this.pickTgsOldestUnprotected() : undefined);
+            if (victim !== undefined) this.dropTgsJsonEntry(victim, true);
         }
         this.tgsJsonByUrl.set(url, jsonStr);
         this.tgsJsonByUrlTs.set(url, now);
@@ -707,18 +708,53 @@ export class GramMediaRouter {
             const cutoff = now - TGS_JSON_TTL_MS;
             for (const [u, ts] of this.tgsJsonByUrlTs) {
                 if (ts < cutoff) {
-                    this.revokeBlobUrl(u);
-                    const k = this.tgsJsonKeyByUrl.get(u);
-                    if (k) {
-                        this.tgsJsonUrlByKey.delete(k);
-                        this.tgsJsonKeyByUrl.delete(u);
-                    }
-                    this.tgsJsonByUrl.delete(u);
-                    this.tgsJsonByUrlTs.delete(u);
+                    if (this.isTgsUrlProtected(u)) continue;
+                    this.dropTgsJsonEntry(u, false);
                 }
             }
         }
         return url;
+    }
+
+    private isTgsUrlProtected(url: string): boolean {
+        return this.isCachedEmojiUrl(url) || this.emojiBlobUrls.has(url);
+    }
+
+    private pickTgsEvictVictim(now: number): string | undefined {
+        let oldest: string | undefined;
+        let oldestTs = Infinity;
+        for (const [u, ts] of this.tgsJsonByUrlTs) {
+            if (this.isTgsUrlProtected(u)) continue;
+            if (now - ts < TGS_JSON_EVICT_GRACE_MS) continue;
+            if (ts < oldestTs) { oldestTs = ts; oldest = u; }
+        }
+        return oldest;
+    }
+
+    private pickTgsOldestUnprotected(): string | undefined {
+        let oldest: string | undefined;
+        let oldestTs = Infinity;
+        for (const [u, ts] of this.tgsJsonByUrlTs) {
+            if (this.isTgsUrlProtected(u)) continue;
+            if (ts < oldestTs) { oldestTs = ts; oldest = u; }
+        }
+        if (oldest !== undefined) return oldest;
+        oldestTs = Infinity;
+        for (const [u, ts] of this.tgsJsonByUrlTs) {
+            if (ts < oldestTs) { oldestTs = ts; oldest = u; }
+        }
+        return oldest;
+    }
+
+    private dropTgsJsonEntry(u: string, revoke: boolean): void {
+        const k = this.tgsJsonKeyByUrl.get(u);
+        if (k) {
+            this.tgsJsonUrlByKey.delete(k);
+            this.tgsJsonKeyByUrl.delete(u);
+        }
+        this.tgsJsonByUrl.delete(u);
+        this.tgsJsonByUrlTs.delete(u);
+        if (revoke) this.revokeBlobUrl(u);
     }
 
     private tgsJsonUrlByKey = new Map<string, { url: string; ts: number }>();
