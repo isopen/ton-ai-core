@@ -225,6 +225,7 @@ export class TdBinlog {
           const encPortion = new Uint8Array(await file.slice(this.encDataOffset, fileSize).arrayBuffer());
           const cipher = new AesCtrCipher(this.encKey, this.encIv, 0);
           const dec = cipher.process(encPortion);
+          this.streamCipher?.destroy();
           this.streamCipher = cipher;
 
           let decOff = 0;
@@ -240,6 +241,7 @@ export class TdBinlog {
                 await w.close();
               } catch {}
               this.fileSize = badOffset;
+              this.streamCipher?.destroy();
               this.streamCipher = new AesCtrCipher(this.encKey!, this.encIv!, (decOff + 15) >>> 4);
               return;
             }
@@ -253,6 +255,7 @@ export class TdBinlog {
                 await w.close();
               } catch {}
               this.fileSize = badOffset;
+              this.streamCipher?.destroy();
               this.streamCipher = new AesCtrCipher(this.encKey!, this.encIv!, (decOff + 15) >>> 4);
               return;
             }
@@ -570,6 +573,9 @@ export class TdBinlog {
     }
     this.fileHandle = await dir.getFileHandle(oldName);
 
+    this.streamCipher?.destroy();
+    this.encKey?.fill(0);
+    this.encIv?.fill(0);
     this.encKey = encKey;
     this.encIv = iv;
     this.streamCipher = newCipher;
@@ -592,6 +598,9 @@ export class TdBinlog {
   private async truncate(offset: number): Promise<void> {
     this.entries = [];
     this.pendingEntries = [];
+    this.streamCipher?.destroy();
+    this.encKey?.fill(0);
+    this.encIv?.fill(0);
     this.encKey = null;
     this.encIv = null;
     this.streamCipher = null;
