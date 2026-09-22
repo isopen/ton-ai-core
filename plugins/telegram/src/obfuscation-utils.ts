@@ -12,6 +12,13 @@ export interface ObfuscationKeys {
 }
 
 export function aes256CtrProcess(data: Buffer, key: Buffer, iv: Buffer, startCounter: number): Buffer {
+    if (!key || key.length !== 32) throw new Error(`obfuscation key must be 32 bytes, got ${key?.length}`);
+    if (!iv || iv.length !== 16) throw new Error(`obfuscation IV must be 16 bytes, got ${iv?.length}`);
+    if (!Number.isInteger(startCounter) || startCounter < 0 || startCounter > 0xFFFFFFFF) {
+        throw new Error(`CTR start counter out of range: ${startCounter}`);
+    }
+    const blocks = Math.ceil(data.length / 16);
+    if (startCounter + blocks > 0xFFFFFFFF + 1) throw new Error('CTR counter overflow');
     const result = Buffer.alloc(data.length);
     let offset = 0;
     let counter = startCounter >>> 0;
@@ -47,6 +54,7 @@ export function generateObfuscationInit(_dcId?: number): { init: Buffer; obf: Bu
     while (true) {
         random = crypton.getRandomBytes(OBFUSCATION_INIT_SIZE);
         if (random[0] === 0xef) continue;
+        if (random[0] === 0x16 && random[1] === 0x03) continue;
         const first4 = random.readUInt32LE(0);
         if ([0x44414548, 0x474554, 0x504f5354, 0xeeeeeeee].includes(first4)) continue;
         if (random.readUInt32LE(4) === 0) continue;
@@ -94,7 +102,9 @@ export function generateObfuscationInit(_dcId?: number): { init: Buffer; obf: Bu
 }
 
 export function abridgedEncode(data: Buffer): Buffer {
+    if (data.length % 4 !== 0) throw new Error(`abridgedEncode data length must be a multiple of 4, got ${data.length}`);
     const intsLen = data.length / 4;
+    if (intsLen >= 0x1000000) throw new Error(`abridgedEncode data too large: ${data.length} bytes`);
     if (intsLen < 0x7F) {
         const header = Buffer.alloc(1);
         header[0] = intsLen;

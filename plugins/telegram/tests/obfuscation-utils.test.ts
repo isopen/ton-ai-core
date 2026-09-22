@@ -164,3 +164,36 @@ test('generateObfuscationInit handles forbidden random values', () => {
 
   getRandomBytesMock.mockRestore();
 });
+
+test('aes256CtrProcess validates inputs', () => {
+  const key = Buffer.alloc(32, 0x01);
+  const iv = Buffer.alloc(16, 0x02);
+  const data = Buffer.alloc(16, 0x03);
+  assert.throws(() => aes256CtrProcess(data, Buffer.alloc(16), iv, 0), /32 bytes/);
+  assert.throws(() => aes256CtrProcess(data, key, Buffer.alloc(8), 0), /16 bytes/);
+  assert.throws(() => aes256CtrProcess(data, key, iv, -1), /out of range/);
+  assert.throws(() => aes256CtrProcess(data, key, iv, 0x100000000), /out of range/);
+});
+
+test('aes256CtrProcess counter overflow throws instead of keystream reuse', () => {
+  const key = Buffer.alloc(32, 0x01);
+  const iv = Buffer.alloc(16, 0x02);
+  assert.throws(() => aes256CtrProcess(Buffer.alloc(32), key, iv, 0xFFFFFFFF), /overflow/i);
+});
+
+test('generateObfuscationInit skips TLS ClientHello prefix', () => {
+  const getRandomBytesMock = jest.spyOn(crypton, 'getRandomBytes');
+  const bad = Buffer.alloc(64, 0x01);
+  bad[0] = 0x16;
+  bad[1] = 0x03;
+  const good = Buffer.alloc(64, 0x02);
+  getRandomBytesMock.mockReturnValueOnce(bad).mockReturnValueOnce(good);
+  const result = generateObfuscationInit();
+  assert.ok(!result.init.equals(bad));
+  getRandomBytesMock.mockRestore();
+});
+
+test('abridgedEncode rejects unaligned and oversized input', () => {
+  assert.throws(() => abridgedEncode(Buffer.alloc(7)), /multiple of 4/);
+  assert.throws(() => abridgedEncode({ length: 0x1000000 * 4 } as any), /too large/);
+});
