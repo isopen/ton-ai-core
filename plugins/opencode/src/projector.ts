@@ -151,6 +151,10 @@ export function mapPart(row: { id: string; time_updated: number; data: string })
         return { kind: 'text', text, time: row.time_updated };
     }
 
+    if (type === 'reasoning') {
+        return { kind: 'reasoning', text: asString(data.text).trim(), time: row.time_updated };
+    }
+
     if (type === 'tool') {
         const tool = asString(data.tool) || 'tool';
         const state = data.state as Record<string, unknown> | undefined;

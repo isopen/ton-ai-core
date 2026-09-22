@@ -51,6 +51,15 @@ describe('opencode projector', () => {
         assert.equal(mapPart(row({ type: 'text', text: '   ' })), null);
     });
 
+    test('reasoning part maps trimmed text, empty text stays an event', () => {
+        assert.deepEqual(mapPart(row({ type: 'reasoning', text: '  Weighing options  ' })), {
+            kind: 'reasoning',
+            text: 'Weighing options',
+            time: 1000,
+        });
+        assert.deepEqual(mapPart(row({ type: 'reasoning', text: '' })), { kind: 'reasoning', text: '', time: 1000 });
+    });
+
     test('tool part maps status and summarized input', () => {
         const event = mapPart(
             row({
@@ -167,8 +176,7 @@ describe('opencode projector', () => {
         assert.equal(mapPart(row({ type: 'patch', hash: 'abc', files: [] })), null);
     });
 
-    test('reasoning and step-start are skipped', () => {
-        assert.equal(mapPart(row({ type: 'reasoning', text: '' })), null);
+    test('step-start is skipped', () => {
         assert.equal(mapPart(row({ type: 'step-start', snapshot: 'x' })), null);
     });
 

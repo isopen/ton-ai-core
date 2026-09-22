@@ -6,6 +6,7 @@ export interface OpencodeConfig {
     autoServe: boolean;
     binPath: string;
     cliFallback?: boolean;
+    cliFirst?: boolean;
 }
 
 export interface SessionRow {
@@ -42,7 +43,8 @@ export type RadarEvent =
     | { kind: 'text'; text: string; time: number }
     | { kind: 'tool'; tool: string; status: string; summary: string; output: string; time: number }
     | { kind: 'step'; tokens: number; cost: number; finish: string; time: number }
-    | { kind: 'files'; files: string[]; time: number };
+    | { kind: 'files'; files: string[]; time: number }
+    | { kind: 'reasoning'; text: string; time: number };
 
 export interface SessionEvent {
     key: string;
