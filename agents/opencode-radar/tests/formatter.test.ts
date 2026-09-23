@@ -7,6 +7,7 @@ import {
     formatDuration,
     formatProgress,
     formatTopicName,
+    parseTopicTitle,
     formatContextPin,
     formatConsoleBatch,
     formatQuestion,
@@ -141,17 +142,18 @@ describe('formatter', () => {
 
     test('formatContextPin shows usage percent when limit is known', () => {
         const pin = formatContextPin({ total: 500000, input: 90000, output: 8000, reasoning: 2000, cacheRead: 390000, cacheWrite: 10000, limit: 1000000, cost: 0.0234 });
-        assert.ok(pin.includes('500,000 / 1,000,000 (50%)'));
-        assert.ok(pin.includes('90,000 in'));
-        assert.ok(pin.includes('8,000 out'));
-        assert.ok(pin.includes('2,000 reasoning'));
-        assert.ok(pin.includes('390,000 cache'));
-        assert.ok(pin.includes('$0.0234'));
+        assert.ok(pin.includes('Context (50%):'));
+        assert.ok(pin.includes('500000/1000000</code>'));
+        assert.ok(pin.includes('<code>90,000 in</code>'));
+        assert.ok(pin.includes('<code>8,000 out</code>'));
+        assert.ok(pin.includes('<code>2,000 reasoning</code>'));
+        assert.ok(pin.includes('<code>390,000 cache</code>'));
+        assert.ok(pin.includes('<code>$0.0234</code>'));
     });
 
     test('formatContextPin works without limit', () => {
         const pin = formatContextPin({ total: 15, input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, limit: null, cost: 0 });
-        assert.ok(pin.includes('15 tokens'));
+        assert.ok(pin.includes('<code>15</code> tokens'));
         assert.ok(!pin.includes('%'));
     });
 
@@ -196,16 +198,30 @@ describe('formatter', () => {
         assert.equal(formatConsoleBatch([{ kind: 'step', tokens: 1, cost: 0, finish: 'stop', time: 1 }], null), '');
     });
 
-    test('formatTopicName fits the forum limit and tags the session', () => {
+    test('formatTopicName is plain text and tags the session', () => {
         const name = formatTopicName('My session', 'ses_f4cc46126ffeS3cq');
-        assert.ok(name.includes('5384090987024892581'));
+        assert.ok(!name.includes('<tg-emoji'));
+        assert.ok(!name.includes('5384090987024892581'));
+        assert.ok(name.startsWith('💎 '));
         assert.ok(name.includes('My session · '));
         assert.ok(name.endsWith('feS3cq'));
         const long = formatTopicName('word '.repeat(60), 'ses_abc123');
         assert.ok(long.length <= FORUM_TOPIC_NAME_LIMIT);
         assert.ok(long.endsWith('abc123'));
         assert.ok(long.includes('…'));
-        assert.equal(formatTopicName('   ', '!!!'), '<tg-emoji emoji-id="5384090987024892581">💎</tg-emoji> Untitled session · session');
+        assert.equal(formatTopicName('   ', '!!!'), '💎 Untitled session · session');
+    });
+
+    test('parseTopicTitle roundtrips formatted names', () => {
+        assert.equal(parseTopicTitle(formatTopicName('My session', 'ses_f4cc46126ffeS3cq'), 'ses_f4cc46126ffeS3cq'), 'My session');
+        assert.equal(parseTopicTitle('💎 My session · feS3cq', 'ses_f4cc46126ffeS3cq'), 'My session');
+        assert.equal(
+            parseTopicTitle('<tg-emoji emoji-id="5384090987024892581">💎</tg-emoji> Old session · feS3cq', 'ses_f4cc46126ffeS3cq'),
+            'Old session',
+        );
+        assert.equal(parseTopicTitle('Brand new name', 'ses_f4cc46126ffeS3cq'), 'Brand new name');
+        assert.equal(parseTopicTitle('   ', 'ses_abc123'), 'Untitled session');
+        assert.ok(parseTopicTitle('x'.repeat(500), 'ses_abc123').length <= 200);
     });
 
     test('splitTelegramHtml passes short text through', () => {

@@ -55,6 +55,7 @@ const ANIM_ID: Record<string, string> = {
     outbox: '5433614747381538714',
     brain: '5859416770019856426',
     gram: '5384090987024892581',
+    coin: '5990252189799422376',
     money: '5832384984593206481',
     bot: '5372981976804366741',
     toolbox: '5449428597922079323',
@@ -96,8 +97,28 @@ const CODE_SPOILER_LINES = 8;
 import type { QuestionRequest, RadarEvent } from '@ton-ai/opencode';
 import { parseTmdEntities, safeHref, codeLangClass, TmdEntity } from '@ton-ai/tmd';
 
+export function parseTopicTitle(name: string, sessionId: string): string {
+    const tag = sessionId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'session';
+    const suffix = ` · ${tag}`;
+    let title = name.replace(/\s+/g, ' ').trim();
+    const legacyPrefix = `${icon('gram')} `;
+    if (title.startsWith(legacyPrefix)) title = title.slice(legacyPrefix.length).trim();
+    const renderedPrefix = `${EMOJI.gram} `;
+    if (title.startsWith(renderedPrefix)) title = title.slice(renderedPrefix.length).trim();
+    if (title.endsWith(suffix)) title = title.slice(0, -suffix.length).trim();
+    return (title || 'Untitled session').slice(0, 200);
+}
+
+/**
+ * Forum topic icon, set via the dedicated createForumTopic field.
+ * Topic names are plain text (Bot API applies no entities there), so the
+ * custom emoji must NOT be embedded as `<tg-emoji>` markup — clients render
+ * the raw tags and the 128-char limit eats the real title.
+ */
+export const TOPIC_ICON_CUSTOM_EMOJI_ID = '5384090987024892581';
+
 export function formatTopicName(title: string, sessionId: string): string {
-    const prefix = `${icon('gram')} `;
+    const prefix = `${EMOJI.gram} `;
     const tag = sessionId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'session';
     const suffix = ` · ${tag}`;
     const cleanTitle = title.replace(/\s+/g, ' ').trim() || 'Untitled session';
@@ -539,7 +560,7 @@ export function formatProgress(state: ProgressState): string {
         );
     }
     const footer =
-        `${icon('toolbox')} ${state.toolCalls} • ${EMOJI.coin} ${(state.tokensIn + state.tokensOut).toLocaleString('en-US')}` +
+        `${icon('toolbox')} ${state.toolCalls} • ${icon('coin')} ${(state.tokensIn + state.tokensOut).toLocaleString('en-US')}` +
             ` • ${icon('money')} $${state.cost.toFixed(4)} • ${icon('folder')} ${state.files.length}` +
             ` • ${icon('timer')} ${formatDuration(state.startedAt, state.updatedAt)} in`;
     if (state.lastText) {
@@ -586,15 +607,15 @@ export interface ContextState {
 export function formatContextPin(state: ContextState): string {
     const head =
         state.limit && state.limit > 0
-            ? `${EMOJI.coin} Context ${state.total.toLocaleString('en-US')} / ${state.limit.toLocaleString('en-US')} (${Math.floor((state.total / state.limit) * 100)}%)`
-            : `${EMOJI.coin} Context ${state.total.toLocaleString('en-US')} tokens`;
+            ? `Context (${Math.floor((state.total / state.limit) * 100)}%):\n${icon('coin')} <code>${state.total}/${state.limit}</code>`
+            : `Context:\n${icon('coin')} <code>${state.total}</code> tokens`;
     return (
         `${head}\n` +
-        `${icon('inbox')} ${state.input.toLocaleString('en-US')} in • ` +
-        `${icon('outbox')} ${state.output.toLocaleString('en-US')} out • ` +
-        `${icon('brain')} ${state.reasoning.toLocaleString('en-US')} reasoning • ` +
-        `${icon('cache')} ${state.cacheRead.toLocaleString('en-US')} cache • ` +
-        `${EMOJI.money} $${state.cost.toFixed(4)}`
+        `${icon('inbox')} <code>${state.input.toLocaleString('en-US')} in</code>  ` +
+        `${icon('outbox')} <code>${state.output.toLocaleString('en-US')} out</code>\n` +
+        `${icon('brain')} <code>${state.reasoning.toLocaleString('en-US')} reasoning</code>\n` +
+        `${icon('cache')} <code>${state.cacheRead.toLocaleString('en-US')} cache</code>\n` +
+        `${icon('money')} <code>$${state.cost.toFixed(4)}</code>`
     );
 }
 
@@ -644,7 +665,7 @@ export function formatThinkingTime(ms: number): string {
 }
 
 export function formatThought(ms: number): string {
-    return `${icon('alien')} ${icon('thinking')} Thought (${formatThinkingTime(ms)})`;
+    return `${icon('thinking')} Thought (${formatThinkingTime(ms)})`;
 }
 
 export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | null): string {
