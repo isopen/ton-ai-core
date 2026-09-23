@@ -17,6 +17,8 @@ export class AES256CBC {
                 const enc = ecb.encryptBlock(block);
                 enc.copy(result, i);
                 enc.copy(prev, 0, 0, 16);
+                block.fill(0);
+                enc.fill(0);
             }
         } finally {
             ecb.destroy();
@@ -39,6 +41,7 @@ export class AES256CBC {
                 const block = ciphertext.subarray(i, i + 16);
                 const dec = ecb.decryptBlock(block);
                 for (let j = 0; j < 16; j++) result[i + j] = dec[j] ^ prev[j];
+                dec.fill(0);
                 block.copy(prev, 0, 0, 16);
             }
         } finally {

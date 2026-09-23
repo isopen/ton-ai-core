@@ -353,6 +353,8 @@ impl MontCtx {
             crate::wipe(&mut t);
             return Err(crate::CryptoError::ArithmeticViolation);
         }
+        debug_assert!(t[2 * n + 1] == 0);
+        debug_assert!(t[2 * n] <= 1);
         let extra = t[2 * n];
         let out: Vec<Limb> = t[n..2 * n].to_vec();
         let mut w: Vec<Limb> = vec![0u64; n + 1];
