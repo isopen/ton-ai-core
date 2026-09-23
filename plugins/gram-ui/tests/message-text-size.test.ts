@@ -327,7 +327,8 @@ describe('message text size styles', () => {
       'country-option-flag', 'login-country-flag', 'login-country-item-flag',
       'TguiImage__error::after', 'MediaCollage__more-overlay', 'MediaCollage__src',
       'tgui-media-source-badge', 'picker__body .emoji', 'tgui-emoji-cell',
-      'tgui-emoji-tab', 'typing-indicator'];
+      'tgui-emoji-tab', 'typing-indicator', 'DiffViewer__title', 'DiffViewer__sub',
+      'DiffViewer__hunkHead', 'DiffViewer__line'];
     const re = /([^{}]+)\{([^{}]*?)font-size:\s*([\d.]+)px([^{}]*?)\}/g;
     const unclassified: string[] = [];
     let m: RegExpExecArray | null;
