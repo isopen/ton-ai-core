@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { PluginContext } from '@ton-ai/core';
 import { OpencodeStore } from './store';
 import { parseServeTarget, serveArgs, ServeTarget, SpawnedProcess, SpawnFn } from './serve';
-import { mapPart, normalizeSessionApi } from './projector';
+import { mapPart, mapSessionMessage, normalizeSessionApi } from './projector';
 import {
     ContextSnapshot,
     ModelApiList,
@@ -217,6 +217,12 @@ export class OpencodeSkills {
             const event = mapPart(row);
             if (event) keyed.push({ key: `db:${row.id}`, event });
         }
+        for (const row of source.readSessionMessages(sessionId, 60)) {
+            for (const { index, event } of mapSessionMessage(row)) {
+                keyed.push({ key: `nmsg:${row.id}:${index}`, event });
+            }
+        }
+        keyed.sort((a, b) => a.event.time - b.event.time);
         return keyed;
     }
 
@@ -439,6 +445,21 @@ export class OpencodeSkills {
                 'opencode replyQuestion',
                 undefined,
                 { method: 'POST', body: JSON.stringify({ answers }) },
+            );
+            return true;
+        } catch (error) {
+            if (error instanceof OpencodeApiError && error.status === 404) return false;
+            throw error;
+        }
+    }
+
+    async renameSession(sessionId: string, title: string): Promise<boolean> {
+        try {
+            await this.request<unknown>(
+                `/session/${encodeURIComponent(sessionId)}`,
+                'opencode renameSession',
+                undefined,
+                { method: 'PATCH', body: JSON.stringify({ title }) },
             );
             return true;
         } catch (error) {

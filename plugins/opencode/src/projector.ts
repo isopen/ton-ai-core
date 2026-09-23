@@ -3,6 +3,7 @@ import {
     ContextSnapshot,
     RadarEvent,
     SessionApiInfo,
+    SessionMessageRow,
     SessionRow,
 } from './types';
 
@@ -118,7 +119,17 @@ export function toolChangeText(tool: string, input: unknown): string {
 export function parseAssistantTokens(data: string): ContextSnapshot | null {
     const parsed = parsePartData(data);
     if (!parsed || parsed.role !== 'assistant') return null;
-    const tokens = parsed.tokens;
+    return snapshotFromTokens(parsed.tokens);
+}
+
+export function parseSessionMessageTokens(type: string, data: string): ContextSnapshot | null {
+    if (type !== 'assistant') return null;
+    const parsed = parsePartData(data);
+    if (!parsed) return null;
+    return snapshotFromTokens(parsed.tokens);
+}
+
+function snapshotFromTokens(tokens: unknown): ContextSnapshot | null {
     if (!tokens || typeof tokens !== 'object' || Array.isArray(tokens)) return null;
     const record = tokens as Record<string, unknown>;
     const cache = record.cache;
@@ -180,6 +191,50 @@ export function mapPart(row: { id: string; time_updated: number; data: string })
     }
 
     return null;
+}
+
+/**
+ * Maps one row of the post-1.18 `session_message` table to radar events.
+ * The server persists prompts and progress here; the legacy `message`/`part`
+ * tables no longer receive server writes, so reading only them makes every
+ * server prompt look unlanded. User rows are skipped on purpose: prompts are
+ * already known to the caller and legacy reads never emitted them either.
+ * Returns indexed events so callers can build stable `nmsg:<id>:<index>` keys.
+ */
+export function mapSessionMessage(row: SessionMessageRow): Array<{ index: number; event: RadarEvent }> {
+    const data = parsePartData(row.data);
+    if (!data) return [];
+    if (row.type !== 'assistant') return [];
+    const content = data.content;
+    if (!Array.isArray(content)) return [];
+    const time = row.time_updated || row.time_created;
+    const events: Array<{ index: number; event: RadarEvent }> = [];
+    content.forEach((part: unknown, index: number) => {
+        if (!part || typeof part !== 'object' || Array.isArray(part)) return;
+        const record = part as Record<string, unknown>;
+        const partType = record.type;
+        if (partType === 'text') {
+            const text = asString(record.text).trim();
+            if (!text) return;
+            events.push({ index, event: { kind: 'text', text, time } });
+            return;
+        }
+        if (partType === 'reasoning') {
+            events.push({ index, event: { kind: 'reasoning', text: asString(record.text).trim(), time } });
+            return;
+        }
+        if (partType === 'tool') {
+            const tool = asString(record.name) || 'tool';
+            const state = record.state as Record<string, unknown> | undefined;
+            const status = typeof state?.status === 'string' ? (state.status as string) : 'running';
+            const summary = summarizeToolInput(tool, state?.input);
+            events.push({
+                index,
+                event: { kind: 'tool', tool, status, summary, output: toolResultText(tool, state), time },
+            });
+        }
+    });
+    return events;
 }
 
 export function mapApiMessages(messages: ApiMessage[]): RadarEvent[] {

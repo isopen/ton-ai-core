@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
-import { parseAssistantTokens } from './projector';
-import { ContextSnapshot, PartRow, SessionRow, TodoRow } from './types';
+import { parseAssistantTokens, parseSessionMessageTokens } from './projector';
+import { ContextSnapshot, PartRow, SessionMessageRow, SessionRow, TodoRow } from './types';
 
 function allRows<T>(db: DatabaseSync, sql: string, ...params: Array<string | number>): T[] {
     return db.prepare(sql).all(...params) as unknown as T[];
@@ -15,6 +15,7 @@ function oneRow<T>(db: DatabaseSync, sql: string, ...params: Array<string | numb
 export class OpencodeStore {
     private db: DatabaseSync;
     private ownsConnection: boolean;
+    private tables: Set<string> | null = null;
 
     constructor(dbPath: string | DatabaseSync) {
         if (typeof dbPath !== 'string') {
@@ -27,6 +28,18 @@ export class OpencodeStore {
         }
         this.db = new DatabaseSync(dbPath, { readOnly: true });
         this.ownsConnection = true;
+    }
+
+    private hasTable(name: string): boolean {
+        if (!this.tables) {
+            try {
+                const rows = allRows<{ name: string }>(this.db, `SELECT name FROM sqlite_master WHERE type = 'table'`);
+                this.tables = new Set(rows.map((row) => row.name));
+            } catch {
+                return false;
+            }
+        }
+        return this.tables.has(name);
     }
 
     listSessions(directory?: string, limit = 20): SessionRow[] {
@@ -78,12 +91,27 @@ export class OpencodeStore {
     }
 
     readLastAssistantTokens(sessionId: string): ContextSnapshot | null {
-        const rows = allRows<{ data: string }>(
+        if (this.hasTable('session_message')) {
+            try {
+                const fresh = allRows<{ type: string; data: string }>(
+                    this.db,
+                    `SELECT type, data FROM session_message WHERE session_id = ? ORDER BY time_created DESC LIMIT 10`,
+                    sessionId,
+                );
+                for (const row of fresh) {
+                    const snapshot = parseSessionMessageTokens(row.type, row.data);
+                    if (snapshot) return snapshot;
+                }
+            } catch {
+                return null;
+            }
+        }
+        const legacy = allRows<{ data: string }>(
             this.db,
             `SELECT data FROM message WHERE session_id = ? ORDER BY time_created DESC LIMIT 10`,
             sessionId,
         );
-        for (const row of rows) {
+        for (const row of legacy) {
             const snapshot = parseAssistantTokens(row.data);
             if (snapshot) return snapshot;
         }
@@ -91,13 +119,61 @@ export class OpencodeStore {
     }
 
     hasMessage(sessionId: string, messageId: string): boolean {
-        const row = oneRow<{ found: number }>(
+        const legacy = oneRow<{ found: number }>(
             this.db,
             `SELECT 1 AS found FROM message WHERE id = ? AND session_id = ? LIMIT 1`,
             messageId,
             sessionId,
         );
-        return row !== null;
+        if (legacy !== null) return true;
+        // Since opencode 1.18 the server persists prompts and progress in
+        // session_message/session_input instead of the legacy message table.
+        // Checking only the legacy table reports every server prompt as
+        // unlanded and forces a needless CLI fallback.
+        if (this.hasTable('session_message')) {
+            try {
+                const fresh = oneRow<{ found: number }>(
+                    this.db,
+                    `SELECT 1 AS found FROM session_message WHERE id = ? AND session_id = ? LIMIT 1`,
+                    messageId,
+                    sessionId,
+                );
+                if (fresh !== null) return true;
+            } catch {
+                return false;
+            }
+        }
+        if (this.hasTable('session_input')) {
+            try {
+                const admitted = oneRow<{ found: number }>(
+                    this.db,
+                    `SELECT 1 AS found FROM session_input WHERE id = ? AND session_id = ? LIMIT 1`,
+                    messageId,
+                    sessionId,
+                );
+                if (admitted !== null) return true;
+            } catch {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    readSessionMessages(sessionId: string, limit = 60): SessionMessageRow[] {
+        if (!this.hasTable('session_message')) return [];
+        try {
+            const rows = allRows<SessionMessageRow>(
+                this.db,
+                `SELECT id, session_id, type, seq, time_created, time_updated, data
+                 FROM session_message WHERE session_id = ?
+                 ORDER BY time_created DESC, seq DESC LIMIT ?`,
+                sessionId,
+                limit,
+            );
+            return rows.reverse();
+        } catch {
+            return [];
+        }
     }
 
     close(): void {

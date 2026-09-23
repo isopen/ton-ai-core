@@ -172,4 +172,9 @@ export class OpencodePlugin extends BasePlugin<OpencodeConfig> {
         this.checkInitialized();
         return this.skills.replyQuestion(sessionId, requestId, answers);
     }
+
+    async renameSession(sessionId: string, title: string): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.renameSession(sessionId, title);
+    }
 }

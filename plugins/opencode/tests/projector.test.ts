@@ -2,22 +2,36 @@ import { strict as assert } from 'assert';
 import {
     mapApiMessages,
     mapPart,
+    mapSessionMessage,
     normalizeSessionApi,
     parseAssistantTokens,
     parsePartData,
+    parseSessionMessageTokens,
     snapshotTotal,
     summarizeToolInput,
     contentBlocksText,
     toolChangeText,
     toolResultText,
 } from '../src/projector';
-import { ApiMessage, PartRow, SessionApiInfo } from '../src/types';
+import { ApiMessage, PartRow, SessionApiInfo, SessionMessageRow } from '../src/types';
 
 function row(data: unknown, time = 1000): PartRow {
     return {
         id: `p${time}`,
         message_id: 'm1',
         session_id: 's1',
+        time_created: time,
+        time_updated: time,
+        data: JSON.stringify(data),
+    };
+}
+
+function sessionMessage(type: string, data: unknown, time = 1000): SessionMessageRow {
+    return {
+        id: `m${time}`,
+        session_id: 's1',
+        type,
+        seq: 3,
         time_created: time,
         time_updated: time,
         data: JSON.stringify(data),
@@ -178,6 +192,49 @@ describe('opencode projector', () => {
 
     test('step-start is skipped', () => {
         assert.equal(mapPart(row({ type: 'step-start', snapshot: 'x' })), null);
+    });
+
+    test('mapSessionMessage expands assistant content with stable indexes', () => {
+        const events = mapSessionMessage(
+            sessionMessage('assistant', {
+                tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+                content: [
+                    { type: 'reasoning', text: '' },
+                    { type: 'text', text: '  done  ' },
+                    { type: 'text', text: '   ' },
+                    { type: 'tool', name: 'bash', state: { status: 'completed', input: { command: 'ls' }, output: 'ok' } },
+                    { type: 'tool', name: 'read' },
+                    { type: 'unknown', text: 'x' },
+                ],
+            }),
+        );
+        assert.deepEqual(events, [
+            { index: 0, event: { kind: 'reasoning', text: '', time: 1000 } },
+            { index: 1, event: { kind: 'text', text: 'done', time: 1000 } },
+            { index: 3, event: { kind: 'tool', tool: 'bash', status: 'completed', summary: 'bash ls', output: 'ok', time: 1000 } },
+            { index: 4, event: { kind: 'tool', tool: 'read', status: 'running', summary: 'read', output: '', time: 1000 } },
+        ]);
+    });
+
+    test('mapSessionMessage skips user rows and invalid payloads', () => {
+        assert.deepEqual(mapSessionMessage(sessionMessage('user', { text: 'ping' })), []);
+        assert.deepEqual(mapSessionMessage(sessionMessage('assistant', { content: 'nope' })), []);
+        const broken = sessionMessage('assistant', { content: [] });
+        broken.data = 'nope';
+        assert.deepEqual(mapSessionMessage(broken), []);
+    });
+
+    test('parseSessionMessageTokens reads top-level tokens of assistant rows', () => {
+        assert.deepEqual(
+            parseSessionMessageTokens(
+                'assistant',
+                JSON.stringify({ tokens: { input: 7, output: 3, reasoning: 1, cache: { read: 40, write: 0 } } }),
+            ),
+            { input: 7, output: 3, reasoning: 1, cacheRead: 40, cacheWrite: 0 },
+        );
+        assert.equal(parseSessionMessageTokens('user', JSON.stringify({ text: 'hi' })), null);
+        assert.equal(parseSessionMessageTokens('assistant', JSON.stringify({ content: [] })), null);
+        assert.equal(parseSessionMessageTokens('assistant', 'nope'), null);
     });
 
     test('summarizeToolInput picks first meaningful field', () => {

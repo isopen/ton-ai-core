@@ -32,6 +32,16 @@ export interface PartRow {
     data: string;
 }
 
+export interface SessionMessageRow {
+    id: string;
+    session_id: string;
+    type: string;
+    seq: number;
+    time_created: number;
+    time_updated: number;
+    data: string;
+}
+
 export interface TodoRow {
     content: string;
     status: string;
