@@ -13,7 +13,7 @@ export const EMOJI = {
     check: '✅',
     question: '❓',
     active: '🔄',
-    queued: '⬜',
+    queued: '🔜',
     plan: '📕',
     folder: '📁',
     doc: '📄',
@@ -47,6 +47,7 @@ const ANIM_ID: Record<string, string> = {
     fail: '5465665476971471368',
     question: '5454231247532353910',
     active: '5264727218734524899',
+    queued: '5440621591387980068',
     plan: '5258046117932711905',
     folder: '5433653135799228968',
     doc: '5359469829302525740',
@@ -398,7 +399,7 @@ export function toTodoState(status: string): TodoState {
 export function todoIcon(state: TodoState): string {
     if (state === 'done') return checkIcon();
     if (state === 'active') return icon('active');
-    return EMOJI.queued;
+    return icon('queued');
 }
 
 export type ToolState = 'ok' | 'fail' | 'running';

@@ -78,7 +78,8 @@ describe('formatter', () => {
         assert.ok(text.includes('5766933926429854499'));
         assert.ok(text.includes('second'));
         assert.ok(text.includes('5264727218734524899'));
-        assert.ok(text.includes('⬜ third'));
+        assert.ok(text.includes('5440621591387980068'));
+        assert.ok(text.includes('third'));
         assert.ok(text.includes('edit /repo/b.ts'));
         assert.ok(text.includes('5411634513509885099'));
         assert.ok(text.includes('model-1'));
