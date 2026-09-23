@@ -1912,23 +1912,30 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         replyTo: number,
         allow: boolean,
     ): Promise<void> {
+        const permKey = `perm:${state.session.id}:${permId}`;
+        if (this.resolvingQuestions.has(permKey)) return;
+        this.resolvingQuestions.add(permKey);
         try {
-            const resolved = await opencode.replyPermission(state.session.id, permId, allow ? 'once' : 'reject');
-            this.permReplies.delete(replyTo);
-            state.knownPerms = state.knownPerms.filter((id) => id !== permId);
-            await this.safeReply(telegram, state, resolved ? (allow ? `${checkIcon()} Allowed once.` : `${icon('denied')} Denied.`) : `${icon('warn')} Already resolved.`);
-        } catch (error) {
-            if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                console.warn(`Radar permission rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
-                return;
+            try {
+                const resolved = await opencode.replyPermission(state.session.id, permId, allow ? 'once' : 'reject');
+                this.permReplies.delete(replyTo);
+                state.knownPerms = state.knownPerms.filter((id) => id !== permId);
+                await this.safeReply(telegram, state, resolved ? (allow ? `${checkIcon()} Allowed once.` : `${icon('denied')} Denied.`) : `${icon('warn')} Already resolved.`);
+            } catch (error) {
+                if (isRateLimitError(error)) {
+                    const waitSec = getRetryAfterSec(error) ?? 10;
+                    this.rateLimitedUntil = Math.max(
+                        this.rateLimitedUntil,
+                        Date.now() + waitSec * 1000 + 1000,
+                    );
+                    console.warn(`Radar permission rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                    return;
+                }
+                console.debug('Radar permission reply failed:', error instanceof Error ? error.message : error);
+                await this.safeReply(telegram, state, `${icon('fail')} Could not send the decision, try again.`);
             }
-            console.debug('Radar permission reply failed:', error instanceof Error ? error.message : error);
-            await this.safeReply(telegram, state, `${icon('fail')} Could not send the decision, try again.`);
+        } finally {
+            this.resolvingQuestions.delete(permKey);
         }
     }
 

@@ -2294,12 +2294,12 @@ describe('radar poll fanout', () => {
         await agent.handleInbound(telegram, opencode, inboundMsg({ message_id: 742, text: 'risky task' }, now));
         assert.ok(exitListener);
         (exitListener as (...args: Array<unknown>) => void)(1);
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
         assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('exit 1')));
         const sendsAfterFail = calls.filter((c) => c.op === 'send').length;
         await agent.handleInbound(telegram, opencode, inboundMsg({ message_id: 743, text: 'next task' }, now));
         (exitListener as (...args: Array<unknown>) => void)(null, 'SIGTERM');
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
         assert.equal(calls.filter((c) => c.op === 'send').length, sendsAfterFail);
     });
 
@@ -3203,7 +3203,7 @@ describe('radar questions', () => {
         await agent.pollQuestions(telegram, fake, state);
         const first = agent.handleCallback(telegram, fake, callbackMsg({ id: 'cb_a', data: 'q1:0:0' }));
         const second = agent.handleCallback(telegram, fake, callbackMsg({ id: 'cb_b', data: 'q1:0:0' }));
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
         assert.equal(answered.length, 1);
         release(true);
         await first;
@@ -3211,6 +3211,53 @@ describe('radar questions', () => {
         assert.equal(answered.length, 1);
         assert.equal(calls.filter((c) => c.op === 'edit').length, 1);
         assert.ok(!calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Already resolved')));
+    });
+
+    test('concurrent toggles on one card both apply', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const multi = { ...QUEST, questions: [{ ...QUEST.questions[0], multiple: true }] };
+        const answered: Array<string[][]> = [];
+        const fake = {
+            listQuestions: async () => [multi],
+            replyQuestion: async (sessionId: string, reqId: string, answers: string[][]) => {
+                answered.push(answers);
+                return true;
+            },
+        };
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        const first = agent.handleCallback(telegram, fake, callbackMsg({ id: 'cc_1', data: 'q1:0:0' }));
+        const second = agent.handleCallback(telegram, fake, callbackMsg({ id: 'cc_2', data: 'q1:0:1' }));
+        await first;
+        await second;
+        await agent.handleCallback(telegram, fake, callbackMsg({ id: 'cc_3', data: 'q1:done' }));
+        assert.deepEqual(answered, [[['Alpha', 'Beta']]]);
+    });
+
+    test('concurrent allow replies submit once', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const decided: Array<{ sessionId: string; permId: string; decision: unknown }> = [];
+        let release!: (value: boolean) => void;
+        const fake = {
+            replyPermission: async (sessionId: string, permId: string, decision: unknown) => {
+                decided.push({ sessionId, permId, decision });
+                return new Promise<boolean>((resolve) => { release = resolve; });
+            },
+        };
+        const first = (agent as unknown as { answerPermission(t: unknown, o: unknown, s: unknown, p: string, r: number, a: boolean): Promise<void> }).answerPermission(telegram, fake, state, 'per_1', 701, true);
+        const second = (agent as unknown as { answerPermission(t: unknown, o: unknown, s: unknown, p: string, r: number, a: boolean): Promise<void> }).answerPermission(telegram, fake, state, 'per_1', 701, true);
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
+        assert.equal(decided.length, 1);
+        release(true);
+        await first;
+        await second;
+        assert.equal(decided.length, 1);
+        assert.equal(calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Allowed once')).length, 1);
     });
 
     test('dead question card is disarmed and late tap only toasts', async () => {
