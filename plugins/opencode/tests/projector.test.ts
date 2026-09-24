@@ -216,8 +216,11 @@ describe('opencode projector', () => {
         ]);
     });
 
-    test('mapSessionMessage skips user rows and invalid payloads', () => {
-        assert.deepEqual(mapSessionMessage(sessionMessage('user', { text: 'ping' })), []);
+    test('mapSessionMessage emits user rows and skips invalid payloads', () => {
+        assert.deepEqual(mapSessionMessage(sessionMessage('user', { text: '  ping  ' })), [
+            { index: 0, event: { kind: 'user', text: 'ping', time: 1000 } },
+        ]);
+        assert.deepEqual(mapSessionMessage(sessionMessage('user', { text: '   ' })), []);
         assert.deepEqual(mapSessionMessage(sessionMessage('assistant', { content: 'nope' })), []);
         const broken = sessionMessage('assistant', { content: [] });
         broken.data = 'nope';

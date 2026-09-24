@@ -131,9 +131,10 @@ describe('opencode single source', () => {
             const skills = new OpencodeSkills(stubContext(), config(path));
             const events = await skills.readEvents('ses_1');
             assert.equal(calls, 0);
-            assert.equal(events.length, 4);
+            assert.equal(events.length, 5);
             assert.ok(events[0].key.startsWith('db:'));
             assert.ok(events.slice(1).every((entry) => entry.key.startsWith('nmsg:')));
+            assert.deepEqual(events[1].event, { kind: 'user', text: 'ping', time: 190 });
             skills.close();
         } finally {
             rmSync(path, { force: true });
@@ -255,13 +256,14 @@ describe('opencode single source', () => {
             assert.ok(keys.includes('nmsg:msg_new_asst:0'));
             assert.ok(keys.includes('nmsg:msg_new_asst:1'));
             assert.ok(keys.includes('nmsg:msg_new_asst:2'));
-            assert.ok(!keys.some((key) => key.startsWith('nmsg:msg_new_user')));
+            assert.ok(keys.includes('nmsg:msg_new_user:0'));
             const kinds = events.map((entry) => entry.event.kind);
-            assert.deepEqual(kinds, ['text', 'reasoning', 'text', 'tool']);
+            assert.deepEqual(kinds, ['text', 'user', 'reasoning', 'text', 'tool']);
             assert.deepEqual(events[0].event, { kind: 'text', text: 'hello', time: 150 });
-            assert.deepEqual(events[1].event, { kind: 'reasoning', text: 'thinking', time: 210 });
-            assert.deepEqual(events[2].event, { kind: 'text', text: 'hello from server', time: 210 });
-            assert.deepEqual(events[3].event, {
+            assert.deepEqual(events[1].event, { kind: 'user', text: 'ping', time: 190 });
+            assert.deepEqual(events[2].event, { kind: 'reasoning', text: 'thinking', time: 210 });
+            assert.deepEqual(events[3].event, { kind: 'text', text: 'hello from server', time: 210 });
+            assert.deepEqual(events[4].event, {
                 kind: 'tool',
                 tool: 'bash',
                 status: 'completed',

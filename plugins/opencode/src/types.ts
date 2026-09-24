@@ -51,6 +51,7 @@ export interface TodoRow {
 
 export type RadarEvent =
     | { kind: 'text'; text: string; time: number }
+    | { kind: 'user'; text: string; time: number }
     | { kind: 'tool'; tool: string; status: string; summary: string; output: string; time: number }
     | { kind: 'step'; tokens: number; cost: number; finish: string; time: number }
     | { kind: 'files'; files: string[]; time: number }
