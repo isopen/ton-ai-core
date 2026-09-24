@@ -8,6 +8,8 @@ import {
   xorInto,
   modPow,
   modPowConstantTime,
+  modPowBranchless,
+  pbkdf2Sha256,
   isProbablyPrime,
   bigIntToBufferLE,
   isNode,
@@ -29,6 +31,17 @@ describe('Utils', () => {
         assert.strictEqual(rand1.length, 32);
         const rand2 = getRandomBytes(32);
         assert.ok(!rand1.equals(rand2));
+    });
+
+    test('input caps reject oversized requests', () => {
+        assert.throws(() => getRandomBytes((1 << 20) + 1), /exceeds/);
+        assert.throws(() => bigIntToBuffer(1n, (1 << 20) + 1), /exceeds/);
+        assert.throws(() => modPowBranchless(2n, 3n, 7n, (1 << 20) + 1), /exceeds/);
+    });
+
+    test('pbkdf2 caps reject oversized requests', async () => {
+        await assert.rejects(() => pbkdf2Sha256(Buffer.alloc(8), Buffer.alloc(8), 10000001, 32), /exceed/);
+        await assert.rejects(() => pbkdf2Sha256(Buffer.alloc(8), Buffer.alloc(8), 1, 255 * 64 + 1), /exceed/);
     });
 
     test('bigIntToBuffer roundtrip small', () => {

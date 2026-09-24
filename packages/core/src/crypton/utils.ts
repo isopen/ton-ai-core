@@ -24,6 +24,7 @@ export function setRandomBytesImplementation(fn: RandomBytesFn): void {
 }
 export function getRandomBytes(length: number): Buffer {
   if (!Number.isInteger(length) || length < 0) throw new Error(`Invalid random length: ${length}`);
+  if (length > (1 << 20)) throw new Error(`Random length exceeds 1 MiB limit: ${length}`);
   return randomBytesImpl(length);
 }
 
@@ -34,6 +35,7 @@ export function bufferToBigInt(buf: Buffer): bigint {
 
 export function bigIntToBuffer(num: bigint, length: number): Buffer {
   if (!Number.isInteger(length) || length < 0) throw new Error(`Invalid buffer length: ${length}`);
+  if (length > (1 << 20)) throw new Error(`Buffer length exceeds 1 MiB limit: ${length}`);
   if (num < 0n) {
     throw new Error(`Negative numbers are not supported (got ${num})`);
   }
@@ -158,6 +160,7 @@ export function modPowBranchless(base: bigint, exponent: bigint, modulus: bigint
   const bits = bitLength ?? required;
   if (!Number.isInteger(bits) || bits <= 0) throw new Error('bitLength must be a positive integer');
   if (bits < required) throw new Error(`bitLength ${bits} too small for exponent (${required} bits)`);
+  if (bits > (1 << 20)) throw new Error(`bitLength exceeds ${(1 << 20)} limit: ${bits}`);
 
   let result = 1n;
   let b = ((base % modulus) + modulus) % modulus;
@@ -190,9 +193,10 @@ export function clearPrimeCache(): void {
 
 export function isProbablyPrime(n: bigint, k: number = 40): boolean {
   if (!Number.isInteger(k) || k <= 0) throw new Error(`Invalid Miller-Rabin rounds: ${k}`);
+  const rounds = Math.min(k, 200);
   const cached = primeCache.get(n);
   if (cached !== undefined) return cached;
-  const result = isPrimeImpl(n, k);
+  const result = isPrimeImpl(n, rounds);
   if (primeCache.size >= PRIME_CACHE_MAX) {
     const oldest = primeCache.keys().next().value;
     if (oldest !== undefined) primeCache.delete(oldest);
@@ -247,6 +251,7 @@ function isProbablyPrimeUncached(n: bigint, k: number): boolean {
 
 export function bigIntToBufferLE(value: bigint, length: number): Buffer {
   if (!Number.isInteger(length) || length < 0) throw new Error(`Invalid buffer length: ${length}`);
+  if (length > (1 << 20)) throw new Error(`Buffer length exceeds 1 MiB limit: ${length}`);
   if (value < 0n) {
     throw new Error(`Negative numbers are not supported (got ${value})`);
   }
@@ -308,7 +313,9 @@ export async function pbkdf2Sha256(
   keyLen: number,
 ): Promise<Buffer> {
   if (!Number.isInteger(iterations) || iterations <= 0) throw new Error(`Invalid PBKDF2 iterations: ${iterations}`);
+  if (iterations > 10000000) throw new Error(`PBKDF2 iterations exceed 10000000 limit: ${iterations}`);
   if (!Number.isInteger(keyLen) || keyLen <= 0) throw new Error(`Invalid PBKDF2 key length: ${keyLen}`);
+  if (keyLen > 255 * 64) throw new Error(`PBKDF2 key length exceeds ${255 * 64} bytes: ${keyLen}`);
   const gCrypto = globalThis.crypto;
   if (gCrypto?.subtle && typeof gCrypto.subtle.importKey === 'function') {
     const key = await gCrypto.subtle.importKey('raw', password, 'PBKDF2', false, ['deriveBits']);
