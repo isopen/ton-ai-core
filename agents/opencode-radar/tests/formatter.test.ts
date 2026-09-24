@@ -10,6 +10,7 @@ import {
     parseTopicTitle,
     formatContextPin,
     formatConsoleBatch,
+    formatLiveTool,
     formatQuestion,
     formatQuestionResolved,
     preBlock,
@@ -156,6 +157,20 @@ describe('formatter', () => {
         const pin = formatContextPin({ total: 15, input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, limit: null, cost: 0 });
         assert.ok(pin.includes('<code>15</code> tokens'));
         assert.ok(!pin.includes('%'));
+    });
+
+    test('formatLiveTool keeps the tail of long output', () => {
+        const big = `${'h'.repeat(4000)}\nTAIL_MARKER`;
+        const text = formatLiveTool({ kind: 'tool', tool: 'bash', status: 'running', summary: 'bash make', output: big, time: 1 });
+        assert.ok(text.includes('bash make'));
+        assert.ok(text.includes('TAIL_MARKER'));
+        assert.ok(!text.includes('h'.repeat(3500)));
+        assert.ok(text.length <= 3900);
+        const short = formatLiveTool({ kind: 'tool', tool: 'bash', status: 'completed', summary: 'bash ls', output: 'ok', time: 2 });
+        assert.ok(short.includes('bash ls'));
+        assert.ok(short.includes('ok'));
+        const aged = formatLiveTool({ kind: 'tool', tool: 'bash', status: 'running', summary: 'bash make', output: 'x', time: 3 }, 12);
+        assert.ok(aged.includes('· 12s'));
     });
 
     test('formatConsoleBatch renders console lines in order', () => {

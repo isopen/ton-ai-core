@@ -2,7 +2,7 @@ import { strict as assert } from 'assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Message } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
-import { OpencodeRadarAgent, isMessageNotModifiedError, isThreadGoneError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError } from '../agent';
+import { OpencodeRadarAgent, isMessageNotModifiedError, isThreadGoneError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, RADAR_THREAD_TIMINGS } from '../agent';
 import { formatThinking, splitTelegramHtml, truncate, wellFormed } from '../formatter';
 
 const NOT_MODIFIED =
@@ -1821,6 +1821,199 @@ describe('radar thread binding survival', () => {
         assert.ok(!batch.includes('```'));
     });
 
+    test('long build streams into one live message', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            pending: Array<{ kind: string; time: number }>;
+            lastEventMessageAt: number;
+            liveTool: unknown;
+        };
+        state.lastEventMessageAt = now;
+        const t1 = now;
+        const t2 = now + 1000;
+        const t3 = now + 2000;
+        const t4 = now + 3000;
+        const toolFor = (status: string, output: string, time: number) => ({
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:bash1', event: { kind: 'tool', tool: 'bash', status, summary: 'bash make rebuild-gram-browser-wasm', output, time } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        const liveSends = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('b.js'));
+        const liveEdits = () => calls.filter((c) => c.op === 'edit' && (String((c.params as Record<string, unknown>).text).includes('c.js') || String((c.params as Record<string, unknown>).text).includes('build ok')));
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'npm notice 1kB a.js', t1);
+        await agent.updateSession(telegram, state);
+        assert.equal(state.pending.length, 1);
+        assert.equal(liveSends().length, 0);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'npm notice 1kB a.js\nnpm notice 2kB b.js', t2);
+        await agent.updateSession(telegram, state);
+        assert.equal(state.pending.length, 0);
+        assert.equal(liveSends().length, 1);
+        now += 4000;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'npm notice 1kB a.js\nnpm notice 2kB b.js\nnpm notice 3kB c.js', t3);
+        await agent.updateSession(telegram, state);
+        assert.equal(liveSends().length, 1);
+        assert.equal(liveEdits().length, 1);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('completed', 'build ok', t4);
+        await agent.updateSession(telegram, state);
+        assert.equal(liveSends().length, 1);
+        assert.equal(liveEdits().length, 2);
+        assert.equal(state.pending.length, 0);
+        assert.equal(state.liveTool, null);
+    });
+
+    test('quick tool never opens a live slot', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            pending: Array<{ kind: string; time: number }>;
+            lastEventMessageAt: number;
+            liveTool: unknown;
+        };
+        state.lastEventMessageAt = now;
+        const toolFor = (status: string, output: string, time: number) => ({
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:bash9', event: { kind: 'tool', tool: 'bash', status, summary: 'bash ls', output, time } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', '', now);
+        await agent.updateSession(telegram, state);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('completed', 'ok', now + 1000);
+        await agent.updateSession(telegram, state);
+        assert.equal(state.liveTool, null);
+        assert.equal(state.pending.length, 1);
+        assert.ok(!calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('tg-spoiler')));
+    });
+
+    test('gone live message reposts on next update', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setEditImpl } = stubTelegram() as unknown as {
+            telegram: unknown;
+            calls: Array<{ op: string; params: Record<string, unknown> }>;
+            setEditImpl: (fn: (params: Record<string, unknown>) => Promise<unknown>) => void;
+        };
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            pending: Array<{ kind: string; time: number }>;
+            lastEventMessageAt: number;
+            liveTool: { messageId: number | null } | null;
+        };
+        state.lastEventMessageAt = now;
+        const toolFor = (status: string, output: string, time: number) => ({
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:bash2', event: { kind: 'tool', tool: 'bash', status, summary: 'bash make', output, time } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        const liveSends = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('bash make') && String((c.params as Record<string, unknown>).text).includes('tg-spoiler'));
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'x', now);
+        await agent.updateSession(telegram, state);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'xy', now + 1000);
+        await agent.updateSession(telegram, state);
+        assert.equal(liveSends().length, 1);
+        setEditImpl(async () => { throw new Error('message to edit not found'); });
+        now += 4000;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'xyz', now + 2000);
+        await agent.updateSession(telegram, state);
+        assert.equal(liveSends().length, 1);
+        assert.equal(state.liveTool?.messageId, null);
+        setEditImpl(async () => true);
+        now += 4000;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'xyzw', now + 3000);
+        await agent.updateSession(telegram, state);
+        assert.equal(liveSends().length, 2);
+        assert.ok(typeof state.liveTool?.messageId === 'number');
+    });
+
+    test('persistent live edit failure falls back to bubble', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setEditImpl } = stubTelegram() as unknown as {
+            telegram: unknown;
+            calls: Array<{ op: string; params: Record<string, unknown> }>;
+            setEditImpl: (fn: (params: Record<string, unknown>) => Promise<unknown>) => void;
+        };
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            pending: Array<{ kind: string; time: number }>;
+            lastEventMessageAt: number;
+            liveTool: unknown;
+        };
+        state.lastEventMessageAt = now;
+        const toolFor = (status: string, output: string, time: number) => ({
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:bash4', event: { kind: 'tool', tool: 'bash', status, summary: 'bash make', output, time } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'a', now);
+        await agent.updateSession(telegram, state);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'ab', now + 1000);
+        await agent.updateSession(telegram, state);
+        setEditImpl(async () => { throw new Error('edit boom'); });
+        now += 1500;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'abc', now + 1000);
+        await agent.updateSession(telegram, state);
+        now += 1500;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'abcd', now + 2000);
+        await agent.updateSession(telegram, state);
+        now += 1500;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'abcde', now + 3000);
+        await agent.updateSession(telegram, state);
+        assert.equal(state.liveTool, null);
+        assert.equal(state.pending.length, 1);
+        state.lastEventMessageAt = 0;
+        await agent.updateSession(telegram, state);
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('abcde')));
+    });
+
+    test('live build takes over the thinking bubble', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            pending: Array<{ kind: string; time: number }>;
+            lastEventMessageAt: number;
+            liveTool: unknown;
+        };
+        state.lastEventMessageAt = now;
+        const toolFor = (status: string, output: string, time: number) => ({
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:bash3', event: { kind: 'tool', tool: 'bash', status, summary: 'bash make', output, time } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        const reasonFor = (text: string, time: number) => ({
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:rsn3', event: { kind: 'reasoning', text, time } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        const thinkingSends = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Thinking'));
+        const thoughtEdits = () => calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('Thought ('));
+        const liveSends = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('bash make') && String((c.params as Record<string, unknown>).text).includes('tg-spoiler'));
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => reasonFor('Hmm', now);
+        await agent.updateSession(telegram, state);
+        assert.equal(thinkingSends().length, 1);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'x', now + 1000);
+        await agent.updateSession(telegram, state);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'xy', now + 2000);
+        await agent.updateSession(telegram, state);
+        assert.equal(liveSends().length, 1);
+        assert.equal(thoughtEdits().length, 1);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => reasonFor('Hmm more', now + 3000);
+        await agent.updateSession(telegram, state);
+        assert.equal(thinkingSends().length, 1);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('completed', 'ok', now + 4000);
+        await agent.updateSession(telegram, state);
+        assert.equal(state.liveTool, null);
+        assert.equal(thinkingSends().length, 2);
+    });
+
     test('running tool heartbeat with identical content does not queue again', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -1873,6 +2066,56 @@ describe('radar thread binding survival', () => {
         );
         assert.equal(cards.length, 1);
         assert.ok(String((cards[0].params as Record<string, unknown>).text).includes('rebuild-gram-browser-wasm'));
+    });
+
+    test('tui prompt is mirrored to chat with sender mark', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const live = {
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:u1', event: { kind: 'user', text: 'do it in tui', time: now } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => live;
+        await agent.updateSession(telegram, state);
+        const mirrors = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('do it in tui'));
+        assert.equal(mirrors.length, 1);
+    });
+
+    test('submitted prompt is not mirrored back', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        (agent as unknown as { enqueuePrompt(s: unknown, text: string): void }).enqueuePrompt(state, 'do it here');
+        const live = {
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:u2', event: { kind: 'user', text: 'do it here', time: now } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => live;
+        await agent.updateSession(telegram, state);
+        assert.ok(!calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('do it here')));
+    });
+
+    test('old user message stays silent on baseline', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const live = {
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:u3', event: { kind: 'user', text: 'ancient', time: now - 100000 } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => live;
+        await agent.updateSession(telegram, state);
+        assert.ok(!calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('ancient')));
     });
 
     test('session gone in opencode is unwatched with a visible notice after 3 empty reads', async () => {
@@ -3500,6 +3743,47 @@ describe('radar stop control', () => {
         await agent.syncStopKeyboard(telegram, state);
         assert.equal(state.stopMessageId, controlId);
         assert.equal(calls.filter((c) => c.op === 'send').length, sendsBefore);
+    });
+
+    test('topic creation failure keeps threads and notifies once', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        let creates = 0;
+        (telegram as unknown as Record<string, unknown>).createForumTopic = async () => {
+            creates += 1;
+            throw new Error('Bad Request: bot is not an admin');
+        };
+        now += RADAR_THREAD_TIMINGS.noticeMs;
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & { threadId: number | null };
+        assert.equal(state.threadId, null);
+        assert.equal(creates, 2);
+        const notices = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('General'));
+        assert.equal(notices().length, 1);
+        await agent.ensureThreadId(telegram, state);
+        assert.equal(creates, 2);
+        now += 6 * 60 * 1000;
+        await agent.ensureThreadId(telegram, state);
+        assert.equal(creates, 4);
+        assert.equal(notices().length, 1);
+        assert.equal((agent as unknown as { threadsEnabled: boolean }).threadsEnabled, true);
+    });
+
+    test('topic icon rejection falls back to plain topic', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const seen: Array<Record<string, unknown>> = [];
+        let nextThreadId = 40;
+        (telegram as unknown as Record<string, unknown>).createForumTopic = async (params: Record<string, unknown>) => {
+            seen.push(params);
+            if (params.icon_custom_emoji_id !== undefined) throw new Error('Bad Request: wrong file identifier');
+            nextThreadId += 1;
+            return { message_thread_id: nextThreadId, name: params.name, icon_color: 0 };
+        };
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & { threadId: number | null };
+        assert.equal(state.threadId, 41);
+        assert.equal(seen.length, 2);
+        assert.ok(seen[0].icon_custom_emoji_id !== undefined);
+        assert.ok(seen[1].icon_custom_emoji_id === undefined);
     });
 
     test('admit reuses the stop control instead of resending', async () => {

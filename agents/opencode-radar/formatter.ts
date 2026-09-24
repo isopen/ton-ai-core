@@ -2,6 +2,26 @@ export const TELEGRAM_TEXT_LIMIT = 4096;
 export const RENDER_BUDGET = 3900;
 export const FORUM_TOPIC_NAME_LIMIT = 128;
 export const TOOL_OUTPUT_CAP = 1200;
+export const LIVE_OUTPUT_MAX = 3000;
+
+export function formatLiveTool(event: RadarEvent, elapsedSec?: number): string {
+    if (event.kind !== 'tool') return formatConsoleBatch([event], null);
+    const age = elapsedSec !== undefined ? ` · ${elapsedSec}s` : '';
+    const lines = [`${toolStateIcon(event.status)} ${escapeHtml(event.summary)}${age}`];
+    if (event.output) {
+        const tail = event.output.length > LIVE_OUTPUT_MAX ? `…${event.output.slice(-LIVE_OUTPUT_MAX)}` : event.output;
+        if (tail.includes('```')) {
+            lines.push(markdownToTelegramHtml(tail));
+        } else if (tail.includes('\n')) {
+            lines.push(preBlock(tail, langFromPath(event.summary)));
+        } else {
+            lines.push(
+                `<tg-spoiler><code>${escapeHtml(tail)}</code></tg-spoiler>`,
+            );
+        }
+    }
+    return lines.join('\n');
+}
 
 export const EMOJI = {
     stop: '⛔️',
@@ -683,6 +703,9 @@ export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | nul
         switch (event.kind) {
             case 'text':
                 chunks.push([markdownToTelegramHtml(event.text)]);
+                break;
+            case 'user':
+                chunks.push([`${icon('chat')} <i>${escapeHtml(truncate(event.text, 500))}</i>`]);
                 break;
             case 'tool': {
                 const lines = [`${toolStateIcon(event.status)} ${escapeHtml(event.summary)}`];

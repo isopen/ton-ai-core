@@ -10,6 +10,7 @@ import {
     escapeHtml,
     formatConsoleBatch,
     formatContextPin,
+    formatLiveTool,
     formatQuestion,
     formatQuestionResolved,
     formatThinking,
@@ -68,6 +69,8 @@ export function isStaleEmptyWatch(
 }
 
 const EVENT_THROTTLE_MS = 3000;
+const LIVE_EDIT_THROTTLE_MS = 1000;
+const MAX_LIVE_FAILURES = 3;
 const THINKING_EDIT_MS = 4000;
 const SLOW_TICK_MS = 3000;
 const WORKING_RECENCY_MS = 15000;
@@ -85,6 +88,12 @@ const CONFIRM_TIMEOUT_MS = 20000;
 const SERVER_ERROR_DEDUP_MS = 60000;
 const MAX_QUEUED_PROMPTS = 5;
 const MAX_SEEN_INBOUND = 500;
+const MAX_SUBMITTED_PROMPTS = 100;
+const SUBMITTED_WINDOW_MS = 120000;
+const THREAD_RETRY_MS = 5 * 60 * 1000;
+const THREAD_NOTICE_MS = 60 * 60 * 1000;
+
+export const RADAR_THREAD_TIMINGS = { retryMs: THREAD_RETRY_MS, noticeMs: THREAD_NOTICE_MS };
 const DOC_MAX_BYTES = 512 * 1024;
 const DOC_MAX_CHARS = 20000;
 const MEDIA_MAX_BYTES = 20 * 1024 * 1024;
@@ -192,6 +201,8 @@ export function eventSignature(event: RadarEvent): string {
     switch (event.kind) {
         case 'text':
             return `text:${event.text}`;
+        case 'user':
+            return `user:${event.text}`;
         case 'tool':
             return `tool:${event.tool}|${event.status}|${event.summary}|${event.output}`;
         case 'files':
@@ -263,6 +274,7 @@ interface WatchedSession {
     limitChecked: boolean;
     pending: RadarEvent[];
     pendingKeys: Map<string, number>;
+    liveTool: { key: string; messageId: number | null; event: RadarEvent; done: boolean; lastText: string; lastEditAt: number; startedAt: number; failCount: number } | null;
     pendingTodos: boolean;
     needsTodoBaseline: boolean;
     needsEventBaseline: boolean;
@@ -336,9 +348,18 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     private questPicks = new Map<string, QuestionPick>();
     private questSeq: number = 0;
     private creatingThreads = new Map<number, Message[]>();
+    private threadRetryAt = 0;
+    private threadNoticeAt = 0;
     private seenInbound = new Set<string>();
     private seenCallbacks = new Set<string>();
     private resolvingQuestions = new Set<string>();
+    private submittedPrompts: Array<{ session: string; text: string; at: number }> = [];
+
+    private isSelfSubmitted(sessionId: string, text: string, now: number): boolean {
+        const fresh = this.submittedPrompts.filter((entry) => now - entry.at < SUBMITTED_WINDOW_MS);
+        if (fresh.length !== this.submittedPrompts.length) this.submittedPrompts = fresh;
+        return fresh.some((entry) => entry.session === sessionId && entry.text === text);
+    }
 
     constructor(config: OpencodeRadarConfig) {
         super(config);
@@ -616,26 +637,45 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     ): Promise<number | null> {
         if (state.threadId !== null) return state.threadId;
         if (!this.threadsEnabled) return null;
-        try {
-            const topic = await telegram.createForumTopic({
-                chat_id: this.config.radar.chatId,
-                name: formatTopicName(state.session.title, state.session.id),
-                icon_custom_emoji_id: TOPIC_ICON_CUSTOM_EMOJI_ID,
-            });
-            state.threadId = topic.message_thread_id;
-            this.savePersisted();
-            return state.threadId;
-        } catch (error) {
-            if (isRateLimitError(error)) {
-                throw error;
+        if (Date.now() < this.threadRetryAt) return null;
+        const attempted: Array<{ icon: boolean; error: unknown }> = [];
+        for (const withIcon of [true, false]) {
+            try {
+                const topic = await telegram.createForumTopic({
+                    chat_id: this.config.radar.chatId,
+                    name: formatTopicName(state.session.title, state.session.id),
+                    ...(withIcon ? { icon_custom_emoji_id: TOPIC_ICON_CUSTOM_EMOJI_ID } : {}),
+                });
+                state.threadId = topic.message_thread_id;
+                this.threadRetryAt = 0;
+                this.savePersisted();
+                if (!withIcon) {
+                    console.warn(`Radar topic icon rejected, created plain topic (session=${state.session.id}).`);
+                }
+                return state.threadId;
+            } catch (error) {
+                if (isRateLimitError(error)) {
+                    throw error;
+                }
+                attempted.push({ icon: withIcon, error });
             }
-            console.warn(
-                'Radar forum topics unavailable, falling back to plain messages:',
-                error instanceof Error ? error.message : error,
-            );
-            this.threadsEnabled = false;
-            return null;
         }
+        const detail = attempted.length > 0 && attempted[attempted.length - 1].error instanceof Error
+            ? (attempted[attempted.length - 1].error as Error).message.slice(0, 160)
+            : 'unknown error';
+        this.threadRetryAt = Date.now() + THREAD_RETRY_MS;
+        console.warn(
+            `Radar forum topic creation failed, retrying later (session=${state.session.id}): ${detail}`,
+        );
+        if (Date.now() - this.threadNoticeAt >= THREAD_NOTICE_MS) {
+            this.threadNoticeAt = Date.now();
+            await this.noticeGeneral(
+                telegram,
+                `${icon('warn')} Cannot create forum topics (${escapeHtml(detail)}). ` +
+                    `New sessions land in General — grant the bot Manage Topics or enable forum topics.`,
+            );
+        }
+        return null;
     }
 
     private async deliverMessage(
@@ -785,6 +825,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             limitChecked: false,
             pending: [],
             pendingKeys: new Map(),
+            liveTool: null,
             pendingTodos: false,
             needsTodoBaseline: false,
             needsEventBaseline: true,
@@ -976,6 +1017,8 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             case 'step':
                 break;
             case 'reasoning':
+                break;
+            case 'user':
                 break;
             case 'files':
                 for (const file of event.files) {
@@ -1237,6 +1280,10 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         const wasEmpty = state.promptQueue.length === 0;
         state.promptQueue.push(text);
         state.stoppedAt = 0;
+        this.submittedPrompts.push({ session: state.session.id, text, at: Date.now() });
+        if (this.submittedPrompts.length > MAX_SUBMITTED_PROMPTS) {
+            this.submittedPrompts.splice(0, this.submittedPrompts.length - MAX_SUBMITTED_PROMPTS);
+        }
         if (wasEmpty) {
             state.promptBusyNotified = false;
             state.promptBusySince = 0;
@@ -1342,7 +1389,11 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         kind: string,
     ): Promise<void> {
         if (fileSize !== undefined && fileSize > MEDIA_MAX_BYTES) {
-            await this.safeReply(telegram, state, `${icon('denied')} Media is too large (max 20 MB).`);
+            if (caption.trim()) {
+                this.enqueuePrompt(state, caption);
+                return;
+            }
+            await this.safeReply(telegram, state, `${icon('denied')} Media is too large (max 20 MB), send it as text.`);
             return;
         }
         let data: string | Buffer;
@@ -1356,7 +1407,11 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
         if (buffer.length > MEDIA_MAX_BYTES) {
             buffer.fill(0);
-            await this.safeReply(telegram, state, `${icon('denied')} Media is too large (max 20 MB).`);
+            if (caption.trim()) {
+                this.enqueuePrompt(state, caption);
+                return;
+            }
+            await this.safeReply(telegram, state, `${icon('denied')} Media is too large (max 20 MB), send it as text.`);
             return;
         }
         const name = sanitizeInboxName(rawName, `${kind}_file.bin`);
@@ -1669,6 +1724,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     }
 
     private async syncThinkingMessage(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        if (state.liveTool) return;
         if (!state.thinkingActive && state.thinkingMessageId === null) return;
         if (Date.now() < this.rateLimitedUntil) return;
         const text = formatThinking(state.thinkingText);
@@ -1840,6 +1896,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             if (confirming && state.confirming === confirming) state.confirming = null;
             state.pending = [];
             state.pendingKeys.clear();
+            state.liveTool = null;
             state.pendingTodos = false;
             state.promptBusyNotified = false;
             state.promptBusySince = 0;
@@ -2337,6 +2394,9 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     ): Promise<void> {
         const tickMark = Date.now();
         try {
+            if (state.threadId === null) {
+                await this.ensureThreadId(telegram, state);
+            }
             await this.updateSession(telegram, state);
             if (![...this.watched.values()].includes(state)) return;
             await this.pumpPrompts(telegram, opencode, state);
@@ -2570,7 +2630,12 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 if (firstSeen) state.toolCalls += 1;
                 if (event.tool === 'question') continue;
             }
+            if (event.kind === 'user' && this.isSelfSubmitted(state.session.id, event.text, Date.now())) continue;
             this.applyEvent(state, event);
+            if (event.kind === 'tool' && (event.status === 'running' || state.liveTool?.key === key)) {
+                this.routeLiveTool(state, key, event, firstSeen);
+                continue;
+            }
             const queuedIdx = state.pendingKeys.get(key);
             if (queuedIdx !== undefined && queuedIdx < state.pending.length) {
                 state.pending[queuedIdx] = event;
@@ -2605,6 +2670,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         }
 
         await this.flushEvents(telegram, state);
+        await this.syncLiveTool(telegram, state);
         await this.refreshContextLimit(opencode, state);
         await this.refreshSnapshot(opencode, state);
         await this.updateContext(telegram, state);
@@ -2812,6 +2878,120 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         }
     }
 
+    private routeLiveTool(state: WatchedSession, key: string, event: RadarEvent, firstSeen: boolean): void {
+        if (event.kind !== 'tool') return;
+        const done = event.status !== 'running';
+        const live = state.liveTool;
+        if (live && live.key === key) {
+            live.event = event;
+            live.done = done;
+            return;
+        }
+        if (!done && !live && !firstSeen) {
+            const pendingIdx = state.pendingKeys.get(key);
+            if (pendingIdx !== undefined && pendingIdx < state.pending.length) {
+                state.pending.splice(pendingIdx, 1);
+                state.pendingKeys.delete(key);
+                for (const [k, i] of state.pendingKeys) {
+                    if (i > pendingIdx) state.pendingKeys.set(k, i - 1);
+                }
+            }
+            state.liveTool = { key, messageId: null, event, done: false, lastText: '', lastEditAt: 0, startedAt: Date.now(), failCount: 0 };
+            return;
+        }
+        const queuedIdx = state.pendingKeys.get(key);
+        if (queuedIdx !== undefined && queuedIdx < state.pending.length) {
+            state.pending[queuedIdx] = event;
+        } else {
+            state.pendingKeys.set(key, state.pending.length);
+            state.pending.push(event);
+        }
+    }
+
+    private abandonLiveTool(state: WatchedSession): void {
+        const live = state.liveTool;
+        if (!live) return;
+        state.liveTool = null;
+        const queuedIdx = state.pendingKeys.get(live.key);
+        if (queuedIdx !== undefined && queuedIdx < state.pending.length) {
+            state.pending[queuedIdx] = live.event;
+        } else {
+            state.pendingKeys.set(live.key, state.pending.length);
+            state.pending.push(live.event);
+        }
+        console.debug(`Radar live tool abandoned, event requeued (session=${state.session.id}).`);
+    }
+
+    private async syncLiveTool(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        const live = state.liveTool;
+        if (!live) return;
+        if (Date.now() < this.rateLimitedUntil) return;
+        const text = formatLiveTool(live.event, Math.max(0, Math.floor((Date.now() - live.startedAt) / 1000)));
+        if (!text) {
+            if (live.done) state.liveTool = null;
+            return;
+        }
+        if (text === live.lastText) {
+            if (live.done) state.liveTool = null;
+            return;
+        }
+        if (Date.now() - live.lastEditAt < LIVE_EDIT_THROTTLE_MS && !live.done) return;
+        if (live.messageId === null) {
+            try {
+                await this.clearThinkingMessage(telegram, state);
+                live.messageId = await this.deliverMessage(telegram, state, text);
+                live.lastText = text;
+                live.lastEditAt = Date.now();
+                live.failCount = 0;
+                if (live.done) state.liveTool = null;
+            } catch (error) {
+                live.lastEditAt = Date.now();
+                live.failCount += 1;
+                console.debug('Radar live tool post failed:', error instanceof Error ? error.message : error);
+                if (live.failCount >= MAX_LIVE_FAILURES) this.abandonLiveTool(state);
+            }
+            return;
+        }
+        try {
+            await telegram.editMessageText({
+                chat_id: this.config.radar.chatId,
+                message_id: live.messageId,
+                text: wellFormed(text),
+                parse_mode: 'HTML',
+            });
+            live.lastText = text;
+            live.lastEditAt = Date.now();
+            live.failCount = 0;
+            if (live.done) state.liveTool = null;
+        } catch (error) {
+            if (isMessageNotModifiedError(error)) {
+                live.lastText = text;
+                live.lastEditAt = Date.now();
+                live.failCount = 0;
+                if (live.done) state.liveTool = null;
+                return;
+            }
+            if (isRateLimitError(error)) {
+                const waitSec = getRetryAfterSec(error) ?? 10;
+                this.rateLimitedUntil = Math.max(
+                    this.rateLimitedUntil,
+                    Date.now() + waitSec * 1000 + 1000,
+                );
+                console.warn(`Radar live tool rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                return;
+            }
+            if (isMessageGoneError(error)) {
+                live.messageId = null;
+                live.failCount = 0;
+                console.debug('Radar live tool message gone, will repost.');
+                return;
+            }
+            live.failCount += 1;
+            console.debug('Radar live tool edit failed:', error instanceof Error ? error.message : error);
+            if (live.failCount >= MAX_LIVE_FAILURES) this.abandonLiveTool(state);
+        }
+    }
+
     private async flushEvents(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         if (Date.now() < this.rateLimitedUntil) return;
         if (state.pending.length === 0 && !state.pendingTodos) return;
@@ -2862,6 +3042,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         state.finalized = true;
         state.pending = [];
         state.pendingKeys.clear();
+        state.liveTool = null;
         state.pendingTodos = false;
         state.promptBusyNotified = false;
         state.promptBusySince = 0;
