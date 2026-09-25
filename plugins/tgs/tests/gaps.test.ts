@@ -50,14 +50,15 @@ describe('parser defaults and edge inputs', () => {
 });
 
 describe('model cache keys', () => {
-    test('same json without key re-parses fresh objects; explicit key reuses one', () => {
+    test('same json without key re-parses fresh objects; explicit key reuses content', () => {
         const a = parseTgs(tgs(MINIMAL));
         const b = parseTgs(tgs(MINIMAL));
         expect(b).not.toBe(a);
 
         const keyed1 = parseTgs(tgs(MINIMAL), { key: 'k1' });
         const keyed2 = parseTgs(tgs(MINIMAL), { key: 'k1' });
-        expect(keyed2).toBe(keyed1);
+        expect(keyed2).toStrictEqual(keyed1);
+        expect(keyed2).not.toBe(keyed1);
 
         const other = parseTgs(tgs(MINIMAL), { key: 'k2' });
         expect(other).not.toBe(keyed1);
@@ -66,7 +67,7 @@ describe('model cache keys', () => {
     test('cache lookup is keyed solely by options.key (json ignored)', () => {
         const a = parseTgs(tgs({ layers: [], nm: 'first' }), { key: 'shared' });
         const b = parseTgs(tgs({ layers: [], nm: 'second' }), { key: 'shared' });
-        expect(b).toBe(a);
+        expect(b).toStrictEqual(a);
         expect(b.name).toBe('first');
     });
 

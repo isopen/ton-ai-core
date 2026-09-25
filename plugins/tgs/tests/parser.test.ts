@@ -563,7 +563,7 @@ describe('parseTgs', () => {
         expect(anim.layers[0].shapes).toBeUndefined();
         expect(anim.layers[0].transform).toBeDefined();
     });
-    it('drops layers without a transform and self-parented layers', () => {
+    it('keeps layers without a transform with defaults and drops self-parented layers', () => {
         const anim = parseTgs(tgs({
             layers: [
                 { ind: 0, ty: 4 },
@@ -571,8 +571,10 @@ describe('parseTgs', () => {
                 { ind: 2, ty: 4, ks: {} },
             ],
         }));
-        expect(anim.layers).toHaveLength(1);
-        expect(anim.layers[0].index).toBe(2);
+        expect(anim.layers).toHaveLength(2);
+        expect(anim.layers[0].index).toBe(0);
+        expect(anim.layers[0].transform).toBeDefined();
+        expect(anim.layers[1].index).toBe(2);
     });
     it('parses precomp layer size (w/h)', () => {
         const anim = parseTgs(tgs({
@@ -749,11 +751,12 @@ describe('interpolateKeyframes', () => {
 });
 describe('model cache', () => {
     afterEach(() => configureModelCacheSize(10));
-    it('returns the same model for the same key', () => {
+    it('returns equal isolated models for the same key', () => {
         const json = tgs({ layers: [{ ind: 0, ty: 4, ks: {} }] });
         const a = parseTgs(json, { key: 'sticker-1' });
         const b = parseTgs(json, { key: 'sticker-1' });
-        expect(a).toBe(b);
+        expect(a).toStrictEqual(b);
+        expect(a).not.toBe(b);
     });
     it('evicts oldest entries beyond the cache size', () => {
         configureModelCacheSize(1);

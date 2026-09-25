@@ -225,7 +225,7 @@ function parseText(t: TgsText): ParsedText | undefined {
 }
 
 function parseLayer(l: TgsLayer): ParsedLayer | undefined {
-    if (!l.ks || (l.parent != null && l.parent === l.ind)) return undefined;
+    if (l.parent != null && l.parent === l.ind) return undefined;
 
     const typeMap: Record<number, LayerType> = {
         0: LayerType.Precomp, 1: LayerType.Solid, 2: LayerType.Image,
@@ -303,8 +303,12 @@ let modelCacheSize = DEFAULT_CACHE_SIZE;
 const modelCache = new Map<string, ParsedAnimation>();
 
 export function configureModelCacheSize(size: number): void {
-    modelCacheSize = size;
-    if (size === 0) modelCache.clear();
+    modelCacheSize = size > 0 ? size : 0;
+    if (modelCacheSize === 0) modelCache.clear();
+}
+
+function cloneAnimation(animation: ParsedAnimation): ParsedAnimation {
+    return structuredClone(animation);
 }
 
 function cacheGet(key: string): ParsedAnimation | undefined {
@@ -319,7 +323,7 @@ function cacheGet(key: string): ParsedAnimation | undefined {
 function cachePut(key: string, value: ParsedAnimation): void {
     if (modelCacheSize <= 0) return;
     cacheGet(key);
-    modelCache.set(key, value);
+    modelCache.set(key, cloneAnimation(value));
     while (modelCache.size > modelCacheSize) {
         const oldest = modelCache.keys().next().value as string;
         modelCache.delete(oldest);
@@ -369,7 +373,7 @@ export function parseTgs(json: string, options?: ParseOptions): ParsedAnimation 
     const key = options?.key;
     if (key) {
         const cached = cacheGet(key);
-        if (cached) return cached;
+        if (cached) return cloneAnimation(cached);
     }
 
     const animation = parseAnimation(data);

@@ -57,7 +57,8 @@ describe('loadTgs', () => {
     it('forwards parse options', async () => {
         const anim = await loadTgs(JSON_BODY, { key: 'k1' });
         const again = await loadTgs(JSON_BODY, { key: 'k1' });
-        expect(anim).toBe(again);
+        expect(again).toStrictEqual(anim);
+        expect(again).not.toBe(anim);
     });
 });
 
