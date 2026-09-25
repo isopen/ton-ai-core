@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 export interface RadarLock {
     path: string;
@@ -8,6 +9,11 @@ export interface RadarLock {
 
 export function lockPathFor(statePath: string): string {
     return `${statePath}.lock`;
+}
+
+export function sharedChatLockPath(chatId: number, baseDir?: string): string {
+    const dir = baseDir ?? join(homedir(), '.local', 'share', 'opencode-radar');
+    return join(dir, `radar-chat-${chatId}.lock`);
 }
 
 export function isPidAlive(pid: number): boolean {

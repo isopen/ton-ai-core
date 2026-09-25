@@ -220,6 +220,7 @@ export interface PersistedSession {
     pinnedThreadId: number | null;
     lastSeen: number;
     appliedTopicName?: string;
+    buildMode?: boolean;
     knownParts?: Record<string, number>;
     knownEventSig?: Record<string, string>;
 }
@@ -255,6 +256,7 @@ interface WatchedSession {
     pinnedThreadId: number | null;
     threadId: number | null;
     appliedTopicName: string | null;
+    buildMode: boolean;
     knownParts: Map<string, number>;
     knownEventSig: Map<string, string>;
     todos: TodoItem[];
@@ -440,8 +442,6 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         this.questReplies.clear();
         this.questPicks.clear();
         this.creatingThreads.clear();
-        this.seenInbound.clear();
-        this.seenCallbacks.clear();
         this.resolvingQuestions.clear();
         if (this.inboundSub) {
             const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
@@ -526,6 +526,18 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             if (!existsSync(this.config.radar.statePath)) return;
             const parsed: unknown = JSON.parse(readFileSync(this.config.radar.statePath, 'utf8'));
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+            const rawSeen = (parsed as Record<string, unknown>).seenInbound;
+            if (Array.isArray(rawSeen)) {
+                for (const key of rawSeen.slice(-MAX_SEEN_INBOUND)) {
+                    if (typeof key === 'string' && key.length > 0) this.seenInbound.add(key);
+                }
+            }
+            const rawSeenCallbacks = (parsed as Record<string, unknown>).seenCallbacks;
+            if (Array.isArray(rawSeenCallbacks)) {
+                for (const key of rawSeenCallbacks.slice(-MAX_SEEN_INBOUND)) {
+                    if (typeof key === 'string' && key.length > 0) this.seenCallbacks.add(key);
+                }
+            }
             const sessions = (parsed as Record<string, unknown>).sessions;
             if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) return;
             for (const [id, entry] of Object.entries(sessions as Record<string, unknown>)) {
@@ -560,6 +572,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                     contextMessageId,
                     pinnedThreadId,
                     lastSeen: typeof record.lastSeen === 'number' ? record.lastSeen : 0,
+                    ...(typeof record.buildMode === 'boolean' ? { buildMode: record.buildMode } : {}),
                     ...(typeof record.appliedTopicName === 'string' && record.appliedTopicName.length > 0
                         ? { appliedTopicName: record.appliedTopicName.slice(0, 200) }
                         : {}),
@@ -602,12 +615,18 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                     pinnedThreadId: state.pinnedThreadId,
                     lastSeen: Date.now(),
                     ...(state.appliedTopicName ? { appliedTopicName: state.appliedTopicName } : {}),
+                    ...(state.buildMode ? {} : { buildMode: false }),
                     ...(cursor.length > 0 ? { knownParts: Object.fromEntries(cursor) } : {}),
                     ...(sigCursor.length > 0 ? { knownEventSig: Object.fromEntries(sigCursor) } : {}),
                 };
             }
             mkdirSync(dirname(this.config.radar.statePath), { recursive: true });
-            writeFileSync(this.config.radar.statePath, JSON.stringify({ version: 1, sessions }));
+            writeFileSync(this.config.radar.statePath, JSON.stringify({
+                version: 1,
+                sessions,
+                seenInbound: [...this.seenInbound].slice(-MAX_SEEN_INBOUND),
+                seenCallbacks: [...this.seenCallbacks].slice(-MAX_SEEN_INBOUND),
+            }));
         } catch (error) {
             console.debug('Radar state save failed:', error);
         }
@@ -806,6 +825,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             pinnedThreadId: stored?.pinnedThreadId ?? null,
             threadId: this.threadsEnabled ? (stored?.threadId ?? null) : null,
             appliedTopicName: null,
+            buildMode: stored?.buildMode ?? true,
             knownParts: new Map(),
             knownEventSig: new Map(),
             todos: [],
@@ -1120,6 +1140,10 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         const command = text.split(/\s+/)[0]?.toLowerCase().split('@')[0];
         if (command === '/stop') {
             await this.stopSession(telegram, opencode, state);
+            return;
+        }
+        if (command === '/mode') {
+            await this.sendModeCard(telegram, state);
             return;
         }
         const replyTo = message.reply_to_message?.message_id;
@@ -1652,6 +1676,45 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
 
     private stopMarkup(state: WatchedSession): InlineKeyboardMarkup {
         return { inline_keyboard: [[{ text: `${EMOJI.coffee} Stop`, callback_data: `stop:${state.session.id}` }]] };
+    }
+
+    private modeMarkup(): InlineKeyboardMarkup {
+        return {
+            inline_keyboard: [[
+                { text: 'Plain', callback_data: 'mode:plain' },
+                { text: 'Build', callback_data: 'mode:build' },
+            ]],
+        };
+    }
+
+    private async sendModeCard(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        try {
+            await this.deliverMessage(
+                telegram,
+                state,
+                `Render mode: <b>${state.buildMode ? 'Build' : 'Plain'}</b> — tap to switch.`,
+                this.modeMarkup(),
+            );
+        } catch (error) {
+            console.debug('Radar mode card failed:', error instanceof Error ? error.message : error);
+        }
+    }
+
+    private async applyRenderMode(
+        telegram: TelegramBotPlugin,
+        query: CallbackQuery,
+        state: WatchedSession,
+        build: boolean,
+    ): Promise<void> {
+        try {
+            await telegram.answerCallbackQuery({ callback_query_id: query.id });
+        } catch (error) {
+            console.debug('Radar mode ack failed:', error instanceof Error ? error.message : error);
+        }
+        if (state.buildMode === build) return;
+        state.buildMode = build;
+        this.savePersisted();
+        await this.safeReply(telegram, state, `Render mode: <b>${build ? 'Build' : 'Plain'}</b>.`);
     }
 
     private async ensureStopControl(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
@@ -2277,6 +2340,28 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             await this.stopSession(telegram, opencode, state);
             return;
         }
+        const modeMatch = data.match(/^mode:(plain|build)$/);
+        if (modeMatch) {
+            const from = query.from;
+            if (!from || from.is_bot) return;
+            if (query.message && query.message.chat.id !== this.config.radar.chatId) return;
+            const allowed = this.config.radar.allowedUsers;
+            if (allowed.length > 0 && !allowed.includes(from.id)) {
+                console.warn(`Radar mode denied for user ${from.id}.`);
+                await dismiss();
+                return;
+            }
+            const threadId = query.message?.message_thread_id;
+            const target = threadId !== undefined && threadId !== null
+                ? this.findSessionByThread(threadId)
+                : [...this.watched.values()][0] ?? null;
+            if (!target) {
+                await dismiss('Outdated, ask again.');
+                return;
+            }
+            await this.applyRenderMode(telegram, query, target, modeMatch[1] === 'build');
+            return;
+        }
         const match = data.match(/^q(\d+):(done|\d+:\d+)$/);
         if (!match) {
             await dismiss();
@@ -2888,6 +2973,16 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             return;
         }
         if (!done && !live && !firstSeen) {
+            if (!state.buildMode) {
+                const queuedIdx = state.pendingKeys.get(key);
+                if (queuedIdx !== undefined && queuedIdx < state.pending.length) {
+                    state.pending[queuedIdx] = event;
+                } else {
+                    state.pendingKeys.set(key, state.pending.length);
+                    state.pending.push(event);
+                }
+                return;
+            }
             const pendingIdx = state.pendingKeys.get(key);
             if (pendingIdx !== undefined && pendingIdx < state.pending.length) {
                 state.pending.splice(pendingIdx, 1);

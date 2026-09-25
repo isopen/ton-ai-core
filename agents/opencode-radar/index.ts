@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { OpencodeRadarAgent, OpencodeRadarConfig } from './agent';
-import { acquireRadarLock, lockPathFor, releaseRadarLock, RadarLock } from './lock';
+import { acquireRadarLock, lockPathFor, releaseRadarLock, sharedChatLockPath, RadarLock } from './lock';
 import { AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
 
 function loadDotEnv(): void {
@@ -145,15 +145,31 @@ async function main(): Promise<void> {
         console.log(`Plugin deactivated: ${data.name}`);
     });
 
+    let lock: RadarLock | null = null;
+    let chatLock: RadarLock | null = null;
+    const releaseLocks = () => {
+        releaseRadarLock(chatLock);
+        chatLock = null;
+        releaseRadarLock(lock);
+        lock = null;
+    };
     try {
-        const lock: RadarLock = acquireRadarLock(lockPathFor(config.radar.statePath));
+        lock = acquireRadarLock(lockPathFor(config.radar.statePath));
         console.log(`Radar lock acquired: ${lock.path}`);
+        try {
+            chatLock = acquireRadarLock(sharedChatLockPath(config.radar.chatId));
+        } catch (error) {
+            releaseRadarLock(lock);
+            lock = null;
+            throw error;
+        }
+        console.log(`Radar chat lock acquired: ${(chatLock as RadarLock).path}`);
         await agent.start();
 
         process.on('SIGINT', () => {
             console.log('\nShutting down...');
             void agent.stop().then(() => {
-                releaseRadarLock(lock);
+                releaseLocks();
                 process.exit(0);
             });
         });
@@ -161,7 +177,7 @@ async function main(): Promise<void> {
         process.on('SIGTERM', () => {
             console.log('\nShutting down...');
             void agent.stop().then(() => {
-                releaseRadarLock(lock);
+                releaseLocks();
                 process.exit(0);
             });
         });
