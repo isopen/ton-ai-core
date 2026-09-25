@@ -329,8 +329,8 @@ describe('renderFrame', () => {
         expect(c.ctx.lineJoin).toBe('round');
 
         expect(c.ctx.dashes[0][0]).toBeCloseTo(4, 4);
-        expect(c.ctx.dashes[0][1]).toBeCloseTo(4, 4);
-        expect(c.ctx.dashOffsets[0]).toBeCloseTo(2, 4);
+        expect(c.ctx.dashes[0][1]).toBeCloseTo(2, 4);
+        expect(c.ctx.dashOffsets[0]).toBeCloseTo(0, 4);
     });
     it('draws paints in reverse order (later paints first)', () => {
         const c = render({ layers: [shapeLayer(0, [RECT, FILL_RED, FILL_BLUE])] });

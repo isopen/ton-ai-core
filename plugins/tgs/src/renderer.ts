@@ -11,7 +11,7 @@ const EPSILON = 0.000001;
 const DASH_TOLERANCE = 0.1;
 const DASH_ITER_CAP = 10000;
 const STAR_POINTS_CAP = 10000;
-const SQRT_2 = 1.41421;
+const SQRT_2 = Math.SQRT2;
 const MAX_PARENT_DEPTH = 64;
 
 function vCompare(a: number, b: number): boolean {
@@ -154,6 +154,15 @@ function matFromTransform(tr: any, frame: number, autoOrient = false): Mat3 {
     const anc = resolveProp(tr?.anchor, frame, [0, 0]);
     let m = matTranslate(toNumber(pos[0]), toNumber(pos[1]));
     m = matMul(m, matRotate(rot));
+    const skew = toNumber(resolveProp(tr?.skew, frame, 0));
+    if (!vIsZero(skew)) {
+        const axis = (toNumber(resolveProp(tr?.skewAxis, frame, 0)) * Math.PI) / 180;
+        const t = Math.tan((skew * Math.PI) / 180);
+        const c = Math.cos(axis);
+        const s = Math.sin(axis);
+        const shear: Mat3 = [1 - t * s * c, -t * s * s, t * c * c, 1 + t * s * c, 0, 0];
+        m = matMul(m, shear);
+    }
     m = matMul(m, matScale(sx / 100, sy / 100));
     m = matMul(m, matTranslate(-toNumber(anc[0]), -toNumber(anc[1])));
     return m;
@@ -261,6 +270,7 @@ function ellipseToVerts(p: number[], s: number[]): any[] {
 
 function starToVerts(shape: ParsedShape, frame: number): any[] {
     const rawPoints = toNumber(resolveProp(shape.points, frame, 5));
+    if (!Number.isFinite(rawPoints) || rawPoints <= 0) return [];
     const points = Math.min(STAR_POINTS_CAP, rawPoints);
     const innerR = toNumber(resolveProp(shape.innerRadius, frame, 0));
     const outerR = toNumber(resolveProp(shape.outerRadius, frame, 0));
@@ -275,11 +285,11 @@ function starToVerts(shape: ParsedShape, frame: number): any[] {
     const verts: any[] = [];
     if (shape.starType === 2) {
         const POLYGON_MAGIC_NUMBER = 0.25;
-        let currentAngle = ((0 - 90) * Math.PI) / 180;
+        const currentStart = ((0 - 90) * Math.PI) / 180;
+        let currentAngle = currentStart;
         const anglePerPoint = (2 * Math.PI) / Math.floor(points);
         const numPoints = Math.floor(points);
         const roundness = innerRoundness || outerRoundness || 0;
-        currentAngle = ((currentAngle - 90) * Math.PI) / 180;
         let x = outerR * Math.cos(currentAngle);
         let y = outerR * Math.sin(currentAngle);
         currentAngle += anglePerPoint * angleDir;
@@ -380,7 +390,7 @@ function starToVerts(shape: ParsedShape, frame: number): any[] {
         }
     }
 
-    const b = (4 * rotation * Math.PI) / 180;
+    const b = (rotation * Math.PI) / 180;
     const s = Math.sin(b);
     const c = Math.cos(b);
     for (const vtx of verts) {
@@ -467,21 +477,22 @@ function shapeCmds(shape: ParsedShape, frame: number): PathCmd[] | null {
             return null;
         }
         if (contours.length === 0) return null;
-        const verts: any[] = [];
-        let closed = true;
+        const cmds: PathCmd[] = [];
         for (const ct of contours) {
             const varr = ct.v as number[][];
             const iarr = ct.i as number[][];
             const oarr = ct.o as number[][];
             if (!varr || varr.length === 0) continue;
-            closed = ct.c !== false;
+            const closed = ct.c !== false;
+            const verts: any[] = [];
             for (let j = 0; j < varr.length; j++) {
-                if (!iarr[j] || !oarr[j]) continue;
-                verts.push({ v: varr[j], i: iarr[j], o: oarr[j] });
+                verts.push({ v: varr[j], i: (iarr && iarr[j]) || [0, 0], o: (oarr && oarr[j]) || [0, 0] });
             }
+            if (verts.length === 0) continue;
+            cmds.push(...vertsToCmds(verts, closed));
         }
-        if (verts.length === 0) return null;
-        return vertsToCmds(verts, closed);
+        if (cmds.length === 0) return null;
+        return cmds;
     }
 
     if (type === 'ellipse') {
@@ -794,7 +805,8 @@ function renderRepeatCopies(ctx: CanvasRenderingContext2D, rec: RepeatCopyRec, f
     const maxCopy = maxPropertyNumber(r.copies, 0);
     const maxCopies = !Number.isFinite(maxCopy) || maxCopy <= 0 ? 0 : Math.min(10000, Math.trunc(maxCopy));
     if (maxCopies <= 0) return;
-    const offset = toNumber(resolveProp(r.copiesOffset, frame, 0));
+    const offsetRaw = toNumber(resolveProp(r.copiesOffset, frame, 0));
+    const offset = Number.isFinite(offsetRaw) ? offsetRaw : 0;
     const tr = r.transform;
     const so = tr ? toNumber(resolveProp(tr.startOpacity, frame, 100)) / 100 : 1;
     const eo = tr ? toNumber(resolveProp(tr.endOpacity, frame, 100)) / 100 : 1;
@@ -982,6 +994,7 @@ function paintGradient(ctx: CanvasRenderingContext2D, paint: PaintRec, frame: nu
     let grad: CanvasGradient;
     if (g.type === 2) {
         const r = Math.hypot(e[0] - s[0], e[1] - s[1]);
+        if (r <= 0) return null;
         grad = ctx.createRadialGradient(s[0], s[1], 0, s[0], s[1], r);
     } else {
         grad = ctx.createLinearGradient(s[0], s[1], e[0], e[1]);
@@ -1027,7 +1040,11 @@ function paintGradient(ctx: CanvasRenderingContext2D, paint: PaintRec, frame: nu
                     for (let i = 1; i < alphaStops.length; i++) {
                         const prev = alphaStops[i - 1];
                         const next = alphaStops[i];
-                        if (pos <= next[0]) return prev[1] + (next[1] - prev[1]) * ((pos - prev[0]) / (next[0] - prev[0]));
+                        if (pos <= next[0]) {
+                            const span = next[0] - prev[0];
+                            if (span <= 0) return prev[1];
+                            return prev[1] + (next[1] - prev[1]) * ((pos - prev[0]) / span);
+                        }
                     }
                     return last[1];
                 };
@@ -1103,28 +1120,28 @@ function drawPaints(ctx: CanvasRenderingContext2D, paints: PaintRec[], frame: nu
             if (lj != null) ctx.lineJoin = (['miter', 'round', 'bevel'][lj - 1] || 'miter') as CanvasLineJoin;
             if (paint.shape.miterLimit != null) ctx.miterLimit = paint.shape.miterLimit;
             const scale = matScaleOf(paint.matrix);
-            const dashInfo: number[] = [];
+            const dashValues: number[] = [];
+            let dashOffset = 0;
             if (paint.shape.dashes) {
                 for (const d of paint.shape.dashes) {
-                    dashInfo.push(toNumber(resolveProp(d.value, frame, 0)));
+                    const v = toNumber(resolveProp(d.value, frame, 0));
+                    if (!Number.isFinite(v) || v < 0) {
+                        dashValues.length = 0;
+                        break;
+                    }
+                    if (d.name === 'o') dashOffset = v * scale;
+                    else dashValues.push(v * scale);
                 }
             }
-            let dashOffset = 0;
-            let pattern: number[] | null = null;
-            if (dashInfo.length > 1) {
-                if (dashInfo.length % 2 === 0) {
-                    dashInfo.push(dashInfo[dashInfo.length - 1]);
-                    dashInfo[dashInfo.length - 2] = dashInfo[dashInfo.length - 3];
-                }
-                dashOffset = dashInfo[dashInfo.length - 1] * scale;
-                pattern = dashInfo.slice(0, -1).map((v) => v * scale);
+            let pattern: number[] | null = dashValues.length > 0 ? dashValues : null;
+            if (pattern) {
                 let noLength = true;
                 let noGap = true;
                 for (let i = 0; i < pattern.length; i += 2) {
                     if (!vIsZero(pattern[i])) noLength = false;
                     if (!vIsZero(pattern[i + 1])) noGap = false;
                 }
-                if (noLength) return;
+                if (noLength) continue;
                 if (noGap) pattern = null;
             }
             if (pattern) {
@@ -1257,15 +1274,16 @@ function renderCompLayers(
         for (let i = 0; i < layers.length; i++) {
             const layer = layers[i];
             if (layer.matteType) continue;
+            if (layer.matteTarget === true && !matteFor.has(layer.index)) continue;
             if (hiddenLayers?.(layer.name)) continue;
             if (!layerVisible(layer, frame)) continue;
             const matte = matteFor.get(layer.index);
             if (matte) {
                 if (layerVisible(matte, frame)) {
-                    renderMattePair(ctx, matte, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+                    renderMattePair(ctx, matte, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder, hiddenLayers);
                 }
             } else {
-                renderLayer(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+                renderLayer(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder, hiddenLayers);
             }
         }
         return;
@@ -1277,13 +1295,17 @@ function renderCompLayers(
         if (layer.matteType) {
             matte = layer;
         } else {
+            if (!matte && layer.matteTarget === true && !layer.matteType) {
+                matte = null;
+                continue;
+            }
             if (layerVisible(layer, frame) && !hiddenLayers?.(layer.name)) {
                 if (matte) {
                     if (layerVisible(matte, frame)) {
-                        renderMattePair(ctx, matte, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+                        renderMattePair(ctx, matte, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder, hiddenLayers);
                     }
                 } else {
-                    renderLayer(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+                    renderLayer(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder, hiddenLayers);
                 }
             }
             matte = null;
@@ -1303,6 +1325,7 @@ function renderMattePair(
     layerById: Map<number, ParsedLayer>,
     anim: ParsedAnimation,
     layerOrder: LayerOrder = 'default',
+    hiddenLayers?: (name?: string) => boolean,
 ) {
     const w = Math.max(1, Math.ceil(clipRect.w));
     const h = Math.max(1, Math.ceil(clipRect.h));
@@ -1321,7 +1344,7 @@ function renderMattePair(
         srcCtx.beginPath();
         srcCtx.rect(0, 0, w, h);
         srcCtx.clip();
-        renderLayer(srcCtx, src, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder);
+        renderLayer(srcCtx, src, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder, hiddenLayers);
         srcCtx.restore();
 
         matteCanvas = getBuffer(w, h, 'matte-layer#' + matteDepth);
@@ -1332,7 +1355,7 @@ function renderMattePair(
         matteCtx.beginPath();
         matteCtx.rect(0, 0, w, h);
         matteCtx.clip();
-        renderLayer(matteCtx, matte, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder);
+        renderLayer(matteCtx, matte, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder, hiddenLayers);
         matteCtx.restore();
 
         const type = matte.matteType ?? MatteType.None;
@@ -1374,20 +1397,20 @@ function renderPrecomp(
     layerById: Map<number, ParsedLayer>,
     anim: ParsedAnimation,
     layerOrder: LayerOrder = 'default',
+    hiddenLayers?: (name?: string) => boolean,
 ) {
     const children = precompChildren(layer, assets);
 
     let mappedFrame: number;
     const tm = layer.timeRemap;
-    if (tm && tm.animated && tm.keyframes && tm.keyframes.length > 0) {
+    if (tm) {
         const t = toNumber(interpolateKeyframes(tm, frame));
         const frameDuration = Math.max(anim.outFrame - anim.inFrame, 0);
-        const pos = frameDuration > 0 ? t * anim.fps / frameDuration : 0;
-        mappedFrame = Math.round(Math.min(1, Math.max(0, pos)) * frameDuration);
+        mappedFrame = frameDuration > 0 ? Math.round(Math.min(Math.max(t * anim.fps, 0), frameDuration)) : 0;
     } else {
         mappedFrame = frame - (layer.startTime ?? 0);
     }
-    mappedFrame = Math.trunc(mappedFrame / (layer.stretch ?? 1));
+    mappedFrame = layer.stretch ? Math.trunc(mappedFrame / layer.stretch) : mappedFrame;
 
     const hasSize = (layer.layerWidth ?? 0) > 0 && (layer.layerHeight ?? 0) > 0;
     let layerClip: Rect | null = clipRect;
@@ -1403,7 +1426,7 @@ function renderPrecomp(
     if (!vCompare(opacity, 1) && complexContent) {
         const w = Math.max(1, Math.ceil(layerClip.w));
         const h = Math.max(1, Math.ceil(layerClip.h));
-        const buf = getBuffer(w, h, 'precomp');
+        const buf = getBuffer(w, h, 'precomp#' + precompDepth);
         const bctx = buf.getContext('2d')!;
         bctx.setTransform(1, 0, 0, 1, 0, 0);
         bctx.clearRect(0, 0, w, h);
@@ -1411,11 +1434,16 @@ function renderPrecomp(
         bctx.beginPath();
         bctx.rect(0, 0, w, h);
         bctx.clip();
-        renderCompLayers(
-            bctx, children, mappedFrame,
-            matMul(matTranslate(-layerClip.x, -layerClip.y), m),
-            childAlpha, rectOf(0, 0, w, h), assets, anim, layerOrder,
-        );
+        precompDepth++;
+        try {
+            renderCompLayers(
+                bctx, children, mappedFrame,
+                matMul(matTranslate(-layerClip.x, -layerClip.y), m),
+                childAlpha, rectOf(0, 0, w, h), assets, anim, layerOrder, hiddenLayers,
+            );
+        } finally {
+            precompDepth--;
+        }
         bctx.restore();
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1430,9 +1458,11 @@ function renderPrecomp(
     ctx.beginPath();
     ctx.rect(layerClip.x, layerClip.y, layerClip.w, layerClip.h);
     ctx.clip();
-    renderCompLayers(ctx, children, mappedFrame, m, childAlpha, layerClip, assets, anim, layerOrder);
+    renderCompLayers(ctx, children, mappedFrame, m, childAlpha, layerClip, assets, anim, layerOrder, hiddenLayers);
     ctx.restore();
 }
+
+let precompDepth = 0;
 
 const imageBitmaps = new Map<string, ImageBitmap | null>();
 const imageDecodes = new Map<string, Promise<ImageBitmap | null>>();
@@ -1469,7 +1499,7 @@ function decodeImageAsset(a: ParsedAsset): ImageBitmap | null {
         }
     })();
     imageDecodes.set(a.id, p);
-    void p.then((b) => { evictOldestImageCache(); imageBitmaps.set(a.id, b); });
+    void p.then((b) => { if (b) { evictOldestImageCache(); imageBitmaps.set(a.id, b); } });
     return null;
 }
 
@@ -1625,22 +1655,23 @@ function maskPathCmds(mk: ParsedMask, frame: number): PathCmd[] | null {
     const raw = resolveProp(mk.path, frame);
     if (!raw || typeof raw === 'string') return null;
     const contours: any[] = Array.isArray(raw) ? raw : [raw];
-    const verts: any[] = [];
-    let closed = true;
+    const cmds: PathCmd[] = [];
     for (const ct of contours) {
         if (!ct || ct.v === undefined) continue;
-        closed = ct.c !== false;
+        const closed = ct.c !== false;
         const varr = ct.v;
         const iarr = ct.i;
         const oarr = ct.o;
         if (!Array.isArray(varr)) continue;
+        const verts: any[] = [];
         for (let j = 0; j < varr.length; j++) {
-            if (!iarr?.[j] || !oarr?.[j]) continue;
-            verts.push({ v: varr[j], i: iarr[j], o: oarr[j] });
+            verts.push({ v: varr[j], i: (iarr && iarr[j]) || [0, 0], o: (oarr && oarr[j]) || [0, 0] });
         }
+        if (verts.length === 0) continue;
+        cmds.push(...vertsToCmds(verts, closed));
     }
-    if (verts.length === 0) return null;
-    return vertsToCmds(verts, closed);
+    if (cmds.length === 0) return null;
+    return cmds;
 }
 
 function fillMaskOp(
@@ -1708,6 +1739,7 @@ function renderLayerWithMasks(
     layerById: Map<number, ParsedLayer>,
     anim: ParsedAnimation,
     layerOrder: LayerOrder,
+    hiddenLayers?: (name?: string) => boolean,
 ) {
     const w = Math.max(1, Math.ceil(clipRect.w));
     const h = Math.max(1, Math.ceil(clipRect.h));
@@ -1719,7 +1751,7 @@ function renderLayerWithMasks(
     try {
         renderLayerWithMasksInner(
             ctx, layer, masks, frame, base, parentAlpha, clipRect,
-            assets, layerById, anim, layerOrder,
+            assets, layerById, anim, layerOrder, hiddenLayers,
             w, h, localClip, shifted, tagSuffix,
         );
     } finally {
@@ -1741,6 +1773,7 @@ function renderLayerWithMasksInner(
     layerById: Map<number, ParsedLayer>,
     anim: ParsedAnimation,
     layerOrder: LayerOrder,
+    hiddenLayers: ((name?: string) => boolean) | undefined,
     w: number,
     h: number,
     localClip: Rect,
@@ -1755,7 +1788,7 @@ function renderLayerWithMasksInner(
     cctx.beginPath();
     cctx.rect(0, 0, w, h);
     cctx.clip();
-    renderLayerInner(cctx, layer, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder);
+    renderLayerInner(cctx, layer, frame, shifted, parentAlpha, localClip, assets, layerById, anim, layerOrder, hiddenLayers);
     cctx.restore();
 
     const maskCanvas = getBuffer(w, h, 'mask-layer' + tagSuffix);
@@ -1774,12 +1807,8 @@ function renderLayerWithMasksInner(
         const inv = mk.inverted === true;
 
         if (mk.mode === MaskMode.Subtract) {
-            if (inv) {
-                if (seeded) eraseMaskOp(mctx, cmds, w, h);
-            } else {
-                if (!seeded) { seedFullMask(mctx, w, h); seeded = true; }
-                eraseMaskOp(mctx, cmds, w, h);
-            }
+            if (!seeded) { seedFullMask(mctx, w, h); seeded = true; }
+            eraseMaskOp(mctx, cmds, w, h);
         } else if (mk.mode === MaskMode.Intersect) {
             if (inv) {
                 if (!seeded) { seedFullMask(mctx, w, h); seeded = true; }
@@ -1812,7 +1841,7 @@ function renderLayerWithMasksInner(
         ctx.drawImage(content, clipRect.x, clipRect.y);
         ctx.restore();
     } else {
-        renderLayerInner(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+        renderLayerInner(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder, hiddenLayers);
     }
 }
 
@@ -1827,16 +1856,17 @@ function renderLayer(
     layerById: Map<number, ParsedLayer>,
     anim: ParsedAnimation,
     layerOrder: LayerOrder = 'default',
+    hiddenLayers?: (name?: string) => boolean,
 ) {
     if (!layerVisible(layer, frame)) return;
 
     const masks = (layer.masks || []).filter(mk => mk.mode !== MaskMode.None);
-    if (masks.length > 0 && (layer.type === LayerType.Shape || layer.type === LayerType.Precomp)) {
-        renderLayerWithMasks(ctx, layer, masks, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+    if (masks.length > 0 && layer.type !== LayerType.Null) {
+        renderLayerWithMasks(ctx, layer, masks, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder, hiddenLayers);
         return;
     }
 
-    renderLayerInner(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder);
+    renderLayerInner(ctx, layer, frame, base, parentAlpha, clipRect, assets, layerById, anim, layerOrder, hiddenLayers);
 }
 
 function renderLayerInner(
@@ -1850,6 +1880,7 @@ function renderLayerInner(
     layerById: Map<number, ParsedLayer>,
     anim: ParsedAnimation,
     layerOrder: LayerOrder = 'default',
+    hiddenLayers?: (name?: string) => boolean,
 ) {
     if (!layerVisible(layer, frame)) return;
 
@@ -1885,7 +1916,7 @@ function renderLayerInner(
                 ctx.restore();
             }
         } else if (layer.type === LayerType.Precomp) {
-            renderPrecomp(ctx, layer, frame, m, opacity, clipRect, assets, layerById, anim, layerOrder);
+            renderPrecomp(ctx, layer, frame, m, opacity, clipRect, assets, layerById, anim, layerOrder, hiddenLayers);
         } else if (layer.type === LayerType.Solid) {
             renderSolid(ctx, layer, m, opacity);
         } else if (layer.type === LayerType.Text) {
@@ -1914,9 +1945,10 @@ export function renderFrame(
     const dispW = displayW ?? (canvas.clientWidth || anim.width);
     const dispH = displayH ?? (canvas.clientHeight || anim.height);
     if (dispW === 0 || dispH === 0) return;
+    const scale = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
 
-    const w = Math.round(dispW * dpr);
-    const h = Math.round(dispH * dpr);
+    const w = Math.round(dispW * scale);
+    const h = Math.round(dispH * scale);
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
 
