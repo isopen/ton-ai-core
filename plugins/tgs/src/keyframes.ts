@@ -10,11 +10,17 @@ function unwrapValue(v: any): any {
     return v;
 }
 
+function keyTime(raw: any): number {
+    const t = Array.isArray(raw?.t) ? raw.t[0] : raw?.t;
+    return typeof t === 'number' ? t : Number.POSITIVE_INFINITY;
+}
+
 function buildKeyframes(rawK: any, defaultValue: any): ParsedKeyframe[] {
     if (!Array.isArray(rawK)) return [];
     const keyframes: ParsedKeyframe[] = [];
+    const ordered = rawK.slice().sort((a, b) => keyTime(a) - keyTime(b));
 
-    for (const raw of rawK) {
+    for (const raw of ordered) {
         if (!raw || typeof raw !== 'object') continue;
         const t = Array.isArray(raw.t) ? raw.t[0] : raw.t;
         if (typeof t !== 'number') continue;
@@ -60,7 +66,6 @@ export function parseValue(v: any): ParsedProperty {
     }
     const keyframes = buildKeyframes(v.k, undefined);
     const isAnimated = keyframes.length > 0;
-    const hasSplit = !!(v.x || v.y);
 
     const prop: ParsedProperty = {
         animated: isAnimated,
@@ -94,10 +99,23 @@ function lerpPosition(
         p3: [end[0], end[1]],
     };
     const len = bezierLength(seg);
-    if (len < 1e-6) return [lerpNumber(start[0], end[0], t), lerpNumber(start[1], end[1], t)];
+    if (len < 1e-6) {
+        const z = start.length > 2 || end.length > 2
+            ? lerpNumber(toNum(start[2]), toNum(end[2]), t)
+            : undefined;
+        const base = [lerpNumber(start[0], end[0], t), lerpNumber(start[1], end[1], t)];
+        return z === undefined ? base : [base[0], base[1], z];
+    }
     const tt = bezierTAtLength(seg, t * len, len);
     const pt = bezierPointAt(seg, tt);
+    if (start.length > 2 || end.length > 2) {
+        return [pt[0], pt[1], lerpNumber(toNum(start[2]), toNum(end[2]), t)];
+    }
     return [pt[0], pt[1]];
+}
+
+function toNum(v: any): number {
+    return typeof v === 'number' && Number.isFinite(v) ? v : 0;
 }
 
 export function lerpValue(start: any, end: any, t: number): any {
@@ -146,12 +164,13 @@ function resolveSplitDimensions(prop: ParsedProperty, value: any, frame: number)
     while (base.length < 2) base.push(0);
     if (prop.x) {
         const xv = interpolateKeyframes(prop.x, frame);
-        const x0 = isNumericArray(xv) ? xv[0] : typeof xv === 'number' ? xv : undefined;
+        const x0 = isNumericArray(xv) && xv.length > 0 ? xv[0] : typeof xv === 'number' ? xv : undefined;
         if (x0 !== undefined) base[0] = x0;
     }
     if (prop.y) {
         const yv = interpolateKeyframes(prop.y, frame);
-        base[1] = isNumericArray(yv) ? yv[0] : typeof yv === 'number' ? yv : 0;
+        const y0 = isNumericArray(yv) && yv.length > 0 ? yv[0] : typeof yv === 'number' ? yv : undefined;
+        if (y0 !== undefined) base[1] = y0;
     }
     return base;
 }

@@ -105,6 +105,7 @@ export class CubicBezier {
 }
 
 const interpolatorCache = new Map<string, CubicBezier>();
+const MAX_INTERPOLATORS = 256;
 
 export function buildEasing(o?: TgsEasing, i?: TgsEasing): CubicBezierEasing | undefined {
     if (!o && !i) return undefined;
@@ -122,11 +123,18 @@ function clamp01(v: number): number {
 
 export function easingValue(easing: CubicBezierEasing, t: number): number {
     const { x1, y1, x2, y2 } = easing;
-    const key = [x1, y1, x2, y2].map((v) => v.toFixed(4)).join('_');
+    const key = x1 + '_' + y1 + '_' + x2 + '_' + y2;
     let interp = interpolatorCache.get(key);
-    if (!interp) {
-        interp = new CubicBezier(x1, y1, x2, y2);
+    if (interp) {
+        interpolatorCache.delete(key);
         interpolatorCache.set(key, interp);
+        return interp.value(t);
+    }
+    interp = new CubicBezier(x1, y1, x2, y2);
+    interpolatorCache.set(key, interp);
+    while (interpolatorCache.size > MAX_INTERPOLATORS) {
+        const oldest = interpolatorCache.keys().next().value as string;
+        interpolatorCache.delete(oldest);
     }
     return interp.value(t);
 }

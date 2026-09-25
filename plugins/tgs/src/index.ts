@@ -31,6 +31,7 @@ export {
 } from './types.js';
 
 const GZIP_MAGIC: [number, number] = [0x1f, 0x8b];
+const MAX_DECOMPRESSED_BYTES = 16 * 1024 * 1024;
 
 export async function inflateTgs(data: Uint8Array): Promise<string> {
     if (data.length < 2 || data[0] !== GZIP_MAGIC[0] || data[1] !== GZIP_MAGIC[1]) {
@@ -58,6 +59,10 @@ export async function inflateTgs(data: Uint8Array): Promise<string> {
         if (value && value.length > 0) {
             chunks.push(value);
             total += value.length;
+            if (total > MAX_DECOMPRESSED_BYTES) {
+                await reader.cancel().catch(() => undefined);
+                throw new Error('TGS payload exceeds size limit');
+            }
         }
     }
     await writeDone;
@@ -76,6 +81,7 @@ export async function loadTgs(data: string | Uint8Array, options?: ParseOptions)
 }
 
 export function frameAtPos(animation: ParsedAnimation, pos: number): number {
+    if (!Number.isFinite(pos)) pos = 0;
     const total = animation.outFrame - animation.inFrame;
     let frame = animation.inFrame + Math.floor(pos * total);
     if (frame < animation.inFrame) frame = animation.inFrame;
