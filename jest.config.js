@@ -60,7 +60,9 @@ module.exports = {
     '<rootDir>/agents/gram-browser/tests',
     '<rootDir>/agents/opencode-radar/tests',
     '<rootDir>/plugins/opencode/tests',
-    '<rootDir>/plugins/telegram-bot-api/tests'
+    '<rootDir>/plugins/telegram-bot-api/tests',
+    '<rootDir>/plugins/durevcode/tests',
+    '<rootDir>/agents/durev-radar/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
@@ -92,6 +94,8 @@ module.exports = {
     '^@ton-ai/gram-media$': '<rootDir>/plugins/gram-media/src/index.ts',
     '^@ton-ai/gram-db$': '<rootDir>/plugins/gram-db/src/index.ts',
     '^@ton-ai/gram-lang$': '<rootDir>/plugins/gram-lang/src/index.ts',
+    '^@ton-ai/durevcode$': '<rootDir>/plugins/durevcode/src/index.ts',
+    '^@ton-ai/telegram-bot-api$': '<rootDir>/plugins/telegram-bot-api/src/index.ts',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
 };
