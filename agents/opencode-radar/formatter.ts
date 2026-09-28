@@ -15,9 +15,7 @@ export function formatLiveTool(event: RadarEvent, elapsedSec?: number): string {
         } else if (tail.includes('\n')) {
             lines.push(preBlock(tail, langFromPath(event.summary)));
         } else {
-            lines.push(
-                `<tg-spoiler><code>${escapeHtml(tail)}</code></tg-spoiler>`,
-            );
+            lines.push(codeNote(tail));
         }
     }
     return lines.join('\n');
@@ -114,6 +112,7 @@ export function hourglassIcon(): string {
 }
 
 const CODE_SPOILER_LINES = 8;
+const CODE_NOTE_CHARS = 240;
 
 import type { QuestionRequest, RadarEvent } from '@ton-ai/opencode';
 import { parseTmdEntities, safeHref, codeLangClass, TmdEntity } from '@ton-ai/tmd';
@@ -232,6 +231,14 @@ export function preBlock(code: string, lang?: string): string {
     const close = cls && cls !== 'language-text' ? '</code></pre>' : '</pre>';
     const block = `${open}${escapeHtml(code)}${close}`;
     if (code.split('\n').length > CODE_SPOILER_LINES) {
+        return `<blockquote expandable>${block}</blockquote>`;
+    }
+    return block;
+}
+
+export function codeNote(code: string): string {
+    const block = `<code>${escapeHtml(code)}</code>`;
+    if (code.split('\n').length > CODE_SPOILER_LINES || code.length > CODE_NOTE_CHARS) {
         return `<blockquote expandable>${block}</blockquote>`;
     }
     return block;
@@ -473,6 +480,7 @@ const HTML_BALANCED_TAGS = new Set([
     'pre',
     'a',
     'tg-spoiler',
+    'blockquote',
     'em',
     'strong',
     'ins',
@@ -577,7 +585,7 @@ export function formatProgress(state: ProgressState): string {
         const mark = state.result.ok ? checkIcon() : icon('fail');
         lines.push(`${EMOJI.doc} ${escapeHtml(truncate(state.result.tool, 40))} ${mark}`);
         lines.push(
-            `<tg-spoiler><code>${escapeHtml(truncate(state.result.text, 400))}</code></tg-spoiler>`,
+            codeNote(truncate(state.result.text, 400)),
         );
     }
     const footer =
@@ -623,13 +631,15 @@ export interface ContextState {
     cacheWrite: number;
     limit: number | null;
     cost: number;
+    mode?: string;
 }
 
 export function formatContextPin(state: ContextState): string {
+    const modeSuffix = state.mode ? ` · ${state.mode}` : '';
     const head =
         state.limit && state.limit > 0
-            ? `Context (${Math.floor((state.total / state.limit) * 100)}%):\n${icon('coin')} <code>${state.total}/${state.limit}</code>`
-            : `Context:\n${icon('coin')} <code>${state.total}</code> tokens`;
+            ? `Context (${Math.floor((state.total / state.limit) * 100)}%)${modeSuffix}:\n${icon('coin')} <code>${state.total}/${state.limit}</code>`
+            : `Context${modeSuffix}:\n${icon('coin')} <code>${state.total}</code> tokens`;
     return (
         `${head}\n` +
         `${icon('inbox')} <code>${state.input.toLocaleString('en-US')} in</code>  ` +
@@ -676,7 +686,7 @@ export function formatThinking(text: string): string {
         if (prev >= 0xd800 && prev <= 0xdbff && cur >= 0xdc00 && cur <= 0xdfff) tail = tail.slice(1);
     }
     if (!tail) return head;
-    return `${head}\n<tg-spoiler>${escapeHtml(cut ? `…${tail}` : tail)}</tg-spoiler>`;
+    return `${head}\n${escapeHtml(cut ? `…${tail}` : tail)}`;
 }
 
 export function formatThinkingTime(ms: number): string {
@@ -716,9 +726,7 @@ export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | nul
                     } else if (clipped.includes('\n')) {
                         lines.push(preBlock(clipped, langFromPath(event.summary)));
                     } else {
-                        lines.push(
-                            `<tg-spoiler><code>${escapeHtml(clipped)}</code></tg-spoiler>`,
-                        );
+                        lines.push(codeNote(clipped));
                     }
                 }
                 chunks.push(lines);

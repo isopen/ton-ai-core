@@ -14,12 +14,15 @@ import {
     formatQuestion,
     formatQuestionResolved,
     preBlock,
+    codeNote,
     langFromPath,
     splitTelegramHtml,
     truncateHtml,
     displayModel,
     toTodoState,
     toToolState,
+    formatThinking,
+    TOOL_OUTPUT_CAP,
     FORUM_TOPIC_NAME_LIMIT,
     TELEGRAM_TEXT_LIMIT,
     RENDER_BUDGET,
@@ -85,7 +88,8 @@ describe('formatter', () => {
         assert.ok(text.includes('5411634513509885099'));
         assert.ok(text.includes('model-1'));
         assert.ok(text.includes('5372981976804366741'));
-        assert.ok(text.includes('<tg-spoiler>'));
+        assert.ok(text.includes('<code>ok output</code>'));
+        assert.ok(!text.includes('tg-spoiler'));
         assert.ok(text.includes('5449428597922079323'));
         assert.ok(!text.includes('<x>'));
         assert.ok(!text.includes('<soon>'));
@@ -138,7 +142,7 @@ describe('formatter', () => {
         assert.ok(text.includes('5449428597922079323'));
         assert.ok(text.endsWith(' in'));
         assert.ok(text.includes('</i>'));
-        assert.ok(text.includes('</code></tg-spoiler>'));
+        assert.ok(text.includes('</code></blockquote>'));
         assert.ok(text.length <= 3900);
     });
 
@@ -157,6 +161,13 @@ describe('formatter', () => {
         const pin = formatContextPin({ total: 15, input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, limit: null, cost: 0 });
         assert.ok(pin.includes('<code>15</code> tokens'));
         assert.ok(!pin.includes('%'));
+    });
+
+    test('formatContextPin appends render mode when set', () => {
+        const base = { total: 500000, input: 90000, output: 8000, reasoning: 2000, cacheRead: 390000, cacheWrite: 10000, limit: 1000000, cost: 0.0234 };
+        assert.ok(!formatContextPin(base).includes('Build'));
+        assert.ok(formatContextPin({ ...base, mode: 'Build' }).includes('Context (50%) · Build:'));
+        assert.ok(formatContextPin({ ...base, limit: null, mode: 'Plain' }).includes('Context · Plain:'));
     });
 
     test('formatLiveTool keeps the tail of long output', () => {
@@ -315,7 +326,7 @@ describe('formatter', () => {
         );
         assert.ok(batch.length < 5000);
         assert.ok(batch.includes('…'));
-        assert.ok(batch.includes('</code></tg-spoiler>'));
+        assert.ok(batch.includes('<blockquote expandable><code>'));
         assert.ok(!batch.includes('x'.repeat(5000)));
     });
 
@@ -443,7 +454,7 @@ describe('formatter code blocks', () => {
         assert.ok(!batch.includes('tg-spoiler'));
     });
 
-    test('multiline tool output renders as a block, single line stays collapsed', () => {
+    test('multiline tool output renders as a block, single line stays visible', () => {
         const block = formatConsoleBatch(
             [{ kind: 'tool', tool: 'bash', status: 'completed', summary: 'run', output: 'line1\nline2', time: 1 }],
             null,
@@ -454,7 +465,38 @@ describe('formatter code blocks', () => {
             [{ kind: 'tool', tool: 'bash', status: 'completed', summary: 'run', output: 'ok', time: 1 }],
             null,
         );
-        assert.ok(inline.includes('</code></tg-spoiler>'));
+        assert.ok(inline.includes('<code>ok</code>'));
+        assert.ok(!inline.includes('tg-spoiler'));
+        assert.ok(!inline.includes('blockquote'));
+    });
+
+    test('truncation inside an expandable quote keeps it closed', () => {
+        const html = codeNote(Array.from({ length: 40 }, (_, i) => `line-${i}`).join('\n'));
+        const cut = truncateHtml(html, 40);
+        assert.ok(cut.startsWith('<blockquote expandable>'));
+        assert.ok(cut.includes('</blockquote>'));
+        assert.equal((cut.match(/<blockquote/g) || []).length, (cut.match(/<\/blockquote>/g) || []).length);
+    });
+
+    test('code notes fold into expandable quotes, never spoilers', () => {
+        assert.equal(codeNote('ok'), '<code>ok</code>');
+        assert.equal(codeNote('a\nb'), '<code>a\nb</code>');
+        assert.equal(
+            codeNote('x'.repeat(241)),
+            `<blockquote expandable><code>${'x'.repeat(241)}</code></blockquote>`,
+        );
+        assert.equal(
+            codeNote(Array.from({ length: 9 }, (_, i) => `l${i}`).join('\n')),
+            `<blockquote expandable><code>${Array.from({ length: 9 }, (_, i) => `l${i}`).join('\n')}</code></blockquote>`,
+        );
+        assert.ok(!codeNote('a<b').includes('tg-spoiler'));
+        assert.ok(codeNote('a<b').includes('a&lt;b'));
+    });
+
+    test('thinking text is never hidden', () => {
+        assert.ok(!formatThinking('plain reasoning text').includes('tg-spoiler'));
+        assert.ok(!formatThinking('x'.repeat(TOOL_OUTPUT_CAP + 50)).includes('tg-spoiler'));
+        assert.ok(formatThinking('plain reasoning text').includes('plain reasoning text'));
     });
 });
 

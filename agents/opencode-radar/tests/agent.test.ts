@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'no
 import { Message } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
 import { OpencodeRadarAgent, isMessageNotModifiedError, isThreadGoneError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, RADAR_THREAD_TIMINGS } from '../agent';
-import { formatThinking, splitTelegramHtml, truncate, wellFormed } from '../formatter';
+import { EMOJI, formatThinking, splitTelegramHtml, truncate, wellFormed } from '../formatter';
 
 const NOT_MODIFIED =
     'Telegram API error: Bad Request: message is not modified: ' +
@@ -1074,6 +1074,237 @@ describe('radar forum control', () => {
         assert.ok(String(confirm.params.text).includes('Allowed'));
     });
 
+    test('plain mode auto-denies file writes silently', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setPerms([{ id: 'per_9', sessionID: 'ses_test01', action: 'edit', resources: ['/repo/a.ts'] }]);
+        const state = await attachWatched(agent, telegram);
+        (state as unknown as { buildMode: boolean }).buildMode = false;
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        assert.deepEqual(fake.replies, [{ sessionId: 'ses_test01', permId: 'per_9', decision: 'reject' }]);
+        assert.ok(!calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Permission needed')));
+    });
+
+    test('attaching a session gates edit and external_directory as ask', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const applied: Array<{ sessionId: string; rules: unknown }> = [];
+        (agent as unknown as { isPluginActive: () => boolean }).isPluginActive = () => true;
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => ({
+            setSessionPermissions: async (sessionId: string, rules: unknown) => {
+                applied.push({ sessionId, rules });
+                return true;
+            },
+        });
+        await attachWatched(agent, telegram);
+        assert.equal(applied.length, 1);
+        assert.equal(applied[0].sessionId, 'ses_test01');
+        assert.deepEqual(applied[0].rules, [
+            { permission: 'edit', pattern: '*', action: 'ask' },
+            { permission: 'external_directory', pattern: '*', action: 'ask' },
+        ]);
+    });
+
+    test('failing to gate permissions does not break the attach', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        (agent as unknown as { isPluginActive: () => boolean }).isPluginActive = () => true;
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => ({
+            setSessionPermissions: async () => {
+                throw new Error('HTTP 500 boom');
+            },
+        });
+        const state = await attachWatched(agent, telegram);
+        assert.equal((state as unknown as { session: { id: string } }).session.id, 'ses_test01');
+        assert.ok(calls.some((c) => c.op === 'send'));
+    });
+
+    test('plain mode auto-denies the edit permission kind', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setPerms([{ id: 'per_9', sessionID: 'ses_test01', action: 'edit', resources: ['/repo/a.ts'] }]);
+        const state = await attachWatched(agent, telegram);
+        (state as unknown as { buildMode: boolean }).buildMode = false;
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        assert.deepEqual(fake.replies, [{ sessionId: 'ses_test01', permId: 'per_9', decision: 'reject' }]);
+        assert.ok(!calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Permission needed')));
+    });
+
+    test('plain mode still asks about external_directory', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setPerms([{ id: 'per_9', sessionID: 'ses_test01', action: 'external_directory', resources: ['/tmp/*'] }]);
+        const state = await attachWatched(agent, telegram);
+        (state as unknown as { buildMode: boolean }).buildMode = false;
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        assert.deepEqual(fake.replies, []);
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Permission needed')));
+    });
+
+    test('build mode still asks for file writes', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setPerms([{ id: 'per_9', sessionID: 'ses_test01', action: 'edit', resources: ['/repo/a.ts'] }]);
+        const state = await attachWatched(agent, telegram);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        assert.deepEqual(fake.replies, []);
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Permission needed')));
+    });
+
+    test('permission notice ships allow and deny buttons', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setPerms([{ id: 'per_9', sessionID: 'ses_test01', action: 'external_directory', resources: ['/tmp/*'] }]);
+        const state = await attachWatched(agent, telegram) as unknown as StopState & { threadId: number | null };
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        const notice = calls.find((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Permission needed'));
+        assert.ok(notice, 'permission notice must be posted');
+        const markup = (notice.params as Record<string, unknown>).reply_markup as {
+            inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+        };
+        assert.deepEqual(markup.inline_keyboard[0].map((b) => b.callback_data), ['pper_9:always', 'pper_9:once', 'pper_9:reject']);
+        assert.ok(markup.inline_keyboard[0][0].text.includes('Always allow'));
+        assert.ok(markup.inline_keyboard[0][1].text.includes('Allow once'));
+        assert.ok(markup.inline_keyboard[0][2].text.includes('Deny'));
+        const noticeText = String((notice.params as Record<string, unknown>).text);
+        assert.ok(noticeText.includes('5454231247532353910'));
+        assert.ok(!noticeText.includes('🔐'));
+    });
+
+    test('permission deny button replies reject and disarms the keyboard', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setPerms([{ id: 'per_9', sessionID: 'ses_test01', action: 'read', resources: [] }]);
+        const state = await attachWatched(agent, telegram) as unknown as StopState & { threadId: number | null };
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_perm1',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 501, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data: 'pper_9:reject',
+        });
+        assert.deepEqual(fake.replies, [{ sessionId: 'ses_test01', permId: 'per_9', decision: 'reject' }]);
+        const disarm = calls.find((c) => c.op === 'markup' && (c.params as Record<string, unknown>).message_id === 501);
+        assert.ok(disarm, 'buttons must be removed after the decision');
+        assert.deepEqual((disarm.params as Record<string, unknown>).reply_markup, { inline_keyboard: [] });
+    });
+
+    test('permission allow button replies once for the right session', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setPerms([{ id: 'per_1', sessionID: 'ses_test01', action: 'bash', resources: [] }]);
+        const state = await attachWatched(agent, telegram) as unknown as StopState & { threadId: number | null };
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_perm2',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 502, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data: 'pper_1:once',
+        });
+        assert.deepEqual(fake.replies, [{ sessionId: 'ses_test01', permId: 'per_1', decision: 'once' }]);
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Allowed once')));
+    });
+
+    test('permission always button replies always for the right session', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setPerms([{ id: 'per_1', sessionID: 'ses_test01', action: 'external_directory', resources: ['/tmp/*'] }]);
+        const state = await attachWatched(agent, telegram) as unknown as StopState & { threadId: number | null };
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_perm4',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 504, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data: 'pper_1:always',
+        });
+        assert.deepEqual(fake.replies, [{ sessionId: 'ses_test01', permId: 'per_1', decision: 'always' }]);
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Allowed always')));
+    });
+
+    test('permission button survives a re-attach of the same session', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setPerms([{ id: 'per_1', sessionID: 'ses_test01', action: 'external_directory', resources: ['/tmp/*'] }]);
+        const first = await attachWatched(agent, telegram) as unknown as StopState & { threadId: number | null };
+        await agent.pollPermissions(telegram, fake.opencode, first);
+        await agent.pollPermissions(telegram, fake.opencode, first);
+        await agent.pollPermissions(telegram, fake.opencode, first);
+        const notice = calls.find((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Permission needed'));
+        assert.ok(notice);
+        const threadId = first.threadId;
+        const watched = (agent as unknown as { watched: Map<string, unknown> }).watched;
+        watched.delete('ses_test01');
+        const second = await attachWatched(agent, telegram) as unknown as StopState & { threadId: number | null };
+        assert.equal(second.threadId, threadId);
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_perm_re',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 601, chat: { id: 1, type: 'supergroup' }, message_thread_id: threadId },
+            data: 'pper_1:once',
+        });
+        assert.deepEqual(fake.replies, [{ sessionId: 'ses_test01', permId: 'per_1', decision: 'once' }]);
+    });
+
+    test('permission button for an unknown id is refused even if well formed', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setPerms([{ id: 'per_1', sessionID: 'ses_test01', action: 'read', resources: [] }]);
+        const state = await attachWatched(agent, telegram) as unknown as StopState & { threadId: number | null };
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_perm_unknown',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 602, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data: 'pper_zzz:always',
+        });
+        assert.deepEqual(fake.replies, []);
+        const acks = calls.filter((c) => c.op === 'ack');
+        assert.equal(acks.length, 1);
+        assert.equal((acks[0].params as Record<string, unknown>).text, 'Outdated, ask again.');
+    });
+
+    test('stale permission button toasts without replying', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram) as unknown as StopState & { threadId: number | null };
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_perm3',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 503, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data: 'pper_gone:once',
+        });
+        assert.deepEqual(fake.replies, []);
+        const acks = calls.filter((c) => c.op === 'ack');
+        assert.equal(acks.length, 1);
+        assert.equal((acks[0].params as Record<string, unknown>).text, 'Outdated, ask again.');
+    });
+
     test('resolved permission reports already resolved', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -1753,6 +1984,63 @@ describe('radar thread binding survival', () => {
         assert.ok(!calls.some((c) => c.op === 'send'));
     });
 
+    test('abnormal step finish is reported instead of vanishing', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & { finalized: boolean };
+        const live = {
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:step1', event: { kind: 'step', tokens: 0, cost: 0, finish: 'length', time: now } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => live;
+        await agent.updateSession(telegram, state);
+        const notice = calls.find((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('opencode stopped the turn'));
+        assert.ok(notice, 'abnormal finish must be surfaced');
+        assert.ok(String((notice.params as Record<string, unknown>).text).includes('output limit reached'));
+        assert.equal(state.finalized, true);
+    });
+
+    test('unknown step finish is reported with its reason', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & { finalized: boolean };
+        const live = {
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:step2', event: { kind: 'step', tokens: 0, cost: 0, finish: 'unknown', time: now } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => live;
+        await agent.updateSession(telegram, state);
+        const notice = calls.find((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('opencode stopped the turn'));
+        assert.ok(notice);
+        assert.ok(String((notice.params as Record<string, unknown>).text).includes('stop reason: unknown'));
+    });
+
+    test('normal step finish stays silent', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & { finalized: boolean };
+        const live = {
+            getSession: async () => SESSION,
+            readEvents: async () => [
+                { key: 'db:step3a', event: { kind: 'step', tokens: 10, cost: 0.01, finish: 'tool-calls', time: now } },
+                { key: 'db:step3b', event: { kind: 'step', tokens: 20, cost: 0.02, finish: 'stop', time: now } },
+            ],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => live;
+        await agent.updateSession(telegram, state);
+        assert.ok(!calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('opencode stopped the turn')));
+        assert.equal(state.finalized, false);
+    });
+
     test('resumed session adopts todos silently on first read', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -1927,7 +2215,7 @@ describe('radar thread binding survival', () => {
             getModelLimit: async () => null,
             readContextSnapshot: async () => null,
         });
-        const liveSends = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('bash make') && String((c.params as Record<string, unknown>).text).includes('tg-spoiler'));
+        const liveSends = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('bash make') && String((c.params as Record<string, unknown>).text).includes('<code>'));
         (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'x', now);
         await agent.updateSession(telegram, state);
         (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'xy', now + 1000);
@@ -2013,7 +2301,7 @@ describe('radar thread binding survival', () => {
         });
         const thinkingSends = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Thinking'));
         const thoughtEdits = () => calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('Thought ('));
-        const liveSends = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('bash make') && String((c.params as Record<string, unknown>).text).includes('tg-spoiler'));
+        const liveSends = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('bash make') && String((c.params as Record<string, unknown>).text).includes('<code>'));
         (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => reasonFor('Hmm', now);
         await agent.updateSession(telegram, state);
         assert.equal(thinkingSends().length, 1);
@@ -2728,7 +3016,7 @@ describe('radar thinking feed', () => {
         const thinkingSends = () =>
             calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Thinking'));
         assert.equal(thinkingSends().length, 1);
-        assert.ok(String((thinkingSends()[0].params as Record<string, unknown>).text).includes('tg-spoiler'));
+        assert.ok(!String((thinkingSends()[0].params as Record<string, unknown>).text).includes('tg-spoiler'));
         assert.ok(String((thinkingSends()[0].params as Record<string, unknown>).text).includes('tg-emoji'));
         assert.ok(
             String((thinkingSends()[0].params as Record<string, unknown>).text).includes('5127731441462937337'),
@@ -3807,7 +4095,30 @@ describe('radar stop control', () => {
         await agent.handleCallback(telegram, fake, queryFor('cb_m4', 'mode:plain'));
         const savedAgain = JSON.parse(readFileSync(path, 'utf8')) as { sessions: Record<string, { buildMode?: boolean }> };
         assert.equal(savedAgain.sessions['ses_test01']?.buildMode, false);
+        const pinEdits = calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('Context'));
+        assert.ok(pinEdits.length >= 1);
+        assert.ok(String((pinEdits[pinEdits.length - 1].params as Record<string, unknown>).text).includes('Plain'));
         rmSync(path, { force: true });
+    });
+
+    test('mode tap refreshes posted stop control text', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & { buildMode: boolean; threadId: number | null; stopMessageId: number | null };
+        state.promptQueue.push('work');
+        await agent.syncStopKeyboard(telegram, state);
+        assert.ok(typeof state.stopMessageId === 'number');
+        const queryFor = (id: string, data: string) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 201, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data,
+        });
+        await agent.handleCallback(telegram, {}, queryFor('cb_m5', 'mode:plain'));
+        assert.equal(state.buildMode, false);
+        const controlEdits = calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('Running'));
+        assert.equal(controlEdits.length, 1);
+        assert.ok(String((controlEdits[0].params as Record<string, unknown>).text).includes('Plain'));
     });
 
     test('plain mode keeps builds in batch, never live', async () => {
@@ -3835,6 +4146,156 @@ describe('radar stop control', () => {
         assert.equal(state.liveTool, null);
         assert.equal(state.pending.length, 1);
         assert.ok(!calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('tg-spoiler')));
+    });
+
+    test('switch to plain abandons open live slot at once', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & {
+            pending: Array<{ kind: string; time: number }>;
+            lastEventMessageAt: number;
+            liveTool: unknown;
+            buildMode: boolean;
+            threadId: number | null;
+        };
+        state.lastEventMessageAt = now;
+        const toolFor = (status: string, output: string, time: number) => ({
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:bashs', event: { kind: 'tool', tool: 'bash', status, summary: 'bash make', output, time } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'x', now);
+        await agent.updateSession(telegram, state);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => toolFor('running', 'xy', now + 1000);
+        await agent.updateSession(telegram, state);
+        assert.notEqual(state.liveTool, null);
+        const queryFor = (id: string, data: string) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 201, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data,
+        });
+        await agent.handleCallback(telegram, {}, queryFor('cb_sw', 'mode:plain'));
+        assert.equal(state.buildMode, false);
+        assert.equal(state.liveTool, null);
+        assert.equal(state.pending.length, 1);
+    });
+
+    test('/model posts card with options and current marked', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = {
+            listModels: async () => [
+                { id: 'm-a', providerID: 'p', name: 'Model A' },
+                { id: 'test-model', providerID: 'p', name: 'Current Model' },
+            ],
+        };
+        const state = await attachWatched(agent, telegram);
+        await agent.handleInbound(telegram, fake, inboundMsg({ message_id: 770, text: '/model' }, now));
+        const cards = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Model:'));
+        assert.equal(cards.length, 1);
+        const markup = (cards[0].params as Record<string, unknown>).reply_markup as {
+            inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+        };
+        assert.deepEqual(
+            markup.inline_keyboard.map((row) => row[0].callback_data),
+            ['model:m-a', 'model:test-model'],
+        );
+        assert.ok(markup.inline_keyboard[1][0].text.includes('Current Model'));
+    });
+
+    test('model tap switches session, limit and pin', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const switched: Array<{ sessionId: string; model: { id: string; providerID: string } }> = [];
+        const fake = {
+            listModels: async () => [
+                { id: 'm-a', providerID: 'p', name: 'Model A' },
+                { id: 'test-model', providerID: 'p', name: 'Current Model' },
+            ],
+            setModel: async (sessionId: string, model: { id: string; providerID: string }) => {
+                switched.push({ sessionId, model });
+                return true;
+            },
+            getModelLimit: async () => 2000000,
+        };
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & {
+            buildMode: boolean;
+            threadId: number | null;
+            session: typeof SESSION;
+            contextLimit: number | null;
+        };
+        const queryFor = (id: string, data: string) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 201, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data,
+        });
+        await agent.handleCallback(telegram, fake, queryFor('cb_mod1', 'model:m-a'));
+        assert.deepEqual(switched, [{ sessionId: 'ses_test01', model: { id: 'm-a', providerID: 'p' } }]);
+        assert.equal(state.contextLimit, 2000000);
+        const card = calls.find((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === 201);
+        assert.ok(card, 'tapped card must be edited in place');
+        const cardMarkup = (card.params as Record<string, unknown>).reply_markup as {
+            inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+        };
+        assert.ok(cardMarkup.inline_keyboard[0][0].text.startsWith(EMOJI.check));
+        assert.ok(cardMarkup.inline_keyboard[1][0].text.startsWith(EMOJI.check) === false);
+        assert.ok(String((card.params as Record<string, unknown>).text).includes('m-a'));
+        assert.equal(calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).startsWith('Model:')).length, 0);
+    });
+
+    test('failed model switch keeps the card and reports the error', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = {
+            listModels: async () => [{ id: 'm-a', providerID: 'p' }, { id: 'm-b', providerID: 'p' }],
+            setModel: async () => {
+                throw new Error('opencode setModel failed: HTTP 500 boom');
+            },
+        };
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & {
+            threadId: number | null;
+            session: typeof SESSION;
+            contextLimit: number | null;
+        };
+        const queryFor = (id: string, data: string) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 201, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data,
+        });
+        await agent.handleCallback(telegram, fake, queryFor('cb_mod_fail', 'model:m-b'));
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Could not switch model')));
+        assert.equal(calls.filter((c) => c.op === 'edit').length, 0);
+        assert.equal(state.contextLimit, null);
+    });
+
+    test('stale model tap toasts without switching', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const switched: Array<unknown> = [];
+        const fake = {
+            listModels: async () => [{ id: 'm-a', providerID: 'p' }],
+            setModel: async (sessionId: string, model: unknown) => {
+                switched.push({ sessionId, model });
+                return true;
+            },
+        };
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & { threadId: number | null };
+        const queryFor = (id: string, data: string) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 201, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data,
+        });
+        await agent.handleCallback(telegram, fake, queryFor('cb_mod2', 'model:ghost'));
+        assert.deepEqual(switched, []);
+        const acks = calls.filter((c) => c.op === 'ack');
+        assert.equal(acks.length, 1);
+        assert.equal((acks[0].params as Record<string, unknown>).text, 'Outdated, ask again.');
     });
 
     test('topic creation failure keeps threads and notifies once', async () => {
