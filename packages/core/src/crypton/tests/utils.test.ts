@@ -11,6 +11,8 @@ import {
   modPowBranchless,
   pbkdf2Sha256,
   isProbablyPrime,
+  setIsProbablyPrimeImplementation,
+  clearPrimeCache,
   bigIntToBufferLE,
   isNode,
   constantTimeEqual,
@@ -103,6 +105,20 @@ describe('Utils', () => {
 
     test('isProbablyPrime Carmichael number 561', () => {
         assert.ok(!isProbablyPrime(561n, 50), '561 must be composite with 50 rounds');
+    });
+
+    test('isProbablyPrime cache separates rounds', () => {
+        const seen: number[] = [];
+        setIsProbablyPrimeImplementation((n, k) => { seen.push(k); return k >= 40; });
+        try {
+            assert.strictEqual(isProbablyPrime(999983n, 5), false);
+            assert.strictEqual(isProbablyPrime(999983n, 40), true);
+            assert.deepStrictEqual(seen, [5, 40]);
+            assert.strictEqual(isProbablyPrime(999983n, 40), true);
+            assert.deepStrictEqual(seen, [5, 40]);
+        } finally {
+            clearPrimeCache();
+        }
     });
 
     test('bigIntToBufferLE', () => {

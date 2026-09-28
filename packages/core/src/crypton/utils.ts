@@ -177,7 +177,7 @@ export function modPowBranchless(base: bigint, exponent: bigint, modulus: bigint
 
 export const modPowConstantTime = modPowBranchless;
 
-const primeCache = new Map<bigint, boolean>();
+const primeCache = new Map<string, boolean>();
 const PRIME_CACHE_MAX = 32;
 
 type IsPrimeFn = (n: bigint, k: number) => boolean;
@@ -194,14 +194,15 @@ export function clearPrimeCache(): void {
 export function isProbablyPrime(n: bigint, k: number = 40): boolean {
   if (!Number.isInteger(k) || k <= 0) throw new Error(`Invalid Miller-Rabin rounds: ${k}`);
   const rounds = Math.min(k, 200);
-  const cached = primeCache.get(n);
+  const cacheKey = n.toString(16) + ':' + rounds;
+  const cached = primeCache.get(cacheKey);
   if (cached !== undefined) return cached;
   const result = isPrimeImpl(n, rounds);
   if (primeCache.size >= PRIME_CACHE_MAX) {
     const oldest = primeCache.keys().next().value;
     if (oldest !== undefined) primeCache.delete(oldest);
   }
-  primeCache.set(n, result);
+  primeCache.set(cacheKey, result);
   return result;
 }
 

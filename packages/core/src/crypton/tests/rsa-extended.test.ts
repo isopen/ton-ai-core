@@ -91,6 +91,19 @@ describe('RSA', () => {
         assert.strictEqual(valid, false, 'invalid signature fails');
     });
 
+    test('rsaVerify returns false on malformed key instead of throwing', async () => {
+        const data = Buffer.from('test data');
+        const fakeSig = Buffer.alloc(256, 0xFF);
+        const valid = await rsaVerify(data, fakeSig, '-----BEGIN RSA PUBLIC KEY-----\nAAAA\n-----END RSA PUBLIC KEY-----');
+        assert.strictEqual(valid, false, 'malformed key resolves false');
+    });
+
+    test('rsaVerify returns false on short signature instead of throwing', async () => {
+        const data = Buffer.from('test data');
+        const valid = await rsaVerify(data, Buffer.alloc(10), pubPem);
+        assert.strictEqual(valid, false, 'short signature resolves false');
+    });
+
     test('rsaVerify with SPKI key', async () => {
         const { publicKey: spkiPem, privateKey: spkiPrivPem } = generateKeyPairSync('rsa', {
             modulusLength: 2048,
