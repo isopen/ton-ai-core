@@ -1,0 +1,22 @@
+{
+  "name": "@ton-ai/durev-radar",
+  "version": "0.1.0",
+  "description": "Radar agent: drives durev-core sessions from Telegram via @ton-ai/telegram-bot-api",
+  "main": "index.js",
+  "scripts": {
+    "start": "npx ts-node index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "TON AI Core Team",
+  "license": "Boost Software License 1.0",
+  "dependencies": {
+    "@ton-ai/core": "*",
+    "@ton-ai/durevcode": "*",
+    "@ton-ai/telegram-bot-api": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

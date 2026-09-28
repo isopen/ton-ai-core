@@ -1,0 +1,20 @@
+{
+  "name": "@ton-ai/durevcode",
+  "version": "0.1.0",
+  "description": "durevcode plugin for TON AI Framework (durev-core engine)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "author": "TON AI Core Team",
+  "license": "Boost Software License 1.0",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "build:rust": "bash ./rust/build.sh",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "@ton-ai/core": "*",
+    "@types/node": "^20.19.33",
+    "typescript": "^5.3.3"
+  }
+}
