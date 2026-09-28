@@ -146,6 +146,9 @@ export interface ApiMessageList {
 
 export interface ModelApiInfo {
     id: string;
+    providerID?: string;
+    name?: string;
+    status?: string;
     limit?: {
         context?: number;
         output?: number;
@@ -196,7 +199,15 @@ export interface QuestionRequest {
     questions: QuestionItem[];
 }
 
-export type PermissionDecision = 'once' | 'reject';
+export type PermissionDecision = 'once' | 'always' | 'reject';
+
+export type SessionPermissionAction = 'ask' | 'allow' | 'deny';
+
+export interface SessionPermissionRule {
+    permission: string;
+    pattern: string;
+    action: SessionPermissionAction;
+}
 
 export interface OpencodeServerError {
     name?: string;

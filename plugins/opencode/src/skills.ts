@@ -5,10 +5,12 @@ import { parseServeTarget, serveArgs, ServeTarget, SpawnedProcess, SpawnFn } fro
 import { mapPart, mapSessionMessage, normalizeSessionApi } from './projector';
 import {
     ContextSnapshot,
+    ModelApiInfo,
     ModelApiList,
     OpencodeConfig,
     OpencodeServerEvent,
     PermissionDecision,
+    SessionPermissionRule,
     PermissionRequest,
     PromptReceipt,
     QuestionRequest,
@@ -414,7 +416,7 @@ export class OpencodeSkills {
                 `/api/session/${encodeURIComponent(sessionId)}/permission/${encodeURIComponent(requestId)}/reply`,
                 'opencode replyPermission',
                 undefined,
-                { method: 'POST', body: JSON.stringify({ decision }) },
+                { method: 'POST', body: JSON.stringify({ reply: decision }) },
             );
             return true;
         } catch (error) {
@@ -460,6 +462,42 @@ export class OpencodeSkills {
                 'opencode renameSession',
                 undefined,
                 { method: 'PATCH', body: JSON.stringify({ title }) },
+            );
+            return true;
+        } catch (error) {
+            if (error instanceof OpencodeApiError && error.status === 404) return false;
+            throw error;
+        }
+    }
+
+    async listModels(): Promise<ModelApiInfo[]> {
+        const list = await this.request<ModelApiList>('/api/model', 'opencode listModels');
+        if (!Array.isArray(list.data)) return [];
+        return list.data.filter((m) => m && typeof m.id === 'string' && m.id.length > 0 && m.status !== 'deprecated');
+    }
+
+    async setSessionPermissions(sessionId: string, rules: SessionPermissionRule[]): Promise<boolean> {
+        try {
+            await this.request<unknown>(
+                `/session/${encodeURIComponent(sessionId)}`,
+                'opencode setSessionPermissions',
+                undefined,
+                { method: 'PATCH', body: JSON.stringify({ permission: rules }) },
+            );
+            return true;
+        } catch (error) {
+            if (error instanceof OpencodeApiError && error.status === 404) return false;
+            throw error;
+        }
+    }
+
+    async setModel(sessionId: string, model: { id: string; providerID: string }): Promise<boolean> {
+        try {
+            await this.request<unknown>(
+                `/api/session/${encodeURIComponent(sessionId)}/model`,
+                'opencode setModel',
+                undefined,
+                { method: 'POST', body: JSON.stringify({ model }) },
             );
             return true;
         } catch (error) {
@@ -547,7 +585,10 @@ export class OpencodeSkills {
                     await sleep(1000 * (attempt + 1));
                     continue;
                 }
-                return (await response.json()) as T;
+                if (response.status === 204) return undefined as T;
+                const raw = await response.text();
+                if (!raw.trim()) return undefined as T;
+                return JSON.parse(raw) as T;
             } catch (error) {
                 if (error instanceof OpencodeApiError) throw error;
                 if (attempt === this.maxRetries) {

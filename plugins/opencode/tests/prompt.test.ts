@@ -86,7 +86,7 @@ describe('opencode prompts and permissions', () => {
         skills.close();
     });
 
-    test('replyPermission posts decision and maps missing to false', async () => {
+    test('replyPermission posts reply key and maps missing to false', async () => {
         const seen: Array<{ url: string; body: string }> = [];
         globalThis.fetch = (async (url: unknown, init: unknown) => {
             seen.push({ url: String(url), body: String((init as { body: string }).body) });
@@ -95,9 +95,43 @@ describe('opencode prompts and permissions', () => {
         const skills = new OpencodeSkills(stubContext(), config());
         assert.equal(await skills.replyPermission('ses_1', 'per_1', 'once'), true);
         assert.ok(seen[0].url.endsWith('/api/session/ses_1/permission/per_1/reply'));
-        assert.deepEqual(JSON.parse(seen[0].body), { decision: 'once' });
+        assert.deepEqual(JSON.parse(seen[0].body), { reply: 'once' });
         globalThis.fetch = (async () => response(false, 404, { _tag: 'PermissionNotFoundError' })) as typeof fetch;
         assert.equal(await skills.replyPermission('ses_1', 'per_gone', 'reject'), false);
+        skills.close();
+    });
+
+    test('setSessionPermissions patches the session ruleset', async () => {
+        const seen: Array<{ url: string; body: string; method: string }> = [];
+        globalThis.fetch = (async (url: unknown, init: unknown) => {
+            const req = init as { body: string; method: string };
+            seen.push({ url: String(url), body: String(req.body), method: req.method });
+            return response(true, 200, {});
+        }) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        const rules = [{ permission: 'edit', pattern: '*', action: 'ask' as const }];
+        assert.equal(await skills.setSessionPermissions('ses_1', rules), true);
+        assert.equal(seen[0].method, 'PATCH');
+        assert.ok(seen[0].url.endsWith('/session/ses_1'));
+        assert.deepEqual(JSON.parse(seen[0].body), { permission: rules });
+        globalThis.fetch = (async () => response(false, 404, { _tag: 'SessionNotFoundError' })) as typeof fetch;
+        assert.equal(await skills.setSessionPermissions('ses_gone', rules), false);
+        skills.close();
+    });
+
+    test('replyPermission body satisfies the API reply-key contract', async () => {
+        const seen: string[] = [];
+        globalThis.fetch = (async (_url: unknown, init: unknown) => {
+            const body = JSON.parse(String((init as { body: string }).body)) as Record<string, unknown>;
+            seen.push(Object.keys(body).join(','));
+            if (body.reply === undefined) {
+                return response(false, 400, { _tag: 'InvalidRequestError', message: 'Missing key at ["reply"]' });
+            }
+            return response(true, 200, {});
+        }) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        assert.equal(await skills.replyPermission('ses_1', 'per_1', 'once'), true);
+        assert.deepEqual(seen, ['reply']);
         skills.close();
     });
 });

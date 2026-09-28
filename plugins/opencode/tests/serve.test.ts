@@ -63,6 +63,16 @@ function fakeSpawn() {
     };
 }
 
+function jsonResponse(body: unknown, status = 200): Response {
+    const text = JSON.stringify(body);
+    return {
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => JSON.parse(text),
+        text: async () => text,
+    } as unknown as Response;
+}
+
 describe('opencode serve target', () => {
     test('parses port and hostname from base url', () => {
         assert.deepEqual(parseServeTarget('http://127.0.0.1:4096'), { port: 4096, hostname: '127.0.0.1' });
@@ -90,7 +100,7 @@ describe('opencode serve lifecycle', () => {
     });
 
     test('healthy server is left alone', async () => {
-        globalThis.fetch = (async () => ({ ok: true, json: async () => ({ healthy: true }) })) as typeof fetch;
+        globalThis.fetch = (async () => jsonResponse({ healthy: true })) as typeof fetch;
         const spawner = fakeSpawn();
         const skills = new OpencodeSkills(stubContext(), config(), spawner.fn);
         assert.equal(await skills.ensureServer(1000), true);
@@ -103,7 +113,7 @@ describe('opencode serve lifecycle', () => {
         let healthy = false;
         globalThis.fetch = (async () => {
             if (!healthy) throw new Error('refused');
-            return { ok: true, json: async () => ({ healthy: true }) };
+            return jsonResponse({ healthy: true });
         }) as typeof fetch;
         const spawner = fakeSpawn();
         const skills = new OpencodeSkills(stubContext(), config(), spawner.fn);

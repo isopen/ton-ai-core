@@ -159,6 +159,49 @@ describe('opencode single source', () => {
         }
     });
 
+    test('setModel accepts empty 204 body', async () => {
+        globalThis.fetch = (async () => ({
+            ok: true,
+            status: 204,
+            json: async () => {
+                throw new Error('Unexpected end of JSON input');
+            },
+            text: async () => '',
+        })) as unknown as typeof fetch;
+        const path = dbFile();
+        try {
+            const skills = new OpencodeSkills(stubContext(), config(path));
+            assert.equal(await skills.setModel('ses_1', { id: 'm-a', providerID: 'opencode' }), true);
+            skills.close();
+        } finally {
+            rmSync(path, { force: true });
+        }
+    });
+
+    test('listModels drops deprecated entries', async () => {
+        const body = JSON.stringify({
+            data: [
+                { id: 'm-new', providerID: 'p', status: 'active' },
+                { id: 'm-old', providerID: 'p', status: 'deprecated' },
+                { id: 'm-mystery', providerID: 'p' },
+            ],
+        });
+        globalThis.fetch = (async () => ({
+            ok: true,
+            status: 200,
+            json: async () => JSON.parse(body),
+            text: async () => body,
+        })) as typeof fetch;
+        const path = dbFile();
+        try {
+            const skills = new OpencodeSkills(stubContext(), config(path));
+            assert.deepEqual((await skills.listModels()).map((m) => m.id), ['m-new', 'm-mystery']);
+            skills.close();
+        } finally {
+            rmSync(path, { force: true });
+        }
+    });
+
     test('listSessions failure propagates instead of switching sources', async () => {
         globalThis.fetch = (async () => {
             throw new Error('no network');
