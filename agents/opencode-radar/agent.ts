@@ -73,11 +73,15 @@ const LIVE_EDIT_THROTTLE_MS = 1000;
 const MAX_LIVE_FAILURES = 3;
 const THINKING_EDIT_MS = 4000;
 const SLOW_TICK_MS = 3000;
+const SESSION_TICK_BATCH_TIMEOUT_MS = 15000;
 const WORKING_RECENCY_MS = 15000;
 const STOP_QUIET_MS = 10000;
 const STOP_DEDUP_MS = 10000;
 const CONTEXT_THROTTLE_MS = 15000;
 const TYPING_COOLDOWN_MS = 4000;
+const TYPING_TICK_MS = 4000;
+const LIVE_TOOL_ACTIVE_MS = 5 * 60 * 1000;
+const UPSTREAM_BACKOFF_MAX_MS = 60000;
 const PROMPT_BUSY_BACKOFF_MS = 8000;
 const PROMPT_TRANSIENT_BACKOFF_MS = 5000;
 const AUTO_PICK_WINDOW_MIN = 20;
@@ -139,6 +143,33 @@ export function isThreadGoneError(error: unknown): boolean {
     return (
         error instanceof Error && /message thread (not found|does not exist|is closed|deleted|invalid)/i.test(error.message)
     );
+}
+
+export function hasUnfinishedLiveTool(
+    state: Pick<WatchedSession, 'liveTool'>,
+    now: number,
+): boolean {
+    const live = state.liveTool;
+    if (!live || live.done) return false;
+    return now - live.startedAt < LIVE_TOOL_ACTIVE_MS;
+}
+
+function optionalPositiveInt(raw: string | undefined, fallback: number): number {
+    if (raw === undefined) return fallback;
+    const parsed = Number.parseInt(raw.trim(), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function isUpstreamServerError(error: unknown): boolean {
+    if (!error) return false;
+    const code = (error as { errorCode?: unknown }).errorCode;
+    if (typeof code === 'number' && code >= 500) return true;
+    const message = error instanceof Error ? error.message : String(error);
+    return /bad gateway|gateway timeout|service unavailable|internal server error|bad gateway|socket hang up|fetch failed|econnreset/i.test(message);
+}
+
+export function isTopicNotModifiedError(error: unknown): boolean {
+    return error instanceof Error && /TOPIC_NOT_MODIFIED|topic (is )?not modified/i.test(error.message);
 }
 
 export function isRateLimitError(error: unknown): boolean {
@@ -304,6 +335,7 @@ interface WatchedSession {
     pendingKeys: Map<string, number>;
     liveTool: { key: string; messageId: number | null; event: RadarEvent; done: boolean; lastText: string; lastEditAt: number; startedAt: number; failCount: number } | null;
     pendingTodos: boolean;
+    flushing: boolean;
     needsTodoBaseline: boolean;
     needsEventBaseline: boolean;
     promptQueue: string[];
@@ -382,6 +414,10 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     private watched = new Map<string, WatchedSession>();
     private persisted: Record<string, PersistedSession> = {};
     private pollTimer: NodeJS.Timeout | null = null;
+    private typingTimer: NodeJS.Timeout | null = null;
+    private typingTickBusy: boolean = false;
+    private upstreamFailures: number = 0;
+    private upstreamBackoffUntil: number = 0;
     private threadsEnabled: boolean = true;
     private rateLimitedUntil: number = 0;
     private serverOutageNoticed: boolean = false;
@@ -389,6 +425,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     private inboundSub: string | null = null;
     private callbackSub: string | null = null;
     private eventUnsub: (() => void) | null = null;
+    private sessionTicks = new Set<string>();
     private permReplies = new Map<number, PermissionReply>();
     private questReplies = new Map<number, QuestionReply>();
     private questPicks = new Map<string, QuestionPick>();
@@ -470,13 +507,24 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         this.pollTimer = setInterval(() => {
             void this.pollTick().catch((error) => console.error('Radar poll failed:', error));
         }, this.config.radar.pollMs);
+        this.typingTimer = setInterval(() => {
+            void this.typingTick().catch((error) => console.error('Radar typing tick failed:', error));
+        }, TYPING_TICK_MS);
         await this.pollTick();
 
-        console.log(`Radar watching ${this.watched.size} session(s)`);
+        const maxSessions = this.config.radar.maxSessions;
+        const extra = Math.max(0, this.watched.size - maxSessions);
+        console.log(
+            `Radar watching ${this.watched.size} session(s) (auto-pick ${maxSessions}${extra > 0 ? `, ${extra} kept active/rebound above the pick limit` : ''})`,
+        );
     }
 
     protected async onStop(): Promise<void> {
         console.log('Stopping opencode-radar agent...');
+        if (this.typingTimer) {
+            clearInterval(this.typingTimer);
+            this.typingTimer = null;
+        }
         if (this.pollTimer) {
             clearInterval(this.pollTimer);
             this.pollTimer = null;
@@ -752,6 +800,9 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         if (Date.now() < this.rateLimitedUntil) {
             throw new Error('Too Many Requests: radar backoff active');
         }
+        if (Date.now() < this.upstreamBackoffUntil) {
+            throw new Error('Telegram upstream backoff active');
+        }
         const parts = splitTelegramHtml(text);
         const sendOne = async (part: string, withMarkup: boolean): Promise<number> => {
             try {
@@ -905,6 +956,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             pendingKeys: new Map(),
             liveTool: null,
             pendingTodos: false,
+            flushing: false,
             needsTodoBaseline: false,
             needsEventBaseline: true,
             promptQueue: [],
@@ -1033,6 +1085,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         for (const id of [...ids].reverse()) {
             seen.add(id);
             if (this.watched.has(id)) continue;
+            if (this.sessionTicks.has(id)) continue;
             let session: SessionRow | null = null;
             try {
                 session = await opencode.getSession(id);
@@ -1052,6 +1105,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         }
         for (const [id, state] of this.watched) {
             if (seen.has(id)) continue;
+            if (this.sessionTicks.has(id)) continue;
             if (!state.finalized && !isStaleEmptyWatch(state, Date.now())) continue;
             this.watched.delete(id);
             this.dropSessionRefs(id);
@@ -1067,6 +1121,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 return a[1].lastEventAt - b[1].lastEventAt;
             });
             for (const [id] of byAge.slice(0, this.watched.size - cap)) {
+                if (this.sessionTicks.has(id)) continue;
                 this.watched.delete(id);
                 this.dropSessionRefs(id);
                 console.warn(`Radar evicted session ${id} (watched cap ${cap} exceeded)`);
@@ -1637,7 +1692,6 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     ): Promise<void> {
         if (state.promptQueue.length === 0) return;
         const pumpMark = Date.now();
-        if (Date.now() < this.rateLimitedUntil) return;
         if (Date.now() < state.promptNextAttemptAt) return;
         if (state.cliRun) {
             await this.notePromptBusy(telegram, state);
@@ -2788,11 +2842,30 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         await this.resolveQuestion(telegram, opencode, state, ref, [[text]]);
     }
 
+    private async typingTick(): Promise<void> {
+        const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
+        if (!telegram) return;
+        if (this.typingTickBusy) return;
+        this.typingTickBusy = true;
+        try {
+            for (const state of [...this.watched.values()]) {
+                try {
+                    await this.sendProgressTyping(telegram, state);
+                } catch (error) {
+                    console.debug('Radar typing tick failed:', error instanceof Error ? error.message : error);
+                }
+            }
+        } finally {
+            this.typingTickBusy = false;
+        }
+    }
+
     private async pollTick(): Promise<void> {
         const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
         const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
         if (!telegram || !opencode) return;
         if (this.pollInFlight) return;
+        const batchTimeoutMs = optionalPositiveInt(process.env.RADAR_POLL_BATCH_TIMEOUT_MS, SESSION_TICK_BATCH_TIMEOUT_MS);
         this.pollInFlight = true;
         try {
             await this.checkServerHealth(telegram, opencode);
@@ -2805,9 +2878,25 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                     await new Promise((resolve) => setTimeout(resolve, 500));
                 }
                 staggered = true;
-                await Promise.allSettled(
+                const batch = Promise.allSettled(
                     states.slice(i, i + fanout).map((state) => this.pollSession(telegram, opencode, state)),
                 );
+                if (batchTimeoutMs > 0) {
+                    let timer: NodeJS.Timeout | null = null;
+                    const timeout = new Promise<'timeout'>((resolve) => {
+                        timer = setTimeout(() => resolve('timeout'), batchTimeoutMs);
+                        timer.unref?.();
+                    });
+                    const winner = await Promise.race([batch.then(() => 'done' as const), timeout]);
+                    if (winner === 'timeout') {
+                        console.warn(
+                            `Radar poll batch exceeded ${batchTimeoutMs}ms, moving on (sessions=${states.slice(i, i + fanout).map((s) => s.session.id).join(',')}).`,
+                        );
+                    }
+                    if (timer) clearTimeout(timer);
+                } else {
+                    await batch;
+                }
             }
         } finally {
             this.pollInFlight = false;
@@ -2815,6 +2904,21 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     }
 
     private async pollSession(
+        telegram: TelegramBotPlugin,
+        opencode: OpencodePlugin,
+        state: WatchedSession,
+    ): Promise<void> {
+        const sessionId = state.session.id;
+        if (this.sessionTicks.has(sessionId)) return;
+        this.sessionTicks.add(sessionId);
+        try {
+            await this.runSessionTick(telegram, opencode, state);
+        } finally {
+            this.sessionTicks.delete(sessionId);
+        }
+    }
+
+    private async runSessionTick(
         telegram: TelegramBotPlugin,
         opencode: OpencodePlugin,
         state: WatchedSession,
@@ -2918,6 +3022,11 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             this.savePersisted();
             console.log(`Radar topic renamed (session=${state.session.id} thread=${state.threadId}): ${name.slice(0, 80)}`);
         } catch (error) {
+            if (isTopicNotModifiedError(error)) {
+                state.appliedTopicName = name;
+                this.savePersisted();
+                return;
+            }
             if (isRateLimitError(error)) {
                 const waitSec = getRetryAfterSec(error) ?? 10;
                 this.rateLimitedUntil = Math.max(
@@ -3126,6 +3235,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         if (state.confirming) return true;
         if (Date.now() - state.stoppedAt < STOP_QUIET_MS) return false;
         if (state.pending.length > 0 || state.pendingTodos) return true;
+        if (hasUnfinishedLiveTool(state, Date.now())) return true;
         return Date.now() - state.lastEventAt < WORKING_RECENCY_MS;
     }
 
@@ -3438,6 +3548,16 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
     }
 
     private async flushEvents(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        if (state.flushing) return;
+        state.flushing = true;
+        try {
+            await this.runFlushEvents(telegram, state);
+        } finally {
+            state.flushing = false;
+        }
+    }
+
+    private async runFlushEvents(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         if (Date.now() < this.rateLimitedUntil) return;
         if (state.pending.length === 0 && !state.pendingTodos) return;
         const todos = state.pendingTodos ? state.todos : null;
@@ -3463,6 +3583,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             state.pendingKeys.clear();
             state.pendingTodos = false;
             state.lastEventMessageAt = Date.now();
+            this.upstreamFailures = 0;
             this.savePersisted();
             if (substantive) await this.clearThinkingMessage(telegram, state);
         } catch (error) {
@@ -3474,6 +3595,15 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                 );
                 console.warn(`Radar events rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
             } else {
+                if (isUpstreamServerError(error)) {
+                    this.upstreamFailures += 1;
+                    const backoffMs = Math.min(UPSTREAM_BACKOFF_MAX_MS, 1000 * 2 ** Math.min(this.upstreamFailures, 6));
+                    this.upstreamBackoffUntil = Math.max(this.upstreamBackoffUntil, Date.now() + backoffMs);
+                    console.warn(
+                        `Radar telegram upstream failed (${this.upstreamFailures} in a row), backing off ${backoffMs}ms (session=${state.session.id}): ${error instanceof Error ? error.message : error}`,
+                    );
+                    return;
+                }
                 console.debug('Radar events send failed:', error);
             }
         }

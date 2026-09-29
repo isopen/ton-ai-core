@@ -2,7 +2,7 @@ import { strict as assert } from 'assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Message } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
-import { OpencodeRadarAgent, isMessageNotModifiedError, isThreadGoneError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, RADAR_THREAD_TIMINGS } from '../agent';
+import { OpencodeRadarAgent, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, RADAR_THREAD_TIMINGS } from '../agent';
 import { EMOJI, formatThinking, splitTelegramHtml, truncate, wellFormed } from '../formatter';
 
 const NOT_MODIFIED =
@@ -1982,6 +1982,29 @@ describe('radar thread binding survival', () => {
         (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => live;
         await agent.updateSession(telegram, state);
         assert.ok(!calls.some((c) => c.op === 'send'));
+    });
+
+    test('topic already named as desired stops the rename loop', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as StopState & {
+            appliedTopicName: string | null;
+            threadId: number | null;
+        };
+        const edits: Array<Record<string, unknown>> = [];
+        const bare = telegram as unknown as { editForumTopic: (p: Record<string, unknown>) => Promise<boolean> };
+        bare.editForumTopic = async (p: Record<string, unknown>) => {
+            edits.push(p);
+            throw new Error('Telegram API error: Bad Request: TOPIC_NOT_MODIFIED');
+        };
+        (state as unknown as { session: { title: string } }).session = { ...state.session, title: 'Renamed topic' };
+        state.appliedTopicName = null;
+        await agent.syncTopicName(telegram, state);
+        assert.equal(edits.length, 1);
+        assert.equal(state.appliedTopicName, '💎 Renamed topic · test01');
+        await agent.syncTopicName(telegram, state);
+        assert.equal(edits.length, 1, 'a settled topic must not be renamed again');
+        assert.equal(calls.filter((c) => c.op === 'edit').length, 0);
     });
 
     test('abnormal step finish is reported instead of vanishing', async () => {
@@ -4657,5 +4680,265 @@ describe('radar server errors', () => {
         const cards = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('opencode error'));
         assert.equal(cards.length, 1);
         assert.ok(calls.filter((c) => c.op === 'send').length > sendsBefore);
+    });
+});
+
+describe('radar poll resilience', () => {
+    test('a session already ticking is skipped instead of run twice', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            sessionTicks: Set<string>;
+        };
+        const { telegram } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & { session: { id: string } };
+        agent.sessionTicks = new Set<string>([state.session.id]);
+        let entered = 0;
+        (agent as unknown as { runSessionTick: () => Promise<void> }).runSessionTick = async () => {
+            entered += 1;
+        };
+        await agent.pollSession(telegram, {} as never, state);
+        assert.equal(entered, 0);
+        agent.sessionTicks.delete(state.session.id);
+        await agent.pollSession(telegram, {} as never, state);
+        assert.equal(entered, 1);
+    });
+
+    test('topic not modified is recognised as already in sync', () => {
+        assert.equal(isTopicNotModifiedError(new Error('Telegram API error: Bad Request: TOPIC_NOT_MODIFIED')), true);
+        assert.equal(isTopicNotModifiedError(new Error('TOPIC_NOT_MODIFIED')), true);
+        assert.equal(isTopicNotModifiedError(new Error('Too Many Requests: retry after 5')), false);
+        assert.equal(isTopicNotModifiedError(new Error('message thread not found')), false);
+        assert.equal(isTopicNotModifiedError(null), false);
+    });
+});
+
+describe('radar typing indicator', () => {
+    let now = 2000000;
+
+    beforeEach(() => {
+        now = 2000000;
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    const liveTool = (startedAt: number, done = false) => ({
+        key: 'db:tool1',
+        messageId: 10,
+        event: { kind: 'tool' as const, tool: 'bash', status: 'running', summary: 'bash make', output: '', time: startedAt },
+        done,
+        lastText: '',
+        lastEditAt: 0,
+        startedAt,
+        failCount: 0,
+    });
+
+    test('a long running tool keeps the session active past event recency', () => {
+        const base = { finalized: false, promptQueue: [], cliRun: null, confirming: null, stoppedAt: 0, pending: [], pendingTodos: false, lastEventAt: 0 };
+        const stale = now - 60000;
+        assert.equal(hasUnfinishedLiveTool({ liveTool: liveTool(stale) }, now), true);
+        assert.equal(hasUnfinishedLiveTool({ liveTool: liveTool(stale, true) }, now), false);
+        assert.equal(hasUnfinishedLiveTool({ liveTool: null }, now), false);
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const probe = agent.isSessionActive as unknown as (s: unknown) => boolean;
+        assert.equal(probe({ ...base, liveTool: liveTool(stale) }), true);
+        assert.equal(probe({ ...base, liveTool: liveTool(stale, true) }), false);
+    });
+
+    test('typing keeps firing while a tool runs and no events arrive', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const stale = now - 60000;
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & {
+            lastEventAt: number;
+            liveTool: unknown;
+            lastTypingAt: number;
+        };
+        state.lastEventAt = stale;
+        state.liveTool = liveTool(stale);
+        (state as unknown as { toolCalls: number }).toolCalls = 3;
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => telegram;
+        await agent.typingTick();
+        assert.ok(calls.some((c) => c.op === 'typing'), 'first tick must type');
+        now += 5000;
+        await agent.typingTick();
+        assert.equal(calls.filter((c) => c.op === 'typing').length, 2, 'typing must be refreshed past 5s');
+        now += 5000;
+        await agent.typingTick();
+        assert.equal(calls.filter((c) => c.op === 'typing').length, 3);
+    });
+
+    test('typing stops once the tool finished and the session went idle', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const stale = now - 60000;
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & {
+            lastEventAt: number;
+            liveTool: unknown;
+        };
+        state.lastEventAt = stale;
+        state.liveTool = liveTool(stale, true);
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => telegram;
+        await agent.typingTick();
+        assert.equal(calls.filter((c) => c.op === 'typing').length, 0);
+    });
+});
+
+describe('radar upstream failures', () => {
+    test('gateway errors are recognised as upstream, not client, failures', () => {
+        assert.equal(isUpstreamServerError({ errorCode: 502, message: 'Telegram API error: Bad Gateway' }), true);
+        assert.equal(isUpstreamServerError({ errorCode: 503, message: 'Telegram API error: Service Unavailable' }), true);
+        assert.equal(isUpstreamServerError(new Error('Telegram API error: Bad Gateway')), true);
+        assert.equal(isUpstreamServerError(new Error('fetch failed')), true);
+        assert.equal(isUpstreamServerError(new Error('socket hang up')), true);
+        assert.equal(isUpstreamServerError({ errorCode: 400, message: 'Bad Request: chat not found' }), false);
+        assert.equal(isUpstreamServerError({ errorCode: 429, message: 'Too Many Requests' }), false);
+        assert.equal(isUpstreamServerError(new Error('TOPIC_NOT_MODIFIED')), false);
+        assert.equal(isUpstreamServerError(null), false);
+    });
+
+    test('repeated gateway failures back off and a success clears them', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            upstreamFailures: number;
+            rateLimitedUntil: number;
+        };
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState;
+        let fail = true;
+        const base = telegram as unknown as { sendMessage: (p: Record<string, unknown>) => Promise<{ message_id: number }> };
+        base.sendMessage = async (p: Record<string, unknown>) => {
+            calls.push({ op: 'send', params: p });
+            if (fail) throw Object.assign(new Error('Telegram API error: Bad Gateway'), { errorCode: 502 });
+            return { message_id: 900 };
+        };
+        (state as unknown as { pending: unknown[] }).pending = [{ kind: 'text', text: 'hi', time: 1 }];
+        await agent.flushEvents(telegram, state);
+        assert.equal(agent.upstreamFailures, 1);
+        assert.ok((agent as unknown as { upstreamBackoffUntil: number }).upstreamBackoffUntil > Date.now(), 'upstream failure must pause sending');
+        assert.equal(agent.rateLimitedUntil, 0, 'upstream failure must not trip the shared flood backoff');
+        assert.equal((state as unknown as { pending: unknown[] }).pending.length, 1, 'events must survive the failure');
+        (agent as unknown as { upstreamBackoffUntil: number }).upstreamBackoffUntil = 0;
+        fail = false;
+        await agent.flushEvents(telegram, state);
+        assert.equal(agent.upstreamFailures, 0, 'a success must reset the backoff');
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('hi')));
+    });
+});
+
+describe('radar prompt delivery independence', () => {
+    test('a telegram upstream backoff does not hold back prompts to the model', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            upstreamBackoffUntil: number;
+            rateLimitedUntil: number;
+        };
+        const { telegram } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & { promptQueue: string[] };
+        state.promptQueue = ['поехали'];
+        agent.upstreamBackoffUntil = Date.now() + 60000;
+        await agent.pumpPrompts(telegram, fake.opencode, state);
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'поехали' }]);
+    });
+
+    test('a real flood backoff still blocks sends but not prompts', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            rateLimitedUntil: number;
+        };
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & { promptQueue: string[] };
+        state.promptQueue = ['вопрос'];
+        const sendsBefore = calls.filter((c) => c.op === 'send').length;
+        agent.rateLimitedUntil = Date.now() + 60000;
+        await agent.pumpPrompts(telegram, fake.opencode, state);
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'вопрос' }]);
+        await assert.rejects(
+            () => agent.deliverMessage(telegram, state, 'text'),
+            /Too Many Requests: radar backoff active/,
+        );
+        assert.equal(calls.filter((c) => c.op === 'send').length, sendsBefore);
+    });
+});
+
+describe('radar event flush concurrency', () => {
+    test('a slow flush blocks a second one instead of sending the same batch twice', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & {
+            pending: Array<{ kind: string; text: string; time: number }>;
+            lastEventMessageAt: number;
+        };
+        state.pending = [{ kind: 'text', text: 'один раз', time: 1 }];
+        let release: (() => void) | null = null;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const base = telegram as unknown as { sendMessage: (p: Record<string, unknown>) => Promise<{ message_id: number }> };
+        base.sendMessage = async (p: Record<string, unknown>) => {
+            calls.push({ op: 'send', params: p });
+            await gate;
+            return { message_id: 950 };
+        };
+        const first = agent.flushEvents(telegram, state);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await agent.flushEvents(telegram, state);
+        (release as unknown as () => void)();
+        await first;
+        const copies = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('один раз'));
+        assert.equal(copies.length, 1, 'the same batch must never be delivered twice');
+        assert.equal(state.pending.length, 0, 'pending must be cleared after the send');
+    });
+
+    test('the flush guard is released even when the send throws', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & {
+            pending: Array<{ kind: string; text: string; time: number }>;
+        };
+        state.pending = [{ kind: 'text', text: 'will fail', time: 1 }];
+        const base = telegram as unknown as { sendMessage: (p: Record<string, unknown>) => Promise<{ message_id: number }> };
+        base.sendMessage = async () => {
+            throw new Error('Bad Request: chat not found');
+        };
+        await agent.flushEvents(telegram, state);
+        assert.equal((state as unknown as { flushing: boolean }).flushing, false);
+        assert.equal(state.pending.length, 1, 'events must survive a failed send');
+    });
+});
+
+describe('radar session lifecycle races', () => {
+    test('a session with an in-flight tick is neither detached nor re-attached', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            sessionTicks: Set<string>;
+            watched: Map<string, unknown>;
+        };
+        const { telegram } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & { finalized: boolean };
+        state.finalized = true;
+        agent.sessionTicks = new Set<string>([state.session.id]);
+        const opencode = {
+            listSessions: async () => [],
+            getSession: async () => ({ ...SESSION, id: 'ses_other01' }),
+        };
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => opencode;
+        await agent.syncSessions();
+        assert.equal(agent.watched.has(state.session.id), true, 'must not detach a session that is still ticking');
+        assert.equal(agent.watched.has('ses_other01'), false, 'must not attach while a tick is in flight');
+    });
+
+    test('the session is detached normally once no tick is in flight', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            sessionTicks: Set<string>;
+            watched: Map<string, unknown>;
+        };
+        const { telegram } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & { finalized: boolean };
+        state.finalized = true;
+        agent.sessionTicks = new Set<string>();
+        const opencode = { listSessions: async () => [] };
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => opencode;
+        await agent.syncSessions();
+        assert.equal(agent.watched.has(state.session.id), false);
     });
 });

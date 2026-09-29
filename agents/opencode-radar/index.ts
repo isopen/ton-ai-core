@@ -67,6 +67,8 @@ function sessionIdList(): string[] {
     return multiple;
 }
 
+const maxSessionsDefault = optionalInt('RADAR_MAX_SESSIONS', 10);
+
 const config: OpencodeRadarConfig = {
     name: 'opencode-radar',
     plugins: {},
@@ -74,8 +76,9 @@ const config: OpencodeRadarConfig = {
         token: process.env.TELEGRAM_BOT_API_TOKEN || '',
         pollingTimeout: 30,
         pollingLimit: 100,
-        retryOnError: true,
-        maxRetries: 3,
+        retryOnError: false,
+        maxRetries: 0,
+        requestTimeoutMs: optionalInt('TELEGRAM_REQUEST_TIMEOUT_MS', 5000),
     },
     opencode: {
         baseUrl: process.env.OPENCODE_SERVER_URL || 'http://127.0.0.1:4096',
@@ -93,7 +96,7 @@ const config: OpencodeRadarConfig = {
         allowedUsers: userIdList(),
         sessionId: process.env.RADAR_SESSION_ID || undefined,
         sessionIds: sessionIdList(),
-        maxSessions: optionalInt('RADAR_MAX_SESSIONS', 10),
+        maxSessions: maxSessionsDefault,
         useThreads: optionalFlag('RADAR_USE_THREADS', true),
         typingEnabled: optionalFlag('RADAR_TYPING', true),
         newTopics: optionalFlag('RADAR_NEW_TOPICS', true),

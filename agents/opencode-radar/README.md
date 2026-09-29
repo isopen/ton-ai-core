@@ -43,7 +43,9 @@ With `RADAR_USE_THREADS=1` (default) every attached session gets its own forum t
 | `RADAR_STATE_PATH` | no | `~/.local/share/opencode-radar/state.json` | Topic/message mapping persisted across restarts |
 | `RADAR_ALLOWED_USERS` | no | open to all | Comma-separated Telegram user ids allowed to drive sessions; empty allows everyone |
 | `RADAR_POLL_MS` | no | `1000` | DB poll interval |
-| `RADAR_POLL_FANOUT` | no | `3` | Sessions updated in parallel per tick |
+| `RADAR_POLL_FANOUT` | no | `3` | Sessions updated in parallel per tick. One tick awaits several Telegram calls per session sequentially, so a small fanout multiplies startup time by the number of batches |
+| `TELEGRAM_REQUEST_TIMEOUT_MS` | no | `5000` | Per-request timeout for the Telegram API. A healthy call is well under a second, so a stalled gateway only costs this much |
+| — (hardcoded) | — | `maxRetries: 0` | Telegram retries are off on purpose: a stalled call would otherwise burn `attempts x timeout` seconds inside one tick, while the radar already retries on the next poll and never loses queued events |
 | `RADAR_IDLE_SEC` | no | `90` | Idle time before the final summary |
 
 ## Forum control
