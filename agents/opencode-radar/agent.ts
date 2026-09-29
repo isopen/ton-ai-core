@@ -1253,33 +1253,8 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             return;
         }
         const text = (message.text || message.caption || '').trim();
-        const command = text.split(/\s+/)[0]?.toLowerCase().split('@')[0];
-        if (command === '/stop') {
-            await this.stopSession(telegram, opencode, state);
-            return;
-        }
-        if (command === '/mode') {
-            await this.sendModeCard(telegram, state);
-            return;
-        }
-        if (command === '/model') {
-            await this.sendModelCard(telegram, opencode, state);
-            return;
-        }
         const replyTo = message.reply_to_message?.message_id;
-        if (replyTo !== undefined) {
-            const pendingPerm = this.permReplies.get(replyTo);
-            const command = text.split(/\s+/)[0]?.toLowerCase();
-            if (pendingPerm && pendingPerm.sessionId === state.session.id && (command === '/allow' || command === '/deny')) {
-                await this.answerPermission(telegram, opencode, state, pendingPerm.permId, replyTo, command === '/allow' ? 'once' : 'reject');
-                return;
-            }
-            const pendingQuest = this.questReplies.get(replyTo);
-            if (pendingQuest && pendingQuest.sessionId === state.session.id && text) {
-                await this.answerQuestionText(telegram, opencode, state, pendingQuest, text);
-                return;
-            }
-        }
+        if (await this.dispatchInboxCommand(telegram, opencode, state, text, replyTo)) return;
         if (hasMediaMessage(message)) {
             const before = state.promptQueue.length;
             await this.inboundMediaMessage(telegram, state, message, text);
@@ -1313,9 +1288,45 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         );
     }
 
+    private async dispatchInboxCommand(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion' | 'createSession' | 'sendPrompt' | 'getSession' | 'renameSession' | 'listModels'> & Partial<Pick<OpencodePlugin, 'interruptSession'>>,
+        state: WatchedSession,
+        text: string,
+        replyTo: number | undefined,
+    ): Promise<boolean> {
+        const command = text.split(/\s+/)[0]?.toLowerCase().split('@')[0];
+        if (command === '/stop') {
+            await this.stopSession(telegram, opencode, state);
+            return true;
+        }
+        if (command === '/mode') {
+            await this.sendModeCard(telegram, state);
+            return true;
+        }
+        if (command === '/model') {
+            await this.sendModelCard(telegram, opencode, state);
+            return true;
+        }
+        if (replyTo !== undefined) {
+            const pendingPerm = this.permReplies.get(replyTo);
+            const replyCommand = text.split(/\s+/)[0]?.toLowerCase();
+            if (pendingPerm && pendingPerm.sessionId === state.session.id && (replyCommand === '/allow' || replyCommand === '/deny')) {
+                await this.answerPermission(telegram, opencode, state, pendingPerm.permId, replyTo, replyCommand === '/allow' ? 'once' : 'reject');
+                return true;
+            }
+            const pendingQuest = this.questReplies.get(replyTo);
+            if (pendingQuest && pendingQuest.sessionId === state.session.id && text) {
+                await this.answerQuestionText(telegram, opencode, state, pendingQuest, text);
+                return true;
+            }
+        }
+        return false;
+    }
+
     private async handleUnknownThread(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'createSession' | 'sendPrompt' | 'getSession'>,
+        opencode: Pick<OpencodePlugin, 'createSession' | 'sendPrompt' | 'getSession' | 'listModels' | 'replyPermission' | 'replyQuestion' | 'renameSession'> & Partial<Pick<OpencodePlugin, 'interruptSession'>>,
         message: Message,
         threadId: number,
     ): Promise<void> {
@@ -1379,6 +1390,8 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                         if (hasMediaMessage(queuedMessage)) {
                             await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
                         } else if (queuedText) {
+                            const queuedReplyTo = queuedMessage.reply_to_message?.message_id;
+                            if (await this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo)) continue;
                             this.enqueuePrompt(state, queuedText);
                         }
                     }

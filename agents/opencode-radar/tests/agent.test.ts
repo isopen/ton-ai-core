@@ -1879,6 +1879,28 @@ describe('radar thread binding survival', () => {
         assert.ok(!calls.some((c) => c.op === 'create'));
     });
 
+    test('command in a rebound topic is dispatched instead of sent as a prompt', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setGetSessionImpl(async (id: string) => (id === 'ses_old' ? { ...SESSION, id: 'ses_old' } : null));
+        (agent as unknown as { persisted: Record<string, unknown> }).persisted = {
+            ses_old: { threadId: 999, contextMessageId: 55, pinnedThreadId: 999, lastSeen: now },
+        };
+        const opencode = {
+            ...fake.opencode,
+            listModels: async () => [{ id: 'm-a', providerID: 'p', name: 'Model A' }],
+        };
+        await agent.handleInbound(telegram, opencode, inboundMsg({ message_thread_id: 999, text: '/model' }, now));
+        assert.deepEqual(fake.prompts, [], '/model must not reach the model as a prompt');
+        const cards = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Model:'));
+        assert.equal(cards.length, 1, 'the model card must be posted');
+        const markup = (cards[0].params as Record<string, unknown>).reply_markup as {
+            inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+        };
+        assert.deepEqual(markup.inline_keyboard.map((row) => row[0].callback_data), ['model:m-a']);
+    });
+
     test('stale persisted binding is dropped and a fresh session is created', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram } = stubTelegram();
