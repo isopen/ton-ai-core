@@ -902,7 +902,7 @@ function applyTrimToItems(items: PaintItem[], trim: ParsedShape, frame: number, 
     }
     if (vCompare(Math.abs(start - end), 1)) return;
 
-    if (trim.trimMode !== 'individually') {
+    if (trim.trimMode === 'individually') {
         for (const it of scope) {
             it.cmds = trimPath(it.cmds, start, end);
         }
@@ -1327,6 +1327,7 @@ function renderMattePair(
     layerOrder: LayerOrder = 'default',
     hiddenLayers?: (name?: string) => boolean,
 ) {
+    if (hiddenLayers?.(matte.name)) return;
     const w = Math.max(1, Math.ceil(clipRect.w));
     const h = Math.max(1, Math.ceil(clipRect.h));
     const localClip = rectOf(0, 0, w, h);

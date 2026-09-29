@@ -51,6 +51,7 @@ export async function inflateTgs(data: Uint8Array): Promise<string> {
         await writer.write(data);
         await writer.close();
     })();
+    writeDone.catch(() => undefined);
     const chunks: Uint8Array[] = [];
     let total = 0;
     for (;;) {

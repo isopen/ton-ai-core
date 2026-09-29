@@ -286,11 +286,15 @@ function parseLayer(l: TgsLayer): ParsedLayer | undefined {
 
 function parseMarkers(markers?: TgsMarker[]): ParsedAnimation['markers'] {
     if (!Array.isArray(markers)) return undefined;
-    return markers.map((m) => ({
-        name: m.cm,
-        startFrame: m.tm,
-        endFrame: m.tm + m.dr,
-    }));
+    return markers.map((m) => {
+        const startFrame = typeof m.tm === 'number' && Number.isFinite(m.tm) ? m.tm : 0;
+        const dr = typeof m.dr === 'number' && Number.isFinite(m.dr) ? m.dr : 0;
+        return {
+            name: m.cm,
+            startFrame,
+            endFrame: startFrame + dr,
+        };
+    });
 }
 
 export interface ParseOptions {
