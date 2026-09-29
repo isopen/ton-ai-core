@@ -201,31 +201,32 @@ export function mapPart(row: { id: string; time_updated: number; data: string })
  * mirrors prompts typed elsewhere; the caller skips the ones it submitted.
  * Returns indexed events so callers can build stable `nmsg:<id>:<index>` keys.
  */
-export function mapSessionMessage(row: SessionMessageRow): Array<{ index: number; event: RadarEvent }> {
+export function mapSessionMessage(row: SessionMessageRow): Array<{ index: number; key: string; event: RadarEvent }> {
     const data = parsePartData(row.data);
     if (!data) return [];
     const time = row.time_updated || row.time_created;
     if (row.type === 'user') {
         const text = asString(data.text).trim();
         if (!text) return [];
-        return [{ index: 0, event: { kind: 'user', text, time } }];
+        return [{ index: 0, key: '0', event: { kind: 'user', text, time } }];
     }
     if (row.type !== 'assistant') return [];
     const content = data.content;
     if (!Array.isArray(content)) return [];
-    const events: Array<{ index: number; event: RadarEvent }> = [];
+    const events: Array<{ index: number; key: string; event: RadarEvent }> = [];
     content.forEach((part: unknown, index: number) => {
         if (!part || typeof part !== 'object' || Array.isArray(part)) return;
         const record = part as Record<string, unknown>;
         const partType = record.type;
+        const key = typeof record.id === 'string' && record.id.length > 0 ? record.id : String(index);
         if (partType === 'text') {
             const text = asString(record.text).trim();
             if (!text) return;
-            events.push({ index, event: { kind: 'text', text, time } });
+            events.push({ index, key, event: { kind: 'text', text, time } });
             return;
         }
         if (partType === 'reasoning') {
-            events.push({ index, event: { kind: 'reasoning', text: asString(record.text).trim(), time } });
+            events.push({ index, key, event: { kind: 'reasoning', text: asString(record.text).trim(), time } });
             return;
         }
         if (partType === 'tool') {
@@ -235,6 +236,7 @@ export function mapSessionMessage(row: SessionMessageRow): Array<{ index: number
             const summary = summarizeToolInput(tool, state?.input);
             events.push({
                 index,
+                key,
                 event: { kind: 'tool', tool, status, summary, output: toolResultText(tool, state), time },
             });
         }

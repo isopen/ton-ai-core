@@ -4964,3 +4964,35 @@ describe('radar session lifecycle races', () => {
         assert.equal(agent.watched.has(state.session.id), false);
     });
 });
+
+describe('radar delivery dedup', () => {
+    test('the same batch text is not delivered twice within the window', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & {
+            pending: Array<{ kind: string; text: string; time: number }>;
+        };
+        const batch = [{ kind: 'text', text: 'same twice', time: 1 }];
+        state.pending = [...batch];
+        await agent.flushEvents(telegram, state);
+        state.pending = [...batch];
+        await agent.flushEvents(telegram, state);
+        const copies = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('same twice'));
+        assert.equal(copies.length, 1);
+    });
+
+    test('different batches still go through', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as QueueState & {
+            pending: Array<{ kind: string; text: string; time: number }>;
+        };
+        state.pending = [{ kind: 'text', text: 'first', time: 1 }];
+        await agent.flushEvents(telegram, state);
+        (state as unknown as { lastEventMessageAt: number }).lastEventMessageAt = 0;
+        state.pending = [{ kind: 'text', text: 'second', time: 2 }];
+        await agent.flushEvents(telegram, state);
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('first')));
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('second')));
+    });
+});

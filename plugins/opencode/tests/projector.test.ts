@@ -209,16 +209,33 @@ describe('opencode projector', () => {
             }),
         );
         assert.deepEqual(events, [
-            { index: 0, event: { kind: 'reasoning', text: '', time: 1000 } },
-            { index: 1, event: { kind: 'text', text: 'done', time: 1000 } },
-            { index: 3, event: { kind: 'tool', tool: 'bash', status: 'completed', summary: 'bash ls', output: 'ok', time: 1000 } },
-            { index: 4, event: { kind: 'tool', tool: 'read', status: 'running', summary: 'read', output: '', time: 1000 } },
+            { index: 0, key: '0', event: { kind: 'reasoning', text: '', time: 1000 } },
+            { index: 1, key: '1', event: { kind: 'text', text: 'done', time: 1000 } },
+            { index: 3, key: '3', event: { kind: 'tool', tool: 'bash', status: 'completed', summary: 'bash ls', output: 'ok', time: 1000 } },
+            { index: 4, key: '4', event: { kind: 'tool', tool: 'read', status: 'running', summary: 'read', output: '', time: 1000 } },
+        ]);
+    });
+
+    test('mapSessionMessage prefers the content entry id for stable keys', () => {
+        const events = mapSessionMessage(
+            sessionMessage('assistant', {
+                content: [
+                    { type: 'reasoning', id: 'rs_1', text: '' },
+                    { type: 'text', id: 'msg_abc', text: 'hi' },
+                    { type: 'text', text: 'no id here' },
+                ],
+            }),
+        );
+        assert.deepEqual(events, [
+            { index: 0, key: 'rs_1', event: { kind: 'reasoning', text: '', time: 1000 } },
+            { index: 1, key: 'msg_abc', event: { kind: 'text', text: 'hi', time: 1000 } },
+            { index: 2, key: '2', event: { kind: 'text', text: 'no id here', time: 1000 } },
         ]);
     });
 
     test('mapSessionMessage emits user rows and skips invalid payloads', () => {
         assert.deepEqual(mapSessionMessage(sessionMessage('user', { text: '  ping  ' })), [
-            { index: 0, event: { kind: 'user', text: 'ping', time: 1000 } },
+            { index: 0, key: '0', event: { kind: 'user', text: 'ping', time: 1000 } },
         ]);
         assert.deepEqual(mapSessionMessage(sessionMessage('user', { text: '   ' })), []);
         assert.deepEqual(mapSessionMessage(sessionMessage('assistant', { content: 'nope' })), []);

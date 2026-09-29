@@ -220,8 +220,8 @@ export class OpencodeSkills {
             if (event) keyed.push({ key: `db:${row.id}`, event });
         }
         for (const row of source.readSessionMessages(sessionId, 60)) {
-            for (const { index, event } of mapSessionMessage(row)) {
-                keyed.push({ key: `nmsg:${row.id}:${index}`, event });
+            for (const { key, event } of mapSessionMessage(row)) {
+                keyed.push({ key: `nmsg:${row.id}:${key}`, event });
             }
         }
         keyed.sort((a, b) => a.event.time - b.event.time);

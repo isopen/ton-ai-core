@@ -82,6 +82,8 @@ const TYPING_COOLDOWN_MS = 4000;
 const TYPING_TICK_MS = 4000;
 const LIVE_TOOL_ACTIVE_MS = 5 * 60 * 1000;
 const UPSTREAM_BACKOFF_MAX_MS = 60000;
+const DELIVERY_DEDUP_MS = 45000;
+const DELIVERY_DEDUP_KEEP = 8;
 const PROMPT_BUSY_BACKOFF_MS = 8000;
 const PROMPT_TRANSIENT_BACKOFF_MS = 5000;
 const AUTO_PICK_WINDOW_MIN = 20;
@@ -152,6 +154,14 @@ export function hasUnfinishedLiveTool(
     const live = state.liveTool;
     if (!live || live.done) return false;
     return now - live.startedAt < LIVE_TOOL_ACTIVE_MS;
+}
+
+function deliverySignature(text: string): string {
+    let hash = 5381;
+    for (let i = 0; i < text.length; i += 1) {
+        hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+    }
+    return `${text.length}:${hash}`;
 }
 
 function optionalPositiveInt(raw: string | undefined, fallback: number): number {
@@ -336,6 +346,7 @@ interface WatchedSession {
     liveTool: { key: string; messageId: number | null; event: RadarEvent; done: boolean; lastText: string; lastEditAt: number; startedAt: number; failCount: number } | null;
     pendingTodos: boolean;
     flushing: boolean;
+    recentDelivered: Array<{ sig: string; at: number }>;
     needsTodoBaseline: boolean;
     needsEventBaseline: boolean;
     promptQueue: string[];
@@ -957,6 +968,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             liveTool: null,
             pendingTodos: false,
             flushing: false,
+            recentDelivered: [],
             needsTodoBaseline: false,
             needsEventBaseline: true,
             promptQueue: [],
@@ -2166,7 +2178,7 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                     message_id: controlId,
                     reply_markup: { inline_keyboard: [] },
                 });
-                console.log(`Radar stop button hidden (session=${state.session.id}).`);
+                console.log(`Radar stop button hidden (session=${state.session.id} control=${controlId}).`);
             } catch (error) {
                 if (!isMessageNotModifiedError(error)) {
                     console.debug('Radar stop control clear failed:', error instanceof Error ? error.message : error);
@@ -3581,6 +3593,15 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             state.pendingTodos = false;
             return;
         }
+        const now = Date.now();
+        state.recentDelivered = state.recentDelivered.filter((entry) => now - entry.at < DELIVERY_DEDUP_MS);
+        if (state.recentDelivered.some((entry) => entry.sig === deliverySignature(text))) {
+            console.warn(`Radar duplicate batch suppressed (session=${state.session.id}).`);
+            state.pending = [];
+            state.pendingKeys.clear();
+            state.pendingTodos = false;
+            return;
+        }
         if (Date.now() - state.lastEventMessageAt < EVENT_THROTTLE_MS) return;
         try {
             const flushMark = Date.now();
@@ -3597,6 +3618,10 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             state.pendingTodos = false;
             state.lastEventMessageAt = Date.now();
             this.upstreamFailures = 0;
+            state.recentDelivered.push({ sig: deliverySignature(text), at: Date.now() });
+            if (state.recentDelivered.length > DELIVERY_DEDUP_KEEP) {
+                state.recentDelivered.splice(0, state.recentDelivered.length - DELIVERY_DEDUP_KEEP);
+            }
             this.savePersisted();
             if (substantive) await this.clearThinkingMessage(telegram, state);
         } catch (error) {
