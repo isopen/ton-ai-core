@@ -1,16 +1,10 @@
-/** Jest transformer for compiled (tsc) ESM files in gram-ui/dist.
- *  Handles the exact emit patterns tsc produces: import declarations,
- *  export {..}, export function/class/const. No default exports used. */
-
 function transformEsmToCjs(src, filename) {
   const requires = [];
   let code = src;
 
-  // import.meta.url → CJS equivalent (worker URLs in compiled tgs/media code)
   code = code.replace(/import\.meta\.url/g, "require('url').pathToFileURL(__filename).href");
   code = code.replace(/\bimport\.meta\b/g, '({})');
 
-  // import { a, b as c } from 'mod';  |  import X from 'mod';  |  import 'mod';
   code = code.replace(
     /^[ \t]*import\s+(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\{([^}]*)\})?\s*from\s*['"]([^'"]+)['"];?[ \t]*$/gm,
     (m, defaultName, named, from) => {
@@ -30,7 +24,6 @@ function transformEsmToCjs(src, filename) {
     },
   );
 
-  // export { A, B as C } from 'mod';
   code = code.replace(
     /^[ \t]*export\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"];?[ \t]*$/gm,
     (m, names, from) => {
@@ -48,7 +41,6 @@ function transformEsmToCjs(src, filename) {
     },
   );
 
-  // export { A, B as C };
   const exportLists = [];
   code = code.replace(/^[ \t]*export\s*\{([^}]*)\};?[ \t]*$/gm, (m, names) => {
     for (const part of names.split(',')) {
@@ -60,21 +52,18 @@ function transformEsmToCjs(src, filename) {
     return '';
   });
 
-  // export function name / export async function name
   code = code.replace(/^[ \t]*export\s+(async\s+)?function\s+([A-Za-z_$][\w$]*)/gm,
     (m, isAsync, name) => {
       exportLists.push(`exports.${name} = ${name};`);
       return `${isAsync || ''}function ${name}`;
     });
 
-  // export class Name
   code = code.replace(/^[ \t]*export\s+class\s+([A-Za-z_$][\w$]*)/gm,
     (m, name) => {
       exportLists.push(`exports.${name} = ${name};`);
       return `class ${name}`;
     });
 
-  // export const/let/var Name = ...
   code = code.replace(/^[ \t]*export\s+(const|let|var)\s+([A-Za-z_$][\w$]*)/gm,
     (m, kw, name) => {
       exportLists.push(`exports.${name} = ${name};`);

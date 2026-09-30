@@ -69,8 +69,8 @@ module.exports = {
   transform: {
     '^.+\\.tsx$': ['ts-jest', tsOpts],
     '^.+\\.ts$': ['ts-jest', tsOpts],
-    'gram-ui/dist/.+\\.js$': '<rootDir>/jest.esm-transformer.cjs',
-    'packages/core/src/crypton/wasm/.+\\.js$': '<rootDir>/jest.esm-transformer.cjs',
+    'gram-ui/dist/.+\\.js$': '<rootDir>/scripts/jest.esm-transformer.cjs',
+    'packages/core/src/crypton/wasm/.+\\.js$': '<rootDir>/scripts/jest.esm-transformer.cjs',
   },
   transformIgnorePatterns: ['/node_modules/(?!(@ton-ai)/)'],
   moduleNameMapper: {
