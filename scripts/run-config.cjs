@@ -1,7 +1,8 @@
 const { execSync } = require('child_process');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
-const manifest = require(path.join(ROOT, 'configs/gram-browser.json'));
+const manifestName = process.env.CONFIG || 'gram-browser.json';
+const manifest = require(path.join(ROOT, 'configs', manifestName));
 function topSplit(body) {
   const parts = [];
   let depth = 0, cur = '';

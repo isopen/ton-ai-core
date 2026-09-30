@@ -1,13 +1,7 @@
-.PHONY: build build-core build-plugins build-agents clean build-% rebuild-gram-browser install
+.PHONY: build build-core build-plugins build-agents clean build-% rebuild-% rebuild-quick-% rebuild-all-% install
 
 install:
 	npm install --no-audit --no-fund --prefer-offline
-
-rebuild-gram-browser:
-	node scripts/run-config.cjs rebuild:quick
-
-rebuild-gram-browser-wasm:
-	BUILD_WASM=1 node scripts/run-config.cjs rebuild:quick
 
 build: build-core build-plugins
 
@@ -30,6 +24,15 @@ build-%:
 		[ -f "$$pkg" ] && node -e "const p=require('./$$pkg');if(p.name==='@ton-ai/$*'&&p.scripts?.build)process.exit(0);else process.exit(1)" && \
 		echo "Building @ton-ai/$*..." && npm run build -w "@ton-ai/$*" && break; \
 	 done)
+
+rebuild-%:
+	CONFIG=$*.json node scripts/run-config.cjs rebuild
+
+rebuild-quick-%:
+	CONFIG=$*.json node scripts/run-config.cjs rebuild:quick
+
+rebuild-all-%:
+	CONFIG=$*.json node scripts/run-config.cjs rebuild:all
 
 clean:
 	npm run clean -ws --if-present
