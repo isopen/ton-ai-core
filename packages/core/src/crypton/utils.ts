@@ -116,11 +116,11 @@ export function hexToBytes(hex: string): Uint8Array {
   }
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
-    const byte = parseInt(hex.substring(i, i + 2), 16);
-    if (Number.isNaN(byte)) {
-      throw new Error(`Invalid hex byte at position ${i}: "${hex.substring(i, i + 2)}"`);
+    const chunk = hex.substring(i, i + 2);
+    if (!/^[0-9a-fA-F]{2}$/.test(chunk)) {
+      throw new Error(`Invalid hex byte at position ${i}: "${chunk}"`);
     }
-    bytes[i / 2] = byte;
+    bytes[i / 2] = parseInt(chunk, 16);
   }
   return bytes;
 }

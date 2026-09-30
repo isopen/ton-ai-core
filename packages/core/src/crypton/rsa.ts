@@ -255,7 +255,7 @@ export async function rsaVerify(
       false,
       ['verify']
     );
-    return crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, data);
+    return await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, data);
   } catch {
     return false;
   }
