@@ -114,3 +114,28 @@ describe('opencode part roles', () => {
         }
     });
 });
+
+describe('opencode store activity probe', () => {
+    test('lastActivityAt tracks the latest session_message write', () => {
+        const db = new DatabaseSync(':memory:');
+        db.exec(
+            `CREATE TABLE session_message (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL,
+                time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL
+            )`,
+        );
+        const insert = db.prepare(
+            'INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        );
+        insert.run('m1', 's1', 'user', 1, 100, 150, '{}');
+        insert.run('m2', 's1', 'assistant', 2, 200, 400, '{}');
+        insert.run('m3', 's2', 'user', 1, 300, 300, '{}');
+        try {
+            const store = new OpencodeStore(db);
+            assert.equal(store.lastActivityAt('s1'), 400);
+            assert.equal(store.lastActivityAt('ghost'), 0);
+        } finally {
+            db.close();
+        }
+    });
+});

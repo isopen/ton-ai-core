@@ -118,6 +118,16 @@ export class OpencodePlugin extends BasePlugin<OpencodeConfig> {
         return this.skills.readContextSnapshot(sessionId);
     }
 
+    storeError(): string | null {
+        this.checkInitialized();
+        return this.skills.storeError();
+    }
+
+    lastActivityAt(sessionId: string): number | null {
+        this.checkInitialized();
+        return this.skills.lastActivityAt(sessionId);
+    }
+
     async getModelLimit(modelId: string): Promise<number | null> {
         this.checkInitialized();
         return this.skills.getModelLimit(modelId);

@@ -126,10 +126,6 @@ export class OpencodeStore {
             sessionId,
         );
         if (legacy !== null) return true;
-        // Since opencode 1.18 the server persists prompts and progress in
-        // session_message/session_input instead of the legacy message table.
-        // Checking only the legacy table reports every server prompt as
-        // unlanded and forces a needless CLI fallback.
         if (this.hasTable('session_message')) {
             try {
                 const fresh = oneRow<{ found: number }>(
@@ -173,6 +169,24 @@ export class OpencodeStore {
             return rows.reverse();
         } catch {
             return [];
+        }
+    }
+
+    lastActivityAt(sessionId: string): number | null {
+        if (!this.hasTable('session_message')) return null;
+        try {
+            const row = oneRow<{ t: number | null }>(
+                this.db,
+                `SELECT max(time_updated) AS t FROM (
+                    SELECT time_updated FROM session_message WHERE session_id = ?
+                    ORDER BY time_created DESC, seq DESC LIMIT 20
+                )`,
+                sessionId,
+            );
+            if (row && typeof row.t === 'number' && Number.isFinite(row.t)) return row.t;
+            return 0;
+        } catch {
+            return null;
         }
     }
 

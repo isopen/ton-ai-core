@@ -193,14 +193,6 @@ export function mapPart(row: { id: string; time_updated: number; data: string })
     return null;
 }
 
-/**
- * Maps one row of the post-1.18 `session_message` table to radar events.
- * The server persists prompts and progress here; the legacy `message`/`part`
- * tables no longer receive server writes, so reading only them makes every
- * server prompt look unlanded. User rows surface as `user` events so the chat
- * mirrors prompts typed elsewhere; the caller skips the ones it submitted.
- * Returns indexed events so callers can build stable `nmsg:<id>:<index>` keys.
- */
 export function mapSessionMessage(row: SessionMessageRow): Array<{ index: number; key: string; event: RadarEvent }> {
     const data = parsePartData(row.data);
     if (!data) return [];

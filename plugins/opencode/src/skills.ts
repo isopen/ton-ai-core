@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { PluginContext } from '@ton-ai/core';
 import { OpencodeStore } from './store';
 import { parseServeTarget, serveArgs, ServeTarget, SpawnedProcess, SpawnFn } from './serve';
@@ -66,6 +67,7 @@ export class OpencodeSkills {
     private serverError: string | null = null;
     private store: OpencodeStore | null = null;
     private storeFailed: boolean = false;
+    private storeErrorText: string | null = null;
     private modelLimits: Map<string, { limit: number | null; at: number }> = new Map();
     private cliRuns: Set<SpawnedProcess> = new Set();
     private eventSources: Set<AbortController> = new Set();
@@ -162,17 +164,31 @@ export class OpencodeSkills {
     }
 
     stopServer(): void {
-        if (this.serverProcess && this.ownsServer) {
-            try {
-                this.serverProcess.kill('SIGTERM');
-            } catch (error) {
-                this.context.logger.debug('opencode server kill failed:', error instanceof Error ? error.message : error);
-            }
-        }
+        const child = this.serverProcess;
+        const owned = this.ownsServer;
         this.serverProcess = null;
         this.ownsServer = false;
         this.serverExitCode = null;
         this.serverError = null;
+        if (!child || !owned) return;
+        let exited = false;
+        child.on('exit', () => {
+            exited = true;
+        });
+        try {
+            child.kill('SIGTERM');
+        } catch (error) {
+            this.context.logger.debug('opencode server kill failed:', error instanceof Error ? error.message : error);
+        }
+        const timer = setTimeout(() => {
+            if (exited) return;
+            try {
+                child.kill('SIGKILL');
+            } catch (error) {
+                this.context.logger.debug('opencode server kill -9 failed:', error instanceof Error ? error.message : error);
+            }
+        }, 3000);
+        timer.unref?.();
     }
 
     private startServer(target: ServeTarget): void {
@@ -232,6 +248,12 @@ export class OpencodeSkills {
         const fallback = this.getStore();
         if (!fallback) return [];
         return fallback.readTodos(sessionId);
+    }
+
+    lastActivityAt(sessionId: string): number | null {
+        const source = this.getStore();
+        if (!source) return null;
+        return source.lastActivityAt(sessionId);
     }
 
     async hasMessage(sessionId: string, messageId: string): Promise<boolean> {
@@ -539,15 +561,25 @@ export class OpencodeSkills {
         this.ready = false;
     }
 
+    storeError(): string | null {
+        if (this.store) return null;
+        if (!this.dbPath) return 'opencode database path is not configured';
+        if (this.storeFailed && this.storeErrorText) return this.storeErrorText;
+        if (!existsSync(this.dbPath)) return `opencode database not found: ${this.dbPath}`;
+        return null;
+    }
+
     private getStore(): OpencodeStore | null {
         if (this.store || this.storeFailed || !this.dbPath) return this.store;
         try {
             this.store = new OpencodeStore(this.dbPath);
         } catch (error) {
             this.storeFailed = true;
+            this.storeErrorText = error instanceof Error ? error.message : String(error);
             this.context.logger.warn('opencode local database unavailable:', error instanceof Error ? error.message : error);
             return null;
         }
+        this.storeErrorText = null;
         return this.store;
     }
 
