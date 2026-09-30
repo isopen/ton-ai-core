@@ -1,5 +1,6 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { t, S } from '@ton-ai/gram-lang';
+import { crypton } from '@ton-ai/core';
 
 const log = getLogger('gram-ui');
 
@@ -291,11 +292,7 @@ export function isButtonInactive(map: Record<string, true> | undefined, messageI
     return map[inactiveButtonKey(messageId, data)] === true;
 }
 
-export function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
-  return bytes;
-}
+export const hexToBytes = crypton.hexToBytes;
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
