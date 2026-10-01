@@ -3,6 +3,7 @@ import { hexToBase64Url, makeQrUrl, generateQrDataUrl, QR_DEFAULTS, preloadQrMod
 import { dbGet, dbSet, dbDel } from '@/utils/db';
 import { getApiCredentials } from '@/utils/api-creds';
 import { addLog, setDialogsFromServer, fetchSelfUserId } from './gram-utils';
+import { recoverUpdateGap } from './gram-updates';
 import type { GramState } from './gram-state';
 import type { WorkerTelegramService } from '@/utils/worker-telegram-service';
 
@@ -170,10 +171,6 @@ export function createAuthCallbacks(
 ) {
   const svc = () => getService();
   try {
-    (window as any).__gramAuthSvc = getService;
-    (window as any).__gramAuthState = s.tgui;
-  } catch {}
-  try {
     window.addEventListener('tg-auth-cancel', () => {
       bumpAuthGen();
       stopQrPolling();
@@ -218,6 +215,7 @@ export function createAuthCallbacks(
     const dialogsResult = await service.fetchDialogs();
     if (gen !== authGen) return;
     if (dialogsResult) setDialogsFromServer(s, dialogsResult);
+    void recoverUpdateGap(s);
   }
 
   function formatAuthError(msg: string): string {

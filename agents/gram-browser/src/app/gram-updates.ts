@@ -1,5 +1,6 @@
 import { t, S, tpl } from '@ton-ai/gram-lang';
 import { collectCustomIds, type Message } from '@ton-ai/gram-ui';
+import { dbGet, dbSet } from '@/utils/db';
 import type { GramState } from './gram-state';
 import {
   addLog, setMessageCache, deleteMessageCache, scheduleDialogsFlush,
@@ -11,6 +12,113 @@ import { insertHistoryMessage, filterDeletedMessages } from './gram-history';
 import { getLogger } from '@ton-ai/gram-debug';
 
 const updLog = getLogger('gram-browser:updates');
+
+const UPDATE_STATE_KEY = 'updateState_v1';
+const UPDATE_STATE_FLUSH_MS = 2000;
+const MAX_DIFFERENCE_ROUNDS = 10;
+
+interface UpdateState {
+  pts: number;
+  qts: number;
+  seq: number;
+  date: number;
+}
+
+let updateState: UpdateState | null = null;
+let updateStateFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let differenceInFlight: Promise<void> | null = null;
+
+async function loadUpdateState(): Promise<UpdateState | null> {
+  if (updateState) return updateState;
+  try {
+    const v = await dbGet<UpdateState>(UPDATE_STATE_KEY);
+    if (v && typeof v.pts === 'number' && v.pts > 0) {
+      updateState = { pts: v.pts, qts: v.qts || 0, seq: v.seq || 0, date: v.date || 0 };
+    }
+  } catch {}
+  return updateState;
+}
+
+function rememberUpdateState(next: Partial<UpdateState>): void {
+  const cur = updateState || { pts: 0, qts: 0, seq: 0, date: 0 };
+  updateState = {
+    pts: next.pts !== undefined ? next.pts : cur.pts,
+    qts: next.qts !== undefined ? next.qts : cur.qts,
+    seq: next.seq !== undefined ? next.seq : cur.seq,
+    date: next.date !== undefined ? next.date : cur.date,
+  };
+  if (updateStateFlushTimer) return;
+  updateStateFlushTimer = setTimeout(() => {
+    updateStateFlushTimer = null;
+    if (updateState && updateState.pts > 0) {
+      dbSet(UPDATE_STATE_KEY, updateState).catch(() => {});
+    }
+  }, UPDATE_STATE_FLUSH_MS);
+}
+
+function stateFromServer(raw: any): Partial<UpdateState> | null {
+  if (!raw || raw._ !== 'updates.state') return null;
+  return {
+    pts: Number(raw.pts) || 0,
+    qts: Number(raw.qts) || 0,
+    seq: Number(raw.seq) || 0,
+    date: Number(raw.date) || 0,
+  };
+}
+
+export async function recoverUpdateGap(s: GramState): Promise<void> {
+  if (differenceInFlight) return differenceInFlight;
+  differenceInFlight = (async () => {
+    try {
+      const service = s.tgService.current;
+      if (!service || !service.authenticated) return;
+      const handle = (s as any).handleUpdate as ((id: number, data: string) => void) | undefined;
+      if (!handle) return;
+      let st = await loadUpdateState();
+      if (!st || st.pts <= 0) {
+        const state = stateFromServer(await service.callRpc('updates.getState', {}));
+        if (state) rememberUpdateState(state);
+        return;
+      }
+      for (let round = 0; round < MAX_DIFFERENCE_ROUNDS; round++) {
+        const diff: any = await service.callRpc('updates.getDifference', {
+          flags: 0,
+          pts: st.pts,
+          date: st.date,
+          qts: st.qts,
+        });
+        if (!diff) return;
+        if (diff._ === 'updates.differenceEmpty') return;
+        if (diff._ === 'updates.differenceTooLong') {
+          updLog.warn('[updates] differenceTooLong — resetting update state');
+          rememberUpdateState({ pts: Number(diff.pts) || 0 });
+          return;
+        }
+        const container = {
+          _: 'updates',
+          updates: [...(diff.new_messages || []), ...(diff.other_updates || [])],
+          users: diff.users || [],
+          chats: diff.chats || [],
+          date: diff.state?.date || st.date,
+          seq: diff.state?.seq || st.seq,
+        };
+        handle(0, JSON.stringify(container));
+        const next = stateFromServer(diff.state);
+        if (next) {
+          rememberUpdateState(next);
+          st = { ...updateState! };
+        }
+        if (diff._ === 'updates.difference') return;
+      }
+      updLog.warn('[updates] difference rounds exhausted');
+    } catch (e: any) {
+      updLog.warn('[updates] difference recovery failed: ' + (e?.message || e));
+    } finally {
+      differenceInFlight = null;
+    }
+  })();
+  return differenceInFlight;
+}
 
 export function applyPeerWallpaper(s: GramState, upd: any): void {
   if (!upd || upd._ !== 'updatePeerWallpaper' || !upd.peer) return;
@@ -65,6 +173,17 @@ export function createHandleUpdate(s: GramState) {
     try {
       const u = JSON.parse(data);
       if (u && u._) {
+        if (u._ === 'updates' || u._ === 'updatesCombined') {
+          if (typeof u.seq === 'number') rememberUpdateState({ seq: u.seq, date: typeof u.date === 'number' ? u.date : undefined });
+        } else if (u._ === 'updateShort') {
+          if (typeof u.date === 'number') rememberUpdateState({ date: u.date });
+          if (typeof u.seq === 'number') rememberUpdateState({ seq: u.seq });
+          if (u.update && typeof u.update.pts === 'number') rememberUpdateState({ pts: u.update.pts + (u.update.pts_count || 0) });
+        } else if (u._ === 'updateShortMessage' || u._ === 'updateShortChatMessage' || u._ === 'updateShortSentMessage') {
+          if (typeof u.pts === 'number') rememberUpdateState({ pts: u.pts + (u.pts_count || 0), date: typeof u.date === 'number' ? u.date : undefined });
+        } else if (typeof u.pts === 'number') {
+          rememberUpdateState({ pts: u.pts + (u.pts_count || 0) });
+        }
         const clean = JSON.stringify(u).replace(/"data:image\/[^"]+base64,[^"]{20,}"/g, (m) => `"[base64:${m.length - 2} bytes]"`);
         addLog(s, '← [' + constructorId + '] ' + clean.slice(0, 500));
         if (u.users && Array.isArray(u.users)) {
@@ -224,6 +343,8 @@ export function createHandleUpdate(s: GramState) {
               } catch {}
             }
           } catch {}
+          let isNew = false;
+          let updated: Message[] = [];
           if (cacheKey) {
             const prevList = s.messagesCache.current.get(cacheKey);
             const base = Array.isArray(prevList) ? prevList : [];
@@ -234,7 +355,9 @@ export function createHandleUpdate(s: GramState) {
               updLog.info('[upd-dbg] stale edit dropped id=', m.id, 'incoming edit=', m.edit_date, 'cached edit=', prevMsg.edit_date);
               return;
             }
-            const { list: updated, isNew } = insertHistoryMessage(base, m);
+            const insertResult = insertHistoryMessage(base, m);
+            updated = insertResult.list;
+            isNew = insertResult.isNew;
             if (!isNew) {
               try {
                 s.tgui.current?.dispatch({ type: 'CLEAR_BUTTON_INACTIVE', messageId: m.id });
@@ -384,6 +507,7 @@ export function createHandleUpdate(s: GramState) {
         if (u._ === 'updateShort' && u.update?._ === 'updatePeerWallpaper') { applyPeerWallpaper(s, u.update); }
         if ((u._ === 'updates' || u._ === 'updatesCombined') && Array.isArray(u.updates)) {
           for (const upd of u.updates) {
+            if (typeof upd.pts === 'number') rememberUpdateState({ pts: upd.pts + (upd.pts_count || 0) });
             if (upd._ === 'updateMessagePoll') applyUpdateMessagePoll(s, upd);
             if (upd._ === 'updatePeerWallpaper') applyPeerWallpaper(s, upd);
             if (upd._ === 'updateNewMessage' || upd._ === 'updateNewChannelMessage') processNewMsg(upd.message);

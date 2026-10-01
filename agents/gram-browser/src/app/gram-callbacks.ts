@@ -466,7 +466,7 @@ export function createCallbacks(
           const live = s.messagesCache.current.get(peerKey);
           const current: Message[] = Array.isArray(live) ? live : [];
           const currentIds = new Set(current.map(m => Number(m.id) || 0));
-          const addedFresh = msgs.filter(m => !currentIds.has(Number(m.id) || 0)).length;
+          const addedFresh = msgs.filter((m: Message) => !currentIds.has(Number(m.id) || 0)).length;
           if (msgs.length === 0 || (maxId > 0 && addedFresh === 0)) {
             s.historyEndRef.current.add(peerKey);
           }

@@ -17,7 +17,7 @@ import {
   loadOrphanedDialogs, loadEmojiPackMap,
 } from './gram-utils';
 import { loadStrings, fetchLangOptions, fetchCachedCountries } from './gram-lang';
-import { createHandleUpdate } from './gram-updates';
+import { createHandleUpdate, recoverUpdateGap } from './gram-updates';
 import { createAuthCallbacks } from './gram-auth';
 import { createCallbacks } from './gram-callbacks';
 import { setupEventListeners, warmupEmojiPipeline } from './gram-events';
@@ -285,6 +285,9 @@ export class GramApp {
     }
     if (!liveAuthed && connectDone) {
       await recoverAuthAfterConnect();
+    }
+    if (s.tgService.current?.authenticated) {
+      void recoverUpdateGap(s);
     }
 
     const langDeps = { tgui: s.tgui, tgService: s.tgService };

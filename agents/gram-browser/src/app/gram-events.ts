@@ -15,6 +15,7 @@ import type { Message } from '@ton-ai/gram-ui';
 import { requestDocument, getEmojiAlt } from '@ton-ai/gram-ui';
 import { applyUpdateMessagePoll } from './gram-utils';
 import { collectViewportEmoticons, extractEmoticons } from './gram-history';
+import { recoverUpdateGap } from './gram-updates';
 
 const fallbackLog = getLogger('gram-ui:fallback');
 
@@ -346,11 +347,12 @@ export function handleWakeVisible(s: GramState, hiddenMs: number): void {
   cbLog.info('[wake] long absence, revalidating connection and history');
   try {
     const p = s.tgService.current?.connect(2);
-    if (p) void p.catch(() => {});
+    if (p) void p.then(() => recoverUpdateGap(s)).catch(() => {});
   } catch {}
   try {
     if (s.selectedPeerRef.current) s.reloadHistoryRef.current?.();
   } catch {}
+  void recoverUpdateGap(s);
 }
 
 export function setupEventListeners(s: GramState): void {

@@ -262,7 +262,7 @@ export class WorkerTelegramService extends TelegramService {
     async getCustomEmojiDocuments(documentId: string): Promise<any[]> {
         this.onLog?.('→ messages.getCustomEmojiDocuments id=' + documentId);
         if (!this.workerClient) throw new Error('not connected');
-        const raw = await this.workerClient.getCustomEmojiDocuments(documentId);
+        const raw: any = await this.workerClient.getCustomEmojiDocuments(documentId);
 
         if (Array.isArray(raw)) return raw;
         if (raw && Array.isArray(raw.docs)) return raw.docs;
