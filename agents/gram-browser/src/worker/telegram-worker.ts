@@ -87,6 +87,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 
 const DC_CONNECT_TIMEOUT_MS = 15000;
 const CDN_CALL_TIMEOUT_MS = 8000;
+const WEBFILE_DC_ID = 4;
 const DC_RPC_SLOT_TIMEOUT_MS = 15000;
 const CDN_PROBE_TIMEOUT_MS = 3000;
 const cdnUnreachableDcs = new Set<number>();
@@ -1378,7 +1379,7 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
                 if (floodSec != null && floodRetries < 3) {
                     floodRetries++;
                     wlog('[worker] DC ' + dcId + ' ' + methodName + ' FLOOD_WAIT_' + floodSec + ' — waiting and retrying');
-                    await new Promise(r => setTimeout(r, Math.min(60000, (floodSec + 1) * 1000)));
+                    await new Promise(r => setTimeout(r, floodSec * 1000));
                     continue;
                 }
                 if (msg.includes('BAD_SERVER_SALT') && saltRetries < 2) {
@@ -3797,6 +3798,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         let cdnKey: Buffer | null = null;
         let cdnIv: Buffer | null = null;
         let cdnFileHashes: Array<{ offset: number; limit: number; hash: string }> = [];
+        let hashQueryInFlight = false;
         const applyCdnRedirect = (res: any): boolean => {
             if (res._ !== 'upload.fileCdnRedirect') return false;
             if (cdnUnreachableDcs.has(res.dc_id)) {
@@ -3820,7 +3822,28 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         const verifyCdnChunk = async (ofs: bigint, chunk: Buffer): Promise<boolean> => {
             const start = Number(ofs);
             const end = start + chunk.length;
-            const ranges = cdnFileHashes.filter((h) => h.limit > 0 && h.hash && h.offset < end && h.offset + h.limit > start);
+            const covering = (): Array<{ offset: number; limit: number; hash: string }> =>
+                cdnFileHashes.filter((h) => h.limit > 0 && h.hash && h.offset < end && h.offset + h.limit > start);
+            let ranges = covering();
+            if (ranges.length === 0 && !hashQueryInFlight && location !== null && location._ !== 'inputWebFileLocation') {
+                hashQueryInFlight = true;
+                try {
+                    const hashesDc = targetDc > 0 ? targetDc : ses?.dcId || 0;
+                    const res = await callRpcOnDc(hashesDc, 'upload.getFileHashes', { location, offset: ofs });
+                    if (Array.isArray(res)) {
+                        cdnFileHashes = cdnFileHashes.concat(res.map((h: any) => ({
+                            offset: Number(h.offset) || 0,
+                            limit: Number(h.limit) || 0,
+                            hash: typeof h.hash === 'string' ? h.hash : Buffer.from(h.hash || '').toString('hex'),
+                        })));
+                    }
+                } catch (e: any) {
+                    wlog('[dl] getFileHashes error id=' + id + ' ' + (e?.message || e));
+                } finally {
+                    hashQueryInFlight = false;
+                }
+                ranges = covering();
+            }
             if (ranges.length === 0) return true;
             for (const h of ranges) {
                 const from = Math.max(start, h.offset) - start;
@@ -3885,6 +3908,11 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                     return { _: 'upload.file', type: { _: 'storage.filePartial' }, bytes: decrypted.toString('hex') };
                 }
                 return result;
+            }
+            if (location !== null && location._ === 'inputWebFileLocation') {
+                const res = await runWithSem(() => callRpcOnDc(WEBFILE_DC_ID, 'upload.getWebFile', { location, offset: ofs, limit: lim }), fileSmall);
+                if (res._ !== 'upload.webFile') throw new Error('Unexpected web file response: ' + res._);
+                return { _: 'upload.file', type: res.file_type && res.file_type._ ? res.file_type : { _: 'storage.fileUnknown' }, bytes: res.bytes || '' };
             }
             const p = { precise, location, offset: ofs, limit: lim };
 
@@ -4122,6 +4150,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     let cdnKey: Buffer | null = null;
     let cdnIv: Buffer | null = null;
     let cdnFileHashes: Array<{ offset: number; limit: number; hash: string }> = [];
+    let streamHashQueryInFlight = false;
 
     const streamDc = (): number => targetDc > 0 ? targetDc : ses!.dcId;
     const streamBucket = (): string => streamPoolKey(streamDc());
@@ -4154,7 +4183,27 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     const verifyStreamCdnChunk = async (ofs: bigint, chunk: Buffer): Promise<boolean> => {
         const start = Number(ofs);
         const end = start + chunk.length;
-        const ranges = cdnFileHashes.filter((h) => h.limit > 0 && h.hash && h.offset < end && h.offset + h.limit > start);
+        const covering = (): Array<{ offset: number; limit: number; hash: string }> =>
+            cdnFileHashes.filter((h) => h.limit > 0 && h.hash && h.offset < end && h.offset + h.limit > start);
+        let ranges = covering();
+        if (ranges.length === 0 && !streamHashQueryInFlight) {
+            streamHashQueryInFlight = true;
+            try {
+                const res = await callRpcOnDc(streamDc(), 'upload.getFileHashes', { location, offset: ofs });
+                if (Array.isArray(res)) {
+                    cdnFileHashes = cdnFileHashes.concat(res.map((h: any) => ({
+                        offset: Number(h.offset) || 0,
+                        limit: Number(h.limit) || 0,
+                        hash: typeof h.hash === 'string' ? h.hash : Buffer.from(h.hash || '').toString('hex'),
+                    })));
+                }
+            } catch (e: any) {
+                vlog('getFileHashes error: ' + (e?.message || e));
+            } finally {
+                streamHashQueryInFlight = false;
+            }
+            ranges = covering();
+        }
         if (ranges.length === 0) return true;
         for (const h of ranges) {
             const from = Math.max(start, h.offset) - start;
@@ -4170,6 +4219,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     };
 
     const doCall = async (ofs: bigint): Promise<any> => {
+        if (location._ === 'inputWebFileLocation') throw new Error('Web files are not streamable');
         if (cdnDcId > 0 && cdnFileToken) {
             const p = { file_token: cdnFileToken, offset: ofs, limit };
             let result: any;
@@ -4298,6 +4348,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
 }
 
 function buildDownloadLocation(document?: any, photo?: any): Record<string, any> | null {
+    if (document?._ === 'inputWebFileLocation') return document;
     if (document) {
         if (document.id == null || document.file_reference == null) return null;
         const id = typeof document.id === 'string' ? BigInt(document.id) : document.id;
