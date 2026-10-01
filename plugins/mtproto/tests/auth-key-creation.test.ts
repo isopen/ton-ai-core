@@ -438,6 +438,7 @@ describe('AuthKeyCreator', () => {
                     const sn = deser.readInt128();
                     const ser = new TLSerializer();
                     ser.writeConstructorId(0x79cb045d); ser.writeInt128(cn); ser.writeInt128(sn);
+                    ser.writeInt128(0x1122334455667788n);
                     return ser.toBuffer();
                 }
                 throw new Error('unexpected');
@@ -1651,7 +1652,7 @@ describe('AuthKeyCreator', () => {
         }
     });
 
-    test('step2 DH prime not prime throws', async () => {
+    test('composite DH prime rejected by safe-prime validation', async () => {
         const { publicKey: pubPem } = require('crypto').generateKeyPairSync('rsa', {
             modulusLength: 2048,
             publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
@@ -1696,7 +1697,7 @@ describe('AuthKeyCreator', () => {
                         const innerSer = new TLSerializer();
                         innerSer.writeConstructorId(0xb5890dba); innerSer.writeInt128(cn); innerSer.writeInt128(sn);
                         innerSer.writeInt32(2);
-                        innerSer.writeBytes(bigIntToBytes(composite, 256)); innerSer.writeBytes(bigIntToBytes(123n, 256))
+                        innerSer.writeBytes(bigIntToBytes(composite, 256)); innerSer.writeBytes(bigIntToBytes(1n << 2040n, 256))
                         innerSer.writeInt32(Math.floor(Date.now() / 1000));
                         const innerData = innerSer.toBuffer();
                         const innerSha1 = await origSha1(innerData);
@@ -1711,7 +1712,7 @@ describe('AuthKeyCreator', () => {
                     }
                     throw new Error('unexpected');
                 }),
-                /DH prime is not prime/
+                /DH prime p is not prime/
             );
         } finally {
             (crypton as any).sha1 = origSha1;

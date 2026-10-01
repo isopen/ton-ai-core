@@ -1,4 +1,4 @@
-import { PluginContext, crypton } from '@ton-ai/core';
+import { PluginContext } from '@ton-ai/core';
 import { CryptoComponents } from './components';
 import {
     MTCryptoConfig,
@@ -13,7 +13,6 @@ export class MTCryptoServices {
     private components: CryptoComponents;
     private config: MTCryptoConfig;
     private ready: boolean = false;
-    private currentSessionId: bigint = 0n;
 
     constructor(context: PluginContext, components: CryptoComponents, config: MTCryptoConfig) {
         this.context = context;
@@ -61,30 +60,23 @@ export class MTCryptoServices {
         this.context.events.emit('mtproto:salt:set', {});
     }
 
-    private ensureSessionId(): void {
-        if (this.currentSessionId === 0n) {
-            const randBuf = crypton.getRandomBytes(8);
-            this.currentSessionId = crypton.bufferToBigInt(randBuf) & 0x7FFFFFFFFFFFFFFFn;
-            randBuf.fill(0);
-        }
-    }
-
     setTimeOffset(offset: number): void {
         this.components.client.setTimeOffset(offset);
     }
 
     async encrypt(data: Buffer | string): Promise<EncryptedData> {
-        this.ensureSessionId();
         const buffer = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
         const encrypted = await this.components.client.encryptForSession('__default__', buffer);
         this.context.events.emit('mtproto:encrypted', { size: encrypted.data.length });
-        return { ...encrypted, sessionId: this.currentSessionId };
+        return encrypted;
     }
 
     async decrypt(encrypted: EncryptedData): Promise<DecryptedData> {
-        const sessionId = encrypted.sessionId ?? this.currentSessionId;
         try {
-            return await this.components.client.decryptMessage(encrypted, sessionId);
+            return await this.components.client.decryptForSession('__default__', {
+                data: encrypted.data,
+                msgKey: encrypted.msgKey,
+            });
         } catch (error) {
             this.context.logger.warn('Decryption failed: invalid message key or corrupted data');
             const msgKey = encrypted.msgKey;

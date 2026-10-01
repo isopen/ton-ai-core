@@ -53,6 +53,7 @@ export class AuthKeyCreator {
     private serverTime: number = 0;
     private tmpAesKey: Buffer = Buffer.alloc(0);
     private tmpAesIv: Buffer = Buffer.alloc(0);
+    private inFlight: Promise<AuthKeyCreationResult> | null = null;
 
     constructor(config: AuthKeyCreationConfig) {
         this.config = config;
@@ -191,25 +192,32 @@ export class AuthKeyCreator {
     async createAuthKey(
         sendRequest: (data: Buffer) => Promise<Buffer>
     ): Promise<AuthKeyCreationResult> {
-        try {
-            const step1Result = await this.step1_reqPq(sendRequest);
-            const step2Result = await this.step2_reqDHParams(sendRequest, step1Result);
-            const step3Result = await this.step3_createSession(sendRequest, step2Result);
-            return step3Result;
-        } finally {
-            if (this.privateKeyBuf) {
-                this.privateKeyBuf.fill(0);
-            }
-            if (this.tmpAesKey.length) {
-                this.tmpAesKey.fill(0);
-            }
-            if (this.tmpAesIv.length) {
-                this.tmpAesIv.fill(0);
-            }
-            if (this.newNonce.length) {
-                this.newNonce.fill(0);
-            }
+        if (this.inFlight) {
+            throw new Error('Auth key creation already in progress');
         }
+        this.inFlight = (async () => {
+            try {
+                const step1Result = await this.step1_reqPq(sendRequest);
+                const step2Result = await this.step2_reqDHParams(sendRequest, step1Result);
+                const step3Result = await this.step3_createSession(sendRequest, step2Result);
+                return step3Result;
+            } finally {
+                this.inFlight = null;
+                if (this.privateKeyBuf) {
+                    this.privateKeyBuf.fill(0);
+                }
+                if (this.tmpAesKey.length) {
+                    this.tmpAesKey.fill(0);
+                }
+                if (this.tmpAesIv.length) {
+                    this.tmpAesIv.fill(0);
+                }
+                if (this.newNonce.length) {
+                    this.newNonce.fill(0);
+                }
+            }
+        })();
+        return this.inFlight;
     }
 
     private async step1_reqPq(sendRequest: (data: Buffer) => Promise<Buffer>): Promise<Buffer> {
@@ -295,6 +303,15 @@ export class AuthKeyCreator {
         const constructor = deserializer.readUint32();
 
         if (constructor === CONSTRUCTOR_SERVER_DH_PARAMS_FAIL) {
+            const failNonce = deserializer.readInt128();
+            const failServerNonce = deserializer.readInt128();
+            deserializer.readInt128();
+            if (failNonce !== this.nonce) {
+                throw new Error('Nonce mismatch in server DH params failure');
+            }
+            if (failServerNonce !== this.serverNonce) {
+                throw new Error('Server nonce mismatch in server DH params failure');
+            }
             throw new Error('Server DH params failed');
         }
 
@@ -362,8 +379,14 @@ export class AuthKeyCreator {
             throw new Error('Unexpected inner constructor in server_DH_inner_data');
         }
 
-        innerDeserializer.readInt128();
-        innerDeserializer.readInt128();
+        const innerNonce = innerDeserializer.readInt128();
+        const innerServerNonce = innerDeserializer.readInt128();
+        if (innerNonce !== this.nonce) {
+            throw new Error('Nonce mismatch in server DH inner data');
+        }
+        if (innerServerNonce !== this.serverNonce) {
+            throw new Error('Server nonce mismatch in server DH inner data');
+        }
         this.g = innerDeserializer.readInt32();
         this.dhPrime = this.bytesToBigInt(innerDeserializer.readBytes());
         this.gA = this.bytesToBigInt(innerDeserializer.readBytes());
@@ -393,14 +416,6 @@ export class AuthKeyCreator {
         const TWO_POW_2048 = 1n << 2048n;
         if (this.dhPrime <= TWO_POW_2047 || this.dhPrime >= TWO_POW_2048) {
             throw new Error('DH prime is not a 2048-bit number');
-        }
-
-        if (!crypton.isProbablyPrime(this.dhPrime)) {
-            throw new Error('DH prime is not prime');
-        }
-        const dhQ = (this.dhPrime - 1n) / 2n;
-        if (!crypton.isProbablyPrime(dhQ)) {
-            throw new Error('DH prime is not a safe prime');
         }
 
         const MIN_DH_VALUE = 1n << (2048n - 64n);

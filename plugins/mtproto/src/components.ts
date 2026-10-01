@@ -18,6 +18,7 @@ interface SessionState {
     sessionId: bigint;
     seqNo: number;
     lastMsgId: bigint;
+    lastInboundMsgId: bigint;
     seenMsgIds: Set<bigint>;
     seenMsgQueue: bigint[];
     lastAccessed: number;
@@ -170,30 +171,7 @@ export class CryptoClient extends EventEmitter {
         const key = secret ? this.secretAuthKey : this.authKey;
         if (!key) throw new Error('Encryption failed');
         if (!this.serverSalt) throw new Error('Encryption failed');
-
-        const plaintext = this.buildDataForEncryption(message, sessionId, messageId, seqNo);
-        const randomPadding = WireFormat.generateRandomPadding(plaintext.length);
-
-        let x: number;
-        if (secret) {
-            if (options?.isInitiator === undefined) throw new Error('Encryption failed');
-            x = options.isInitiator ? 0 : 8;
-        } else {
-            x = this.isClient ? 0 : 8;
-        }
-
-        const msgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, randomPadding, x === 0);
-        const { aesKey, aesIv } = await crypton.MTProtoKDF.deriveKeys(key.key, msgKey, x === 0);
-
-        try {
-            const encrypted = await crypton.AES256IGE.encrypt(Buffer.concat([plaintext, randomPadding]), aesKey, aesIv);
-            return { data: encrypted, msgKey };
-        } finally {
-            aesKey.fill(0);
-            aesIv.fill(0);
-            plaintext.fill(0);
-            randomPadding.fill(0);
-        }
+        return this.encryptMessageWith(message, key.key, this.serverSalt, sessionId, messageId, seqNo, options);
     }
 
     async decryptMessage(
@@ -204,89 +182,7 @@ export class CryptoClient extends EventEmitter {
         const secret = options?.secret ?? false;
         const key = secret ? this.secretAuthKey : this.authKey;
         if (!key) throw new Error('Decryption failed');
-
-        let x: number;
-        if (secret) {
-            if (options?.isInitiator === undefined) throw new Error('Decryption failed');
-            x = options.isInitiator ? 8 : 0;
-        } else {
-            x = this.isClient ? 8 : 0;
-        }
-
-        let decrypted: Buffer;
-        let aesKey: Buffer | undefined;
-        let aesIv: Buffer | undefined;
-        try {
-            const keys = await crypton.MTProtoKDF.deriveKeys(key.key, encrypted.msgKey, x === 0);
-            aesKey = keys.aesKey;
-            aesIv = keys.aesIv;
-            decrypted = await crypton.AES256IGE.decrypt(encrypted.data, aesKey, aesIv);
-        } catch {
-            throw new Error('Decryption failed');
-        } finally {
-            aesKey?.fill(0);
-            aesIv?.fill(0);
-        }
-
-        try {
-            if (decrypted.length < 32) {
-                throw new Error('Decryption failed');
-            }
-
-            const messageLength = decrypted.readInt32LE(28);
-            if (messageLength < 0 || 32 + messageLength > decrypted.length) {
-                throw new Error('Decryption failed');
-            }
-
-            const padding = decrypted.subarray(32 + messageLength);
-            if (padding.length < 12 || padding.length > 1024 || decrypted.length % 16 !== 0) {
-                throw new Error('Decryption failed');
-            }
-
-            const plaintext = decrypted.subarray(0, 32 + messageLength);
-
-            let expectedMsgKey: Buffer;
-            try {
-                expectedMsgKey = await crypton.MTProtoKDF.computeMsgKey(key.key, plaintext, padding, x === 0);
-            } catch {
-                throw new Error('Decryption failed');
-            }
-
-            if (!crypton.constantTimeEqual(expectedMsgKey, encrypted.msgKey)) {
-                throw new Error('Decryption failed');
-            }
-
-            const sessionId = decrypted.readBigInt64LE(8);
-            if (sessionId !== expectedSessionId) {
-                throw new Error('Decryption failed');
-            }
-
-            const msgId = decrypted.readBigInt64LE(16);
-            if (msgId === 0n || msgId === 0x7FFFFFFFFFFFFFFFn) {
-                throw new Error('Decryption failed');
-            }
-
-            const expectOdd = options?.expectOddMsgId ?? true;
-            const msgIdMod4 = Number(msgId & 3n);
-            if (expectOdd && (msgIdMod4 !== 1 && msgIdMod4 !== 3)) {
-                throw new Error('Decryption failed');
-            }
-            if (!expectOdd && msgIdMod4 !== 3) {
-                throw new Error('Decryption failed');
-            }
-
-            const msgTime = Number(msgId >> 32n);
-            const now = this.getServerTime();
-            const msgAge = now - msgTime;
-            if (msgAge > 300 || msgAge < -300) {
-                throw new Error('Decryption failed');
-            }
-
-            const result = Buffer.from(decrypted.subarray(32, 32 + messageLength));
-            return { data: result, isValid: true, msgKey: expectedMsgKey, messageId: msgId };
-        } finally {
-            decrypted.fill(0);
-        }
+        return this.decryptMessageWith(encrypted, key.key, expectedSessionId, options);
     }
 
     getAuthKey(): AuthKey | null { return this.authKey; }
@@ -353,6 +249,7 @@ export class CryptoClient extends EventEmitter {
                 sessionId,
                 seqNo: 0,
                 lastMsgId: 0n,
+                lastInboundMsgId: 0n,
                 seenMsgIds: new Set(),
                 seenMsgQueue: [],
                 lastAccessed: Date.now(),
@@ -378,6 +275,7 @@ export class CryptoClient extends EventEmitter {
             })(),
             seqNo: 0,
             lastMsgId: 0n,
+            lastInboundMsgId: 0n,
             seenMsgIds: new Set(),
             seenMsgQueue: [],
             lastAccessed: Date.now(),
@@ -452,7 +350,8 @@ export class CryptoClient extends EventEmitter {
             session.lastAccessed = Date.now();
             const messageId = this.nextMsgId(session);
             const seqNo = this.nextSeqNo(session, true);
-            return await this.encryptMessageWith(message, session.authKey.key, session.serverSalt, session.sessionId, messageId, seqNo);
+            const result = await this.encryptMessageWith(message, session.authKey.key, session.serverSalt, session.sessionId, messageId, seqNo);
+            return { data: result.data, msgKey: result.msgKey, sessionId: session.sessionId };
         });
     }
 
@@ -464,7 +363,8 @@ export class CryptoClient extends EventEmitter {
             session.lastAccessed = Date.now();
             const messageId = this.nextServerMsgId(session);
             const seqNo = this.nextSeqNo(session, true);
-            return await this.encryptMessageWith(message, session.authKey.key, session.serverSalt, session.sessionId, messageId, seqNo);
+            const result = await this.encryptMessageWith(message, session.authKey.key, session.serverSalt, session.sessionId, messageId, seqNo);
+            return { data: result.data, msgKey: result.msgKey, sessionId: session.sessionId };
         });
     }
 
@@ -474,10 +374,13 @@ export class CryptoClient extends EventEmitter {
             const session = this.sessions.get(peerId);
             if (!session) throw new Error(`No session for peer ${peerId}`);
             session.lastAccessed = Date.now();
-            const result = await this.decryptMessageWith(encrypted, session.authKey.key, session.serverSalt, session.sessionId, { expectOddMsgId });
+            const result = await this.decryptMessageWith(encrypted, session.authKey.key, session.sessionId, { expectOddMsgId });
             if (result.messageId !== undefined) {
                 if (session.seenMsgIds.has(result.messageId)) {
                     throw new Error('Message replay detected');
+                }
+                if (result.messageId < session.lastInboundMsgId) {
+                    throw new Error('Stale message detected');
                 }
                 session.seenMsgIds.add(result.messageId);
                 session.seenMsgQueue.push(result.messageId);
@@ -485,6 +388,7 @@ export class CryptoClient extends EventEmitter {
                     const oldest = session.seenMsgQueue.shift()!;
                     session.seenMsgIds.delete(oldest);
                 }
+                session.lastInboundMsgId = result.messageId;
             }
             return result;
         });
@@ -531,7 +435,6 @@ export class CryptoClient extends EventEmitter {
     private async decryptMessageWith(
         encrypted: EncryptedData,
         authKeyBuf: Buffer,
-        serverSalt: Buffer,
         expectedSessionId: bigint,
         options?: { secret?: boolean; isInitiator?: boolean; expectOddMsgId?: boolean }
     ): Promise<DecryptedData> {
@@ -616,7 +519,8 @@ export class CryptoClient extends EventEmitter {
             }
 
             const result = Buffer.from(decrypted.subarray(32, 32 + messageLength));
-            return { data: result, isValid: true, msgKey: expectedMsgKey, messageId: msgId };
+            const salt = Buffer.from(decrypted.subarray(0, 8));
+            return { data: result, isValid: true, msgKey: expectedMsgKey, messageId: msgId, salt };
         } finally {
             decrypted.fill(0);
         }
@@ -630,13 +534,13 @@ export class CryptoClient extends EventEmitter {
         randBuf.fill(0);
         const xorLower = BigInt(rx);
         let raw = t ^ xorLower;
-        raw = (raw | 1n) & 0x7FFFFFFFFFFFFFFFn;
+        raw = ((raw & ~2n) | 1n) & 0x7FFFFFFFFFFFFFFFn;
         if (session.lastMsgId >= raw) {
             raw = session.lastMsgId + 8n;
             if (raw > 0x7FFFFFFFFFFFFFFFn) {
                 throw new Error('Message ID space exhausted for this session');
             }
-            raw = (raw | 1n) & 0x7FFFFFFFFFFFFFFFn;
+            raw = ((raw & ~2n) | 1n) & 0x7FFFFFFFFFFFFFFFn;
         }
         session.lastMsgId = raw;
         return raw;

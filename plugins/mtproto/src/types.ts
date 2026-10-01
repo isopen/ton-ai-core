@@ -18,6 +18,7 @@ export interface DecryptedData {
     isValid: boolean;
     msgKey: Buffer;
     messageId?: bigint;
+    salt?: Buffer;
 }
 
 export interface AuthKey {
