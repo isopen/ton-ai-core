@@ -1,4 +1,5 @@
 import { MTProtoCryptoPlugin, AuthKey } from '@ton-ai/mtproto';
+import { crypton } from '@ton-ai/core';
 import { TLSerializer, TLDeserializer, SchemaSerializer, SchemaDeserializer } from '@ton-ai/tl-language';
 import { EventEmitter } from 'events';
 import { IConnection, TL_CONSTRUCTORS, API_LAYER } from './types';
@@ -62,7 +63,7 @@ export class MtprotoClient {
             serverTime,
             sessionId: randomSessionId(),
             seqNo: 0,
-            msgIdCounter: 0,
+            msgIdCounter: 1,
         };
     }
 
@@ -374,7 +375,8 @@ export class MtprotoClient {
                 if (m.startsWith('Bad msg error code: 48') ||
                     m.startsWith('Bad msg error code: 64') ||
                     m.startsWith('Bad msg error code: 16') ||
-                    m.startsWith('Bad msg error code: 17')) {
+                    m.startsWith('Bad msg error code: 17') ||
+                    m.startsWith('Bad msg error code: 18')) {
                     continue;
                 }
                 throw e;
@@ -435,7 +437,8 @@ export class MtprotoClient {
                 if (m.startsWith('Bad msg error code: 48') ||
                     m.startsWith('Bad msg error code: 64') ||
                     m.startsWith('Bad msg error code: 16') ||
-                    m.startsWith('Bad msg error code: 17')) {
+                    m.startsWith('Bad msg error code: 17') ||
+                    m.startsWith('Bad msg error code: 18')) {
                     continue;
                 }
                 throw e;
@@ -486,13 +489,15 @@ export class MtprotoClient {
 }
 
 function randomSessionId(): bigint {
-    const buf = Buffer.alloc(8);
-    for (let i = 0; i < 8; i++) buf[i] = Math.floor(Math.random() * 256);
-    return buf.readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn;
+    const buf = crypton.getRandomBytes(8);
+    const id = buf.readBigUInt64LE(0) & 0x7FFFFFFFFFFFFFFFn;
+    buf.fill(0);
+    return id;
 }
 
 function randomBigInt(): bigint {
-    const buf = Buffer.alloc(8);
-    for (let i = 0; i < 8; i++) buf[i] = Math.floor(Math.random() * 256);
-    return buf.readBigUInt64LE(0);
+    const buf = crypton.getRandomBytes(8);
+    const id = buf.readBigUInt64LE(0);
+    buf.fill(0);
+    return id;
 }
