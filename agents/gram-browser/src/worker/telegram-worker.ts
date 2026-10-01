@@ -1777,8 +1777,14 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
 
 function photoStorageMime(fileType: string): string {
     if (fileType === 'storage.filePng') return 'image/png';
+    if (fileType === 'storage.fileJpeg') return 'image/jpeg';
     if (fileType === 'storage.fileWebp') return 'image/webp';
     if (fileType === 'storage.fileGif') return 'image/gif';
+    if (fileType === 'storage.filePdf') return 'application/pdf';
+    if (fileType === 'storage.fileMp3') return 'audio/mpeg';
+    if (fileType === 'storage.fileMp4') return 'video/mp4';
+    if (fileType === 'storage.fileMov') return 'video/quicktime';
+    if (fileType === 'storage.fileTgs') return 'application/x-tgsticker';
     return 'image/jpeg';
 }
 
@@ -3435,9 +3441,10 @@ let downloadInFlight = 0;
 const MAX_PARALLEL_DOWNLOADS = 16;
 
 const IS_PREMIUM = false;
-const POOL_BUDGET = (IS_PREMIUM ? 16 : 8) << 20;
-const SMALL_POOL_BUDGET = (IS_PREMIUM ? 8 : 4) << 20;
-const STREAM_POOL_BUDGET = (IS_PREMIUM ? 16 : 8) << 20;
+const DL_RESOURCE_LIMIT = (1 << 21) * (IS_PREMIUM ? 8 : 1);
+const POOL_BUDGET = DL_RESOURCE_LIMIT;
+const SMALL_POOL_BUDGET = DL_RESOURCE_LIMIT;
+const STREAM_POOL_BUDGET = DL_RESOURCE_LIMIT;
 
 const UNKNOWN_DC = 0;
 const poolInFlight = new Map<string, number>();
@@ -3547,13 +3554,11 @@ function dcAndSize(document?: any, photo?: any): { dc: number; size: number } {
 
 const MAX_PART_COUNT = IS_PREMIUM ? 8000 : 4000;
 const MAX_FILE_SIZE = (512 << 10) * MAX_PART_COUNT;
-const PART_SIZE_MAX = 1 << 20;
-const PART_SIZE_MID = 512 << 10;
+const PART_SIZE_MAX = 512 << 10;
 function selectPartSize(size: number): number {
-    if (!Number.isFinite(size) || size <= 0) return PART_SIZE_MAX;
-    if (size <= PART_SIZE_MAX) return PART_SIZE_MAX;
-    if (size <= (32 << 20)) return PART_SIZE_MID;
-    return PART_SIZE_MAX;
+    let ps = 64 << 10;
+    while (ps < PART_SIZE_MAX && Math.ceil((size > 0 ? size : 0) / ps) > MAX_PART_COUNT) ps *= 2;
+    return ps;
 }
 
 const SMALL_FILE_LIMIT = 1 << 20;
@@ -3770,7 +3775,6 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         const PART_SIZE = selectPartSize(knownSize);
         const rangeFirstPart = hasRange ? Math.floor(rangeOffset / PART_SIZE) : 0;
         const rangeLastExclusive = hasRange ? Math.ceil(rangeEnd / PART_SIZE) : 0;
-        const rangeEndCap = hasRange ? rangeEnd : knownSize;
 
         const MAX_CONCURRENT = Math.max(1, Math.floor(POOL_BUDGET / PART_SIZE));
 
@@ -3787,18 +3791,12 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             try { return await fn(); }
             finally { releasePool(poolDc, fileSmall, size, bucket || undefined); }
         };
-        const requestSize = (ofs: bigint): number => {
-            if (rangeEndCap > 0) {
-                const remaining = rangeEndCap - Number(ofs);
-                return remaining > 0 ? Math.min(PART_SIZE, remaining) : PART_SIZE;
-            }
-            return PART_SIZE;
-        };
 
         let cdnDcId = 0;
         let cdnFileToken: Buffer | null = null;
         let cdnKey: Buffer | null = null;
         let cdnIv: Buffer | null = null;
+        let cdnFileHashes: Array<{ offset: number; limit: number; hash: string }> = [];
         const applyCdnRedirect = (res: any): boolean => {
             if (res._ !== 'upload.fileCdnRedirect') return false;
             if (cdnUnreachableDcs.has(res.dc_id)) {
@@ -3812,6 +3810,28 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 : Buffer.from(res.file_token);
             cdnKey = Buffer.from(res.encryption_key, 'hex');
             cdnIv = Buffer.from(res.encryption_iv, 'hex');
+            cdnFileHashes = Array.isArray(res.file_hashes) ? res.file_hashes.map((h: any) => ({
+                offset: Number(h.offset) || 0,
+                limit: Number(h.limit) || 0,
+                hash: typeof h.hash === 'string' ? h.hash : Buffer.from(h.hash || '').toString('hex'),
+            })) : [];
+            return true;
+        };
+        const verifyCdnChunk = async (ofs: bigint, chunk: Buffer): Promise<boolean> => {
+            const start = Number(ofs);
+            const end = start + chunk.length;
+            const ranges = cdnFileHashes.filter((h) => h.limit > 0 && h.hash && h.offset < end && h.offset + h.limit > start);
+            if (ranges.length === 0) return true;
+            for (const h of ranges) {
+                const from = Math.max(start, h.offset) - start;
+                const to = Math.min(end, h.offset + h.limit) - start;
+                if (to <= from) continue;
+                const copy = new Uint8Array(to - from);
+                copy.set(chunk.subarray(from, to));
+                const digest = await crypto.subtle.digest('SHA-256', copy);
+                const hex = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+                if (hex !== h.hash.toLowerCase()) return false;
+            }
             return true;
         };
 
@@ -3856,6 +3876,12 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                     const encrypted = Buffer.from(result.bytes || '', 'hex');
                     const startCounter = Number(ofs) / 16;
                     const decrypted = crypton.AES256CTR.process(encrypted, cdnKey!, cdnIv!, startCounter);
+                    if (!(await verifyCdnChunk(ofs, decrypted))) {
+                        wlog('[dl] CDN hash mismatch id=' + id + ' ofs=' + ofs + ' — falling back to origin DC');
+                        cdnUnreachableDcs.add(cdnDcId);
+                        cdnDcId = 0; cdnFileToken = null; cdnKey = null; cdnIv = null; cdnFileHashes = [];
+                        return doCall(ofs, lim, precise);
+                    }
                     return { _: 'upload.file', type: { _: 'storage.filePartial' }, bytes: decrypted.toString('hex') };
                 }
                 return result;
@@ -3875,8 +3901,8 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
 
         let firstResult: any;
         const probeOfs = BigInt(rangeFirstPart * PART_SIZE);
-        const firstSize = hasRange ? Math.min(PART_SIZE, Math.max(1, rangeEnd - rangeFirstPart * PART_SIZE)) : PART_SIZE;
-        const firstClaimSize = hasRange ? firstSize : (knownSize > 0 ? Math.min(PART_SIZE, knownSize) : Math.min(PART_SIZE, SMALL_FILE_LIMIT));
+        const firstSize = PART_SIZE;
+        const firstClaimSize = PART_SIZE;
         let abortFirstRequest: (() => void) | null = null;
         const firstRequestAbort = new Promise<never>((_, reject) => {
             abortFirstRequest = () => reject(new Error('download STALL timeout after 45s'));
@@ -3966,9 +3992,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             let lastErr: any = new Error('Part download failed idx=' + partIdx);
             for (let attempt = 0; attempt < 5; attempt++) {
                 try {
-                    const lim = requestSize(BigInt(partIdx * PART_SIZE));
-                    const precise = knownSize > 0 && lim < PART_SIZE;
-                    const r = await poolCall(() => doCall(BigInt(partIdx * PART_SIZE), lim, precise), lim);
+                    const r = await poolCall(() => doCall(BigInt(partIdx * PART_SIZE), PART_SIZE, false), PART_SIZE);
                     if (r._ === 'upload.fileEmpty') {
                         return Buffer.alloc(0);
                     }
@@ -3993,10 +4017,11 @@ if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen 
 
         while (nextPart * PART_SIZE < maxTotal) {
             if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen : photoDownloadGen)) return { type: '', bytes: new ArrayBuffer(0), error: 'ABORTED' };
+            const lastPartIdx = hasRange ? rangeLastExclusive : (knownSize > 0 ? Math.ceil(knownSize / PART_SIZE) : Infinity);
             const batch: Promise<{ idx: number; chunk: Buffer }>[] = [];
             for (let i = 0; i < MAX_CONCURRENT; i++) {
                 const partIdx = nextPart + i;
-                if (hasRange && partIdx >= rangeLastExclusive) break;
+                if (partIdx >= lastPartIdx) break;
                 batch.push(fetchPart(partIdx).then(chunk => ({ idx: partIdx, chunk })));
             }
             const batchResults = await Promise.all(batch);
@@ -4088,7 +4113,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     const streamSize = Number(document?.size) || 0;
     const accumulateCacheChunks = cacheKey !== '' && (streamSize === 0 || streamSize <= streamCacheLimit);
     const cacheChunks: Buffer[] = [];
-    const limit = 1048576;
+    const limit = selectPartSize(Number(document?.size) || 0);
     let finalType = 'storage.fileUnknown';
     let targetDc = 0;
     let serverType: 'home-server' | 'cdn-server' | 'migrate-server' = 'home-server';
@@ -4096,6 +4121,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
     let cdnFileToken: Buffer | null = null;
     let cdnKey: Buffer | null = null;
     let cdnIv: Buffer | null = null;
+    let cdnFileHashes: Array<{ offset: number; limit: number; hash: string }> = [];
 
     const streamDc = (): number => targetDc > 0 ? targetDc : ses!.dcId;
     const streamBucket = (): string => streamPoolKey(streamDc());
@@ -4118,6 +4144,28 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
             : Buffer.from(res.file_token);
         cdnKey = Buffer.from(res.encryption_key, 'hex');
         cdnIv = Buffer.from(res.encryption_iv, 'hex');
+        cdnFileHashes = Array.isArray(res.file_hashes) ? res.file_hashes.map((h: any) => ({
+            offset: Number(h.offset) || 0,
+            limit: Number(h.limit) || 0,
+            hash: typeof h.hash === 'string' ? h.hash : Buffer.from(h.hash || '').toString('hex'),
+        })) : [];
+        return true;
+    };
+    const verifyStreamCdnChunk = async (ofs: bigint, chunk: Buffer): Promise<boolean> => {
+        const start = Number(ofs);
+        const end = start + chunk.length;
+        const ranges = cdnFileHashes.filter((h) => h.limit > 0 && h.hash && h.offset < end && h.offset + h.limit > start);
+        if (ranges.length === 0) return true;
+        for (const h of ranges) {
+            const from = Math.max(start, h.offset) - start;
+            const to = Math.min(end, h.offset + h.limit) - start;
+            if (to <= from) continue;
+            const copy = new Uint8Array(to - from);
+            copy.set(chunk.subarray(from, to));
+            const digest = await crypto.subtle.digest('SHA-256', copy);
+            const hex = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+            if (hex !== h.hash.toLowerCase()) return false;
+        }
         return true;
     };
 
@@ -4154,6 +4202,12 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
                 const encrypted = Buffer.from(result.bytes || '', 'hex');
                 const startCounter = Number(ofs) / 16;
                 const decrypted = crypton.AES256CTR.process(encrypted, cdnKey!, cdnIv!, startCounter);
+                if (!(await verifyStreamCdnChunk(ofs, decrypted))) {
+                    vlog('CDN hash mismatch ofs=' + ofs + ' — falling back to origin DC');
+                    cdnUnreachableDcs.add(cdnDcId);
+                    cdnDcId = 0; cdnFileToken = null; cdnKey = null; cdnIv = null; cdnFileHashes = [];
+                    return doCall(ofs);
+                }
                 const typeName = decrypted.length < limit ? 'storage.fileJpeg' : 'storage.filePartial';
                 return { _: 'upload.file', type: { _: typeName }, bytes: decrypted.toString('hex') };
             }
