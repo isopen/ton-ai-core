@@ -212,6 +212,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
     private components!: TelegramBotComponents;
     private skills!: TelegramBotSkills;
     private pollingTimeout?: NodeJS.Timeout;
+    private pollStarting: boolean = false;
 
     protected defaults(): Partial<TelegramBotConfig> {
         return {
@@ -254,7 +255,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
                 drop_pending_updates: this.config.dropPendingUpdates
             });
         } else {
-            this.startPolling();
+            await this.startPolling();
         }
 
         this.events.emit('telegram-bot:activated', {
@@ -305,19 +306,28 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
                 });
                 this.stopPolling();
             } else if (oldWebhook && !this.config.webhookUrl) {
-                this.startPolling();
+                await this.startPolling();
             }
         }
 
         this.events.emit('telegram-bot:config:updated');
     }
 
-    private startPolling(): void {
-        if (this.pollingTimeout) return;
+    private async startPolling(): Promise<void> {
+        if (this.pollingTimeout || this.pollStarting) return;
+        this.pollStarting = true;
+        try {
+            this.components.updates.startPolling();
 
-        this.components.updates.startPolling();
+            if (this.config.dropPendingUpdates) {
+                try {
+                    await this.skills.dropPendingUpdates();
+                } catch (error) {
+                    this.logger.error('Failed to drop pending updates:', error);
+                }
+            }
 
-        const poll = async () => {
+            const poll = async () => {
             try {
                 const updates = await this.skills.getUpdates({
                     offset: this.components.updates.getLastUpdateId() + 1,
@@ -382,6 +392,9 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
 
                 if (this.config.retryOnError) {
                     this.pollingTimeout = setTimeout(poll, 5000);
+                } else {
+                    this.pollingTimeout = undefined;
+                    this.components.updates.setPollTimeout(null);
                 }
             }
         };
@@ -390,6 +403,9 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         this.components.updates.setPollTimeout(this.pollingTimeout);
 
         this.logger.info('Polling started');
+        } finally {
+            this.pollStarting = false;
+        }
     }
 
     private stopPolling(): void {

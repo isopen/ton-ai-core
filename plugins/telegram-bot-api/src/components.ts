@@ -316,6 +316,11 @@ export class MessageCache {
 
     setReplyMarkup(messageId: number, markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | ForceReply): void {
         this.replyMarkups.set(`markup:${messageId}`, markup);
+        while (this.replyMarkups.size > 500) {
+            const oldest = this.replyMarkups.keys().next().value;
+            if (oldest === undefined) break;
+            this.replyMarkups.delete(oldest);
+        }
     }
 
     getReplyMarkup(messageId: number): InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | ForceReply | null {
@@ -363,6 +368,7 @@ export class FileCache {
 
     setFilePath(fileId: string, path: string): void {
         this.filePaths.set(fileId, path);
+        this.pruneFiles();
     }
 
     getFilePath(fileId: string): string | null {
@@ -370,12 +376,15 @@ export class FileCache {
     }
 
     private pruneFiles(): void {
-        if (this.files.size > this.maxEntries) {
-            const keysToDelete = Array.from(this.files.keys()).slice(0, this.files.size - this.maxEntries);
-            for (const key of keysToDelete) {
-                this.files.delete(key);
-                this.filePaths.delete(key);
-            }
+        this.pruneMap(this.files);
+        this.pruneMap(this.filePaths);
+    }
+
+    private pruneMap(map: Map<string, unknown>): void {
+        if (map.size <= this.maxEntries) return;
+        const stale = Array.from(map.keys()).slice(0, map.size - this.maxEntries);
+        for (const key of stale) {
+            map.delete(key);
         }
     }
 
@@ -386,6 +395,8 @@ export class FileCache {
 }
 
 export class UpdateManager {
+    private static readonly MAX_LAST_ENTRIES = 200;
+
     private callbacks: Map<string, (update: Update) => void> = new Map();
     private lastUpdateId: number = 0;
     private pendingUpdates: Update[] = [];
@@ -406,12 +417,32 @@ export class UpdateManager {
         this.maxPending = maxPending;
     }
 
+    private storeLast<K, V>(map: Map<K, V>, key: K, value: V): void {
+        map.set(key, value);
+        while (map.size > UpdateManager.MAX_LAST_ENTRIES) {
+            const oldest = map.keys().next().value;
+            if (oldest === undefined) break;
+            map.delete(oldest);
+        }
+    }
+
     registerCallback(id: string, callback: (update: Update) => void): void {
         this.callbacks.set(id, callback);
+        this.flushPendingUpdates();
     }
 
     unregisterCallback(id: string): void {
         this.callbacks.delete(id);
+    }
+
+    private dispatchUpdate(update: Update): void {
+        for (const callback of this.callbacks.values()) {
+            try {
+                callback(update);
+            } catch (error) {
+                console.error('Error in update callback:', error);
+            }
+        }
     }
 
     handleUpdate(update: Update): void {
@@ -420,19 +451,19 @@ export class UpdateManager {
         }
 
         if (update.callback_query) {
-            this.lastCallbackQuery.set(update.callback_query.id, update.callback_query);
+            this.storeLast(this.lastCallbackQuery, update.callback_query.id, update.callback_query);
         }
         if (update.inline_query) {
-            this.lastInlineQuery.set(update.inline_query.id, update.inline_query);
+            this.storeLast(this.lastInlineQuery, update.inline_query.id, update.inline_query);
         }
         if (update.chosen_inline_result) {
-            this.lastChosenInlineResult.set(update.chosen_inline_result.result_id, update.chosen_inline_result);
+            this.storeLast(this.lastChosenInlineResult, update.chosen_inline_result.result_id, update.chosen_inline_result);
         }
         if (update.shipping_query) {
-            this.lastShippingQuery.set(update.shipping_query.id, update.shipping_query);
+            this.storeLast(this.lastShippingQuery, update.shipping_query.id, update.shipping_query);
         }
         if (update.pre_checkout_query) {
-            this.lastPreCheckoutQuery.set(update.pre_checkout_query.id, update.pre_checkout_query);
+            this.storeLast(this.lastPreCheckoutQuery, update.pre_checkout_query.id, update.pre_checkout_query);
         }
         if (update.guest_message) {
             this.lastGuestMessage = update.guest_message;
@@ -447,14 +478,8 @@ export class UpdateManager {
             this.lastManagedBot = update.managed_bot;
         }
 
-        if (this.isPolling) {
-            for (const callback of this.callbacks.values()) {
-                try {
-                    callback(update);
-                } catch (error) {
-                    console.error('Error in update callback:', error);
-                }
-            }
+        if (this.isPolling && this.callbacks.size > 0) {
+            this.dispatchUpdate(update);
         } else {
             if (this.pendingUpdates.length < this.maxPending) {
                 this.pendingUpdates.push(update);
@@ -464,22 +489,20 @@ export class UpdateManager {
 
     startPolling(): void {
         this.isPolling = true;
-
-        for (const update of this.pendingUpdates) {
-            for (const callback of this.callbacks.values()) {
-                try {
-                    callback(update);
-                } catch (error) {
-                    console.error('Error processing pending update:', error);
-                }
-            }
-        }
-
-        this.pendingUpdates = [];
+        this.flushPendingUpdates();
     }
 
     stopPolling(): void {
         this.isPolling = false;
+    }
+
+    private flushPendingUpdates(): void {
+        if (this.callbacks.size === 0 || this.pendingUpdates.length === 0) return;
+        const pending = this.pendingUpdates;
+        this.pendingUpdates = [];
+        for (const update of pending) {
+            this.dispatchUpdate(update);
+        }
     }
 
     setPollTimeout(timeout: NodeJS.Timeout | null): void {
@@ -666,6 +689,8 @@ export class BusinessCache {
 }
 
 export class InlineCache {
+    private static readonly MAX_ENTRIES = 200;
+
     private results: Map<string, { results: InlineQueryResult[], timestamp: number }> = new Map();
     private maxAge: number = 60000;
     private inlineQueries: Map<string, InlineQuery> = new Map();
@@ -675,11 +700,17 @@ export class InlineCache {
         this.maxAge = maxAgeMs;
     }
 
+    private storeBounded<K, V>(map: Map<K, V>, key: K, value: V): void {
+        map.set(key, value);
+        while (map.size > InlineCache.MAX_ENTRIES) {
+            const oldest = map.keys().next().value;
+            if (oldest === undefined) break;
+            map.delete(oldest);
+        }
+    }
+
     setResults(queryId: string, results: InlineQueryResult[]): void {
-        this.results.set(queryId, {
-            results,
-            timestamp: Date.now()
-        });
+        this.storeBounded(this.results, queryId, { results, timestamp: Date.now() });
     }
 
     getResults(queryId: string): InlineQueryResult[] | null {
@@ -691,7 +722,7 @@ export class InlineCache {
     }
 
     setInlineQuery(id: string, query: InlineQuery): void {
-        this.inlineQueries.set(id, query);
+        this.storeBounded(this.inlineQueries, id, query);
     }
 
     getInlineQuery(id: string): InlineQuery | null {
@@ -699,7 +730,7 @@ export class InlineCache {
     }
 
     setChosenResult(id: string, result: ChosenInlineResult): void {
-        this.chosenResults.set(id, result);
+        this.storeBounded(this.chosenResults, id, result);
     }
 
     getChosenResult(id: string): ChosenInlineResult | null {
@@ -796,13 +827,28 @@ export class StickerCache {
 }
 
 export class PollCache {
+    private static readonly MAX_POLLS = 200;
+    private static readonly MAX_BOOST_CHATS = 200;
+
     private polls: Map<string, Poll> = new Map();
     private pollAnswers: Map<string, Map<number, PollAnswer>> = new Map();
     private pollBoosts: Map<string, ChatBoost[]> = new Map();
     private userChatBoosts: Map<string, UserChatBoosts> = new Map();
 
+    private storeBounded<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
+        map.set(key, value);
+        while (map.size > max) {
+            const oldest = map.keys().next().value;
+            if (oldest === undefined) break;
+            map.delete(oldest);
+        }
+    }
+
     setPoll(pollId: string, poll: Poll): void {
-        this.polls.set(pollId, poll);
+        this.storeBounded(this.polls, pollId, poll, PollCache.MAX_POLLS);
+        if (!this.pollAnswers.has(pollId)) {
+            this.storeBounded(this.pollAnswers, pollId, new Map<number, PollAnswer>(), PollCache.MAX_POLLS);
+        }
     }
 
     getPoll(pollId: string): Poll | null {
@@ -820,7 +866,13 @@ export class PollCache {
         if (!this.pollAnswers.has(pollId)) {
             this.pollAnswers.set(pollId, new Map());
         }
-        this.pollAnswers.get(pollId)!.set(userId, answer);
+        const answers = this.pollAnswers.get(pollId)!;
+        answers.set(userId, answer);
+        while (answers.size > 1000) {
+            const oldest = answers.keys().next().value;
+            if (oldest === undefined) break;
+            answers.delete(oldest);
+        }
     }
 
     getPollAnswer(pollId: string, userId: number): PollAnswer | null {
@@ -829,7 +881,7 @@ export class PollCache {
 
     addPollBoost(pollId: string, boost: ChatBoost): void {
         if (!this.pollBoosts.has(pollId)) {
-            this.pollBoosts.set(pollId, []);
+            this.storeBounded(this.pollBoosts, pollId, [], PollCache.MAX_BOOST_CHATS);
         }
         this.pollBoosts.get(pollId)!.push(boost);
     }
@@ -839,7 +891,7 @@ export class PollCache {
     }
 
     setUserChatBoosts(chatId: number | string, userId: number, boosts: UserChatBoosts): void {
-        this.userChatBoosts.set(`${chatId}:${userId}`, boosts);
+        this.storeBounded(this.userChatBoosts, `${chatId}:${userId}`, boosts, PollCache.MAX_POLLS);
     }
 
     getUserChatBoosts(chatId: number | string, userId: number): UserChatBoosts | null {
@@ -1052,10 +1104,10 @@ export class TelegramBotComponents {
         this.context = context;
         this.config = config;
 
-        this.bot = new BotInfoCache();
+        this.bot = new BotInfoCache(config?.botInfoCacheTTL);
         this.chats = new ChatCache();
-        this.messages = new MessageCache();
-        this.files = new FileCache();
+        this.messages = new MessageCache(config?.messageCacheSize);
+        this.files = new FileCache(config?.fileCacheSize);
         this.updates = new UpdateManager();
         this.forums = new ForumCache();
         this.business = new BusinessCache();
@@ -1064,7 +1116,7 @@ export class TelegramBotComponents {
         this.stickers = new StickerCache();
         this.polls = new PollCache();
         this.webhook = new WebhookCache();
-        this.rateLimiter = new RateLimiter();
+        this.rateLimiter = new RateLimiter(config?.rateLimitDefault, config?.rateLimitWindow);
         this.rich = new RichCache();
         this.ephemeral = new EphemeralCache();
         this.communities = new CommunityCache();
