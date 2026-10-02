@@ -280,7 +280,7 @@ export class TelegramBotSkills {
         this.components = components;
         this.baseUrl = config.apiBaseUrl || 'https://api.telegram.org/bot';
         this.token = config.token || '';
-        this.maxRetries = config.maxRetries || 3;
+        this.maxRetries = config.maxRetries ?? 3;
         this.requestTimeoutMs = config.requestTimeoutMs ?? 30000;
     }
 
@@ -311,7 +311,8 @@ export class TelegramBotSkills {
     private async request<T>(
         method: string,
         params?: Record<string, any>,
-        timeoutMs: number = this.requestTimeoutMs
+        timeoutMs: number = this.requestTimeoutMs,
+        migrated: boolean = false
     ): Promise<T> {
         const url = this.getApiUrl(method);
 
@@ -378,6 +379,15 @@ export class TelegramBotSkills {
                     migrateToChatId: responseData.parameters?.migrate_to_chat_id,
                 });
 
+                if (apiError.migrateToChatId !== undefined && params && 'chat_id' in params && !migrated) {
+                    return await this.request<T>(
+                        method,
+                        { ...params, chat_id: apiError.migrateToChatId },
+                        timeoutMs,
+                        true
+                    );
+                }
+
                 if (errorCode === 429 || retryAfter !== null || /too many requests|flood/i.test(description)) {
                     const waitSec = retryAfter ?? 5;
                     this.floodWaitUntil = Math.max(this.floodWaitUntil, Date.now() + waitSec * 1000 + 500);
@@ -437,6 +447,10 @@ export class TelegramBotSkills {
         allowed_updates?: string[];
     }): Promise<Update[]> {
         return this.request<Update[]>('getUpdates', params, (params?.timeout ?? 30) * 1000 + 5000);
+    }
+
+    async dropPendingUpdates(): Promise<boolean> {
+        return this.request<boolean>('getUpdates', { offset: -1, drop_pending_updates: true, timeout: 0, limit: 1 }, 10000);
     }
 
     async setWebhook(
@@ -642,14 +656,13 @@ export class TelegramBotSkills {
 
     async sendMediaGroup(params: SendMediaGroupParams): Promise<Message[]> {
         this.logMediaGroup(params.media);
+        for (const media of params.media) {
+            this.validateInputMedia(media);
+        }
         const messages = await this.request<Message[]>('sendMediaGroup', params);
         for (const message of messages) {
             if (message.chat && message.message_id) {
                 this.components.messages.addMessage(message.chat.id, message);
-
-                for (const media of params.media) {
-                    this.validateInputMedia(media);
-                }
             }
         }
         this.context.logger.debug(`Media group sent successfully, received ${messages.length} messages`);
@@ -999,13 +1012,13 @@ export class TelegramBotSkills {
                 }
             }
 
-            this.context.logger.info(`Sticker sent successfully to chat ${params.chat_id}`);
+            this.context.logger.debug(`Sticker sent successfully to chat ${params.chat_id}`);
             return message;
         } catch (error) {
             this.context.logger.error('Failed to send sticker:', error);
 
             if (error instanceof Error && error.message.includes('wrong file identifier')) {
-                this.context.logger.info('Attempting to send fallback message instead of sticker');
+                this.context.logger.debug('Attempting to send fallback message instead of sticker');
 
                 const fallbackMessage = await this.request<Message>('sendMessage', {
                     chat_id: params.chat_id,
@@ -1070,13 +1083,12 @@ export class TelegramBotSkills {
 
     async editMessageMedia(params: EditMessageMediaParams): Promise<Message | boolean> {
         this.context.logger.debug(`Editing message media${this.describeMessageTarget(params)} with: ${this.summarizeMedia(params.media)}`);
+        this.validateInputMedia(params.media);
         const result = await this.request<Message | boolean>('editMessageMedia', params);
 
         if (typeof result === 'object' && result && 'chat' in result && 'message_id' in result) {
             const message = result as Message;
             this.components.messages.addMessage(message.chat.id, message);
-
-            this.validateInputMedia(params.media);
 
             if (params.reply_markup) {
                 this.components.messages.setReplyMarkup(message.message_id, params.reply_markup);
@@ -1319,11 +1331,11 @@ export class TelegramBotSkills {
 
     async setChatPermissions(params: SetChatPermissionsParams): Promise<boolean> {
         this.context.logger.debug(`Setting chat permissions for chat ${params.chat_id}: ${this.summarizePermissions(params.permissions)}`);
+        this.validateChatPermissions(params.permissions);
         const result = await this.request<boolean>('setChatPermissions', params);
         if (result) {
             this.components.chats.setPermissions(params.chat_id, params.permissions);
-            this.validateChatPermissions(params.permissions);
-            this.context.logger.info(`Chat permissions updated successfully for chat ${params.chat_id}`);
+            this.context.logger.debug(`Chat permissions updated successfully for chat ${params.chat_id}`);
         } else {
             this.context.logger.warn(`Failed to update chat permissions for chat ${params.chat_id}`);
         }
@@ -1416,10 +1428,8 @@ export class TelegramBotSkills {
     }
 
     async restrictChatMember(params: RestrictChatMemberParams): Promise<boolean> {
+        this.validateChatPermissions(params.permissions);
         const result = await this.request<boolean>('restrictChatMember', params);
-        if (result) {
-            this.validateChatPermissions(params.permissions);
-        }
         return result;
     }
 
@@ -1460,7 +1470,14 @@ export class TelegramBotSkills {
     }
 
     async editForumTopic(params: EditForumTopicParams): Promise<boolean> {
-        return this.request<boolean>('editForumTopic', params);
+        const result = await this.request<boolean>('editForumTopic', params);
+        if (result) {
+            const cached = this.components.forums.getTopic(params.chat_id, params.message_thread_id);
+            if (cached) {
+                this.components.forums.setTopic(params.chat_id, { ...cached, name: params.name ?? cached.name });
+            }
+        }
+        return result;
     }
 
     async closeForumTopic(params: CloseForumTopicParams): Promise<boolean> {
@@ -1545,6 +1562,9 @@ export class TelegramBotSkills {
 
         const url = await this.getFileUrl(file.file_path);
         const response = await fetch(url, { signal: AbortSignal.timeout(60000) });
+        if (!response.ok) {
+            throw new Error(`Telegram file download failed: HTTP ${response.status}`);
+        }
         const buffer = Buffer.from(await response.arrayBuffer());
 
         this.components.files.setFilePath(fileId, file.file_path);
@@ -1663,19 +1683,18 @@ export class TelegramBotSkills {
     async sendInvoice(params: SendInvoiceParams): Promise<Message> {
         this.logInvoicePrices(params.prices, params.currency, params.title, params.description, `Sending invoice to chat ${params.chat_id}:`);
         this.logPriceRequirements(params);
+        this.validateLabeledPrices(params.prices);
         const message = await this.request<Message>('sendInvoice', params);
         if (message.chat && message.message_id) {
             this.components.messages.addMessage(message.chat.id, message);
             this.components.payments.setInvoicePayload(message.chat.id, params.payload);
             this.components.payments.setPrices(params.payload, params.prices);
 
-            this.validateLabeledPrices(params.prices);
-
             if (params.reply_markup) {
                 this.components.messages.setReplyMarkup(message.message_id, params.reply_markup);
             }
         }
-        this.context.logger.info(`Invoice sent successfully, message ID: ${message.message_id}`);
+        this.context.logger.debug(`Invoice sent successfully, message ID: ${message.message_id}`);
         return message;
     }
 
@@ -1716,9 +1735,6 @@ export class TelegramBotSkills {
             const tips = params.suggested_tip_amounts.map(t => `${t / 100} ${params.currency.toUpperCase()}`).join(', ');
             this.context.logger.debug(`Suggested tips: ${tips}`);
         }
-        if (params.provider_token) {
-            this.context.logger.debug(`Provider token: ${params.provider_token.substring(0, 5)}...`);
-        }
         if (params.need_name) this.context.logger.debug('Customer name required');
         if (params.need_phone_number) this.context.logger.debug('Phone number required');
         if (params.need_email) this.context.logger.debug('Email required');
@@ -1727,9 +1743,11 @@ export class TelegramBotSkills {
 
     private validateLabeledPrices(prices: LabeledPrice[]): void {
         for (const price of prices) {
-            const label = price.label;
-            const amount = price.amount;
-            if (label && amount) {
+            if (typeof price.label !== 'string' || price.label.length === 0) {
+                throw new Error('Invalid labeled price: label must be a non-empty string');
+            }
+            if (!Number.isInteger(price.amount) || price.amount <= 0) {
+                throw new Error(`Invalid labeled price: amount for "${price.label}" must be a positive integer`);
             }
         }
     }
@@ -1818,19 +1836,19 @@ export class TelegramBotSkills {
             this.context.logger.debug('Caption shown above media');
         }
 
+        for (const media of params.media) {
+            this.validateInputMedia(media);
+        }
+
         const message = await this.request<Message>('sendPaidMedia', params);
         if (message.chat && message.message_id) {
             this.components.messages.addMessage(message.chat.id, message);
-
-            for (const media of params.media) {
-                this.validateInputMedia(media);
-            }
 
             if (params.reply_markup) {
                 this.components.messages.setReplyMarkup(message.message_id, params.reply_markup);
             }
         }
-        this.context.logger.info(`Paid media sent successfully, message ID: ${message.message_id}`);
+        this.context.logger.debug(`Paid media sent successfully, message ID: ${message.message_id}`);
         return message;
     }
 
