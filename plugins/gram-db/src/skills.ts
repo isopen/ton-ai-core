@@ -1,6 +1,6 @@
 import { crypton } from '@ton-ai/core';
 import { getLogger } from '@ton-ai/gram-debug';
-import { GramDbComponents, KeyManager, EncryptedStore, StorageEngine, DbVersion, currentDbVersion } from './components';
+import { GramDbComponents, KeyManager, EncryptedStore, StorageEngine, DbVersion, currentDbVersion, KEY_SALT_SIZE } from './components';
 import type { StoredSession } from './types';
 import { Buffer } from 'buffer';
 
@@ -20,6 +20,7 @@ export class GramDbSkills {
   private _masterKey: Buffer | null = null;
   private _keyIndex: string[] | null = null;
   private _opQueue: Promise<void> = Promise.resolve();
+  private sessionBlobKeys = new Map<string, { salt: Buffer; key: Buffer }>();
 
   constructor(components: GramDbComponents) {
     this.components = components;
@@ -118,7 +119,26 @@ export class GramDbSkills {
     this._masterKey = null;
     this._sessionId = null;
     this._keyIndex = null;
+    this.scrubSessionBlobKeys();
     this.ready = false;
+  }
+
+  private scrubSessionBlobKeys(): void {
+    for (const entry of this.sessionBlobKeys.values()) {
+      entry.key.fill(0);
+    }
+    this.sessionBlobKeys.clear();
+  }
+
+  private async sessionBlobKey(sessionId: string, saltB64?: string): Promise<{ salt: Buffer; key: Buffer }> {
+    const cached = this.sessionBlobKeys.get(sessionId);
+    if (cached && (!saltB64 || cached.salt.toString('base64') === saltB64)) return cached;
+    const salt = saltB64 ? Buffer.from(saltB64, 'base64') : await KeyManager.generateSalt();
+    if (salt.length !== KEY_SALT_SIZE) throw new Error('Invalid session blob salt');
+    const key = await KeyManager.deriveKey(sessionId, salt);
+    const entry = { salt, key };
+    this.sessionBlobKeys.set(sessionId, entry);
+    return entry;
   }
 
   private async ensureEngine(): Promise<void> {
@@ -252,10 +272,9 @@ export class GramDbSkills {
   async getMany<T = any>(keys: string[]): Promise<Record<string, T | undefined>> {
     return this._serial(async () => {
       await this.ensureEngine();
+      const values = await Promise.all(keys.map(k => this._getInternal<T>(k)));
       const result: Record<string, T | undefined> = {};
-      for (const key of keys) {
-        result[key] = await this._getInternal<T>(key);
-      }
+      keys.forEach((key, i) => { result[key] = values[i]; });
       return result;
     });
   }
@@ -352,20 +371,33 @@ export class GramDbSkills {
   async saveSession(sessionId: string, data: StoredSession): Promise<void> {
     return this._serial(async () => {
       await this.ensureEngine();
-      const mk = await this.ensureMasterKey(sessionId);
+      const { salt, key } = await this.sessionBlobKey(sessionId);
       const hk = await this.encKey('session:' + sessionId);
       await this.engine.setItem(hk,
-        await EncryptedStore.encryptToBase64(mk, JSON.stringify(data)));
+        'gs1|' + salt.toString('base64') + '|' + await EncryptedStore.encryptToBase64(key, JSON.stringify(data)));
     });
   }
 
   async loadSession(sessionId: string): Promise<StoredSession | null> {
     return this._serial(async () => {
       await this.ensureEngine();
-      const mk = await this.ensureMasterKey(sessionId);
       const hk = await this.encKey('session:' + sessionId);
       const raw = await this.engine.getItem(hk);
       if (!raw) return null;
+      if (raw.startsWith('gs1|')) {
+        const sep = raw.indexOf('|', 4);
+        if (sep > 4) {
+          try {
+            const { key } = await this.sessionBlobKey(sessionId, raw.slice(4, sep));
+            const s = await EncryptedStore.decryptFromBase64(key, raw.slice(sep + 1));
+            return JSON.parse(s);
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      }
+      const mk = await this.ensureMasterKey(sessionId);
       try {
         const s = await EncryptedStore.decryptFromBase64(mk, raw);
         return JSON.parse(s);
@@ -458,14 +490,23 @@ export class GramDbSkills {
       if (!this._masterKey) return [];
       await this.ensureEngine();
       const result: Array<{ opfsName: string; dataUri: string }> = [];
-      const allKeys = await this.engine.getAllKeys();
-      for (const opfsName of allKeys) {
+      const storeKeys: string[] = [];
+      if (this._sessionId) {
+        const idx = await this._loadKeyIndexInternal();
+        for (const k of idx) {
+          if (k.startsWith('avatar:')) storeKeys.push(await this.encKey(k));
+        }
+      }
+      if (storeKeys.length === 0) {
+        storeKeys.push(...await this.engine.getAllKeys());
+      }
+      for (const storeKey of storeKeys) {
         try {
-          const raw = await this.engine.getItem(opfsName);
+          const raw = await this.engine.getItem(storeKey);
           if (!raw) continue;
           const val = await EncryptedStore.decryptFromBase64(this._masterKey, raw);
           if (val.startsWith('data:')) {
-            result.push({ opfsName, dataUri: val });
+            result.push({ opfsName: storeKey, dataUri: val });
           }
         } catch {}
       }
@@ -516,6 +557,7 @@ export class GramDbSkills {
       this._sessionId = null;
       this.scrubMasterKey();
       this._masterKey = null;
+      this.scrubSessionBlobKeys();
     });
   }
 
