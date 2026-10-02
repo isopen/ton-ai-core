@@ -311,23 +311,27 @@ export class TdBinlog {
   async append(type: EventType, ...values: (number | bigint | string | Buffer)[]): Promise<void> {
     const payload = this.serializePayload(values);
     const eventSize = EVENT_HEADER_SIZE + payload.length + EVENT_TAIL_SIZE;
-    const id = this.nextId++;
-    this.entries.push({ id: id * 2n, type, buf: payload });
-    this.totalEventsSize += eventSize;
-
     await this.ensureEncryptionEvent();
-
+    const id = this.nextId;
     const event = buildEvent(id, type, 0, 0n, payload);
     let eventBuf = Buffer.from(event);
     const padLen = (16 - (eventBuf.length % 16)) % 16;
     if (padLen) eventBuf = Buffer.concat([eventBuf, Buffer.alloc(padLen)]);
-    const encrypted = this.streamCipher!.process(eventBuf);
-
-    const w = await this.fileHandle!.createWritable({ keepExistingData: true });
-    await w.write({ type: 'write', position: this.fileSize, data: encrypted as any });
-    await w.close();
+    const counterBefore = this.streamCipher!.counter;
+    let encrypted: Uint8Array;
+    try {
+      encrypted = this.streamCipher!.process(eventBuf);
+      const w = await this.fileHandle!.createWritable({ keepExistingData: true });
+      await w.write({ type: 'write', position: this.fileSize, data: encrypted as any });
+      await w.close();
+    } catch (e) {
+      this.streamCipher = new AesCtrCipher(this.encKey!, this.encIv!, counterBefore);
+      throw e;
+    }
     this.fileSize += encrypted.length;
-
+    this.nextId = id + 1n;
+    this.entries.push({ id: id * 2n, type, buf: payload });
+    this.totalEventsSize += eventSize;
     await this.maybeReindex();
   }
 
