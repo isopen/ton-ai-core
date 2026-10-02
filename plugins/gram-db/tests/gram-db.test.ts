@@ -453,10 +453,18 @@ describe('GramDbSkills', () => {
     assert.ok(keys.includes('a:2'));
   });
 
-  test('ensureEngine throws when OPFS not available and no engine', async () => {
-    const comps = new GramDbComponents();
+  test('ensureEngine throws when OPFS not available and fallback disabled', async () => {
+    const comps = new GramDbComponents(undefined, { allowMemoryFallback: false });
     const skills = new GramDbSkills(comps);
     await assert.rejects(() => skills.getSessionId(), /OPFS not available/);
+  });
+
+  test('ensureEngine uses memory engine fallback when OPFS not available', async () => {
+    const comps = new GramDbComponents();
+    const skills = new GramDbSkills(comps);
+    await skills.set('fb:1', 'v1');
+    assert.strictEqual(await skills.get('fb:1'), 'v1');
+    assert.strictEqual(comps.initialized, true);
   });
 
   test('loadKeyIndex handles non-array JSON without masterKey', async () => {

@@ -1,11 +1,14 @@
 import { crypton } from '@ton-ai/core';
+import { getLogger } from '@ton-ai/gram-debug';
 import { Buffer } from 'buffer';
 import type { GramDbConfig } from './types';
 const KEY_LEN = 32;
-const KEY_SALT_SIZE = 32;
+export const KEY_SALT_SIZE = 32;
 export const IV_SIZE = 16;
 const DIR = '_7a';
 const PBKDF2_ITERATIONS = 310000;
+const OPFS_PROBE_KEY = '_opfs_probe';
+const componentsLog = getLogger('gram-db');
 
 declare global {
   interface FileSystemDirectoryHandle {
@@ -189,6 +192,17 @@ export class EncryptedStore {
   }
 }
 
+export class MemoryEngine implements StorageEngine {
+  private store = new Map<string, string>();
+
+  async init(): Promise<void> {}
+  async getItem(key: string): Promise<string | null> { return this.store.get(key) ?? null; }
+  async setItem(key: string, value: string): Promise<void> { this.store.set(key, value); }
+  async removeItem(key: string): Promise<void> { this.store.delete(key); }
+  async getAllKeys(): Promise<string[]> { return [...this.store.keys()]; }
+  async clear(): Promise<void> { this.store.clear(); }
+}
+
 export class GramDbComponents {
   private _engine: StorageEngine | null = null;
   private _initPromise: Promise<void> | null = null;
@@ -213,12 +227,26 @@ export class GramDbComponents {
     if (this._initPromise) return this._initPromise;
     this._initPromise = (async () => {
       if (this._engine) return;
-      if (typeof navigator === 'undefined' || typeof (navigator as any).storage?.getDirectory !== 'function') {
-        throw new Error('OPFS not available');
+      let opfsOk = false;
+      if (typeof navigator !== 'undefined' && typeof (navigator as any).storage?.getDirectory === 'function') {
+        try {
+          const e = new OpfsEngine();
+          await e.init();
+          await e.setItem(OPFS_PROBE_KEY, 'ok');
+          opfsOk = (await e.getItem(OPFS_PROBE_KEY)) === 'ok';
+          await e.removeItem(OPFS_PROBE_KEY);
+          if (opfsOk) this._engine = e;
+        } catch (e: any) {
+          componentsLog.warn('[gram-db] OPFS probe failed: ' + (e?.message || e));
+          opfsOk = false;
+        }
       }
-      const e = new OpfsEngine();
-      await e.init();
-      this._engine = e;
+      if (!opfsOk) {
+        const allowFallback = this.config.allowMemoryFallback !== false;
+        if (!allowFallback) throw new Error('OPFS not available');
+        componentsLog.warn('[gram-db] OPFS unavailable — falling back to in-memory storage (data will not persist)');
+        this._engine = new MemoryEngine();
+      }
     })();
     return this._initPromise;
   }

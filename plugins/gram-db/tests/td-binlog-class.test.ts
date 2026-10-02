@@ -199,10 +199,19 @@ describe('OpfsEngine via GramDbComponents', () => {
     delete (global as any).navigator;
   });
 
-  test('GramDbComponents initialize throws without OPFS', async () => {
+  test('GramDbComponents falls back to memory engine without OPFS', async () => {
     delete (global as any).navigator;
     const { GramDbComponents } = await import('../src/components');
     const comps = new GramDbComponents();
+    await comps.initialize();
+    await comps.engine.setItem('k', 'v');
+    assert.strictEqual(await comps.engine.getItem('k'), 'v');
+  });
+
+  test('GramDbComponents initialize throws without OPFS when fallback disabled', async () => {
+    delete (global as any).navigator;
+    const { GramDbComponents } = await import('../src/components');
+    const comps = new GramDbComponents(undefined, { allowMemoryFallback: false });
     await assert.rejects(() => comps.initialize(), /OPFS not available/);
   });
 });

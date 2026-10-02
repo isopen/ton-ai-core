@@ -1,4 +1,6 @@
-export interface GramDbConfig {}
+export interface GramDbConfig {
+  allowMemoryFallback?: boolean;
+}
 
 export interface StoredSession {
   authKey: string;
