@@ -419,7 +419,7 @@ export function pickInteractionAnchor(bubble: Element, x?: number, y?: number): 
     return candidates[candidates.length - 1];
 }
 
-function runLocalInteractionFx(messageId: string, x?: number, y?: number): void {
+export function runLocalInteractionFx(messageId: string, x?: number, y?: number): void {
     const bubble = document.getElementById('msg-' + messageId);
     if (!bubble) return;
     if (bubble.querySelector('.tgui-sticker[data-server-fx]')) return;
