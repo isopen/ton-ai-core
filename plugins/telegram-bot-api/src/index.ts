@@ -188,6 +188,37 @@ import {
     ApproveSuggestedPostParams,
     DeclineSuggestedPostParams,
     ReplaceStickerInSetParams,
+    ConvertGiftToStarsParams,
+    EditUserStarSubscriptionParams,
+    RefundStarPaymentParams,
+    GetChatGiftsParams,
+    GetUserGiftsParams,
+    GetBusinessAccountGiftsParams,
+    GiftPremiumSubscriptionParams,
+    TransferGiftParams,
+    UpgradeGiftParams,
+    DeleteBusinessMessagesParams,
+    ReadBusinessMessageParams,
+    GetBusinessAccountStarBalanceParams,
+    SetBusinessAccountNameParams,
+    SetBusinessAccountUsernameParams,
+    SetBusinessAccountBioParams,
+    SetBusinessAccountProfilePhotoParams,
+    RemoveBusinessAccountProfilePhotoParams,
+    SetBusinessAccountGiftSettingsParams,
+    TransferBusinessAccountStarsParams,
+    PostStoryParams,
+    EditStoryParams,
+    DeleteStoryParams,
+    RepostStoryParams,
+    VerifyUserParams,
+    VerifyChatParams,
+    RemoveUserVerificationParams,
+    RemoveChatVerificationParams,
+    SavePreparedInlineMessageParams,
+    SavePreparedKeyboardButtonParams,
+    SetMyProfilePhotoParams,
+    SetUserEmojiStatusParams,
     BotSubscriptionUpdated,
     MessageGenerationStopped,
     Community,
@@ -1455,6 +1486,176 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
     async replaceStickerInSet(params: ReplaceStickerInSetParams): Promise<boolean> {
         this.checkInitialized();
         return this.skills.replaceStickerInSet(params);
+    }
+
+    async convertGiftToStars(params: ConvertGiftToStarsParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.convertGiftToStars(params);
+    }
+
+    async editUserStarSubscription(params: EditUserStarSubscriptionParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.editUserStarSubscription(params);
+    }
+
+    async getMyStarBalance(): Promise<any> {
+        this.checkInitialized();
+        return this.skills.getMyStarBalance();
+    }
+
+    async refundStarPayment(params: RefundStarPaymentParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.refundStarPayment(params);
+    }
+
+    async getAvailableGifts(): Promise<any> {
+        this.checkInitialized();
+        return this.skills.getAvailableGifts();
+    }
+
+    async getChatGifts(params: GetChatGiftsParams): Promise<any> {
+        this.checkInitialized();
+        return this.skills.getChatGifts(params);
+    }
+
+    async getUserGifts(params: GetUserGiftsParams): Promise<any> {
+        this.checkInitialized();
+        return this.skills.getUserGifts(params);
+    }
+
+    async giftPremiumSubscription(params: GiftPremiumSubscriptionParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.giftPremiumSubscription(params);
+    }
+
+    async transferGift(params: TransferGiftParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.transferGift(params);
+    }
+
+    async upgradeGift(params: UpgradeGiftParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.upgradeGift(params);
+    }
+
+    async deleteBusinessMessages(params: DeleteBusinessMessagesParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.deleteBusinessMessages(params);
+    }
+
+    async readBusinessMessage(params: ReadBusinessMessageParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.readBusinessMessage(params);
+    }
+
+    async getBusinessAccountGifts(params: GetBusinessAccountGiftsParams): Promise<any> {
+        this.checkInitialized();
+        return this.skills.getBusinessAccountGifts(params);
+    }
+
+    async getBusinessAccountStarBalance(params: GetBusinessAccountStarBalanceParams): Promise<any> {
+        this.checkInitialized();
+        return this.skills.getBusinessAccountStarBalance(params);
+    }
+
+    async setBusinessAccountName(params: SetBusinessAccountNameParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.setBusinessAccountName(params);
+    }
+
+    async setBusinessAccountUsername(params: SetBusinessAccountUsernameParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.setBusinessAccountUsername(params);
+    }
+
+    async setBusinessAccountBio(params: SetBusinessAccountBioParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.setBusinessAccountBio(params);
+    }
+
+    async setBusinessAccountProfilePhoto(params: SetBusinessAccountProfilePhotoParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.setBusinessAccountProfilePhoto(params);
+    }
+
+    async removeBusinessAccountProfilePhoto(params: RemoveBusinessAccountProfilePhotoParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.removeBusinessAccountProfilePhoto(params);
+    }
+
+    async setBusinessAccountGiftSettings(params: SetBusinessAccountGiftSettingsParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.setBusinessAccountGiftSettings(params);
+    }
+
+    async transferBusinessAccountStars(params: TransferBusinessAccountStarsParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.transferBusinessAccountStars(params);
+    }
+
+    async postStory(params: PostStoryParams): Promise<any> {
+        this.checkInitialized();
+        return this.skills.postStory(params);
+    }
+
+    async editStory(params: EditStoryParams): Promise<any> {
+        this.checkInitialized();
+        return this.skills.editStory(params);
+    }
+
+    async deleteStory(params: DeleteStoryParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.deleteStory(params);
+    }
+
+    async repostStory(params: RepostStoryParams): Promise<any> {
+        this.checkInitialized();
+        return this.skills.repostStory(params);
+    }
+
+    async verifyUser(params: VerifyUserParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.verifyUser(params);
+    }
+
+    async verifyChat(params: VerifyChatParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.verifyChat(params);
+    }
+
+    async removeUserVerification(params: RemoveUserVerificationParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.removeUserVerification(params);
+    }
+
+    async removeChatVerification(params: RemoveChatVerificationParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.removeChatVerification(params);
+    }
+
+    async savePreparedInlineMessage(params: SavePreparedInlineMessageParams): Promise<any> {
+        this.checkInitialized();
+        return this.skills.savePreparedInlineMessage(params);
+    }
+
+    async savePreparedKeyboardButton(params: SavePreparedKeyboardButtonParams): Promise<any> {
+        this.checkInitialized();
+        return this.skills.savePreparedKeyboardButton(params);
+    }
+
+    async setMyProfilePhoto(params: SetMyProfilePhotoParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.setMyProfilePhoto(params);
+    }
+
+    async removeMyProfilePhoto(): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.removeMyProfilePhoto();
+    }
+
+    async setUserEmojiStatus(params: SetUserEmojiStatusParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.setUserEmojiStatus(params);
     }
 
     onGuestMessage(callback: (message: Message) => void): string {
