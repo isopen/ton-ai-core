@@ -194,7 +194,38 @@ import {
     GetUserProfileAudiosParams,
     ApproveSuggestedPostParams,
     DeclineSuggestedPostParams,
-    ReplaceStickerInSetParams
+    ReplaceStickerInSetParams,
+    ConvertGiftToStarsParams,
+    EditUserStarSubscriptionParams,
+    RefundStarPaymentParams,
+    GetChatGiftsParams,
+    GetUserGiftsParams,
+    GetBusinessAccountGiftsParams,
+    GiftPremiumSubscriptionParams,
+    TransferGiftParams,
+    UpgradeGiftParams,
+    DeleteBusinessMessagesParams,
+    ReadBusinessMessageParams,
+    GetBusinessAccountStarBalanceParams,
+    SetBusinessAccountNameParams,
+    SetBusinessAccountUsernameParams,
+    SetBusinessAccountBioParams,
+    SetBusinessAccountProfilePhotoParams,
+    RemoveBusinessAccountProfilePhotoParams,
+    SetBusinessAccountGiftSettingsParams,
+    TransferBusinessAccountStarsParams,
+    PostStoryParams,
+    EditStoryParams,
+    DeleteStoryParams,
+    RepostStoryParams,
+    VerifyUserParams,
+    VerifyChatParams,
+    RemoveUserVerificationParams,
+    RemoveChatVerificationParams,
+    SavePreparedInlineMessageParams,
+    SavePreparedKeyboardButtonParams,
+    SetMyProfilePhotoParams,
+    SetUserEmojiStatusParams
 } from './types';
 
 const DEFAULT_ADMIN_RIGHTS_KEY = 0;
@@ -2235,5 +2266,141 @@ export class TelegramBotSkills {
 
     async replaceStickerInSet(params: ReplaceStickerInSetParams): Promise<boolean> {
         return this.request<boolean>('replaceStickerInSet', params);
+    }
+
+    async convertGiftToStars(params: ConvertGiftToStarsParams): Promise<boolean> {
+        return this.request<boolean>('convertGiftToStars', params);
+    }
+
+    async editUserStarSubscription(params: EditUserStarSubscriptionParams): Promise<boolean> {
+        return this.request<boolean>('editUserStarSubscription', params);
+    }
+
+    async getMyStarBalance(): Promise<any> {
+        return this.request<any>('getMyStarBalance');
+    }
+
+    async refundStarPayment(params: RefundStarPaymentParams): Promise<boolean> {
+        return this.request<boolean>('refundStarPayment', params);
+    }
+
+    async getAvailableGifts(): Promise<any> {
+        return this.request<any>('getAvailableGifts');
+    }
+
+    async getChatGifts(params: GetChatGiftsParams): Promise<any> {
+        return this.request<any>('getChatGifts', params);
+    }
+
+    async getUserGifts(params: GetUserGiftsParams): Promise<any> {
+        return this.request<any>('getUserGifts', params);
+    }
+
+    async giftPremiumSubscription(params: GiftPremiumSubscriptionParams): Promise<boolean> {
+        return this.request<boolean>('giftPremiumSubscription', params);
+    }
+
+    async transferGift(params: TransferGiftParams): Promise<boolean> {
+        return this.request<boolean>('transferGift', params);
+    }
+
+    async upgradeGift(params: UpgradeGiftParams): Promise<boolean> {
+        return this.request<boolean>('upgradeGift', params);
+    }
+
+    async deleteBusinessMessages(params: DeleteBusinessMessagesParams): Promise<boolean> {
+        return this.request<boolean>('deleteBusinessMessages', params);
+    }
+
+    async readBusinessMessage(params: ReadBusinessMessageParams): Promise<boolean> {
+        return this.request<boolean>('readBusinessMessage', params);
+    }
+
+    async getBusinessAccountGifts(params: GetBusinessAccountGiftsParams): Promise<any> {
+        return this.request<any>('getBusinessAccountGifts', params);
+    }
+
+    async getBusinessAccountStarBalance(params: GetBusinessAccountStarBalanceParams): Promise<any> {
+        return this.request<any>('getBusinessAccountStarBalance', params);
+    }
+
+    async setBusinessAccountName(params: SetBusinessAccountNameParams): Promise<boolean> {
+        return this.request<boolean>('setBusinessAccountName', params);
+    }
+
+    async setBusinessAccountUsername(params: SetBusinessAccountUsernameParams): Promise<boolean> {
+        return this.request<boolean>('setBusinessAccountUsername', params);
+    }
+
+    async setBusinessAccountBio(params: SetBusinessAccountBioParams): Promise<boolean> {
+        return this.request<boolean>('setBusinessAccountBio', params);
+    }
+
+    async setBusinessAccountProfilePhoto(params: SetBusinessAccountProfilePhotoParams): Promise<boolean> {
+        return this.request<boolean>('setBusinessAccountProfilePhoto', params);
+    }
+
+    async removeBusinessAccountProfilePhoto(params: RemoveBusinessAccountProfilePhotoParams): Promise<boolean> {
+        return this.request<boolean>('removeBusinessAccountProfilePhoto', params);
+    }
+
+    async setBusinessAccountGiftSettings(params: SetBusinessAccountGiftSettingsParams): Promise<boolean> {
+        return this.request<boolean>('setBusinessAccountGiftSettings', params);
+    }
+
+    async transferBusinessAccountStars(params: TransferBusinessAccountStarsParams): Promise<boolean> {
+        return this.request<boolean>('transferBusinessAccountStars', params);
+    }
+
+    async postStory(params: PostStoryParams): Promise<any> {
+        return this.request<any>('postStory', params);
+    }
+
+    async editStory(params: EditStoryParams): Promise<any> {
+        return this.request<any>('editStory', params);
+    }
+
+    async deleteStory(params: DeleteStoryParams): Promise<boolean> {
+        return this.request<boolean>('deleteStory', params);
+    }
+
+    async repostStory(params: RepostStoryParams): Promise<any> {
+        return this.request<any>('repostStory', params);
+    }
+
+    async verifyUser(params: VerifyUserParams): Promise<boolean> {
+        return this.request<boolean>('verifyUser', params);
+    }
+
+    async verifyChat(params: VerifyChatParams): Promise<boolean> {
+        return this.request<boolean>('verifyChat', params);
+    }
+
+    async removeUserVerification(params: RemoveUserVerificationParams): Promise<boolean> {
+        return this.request<boolean>('removeUserVerification', params);
+    }
+
+    async removeChatVerification(params: RemoveChatVerificationParams): Promise<boolean> {
+        return this.request<boolean>('removeChatVerification', params);
+    }
+
+    async savePreparedInlineMessage(params: SavePreparedInlineMessageParams): Promise<any> {
+        return this.request<any>('savePreparedInlineMessage', params);
+    }
+
+    async savePreparedKeyboardButton(params: SavePreparedKeyboardButtonParams): Promise<any> {
+        return this.request<any>('savePreparedKeyboardButton', params);
+    }
+
+    async setMyProfilePhoto(params: SetMyProfilePhotoParams): Promise<boolean> {
+        return this.request<boolean>('setMyProfilePhoto', params);
+    }
+
+    async removeMyProfilePhoto(): Promise<boolean> {
+        return this.request<boolean>('removeMyProfilePhoto');
+    }
+
+    async setUserEmojiStatus(params: SetUserEmojiStatusParams): Promise<boolean> {
+        return this.request<boolean>('setUserEmojiStatus', params);
     }
 }
