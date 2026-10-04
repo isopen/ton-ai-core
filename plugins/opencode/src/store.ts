@@ -55,6 +55,25 @@ export class OpencodeStore {
         return rows;
     }
 
+    readSessionParents(ids: string[]): Map<string, string> {
+        const parents = new Map<string, string>();
+        if (ids.length === 0 || !this.hasTable('session')) return parents;
+        try {
+            const placeholders = ids.map(() => '?').join(', ');
+            const rows = allRows<{ id: string; parent_id: string | null }>(
+                this.db,
+                `SELECT id, parent_id FROM session WHERE parent_id IS NOT NULL AND parent_id != '' AND id IN (${placeholders})`,
+                ...ids,
+            );
+            for (const row of rows) {
+                if (row.parent_id) parents.set(row.id, row.parent_id);
+            }
+        } catch {
+            return new Map<string, string>();
+        }
+        return parents;
+    }
+
     getSession(sessionId: string): SessionRow | null {
         return oneRow<SessionRow>(
             this.db,

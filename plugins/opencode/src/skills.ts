@@ -210,7 +210,18 @@ export class OpencodeSkills {
         const query: Record<string, string> = { limit: String(limit), order };
         if (directory) query.directory = directory;
         const list = await this.request<SessionApiList>('/api/session', 'opencode listSessions', query);
-        return (list.data || []).map(normalizeSessionApi);
+        const rows = (list.data || []).map(normalizeSessionApi);
+        const store = this.getStore();
+        if (store) {
+            const parents = store.readSessionParents(rows.map((row) => row.id));
+            for (const row of rows) {
+                if (!row.parent_id) {
+                    const parent = parents.get(row.id);
+                    if (parent) row.parent_id = parent;
+                }
+            }
+        }
+        return rows;
     }
 
     async getSession(sessionId: string): Promise<SessionRow | null> {

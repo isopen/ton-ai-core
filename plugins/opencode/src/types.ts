@@ -15,6 +15,7 @@ export interface SessionRow {
     directory: string;
     agent: string;
     model: string;
+    parent_id?: string | null;
     time_created: number;
     time_updated: number;
     cost: number;
