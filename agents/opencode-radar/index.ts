@@ -67,7 +67,7 @@ function sessionIdList(): string[] {
     return multiple;
 }
 
-const maxSessionsDefault = optionalInt('RADAR_MAX_SESSIONS', 10);
+const maxSessionsDefault = optionalInt('RADAR_MAX_SESSIONS', 3);
 
 const config: OpencodeRadarConfig = {
     name: 'opencode-radar',
@@ -78,7 +78,7 @@ const config: OpencodeRadarConfig = {
         pollingLimit: 100,
         retryOnError: false,
         maxRetries: 0,
-        requestTimeoutMs: optionalInt('TELEGRAM_REQUEST_TIMEOUT_MS', 5000),
+        requestTimeoutMs: optionalInt('TELEGRAM_REQUEST_TIMEOUT_MS', 30000),
     },
     opencode: {
         baseUrl: process.env.OPENCODE_SERVER_URL || 'http://127.0.0.1:4096',

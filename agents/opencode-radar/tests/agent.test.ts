@@ -2,7 +2,7 @@ import { strict as assert } from 'assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Message } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
-import { OpencodeRadarAgent, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, RADAR_THREAD_TIMINGS } from '../agent';
+import { OpencodeRadarAgent, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, RADAR_THREAD_TIMINGS } from '../agent';
 import { EMOJI, formatThinking, splitTelegramHtml, truncate, wellFormed } from '../formatter';
 
 const NOT_MODIFIED =
@@ -191,6 +191,34 @@ describe('radar console feed', () => {
         assert.equal(hasSessionWork({ ...base, tokens_output: 5 }), true);
         assert.equal(hasSessionWork({ ...base, tokens_reasoning: 7 }), true);
         assert.equal(hasSessionWork({ ...base, time_updated: 101 }), true);
+    });
+
+    test('rankSessionIds skips subagent sessions and keeps the server order', () => {
+        const row = (id: string, over: Record<string, unknown> = {}) => ({
+            ...SESSION,
+            id,
+            tokens_input: 500,
+            time_updated: 1000,
+            ...over,
+        });
+        const child = (id: string, parent: string) => row(id, { parent_id: parent, agent: 'explore' });
+        const list = [
+            child('ses_child1', 'ses_main1'),
+            row('ses_main1'),
+            child('ses_child2', 'ses_main1'),
+            row('ses_main2', { parent_id: null }),
+            row('ses_main3', { parent_id: '' }),
+        ];
+        assert.deepEqual(rankSessionIds(list, 3), ['ses_main1', 'ses_main2', 'ses_main3']);
+        assert.deepEqual(rankSessionIds(list, 2), ['ses_main1', 'ses_main2']);
+    });
+
+    test('isSubagentSession only reacts to a real parent id', () => {
+        const base = { ...SESSION } as unknown as Record<string, unknown>;
+        assert.equal(isSubagentSession(base as never), false);
+        assert.equal(isSubagentSession({ ...base, parent_id: null } as never), false);
+        assert.equal(isSubagentSession({ ...base, parent_id: '' } as never), false);
+        assert.equal(isSubagentSession({ ...base, parent_id: 'ses_parent' } as never), true);
     });
 
     test('rankSessionIds keeps only sessions with real work', () => {
@@ -2663,23 +2691,29 @@ describe('radar thread binding survival', () => {
 });
 
 describe('radar server outage', () => {
-    test('outage notice is posted once until recovery', async () => {
+    test('outage is logged once until recovery and never posted to General', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
         let healthy = false;
         const opencode = { health: async () => { if (!healthy) throw new Error('down'); } };
-        await agent.checkServerHealth(telegram, opencode);
-        await agent.checkServerHealth(telegram, opencode);
-        const notices = calls.filter((c) => c.op === 'send');
-        assert.equal(notices.length, 1);
-        assert.ok(String((notices[0].params as Record<string, unknown>).text).includes('unreachable'));
-        healthy = true;
-        await agent.checkServerHealth(telegram, opencode);
-        const after = calls.filter((c) => c.op === 'send');
-        assert.equal(after.length, 2);
-        assert.ok(String((after[1].params as Record<string, unknown>).text).includes('back'));
-        await agent.checkServerHealth(telegram, opencode);
-        assert.equal(calls.filter((c) => c.op === 'send').length, 2);
+        try {
+            await agent.checkServerHealth(telegram, opencode);
+            await agent.checkServerHealth(telegram, opencode);
+            const logged = warn.mock.calls.map((entry) => String(entry[0])).filter((line) => line.includes('service notice'));
+            assert.equal(logged.length, 1);
+            assert.ok(logged[0].includes('unreachable'));
+            healthy = true;
+            await agent.checkServerHealth(telegram, opencode);
+            const after = warn.mock.calls.map((entry) => String(entry[0])).filter((line) => line.includes('service notice'));
+            assert.equal(after.length, 2);
+            assert.ok(after[1].includes('back'));
+            await agent.checkServerHealth(telegram, opencode);
+            assert.equal(warn.mock.calls.map((entry) => String(entry[0])).filter((line) => line.includes('service notice')).length, 2);
+        } finally {
+            warn.mockRestore();
+        }
+        assert.equal(calls.filter((c) => c.op === 'send').length, 0, 'General must stay empty');
     });
 
     test('no notice while healthy', async () => {
@@ -4355,14 +4389,14 @@ describe('radar stop control', () => {
         const state = (await attachWatched(agent, telegram)) as unknown as StopState & { threadId: number | null };
         assert.equal(state.threadId, null);
         assert.equal(creates, 2);
-        const notices = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('General'));
-        assert.equal(notices().length, 1);
+        const notices = () => calls.filter((c) => c.op === 'send');
+        assert.equal(notices().length, 0, 'topic failures are logged, never posted to General');
         await agent.ensureThreadId(telegram, state);
         assert.equal(creates, 2);
-        now += 6 * 60 * 1000;
+        now += RADAR_THREAD_TIMINGS.retryMs + 1000;
         await agent.ensureThreadId(telegram, state);
         assert.equal(creates, 4);
-        assert.equal(notices().length, 1);
+        assert.equal(notices().length, 0);
         assert.equal((agent as unknown as { threadsEnabled: boolean }).threadsEnabled, true);
     });
 
@@ -4994,5 +5028,414 @@ describe('radar delivery dedup', () => {
         await agent.flushEvents(telegram, state);
         assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('first')));
         assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('second')));
+    });
+});
+
+describe('radar topic count', () => {
+    let now = 13000000;
+
+    beforeEach(() => {
+        now = 13000000;
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    function radarRows() {
+        return [
+            { id: 'ses_a01', title: 'Alpha', directory: '/repo', agent: 'build', model: '{"id":"test-model"}', time_created: 1000, time_updated: 5000, cost: 0, tokens_input: 10, tokens_output: 5, tokens_reasoning: 0 },
+            { id: 'ses_b02', title: 'Bravo', directory: '/repo', agent: 'build', model: '{"id":"test-model"}', time_created: 1000, time_updated: 4000, cost: 0, tokens_input: 10, tokens_output: 5, tokens_reasoning: 0 },
+            { id: 'ses_c03', title: 'Charlie', directory: '/repo', agent: 'build', model: '{"id":"test-model"}', time_created: 1000, time_updated: 3000, cost: 0, tokens_input: 10, tokens_output: 5, tokens_reasoning: 0 },
+        ];
+    }
+
+    function radarLive(rows: Array<Record<string, unknown>>, reads: Record<string, boolean>) {
+        return {
+            listSessions: async () => rows,
+            getSession: async (sessionId: string) => rows.find((row) => row.id === sessionId) ?? null,
+            readEvents: async (sessionId: string) => {
+                reads[sessionId] = true;
+                return [{ key: 'db:1', event: { kind: 'text', text: 'older words', time: now - 5000 } }];
+            },
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            setSessionPermissions: async () => true,
+        };
+    }
+
+    test('a slow context send never creates a second topic for the same session', async () => {
+        const statePath = `/tmp/opencode/radar-test-state-topics-${process.pid}.json`;
+        rmSync(statePath, { force: true });
+        try {
+            const agent = makeAgentWithState(statePath) as unknown as Record<
+                string,
+                (...args: never[]) => Promise<never>
+            > & { getPlugin: (name: string) => unknown; watched: Map<string, unknown> };
+            const { telegram, calls, setSendImpl } = stubTelegram();
+            const rows = radarRows();
+            const reads: Record<string, boolean> = {};
+            agent.getPlugin = (name: string) =>
+                name === 'telegram-bot-api' ? telegram : radarLive(rows, reads);
+            const saved = (): Array<{ threadId: number | null }> => {
+                const parsed = JSON.parse(readFileSync(statePath, 'utf8')) as {
+                    sessions: Record<string, { threadId: number | null }>;
+                };
+                return Object.values(parsed.sessions);
+            };
+            setSendImpl(() => Promise.reject(new Error('fetch failed: socket hang up')));
+            await agent.syncSessions();
+            assert.equal(calls.filter((c) => c.op === 'create').length, 3);
+            assert.equal(agent.watched.size, 0);
+            assert.equal(saved().length, 3);
+            assert.deepEqual(saved().map((entry) => entry.threadId), [8, 9, 10]);
+            assert.equal(reads['ses_a01'], undefined, 'a failed attach must not read history');
+
+            setSendImpl(null);
+            await agent.syncSessions();
+            assert.equal(calls.filter((c) => c.op === 'create').length, 3, 'retry must reuse the stored topics');
+            assert.equal(agent.watched.size, 3);
+            assert.equal(saved().length, 3);
+            assert.equal(calls.filter((c) => c.op === 'send').length, 6);
+            assert.equal(calls.filter((c) => c.op === 'pin').length, 3);
+        } finally {
+            rmSync(statePath, { force: true });
+        }
+    });
+
+    test('a slow context send on every tick still yields exactly three topics', async () => {
+        const statePath = `/tmp/opencode/radar-test-state-topics2-${process.pid}.json`;
+        rmSync(statePath, { force: true });
+        try {
+            const agent = makeAgentWithState(statePath) as unknown as Record<
+                string,
+                (...args: never[]) => Promise<never>
+            > & { watched: Map<string, unknown> };
+            const { telegram, calls, setSendImpl } = stubTelegram();
+            const rows = radarRows();
+            const reads: Record<string, boolean> = {};
+            agent.getPlugin = (name: string) =>
+                name === 'telegram-bot-api' ? telegram : radarLive(rows, reads);
+            setSendImpl(() => Promise.reject(new Error('fetch failed: socket hang up')));
+            for (let round = 0; round < 4; round += 1) {
+                await agent.syncSessions();
+                now += 1000;
+            }
+            assert.equal(calls.filter((c) => c.op === 'create').length, 3);
+            const parsed = JSON.parse(readFileSync(statePath, 'utf8')) as {
+                sessions: Record<string, { threadId: number | null }>;
+            };
+            assert.deepEqual(
+                Object.values(parsed.sessions).map((entry) => entry.threadId),
+                [8, 9, 10],
+            );
+            assert.equal(Object.values(parsed.sessions).filter((entry) => entry.threadId === null).length, 0);
+        } finally {
+            rmSync(statePath, { force: true });
+        }
+    });
+});
+
+describe('radar session pick order', () => {
+    let now = 14000000;
+
+    beforeEach(() => {
+        now = 14000000;
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    function row(id: string, title: string, timeUpdated: number, parent: string | null = null) {
+        return {
+            id,
+            title,
+            directory: '/repo',
+            agent: parent ? 'explore' : 'build',
+            model: '{"id":"test-model"}',
+            parent_id: parent,
+            time_created: 1000,
+            time_updated: timeUpdated,
+            cost: 0,
+            tokens_input: 10,
+            tokens_output: 5,
+            tokens_reasoning: 0,
+        };
+    }
+
+    test('topics are created for the three newest main sessions, newest first', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const created: string[] = [];
+        (telegram as unknown as { createForumTopic: unknown }).createForumTopic = async (params: Record<string, unknown>) => {
+            created.push(String(params.name));
+            return { message_thread_id: 300 + created.length, name: params.name, icon_color: 0 };
+        };
+        const rows = [
+            row('ses_child_a', 'Explore something (@explore subagent)', 9000, 'ses_main_a'),
+            row('ses_main_a', 'Main newest', 8000),
+            row('ses_child_b', 'Explore other (@explore subagent)', 7000, 'ses_main_a'),
+            row('ses_main_b', 'Main second', 6000),
+            row('ses_main_c', 'Main third', 5000),
+            row('ses_main_d', 'Main fourth', 4000),
+        ];
+        const live = {
+            listSessions: async () => rows,
+            getSession: async (sessionId: string) => rows.find((entry) => entry.id === sessionId) ?? null,
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            setSessionPermissions: async () => true,
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' ? telegram : live;
+        await agent.syncSessions();
+        assert.equal(created.length, 3);
+        assert.ok(created[0].includes('Main newest'));
+        assert.ok(created[1].includes('Main second'));
+        assert.ok(created[2].includes('Main third'));
+        assert.ok(!created.some((name) => name.includes('Explore')));
+        assert.equal(calls.filter((c) => c.op === 'pin').length, 3);
+    });
+});
+
+describe('radar context placement', () => {
+    let now = 15000000;
+
+    beforeEach(() => {
+        now = 15000000;
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    function row(id: string, title: string) {
+        return {
+            id,
+            title,
+            directory: '/repo',
+            agent: 'build',
+            model: '{"id":"test-model"}',
+            time_created: 1000,
+            time_updated: 5000,
+            cost: 0,
+            tokens_input: 10,
+            tokens_output: 5,
+            tokens_reasoning: 0,
+        };
+    }
+
+    function livePlugin(rows: Array<ReturnType<typeof row>>) {
+        return {
+            listSessions: async () => rows,
+            getSession: async (sessionId: string) => rows.find((entry) => entry.id === sessionId) ?? null,
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            setSessionPermissions: async () => true,
+        };
+    }
+
+    test('a failed topic creation never posts the context card into General', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+        };
+        const { telegram, calls } = stubTelegram();
+        (telegram as unknown as { createForumTopic: unknown }).createForumTopic = async () => {
+            throw new Error('The operation was aborted due to timeout');
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' ? telegram : livePlugin([row('ses_a01', 'Alpha')]);
+        await agent.syncSessions();
+        assert.equal(agent.watched.size, 1);
+        const cards = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Context'));
+        assert.equal(cards.length, 0, 'the context card must never land in General');
+        assert.equal(calls.filter((c) => c.op === 'pin').length, 0);
+        const state = agent.watched.get('ses_a01') as { contextMessageId: number | null; threadId: number | null };
+        assert.equal(state.contextMessageId, null);
+        assert.equal(state.threadId, null);
+    });
+
+    test('the context card is sent into the topic as soon as it exists', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+        };
+        const { telegram, calls, setEditImpl } = stubTelegram();
+        let createFails = true;
+        (telegram as unknown as { createForumTopic: unknown }).createForumTopic = async () => {
+            if (createFails) throw new Error('The operation was aborted due to timeout');
+            return { message_thread_id: 77, name: 'Alpha', icon_color: 0 };
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' ? telegram : livePlugin([row('ses_a01', 'Alpha')]);
+        await agent.syncSessions();
+        assert.equal(calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Context')).length, 0);
+
+        createFails = false;
+        now += RADAR_THREAD_TIMINGS.retryMs + 1000;
+        const state = agent.watched.get('ses_a01') as { threadId: number | null };
+        await agent.runSessionTick(telegram, livePlugin([row('ses_a01', 'Alpha')]) as never, state as never);
+        assert.equal(state.threadId, 77);
+        const sends = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Context'));
+        assert.equal(sends.length, 1);
+        const card = sends[0] as { params: Record<string, unknown> };
+        assert.equal(card.params.message_thread_id, 77);
+        assert.ok(String(card.params.text).includes('Context'));
+        assert.equal(calls.filter((c) => c.op === 'pin').length, 1);
+    });
+
+    test('every session without a topic stays silent instead of leaking into General', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+        };
+        const { telegram, calls } = stubTelegram();
+        (telegram as unknown as { createForumTopic: unknown }).createForumTopic = async () => {
+            throw new Error('The operation was aborted due to timeout');
+        };
+        const rows = [row('ses_a01', 'Alpha'), row('ses_b02', 'Bravo'), row('ses_c03', 'Charlie')];
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' ? telegram : livePlugin(rows);
+        await agent.syncSessions();
+        assert.equal(agent.watched.size, 3);
+        const notices = calls.filter((c) => c.op === 'send');
+        assert.equal(notices.length, 0, 'topic failures are logged, never posted to General');
+        assert.equal(
+            calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Context')).length,
+            0,
+        );
+        for (const id of ['ses_a01', 'ses_b02', 'ses_c03']) {
+            const state = agent.watched.get(id) as { contextMessageId: number | null };
+            assert.equal(state.contextMessageId, null);
+        }
+    });
+});
+
+describe('radar general isolation', () => {
+    let now = 16000000;
+
+    beforeEach(() => {
+        now = 16000000;
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    function row(id: string, title: string) {
+        return {
+            id,
+            title,
+            directory: '/repo',
+            agent: 'build',
+            model: '{"id":"test-model"}',
+            time_created: 1000,
+            time_updated: 5000,
+            cost: 0,
+            tokens_input: 10,
+            tokens_output: 5,
+            tokens_reasoning: 0,
+        };
+    }
+
+    function livePlugin(rows: Array<ReturnType<typeof row>>, events: Array<{ key: string; event: unknown }> = []) {
+        return {
+            listSessions: async () => rows,
+            getSession: async (sessionId: string) => rows.find((entry) => entry.id === sessionId) ?? null,
+            readEvents: async () => events,
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            setSessionPermissions: async () => true,
+        };
+    }
+
+    test('an active session without a topic posts nothing into General', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+        };
+        const { telegram, calls } = stubTelegram();
+        (telegram as unknown as { createForumTopic: unknown }).createForumTopic = async () => {
+            throw new Error('Bad Request: not enough rights');
+        };
+        const events = [{ key: 'db:1', event: { kind: 'text', text: 'fresh answer', time: now } }];
+        const live = livePlugin([row('ses_a01', 'Alpha')], events);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' ? telegram : live;
+        await agent.syncSessions();
+        const state = agent.watched.get('ses_a01') as {
+            threadId: number | null;
+            promptQueue: string[];
+            pending: unknown[];
+        };
+        assert.equal(state.threadId, null);
+        (state as { promptQueue: string[] }).promptQueue.push('do it');
+        calls.length = 0;
+        for (let round = 0; round < 3; round += 1) {
+            await agent.runSessionTick(telegram, live as never, state as never);
+            now += 2000;
+        }
+        assert.equal(state.threadId, null);
+        assert.equal(calls.filter((c) => c.op === 'send').length, 0, 'no session content may reach General');
+        assert.equal(calls.filter((c) => c.op === 'typing').length, 0, 'no typing into General');
+        assert.equal(calls.filter((c) => c.op === 'edit').length, 0);
+        assert.equal((state as { pending: unknown[] }).pending.length, 1, 'events stay queued until the topic exists');
+    });
+
+    test('a failed topic creation for one session does not block the next one', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+        };
+        const { telegram } = stubTelegram();
+        const created: string[] = [];
+        (telegram as unknown as { createForumTopic: unknown }).createForumTopic = async (params: Record<string, unknown>) => {
+            if (String(params.name).includes('Alpha')) throw new Error('The operation was aborted due to timeout');
+            created.push(String(params.name));
+            return { message_thread_id: 500 + created.length, name: params.name, icon_color: 0 };
+        };
+        const rows = [row('ses_a01', 'Alpha'), row('ses_b02', 'Bravo'), row('ses_c03', 'Charlie')];
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' ? telegram : livePlugin(rows);
+        await agent.syncSessions();
+        assert.equal(created.length, 2);
+        assert.ok(created[0].includes('Bravo'));
+        assert.ok(created[1].includes('Charlie'));
+        assert.equal((agent.watched.get('ses_b02') as { threadId: number | null }).threadId, 501);
+        assert.equal((agent.watched.get('ses_c03') as { threadId: number | null }).threadId, 502);
+        assert.equal((agent.watched.get('ses_a01') as { threadId: number | null }).threadId, null);
+    });
+
+    test('a deleted topic that cannot be recreated never falls back to General', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setSendImpl } = stubTelegram();
+        let creates = 0;
+        (telegram as unknown as { createForumTopic: unknown }).createForumTopic = async () => {
+            creates += 1;
+            if (creates === 1) return { message_thread_id: 77, name: 'Alpha', icon_color: 0 };
+            throw new Error('Bad Request: not enough rights');
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' ? telegram : livePlugin([row('ses_a01', 'Alpha')]);
+        const state = (await agent.attachSession(telegram, row('ses_a01', 'Alpha'))) as unknown as {
+            threadId: number | null;
+            pending: Array<{ kind: string; text: string; time: number }>;
+            lastEventMessageAt: number;
+        };
+        assert.equal(state.threadId, 77);
+        calls.length = 0;
+        setSendImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
+        state.pending = [{ kind: 'text', text: 'after delete', time: now }];
+        await agent.flushEvents(telegram, state as never);
+        assert.equal(state.threadId, null);
+        assert.equal(
+            calls.filter((c) => c.op === 'send' && (c.params as Record<string, unknown>).message_thread_id === undefined).length,
+            0,
+            'nothing may be sent without a message_thread_id',
+        );
+        assert.equal((state as { pending: unknown[] }).pending.length, 1);
     });
 });
