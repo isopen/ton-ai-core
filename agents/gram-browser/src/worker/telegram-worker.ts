@@ -656,6 +656,9 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
     if (!dcOpts) throw new Error('Unknown DC ' + dcId);
 
     const newConn = new BrowserObfuscatedConnection();
+    const willNeedAuthImport = authenticated && !dcStoredAuthKeys.has(dcId) && ses?.dcId !== dcId && !(homeSession && homeSession.dcId === dcId);
+    const preExportedAuth = willNeedAuthImport ? exportAuthWithRetry(dcId) : null;
+    if (preExportedAuth) preExportedAuth.catch(() => {});
     const hosts: { host: string; noObfuscation?: boolean }[] = [
         { host: dcOpts.host },
         ...(TELEGRAM_WS_FALLBACKS[dcId] || []),
@@ -824,31 +827,13 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
     if (needsAuthImport) {
         let exportedAuth: { id: bigint; bytes: Buffer } | null = null;
         let exportError: string | null = null;
-        for (let attempt = 0; attempt < 3 && !exportedAuth; attempt++) {
-            if (attempt > 0) {
-                wlog('[worker] retry auth export for DC ' + dcId + ' attempt ' + (attempt + 1));
-                await new Promise(r => setTimeout(r, 400 * attempt));
-            }
-            try {
-                if (homeSession && ses!.dcId !== homeSession.dcId) {
-                    exportedAuth = await exportAuthFromDc(homeSession.dcId, dcId);
-                } else {
-                    const expResult = await callRpc('auth.exportAuthorization', { dc_id: dcId }, { noMigrate: true });
-                    if (expResult && expResult.id != null && expResult.bytes != null) {
-                        exportedAuth = {
-                            id: typeof expResult.id === 'bigint' ? expResult.id : BigInt(expResult.id),
-                            bytes: typeof expResult.bytes === 'string' ? Buffer.from(expResult.bytes, 'hex') : Buffer.from(expResult.bytes),
-                        };
-                    }
-                }
-            } catch (e: any) {
-                exportError = e?.message || String(e);
-                wlog('[worker] export auth error for DC ' + dcId + ': ' + exportError);
-                const fs = exportError ? findFloodWaitSeconds(exportError) : null;
-                if (fs != null) {
-                    await new Promise(r => setTimeout(r, Math.min(5000, (fs + 1) * 1000)));
-                }
-            }
+        try {
+            exportedAuth = preExportedAuth ? await preExportedAuth : await exportAuthWithRetry(dcId);
+        } catch (e: any) {
+            exportError = e?.message || String(e);
+            dcStoredAuthKeys.delete(dcId);
+            try { newConn.close(); } catch {}
+            throw new Error('auth export failed for DC ' + dcId + ': ' + exportError);
         }
         if (exportedAuth) {
             if (entry.counter.value < msgIdCounter) entry.counter.value = msgIdCounter;
@@ -866,11 +851,6 @@ async function createDcConnectionInner(dcId: number, type: 'video' | 'download' 
                 try { newConn.close(); } catch {}
                 throw new Error('auth import failed for DC ' + dcId + ': ' + e.message);
             }
-        } else {
-            wlog('[worker] auth export FAILED for DC ' + dcId + ' (need import): ' + exportError);
-            dcStoredAuthKeys.delete(dcId);
-            try { newConn.close(); } catch {}
-            throw new Error('auth export failed for DC ' + dcId + ': ' + exportError);
         }
     }
 
@@ -2160,6 +2140,37 @@ function updateMtprotoSalt(newSalt: bigint): void {
     serverSalt = newSalt;
 }
 
+async function exportAuthWithRetry(targetDcId: number): Promise<{ id: bigint; bytes: Buffer }> {
+    let lastError: string | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) {
+            wlog('[worker] retry auth export for DC ' + targetDcId + ' attempt ' + (attempt + 1));
+            await new Promise(r => setTimeout(r, 400 * attempt));
+        }
+        try {
+            if (homeSession && ses!.dcId !== homeSession.dcId) {
+                return await exportAuthFromDc(homeSession.dcId, targetDcId);
+            }
+            const expResult = await callRpc('auth.exportAuthorization', { dc_id: targetDcId }, { noMigrate: true });
+            if (expResult && expResult.id != null && expResult.bytes != null) {
+                return {
+                    id: typeof expResult.id === 'bigint' ? expResult.id : BigInt(expResult.id),
+                    bytes: typeof expResult.bytes === 'string' ? Buffer.from(expResult.bytes, 'hex') : Buffer.from(expResult.bytes),
+                };
+            }
+            lastError = 'empty export result';
+        } catch (e: any) {
+            lastError = e?.message || String(e);
+            wlog('[worker] export auth error for DC ' + targetDcId + ': ' + lastError);
+            const fs = lastError ? findFloodWaitSeconds(lastError) : null;
+            if (fs != null) {
+                await new Promise(r => setTimeout(r, Math.min(5000, (fs + 1) * 1000)));
+            }
+        }
+    }
+    throw new Error(lastError || 'auth export failed');
+}
+
 async function exportAuthFromDc(fromDcId: number, targetDcId: number): Promise<{ id: bigint; bytes: Buffer }> {
     if (!homeSession) throw new Error('No home session');
     if (!conn) throw new Error('Not connected');
@@ -3063,6 +3074,13 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
             };
         } else if (authenticated && !homeSession) {
             homeSession = { ...ses };
+        }
+    }
+
+    if (authenticated && ses) {
+        for (let dc = 1; dc <= 5; dc++) {
+            if (ses.dcId === dc) continue;
+            setTimeout(() => warmUpDcConnection(dc, 'download'), dc * 150);
         }
     }
 

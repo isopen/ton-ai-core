@@ -3,7 +3,7 @@ import { TelegramWorkerClient } from '@/worker/worker-adapter';
 import { getApiCredentials } from './api-creds';
 import { TelegramService } from '@ton-ai/telegram/dist/telegram-service';
 import type { PeerInfo } from '@ton-ai/telegram/dist/types';
-import { serializePeer } from '@ton-ai/telegram/dist/types';
+import { serializePeer, TELEGRAM_WS_DC_OPTIONS } from '@ton-ai/telegram/dist/types';
 
 export class WorkerTelegramService extends TelegramService {
     workerClient: TelegramWorkerClient | null = null;
@@ -15,7 +15,10 @@ export class WorkerTelegramService extends TelegramService {
 
     async warmUp(dcId = 2): Promise<void> {
         try {
-          const hosts = ['https://venus.web.telegram.org', 'https://kws1.web.telegram.org', 'https://kws2.web.telegram.org'];
+          const hosts = [...new Set([
+            'https://venus.web.telegram.org',
+            ...TELEGRAM_WS_DC_OPTIONS.map(o => 'https://' + o.host + ':' + o.port),
+          ])];
           hosts.forEach(h => {
             try {
               const l = document.createElement('link');
