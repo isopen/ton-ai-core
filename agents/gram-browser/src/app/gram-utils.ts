@@ -83,9 +83,22 @@ export function setDialogsFromServer(s: GramState, raw: any) {
   const dialogs = raw.dialogs || raw;
   const merged = mergeOrphanedDialogs(s, dialogs);
 
+  const prevAvatars = new Map<string, { avatarUrl: string; photoId: string }>();
+  for (const d of s.dialogsRef.current) {
+    const key = `${d.peer.type}_${d.peer.id}`;
+    if (d.peer.avatarUrl) {
+      prevAvatars.set(key, { avatarUrl: d.peer.avatarUrl, photoId: String(d.peer.photo?.photo_id ?? '') });
+    }
+  }
+
   for (const d of merged) {
     if (d.peer?.photo && !d.peer.blurUrl) {
       d.peer.blurUrl = buildPeerBlurThumb(d.peer.photo) || undefined;
+    }
+    const key = `${d.peer.type}_${d.peer.id}`;
+    const prev = prevAvatars.get(key);
+    if (prev && prev.avatarUrl && String(d.peer.photo?.photo_id ?? '') === prev.photoId) {
+      d.peer.avatarUrl = prev.avatarUrl;
     }
   }
 
@@ -110,7 +123,7 @@ export function setDialogsFromServer(s: GramState, raw: any) {
     dbSet(DIALOG_CACHE_KEY, merged).catch((e: any) => log.error('[dialog-cache] SAVE error', e?.message));
   }
   for (const d of merged) {
-    if (d.peer?.photo?.photo_id) dispatchAvatarDownload(d.peer.type, d.peer.id, d.peer.photo);
+    if (d.peer?.photo?.photo_id && !d.peer.avatarUrl) dispatchAvatarDownload(d.peer.type, d.peer.id, d.peer.photo);
   }
 }
 
@@ -124,13 +137,37 @@ export async function loadCachedDialogs(s: GramState) {
       const merged = mergeOrphanedDialogs(s, cached);
       if (s.dialogsLoadedRef.current) { log.info('[cache] loadCachedDialogs skipped - race'); return; }
       for (const d of merged) {
-        if (d.peer?.avatarUrl) d.peer.avatarUrl = undefined;
-
         if (d.peer?.photo && !d.peer.blurUrl) {
           d.peer.blurUrl = buildPeerBlurThumb(d.peer.photo) || undefined;
         }
       }
-      log.info(`[cache] loadCachedDialogs: ${merged.length} dialogs, avatars served by worker`);
+      let hydrated = 0;
+      const byCacheKey = new Map<string, Dialog>();
+      for (const d of merged) {
+        const pid = d.peer?.photo?.photo_id;
+        if (pid) byCacheKey.set(`dlcache:v2:${pid}_thumb_m`, d);
+      }
+      if (byCacheKey.size > 0) {
+        try {
+          const entries = await dbGetMany<{ type?: string; bytes?: string }>([...byCacheKey.keys()]);
+          for (const [cacheKey, entry] of Object.entries(entries)) {
+            const d = byCacheKey.get(cacheKey);
+            if (!d || !entry?.bytes) continue;
+            d.peer.avatarUrl = 'data:image/jpeg;base64,' + entry.bytes;
+            hydrated++;
+            s.tgui.current?.dispatch({
+              type: 'UPDATE_DIALOG_AVATAR',
+              peerType: d.peer.type,
+              peerId: d.peer.id,
+              url: d.peer.avatarUrl,
+              cacheSource: 'persisted',
+            });
+          }
+        } catch (e: any) {
+          log.warn('[dialog-cache] avatar hydrate failed: ' + (e?.message || e));
+        }
+      }
+      log.info(`[cache] loadCachedDialogs: ${merged.length} dialogs, avatars hydrated=${hydrated}`);
       s.dialogsRef.current = merged;
       s.tgui.current?.setDialogs(merged);
     }

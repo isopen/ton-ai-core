@@ -3302,8 +3302,10 @@ function downloadCacheKeyFor(document?: any, photo?: any, range?: { offset: numb
 
 const DLCACHE_PREFIX = 'dlcache:v2:';
 const SESSION_PARTS_PREFIX = 'dlc:p:';
+const DLCACHE_TOUCH_THROTTLE_MS = 60 * 60 * 1000;
+const touchedAt = new Map<string, number>();
 interface DLCacheEntry { type: string; bytes: string; updatedAt?: number; partIndexes?: number[]; partSize?: number; immune?: boolean }
-let dlcLastGcAt = 0;
+let dlcLastGcAt = Date.now();
 
 async function persistDownloadCache(key: string, type: string, bytesBase64: string, mime?: string): Promise<void> {
     if (!key) return;
@@ -3326,8 +3328,12 @@ async function loadPersistedDownloadCache(key: string): Promise<{ type: string; 
         const val = await db.get<DLCacheEntry>(DLCACHE_PREFIX + key);
         if (val && val.type && val.bytes) {
             wlog('[dlc] loaded key=' + key + ' type=' + val.type + ' bytesLen=' + val.bytes.length);
-            if (val.updatedAt) {
-                await db.set(DLCACHE_PREFIX + key, { ...val, updatedAt: Date.now() });
+            const now = Date.now();
+            const lastTouch = touchedAt.get(key) ?? val.updatedAt ?? 0;
+            if (val.updatedAt && now - lastTouch > DLCACHE_TOUCH_THROTTLE_MS) {
+                touchedAt.set(key, now);
+                if (touchedAt.size > 4000) touchedAt.clear();
+                void db.set(DLCACHE_PREFIX + key, { ...val, updatedAt: now }).catch(() => {});
             }
             return val;
         }
@@ -3571,7 +3577,7 @@ const smallUploadQueue: Array<() => void> = [];
 const TDLIB_PRIORITY_MIN = 1;
 const TDLIB_PRIORITY_MAX = 32;
 
-const AVATAR_DL_PRIORITY = 24;
+const AVATAR_DL_PRIORITY = 32;
 function normalizePriority(p: number): number {
     if (!Number.isFinite(p)) return TDLIB_PRIORITY_MIN;
     return Math.min(TDLIB_PRIORITY_MAX, Math.max(TDLIB_PRIORITY_MIN, Math.round(p)));
@@ -4404,9 +4410,8 @@ export async function batchCheckPhotoCache(requests: Array<{ photo: any; sizeTyp
   const result: Record<string, string> = {};
   const withKey = requests.map(({ photo, sizeType }) => {
     const photoWithThumb = { ...photo, thumb_size: sizeType };
-    const location = buildDownloadLocation(undefined, photoWithThumb);
     const baseKey = photo?.id?.toString() || '';
-    const cacheKey = location ? baseKey + '_thumb_' + sizeType : '';
+    const cacheKey = baseKey ? baseKey + '_thumb_' + sizeType : '';
     return { cacheKey };
   }).filter(x => x.cacheKey);
   for (const { cacheKey } of withKey) {
