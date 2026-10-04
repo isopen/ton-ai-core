@@ -2684,3 +2684,182 @@ export interface ReplaceStickerInSetParams {
     old_sticker: string;
     sticker: any;
 }
+export interface ConvertGiftToStarsParams {
+    business_connection_id: string;
+    owned_gift_id: string;
+}
+export interface EditUserStarSubscriptionParams {
+    user_id: number;
+    telegram_payment_charge_id: string;
+    is_canceled: boolean;
+}
+export interface RefundStarPaymentParams {
+    user_id: number;
+    telegram_payment_charge_id: string;
+}
+export interface GetChatGiftsParams {
+    chat_id: number | string;
+    exclude_unsaved?: boolean;
+    exclude_saved?: boolean;
+    exclude_unlimited?: boolean;
+    exclude_limited_upgradable?: boolean;
+    exclude_limited_non_upgradable?: boolean;
+    exclude_from_blockchain?: boolean;
+    exclude_unique?: boolean;
+    sort_by_price?: boolean;
+    offset?: string;
+    limit?: number;
+}
+export interface GetUserGiftsParams {
+    user_id: number;
+    exclude_unlimited?: boolean;
+    exclude_limited_upgradable?: boolean;
+    exclude_limited_non_upgradable?: boolean;
+    exclude_from_blockchain?: boolean;
+    exclude_unique?: boolean;
+    sort_by_price?: boolean;
+    offset?: string;
+    limit?: number;
+}
+export interface GetBusinessAccountGiftsParams {
+    business_connection_id: string;
+    exclude_unsaved?: boolean;
+    exclude_saved?: boolean;
+    exclude_unlimited?: boolean;
+    exclude_limited_upgradable?: boolean;
+    exclude_limited_non_upgradable?: boolean;
+    exclude_unique?: boolean;
+    exclude_from_blockchain?: boolean;
+    sort_by_price?: boolean;
+    offset?: string;
+    limit?: number;
+}
+export interface GiftPremiumSubscriptionParams {
+    user_id: number;
+    month_count: number;
+    star_count: number;
+    text?: string;
+    text_parse_mode?: string;
+    text_entities?: MessageEntity[];
+}
+export interface TransferGiftParams {
+    business_connection_id: string;
+    owned_gift_id: string;
+    new_owner_chat_id: number;
+    star_count?: number;
+}
+export interface UpgradeGiftParams {
+    business_connection_id: string;
+    owned_gift_id: string;
+    keep_original_details?: boolean;
+    star_count?: number;
+}
+export interface DeleteBusinessMessagesParams {
+    business_connection_id: string;
+    message_ids: number[];
+}
+export interface ReadBusinessMessageParams {
+    business_connection_id: string;
+    chat_id: number;
+    message_id: number;
+}
+export interface GetBusinessAccountStarBalanceParams {
+    business_connection_id: string;
+}
+export interface SetBusinessAccountNameParams {
+    business_connection_id: string;
+    first_name: string;
+    last_name?: string;
+}
+export interface SetBusinessAccountUsernameParams {
+    business_connection_id: string;
+    username?: string;
+}
+export interface SetBusinessAccountBioParams {
+    business_connection_id: string;
+    bio?: string;
+}
+export interface SetBusinessAccountProfilePhotoParams {
+    business_connection_id: string;
+    photo: any;
+    is_public?: boolean;
+}
+export interface RemoveBusinessAccountProfilePhotoParams {
+    business_connection_id: string;
+    is_public?: boolean;
+}
+export interface SetBusinessAccountGiftSettingsParams {
+    business_connection_id: string;
+    show_gift_button: boolean;
+    accepted_gift_types: any;
+}
+export interface TransferBusinessAccountStarsParams {
+    business_connection_id: string;
+    star_count: number;
+}
+export interface PostStoryParams {
+    business_connection_id: string;
+    content: any;
+    active_period: number;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    areas?: any[];
+    post_to_chat_page?: boolean;
+    protect_content?: boolean;
+}
+export interface EditStoryParams {
+    business_connection_id: string;
+    story_id: number;
+    content: any;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    areas?: any[];
+}
+export interface DeleteStoryParams {
+    business_connection_id: string;
+    story_id: number;
+}
+export interface RepostStoryParams {
+    business_connection_id: string;
+    from_chat_id: number;
+    from_story_id: number;
+    active_period: number;
+    post_to_chat_page?: boolean;
+    protect_content?: boolean;
+}
+export interface VerifyUserParams {
+    user_id: number;
+    custom_description?: string;
+}
+export interface VerifyChatParams {
+    chat_id: number | string;
+    custom_description?: string;
+}
+export interface RemoveUserVerificationParams {
+    user_id: number;
+}
+export interface RemoveChatVerificationParams {
+    chat_id: number | string;
+}
+export interface SavePreparedInlineMessageParams {
+    user_id: number;
+    result: InlineQueryResult;
+    allow_user_chats?: boolean;
+    allow_bot_chats?: boolean;
+    allow_group_chats?: boolean;
+    allow_channel_chats?: boolean;
+}
+export interface SavePreparedKeyboardButtonParams {
+    user_id: number;
+    button: any;
+}
+export interface SetMyProfilePhotoParams {
+    photo: any;
+}
+export interface SetUserEmojiStatusParams {
+    user_id: number;
+    emoji_status_custom_emoji_id?: string;
+    emoji_status_expiration_date?: number;
+}
