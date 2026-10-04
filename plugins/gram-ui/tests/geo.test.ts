@@ -265,9 +265,9 @@ describe('Peer blur cache', () => {
         expect(a).toEqual({ url: '', blurUrl: '' });
     });
 
-    test('resolveAvatar keeps only fetchable urls', () => {
+    test('resolveAvatar keeps fetchable and data urls', () => {
         const thumb = 'data:image/jpeg;base64,/9j/4AA=';
-        expect(resolveAvatar({ avatarUrl: thumb, blurUrl: thumb })).toEqual({ url: '', blurUrl: thumb });
+        expect(resolveAvatar({ avatarUrl: thumb, blurUrl: thumb })).toEqual({ url: thumb, blurUrl: thumb });
         expect(resolveAvatar({ avatarUrl: 'foo/bar' })).toEqual({ url: '', blurUrl: '' });
         expect(resolveAvatar({ avatarUrl: 'blob:abc' })).toEqual({ url: 'blob:abc', blurUrl: '' });
     });

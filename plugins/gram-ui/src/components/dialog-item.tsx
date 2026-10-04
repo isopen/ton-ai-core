@@ -24,7 +24,7 @@ export function DialogItem(props: DialogItemProps) {
   const initial = getInitials(d.peer);
 
   const rawUrl = d.peer.avatarUrl || '';
-  const isFullFile = rawUrl.startsWith('blob:') || /^https?:/.test(rawUrl);
+  const isFullFile = rawUrl.startsWith('blob:') || rawUrl.startsWith('data:') || /^https?:/.test(rawUrl);
   const blurThumb = d.peer.blurUrl || buildPeerBlurThumb(d.peer.photo)
     || (/^data:image/.test(rawUrl) ? rawUrl : '');
   const fullUrl = isFullFile ? rawUrl : '';

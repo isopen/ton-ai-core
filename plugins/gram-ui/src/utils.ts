@@ -405,7 +405,7 @@ function buildPeerBlurThumbUncached(photo: any): string {
 
 export function resolveAvatar(peer: any): { url: string; blurUrl: string } {
   const rawUrl = peer?.avatarUrl || '';
-  const isFullFile = rawUrl.startsWith('blob:') || /^https?:/.test(rawUrl);
+  const isFullFile = rawUrl.startsWith('blob:') || rawUrl.startsWith('data:') || /^https?:/.test(rawUrl);
   const blurUrl = peer?.blurUrl || buildPeerBlurThumb(peer?.photo) || (/^data:image/.test(rawUrl) ? rawUrl : '');
   return { url: isFullFile ? rawUrl : '', blurUrl };
 }
