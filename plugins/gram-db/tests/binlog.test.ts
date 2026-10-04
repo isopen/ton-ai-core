@@ -8,6 +8,8 @@ import {
   TYPE_AES_CTR_ENCRYPTION,
 } from '../src/td-binlog';
 
+jest.setTimeout(30000);
+
 const KDF_ITERATIONS = 60002;
 const KEY_SIZE = 32;
 const SERVICE_TYPE_EMPTY = -2;

@@ -6,6 +6,7 @@ import { Buffer } from 'buffer';
 const log = getLogger('gram-db');
 
 const BINLOG_FILE = 'binlog';
+const DBKEY_FILE = 'binlog_key';
 const EVENT_HEADER_SIZE = 28;
 const EVENT_TAIL_SIZE = 4;
 const EVENT_MIN_SIZE = EVENT_HEADER_SIZE + EVENT_TAIL_SIZE;
@@ -21,6 +22,7 @@ const FLAG_REWRITE = 1;
 const FLAG_PARTIAL = 2;
 
 const KDF_ITERATIONS = 60002;
+const RAW_KDF_ITERATIONS = 2;
 
 function readU32(buf: Uint8Array, off: number): number {
   return (buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24)) >>> 0;
@@ -154,18 +156,78 @@ export class TdBinlog {
   private pendingEntries: Array<{ type: EventType; buf: Buffer }> = [];
   private wasCreated = false;
   private wrongPassword = false;
+  private lockRelease: (() => void) | null = null;
+  private dbKeyRaw: Buffer | null = null;
+  private legacyKeyMatched = false;
+
+  private async readOrGenerateDbKey(dir: FileSystemDirectoryHandle): Promise<Buffer> {
+    try {
+      const fh = await dir.getFileHandle(DBKEY_FILE);
+      const file = await fh.getFile();
+      const raw = await file.text();
+      const key = Buffer.from(raw.trim(), 'base64');
+      if (key.length === KEY_SIZE) return key;
+    } catch {}
+    const key = Buffer.from(crypton.getRandomBytes(KEY_SIZE));
+    try {
+      const fh = await dir.getFileHandle(DBKEY_FILE, { create: true });
+      const w = await fh.createWritable({ keepExistingData: false });
+      await w.write(key.toString('base64'));
+      await w.close();
+    } catch (e: any) {
+      log.warn('[td-binlog] key file save failed: ' + (e?.message || e));
+    }
+    return key;
+  }
+
+  private deriveBinlogKey(input: Buffer, salt: Uint8Array, iterations: number): Promise<Buffer> {
+    return crypton.pbkdf2Sha256(input, salt, iterations, KEY_SIZE);
+  }
+
+  private async acquireFileLock(): Promise<void> {
+    const locks = (typeof navigator !== 'undefined' ? (navigator as any).locks : undefined);
+    if (!locks?.request || this.lockRelease) return;
+    let grant!: (ok: boolean) => void;
+    const granted = new Promise<boolean>((r) => { grant = r; });
+    let release!: () => void;
+    const released = new Promise<void>((r) => { release = r; });
+    const holder = (async () => {
+      return await locks.request('gram-db-binlog-lock', { ifAvailable: true }, async (lock: any) => {
+        if (!lock) {
+          grant(false);
+          return;
+        }
+        grant(true);
+        await released;
+      });
+    })();
+    holder.catch(() => {});
+    const ok = await granted;
+    if (!ok) {
+      throw new Error('gram-db binlog is locked by another instance');
+    }
+    this.lockRelease = release;
+    log.info('[td-binlog] file lock acquired');
+  }
 
   async init(sessionId: string, oldSessionId?: string): Promise<BinlogInfo> {
+    await this.acquireFileLock();
     const dir = await navigator.storage.getDirectory();
     this.fileHandle = await dir.getFileHandle(BINLOG_FILE, { create: true });
 
     this.sessionBytes = Buffer.from(sessionId, 'utf-8');
     this.oldSessionBytes = oldSessionId ? Buffer.from(oldSessionId, 'utf-8') : null;
     this.wrongPassword = false;
+    this.legacyKeyMatched = false;
+    this.dbKeyRaw = await this.readOrGenerateDbKey(dir);
     const file = await this.fileHandle!.getFile();
     this.wasCreated = file.size === 0;
     log.info('[td-binlog] init sessionId=' + sessionId + ' fileSize=' + file.size + ' exists=' + (file.size > 0));
     await this.replay();
+    if (this.legacyKeyMatched) {
+      log.info('[td-binlog] legacy sessionId key matched — reindexing to raw db key');
+      await this.doReindex();
+    }
     log.info('[td-binlog] init done entries=' + this.entries.length + ' encKey=' + !!this.encKey + ' wrongPassword=' + this.wrongPassword);
     return { wasCreated: this.wasCreated, wrongPassword: this.wrongPassword, isEncrypted: !!this.encKey };
   }
@@ -201,21 +263,25 @@ export class TdBinlog {
           if (!parsed) { log.info('[td-binlog] replay: bad encryption event at offset=' + offset + ' truncating to ' + lastGoodOffset); await this.truncateFileOnly(lastGoodOffset); return; }
 
           let encKey: Buffer | null = null;
-          const tryKey = async (sessionBytes: Buffer): Promise<Buffer | null> => {
-            const k = Buffer.from(await crypton.pbkdf2Sha256(sessionBytes, parsed.salt, KDF_ITERATIONS, KEY_SIZE));
+          const tryKey = async (input: Buffer, iterations: number): Promise<Buffer | null> => {
+            const k = await this.deriveBinlogKey(input, parsed.salt, iterations);
             const h = await crypton.hmacSha256(k, new TextEncoder().encode(KEY_HASH_LABEL));
             if (Buffer.from(h).equals(Buffer.from(parsed.keyHash))) return k;
             return null;
           };
-          encKey = await tryKey(this.sessionBytes!);
+          encKey = this.dbKeyRaw ? await tryKey(this.dbKeyRaw, RAW_KDF_ITERATIONS) : null;
+          if (!encKey) encKey = await tryKey(this.sessionBytes!, KDF_ITERATIONS);
           if (!encKey && this.oldSessionBytes) {
-            encKey = await tryKey(this.oldSessionBytes);
+            encKey = await tryKey(this.oldSessionBytes, KDF_ITERATIONS);
             if (encKey) log.info('[td-binlog] replay: encryption key matched old_session');
           }
           if (!encKey) {
             this.wrongPassword = true;
             log.info('[td-binlog] replay: keyHash mismatch wrongPassword=true');
             return;
+          }
+          if (!this.legacyKeyMatched && this.dbKeyRaw && encKey.equals(await this.deriveBinlogKey(this.sessionBytes!, parsed.salt, KDF_ITERATIONS))) {
+            this.legacyKeyMatched = true;
           }
           this.encKey = encKey;
           this.encIv = parsed.iv;
@@ -285,9 +351,7 @@ export class TdBinlog {
 
     const salt = crypton.getRandomBytes(SALT_SIZE);
     const iv = crypton.getRandomBytes(IV_SIZE);
-    const encKey = Buffer.from(await crypton.pbkdf2Sha256(
-      this.sessionBytes!, salt, KDF_ITERATIONS, KEY_SIZE,
-    ));
+    const encKey = await this.deriveBinlogKey(this.dbKeyRaw || this.sessionBytes!, salt, RAW_KDF_ITERATIONS);
     const keyHash = Buffer.from(await crypton.hmacSha256(
       encKey, new TextEncoder().encode(KEY_HASH_LABEL),
     ));
@@ -529,9 +593,7 @@ export class TdBinlog {
 
     const salt = crypton.getRandomBytes(SALT_SIZE);
     const iv = crypton.getRandomBytes(IV_SIZE);
-    const encKey = Buffer.from(await crypton.pbkdf2Sha256(
-      this.sessionBytes!, salt, KDF_ITERATIONS, KEY_SIZE,
-    ));
+    const encKey = await this.deriveBinlogKey(this.dbKeyRaw || this.sessionBytes!, salt, RAW_KDF_ITERATIONS);
     const keyHash = Buffer.from(await crypton.hmacSha256(
       encKey, new TextEncoder().encode(KEY_HASH_LABEL),
     ));
@@ -622,6 +684,17 @@ export class TdBinlog {
 
   async clear(): Promise<void> {
     return this.truncate(0);
+  }
+
+  async keyFileMatches(dir: FileSystemDirectoryHandle, key: Buffer): Promise<boolean> {
+    try {
+      const fh = await dir.getFileHandle(DBKEY_FILE);
+      const file = await fh.getFile();
+      const stored = Buffer.from(await file.text(), 'base64');
+      return stored.length === KEY_SIZE && stored.equals(key);
+    } catch {
+      return false;
+    }
   }
 }
 

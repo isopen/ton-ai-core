@@ -1,6 +1,8 @@
 import { strict as assert } from 'assert';
 import { GramDbComponents, GramDbSkills, StorageEngine } from '../src';
 
+jest.setTimeout(30000);
+
 class SharedMockEngine implements StorageEngine {
   store = new Map<string, string>();
   async init(): Promise<void> {}

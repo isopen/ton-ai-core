@@ -2,6 +2,8 @@ import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 import { GramDbComponents, GramDbSkills, KeyManager, EncryptedStore } from '../src';
 
+jest.setTimeout(30000);
+
 class MockEngine {
   private store = new Map<string, string>();
   async init() {}

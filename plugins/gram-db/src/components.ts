@@ -56,14 +56,12 @@ class OpfsEngine implements StorageEngine {
   }
 
   async getItem(key: string): Promise<string | null> {
-    return this.serialized(async () => {
-      try {
-        const fh = await this.root.getFileHandle(key);
-        const file = await fh.getFile();
-        if (file.size === 0) return null;
-        return await file.text();
-      } catch { return null; }
-    });
+    try {
+      const fh = await this.root.getFileHandle(key);
+      const file = await fh.getFile();
+      if (file.size === 0) return null;
+      return await file.text();
+    } catch { return null; }
   }
 
   async setItem(key: string, value: string): Promise<void> {
@@ -82,13 +80,11 @@ class OpfsEngine implements StorageEngine {
   }
 
   async getAllKeys(): Promise<string[]> {
-    return this.serialized(async () => {
-      const keys: string[] = [];
-      for await (const [name] of this.root.entries()) {
-        keys.push(name);
-      }
-      return keys;
-    });
+    const keys: string[] = [];
+    for await (const [name] of this.root.entries()) {
+      keys.push(name);
+    }
+    return keys;
   }  async clear(): Promise<void> {
     return this.serialized(async () => {
       const names: string[] = [];

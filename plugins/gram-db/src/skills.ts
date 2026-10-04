@@ -209,10 +209,8 @@ export class GramDbSkills {
   }
 
   async get<T = any>(key: string): Promise<T | undefined> {
-    return this._serial(async () => {
-      await this.ensureEngine();
-      return this._getInternal<T>(key);
-    });
+    await this.ensureEngine();
+    return this._getInternal<T>(key);
   }
 
   private async _setInternal(key: string, value: any): Promise<void> {
@@ -270,13 +268,11 @@ export class GramDbSkills {
   }
 
   async getMany<T = any>(keys: string[]): Promise<Record<string, T | undefined>> {
-    return this._serial(async () => {
-      await this.ensureEngine();
-      const values = await Promise.all(keys.map(k => this._getInternal<T>(k)));
-      const result: Record<string, T | undefined> = {};
-      keys.forEach((key, i) => { result[key] = values[i]; });
-      return result;
-    });
+    await this.ensureEngine();
+    const values = await Promise.all(keys.map(k => this._getInternal<T>(k)));
+    const result: Record<string, T | undefined> = {};
+    keys.forEach((key, i) => { result[key] = values[i]; });
+    return result;
   }
 
   async keys(prefix: string): Promise<string[]> {
