@@ -169,21 +169,21 @@ async function main(): Promise<void> {
         console.log(`Radar chat lock acquired: ${(chatLock as RadarLock).path}`);
         await agent.start();
 
-        process.on('SIGINT', () => {
+        const shutdown = () => {
             console.log('\nShutting down...');
-            void agent.stop().then(() => {
-                releaseLocks();
-                process.exit(0);
-            });
-        });
+            void agent.stop()
+                .catch((error) => {
+                    console.error('Agent shutdown failed:', error);
+                    process.exitCode = 1;
+                })
+                .then(() => {
+                    releaseLocks();
+                    process.exit(process.exitCode ?? 0);
+                });
+        };
 
-        process.on('SIGTERM', () => {
-            console.log('\nShutting down...');
-            void agent.stop().then(() => {
-                releaseLocks();
-                process.exit(0);
-            });
-        });
+        process.on('SIGINT', shutdown);
+        process.on('SIGTERM', shutdown);
     } catch (error) {
         console.error('Failed to start agent:', error);
         process.exit(1);
