@@ -51,9 +51,14 @@ async function main() {
 
         const cleanup = async () => {
             console.log('\nShutting down gracefully...');
-            await agent.stop();
-            console.log('Shutdown complete');
-            process.exit(0);
+            try {
+                await agent.stop();
+                console.log('Shutdown complete');
+                process.exit(0);
+            } catch (error) {
+                console.error('Agent shutdown failed:', error);
+                process.exit(1);
+            }
         };
 
         process.on('SIGINT', cleanup);
