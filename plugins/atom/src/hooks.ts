@@ -97,6 +97,10 @@ export function snapshotEffectQueues(): [number, number, number] {
   return [pendingEffects.length, pendingLayoutEffects.length, hookJournal.length];
 }
 
+export function commitHookJournal(): void {
+  hookJournal.length = 0;
+}
+
 export function rollbackEffectQueues(snap: [number, number, number]): void {
   if (pendingEffects.length > snap[0]) {
     for (let i = pendingEffects.length - 1; i >= snap[0]; i--) {
@@ -223,6 +227,7 @@ export function useDomEvent(
   targetRef.current = target;
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  const resolved = typeof target === 'function' ? target() : target;
   useEffect(() => {
     const t = typeof targetRef.current === 'function' ? targetRef.current() : targetRef.current;
     const opts = optionsRef.current;
@@ -230,7 +235,7 @@ export function useDomEvent(
     const dispatch = (e: any) => handlerRef.current?.(e);
     t.addEventListener(type, dispatch, opts);
     return () => t.removeEventListener(type, dispatch, opts);
-  }, [type, target, options?.capture, options?.passive, options?.once, options?.signal, ...deps]);
+  }, [type, resolved, options?.capture, options?.passive, options?.once, options?.signal, ...deps]);
 }
 
 export function useReducer<S, A>(
@@ -360,7 +365,7 @@ export function useSyncExternalStore<T>(
     };
     check();
     return subscribe(check);
-  }, [subscribe, getSnapshot]);
+  }, [subscribe]);
   return ref.current.snapshot;
 }
 

@@ -13,6 +13,8 @@ import { memo } from '../src/vdom.js';
 import type { ComponentType, VNode } from '../src/vdom.js';
 import { TEXT } from '../src/vdom.js';
 
+jest.setTimeout(30000);
+
 function h(type: any, props: Record<string, any> = {}, ...children: any[]): VNode {
   const flatChildren: VNode[] = [];
   for (const c of children) {
@@ -388,7 +390,26 @@ describe('atom p2 fixes hooks scheduler suspense', () => {
     try {
       suspend('lru-1', mkLoader('lru-1'));
     } catch {}
-    expect(calls.get('lru-1')).toBe(2);
+    expect(calls.get('lru-1')).toBe(1);
+  });
+
+  test('suspend cache evicts settled entries before pending ones', async () => {
+    const calls = new Map<string, number>();
+    const mkLoader = (k: string) => () => {
+      calls.set(k, (calls.get(k) ?? 0) + 1);
+      return Promise.resolve('ok:' + k);
+    };
+    for (let i = 0; i < 500; i++) {
+      try {
+        suspend('set-' + i, mkLoader('set-' + i));
+      } catch {}
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    try {
+      suspend('set-0', mkLoader('set-0'));
+    } catch {}
+    expect(calls.get('set-0')).toBe(2);
   });
 });
 

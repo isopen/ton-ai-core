@@ -400,7 +400,11 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     const s = st.current;
     const len = data.length;
     if (s.prefix && s.prefixData === data && s.prefixLen === len && s.prefixVersion === s.heightsVersion && s.prefixEst === estH && s.prefixEstimator === estimateItem) return s.prefix;
-    const prefix = new Float64Array(len + 1);
+    let prefix = s.prefix;
+    if (!prefix || prefix.length !== len + 1) {
+      prefix = new Float64Array(len + 1);
+    }
+    prefix[0] = 0;
     for (let i = 0; i < len; i++) prefix[i + 1] = prefix[i] + getHeight(i);
     s.prefix = prefix;
     s.prefixData = data;

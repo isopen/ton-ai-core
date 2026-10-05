@@ -1,6 +1,6 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { ComponentInstance, setMountRoot, PORTAL, SLOT, type VNode, type ComponentType } from './vdom.js';
-import { __setReroot, flushAllEffects, flushLayoutEffects, snapshotEffectQueues, rollbackEffectQueues, purgeDeadEffects } from './hooks.js';
+import { __setReroot, flushAllEffects, flushLayoutEffects, snapshotEffectQueues, rollbackEffectQueues, purgeDeadEffects, commitHookJournal } from './hooks.js';
 import { snapshotContextQueue, rollbackContextQueue, flushPendingContexts, resetRenderCursor } from './context.js';
 import { createDOM, patch, flushPendingRefs, removePortalNodes, dropPendingRefsFor } from './reconciler.js';
 import { inTransition, drainTransitionSettled, setTransitionFlusher, setTransitionDiscarder, getTransitionGen } from './scheduler.js';
@@ -13,6 +13,8 @@ interface RootData {
   container: HTMLElement;
   rootDom: Node;
   retried?: boolean;
+  needsRemount?: boolean;
+  patchFailures?: number;
   tgen?: number;
 }
 
@@ -128,7 +130,13 @@ function flushRenderInternal(rd: RootData) {
   }
 
   try {
-    if (rootDom && oldVNode) {
+    if (rd.needsRemount) {
+      setMountRoot(rd);
+      rebuildRoot(rd, newVNode);
+      rd.needsRemount = false;
+      rd.patchFailures = 0;
+      flushPendingRefs();
+    } else if (rootDom && oldVNode) {
       setMountRoot(rd);
       rd.rootDom = patch(rootDom, oldVNode, newVNode);
       flushPendingRefs();
@@ -137,6 +145,8 @@ function flushRenderInternal(rd: RootData) {
     log.error('[atom] patch error in ' + instance.displayName + ' — keeping previous tree:', e);
     rollbackEffectQueues(fxSnap);
     rollbackContextQueue(ctxSnap);
+    rd.patchFailures = (rd.patchFailures ?? 0) + 1;
+    rd.needsRemount = rd.patchFailures > 1;
     if (!rd.retried) {
       rd.retried = true;
       instance._dirty = true;
@@ -153,7 +163,9 @@ function flushRenderInternal(rd: RootData) {
   instance._dirty = false;
   instance.vnode = newVNode;
   rd.oldVNode = newVNode;
+  rd.patchFailures = 0;
 
+  commitHookJournal();
   flushPendingContexts();
   flushLayoutEffects();
   flushAllEffects();
@@ -217,6 +229,7 @@ export function render(component: ComponentType, container: HTMLElement): Node {
     }
   });
 
+  commitHookJournal();
   flushPendingContexts();
   flushLayoutEffects();
   flushAllEffects();
@@ -254,6 +267,19 @@ function unmountRoot(container: HTMLElement): void {
   if (rd.rootDom && rd.rootDom.parentNode) {
     rd.rootDom.parentNode.removeChild(rd.rootDom);
   }
+}
+
+function rebuildRoot(rd: RootData, newVNode: VNode): void {
+  runUnmountTree(rd.oldVNode);
+  purgeDeadEffects();
+  const fresh = createDOM(newVNode);
+  const prev = rd.rootDom;
+  if (prev && prev.parentNode) {
+    prev.parentNode.replaceChild(fresh, prev);
+  } else {
+    rd.container.appendChild(fresh);
+  }
+  rd.rootDom = fresh;
 }
 
 function runUnmountTree(vnode: VNode | null): void {

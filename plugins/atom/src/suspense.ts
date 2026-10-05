@@ -92,11 +92,18 @@ function suspendTouch(key: string, entry: SuspendEntry): void {
 }
 
 function suspendSet(key: string, entry: SuspendEntry): void {
-  suspendCache.set(key, entry);
-  if (suspendCache.size > SUSPEND_CACHE_LIMIT) {
-    const oldest = suspendCache.keys().next();
-    if (!oldest.done && oldest.value !== key) suspendCache.delete(oldest.value);
-  }
+    suspendCache.set(key, entry);
+    if (suspendCache.size > SUSPEND_CACHE_LIMIT) {
+        let oldestKey: string | null = null;
+        for (const k of suspendCache.keys()) {
+            if (k === key) continue;
+            const e = suspendCache.get(k);
+            if (e && e.status === 'pending') continue;
+            oldestKey = k;
+            break;
+        }
+        if (oldestKey && oldestKey !== key) suspendCache.delete(oldestKey);
+    }
 }
 
 function rerenderOwners(key: string): void {
