@@ -1,7 +1,7 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { t, S } from '@ton-ai/gram-lang';
 import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
-import { AnimatedEmoji } from './emoji-text.js';
+import { AnimatedEmoji, EmojiAutoplayContext } from './emoji-text.js';
 import { getLogger } from '@ton-ai/gram-debug';
 import { matchEmojiRuns, getEmojiDocId, normalizeEmoji } from './emoji-store.js';
 import { hexToDataUrl, strippedToDataUrl, buttonStyleClass, isInactiveButtonData, isButtonInactive, isDisabledButtonType, decodeButtonAction } from '../utils.js';
@@ -456,6 +456,7 @@ function Block({ block, messageId, onButton, documentUrls, inactiveButtons, rich
         else if (act.kind === 'url' && act.url) window.open(act.url, '_blank', 'noopener');
       };
       return (
+        <EmojiAutoplayContext.Provider value={false}>
         <table class={'rich-table' + (block.compact ? ' rich-table_compact' : '')}>
           <tbody>
             {rows.map((row: any, ri: number) => (
@@ -475,6 +476,7 @@ function Block({ block, messageId, onButton, documentUrls, inactiveButtons, rich
             ))}
           </tbody>
         </table>
+        </EmojiAutoplayContext.Provider>
       );
     }
     case 'pageBlockButtonRow':

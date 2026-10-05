@@ -1,5 +1,6 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState, useDomEvent } from '@ton-ai/atom/hooks';
+import { createContext, useContext } from '@ton-ai/atom/context';
 import { EmojiCanvas, StaticEmojiText, fetchEmojiData, getCachedEmojiData, subscribeEmojiData, useMessageFontSize } from './emoji-canvas.js';
 import type { EmojiSegment } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
@@ -18,6 +19,10 @@ const SINGLE_EMOJI_SIZE = INLINE_EMOJI_SIZE * 8;
 export { releaseEmojiCache } from './emoji-canvas.js';
 
 function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, playKey, showLastFrame, fontScaled = false }: { docId?: string; url: string; alt?: string; size: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; fontScaled?: boolean }) {
+  const ctxAuto = useContext(EmojiAutoplayContext);
+  const staticMode = ctxAuto === false;
+  const effAutoplay = autoplay && !staticMode;
+  const effShowLast = showLastFrame || staticMode;
   const [data, setData] = useState<any>(() => (url ? getCachedEmojiData(url) ?? null : null));
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoIoRef = useRef<IntersectionObserver | null>(null);
@@ -94,7 +99,7 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
   const esize = fontScaled ? Math.round(size * liveFont / MESSAGE_FONT_DEFAULT) : size;
 
   if (data?.kind === 'tgs') {
-    var tgsNode = <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={esize} height={esize} loop={loop} autoplay={autoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} playKey={playKey} showLastFrame={showLastFrame} />;
+    var tgsNode = <TgsPlayer className="tgui-emoji-inline" animationData={data.value} width={esize} height={esize} loop={loop} autoplay={effAutoplay} cacheKey={docId ? 'emojipack-' + docId : undefined} playKey={playKey} showLastFrame={effShowLast} />;
     return fontScaled ? scaleWrap(size, tgsNode) : tgsNode;
   }
   if (data?.kind === 'video') {
@@ -241,6 +246,8 @@ function isEmojiOnlyText(text: string, entities?: any[]): boolean {
   }
   return !/\S/.test(text.slice(pos));
 }
+
+export const EmojiAutoplayContext = createContext<boolean | null>(null);
 
 export function EmojiText({ text, entities, documentUrls, documentSources, inlineSize = INLINE_EMOJI_SIZE, singleLine = false, ctx = 'chat', fontScaled = true }: { text: string; entities?: any[]; documentUrls: Record<number, string>; documentSources?: Record<number | string, string>; inlineSize?: number; singleLine?: boolean; ctx?: 'dialog' | 'chat'; fontScaled?: boolean }) {
   const emojiEntities = (entities || [])
