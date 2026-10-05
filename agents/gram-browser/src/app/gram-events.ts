@@ -828,6 +828,8 @@ export function setupEventListeners(s: GramState): void {
     }
     void processLocalEmojiClick(s, String(detail.messageId), detail.x, detail.y, detail.slotIndex, detail.docId, detail.glyph);
   };
+  const pendingBotCb = new Map<string, true>();
+
   const onBotCallback = (e: Event) => {
     const detail = ((e as CustomEvent).detail || {}) as { messageId?: number | string; data?: string; text?: string; rel?: { x: number; y: number; w: number; h: number } | null };
     const peer = s.selectedPeerRef.current;
@@ -851,8 +853,16 @@ export function setupEventListeners(s: GramState): void {
       cbLog.warn('[bot-cb] no service msg=' + detail.messageId);
       return;
     }
+    const flightKey = String(detail.messageId) + '|' + String(detail.data);
+    if (pendingBotCb.has(flightKey)) {
+      cbLog.warn('[bot-cb] duplicate in-flight skipped msg=' + detail.messageId);
+      return;
+    }
+    pendingBotCb.set(flightKey, true);
+    const clearFlight = () => { pendingBotCb.delete(flightKey); };
     svc.getBotCallbackAnswer(peer, Number(detail.messageId) || 0, detail.data)
       .then((res: any) => {
+        clearFlight();
         const payload = res?.result && typeof res.result === 'object' ? res.result : res;
         cbLog.info('[bot-cb] ok msg=' + detail.messageId + ' res=' + JSON.stringify(payload).slice(0, 1200));
         const answerMessage = typeof payload?.message === 'string' ? payload.message : '';
@@ -897,6 +907,7 @@ export function setupEventListeners(s: GramState): void {
         }
       })
       .catch((err: any) => {
+        clearFlight();
         const errText = String(err?.message || err);
         cbLog.error('[bot-cb] failed msg=' + detail.messageId + ' err=' + errText);
         try {
