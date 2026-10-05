@@ -52,8 +52,13 @@ async function main() {
 
     const shutdown = async () => {
         console.log('\nShutting down...');
-        await agent.stop();
-        process.exit(0);
+        try {
+            await agent.stop();
+            process.exit(0);
+        } catch (error) {
+            console.error('Agent shutdown failed:', error);
+            process.exit(1);
+        }
     };
 
     process.on('SIGINT', shutdown);
