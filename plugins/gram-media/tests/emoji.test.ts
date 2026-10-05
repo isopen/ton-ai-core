@@ -622,7 +622,7 @@ describe('GramMediaRouter emoji pipeline', () => {
             detail: { items: docs.map((d) => ({ docId: d.id, priority: 1 })) },
         }));
         await flushTicks();
-        await flushTicks();
+        await new Promise((r) => setTimeout(r, 700));
         await flushTicks();
 
         expect(rpcIds).toHaveLength(N);

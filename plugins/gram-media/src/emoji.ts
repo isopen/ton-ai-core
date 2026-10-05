@@ -348,6 +348,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
         const fresh = ids.filter((id: any) => this.canResolveEmojiId(String(id)));
         if (fresh.length === 0) return;
+        const batchT0 = Date.now();
         try {
             const { docs, unresolved } = await this.fetchCustomEmojiDocsChunked(fresh);
             let changed = false;
@@ -367,6 +368,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             if (changed) this.indexEmojiDocs();
             if (toDownload.length > 0) void this.downloadEmojiList(toDownload);
             for (const id of unresolved) this.markEmojiUnresolved(id);
+            log.info('[gram-media] custom emoji batch done ids=' + fresh.length + ' docs=' + docs.length + ' downloads=' + toDownload.length + ' elapsed=' + (Date.now() - batchT0) + 'ms');
         } catch (err: any) {
             log.error('[gram-media] tg-fetch-custom-emoji error:', err?.message || err);
         }
@@ -1379,12 +1381,18 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         if (stillNeeded.length === 0) return;
         if (this.debug) log.info('[gram-media] emoji batch download start items=' + stillNeeded.length);
 
-        for (const r of stillNeeded) {
-            if (!this.canRequestEmojiDoc(r.id)) continue;
-            this.markEmojiDocInFlight(r.id);
-            this.router.emitWindow('tg-download-document', {
-                document: r.doc, messageId: 'emojipack-' + r.id, priority: r.priority, ctx: r.ctx,
-            });
+        const chunk = 12;
+        for (let i = 0; i < stillNeeded.length; i += chunk) {
+            for (const r of stillNeeded.slice(i, i + chunk)) {
+                if (!this.canRequestEmojiDoc(r.id)) continue;
+                this.markEmojiDocInFlight(r.id);
+                this.router.emitWindow('tg-download-document', {
+                    document: r.doc, messageId: 'emojipack-' + r.id, priority: r.priority, ctx: r.ctx,
+                });
+            }
+            if (i + chunk < stillNeeded.length) {
+                await new Promise(res => setTimeout(res, 150));
+            }
         }
     }
 
