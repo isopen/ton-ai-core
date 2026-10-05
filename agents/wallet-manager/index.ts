@@ -46,8 +46,13 @@ async function main() {
   });
 
   process.on('SIGINT', async () => {
-    await agent.stop();
-    process.exit(0);
+    try {
+      await agent.stop();
+      process.exit(0);
+    } catch (error) {
+      console.error('Agent shutdown failed:', error);
+      process.exit(1);
+    }
   });
 
   await agent.start();
