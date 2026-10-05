@@ -1,0 +1,26 @@
+{
+  "name": "ton-ai-durev-radar",
+  "version": "0.1.0",
+  "description": "Rebuild scripts for the durev engine stack",
+  "scripts": {
+    "clean": "npm run clean:rust && npm run clean:ts",
+    "clean:rust": "rm -rf plugins/durevcode/rust/target 2>/dev/null || true",
+    "clean:ts": "rm -rf plugins/durevcode/dist agents/durev-radar/dist 2>/dev/null || true",
+    "build:rust": "cargo build --release --manifest-path plugins/durevcode/rust/Cargo.toml",
+    "build:durevcode": "npm run build -w @ton-ai/durevcode",
+    "build:wasm": "wasm-pack build plugins/durevcode/rust --target web --out-dir ../wasm --out-name durev_wasm -- --no-default-features --features wasm",
+    "build:agent": "npx tsc -p agents/durev-radar --noEmit",
+    "test:rust": "cargo test --manifest-path plugins/durevcode/rust/Cargo.toml",
+    "test:ts": "npx jest plugins/durevcode/tests/durev-radar.test.ts agents/durev-radar/tests/durev-radar.test.ts",
+    "rebuild": "npm run clean && npm run rebuild:quick",
+    "rebuild:all": "npm run clean && npm run build:rust && npm run build:durevcode && npm run build:agent && npm run test:rust && npm run test:ts",
+    "install:root": "npm install --no-audit --no-fund --prefer-offline",
+    "rebuild:quick": "npm run build:rust && npm run build:durevcode && npm run build:agent"
+  },
+  "keywords": [
+    "durev",
+    "telegram"
+  ],
+  "author": "TON AI Core Team",
+  "license": "Boost Software License 1.0"
+}
