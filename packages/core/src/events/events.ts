@@ -10,7 +10,7 @@ export const PLUGIN_EVENTS = {
   UNREGISTERED: 'plugin:unregistered',
   ACTIVATED: 'plugin:activated',
   DEACTIVATED: 'plugin:deactivated'
-}
+} as const;
 
 export const MCP_EVENTS = {
   READY: 'mcp:ready',
