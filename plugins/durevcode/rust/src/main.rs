@@ -603,6 +603,66 @@ fn main() {
         }
         return;
     }
+    if args.len() > 1 && args[1] == "check-rules" {
+        if args.len() < 5 {
+            eprintln!("usage: durev check-rules <root> <tool> <input>");
+            std::process::exit(2);
+        }
+        let home = std::env::var("HOME").unwrap_or_default();
+        let chain = durev_core::rules::full_chain(&args[2], &[]);
+        let v = durev_core::rules::evaluate(&chain, &args[3], &args[4], &home);
+        println!("{}", v.as_str());
+        return;
+    }
+    if args.len() > 1 && args[1] == "always-add" {
+        if args.len() < 5 {
+            eprintln!("usage: durev always-add <store.db> <tool> <pattern>");
+            std::process::exit(2);
+        }
+        let db = open_db(&args[2]);
+        match db.always_add(&args[3], &args[4]) {
+            Ok(()) => println!("ok"),
+            Err(_) => {
+                eprintln!("db failed");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "always-list" {
+        if args.len() < 3 {
+            eprintln!("usage: durev always-list <store.db>");
+            std::process::exit(2);
+        }
+        let db = open_db(&args[2]);
+        match db.always_list() {
+            Ok(list) => {
+                for (tool, pattern) in list {
+                    println!("{} {}", tool, pattern);
+                }
+            }
+            Err(_) => {
+                eprintln!("db failed");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "always-del" {
+        if args.len() < 5 {
+            eprintln!("usage: durev always-del <store.db> <tool> <pattern>");
+            std::process::exit(2);
+        }
+        let db = open_db(&args[2]);
+        match db.always_del(&args[3], &args[4]) {
+            Ok(v) => println!("{}", v),
+            Err(_) => {
+                eprintln!("db failed");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     if args.len() > 1 && args[1] == "tool-read" {
         if args.len() < 4 {
             eprintln!("usage: durev tool-read <root> <path> [limit]");

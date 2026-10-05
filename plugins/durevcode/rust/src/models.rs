@@ -24,11 +24,6 @@ pub const OPENROUTER_CHAT_URL: &str = "https://openrouter.ai/api/v1/chat/complet
 
 pub const ANON_OK: &[&str] = &["space-bunny-free"];
 
-pub fn supports_anonymous(id: &str) -> bool {
-    let short = id.rsplit('/').next().unwrap_or(id);
-    ANON_OK.contains(&short)
-}
-
 pub const FREE_MODELS: &[FreeModel] = &[
     FreeModel { id: "big-pickle", provider: Provider::Zen, endpoint: Endpoint::ChatCompletions },
     FreeModel { id: "mimo-v2.5-free", provider: Provider::Zen, endpoint: Endpoint::ChatCompletions },
@@ -36,10 +31,10 @@ pub const FREE_MODELS: &[FreeModel] = &[
     FreeModel { id: "ling-3.0-flash-fin-free", provider: Provider::Zen, endpoint: Endpoint::ChatCompletions },
     FreeModel { id: "nemotron-3-ultra-free", provider: Provider::Zen, endpoint: Endpoint::ChatCompletions },
     FreeModel { id: "nemotron-3.5-lightning-free", provider: Provider::Zen, endpoint: Endpoint::ChatCompletions },
-    FreeModel { id: "kimi-k2.5-free", provider: Provider::Zen, endpoint: Endpoint::ChatCompletions },
-    FreeModel { id: "minimax-m2.5-free", provider: Provider::Zen, endpoint: Endpoint::ChatCompletions },
+    FreeModel { id: "deepseek-v4-flash-free", provider: Provider::Zen, endpoint: Endpoint::ChatCompletions },
+    FreeModel { id: "longcat-2.5-preview-free", provider: Provider::Zen, endpoint: Endpoint::ChatCompletions },
     FreeModel { id: "space-bunny-free", provider: Provider::Zen, endpoint: Endpoint::ChatCompletions },
-    FreeModel { id: "jev-1.13-free", provider: Provider::Zen, endpoint: Endpoint::ChatCompletions },
+    FreeModel { id: "muse-spark-1.2-contributor-free", provider: Provider::Zen, endpoint: Endpoint::Responses },
     FreeModel { id: "muse-spark-1.3-contributor-free", provider: Provider::Zen, endpoint: Endpoint::Responses },
 ];
 
@@ -68,7 +63,10 @@ pub fn chat_url_for(id: &str) -> &'static str {
             Provider::OpenRouter => OPENROUTER_CHAT_URL,
         },
         None => {
-            if id.contains('/') && id.ends_with(":free") {
+            let short = id.rsplit('/').next().unwrap_or(id);
+            if short.ends_with("-contributor-free") {
+                ZEN_RESPONSES_URL
+            } else if id.contains('/') && id.ends_with(":free") {
                 OPENROUTER_CHAT_URL
             } else if id.ends_with("-free") {
                 ZEN_CHAT_URL
@@ -82,8 +80,16 @@ pub fn chat_url_for(id: &str) -> &'static str {
 pub fn needs_responses_endpoint(id: &str) -> bool {
     match find_model(id) {
         Some(m) => m.endpoint == Endpoint::Responses,
-        None => false,
+        None => {
+            let short = id.rsplit('/').next().unwrap_or(id);
+            short.ends_with("-contributor-free")
+        }
     }
+}
+
+pub fn supports_anonymous(id: &str) -> bool {
+    let short = id.rsplit('/').next().unwrap_or(id);
+    ANON_OK.contains(&short)
 }
 
 #[cfg(test)]
@@ -101,8 +107,12 @@ mod tests {
     fn contributor_uses_responses_endpoint() {
         assert!(needs_responses_endpoint("muse-spark-1.3-contributor-free"));
         assert!(needs_responses_endpoint("opencode/muse-spark-1.3-contributor-free"));
+        assert!(needs_responses_endpoint("muse-spark-1.2-contributor-free"));
+        assert!(needs_responses_endpoint("muse-spark-9.9-contributor-free"));
         assert!(!needs_responses_endpoint("mimo-v2.5-free"));
         assert_eq!(chat_url_for("muse-spark-1.3-contributor-free"), ZEN_RESPONSES_URL);
+        assert_eq!(chat_url_for("muse-spark-1.2-contributor-free"), ZEN_RESPONSES_URL);
+        assert_eq!(chat_url_for("muse-spark-9.9-contributor-free"), ZEN_RESPONSES_URL);
         assert_eq!(chat_url_for("mimo-v2.5-free"), ZEN_CHAT_URL);
     }
 

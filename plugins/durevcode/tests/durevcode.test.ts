@@ -25,7 +25,11 @@ describe('durevcode free models', () => {
     test('contributor model uses responses endpoint', () => {
         expect(endpointFor('muse-spark-1.3-contributor-free')).toBe('responses');
         expect(endpointFor('opencode/muse-spark-1.3-contributor-free')).toBe('responses');
+        expect(endpointFor('muse-spark-1.2-contributor-free')).toBe('responses');
+        expect(endpointFor('muse-spark-9.9-contributor-free')).toBe('responses');
         expect(chatUrlFor('muse-spark-1.3-contributor-free')).toContain('/responses');
+        expect(chatUrlFor('muse-spark-1.2-contributor-free')).toContain('/responses');
+        expect(chatUrlFor('muse-spark-9.9-contributor-free')).toContain('/responses');
         expect(chatUrlFor('mimo-v2.5-free')).toContain('/chat/completions');
     });
     test('openrouter free pattern routes to openrouter', () => {
@@ -284,7 +288,7 @@ describe('durevcode agent mode', () => {
             (global as Record<string, unknown>).fetch = realFetch;
         }
     });
-    test('tool call waits approval then runs and feeds back', async () => {
+    test('routine reads auto-allow, writes still need approval', async () => {
         const skills = stubAgent({ fallbackOnly: true });
         const realFetch = global.fetch;
         let n = 0;
@@ -301,19 +305,13 @@ describe('durevcode agent mode', () => {
             const fs = await import('fs');
             const root = fs.mkdtempSync(fspath.join(os.tmpdir(), 'durev-agent-'));
             fs.writeFileSync(fspath.join(root, 'a.txt'), 'file-bytes');
-            const p = skills.runAgent('ses_0002', 'read it', { root, approvalTimeoutMs: 5000 });
-            await new Promise((r) => setTimeout(r, 300));
-            const decided = await (skills as unknown as {
-                replyPermission: (s: string, id: string, d: 'once' | 'deny') => Promise<boolean>;
-                listPermissions: (s: string) => Promise<Array<{ id: string }>>;
-            }).listPermissions('ses_0002');
-            expect(decided.length).toBe(1);
-            await (skills as unknown as {
-                replyPermission: (s: string, id: string, d: 'once' | 'deny') => Promise<boolean>;
-            }).replyPermission('ses_0002', decided[0].id, 'once');
-            const r = await p;
+            const r = await skills.runAgent('ses_0002', 'read it', { root, approvalTimeoutMs: 5000 });
             expect(r.text).toBe('saw it');
             expect(r.turns).toBe(2);
+            const decided = await (skills as unknown as {
+                listPermissions: (s: string) => Promise<Array<{ id: string }>>;
+            }).listPermissions('ses_0002');
+            expect(decided.length).toBe(0);
             fs.rmSync(root, { recursive: true });
         } finally {
             (global as Record<string, unknown>).fetch = realFetch;
@@ -337,6 +335,289 @@ describe('durevcode agent mode', () => {
             const r = await p;
             expect(r.interrupted).toBe(true);
             expect(skills.agentBusy('ses_0003')).toBe(false);
+        } finally {
+            (global as Record<string, unknown>).fetch = realFetch;
+        }
+    });
+});
+
+describe('durevcode permission rules', () => {
+    test('wildcard and last-match-wins mirror rust', async () => {
+        const { wildcardMatch, evaluateRules, defaultRules, secretGuard, trustedRootRules, fullChain, suggestPattern } = await import('../src/components');
+        expect(wildcardMatch('git *', 'git status')).toBe(true);
+        expect(wildcardMatch('git *', 'git')).toBe(false);
+        expect(wildcardMatch('*.env', '.env')).toBe(true);
+        expect(evaluateRules(defaultRules(), 'read', '.env', '')).toBe('deny');
+        expect(evaluateRules(defaultRules(), 'read', '.env.example', '')).toBe('allow');
+        expect(evaluateRules(defaultRules(), 'read', 'notes.txt', '')).toBe('allow');
+        const chain = fullChain('/repo', [{ tool: 'bash', pattern: 'git *' }]);
+        expect(evaluateRules(chain, 'read', '.env', '')).toBe('deny');
+        expect(evaluateRules(chain, 'bash', 'git status', '')).toBe('allow');
+        expect(evaluateRules(chain, 'bash', 'cargo test', '')).toBe('ask');
+        expect(evaluateRules(chain, 'bash', 'rm -rf x', '')).toBe('deny');
+        expect(secretGuard().length).toBe(3);
+        expect(suggestPattern('bash', 'git status --porcelain')).toBe('git *');
+    });
+    test('agent auto-allows routine root work without approval', async () => {
+        const { DurevcodeSkills } = await import('../src/skills');
+        const { DurevcodeComponents } = await import('../src/components');
+        const ctx = { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } } as never;
+        const comp = new (DurevcodeComponents as never as new (c: never) => {
+            requestQueue: { add: <T>(f: () => Promise<T>) => Promise<T> };
+        })(ctx);
+        const skills = new (DurevcodeSkills as never as new (c: never, p: never, cfg: never) => {
+            checkRules: (r: string, t: string, i: string) => Promise<string>;
+        })(ctx, comp as never, { fallbackOnly: true } as never);
+        expect(await skills.checkRules('/repo', 'read', 'notes/a.txt')).toBe('allow');
+        expect(await skills.checkRules('/repo', 'read', '.env')).toBe('deny');
+        expect(await skills.checkRules('/repo', 'bash', 'git status')).toBe('allow');
+        expect(await skills.checkRules('/repo', 'bash', 'cargo test')).toBe('ask');
+    });
+});
+
+describe('durevcode agent approval path', () => {
+    test('write asks, approval runs it', async () => {
+        const { DurevcodeSkills } = await import('../src/skills');
+        const { DurevcodeComponents } = await import('../src/components');
+        const ctx = { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } } as never;
+        const comp = new (DurevcodeComponents as never as new (c: never) => {
+            requestQueue: { add: <T>(f: () => Promise<T>) => Promise<T> };
+        })(ctx);
+        const skills = new (DurevcodeSkills as never as new (c: never, p: never, cfg: never) => {
+            runAgent: (s: string, p: string, o: Record<string, unknown>) => Promise<{ text: string; turns: number }>;
+            listPermissions: (s: string) => Promise<Array<{ id: string }>>;
+            replyPermission: (s: string, id: string, d: 'once' | 'deny') => Promise<boolean>;
+        })(ctx, comp as never, { fallbackOnly: true } as never);
+        const realFetch = global.fetch;
+        let n = 0;
+        (global as Record<string, unknown>).fetch = (async () => {
+            n += 1;
+            if (n === 1) {
+                return { ok: true, json: async () => ({ choices: [{ message: { content: '', tool_calls: [{ id: 'c1', function: { name: 'write', arguments: '{"path":"b.txt","content":"hi"}' } }] } }] }) };
+            }
+            return { ok: true, json: async () => ({ choices: [{ message: { content: 'wrote it' } }] }) };
+        }) as unknown as typeof fetch;
+        try {
+            const os = await import('os');
+            const fspath = await import('path');
+            const fs = await import('fs');
+            const root = fs.mkdtempSync(fspath.join(os.tmpdir(), 'durev-agent-'));
+            const p = skills.runAgent('ses_0009', 'write it', { root, approvalTimeoutMs: 8000 });
+            await new Promise((r) => setTimeout(r, 400));
+            const pending = await skills.listPermissions('ses_0009');
+            expect(pending.length).toBe(1);
+            await skills.replyPermission('ses_0009', pending[0].id, 'once');
+            const r = await p;
+            expect(r.text).toBe('wrote it');
+            expect(fs.readFileSync(fspath.join(root, 'b.txt'), 'utf8')).toBe('hi');
+            fs.rmSync(root, { recursive: true });
+        } finally {
+            (global as Record<string, unknown>).fetch = realFetch;
+        }
+    });
+});
+
+describe('durevcode pacing and waf', () => {
+    function stubPace(cfg: Record<string, unknown>) {
+        const { DurevcodeSkills } = require('../src/skills') as typeof import('../src/skills');
+        const { DurevcodeComponents } = require('../src/components') as typeof import('../src/components');
+        const ctx = { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } } as never;
+        const comp = new (DurevcodeComponents as never as new (c: never) => { requestQueue: { add: <T>(f: () => Promise<T>) => Promise<T> } })(ctx);
+        return new (DurevcodeSkills as never as new (c: never, p: never, cfg: never) => {
+            chat: (m: Array<{ role: string; content: string }>, o?: Record<string, unknown>) => Promise<string>;
+        })(ctx, comp as never, cfg as never);
+    }
+    test('classify separates waf pages from api errors', async () => {
+        const { classifyHttpError } = await import('../src/skills');
+        expect(await classifyHttpError({ status: 403, headers: { get: () => 'text/html' } })).toBe('waf');
+        expect(await classifyHttpError({
+            status: 403,
+            headers: { get: () => 'text/plain' },
+            clone: () => ({ text: async () => 'error code: 1010\n' }),
+        })).toBe('waf');
+        expect(await classifyHttpError({
+            status: 403,
+            headers: { get: () => 'application/json' },
+            clone: () => ({ text: async () => '{"type":"error"}' }),
+        })).toBe('api');
+        expect(await classifyHttpError({ status: 429 })).toBe('api');
+        expect(await classifyHttpError({ status: 400 })).toBe('other');
+    });
+    test('waf failure cools the host, other host still tried', async () => {
+        const skills = stubPace({ fallbackOnly: true, paceMs: 0, fallbackModels: ['mimo-v2.5-free'], zenApiKey: 'k' });
+        const seen: string[] = [];
+        const realFetch = global.fetch;
+        (global as Record<string, unknown>).fetch = (async (url: unknown) => {
+            seen.push(String(url));
+            return {
+                ok: false,
+                status: 403,
+                headers: { get: () => 'text/plain' },
+                text: async () => 'error code: 1010',
+                clone: () => ({ text: async () => 'error code: 1010' }),
+            };
+        }) as unknown as typeof fetch;
+        try {
+            await expect(skills.chat([{ role: 'user', content: 'hi' }], { model: 'space-bunny-free' })).rejects.toThrow(/cooling|403/);
+            expect(seen.length).toBe(1);
+        } finally {
+            (global as Record<string, unknown>).fetch = realFetch;
+        }
+    });
+});
+
+describe('durevcode opencode retry policy', () => {
+    test('delay math matches opencode numbers', async () => {
+        const { retryDelayMs } = await import('../src/skills');
+        expect(retryDelayMs(1, 0)).toBe(2000);
+        expect(retryDelayMs(2, 0)).toBe(4000);
+        expect(retryDelayMs(3, 0)).toBe(8000);
+        expect(retryDelayMs(1, 1)).toBe(2500);
+        expect(retryDelayMs(9, 0)).toBe(30000);
+        expect(retryDelayMs(1, 0, 1500)).toBe(1500);
+    });
+    test('429 retries then succeeds', async () => {
+        const { DurevcodeSkills } = await import('../src/skills');
+        const { DurevcodeComponents } = await import('../src/components');
+        const ctx = { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } } as never;
+        const comp = new (DurevcodeComponents as never as new (c: never) => { requestQueue: { add: <T>(f: () => Promise<T>) => Promise<T> } })(ctx);
+        const skills = new (DurevcodeSkills as never as new (c: never, p: never, cfg: never) => {
+            chat: (m: Array<{ role: string; content: string }>, o?: Record<string, unknown>) => Promise<string>;
+        })(ctx, comp as never, { fallbackOnly: true, paceMs: 0 } as never);
+        let n = 0;
+        const realFetch = global.fetch;
+        (global as Record<string, unknown>).fetch = (async () => {
+            n += 1;
+            if (n < 3) {
+                return { ok: false, status: 429, headers: { get: () => null }, text: async () => 'rate limit' };
+            }
+            return { ok: true, json: async () => ({ choices: [{ message: { content: 'recovered' } }] }) };
+        }) as unknown as typeof fetch;
+        const realRandom = Math.random;
+        (Math as unknown as { random: () => number }).random = () => 0;
+        try {
+            expect(await skills.chat([{ role: 'user', content: 'hi' }], { model: 'space-bunny-free' })).toBe('recovered');
+            expect(n).toBe(3);
+        } finally {
+            (global as Record<string, unknown>).fetch = realFetch;
+            (Math as unknown as { random: () => number }).random = realRandom;
+        }
+    }, 30000);
+});
+
+describe('durevcode reasoning handling', () => {
+    test('reasoning-only turn continues instead of leaking', async () => {
+        const { DurevcodeSkills } = await import('../src/skills');
+        const { DurevcodeComponents } = await import('../src/components');
+        const ctx = { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } } as never;
+        const comp = new (DurevcodeComponents as never as new (c: never) => { requestQueue: { add: <T>(f: () => Promise<T>) => Promise<T> } })(ctx);
+        const skills = new (DurevcodeSkills as never as new (c: never, p: never, cfg: never) => {
+            runAgent: (s: string, p: string, o: Record<string, unknown>) => Promise<{ text: string; turns: number }>;
+        })(ctx, comp as never, { fallbackOnly: true, paceMs: 0 } as never);
+        const realFetch = global.fetch;
+        let n = 0;
+        (global as Record<string, unknown>).fetch = (async () => {
+            n += 1;
+            if (n === 1) {
+                return { ok: true, json: async () => ({ choices: [{ message: { content: '', reasoning_content: 'Let me think about tgs' } }] }) };
+            }
+            return { ok: true, json: async () => ({ choices: [{ message: { content: 'tgs renders stickers' } }] }) };
+        }) as unknown as typeof fetch;
+        try {
+            const r = await skills.runAgent('ses_0099', 'what is tgs', { root: '/tmp' });
+            expect(r.text).toBe('tgs renders stickers');
+            expect(r.turns).toBe(2);
+            expect(n).toBe(2);
+        } finally {
+            (global as Record<string, unknown>).fetch = realFetch;
+        }
+    });
+});
+
+describe('durevcode live catalog', () => {
+    test('parseModelCatalog keeps structurally free only', async () => {
+        const { parseModelCatalog } = await import('../src/skills');
+        const data = {
+            data: [
+                { id: 'mimo-v2.5-free', cost: { input: 0, output: 0 } },
+                { id: 'big-pickle', pricing: { input: 'Free', output: 'Free' } },
+                { id: 'gpt-paid', cost: { input: 1, output: 2 } },
+                { id: 'muse-spark-1.3-contributor-free', cost: { input: 0, output: 0 } },
+                { id: '', cost: { input: 0 } },
+                { id: 'mimo-v2.5-free', cost: { input: 0, output: 0 } },
+            ],
+        };
+        const out = parseModelCatalog(data);
+        expect(out.map((m) => m.id)).toEqual(['mimo-v2.5-free', 'big-pickle', 'muse-spark-1.3-contributor-free']);
+        expect(out.find((m) => m.id === 'muse-spark-1.3-contributor-free')?.endpoint).toBe('responses');
+        expect(parseModelCatalog({ data: [{ id: 'muse-spark-9.9-contributor-free' }] })[0]?.endpoint).toBe('responses');
+        expect(parseModelCatalog({ data: [{ id: 'jev-1.13-free' }] })).toEqual([]);
+        expect(parseModelCatalog({})).toEqual([]);
+        expect(parseModelCatalog({ data: [{ id: 'x' }] })).toEqual([{ id: 'x', provider: 'zen', endpoint: 'chat' }]);
+    });
+    test('listModels falls back to static when offline', async () => {
+        const { DurevcodeSkills } = await import('../src/skills');
+        const { DurevcodeComponents, FREE_MODELS } = await import('../src/components');
+        const ctx = { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } } as never;
+        const comp = new (DurevcodeComponents as never as new (c: never) => { requestQueue: { add: <T>(f: () => Promise<T>) => Promise<T> } })(ctx);
+        const skills = new (DurevcodeSkills as never as new (c: never, p: never, cfg: never) => {
+            listModels: () => Promise<Array<{ id: string }>>;
+            clearModelCache: () => void;
+        })(ctx, comp as never, { fallbackOnly: true } as never);
+        const realFetch = global.fetch;
+        (global as Record<string, unknown>).fetch = (async () => ({ ok: false, status: 403 })) as unknown as typeof fetch;
+        try {
+            const first = await skills.listModels();
+            expect(first.map((m) => m.id)).toEqual(FREE_MODELS.map((m) => m.id));
+            skills.clearModelCache();
+            (global as Record<string, unknown>).fetch = (async () => ({
+                ok: true,
+                json: async () => ({ data: [{ id: 'laguna-s-2.1-free', cost: { input: 0, output: 0 } }] }),
+            })) as unknown as typeof fetch;
+            const second = await skills.listModels();
+            expect(second.map((m) => m.id)).toEqual(['laguna-s-2.1-free']);
+        } finally {
+            (global as Record<string, unknown>).fetch = realFetch;
+        }
+    });
+});
+
+
+describe('durevcode responses endpoint', () => {
+    test('builds responses body and reads output parts', async () => {
+        const { buildResponsesBody, extractResponsesText, extractChatText } = await import('../src/skills');
+        const body = buildResponsesBody('opencode/muse-spark-1.3-contributor-free', [{ role: 'user', content: 'hi' }], 10);
+        expect(body).toEqual({
+            model: 'muse-spark-1.3-contributor-free',
+            input: [{ role: 'user', content: 'hi' }],
+            max_tokens: 10,
+        });
+        const data = { output: [{ type: 'message', content: [{ type: 'output_text', text: 'PONG' }] }] };
+        expect(extractResponsesText(data)).toBe('PONG');
+        expect(extractChatText(data)).toBe('PONG');
+        expect(extractResponsesText({})).toBe('');
+    });
+    test('chat posts responses shape to responses url', async () => {
+        const { DurevcodeSkills } = await import('../src/skills');
+        const { DurevcodeComponents } = await import('../src/components');
+        const ctx = { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } } as never;
+        const comp = new (DurevcodeComponents as never as new (c: never) => { requestQueue: { add: <T>(f: () => Promise<T>) => Promise<T> } })(ctx);
+        const skills = new (DurevcodeSkills as never as new (c: never, p: never, cfg: never) => {
+            chat: (m: Array<{ role: string; content: string }>, o?: Record<string, unknown>) => Promise<string>;
+        })(ctx, comp as never, { fallbackOnly: true, paceMs: 0 } as never);
+        let seenUrl = '';
+        let seenBody: Record<string, unknown> = {};
+        const realFetch = global.fetch;
+        (global as Record<string, unknown>).fetch = (async (url: unknown, init: unknown) => {
+            seenUrl = String(url);
+            seenBody = JSON.parse(String((init as { body: string }).body));
+            return { ok: true, json: async () => ({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'spark-hi' }] }] }) };
+        }) as unknown as typeof fetch;
+        try {
+            expect(await skills.chat([{ role: 'user', content: 'hi' }], { model: 'muse-spark-1.3-contributor-free' })).toBe('spark-hi');
+            expect(seenUrl).toContain('/responses');
+            expect(seenBody).toHaveProperty('input');
+            expect(seenBody).not.toHaveProperty('messages');
         } finally {
             (global as Record<string, unknown>).fetch = realFetch;
         }

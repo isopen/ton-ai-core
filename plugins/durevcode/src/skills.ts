@@ -1,5 +1,5 @@
 import { PluginContext } from '@ton-ai/core';
-import { DurevcodeComponents, DurevNative, DUREV_VERSION, PUBLIC_KEY, analyzeDiffTs, buildChatHeaders, chatUrlFor, endpointFor, providerFor, supportsAnonymous } from './components';
+import { DurevcodeComponents, DurevNative, DUREV_VERSION, PUBLIC_KEY, analyzeDiffTs, buildChatHeaders, chatUrlFor, endpointFor, evaluateRules, findModel, fullChain, providerFor, suggestPattern, supportsAnonymous, FREE_MODELS } from './components';
 import { DurevAnalyzeParams, DurevDiffStat, DurevEvent, DurevModelRef, DurevReview, DurevSession, DurevcodeConfig } from './types';
 import { spawn } from 'child_process';
 import * as fs from 'fs';
@@ -13,7 +13,33 @@ const DEFAULT_MAX_TOKENS = 4096;
 export function extractChatText(data: any): string {
     const choice = data?.choices?.[0];
     const msg = choice?.message || {};
-    return msg.content || msg.reasoning_content || choice?.text || choice?.delta?.content || '';
+    const direct = msg.content || msg.reasoning_content || choice?.text || choice?.delta?.content || '';
+    if (direct) return direct;
+    return extractResponsesText(data);
+}
+
+export function extractResponsesText(data: any): string {
+    const out = data?.output;
+    if (!Array.isArray(out)) return '';
+    const texts: string[] = [];
+    for (const item of out) {
+        const content = (item as { content?: unknown }).content;
+        if (typeof content === 'string') {
+            texts.push(content);
+            continue;
+        }
+        if (!Array.isArray(content)) continue;
+        for (const part of content) {
+            const t = (part as { text?: unknown }).text;
+            if (typeof t === 'string' && t) texts.push(t);
+        }
+    }
+    return texts.join('\n');
+}
+
+export function buildResponsesBody(model: string, messages: Array<{ role: string; content: string }>, maxTokens: number): Record<string, unknown> {
+    const input = messages.map((m) => ({ role: m.role, content: m.content }));
+    return { model: model.split('/').pop(), input, max_tokens: maxTokens };
 }
 
 export class DurevcodeSkills {
@@ -22,6 +48,9 @@ export class DurevcodeSkills {
     private config: DurevcodeConfig;
     private ready = false;
     private lastModel: string | null = null;
+    private modelCache: { items: DurevModelRef[]; at: number } | null = null;
+    private hostCool = new Map<string, number>();
+    private nextAllowedAt = 0;
     private agentQueues = new Map<string, QueuedPrompt[]>();
     private agentAbort = new Map<string, AbortController>();
     private agentContext = new Map<string, { tokensIn: number; tokensOut: number; turns: number; cost: number }>();
@@ -29,7 +58,7 @@ export class DurevcodeSkills {
     constructor(context: PluginContext, components: DurevcodeComponents, config: DurevcodeConfig) {
         this.context = context;
         this.components = components;
-        this.config = { timeoutMs: DEFAULT_TIMEOUT_MS, ...config };
+        this.config = { timeoutMs: DEFAULT_TIMEOUT_MS, chatTimeoutMs: DEFAULT_CHAT_TIMEOUT_MS, ...config };
     }
 
     isReady(): boolean {
@@ -99,7 +128,19 @@ export class DurevcodeSkills {
         const first = opts?.model || this.config.model || process.env.DUREV_MODEL || DEFAULT_MODEL;
         const chain = [first, ...(this.config.fallbackModels || [])].filter((m, i, a) => m && a.indexOf(m) === i);
         let lastError: unknown = null;
+        let attempt = 0;
         for (const model of chain) {
+            if (opts?.signal?.aborted) throw new Error('aborted');
+            if (this.hostCooling(this.urlFor(model))) {
+                lastError = new Error('host cooling, skipped');
+                continue;
+            }
+            if (attempt > 0) {
+                const wait = Math.min(800 * attempt + Math.floor(Math.random() * 400), 5000);
+                await new Promise((r) => setTimeout(r, wait));
+                if (opts?.signal?.aborted) throw new Error('aborted');
+            }
+            attempt += 1;
             try {
                 const out = await this.chatOnce(messages, model, opts);
                 this.lastModel = model;
@@ -113,12 +154,8 @@ export class DurevcodeSkills {
         throw lastError instanceof Error ? lastError : new Error('chat failed on all providers');
     }
 
-    private async chatOnce(messages: Array<{ role: string; content: string }>, model: string, opts?: { maxTokens?: number; apiKey?: string; userId?: string; tools?: AgentToolSpec[]; signal?: AbortSignal }): Promise<{ text: string; calls: ChatToolCall[]; usage: { in: number; out: number }; cost: number }> {
-        const url = chatUrlFor(model, {
-            zenChat: this.config.zenChatUrl,
-            zenResponses: this.config.zenResponsesUrl,
-            openrouterChat: this.config.openrouterChatUrl,
-        });
+    private async chatOnce(messages: Array<{ role: string; content: string }>, model: string, opts?: { maxTokens?: number; apiKey?: string; userId?: string; tools?: AgentToolSpec[]; signal?: AbortSignal }): Promise<{ text: string; reasoning: string; calls: ChatToolCall[]; usage: { in: number; out: number }; cost: number }> {
+        const url = this.urlFor(model);
         const prov = providerFor(model);
         const key = opts?.apiKey
             || (opts?.userId ? this.readUserKey(opts.userId, prov) : null)
@@ -126,8 +163,9 @@ export class DurevcodeSkills {
                 ? (this.config.openrouterKey || process.env.OPENROUTER_API_KEY || '')
                 : (this.config.zenApiKey || process.env.OPENCODE_ZEN_API_KEY || process.env.DUREV_ZEN_KEY || PUBLIC_KEY));
         if (!key && !supportsAnonymous(model)) throw new Error(`missing api key for provider=${prov}`);
+        await this.paceOutbound(opts?.signal);
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), this.config.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS);
+        const timer = setTimeout(() => ctrl.abort(), this.config.chatTimeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS);
         const onAbort = () => ctrl.abort();
         if (opts?.signal) {
             if (opts.signal.aborted) {
@@ -137,36 +175,135 @@ export class DurevcodeSkills {
             opts.signal.addEventListener('abort', onAbort, { once: true });
         }
         try {
-            const body: Record<string, unknown> = { model: model.split('/').pop(), messages, max_tokens: opts?.maxTokens ?? DEFAULT_MAX_TOKENS };
+            const isResponses = url.endsWith('/responses');
+            const body: Record<string, unknown> = isResponses
+                ? buildResponsesBody(model, messages, opts?.maxTokens ?? DEFAULT_MAX_TOKENS)
+                : { model: model.split('/').pop(), messages, max_tokens: opts?.maxTokens ?? DEFAULT_MAX_TOKENS };
             if (opts?.tools && opts.tools.length > 0) {
                 body.tools = opts.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
                 body.tool_choice = 'auto';
             }
-            const res = await fetch(url, {
-                method: 'POST',
-                headers: buildChatHeaders(key || null),
-                body: JSON.stringify(body),
-                signal: ctrl.signal,
-            });
-            if (!res.ok) throw new Error(`chat failed: ${res.status}`);
-            const data: any = await res.json();
-            const calls = extractToolCalls(data);
-            const text = extractChatText(data);
-            if (!text && calls.length === 0) throw new Error('empty chat response');
-            const usage = data?.usage || {};
-            return {
-                text: String(text || ''),
-                calls,
-                usage: { in: Number(usage.prompt_tokens || 0), out: Number(usage.completion_tokens || 0) },
-                cost: Number(data?.cost || 0),
-            };
+            let attempt = 0;
+            for (;;) {
+                attempt += 1;
+                let res: Response;
+                try {
+                    res = await fetch(url, {
+                        method: 'POST',
+                        headers: buildChatHeaders(key || null),
+                        body: JSON.stringify(body),
+                        signal: ctrl.signal,
+                    });
+                } catch (e) {
+                    if (opts?.signal?.aborted) throw e;
+                    if (attempt > RETRY_MAX_RETRIES || !matchesRetryableMessage(e instanceof Error ? e.message : String(e))) throw e;
+                    await sleepAbort(retryDelayMs(attempt, Math.random()), ctrl.signal, opts?.signal);
+                    continue;
+                }
+                if (res.ok) {
+                    let data: any;
+                    try {
+                        data = await res.json();
+                    } catch {
+                        throw new Error('chat failed: bad json');
+                    }
+                    const calls = extractToolCalls(data);
+                    const rawContent = data?.choices?.[0]?.message?.content;
+                    const content = typeof rawContent === 'string' ? rawContent : '';
+                    const rawReasoning = data?.choices?.[0]?.message?.reasoning_content;
+                    const reasoning = typeof rawReasoning === 'string' ? rawReasoning : '';
+                    const text = content || extractChatText(data);
+                    if (!text && calls.length === 0) throw new Error('empty chat response');
+                    const usage = data?.usage || {};
+                    return {
+                        text: String(text || ''),
+                        reasoning: content ? '' : reasoning,
+                        calls,
+                        usage: { in: Number(usage.prompt_tokens || 0), out: Number(usage.completion_tokens || 0) },
+                        cost: Number(data?.cost || 0),
+                    };
+                }
+                const retryAfterMs = parseRetryAfter(res);
+                let bodyText = '';
+                try {
+                    bodyText = await res.text();
+                } catch {
+                }
+                if (bodyText.includes('FreeUsageLimitError') || bodyText.includes('FreeTierError')) {
+                    throw new Error(`chat failed: ${res.status} free tier limit`);
+                }
+                const retryable = res.status === 429 || res.status >= 500 || matchesRetryableMessage(bodyText);
+                if (attempt > RETRY_MAX_RETRIES || !retryable) {
+                    const kind = await classifyHttpError({ status: res.status, headers: { get: (n: string) => res.headers.get(n) }, clone: () => ({ text: async () => bodyText }) });
+                    if (kind === 'waf') this.coolHost(url, 120000);
+                    throw new Error(`chat failed: ${res.status}${kind === 'waf' ? ' waf' : ''}`);
+                }
+                await sleepAbort(retryDelayMs(attempt, Math.random(), retryAfterMs ?? undefined), ctrl.signal, opts?.signal);
+            }
         } finally {
             clearTimeout(timer);
             if (opts?.signal) opts.signal.removeEventListener('abort', onAbort);
         }
     }
 
-    private async tryNative(text: string, file?: string): Promise<DurevDiffStat | null> {        if (this.config.fallbackOnly) return null;
+    private urlFor(model: string): string {
+        return chatUrlFor(model, {
+            zenChat: this.config.zenChatUrl,
+            zenResponses: this.config.zenResponsesUrl,
+            openrouterChat: this.config.openrouterChatUrl,
+        });
+    }
+
+    private hostCooling(url: string): boolean {
+        const host = hostOf(url);
+        const until = this.hostCool.get(host) || 0;
+        return Date.now() < until;
+    }
+
+    private coolHost(url: string, ms: number): void {
+        this.hostCool.set(hostOf(url), Date.now() + ms);
+    }
+
+    private paceMs(): number {
+        const v = (this.config as Record<string, unknown>).paceMs;
+        if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v;
+        return 2500;
+    }
+
+    private paceJitter(): number {
+        return Math.floor(Math.random() * 800);
+    }
+
+    private async paceOutbound(signal?: AbortSignal): Promise<void> {
+        const base = this.paceMs();
+        if (base <= 0) return;
+        const gap = base + this.paceJitter();
+        const wait = this.nextAllowedAt - Date.now();
+        if (wait > 0) {
+            await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    cleanup();
+                    resolve();
+                }, wait);
+                const cleanup = () => clearTimeout(timer);
+                if (signal) {
+                    if (signal.aborted) {
+                        cleanup();
+                        reject(new Error('aborted'));
+                        return;
+                    }
+                    signal.addEventListener('abort', () => {
+                        cleanup();
+                        reject(new Error('aborted'));
+                    }, { once: true });
+                }
+            });
+        }
+        this.nextAllowedAt = Date.now() + gap;
+    }
+
+    private async tryNative(text: string, file?: string): Promise<DurevDiffStat | null> {
+        if (this.config.fallbackOnly) return null;
         const loader: DurevNative = this.components.native;
         const binary = loader.resolveBinary(this.config.binaryPath);
         if (!binary) return null;
@@ -180,12 +317,41 @@ export class DurevcodeSkills {
         }
     }
 
-    getMetrics() {
-        return this.components.metrics.getStats();
+    async listModels(): Promise<DurevModelRef[]> {
+        const now = Date.now();
+        if (this.modelCache && now - this.modelCache.at < 3600000) return this.modelCache.items;
+        const live = await this.fetchLiveModels();
+        const items = live || FREE_MODELS;
+        this.modelCache = { items, at: now };
+        return items;
+    }
+
+    clearModelCache(): void {
+        this.modelCache = null;
+    }
+
+    private async fetchLiveModels(): Promise<DurevModelRef[] | null> {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 15000);
+        try {
+            const res = await fetch('https://opencode.ai/zen/v1/models', { signal: ctrl.signal });
+            if (!res.ok) return null;
+            const data: any = await res.json();
+            const items = parseModelCatalog(data);
+            return items.length > 0 ? items : null;
+        } catch {
+            return null;
+        } finally {
+            clearTimeout(timer);
+        }
     }
 
     lastAnsweredModel(): string | null {
         return this.lastModel;
+    }
+
+    getMetrics() {
+        return this.components.metrics.getStats();
     }
 
     resetMetrics(): void {
@@ -475,6 +641,58 @@ export class DurevcodeSkills {
         return this.components.todos.setDone(session, position);
     }
 
+    async checkRules(root: string, tool: string, input: string): Promise<'allow' | 'ask' | 'deny'> {
+        const home = process.env.HOME || '';
+        const always = await this.listAlwaysRules();
+        return evaluateRules(fullChain(root, always), tool, input, home);
+    }
+
+    suggestPattern(tool: string, input: string): string {
+        return suggestPattern(tool, input);
+    }
+
+    async addAlwaysRule(tool: string, pattern: string): Promise<boolean> {
+        const store = this.config.storePath;
+        if (store && store.endsWith('.db') && !this.config.fallbackOnly) {
+            const out = await this.runBin(['always-add', store, tool, pattern]);
+            if (out !== null) {
+                this.components.always.add(tool, pattern);
+                return true;
+            }
+        }
+        this.components.always.add(tool, pattern);
+        return true;
+    }
+
+    async listAlwaysRules(): Promise<Array<{ tool: string; pattern: string }>> {
+        const store = this.config.storePath;
+        if (store && store.endsWith('.db') && !this.config.fallbackOnly) {
+            const out = await this.runBin(['always-list', store]);
+            if (out !== null) {
+                const rows = out.split('\n').filter((l) => l.trim().length > 0);
+                if (rows.length > 0) {
+                    return rows.map((l) => {
+                        const i = l.indexOf(' ');
+                        return { tool: l.slice(0, i), pattern: l.slice(i + 1) };
+                    });
+                }
+            }
+        }
+        return this.components.always.list();
+    }
+
+    async removeAlwaysRule(tool: string, pattern: string): Promise<boolean> {
+        const store = this.config.storePath;
+        if (store && store.endsWith('.db') && !this.config.fallbackOnly) {
+            const out = await this.runBin(['always-del', store, tool, pattern]);
+            if (out === 'true' || out === 'false') {
+                this.components.always.remove(tool, pattern);
+                return out === 'true';
+            }
+        }
+        return this.components.always.remove(tool, pattern);
+    }
+
     async runToolLocal(root: string, kind: 'read' | 'write', args: string[]): Promise<{ output: string; engine: string }> {
         const r = await this.runToolTs(root, [kind, ...args]);
         return { output: r.output, engine: 'ts' };
@@ -545,7 +763,7 @@ export class DurevcodeSkills {
         for (let i = 0; i < maxTurns; i++) {
             if (signal.aborted) return { text, turns, tokensIn, tokensOut, cost, interrupted: true };
             turns += 1;
-            let step: { text: string; calls: ChatToolCall[]; usage: { in: number; out: number }; cost: number };
+            let step: { text: string; reasoning: string; calls: ChatToolCall[]; usage: { in: number; out: number }; cost: number };
             try {
                 step = await this.chatOnce(history, model, {
                     userId: opts.userId,
@@ -563,6 +781,11 @@ export class DurevcodeSkills {
             if (step.text) text = step.text;
             await this.appendAgentEvent(session, turns, step.text, step.calls);
             if (step.calls.length === 0) {
+                if (step.reasoning && step.text === step.reasoning && i + 1 < maxTurns) {
+                    history.push({ role: 'assistant', content: step.reasoning.slice(0, 4000) });
+                    history.push({ role: 'user', content: 'Give the final answer now, without thinking out loud.' });
+                    continue;
+                }
                 return { text, turns, tokensIn, tokensOut, cost, interrupted: false };
             }
             for (const call of step.calls) {
@@ -580,20 +803,29 @@ export class DurevcodeSkills {
             return `unknown tool: ${call.name}`;
         }
         const resource = call.args.path || call.args.cmd || call.name;
+        const pre = await this.checkRules(opts.root, call.name, resource);
+        if (pre === 'deny') return 'denied by policy';
+        if (pre === 'allow') {
+            return this.executeTool(opts.root, call);
+        }
         const req = await this.requestToolApproval(session, call.name, resource);
         if (!req) return 'approval unavailable';
         const decision = await this.awaitApproval(session, req.id, opts, signal);
         if (decision !== 'once') return 'denied by user';
+        return this.executeTool(opts.root, call);
+    }
+
+    private async executeTool(root: string, call: ChatToolCall): Promise<string> {
         try {
             if (call.name === 'read') {
-                const r = await this.runToolTs(opts.root, ['read', call.args.path || '', '200']);
+                const r = await this.runToolTs(root, ['read', call.args.path || '', '200']);
                 return r.output;
             }
             if (call.name === 'write') {
-                const r = await this.runToolTs(opts.root, ['write', call.args.path || '', call.args.content || '']);
+                const r = await this.runToolTs(root, ['write', call.args.path || '', call.args.content || '']);
                 return `written ${r.output} bytes`;
             }
-            return await this.runShell(opts.root, call.args.cmd || '');
+            return await this.runShell(root, call.args.cmd || '');
         } catch (e) {
             return `tool error: ${e instanceof Error ? e.message : String(e)}`;
         }
@@ -833,6 +1065,32 @@ export function safeJoin(root: string, rel: string): string | null {    if (!rel
     return full;
 }
 
+export const RETRY_INITIAL_DELAY = 2000;
+export const RETRY_BACKOFF_FACTOR = 2;
+export const RETRY_JITTER_FACTOR = 0.25;
+export const RETRY_MAX_DELAY_NO_HEADERS = 30000;
+export const RETRY_MAX_RETRIES = 5;
+
+const RETRYABLE_MESSAGE_PATTERNS = [
+    /429|500|502|503|504|524/i,
+    /rate increased too quickly|rate limit|rate-limit|rate_limit|too many requests/i,
+    /overloaded|service unavailable|service_unavailable|service-unavailable|internal error|internal_error|internal server error|server error|server_error|server-error|provider returned error|provider_returned_error|provider-returned-error/i,
+    /terminated|fetch failed|failed to fetch|network[-_\s]error|upstream connect|connection error|connection refused|connection lost|socket hang up|reset before headers|getaddrinfo|enotfound|econnreset|etimedout/i,
+    /try your request again|retry your request|resource exhausted|resource_exhausted/i,
+];
+
+export function matchesRetryableMessage(msg: string): boolean {
+    return RETRYABLE_MESSAGE_PATTERNS.some((re) => re.test(msg));
+}
+
+export function retryDelayMs(attempt: number, random: number, retryAfterMs?: number): number {
+    if (retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
+        return Math.min(Math.ceil(retryAfterMs), 2147483647);
+    }
+    const base = RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1);
+    return Math.min(Math.ceil(base + base * RETRY_JITTER_FACTOR * random), RETRY_MAX_DELAY_NO_HEADERS);
+}
+
 export function isRetryableChatError(e: unknown): boolean {
     const msg = e instanceof Error ? e.message : String(e);
     if (/chat failed: (401|403|429|500|502|503)/.test(msg)) return true;
@@ -915,3 +1173,125 @@ export const AGENT_TOOLS: AgentToolSpec[] = [
         parameters: { type: 'object', properties: { cmd: { type: 'string' } }, required: ['cmd'] },
     },
 ];
+
+export function hostOf(url: string): string {
+    try {
+        return new URL(url).host;
+    } catch {
+        return url;
+    }
+}
+
+export async function classifyHttpError(res: { status: number; headers?: { get: (n: string) => string | null }; clone?: () => { text: () => Promise<string> } }): Promise<'waf' | 'api' | 'other'> {
+    if (res.status !== 403 && res.status !== 401) return res.status === 429 || res.status >= 500 ? 'api' : 'other';
+    try {
+        const ct = res.headers?.get('content-type') || '';
+        if (ct.includes('text/html')) return 'waf';
+    } catch {
+    }
+    try {
+        const text = res.clone ? await res.clone().text() : '';
+        if (/error code:\s*1010|<html/i.test(text)) return 'waf';
+    } catch {
+    }
+    return 'api';
+}
+
+export function parseRetryAfter(res: { headers: { get: (n: string) => string | null } }): number | null {
+    try {
+        const ms = res.headers.get('retry-after-ms');
+        if (ms) {
+            const v = Number.parseFloat(ms);
+            if (Number.isFinite(v) && v >= 0) return v;
+        }
+        const ra = res.headers.get('retry-after');
+        if (ra) {
+            const v = Number.parseFloat(ra);
+            if (Number.isFinite(v) && v >= 0) return Math.ceil(v * 1000);
+            const t = Date.parse(ra) - Date.now();
+            if (Number.isFinite(t) && t > 0) return Math.ceil(t);
+        }
+    } catch {
+    }
+    return null;
+}
+
+export function sleepAbort(ms: number, ...signals: Array<AbortSignal | undefined>): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const ctrls = signals.filter((s): s is AbortSignal => !!s);
+        if (ctrls.some((s) => s.aborted)) {
+            reject(new Error('aborted'));
+            return;
+        }
+        const timer = setTimeout(() => {
+            cleanup();
+            resolve();
+        }, Math.max(0, ms));
+        const cleanup = () => clearTimeout(timer);
+        const onAbort = () => {
+            cleanup();
+            reject(new Error('aborted'));
+        };
+        for (const s of ctrls) s.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
+export interface CatalogModel {
+    id?: unknown;
+    cost?: unknown;
+    pricing?: unknown;
+    price?: unknown;
+}
+
+function costNumber(v: unknown): number | null {
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string') {
+        const t = v.trim().toLowerCase();
+        if (t === 'free' || t === '0' || t === '$0' || t === '0.0') return 0;
+        const n = Number.parseFloat(t.replace(/^\$/, ''));
+        if (Number.isFinite(n)) return n;
+    }
+    return null;
+}
+
+function costsOf(entry: CatalogModel): number[] {
+    const out: number[] = [];
+    const bags: unknown[] = [entry.cost, entry.pricing, entry.price];
+    for (const bag of bags) {
+        if (bag && typeof bag === 'object' && !Array.isArray(bag)) {
+            for (const v of Object.values(bag as Record<string, unknown>)) {
+                const n = costNumber(v);
+                if (n !== null) out.push(n);
+            }
+        } else {
+            const n = costNumber(bag);
+            if (n !== null) out.push(n);
+        }
+    }
+    return out;
+}
+
+export function parseModelCatalog(data: unknown): DurevModelRef[] {
+    const root = data as { data?: unknown };
+    const list = Array.isArray(root?.data) ? (root.data as CatalogModel[]) : [];
+    const out: DurevModelRef[] = [];
+    const seen = new Set<string>();
+    for (const entry of list) {
+        if (!entry || typeof entry.id !== 'string' || !entry.id) continue;
+        const id = entry.id;
+        if (id.startsWith('jev-')) continue;
+        const costs = costsOf(entry);
+        if (costs.length > 0 && !costs.every((c) => c === 0)) continue;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const known = findModel(id);
+        const rawName = (entry as { name?: unknown }).name;
+        out.push({
+            id,
+            provider: known ? known.provider : 'zen',
+            endpoint: endpointFor(id),
+            ...(typeof rawName === 'string' && rawName ? { name: rawName } : {}),
+        });
+    }
+    return out;
+}

@@ -15,6 +15,7 @@ export const ANON_OK = ['space-bunny-free'];
 
 export const PUBLIC_KEY = 'public';
 
+
 export function supportsAnonymous(id: string): boolean {
     return ANON_OK.includes(shortModelId(id));
 }
@@ -32,10 +33,10 @@ export const FREE_MODELS: DurevModelRef[] = [
     { id: 'ling-3.0-flash-fin-free', provider: 'zen', endpoint: 'chat' },
     { id: 'nemotron-3-ultra-free', provider: 'zen', endpoint: 'chat' },
     { id: 'nemotron-3.5-lightning-free', provider: 'zen', endpoint: 'chat' },
-    { id: 'kimi-k2.5-free', provider: 'zen', endpoint: 'chat' },
-    { id: 'minimax-m2.5-free', provider: 'zen', endpoint: 'chat' },
+    { id: 'deepseek-v4-flash-free', provider: 'zen', endpoint: 'chat' },
+    { id: 'longcat-2.5-preview-free', provider: 'zen', endpoint: 'chat' },
     { id: 'space-bunny-free', provider: 'zen', endpoint: 'chat' },
-    { id: 'jev-1.13-free', provider: 'zen', endpoint: 'chat' },
+    { id: 'muse-spark-1.2-contributor-free', provider: 'zen', endpoint: 'responses' },
     { id: 'muse-spark-1.3-contributor-free', provider: 'zen', endpoint: 'responses' },
 ];
 
@@ -63,12 +64,14 @@ export function chatUrlFor(id: string, override?: { zenChat?: string; zenRespons
         return override?.zenChat || ZEN_CHAT_URL;
     }
     if (id.includes('/') && id.endsWith(':free')) return override?.openrouterChat || OPENROUTER_CHAT_URL;
+    if (shortModelId(id).endsWith('-contributor-free')) return override?.zenResponses || ZEN_RESPONSES_URL;
     return override?.zenChat || ZEN_CHAT_URL;
 }
 
 export function endpointFor(id: string): DurevEndpoint {
     const found = findModel(id);
     if (found) return found.endpoint;
+    if (shortModelId(id).endsWith('-contributor-free')) return 'responses';
     return 'chat';
 }
 
@@ -261,6 +264,7 @@ export class DurevcodeComponents {
     public permissions: TsPermissionStore;
     public questions: TsQuestionStore;
     public todos: TsTodoStore;
+    public always: TsAlwaysStore;
     private context: PluginContext;
 
     constructor(context: PluginContext) {
@@ -273,6 +277,7 @@ export class DurevcodeComponents {
         this.permissions = new TsPermissionStore();
         this.questions = new TsQuestionStore();
         this.todos = new TsTodoStore();
+        this.always = new TsAlwaysStore();
         void this.context;
     }
 
@@ -284,6 +289,7 @@ export class DurevcodeComponents {
         this.permissions.clear();
         this.questions.clear();
         this.todos.clear();
+        this.always.clear();
     }
 }
 
@@ -510,5 +516,128 @@ export class TsTodoStore {
 
     clear(): void {
         this.map.clear();
+    }
+}
+
+export type RuleVerdict = 'allow' | 'ask' | 'deny';
+
+export interface PermRule {
+    tool: string;
+    pattern: string;
+    verdict: RuleVerdict;
+}
+
+export function wildcardMatch(pattern: string, text: string): boolean {
+    let pi = 0;
+    let ti = 0;
+    let star: number | null = null;
+    let mark = 0;
+    while (ti < text.length) {
+        if (pi < pattern.length && (pattern[pi] === '?' || pattern[pi] === text[ti])) {
+            pi += 1;
+            ti += 1;
+        } else if (pi < pattern.length && pattern[pi] === '*') {
+            star = pi;
+            mark = ti;
+            pi += 1;
+        } else if (star !== null) {
+            pi = star + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while (pi < pattern.length && pattern[pi] === '*') pi += 1;
+    return pi === pattern.length;
+}
+
+export function expandHome(pattern: string, home: string): string {
+    if (pattern === '~') return home;
+    if (pattern.startsWith('~/')) return `${home.replace(/\/$/, '')}/${pattern.slice(2)}`;
+    if (pattern.startsWith('$HOME/')) return `${home.replace(/\/$/, '')}/${pattern.slice(6)}`;
+    return pattern;
+}
+
+export function defaultRules(): PermRule[] {
+    return [
+        { tool: 'read', pattern: '*', verdict: 'allow' },
+        { tool: 'read', pattern: '*.env', verdict: 'deny' },
+        { tool: 'read', pattern: '*.env.*', verdict: 'deny' },
+        { tool: 'read', pattern: '*.env.example', verdict: 'allow' },
+        { tool: 'write', pattern: '*', verdict: 'ask' },
+        { tool: 'bash', pattern: '*', verdict: 'ask' },
+        { tool: 'external', pattern: '*', verdict: 'ask' },
+    ];
+}
+
+export function secretGuard(): PermRule[] {
+    return [
+        { tool: 'read', pattern: '*.env', verdict: 'deny' },
+        { tool: 'read', pattern: '*.env.*', verdict: 'deny' },
+        { tool: 'read', pattern: '*.env.example', verdict: 'allow' },
+    ];
+}
+
+export function trustedRootRules(root: string): PermRule[] {
+    const clean = root.replace(/\/$/, '');
+    return [
+        { tool: 'read', pattern: `${clean}/*`, verdict: 'allow' },
+        { tool: 'bash', pattern: 'git status*', verdict: 'allow' },
+        { tool: 'bash', pattern: 'git diff*', verdict: 'allow' },
+        { tool: 'bash', pattern: 'git log*', verdict: 'allow' },
+        { tool: 'bash', pattern: 'ls*', verdict: 'allow' },
+        { tool: 'bash', pattern: 'cat *', verdict: 'allow' },
+        { tool: 'bash', pattern: 'grep *', verdict: 'allow' },
+        { tool: 'bash', pattern: 'rm *', verdict: 'deny' },
+    ];
+}
+
+export function evaluateRules(rules: PermRule[], tool: string, input: string, home: string): RuleVerdict {
+    let verdict: RuleVerdict | null = null;
+    for (const rule of rules) {
+        if (rule.tool !== '*' && rule.tool !== tool) continue;
+        if (wildcardMatch(expandHome(rule.pattern, home), input)) verdict = rule.verdict;
+    }
+    return verdict || 'ask';
+}
+
+export function fullChain(root: string, always: Array<{ tool: string; pattern: string }>): PermRule[] {
+    return [
+        ...defaultRules(),
+        ...trustedRootRules(root),
+        ...always.map((r) => ({ tool: r.tool, pattern: r.pattern, verdict: 'allow' as RuleVerdict })),
+        ...secretGuard(),
+    ];
+}
+
+export function suggestPattern(tool: string, input: string): string {
+    const first = (input.split(/\s+/)[0] || '').trim();
+    if (tool === 'bash' && first) return `${first} *`;
+    return input;
+}
+
+export class TsAlwaysStore {
+    private items: Array<{ tool: string; pattern: string }> = [];
+
+    add(tool: string, pattern: string): void {
+        if (!this.items.some((r) => r.tool === tool && r.pattern === pattern)) {
+            this.items.push({ tool, pattern });
+        }
+    }
+
+    list(): Array<{ tool: string; pattern: string }> {
+        return this.items.map((r) => ({ ...r }));
+    }
+
+    remove(tool: string, pattern: string): boolean {
+        const i = this.items.findIndex((r) => r.tool === tool && r.pattern === pattern);
+        if (i < 0) return false;
+        this.items.splice(i, 1);
+        return true;
+    }
+
+    clear(): void {
+        this.items = [];
     }
 }

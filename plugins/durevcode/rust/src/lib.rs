@@ -4,6 +4,7 @@ pub mod events;
 pub mod models;
 pub mod permissions;
 pub mod questions;
+pub mod rules;
 pub mod sessions;
 pub mod todos;
 #[cfg(not(target_arch = "wasm32"))]
@@ -17,6 +18,7 @@ pub use events::{Event, EventLog, PromptQueue};
 pub use models::{chat_url_for, find_model, is_free_id, needs_responses_endpoint, supports_anonymous, FreeModel, FREE_MODELS};
 pub use permissions::{Decision, PermissionRequest, PermissionStore};
 pub use questions::{QuestionItem, QuestionOption, QuestionRequest, QuestionStore};
+pub use rules::{evaluate, full_chain, secret_guard, suggest_pattern, trusted_root_rules, wildcard_match, Rule, Verdict};
 pub use sessions::{Session, SessionStore};
 pub use todos::{TodoItem, TodoStore};
 #[cfg(not(target_arch = "wasm32"))]

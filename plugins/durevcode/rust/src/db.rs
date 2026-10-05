@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS auth (
     created INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user, provider)
 );
+CREATE TABLE IF NOT EXISTS always_rules (
+    tool TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    PRIMARY KEY (tool, pattern)
+);
 ";
 
 fn next_id(conn: &Connection, table: &str, col: &str, prefix: &str) -> Result<String> {
@@ -356,6 +361,28 @@ impl DbStore {
         )?;
         Ok(n > 0)
     }
+
+    pub fn always_add(&self, tool: &str, pattern: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO always_rules (tool, pattern) VALUES (?1, ?2)",
+            params![tool, pattern],
+        )?;
+        Ok(())
+    }
+
+    pub fn always_list(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare("SELECT tool, pattern FROM always_rules ORDER BY tool, pattern")?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        rows.collect()
+    }
+
+    pub fn always_del(&self, tool: &str, pattern: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "DELETE FROM always_rules WHERE tool = ?1 AND pattern = ?2",
+            params![tool, pattern],
+        )?;
+        Ok(n > 0)
+    }
 }
 
 #[cfg(test)]
@@ -443,5 +470,16 @@ mod tests {
         assert!(db.auth_del("u1", "zen").unwrap());
         assert!(!db.auth_has("u1", "zen").unwrap());
         assert!(!db.auth_del("u1", "zen").unwrap());
+    }
+
+    #[test]
+    fn always_rules_crud() {
+        let db = DbStore::open_memory().unwrap();
+        db.always_add("bash", "git *").unwrap();
+        db.always_add("bash", "git *").unwrap();
+        let list = db.always_list().unwrap();
+        assert_eq!(list, vec![("bash".to_string(), "git *".to_string())]);
+        assert!(db.always_del("bash", "git *").unwrap());
+        assert!(!db.always_del("bash", "git *").unwrap());
     }
 }

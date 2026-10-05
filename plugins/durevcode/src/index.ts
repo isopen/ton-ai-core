@@ -141,9 +141,39 @@ export class DurevcodePlugin extends BasePlugin<DurevcodeConfig> {
         return this.skills.readTodos(session);
     }
 
+    async listModels() {
+        this.checkInitialized();
+        return this.skills.listModels();
+    }
+
     async completeTodo(session: string, position: number) {
         this.checkInitialized();
         return this.skills.completeTodo(session, position);
+    }
+
+    checkRules(root: string, tool: string, input: string) {
+        this.checkInitialized();
+        return this.skills.checkRules(root, tool, input);
+    }
+
+    suggestPattern(tool: string, input: string): string {
+        this.checkInitialized();
+        return this.skills.suggestPattern(tool, input);
+    }
+
+    async addAlwaysRule(tool: string, pattern: string) {
+        this.checkInitialized();
+        return this.skills.addAlwaysRule(tool, pattern);
+    }
+
+    async listAlwaysRules() {
+        this.checkInitialized();
+        return this.skills.listAlwaysRules();
+    }
+
+    async removeAlwaysRule(tool: string, pattern: string) {
+        this.checkInitialized();
+        return this.skills.removeAlwaysRule(tool, pattern);
     }
 
     async runToolLocal(root: string, kind: 'read' | 'write', args: string[]) {

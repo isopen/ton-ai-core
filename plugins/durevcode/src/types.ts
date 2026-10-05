@@ -2,6 +2,8 @@ export interface DurevcodeConfig {
     binaryPath?: string;
     storePath?: string;
     timeoutMs?: number;
+    chatTimeoutMs?: number;
+    paceMs?: number;
     fallbackOnly?: boolean;
     model?: string;
     fallbackModels?: string[];
@@ -20,6 +22,7 @@ export interface DurevModelRef {
     id: string;
     provider: DurevProvider;
     endpoint: DurevEndpoint;
+    name?: string;
 }
 
 export type DurevEngine = 'rust' | 'ts';
