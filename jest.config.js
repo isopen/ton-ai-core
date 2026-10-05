@@ -44,6 +44,9 @@ const distJsOpts = {
 module.exports = {
   roots: [
     '<rootDir>/plugins/mtproto/tests',
+    '<rootDir>/packages/core/src/agent/tests',
+    '<rootDir>/packages/core/src/plugin/tests',
+    '<rootDir>/packages/core/src/events/tests',
     '<rootDir>/packages/core/src/crypton/tests',
     '<rootDir>/plugins/tl-language/tests',
     '<rootDir>/plugins/agent-transport/tests',

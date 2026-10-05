@@ -81,6 +81,13 @@ export class PluginManager extends EventEmitter {
 
     try {
       await plugin.initialize(context);
+    } catch (error) {
+      this.emit('plugin:error', { name, error });
+      await this.runTeardown(plugin, name, false);
+      throw error;
+    }
+
+    try {
       if (plugin.onActivate) {
         await plugin.onActivate();
       }
@@ -88,6 +95,7 @@ export class PluginManager extends EventEmitter {
       this.emit('plugin:activated', { name });
     } catch (error) {
       this.emit('plugin:error', { name, error });
+      await this.runTeardown(plugin, name, true);
       throw error;
     }
   }
@@ -100,25 +108,31 @@ export class PluginManager extends EventEmitter {
       return;
     }
 
-    try {
-      if (plugin.onDeactivate) {
-        await plugin.onDeactivate();
-      }
-      if (plugin.shutdown) {
-        await plugin.shutdown();
-      }
-      this.contexts.delete(name);
-      this.emit('plugin:deactivated', { name });
-    } catch (error) {
-      this.emit('plugin:error', { name, error });
-      throw error;
+    const failure = await this.runTeardown(plugin, name, true);
+
+    if (failure !== undefined) {
+      throw failure;
     }
+
+    this.emit('plugin:deactivated', { name });
   }
 
   async deactivateAll(): Promise<void> {
     const activePlugins = Array.from(this.contexts.keys());
+    let failure: unknown;
+
     for (const name of activePlugins.reverse()) {
-      await this.deactivatePlugin(name);
+      try {
+        await this.deactivatePlugin(name);
+      } catch (error) {
+        if (failure === undefined) {
+          failure = error;
+        }
+      }
+    }
+
+    if (failure !== undefined) {
+      throw failure;
     }
   }
 
@@ -140,6 +154,34 @@ export class PluginManager extends EventEmitter {
 
   listActivePlugins(): string[] {
     return Array.from(this.contexts.keys());
+  }
+
+  private async runTeardown(plugin: Plugin, name: string, runDeactivate: boolean): Promise<unknown> {
+    let failure: unknown;
+
+    if (runDeactivate && plugin.onDeactivate) {
+      try {
+        await plugin.onDeactivate();
+      } catch (error) {
+        failure = error;
+        this.emit('plugin:error', { name, error });
+      }
+    }
+
+    if (plugin.shutdown) {
+      try {
+        await plugin.shutdown();
+      } catch (error) {
+        if (failure === undefined) {
+          failure = error;
+        }
+        this.emit('plugin:error', { name, error });
+      }
+    }
+
+    this.contexts.delete(name);
+
+    return failure;
   }
 
   private createContext(name: string, config: Record<string, any>): PluginContext {

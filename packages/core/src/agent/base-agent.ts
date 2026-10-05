@@ -88,14 +88,8 @@ export abstract class BaseAgent extends BaseAgentCore<AgentConfig> {
     }
   }
 
-  async stop(): Promise<void> {
-    this.isRunning = false;
-    this.initialized = false;
-    await this.plugins.deactivateAll();
-    await this.onStop();
+  protected async onPluginsReleased(): Promise<void> {
     await this.mcp.close();
-    this.emit(AGENT_EVENTS.STOPPED, { id: this.id, name: this.name });
-    this.removeAllListeners();
   }
 
   async getBalance(): Promise<BalanceResponse> {

@@ -30,6 +30,7 @@ export abstract class BaseAgentCore<TConfig extends BaseAgentConfig = BaseAgentC
   protected startTime?: Date;
   protected initialized: boolean = false;
   protected logger: Logger;
+  private stopping: Promise<void> | null = null;
 
   constructor(config: TConfig = {} as TConfig) {
     super();
@@ -70,19 +71,34 @@ export abstract class BaseAgentCore<TConfig extends BaseAgentConfig = BaseAgentC
 
     if (!this.isRunning) {
       this.isRunning = true;
+      this.stopping = null;
       await this.onStart();
       this.emit(AGENT_EVENTS.STARTED, { id: this.id, name: this.name });
     }
   }
 
   async stop(): Promise<void> {
+    if (!this.stopping) {
+      this.stopping = this.stopInternal();
+    }
+
+    return this.stopping;
+  }
+
+  private async stopInternal(): Promise<void> {
     this.isRunning = false;
     this.initialized = false;
-    await this.plugins.deactivateAll();
-    await this.onStop();
+    try {
+      await this.onStop();
+    } finally {
+      await this.plugins.deactivateAll();
+      await this.onPluginsReleased();
+    }
     this.emit(AGENT_EVENTS.STOPPED, { id: this.id, name: this.name });
     this.removeAllListeners();
   }
+
+  protected async onPluginsReleased(): Promise<void> {}
 
   async registerPlugin(plugin: Plugin, config?: Record<string, any>): Promise<void> {
     await this.plugins.registerPlugin(plugin);
