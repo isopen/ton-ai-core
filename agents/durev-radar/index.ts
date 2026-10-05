@@ -6,7 +6,7 @@ import { acquireDurevLock, lockPathFor, releaseDurevLock, sharedChatLockPath, Du
 import { AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
 
 function loadDotEnv(): void {
-    for (const name of ['.env', 'env.local']) {
+    for (const name of ['.env']) {
         const file = join(__dirname, name);
         if (!existsSync(file)) continue;
         for (const line of readFileSync(file, 'utf8').split('\n')) {
@@ -71,7 +71,7 @@ const config: DurevRadarConfig = {
         root: process.env.DUREV_ROOT || process.cwd(),
         allowedUsers: userIdList(),
         model: process.env.DUREV_MODEL || 'space-bunny-free',
-        pollMs: optionalInt('DUREV_POLL_MS', 3000),
+        pollMs: optionalInt('DUREV_POLL_MS', 1000),
         maxSessions: optionalInt('DUREV_MAX_SESSIONS', 10),
     },
 };

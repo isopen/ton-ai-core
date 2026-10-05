@@ -106,6 +106,16 @@ function stubEngine(): DurevEngine & { runs: Array<{ permId: string }> } {
         hasUserKey: () => false,
         saveUserKey: async () => true,
         lastAnsweredModel: () => null,
+        agentBusy: () => false,
+        listModels: async () => [],
+        getAgentContext: () => ({ tokensIn: 0, tokensOut: 0, turns: 0, cost: 0 }),
+        readTodos: async () => [],
+        checkRules: async () => 'ask' as const,
+        addAlwaysRule: async () => true,
+        suggestPattern: (tool: string, input: string) => {
+            const first = (input.split(/\s+/)[0] || '').trim();
+            return tool === 'bash' && first ? `${first} *` : input;
+        },
     };
     return Object.assign(engine, { runs });
 }
@@ -145,10 +155,11 @@ describe('durev-radar prompt loop', () => {
         const durev = stubEngine();
         await agent.handleInbound(telegram, durev, inbound({ message_id: 11, text: 'hello' }));
         const sends = calls.filter((c) => c.op === 'send');
-        assert.equal(sends.length, 3);
-        assert.match(String((sends[0].params as Record<string, unknown>).text), /🔧/);
-        assert.match(String((sends[1].params as Record<string, unknown>).text), /echo:hello/);
-        assert.match(JSON.stringify((sends[2].params as Record<string, unknown>).reply_markup || {}), /stop:0/);
+        assert.equal(sends.length, 4);
+        assert.match(String((sends[0].params as Record<string, unknown>).text), /Thinking/);
+        assert.match(String((sends[1].params as Record<string, unknown>).text), /ran hello/);
+        assert.match(String((sends[2].params as Record<string, unknown>).text), /echo:hello/);
+        assert.match(JSON.stringify((sends[3].params as Record<string, unknown>).reply_markup || {}), /stop:0/);
     });
 
     test('foreign chat and bots are ignored', async () => {
@@ -225,7 +236,7 @@ describe('durev-radar questions', () => {
         const n = calls.filter((c) => c.op === 'send').length;
         await agent.handleInbound(telegram, durev, inbound({ message_id: 42, text: '2', reply_to_message: { message_id: cardId } }));
         const after = calls.filter((c) => c.op === 'send');
-        assert.equal(after.length, n + 2);
+        assert.equal(after.length, n + 3);
         assert.match(String((after[after.length - 1].params as Record<string, unknown>).text), /echo:2/);
     });
 });
@@ -258,14 +269,52 @@ describe('durev-radar login', () => {
 });
 
 describe('durev-radar model command', () => {
-    test('/model reports model and mode', async () => {
+    test('/model posts a free-only card', async () => {
         const agent = makeAgent();
         const { telegram, calls } = stubTelegram();
         const durev = stubEngine();
         await agent.handleInbound(telegram, durev, inbound({ message_id: 60, text: '/model' }));
         const sends = calls.filter((c) => c.op === 'send');
         assert.equal(sends.length, 1);
-        assert.match(String((sends[0].params as Record<string, unknown>).text), /space-bunny-free/);
+        const params = sends[0].params as Record<string, unknown>;
+        assert.match(String(params.text), /space-bunny-free/);
+        const kb = (params.reply_markup as { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }).inline_keyboard;
+        assert.ok(kb.length >= 11);
+        assert.ok(kb.every((row) => row[0].callback_data.startsWith('model:')));
+        assert.ok(!kb.some((row) => row[0].text.includes('🔑')));
+        assert.ok(kb.some((row) => row[0].text.startsWith('✅ ')));
+    });
+    test('model tap switches the thread model and edits the card', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 61, text: '/model' }));
+        await agent.handleCallback(telegram, durev, {
+            id: 'm1',
+            data: 'model:mimo-v2.5-free',
+            from: { id: 42, is_bot: false },
+            message: { message_id: 101, chat: { id: 1 } },
+        });
+        const state = await agent.sessionFor(0, durev);
+        assert.equal((state as unknown as { model?: string }).model, 'mimo-v2.5-free');
+        const edits = calls.filter((c) => c.op === 'edit');
+        assert.equal(edits.length, 1);
+        assert.match(String((edits[0].params as Record<string, unknown>).text), /mimo-v2\.5-free/);
+    });
+    test('unknown model tap is rejected', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 62, text: '/model' }));
+        await agent.handleCallback(telegram, durev, {
+            id: 'm2',
+            data: 'model:gpt-99',
+            from: { id: 42, is_bot: false },
+            message: { message_id: 101, chat: { id: 1 } },
+        });
+        const state = await agent.sessionFor(0, durev);
+        assert.equal((state as unknown as { model?: string }).model, undefined);
+        assert.ok(calls.some((c) => c.op === 'ack'));
     });
 });
 
@@ -291,12 +340,11 @@ describe('durev-radar keyboards', () => {
         await agent.pollQuestions(telegram, durev, { sessionId: state.sessionId, threadId: 0, lastActivity: Date.now() });
         const cardA = questionCard(agent);
         await agent.handleCallback(telegram, durev, cb('cb1', `q${cardA}:0`));
-        const edits = calls.filter((c) => c.op === 'edit');
+        const edits = calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('Alpha'));
         assert.equal(edits.length, 1);
-        assert.match(String((edits[0].params as Record<string, unknown>).text), /Alpha/);
         assert.equal(calls.filter((c) => c.op === 'ack').length, 1);
         await agent.handleCallback(telegram, durev, cb('cb2', `q${cardA}:1`));
-        assert.equal(calls.filter((c) => c.op === 'edit').length, 1);
+        assert.equal(calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('Saved')).length, 1);
         assert.equal(calls.filter((c) => c.op === 'ack').length, 2);
     });
     test('multi toggles and done submits', async () => {
@@ -313,9 +361,8 @@ describe('durev-radar keyboards', () => {
         await agent.handleCallback(telegram, durev, cb('m2', `q${card}:1`));
         assert.ok(calls.some((c) => c.op === 'markup'));
         await agent.handleCallback(telegram, durev, cb('m3', `q${card}:done`));
-        const edits = calls.filter((c) => c.op === 'edit');
+        const edits = calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('Saved'));
         assert.equal(edits.length, 1);
-        assert.match(String((edits[0].params as Record<string, unknown>).text), /Saved/);
     });
     test('stop button tap stops the thread', async () => {
         const agent = makeAgent();
@@ -349,6 +396,15 @@ describe('durev-radar keyboards', () => {
         await agent.handleInbound(telegram, durev, inbound({ message_id: 75, text: 'again' }));
         const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
         assert.ok(texts.some((t) => t.includes('Busy')));
+    });
+    test('free tier limit points to /login instead of generic unreachable', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        (durev as unknown as { runAgent: () => Promise<never> }).runAgent = async () => { throw new Error('chat failed: 403 free tier limit'); };
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 76, text: 'hi' }));
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(texts.some((t) => t.includes('/login')));
     });
     test('idle session is dropped silently', async () => {
         const agent = makeAgent();
@@ -403,10 +459,10 @@ describe('durev-radar event stream', () => {
         const durev = stubEngine();
         await agent.handleInbound(telegram, durev, inbound({ message_id: 80, text: 'do work' }));
         const state = await agent.sessionFor(0, durev);
-        const tools = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('🔧'));
+        const tools = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('ran do work'));
         assert.equal(tools.length, 1);
         await agent.flushEvents(telegram, durev, { sessionId: state.sessionId, threadId: 0, lastActivity: Date.now() });
-        assert.equal(calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('🔧')).length, 1);
+        assert.equal(calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('ran do work')).length, 1);
     });
     test('/stop interrupts the agent run', async () => {
         const agent = makeAgent();
@@ -421,5 +477,294 @@ describe('durev-radar event stream', () => {
         const state = await agent.sessionFor(0, durev);
         await agent.handleInbound(telegram, durev, inbound({ message_id: 82, text: '/stop' }));
         assert.deepEqual(interrupted, [state.sessionId]);
+    });
+});
+
+function permCard(agent: unknown): { card: number; perm: string } {
+    const posted = (agent as unknown as { permPosted: Map<number, { permId: string }> }).permPosted;
+    const entries = [...posted.entries()];
+    assert.ok(entries.length > 0);
+    const [card, ref] = entries[0] as [number, { permId: string }];
+    return { card, perm: ref.permId };
+}
+
+describe('durev-radar three-way permission', () => {
+    function pcb(id: string, data: string, msg = 101) {
+        return { id, data, from: { id: 42, is_bot: false }, message: { message_id: msg, chat: { id: 1 } } };
+    }
+    test('notice carries three buttons', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 90, text: '/exec bash echo hi' }));
+        const notice = calls.find((c) => c.op === 'send') as { params: Record<string, unknown> };
+        const kb = (notice.params.reply_markup as { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }).inline_keyboard;
+        assert.equal(kb.length, 1);
+        assert.deepEqual(kb[0].map((b) => b.text), ['♾️ Always allow', '✓ Allow once', 'Deny']);
+        assert.ok(kb[0][0].callback_data.startsWith('pper_'));
+        assert.ok(kb[0][0].callback_data.endsWith(':always'));
+    });
+    test('always tap saves a rule and runs', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        const rules: Array<{ tool: string; pattern: string }> = [];
+        (durev as unknown as { addAlwaysRule: (t: string, p: string) => Promise<boolean> }).addAlwaysRule =
+            async (t: string, p: string) => {
+                rules.push({ tool: t, pattern: p });
+                return true;
+            };
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 91, text: '/exec bash echo hi' }));
+        const a = permCard(agent);
+        await agent.handleCallback(telegram, durev, pcb('pa1', `p${a.perm}:always`, a.card));
+        assert.deepEqual(rules, [{ tool: 'bash', pattern: 'echo *' }]);
+        assert.equal(durev.runs.length, 1);
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(texts.some((t) => t.includes('Allowed always')));
+        assert.ok(calls.some((c) => c.op === 'markup'));
+    });
+    test('once tap does not save a rule', async () => {
+        const agent = makeAgent();
+        const { telegram } = stubTelegram();
+        const durev = stubEngine();
+        let saved = 0;
+        (durev as unknown as { addAlwaysRule: () => Promise<boolean> }).addAlwaysRule = async () => {
+            saved += 1;
+            return true;
+        };
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 92, text: '/exec read a.txt' }));
+        const o = permCard(agent);
+        await agent.handleCallback(telegram, durev, pcb('po1', `p${o.perm}:once`, o.card));
+        assert.equal(saved, 0);
+        assert.equal(durev.runs.length, 1);
+    });
+    test('deny tap refuses without running', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 93, text: '/exec read a.txt' }));
+        const r = permCard(agent);
+        await agent.handleCallback(telegram, durev, pcb('pr1', `p${r.perm}:reject`, r.card));
+        assert.equal(durev.runs.length, 0);
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(texts.some((t) => t.includes('Denied')));
+    });
+});
+
+describe('durev-radar formatter', () => {
+    test('markdown renders to telegram html', async () => {
+        const { markdownToTelegramHtml } = await import('../formatter');
+        const html = markdownToTelegramHtml('**bold** and `code`');
+        assert.ok(html.includes('<b>bold</b>'));
+        assert.ok(html.includes('<code>code</code>'));
+        const block = markdownToTelegramHtml('```ts\nconst a = 1;\n```');
+        assert.ok(block.includes('<pre>'));
+    });
+    test('truncateHtml keeps tags balanced', async () => {
+        const { truncateHtml } = await import('../formatter');
+        const out = truncateHtml('<b>hello world</b>', 10);
+        assert.ok(out.includes('</b>'));
+        assert.ok(out.length <= 14);
+    });
+    test('tool line and question card carry icons', async () => {
+        const { formatToolLine, formatQuestionCard, formatSaved } = await import('../formatter');
+        assert.ok(formatToolLine('read', 'notes/a.txt').includes('tg-emoji'));
+        assert.ok(formatQuestionCard('Pick?', ['A'], false).includes('Tap a button'));
+        assert.ok(formatSaved('Alpha').includes('Saved'));
+    });
+});
+
+describe('durev-radar approval nudge', () => {
+    test('busy session with pending perms gets a reminder', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        (durev as unknown as { agentBusy: () => boolean }).agentBusy = () => true;
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 90, text: '/exec read a.txt' }));
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 91, text: 'go on' }));
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(texts.some((t) => t.includes('Still waiting')));
+    });
+    test('busy session without pending perms stays quiet', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        (durev as unknown as { agentBusy: () => boolean }).agentBusy = () => true;
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 92, text: 'hello' }));
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(!texts.some((t) => t.includes('Still waiting')));
+    });
+});
+
+describe('durev-radar rules fast path', () => {
+    test('allowed action runs at once without a card', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        (durev as unknown as { checkRules: () => Promise<string> }).checkRules = async () => 'allow';
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 100, text: '/exec read a.txt' }));
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(!texts.some((t) => t.includes('Permission needed')));
+        assert.equal(durev.runs.length, 1);
+    });
+    test('denied action is refused without a card', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        (durev as unknown as { checkRules: () => Promise<string> }).checkRules = async () => 'deny';
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 101, text: '/exec bash rm -rf x' }));
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(texts.some((t) => t.includes('Denied by policy')));
+        assert.equal(durev.runs.length, 0);
+    });
+});
+
+describe('durev-radar command robustness', () => {
+    test('/allow@bot suffix works like /allow', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 110, text: '/exec read a.txt' }));
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 111, text: '/allow@ton_ai_core_bot', reply_to_message: { message_id: 101 } }));
+        assert.equal(durev.runs.length, 1);
+        void calls;
+    });
+    test('bare /allow applies to the single pending card', async () => {
+        const agent = makeAgent();
+        const { telegram } = stubTelegram();
+        const durev = stubEngine();
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 112, text: '/exec read a.txt' }));
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 113, text: '/allow' }));
+        assert.equal(durev.runs.length, 1);
+    });
+    test('bare /allow with several pending asks for a reply', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 114, text: '/exec read a.txt' }));
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 115, text: '/exec read b.txt' }));
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 116, text: '/deny' }));
+        assert.equal(durev.runs.length, 0);
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(texts.some((t) => t.includes('Several pending')));
+    });
+    test('nudge carries working buttons', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        (durev as unknown as { agentBusy: () => boolean }).agentBusy = () => true;
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 117, text: '/exec read a.txt' }));
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 118, text: 'go on' }));
+        const nudges = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Still waiting'));
+        assert.equal(nudges.length, 1);
+        const kb = ((nudges[0].params as Record<string, unknown>).reply_markup as { inline_keyboard: Array<Array<{ callback_data: string }>> }).inline_keyboard;
+        assert.ok(kb[0][0].callback_data.includes(':always'));
+    });
+});
+
+describe('durev-radar step icons parity', () => {
+    test('tool states map like opencode-radar', async () => {
+        const { toolStateIcon, toToolState } = await import('../formatter');
+        expect(toToolState('completed')).toBe('ok');
+        expect(toToolState('failed')).toBe('fail');
+        expect(toToolState('running')).toBe('running');
+        expect(toolStateIcon('running')).toContain('5411634513509885099');
+        expect(toolStateIcon('ok')).toContain('5766933926429854499');
+        expect(toolStateIcon('fail')).toContain('5465665476971471368');
+    });
+});
+
+describe('durev-radar thinking parity', () => {
+    test('thinking posts then flips to thought', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        await agent.startThinking(telegram, 0);
+        await agent.startThinking(telegram, 0);
+        const posts = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Thinking'));
+        assert.equal(posts.length, 1);
+        await agent.finalizeThinking(telegram, 0);
+        const edits = calls.filter((c) => c.op === 'edit');
+        assert.equal(edits.length, 1);
+        assert.match(String((edits[0].params as Record<string, unknown>).text), /Thought \(/);
+        await agent.finalizeThinking(telegram, 0);
+        assert.equal(calls.filter((c) => c.op === 'edit').length, 1);
+    });
+    test('thinking time formats like radar', async () => {
+        const { formatThinkingTime, formatThought, formatThinking } = await import('../formatter');
+        assert.equal(formatThinkingTime(2200), '2.2s');
+        assert.equal(formatThinkingTime(90000), '1m 30s');
+        assert.ok(formatThought(2200).includes('Thought (2.2s)'));
+        assert.ok(formatThinking('').includes('Thinking'));
+        assert.ok(formatThinking('abc').includes('abc'));
+    });
+});
+
+describe('durev-radar stats and todos', () => {
+    test('/stats shows context numbers', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        (durev as unknown as { getAgentContext: () => unknown }).getAgentContext = () => ({ tokensIn: 100, tokensOut: 20, turns: 3, cost: 0 });
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 120, text: '/stats' }));
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.equal(texts.length, 1);
+        assert.ok(texts[0].includes('Turns: 3'));
+        assert.ok(texts[0].includes('100'));
+    });
+    test('/todos lists with progress', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        (durev as unknown as { readTodos: () => Promise<unknown> }).readTodos = async () => ([
+            { content: 'write code', status: 'done', priority: 'medium', position: 0 },
+            { content: 'run tests', status: 'pending', priority: 'high', position: 1 },
+        ]);
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 121, text: '/todos' }));
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.equal(texts.length, 1);
+        assert.ok(texts[0].includes('Plan 1/2'));
+        assert.ok(texts[0].includes('write code'));
+    });
+    test('/todos empty state', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 122, text: '/todos' }));
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(texts.some((t) => t.includes('No todos')));
+    });
+});
+
+describe('durev-radar live model list', () => {
+    test('/model renders provider list when live works', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        (durev as unknown as { listModels: () => Promise<unknown> }).listModels = async () => ([
+            { id: 'longcat-2.0-free', provider: 'zen', endpoint: 'chat', name: 'LongCat 2.0 Free' },
+            { id: 'space-bunny-free', provider: 'zen', endpoint: 'chat', name: 'Space Bunny Free' },
+        ]);
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 130, text: '/model' }));
+        const sends = calls.filter((c) => c.op === 'send');
+        assert.equal(sends.length, 1);
+        const kb = ((sends[0].params as Record<string, unknown>).reply_markup as { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }).inline_keyboard;
+        assert.equal(kb.length, 2);
+        assert.ok(kb.some((row) => row[0].callback_data === 'model:longcat-2.0-free'));
+    });
+});
+
+describe('durev-radar model names', () => {
+    test('card shows provider display names', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const durev = stubEngine();
+        (durev as unknown as { listModels: () => Promise<unknown> }).listModels = async () => ([
+            { id: 'space-bunny-free', provider: 'zen', endpoint: 'chat', name: 'Space Bunny Free' },
+        ]);
+        await agent.handleInbound(telegram, durev, inbound({ message_id: 140, text: '/model' }));
+        const sends = calls.filter((c) => c.op === 'send');
+        assert.equal(sends.length, 1);
+        const kb = ((sends[0].params as Record<string, unknown>).reply_markup as { inline_keyboard: Array<Array<{ text: string }>> }).inline_keyboard;
+        assert.ok(kb.some((row) => row[0].text.includes('Space Bunny Free')));
     });
 });

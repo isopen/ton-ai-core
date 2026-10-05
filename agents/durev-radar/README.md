@@ -23,7 +23,7 @@ Wait for `Radar lock acquired` and `Agent started`, then write to the bot in Tel
 
 ## Environment
 
-Only two variables are required: `TELEGRAM_BOT_API_TOKEN` and `DUREV_CHAT_ID`. The rest have defaults. Copy `env.local`, fill the token and chat id, the loader picks up both `.env` and `env.local`:
+Only two variables are required: `TELEGRAM_BOT_API_TOKEN` and `DUREV_CHAT_ID`. The rest have defaults. Copy `.env`, fill the token and chat id, the loader picks up both `.env` and `.env`:
 
 ```text
 TELEGRAM_BOT_API_TOKEN=
@@ -36,7 +36,7 @@ DUREV_CHAT_ID=
 # OPENCODE_ZEN_API_KEY=            (needed for chat answers)
 # OPENROUTER_API_KEY=              (needed for :free models)
 # DUREV_ALLOWED_USERS=             (empty means everyone)
-# DUREV_POLL_MS=3000
+# DUREV_POLL_MS=1000
 # DUREV_MAX_SESSIONS=10
 ```
 
