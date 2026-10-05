@@ -29,7 +29,9 @@ async function main() {
 
     } catch (error) {
         console.error('Error:', error instanceof Error ? error.message : String(error));
-        await agent.stop().catch(() => { });
+        await agent.stop().catch((stopError) => {
+            console.error('Agent shutdown failed:', stopError);
+        });
     }
 }
 
@@ -247,13 +249,24 @@ async function interactiveMode(agent: LoggerAgent) {
 
     rl.on('close', () => {
         console.log('\nExiting interactive mode');
-        agent.stop().then(() => process.exit(0));
+        agent.stop().then(
+            () => process.exit(0),
+            (error) => {
+                console.error('Agent shutdown failed:', error);
+                process.exit(1);
+            }
+        );
     });
 
     process.on('SIGINT', async () => {
         console.log('\nReceived SIGINT. Stopping agent...');
-        await agent.stop();
-        process.exit(0);
+        try {
+            await agent.stop();
+            process.exit(0);
+        } catch (error) {
+            console.error('Agent shutdown failed:', error);
+            process.exit(1);
+        }
     });
 }
 
