@@ -71,18 +71,19 @@ async function main() {
     try {
         await agent.start();
 
-        process.on('SIGINT', async () => {
+        const shutdown = async () => {
             console.log('\nShutting down...');
-            await agent.stop();
-            process.exit(0);
-        });
+            try {
+                await agent.stop();
+                process.exit(0);
+            } catch (error) {
+                console.error('Agent shutdown failed:', error);
+                process.exit(1);
+            }
+        };
 
-        process.on('SIGTERM', async () => {
-            console.log('\nShutting down...');
-            await agent.stop();
-            process.exit(0);
-        });
-
+        process.on('SIGINT', shutdown);
+        process.on('SIGTERM', shutdown);
     } catch (error) {
         console.error('Failed to start agent:', error);
         process.exit(1);
