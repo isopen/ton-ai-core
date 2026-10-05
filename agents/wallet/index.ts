@@ -38,9 +38,14 @@ async function main() {
   await bobAgent.start();
 
   process.on('SIGINT', async () => {
-    await aliceAgent.stop();
-    await bobAgent.stop();
-    process.exit(0);
+    try {
+      await aliceAgent.stop();
+      await bobAgent.stop();
+      process.exit(0);
+    } catch (error) {
+      console.error('Agent shutdown failed:', error);
+      process.exit(1);
+    }
   });
 }
 
