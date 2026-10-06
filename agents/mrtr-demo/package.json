@@ -1,0 +1,21 @@
+{
+  "name": "@ton-ai/mrtr-demo",
+  "version": "0.1.0",
+  "description": "Demo agent showing MCP multi round-trip requests: a server asks for confirmation via elicitation and the agent answers it",
+  "main": "index.js",
+  "scripts": {
+    "start": "npx ts-node index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "testertesterov",
+  "license": "Boost Software License 1.0",
+  "private": true,
+  "dependencies": {
+    "@ton-ai/core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
