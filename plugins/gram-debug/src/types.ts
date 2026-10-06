@@ -1,3 +1,4 @@
+import type { BasePluginConfig } from "@ton-ai/core";
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'off';
 
 export const LOG_LEVELS: Record<LogLevel, number> = {
@@ -15,7 +16,7 @@ export interface ScopeConfig {
     file?: string;
 }
 
-export interface GramDebugConfig {
+export interface GramDebugConfig extends BasePluginConfig {
     enabled?: boolean;
     level?: LogLevel;
     noMediaCache?: boolean;

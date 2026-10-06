@@ -1,4 +1,5 @@
-export interface RailwayPluginConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface RailwayPluginConfig extends BasePluginConfig {
     apiToken: string;
     tokenType: 'account' | 'workspace' | 'project';
     teamId?: string;

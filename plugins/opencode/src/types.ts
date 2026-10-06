@@ -1,4 +1,5 @@
-export interface OpencodeConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface OpencodeConfig extends BasePluginConfig {
     baseUrl: string;
     timeoutMs: number;
     maxRetries: number;

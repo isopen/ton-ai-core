@@ -1,3 +1,4 @@
+import type { BasePluginConfig } from "@ton-ai/core";
 import { EventEmitter } from 'events';
 import { ICryptoBackend } from './crypto-backend';
 import { TcpTransport, TcpTransportType } from './tcp-transport';
@@ -6,7 +7,7 @@ import { REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, DEFAULT_HOST, HANDSHA
 import { BufferStream } from './buffer-stream';
 import { ProxyConfig } from './proxy-connect';
 
-export interface TcpConfig {
+export interface TcpConfig extends BasePluginConfig {
     cryptoBackend: ICryptoBackend;
     port: number;
     host: string;

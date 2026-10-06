@@ -1,3 +1,4 @@
+import type { BasePluginConfig } from "@ton-ai/core";
 import { EventEmitter } from 'events';
 import http from 'http';
 import { ICryptoBackend } from './crypto-backend';
@@ -5,7 +6,7 @@ import { HttpTransport, HttpTransportType } from './http-transport';
 import { crypton } from '@ton-ai/core';
 import { REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, DEFAULT_HOST, HANDSHAKE_TIMEOUT_MS } from './types';
 
-export interface HttpConfig {
+export interface HttpConfig extends BasePluginConfig {
     cryptoBackend: ICryptoBackend;
     port: number;
     host: string;

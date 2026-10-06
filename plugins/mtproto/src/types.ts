@@ -1,6 +1,7 @@
-import { SimpleAgentConfig } from '@ton-ai/core';
+import type { BasePluginConfig } from "@ton-ai/core";
+import { AgentConfig } from '@ton-ai/core';
 
-export interface MTCryptoConfig extends SimpleAgentConfig {
+export interface MTCryptoConfig extends AgentConfig, BasePluginConfig {
     mode?: 'client' | 'server';
     testMode?: boolean;
     authKeyMode?: 'p2p' | 'telegram';

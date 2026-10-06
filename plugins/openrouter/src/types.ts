@@ -1,4 +1,5 @@
-export interface OpenRouterConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface OpenRouterConfig extends BasePluginConfig {
     apiKey?: string;
     baseUrl?: string;
     defaultModel?: string;

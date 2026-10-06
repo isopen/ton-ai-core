@@ -1,4 +1,5 @@
-export interface CommentStripperConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface CommentStripperConfig extends BasePluginConfig {
     keepSingleBlank?: boolean;
     preserveHeader?: boolean;
     preserveDocblocks?: boolean;

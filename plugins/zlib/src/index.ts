@@ -1,3 +1,4 @@
+import type { BasePluginConfig } from "@ton-ai/core";
 import { BasePlugin } from '@ton-ai/core';
 
 import { Buffer } from 'buffer';
@@ -90,7 +91,7 @@ export async function compressGzip(data: Buffer): Promise<Buffer> {
     return compressGzipNode(data);
 }
 
-export interface ZlibConfig {
+export interface ZlibConfig extends BasePluginConfig {
     [key: string]: any;
 }
 

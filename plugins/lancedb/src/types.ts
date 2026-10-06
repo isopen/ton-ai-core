@@ -1,4 +1,5 @@
-export interface VectorDBConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface VectorDBConfig extends BasePluginConfig {
     uri: string;
     vectorDimension?: number;
     defaultTableName?: string;

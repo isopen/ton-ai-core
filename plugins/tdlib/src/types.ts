@@ -1,4 +1,5 @@
-export interface TdlibConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface TdlibConfig extends BasePluginConfig {
     apiId: number;
     apiHash: string;
     botToken?: string;

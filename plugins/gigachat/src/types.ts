@@ -1,4 +1,5 @@
-export interface GigaChatConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface GigaChatConfig extends BasePluginConfig {
     apiKey: string;
     scope?: string;
     model?: string;

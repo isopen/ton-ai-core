@@ -1,3 +1,4 @@
+import type { BasePluginConfig } from "@ton-ai/core";
 import { ICryptoBackend } from './crypto-backend';
 
 export const REKEY_MESSAGE_THRESHOLD = 101;
@@ -19,7 +20,7 @@ export const OBFUSCATION_INIT_SIZE = 64;
 export const CONTAINER_CONSTRUCTOR = 0x73f1f8dc;
 export const GZIP_CONTAINER_CONSTRUCTOR = 0x3072cfa1;
 
-export interface UdpConfig {
+export interface UdpConfig extends BasePluginConfig {
     cryptoBackend: ICryptoBackend;
     listenPort: number;
     listenAddress?: string;

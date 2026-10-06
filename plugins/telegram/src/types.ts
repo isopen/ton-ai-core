@@ -1,3 +1,4 @@
+import type { BasePluginConfig } from "@ton-ai/core";
 import { getLogger } from '@ton-ai/gram-debug';
 
 const log = getLogger('telegram');
@@ -2473,7 +2474,7 @@ export const TL_CONSTRUCTORS = {
     PING_DELAY_DISCONNECT: 0xf3427b8c,
 };
 
-export interface TelegramClientConfig {
+export interface TelegramClientConfig extends BasePluginConfig {
     apiId: number;
     apiHash: string;
     dcId?: number;

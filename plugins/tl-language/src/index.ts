@@ -1,3 +1,4 @@
+import type { BasePluginConfig } from "@ton-ai/core";
 import { BasePlugin } from '@ton-ai/core';
 import { getLogger } from '@ton-ai/gram-debug';
 import { parseTLSchema } from './parser';
@@ -17,7 +18,7 @@ import {
     BOXED_BUILTINS, BARE_BUILTINS,
 } from './types';
 
-export interface TLConfig {
+export interface TLConfig extends BasePluginConfig {
     schema?: string;
     schemaPath?: string;
 }

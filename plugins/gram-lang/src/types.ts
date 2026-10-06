@@ -1,4 +1,5 @@
-export interface GramLangConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface GramLangConfig extends BasePluginConfig {
     langPack?: string;
     cacheVersion?: string;
     defaultLang?: string;

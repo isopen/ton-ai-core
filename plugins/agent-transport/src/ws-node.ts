@@ -1,3 +1,4 @@
+import type { BasePluginConfig } from "@ton-ai/core";
 import { EventEmitter } from 'events';
 import { ICryptoBackend } from './crypto-backend';
 import { WsTransport, WsTransportType } from './ws-transport';
@@ -5,7 +6,7 @@ import { crypton } from '@ton-ai/core';
 import { REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, DEFAULT_HOST, HANDSHAKE_TIMEOUT_MS } from './types';
 import { BufferStream } from './buffer-stream';
 
-export interface WsConfig {
+export interface WsConfig extends BasePluginConfig {
     cryptoBackend: ICryptoBackend;
     port: number;
     host: string;

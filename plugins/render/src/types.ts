@@ -1,4 +1,5 @@
-export interface RenderPluginConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface RenderPluginConfig extends BasePluginConfig {
     apiKey: string;
     workspaceId?: string;
     defaultServiceName?: string;

@@ -1,4 +1,5 @@
-export interface VercelPluginConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface VercelPluginConfig extends BasePluginConfig {
     accessToken: string;
     teamId?: string;
 }

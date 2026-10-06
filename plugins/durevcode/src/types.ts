@@ -1,4 +1,5 @@
-export interface DurevcodeConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface DurevcodeConfig extends BasePluginConfig {
     binaryPath?: string;
     storePath?: string;
     timeoutMs?: number;
