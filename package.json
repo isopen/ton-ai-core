@@ -6,7 +6,8 @@
   "workspaces": [
     "packages/*",
     "plugins/*",
-    "agents/*"
+    "agents/*",
+    "mcp/*"
   ],
   "scripts": {
     "build": "npm run build -w @ton-ai/core && npm run build -ws --if-present",
