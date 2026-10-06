@@ -1,9 +1,10 @@
-import { MCPConfig } from '@ton-ai/core';
-
-export interface WalletConfig extends MCPConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface WalletConfig extends BasePluginConfig {
+  network?: string;
   autoConnect?: boolean;
   monitorInterval?: number;
   maxTransactions?: number;
+  mcpServer?: string;
 }
 
 export interface WalletInfo {

@@ -1,4 +1,5 @@
-import { BaseAgent, AgentConfig, MCPClient } from '@ton-ai/core';
+import { BaseAgent, AgentConfig } from '@ton-ai/core';
+import { TonMcpClient } from '@ton-ai/mcp-ton';
 import { OpenRouterPlugin, Message } from '@ton-ai/openrouter';
 import { EventEmitter } from 'events';
 
@@ -43,15 +44,12 @@ export class PaidAIAssistant extends BaseAgent {
     private requestCounter: number = 0;
     private totalSpent: string = '0';
 
-    private mcpReady: boolean = false;
     private pluginReady: boolean = false;
     private agentFullyInitialized: boolean = false;
 
-    private mcpReadyPromise: Promise<void>;
-    private mcpReadyResolver!: (value: void | PromiseLike<void>) => void;
-
     private pluginReadyPromise: Promise<void>;
     private pluginReadyResolver!: (value: void | PromiseLike<void>) => void;
+    private ton: TonMcpClient | null = null;
 
     private initializationPromise: Promise<void>;
     private initializationResolver!: (value: void | PromiseLike<void>) => void;
@@ -72,10 +70,6 @@ export class PaidAIAssistant extends BaseAgent {
         this.openRouter = new OpenRouterPlugin();
         this.eventEmitter = new EventEmitter();
 
-        this.mcpReadyPromise = new Promise((resolve) => {
-            this.mcpReadyResolver = resolve;
-        });
-
         this.pluginReadyPromise = new Promise((resolve) => {
             this.pluginReadyResolver = resolve;
         });
@@ -84,19 +78,6 @@ export class PaidAIAssistant extends BaseAgent {
             this.initializationResolver = resolve;
         });
 
-        this.setupEventListeners();
-    }
-
-    private setupEventListeners(): void {
-        (this.mcp as any).on('ready', () => {
-            console.log('MCP client ready event received');
-            this.mcpReady = true;
-            this.mcpReadyResolver();
-        });
-
-        (this.mcp as any).on('error', (error: Error) => {
-            console.error('MCP client error:', error);
-        });
     }
 
     on<K extends keyof AgentEvents>(event: K, listener: (...args: AgentEvents[K]) => void): this {
@@ -108,17 +89,12 @@ export class PaidAIAssistant extends BaseAgent {
         this.eventEmitter.emit(event, ...args);
     }
 
-    async waitForMCPReady(timeout: number = 30000): Promise<void> {
-        if (this.mcpReady) {
+    async waitForMCPReady(_timeout: number = 30000): Promise<void> {
+        const hub = this.getMcpHub();
+        if (hub && hub.status('ton') === 'ready') {
             return;
         }
-
-        return Promise.race([
-            this.mcpReadyPromise,
-            new Promise<void>((_, reject) => 
-                setTimeout(() => reject(new Error('MCP ready timeout')), timeout)
-            )
-        ]);
+        throw new Error('TON MCP server is not connected');
     }
 
     async waitForPluginReady(timeout: number = 30000): Promise<void> {
@@ -149,6 +125,7 @@ export class PaidAIAssistant extends BaseAgent {
 
     protected async onInitialize(): Promise<void> {
         console.log('Initializing Paid AI Assistant...');
+        this.ton = new TonMcpClient(this.getMcpHub());
 
         try {
             console.log('Waiting for MCP to be ready...');
@@ -156,7 +133,7 @@ export class PaidAIAssistant extends BaseAgent {
             console.log('MCP is ready');
 
             const pluginContext = {
-                mcp: this.mcp as MCPClient,
+                mcpHub: this.getMcpHub() ?? undefined,
                 events: this.eventEmitter,
                 logger: {
                     info: (message: string, ...args: any[]) => console.log(`[INFO] ${message}`, ...args),
@@ -213,7 +190,7 @@ export class PaidAIAssistant extends BaseAgent {
         await this.waitForInitialization();
 
         console.log('Paid AI Assistant is running');
-        console.log('Current wallet:', this.getWalletAddress());
+        console.log('Current wallet:', await this.requireTon().fetchWalletAddress());
 
         //this.startBalanceMonitoring();
     }
@@ -234,7 +211,6 @@ export class PaidAIAssistant extends BaseAgent {
         await this.openRouter.shutdown();
 
         this.agentFullyInitialized = false;
-        this.mcpReady = false;
         this.pluginReady = false;
     }
 
@@ -248,8 +224,15 @@ export class PaidAIAssistant extends BaseAgent {
         });
     }
 
+    private requireTon(): TonMcpClient {
+        if (!this.ton) {
+            throw new Error('TON MCP client is not initialized');
+        }
+        return this.ton;
+    }
+
     private async checkBalance(): Promise<void> {
-        const balance = await this.mcp.getBalance();
+        const balance = await this.requireTon().getBalance();
         const tonBalance = parseFloat(balance.ton);
         const threshold = parseFloat(this.assistantConfig.minBalanceThreshold!);
 
@@ -276,23 +259,23 @@ export class PaidAIAssistant extends BaseAgent {
 
     private async chargeForRequest(): Promise<{ hash: string; amount: string; success: boolean }> {
         try {
-            const response = await this.mcp.sendTON(
+            const { hash } = await this.requireTon().sendTON(
                 this.assistantConfig.treasuryAddress,
                 this.assistantConfig.costPerRequest!,
-                `AI Request`
+                `AI Request`,
             );
 
             this.requestCounter++;
             this.totalSpent = (parseFloat(this.totalSpent) + parseFloat(this.assistantConfig.costPerRequest!)).toString();
 
             this.emitEvent('payment:processed', {
-                hash: response.hash,
+                hash,
                 amount: this.assistantConfig.costPerRequest!,
                 requestNumber: this.requestCounter
             });
 
             return {
-                hash: response.hash,
+                hash,
                 amount: this.assistantConfig.costPerRequest!,
                 success: true
             };
@@ -432,7 +415,7 @@ export class PaidAIAssistant extends BaseAgent {
     async canMakeRequest(): Promise<boolean> {
         try {
             await this.ensureReady();
-            const balance = await this.mcp.getBalance();
+            const balance = await this.requireTon().getBalance();
             const tonBalance = parseFloat(balance.ton);
             const cost = parseFloat(this.assistantConfig.costPerRequest!);
             return tonBalance >= cost;

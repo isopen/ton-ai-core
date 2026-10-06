@@ -1,47 +1,48 @@
 import { PluginContext } from '@ton-ai/core';
-import { MCPClient } from '@ton-ai/core';
+import { TonMcpClient } from '@ton-ai/mcp-ton';
 import { WalletComponents } from './components';
-import { 
+import {
   WalletBalance,
   TransactionResult,
   SendTONResponse,
   SendJettonResponse,
   SendNFTResponse,
-  BalanceResponse,
-  SwapResult,
   JettonWithBalance,
   KnownJetton,
   NFT,
   ResolveDNSResponse,
   BackResolveDNSResponse,
-  SwapQuoteResponse
+  SwapQuoteResponse,
+  BalanceResponse
 } from './types';
 
 export class WalletSkills {
   private context: PluginContext;
-  private mcp: MCPClient;
   private components: WalletComponents;
+  private ton: TonMcpClient;
 
-  constructor(context: PluginContext, mcp: MCPClient, components: WalletComponents) {
+  constructor(context: PluginContext, components: WalletComponents) {
     this.context = context;
-    this.mcp = mcp;
     this.components = components;
+    const configured = (context.config as Record<string, unknown> | undefined)?.mcpServer;
+    const server = typeof configured === 'string' && configured.length > 0 ? configured : 'ton';
+    this.ton = new TonMcpClient(context.mcpHub, server);
   }
 
   isReady(): boolean {
-    return (this.mcp as any).isReady;
+    return this.ton.isReady();
   }
 
-  async waitForReady(timeout: number = 10000): Promise<void> {
-    if (this.isReady()) return;
+  async waitForReady(_timeout?: number): Promise<void> {
+    return this.ton.waitForReady();
+  }
 
-    this.context.logger.info('Waiting for wallet to be ready...');
-    await this.mcp.waitForReady(timeout);
-    this.context.logger.info('Wallet is ready');
+  async fetchWalletAddress(): Promise<string> {
+    return this.ton.fetchWalletAddress();
   }
 
   getWalletAddress(): string | undefined {
-    return this.mcp.getWalletAddress();
+    return this.ton.getWalletAddress();
   }
 
   async getBalance(useCache: boolean = true): Promise<WalletBalance> {
@@ -60,7 +61,7 @@ export class WalletSkills {
     }
 
     try {
-      const balance = await this.mcp.getBalance();
+      const balance = await this.ton.getBalance();
 
       this.components.balanceCache.set(balance);
 
@@ -81,11 +82,11 @@ export class WalletSkills {
     this.context.logger.info(`Getting last ${limit} transactions...`);
 
     try {
-      const transactions = await this.mcp.getTransactions(limit);
+      const transactions = await this.ton.getTransactions(limit);
 
       this.context.logger.info(`Found ${transactions.length} transactions`);
 
-      return transactions.map(tx => ({
+      return transactions.map((tx: any) => ({
         hash: tx.hash,
         time: tx.date || new Date(tx.timestamp).toLocaleString(),
         events: tx.events,
@@ -101,14 +102,14 @@ export class WalletSkills {
     this.context.logger.info(`Sending ${amount} TON to ${to}${comment ? ` (${comment})` : ''}...`);
 
     try {
-      const result = await this.mcp.sendTON(to, amount, comment) as SendTONResponse;
+      const { hash } = await this.ton.sendTON(to, amount, comment);
 
-      this.context.logger.info(`Transaction sent! Hash: ${result.hash}`);
+      this.context.logger.info(`Transaction sent! Hash: ${hash}`);
 
       this.components.balanceCache.clear();
 
       return {
-        hash: result.hash,
+        hash,
         success: true
       };
     } catch (error) {
@@ -121,12 +122,12 @@ export class WalletSkills {
     this.context.logger.info(`Sending ${amount} Jetton (${jettonAddress}) to ${to}...`);
 
     try {
-      const result = await this.mcp.sendJetton(to, jettonAddress, amount, comment) as SendJettonResponse;
+      const { hash } = await this.ton.sendJetton(to, jettonAddress, amount, comment);
 
-      this.context.logger.info(`Jetton sent! Hash: ${result.hash}`);
+      this.context.logger.info(`Jetton sent! Hash: ${hash}`);
 
       return {
-        hash: result.hash,
+        hash,
         success: true
       };
     } catch (error) {
@@ -139,7 +140,7 @@ export class WalletSkills {
     this.context.logger.info('Getting jetton balances...');
 
     try {
-      const jettons = await this.mcp.getJettons();
+      const jettons = await this.ton.getJettons();
 
       this.context.logger.info(`Found ${jettons.length} jettons`);
 
@@ -154,7 +155,7 @@ export class WalletSkills {
     this.context.logger.info('Getting known jettons...');
 
     try {
-      const jettons = await this.mcp.getKnownJettons();
+      const jettons = await this.ton.getKnownJettons();
 
       this.context.logger.info(`Found ${jettons.length} known jettons`);
 
@@ -169,7 +170,7 @@ export class WalletSkills {
     this.context.logger.info(`Getting swap quote: ${amount} ${fromToken} -> ${toToken}`);
 
     try {
-      const quote = await this.mcp.getSwapQuote(fromToken, toToken, amount, slippageBps);
+      const quote = await this.ton.getSwapQuote(fromToken, toToken, amount, slippageBps);
 
       this.context.logger.info(`Quote received: ${quote.fromAmount} -> ${quote.toAmount}`);
 
@@ -180,30 +181,11 @@ export class WalletSkills {
     }
   }
 
-  async swapTokens(fromToken: string, toToken: string, amount: string, slippageBps?: number): Promise<SwapResult> {
-    this.context.logger.info(`Swapping ${amount} ${fromToken} -> ${toToken}...`);
-
-    try {
-      const result = await this.mcp.swapTokens(fromToken, toToken, amount, slippageBps);
-
-      this.context.logger.info(`Swap executed! Hash: ${result.hash}`);
-
-      return {
-        hash: result.hash,
-        quote: result.quote,
-        success: result.success
-      };
-    } catch (error) {
-      this.context.logger.error('Failed to swap tokens:', error);
-      throw error;
-    }
-  }
-
   async getNFTs(limit: number = 20, offset: number = 0): Promise<NFT[]> {
     this.context.logger.info(`Getting NFTs (limit: ${limit}, offset: ${offset})...`);
 
     try {
-      const nfts = await this.mcp.getNFTs(limit, offset);
+      const nfts = await this.ton.getNFTs(limit, offset);
 
       this.context.logger.info(`Found ${nfts.length} NFTs`);
 
@@ -218,7 +200,7 @@ export class WalletSkills {
     this.context.logger.info(`Getting NFT: ${nftAddress}...`);
 
     try {
-      const nft = await this.mcp.getNFT(nftAddress);
+      const nft = await this.ton.getNFT(nftAddress);
 
       this.context.logger.info(`NFT found: ${nft.metadata?.name || 'Unnamed'}`);
 
@@ -233,12 +215,12 @@ export class WalletSkills {
     this.context.logger.info(`Sending NFT ${nftAddress} to ${to}...`);
 
     try {
-      const result = await this.mcp.sendNFT(nftAddress, to, comment) as SendNFTResponse;
+      const { hash } = await this.ton.sendNFT(nftAddress, to, comment);
 
-      this.context.logger.info(`NFT sent! Hash: ${result.hash}`);
+      this.context.logger.info(`NFT sent! Hash: ${hash}`);
 
       return {
-        hash: result.hash,
+        hash,
         success: true
       };
     } catch (error) {
@@ -251,7 +233,7 @@ export class WalletSkills {
     this.context.logger.info(`Resolving DNS: ${domain}...`);
 
     try {
-      const result = await this.mcp.resolveDNS(domain);
+      const result = await this.ton.resolveDNS(domain);
 
       this.context.logger.info(`Resolved to: ${result.address}`);
 
@@ -266,7 +248,7 @@ export class WalletSkills {
     this.context.logger.info(`Back resolving address: ${address}...`);
 
     try {
-      const result = await this.mcp.backResolveDNS(address);
+      const result = await this.ton.backResolveDNS(address);
 
       this.context.logger.info(`Resolved to domain: ${result.domain}`);
 

@@ -1,4 +1,5 @@
-import { BaseAgent, AgentConfig, AGENT_EVENTS, PLUGIN_EVENTS, MCP_EVENTS } from '@ton-ai/core';
+import { BaseAgent, AgentConfig, AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
+import { TonMcpClient } from '@ton-ai/mcp-ton';
 import { OpenRouterPlugin, VisionAnalysisOptions, VisionAnalysisResult } from '@ton-ai/openrouter';
 
 export interface ContentCheckerConfig extends AgentConfig {
@@ -23,6 +24,7 @@ export interface AnalysisResult extends VisionAnalysisResult {
 export class ContentCheckerAgent extends BaseAgent {
     private openRouter: OpenRouterPlugin;
     private agentConfig: ContentCheckerConfig;
+    private ton: TonMcpClient | null = null;
     private requestCounter: number = 0;
     private totalSpent: string = '0';
 
@@ -67,29 +69,15 @@ export class ContentCheckerAgent extends BaseAgent {
             console.log(`Plugin activated: ${name}`);
         });
 
-        this.on(MCP_EVENTS.READY, () => {
-            console.log('MCP client ready');
-        });
-
-        this.on(MCP_EVENTS.ERROR, (error) => {
-            console.error('MCP error:', error);
-        });
-
-        this.on(MCP_EVENTS.BALANCE_UPDATE, (balance) => {
-            console.log(`Balance update: ${balance}`);
-        });
-
-        this.on(MCP_EVENTS.TRANSACTION, (tx) => {
-            console.log(`Transaction: ${JSON.stringify(tx)}`);
-        });
     }
 
     protected async onInitialize(): Promise<void> {
         console.log('Initializing Content Checker Agent...');
+        this.ton = new TonMcpClient(this.getMcpHub());
 
         try {
-            console.log('Waiting for MCP client...');
-            await this.mcp.waitForReady();
+            console.log('Waiting for TON MCP server...');
+            await this.waitForTonReady();
 
             const pluginContext = {
                 events: this,
@@ -128,7 +116,7 @@ export class ContentCheckerAgent extends BaseAgent {
 
             console.log('Content Checker Agent initialized');
             console.log(`Default model: ${this.agentConfig.defaultModel}`);
-            console.log(`Wallet address: ${this.getWalletAddress()}`);
+            console.log(`Wallet address: ${await this.requireTon().fetchWalletAddress()}`);
 
         } catch (error) {
             this.emit(AGENT_EVENTS.ERROR, error instanceof Error ? error : new Error(String(error)));
@@ -173,10 +161,25 @@ export class ContentCheckerAgent extends BaseAgent {
         }
     }
 
+    private async waitForTonReady(): Promise<void> {
+        const hub = this.getMcpHub();
+        if (hub && hub.status('ton') === 'ready') {
+            return;
+        }
+        throw new Error('TON MCP server is not connected');
+    }
+
+    private requireTon(): TonMcpClient {
+        if (!this.ton) {
+            throw new Error('TON MCP client is not initialized');
+        }
+        return this.ton;
+    }
+
     private async ensureSufficientBalance(): Promise<void> {
         if (!this.agentConfig.treasuryAddress) return;
 
-        const balance = await this.mcp.getBalance();
+        const balance = await this.requireTon().getBalance();
         const tonBalance = parseFloat(balance.ton) || 0;
         const cost = 0.1;
 
@@ -198,16 +201,16 @@ export class ContentCheckerAgent extends BaseAgent {
 
             await this.ensureSufficientBalance();
 
-            const response = await this.mcp.sendTON(
+            const { hash } = await this.requireTon().sendTON(
                 this.agentConfig.treasuryAddress,
                 this.agentConfig.costPerRequest!,
-                `Media Analysis Request`
+                `Media Analysis Request`,
             );
 
             this.totalSpent = ((parseFloat(this.totalSpent) || 0) + (parseFloat(this.agentConfig.costPerRequest!) || 0)).toString();
 
             return {
-                hash: response.hash,
+                hash,
                 amount: this.agentConfig.costPerRequest!,
                 success: true
             };
@@ -364,7 +367,7 @@ export class ContentCheckerAgent extends BaseAgent {
 
     getStats() {
         const status = this.getStatus();
-        const { openRouterApiKey, mnemonic, ...restConfig } = this.agentConfig;
+        const { openRouterApiKey, ...restConfig } = this.agentConfig;
 
         return {
             ...status,
@@ -373,8 +376,7 @@ export class ContentCheckerAgent extends BaseAgent {
             model: this.agentConfig.defaultModel,
             config: {
                 ...restConfig,
-                openRouterApiKey: '***',
-                mnemonic: '***'
+                openRouterApiKey: '***'
             }
         };
     }

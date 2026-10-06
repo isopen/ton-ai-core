@@ -1,4 +1,5 @@
 import { ContentCheckerAgent } from './agent_mcp';
+import { tonServer } from '@ton-ai/mcp-ton';
 
 async function main() {
     const requiredEnvVars = ['OPENROUTER_API_KEY', 'TREASURY_ADDRESS', 'MNEMONIC'];
@@ -24,10 +25,10 @@ async function main() {
         costPerRequest: '0.000001',
         defaultModel: process.env.DEFAULT_MODEL || 'nvidia/nemotron-nano-12b-v2-vl:free',
         systemPrompt: 'You are a content analysis assistant. Analyze the provided media in detail.',
-        network: 'testnet',
-        mode: 'stdio',
         verbose: process.env.VERBOSE === 'true',
-        mnemonic: process.env.MNEMONIC
+        mcpServers: {
+            ton: tonServer({ network: 'testnet' }),
+        },
     });
 
     try {

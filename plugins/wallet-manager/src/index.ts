@@ -9,7 +9,6 @@ import {
   SendTONParams,
   SendJettonParams,
   SwapQuoteParams,
-  SwapResult,
   TransactionEvent,
   JettonWithBalance,
   KnownJetton,
@@ -44,14 +43,14 @@ export class WalletManagerPlugin extends BasePlugin<WalletConfig> {
   protected async onInit() {
     this.logger.info('Initializing WalletManager plugin...');
     this.components = new WalletComponents(this.context, this.config);
-    this.skills = new WalletSkills(this.context, this.mcp!, this.components);
+    this.skills = new WalletSkills(this.context, this.components);
     if (this.config.autoConnect) await this.skills.waitForReady();
     this.logger.info('WalletManager plugin initialized');
   }
 
   async onActivate() {
     this.logger.info('WalletManager plugin activated');
-    const address = this.skills.getWalletAddress();
+    const address = await this.skills.fetchWalletAddress();
     this.startTransactionMonitoring();
     this.events.emit('wallet:activated', { address, network: this.config.network });
   }
@@ -238,26 +237,6 @@ export class WalletManagerPlugin extends BasePlugin<WalletConfig> {
       params.amount,
       params.slippageBps
     );
-  }
-
-  async swapTokens(params: SwapQuoteParams): Promise<SwapResult> {
-    this.checkInitialized();
-
-    const result = await this.skills.swapTokens(
-      params.fromToken,
-      params.toToken,
-      params.amount,
-      params.slippageBps
-    );
-
-    this.events.emit('wallet:swap:executed', {
-      hash: result.hash,
-      fromToken: params.fromToken,
-      toToken: params.toToken,
-      amount: params.amount
-    });
-
-    return result;
   }
 
   async getNFTs(limit?: number, offset?: number): Promise<NFT[]> {

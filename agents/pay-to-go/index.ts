@@ -1,4 +1,5 @@
 import { PaidAIAssistant } from './agent';
+import { tonServer } from '@ton-ai/mcp-ton';
 
 async function main() {
     ['MNEMONIC', 'OPENROUTER_API_KEY', 'TREASURY_ADDRESS'].forEach(varName => {
@@ -9,15 +10,15 @@ async function main() {
     });
 
     const assistant = new PaidAIAssistant({
-        mnemonic: process.env.MNEMONIC,
         openRouterApiKey: process.env.OPENROUTER_API_KEY || '',
         treasuryAddress: process.env.TREASURY_ADDRESS || '',
         defaultModel: process.env.DEFAULT_MODEL || 'arcee-ai/trinity-large-preview:free',
         costPerRequest: '0.000001',
         minBalanceThreshold: '0.1',
-        network: 'testnet',
         systemPrompt: 'You are a helpful assistant.',
-        mode: 'stdio'
+        mcpServers: {
+            ton: tonServer({ network: 'testnet' }),
+        },
     });
 
     try {

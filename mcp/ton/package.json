@@ -1,0 +1,22 @@
+{
+  "name": "@ton-ai/mcp-ton",
+  "version": "0.1.0",
+  "description": "TON MCP server definition and hub-backed client for @ton-ai/core McpHub",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "author": "testertesterov",
+  "license": "Boost Software License 1.0",
+  "private": true,
+  "dependencies": {
+    "@ton-ai/core": "*",
+    "@ton/mcp": "^0.1.13"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "typescript": "^5.9.3"
+  }
+}

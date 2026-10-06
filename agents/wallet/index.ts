@@ -1,18 +1,24 @@
 import { BaseAgent } from '@ton-ai/core';
+import { tonServer, TonMcpClient } from '@ton-ai/mcp-ton';
 
 class WalletAgent extends BaseAgent {
+  private ton: TonMcpClient | null = null;
+
+  private requireTon(): TonMcpClient {
+    if (!this.ton) {
+      throw new Error('TON MCP client is not initialized');
+    }
+    return this.ton;
+  }
   protected async onInitialize() {
     console.log('Initializing WalletAgent...');
+    this.ton = new TonMcpClient(this.getMcpHub());
   }
 
   protected async onStart() {
     console.log('WalletAgent started');
-    console.log('Wallet:', this.getWalletAddress());
-
-    const balance = await this.getBalance();
-    console.log('Balance:', balance);
-
-    //await this.sendTON('UQAvlO9Hl_s0amBNHeA7M1szpYIWHtZn7lTAqsYtn7H1RhCv', '0.1', 'test');
+    console.log('Wallet:', await this.requireTon().fetchWalletAddress());
+    console.log('Balance:', await this.requireTon().getBalance());
   }
 
   protected async onStop() {
@@ -22,17 +28,15 @@ class WalletAgent extends BaseAgent {
 
 async function main() {
   const aliceAgent = new WalletAgent({
-    mode: 'stdio',
-    network: 'testnet',
-    mnemonic: process.env.MNEMONIC
+    name: 'alice',
+    mcpServers: { ton: tonServer({ network: 'testnet', mnemonic: process.env.MNEMONIC }) },
   });
 
   await aliceAgent.start();
 
   const bobAgent = new WalletAgent({
-    mode: 'stdio',
-    network: 'testnet',
-    mnemonic: process.env.MNEMONIC_1
+    name: 'bob',
+    mcpServers: { ton: tonServer({ network: 'testnet', mnemonic: process.env.MNEMONIC_1 }) },
   });
 
   await bobAgent.start();
