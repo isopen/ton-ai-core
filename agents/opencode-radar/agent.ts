@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
+import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup } from '@ton-ai/telegram-bot-api';
 import { ContextSnapshot, ModelApiInfo, OpencodeConfig, OpencodePlugin, OpencodeServerEvent, PermissionDecision, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionPermissionRule, SessionRow, snapshotTotal, SpawnedProcess } from '@ton-ai/opencode';
 import {
@@ -316,7 +316,7 @@ export interface RadarWatchConfig {
     idleSec: number;
 }
 
-export interface OpencodeRadarConfig extends SimpleAgentConfig {
+export interface OpencodeRadarConfig extends AgentConfig {
     telegram: TelegramBotConfig;
     opencode: OpencodeConfig;
     radar: RadarWatchConfig;
@@ -424,7 +424,7 @@ function permissionDecisionText(decision: PermissionDecision): string {
     return `${checkIcon()} ${decision === 'always' ? 'Allowed always.' : 'Allowed once.'}`;
 }
 
-export class OpencodeRadarAgent extends BaseAgentSimple {
+export class OpencodeRadarAgent extends BaseAgent {
     public readonly config: OpencodeRadarConfig;
 
     private watched = new Map<string, WatchedSession>();
@@ -965,7 +965,26 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
         }
     }
 
+    private attaching = new Map<string, Promise<WatchedSession>>();
+
     private async attachSession(
+        telegram: TelegramBotPlugin,
+        session: SessionRow,
+        existingThreadId?: number,
+    ): Promise<WatchedSession> {
+        const inFlight = this.attaching.get(session.id);
+        if (inFlight) return inFlight;
+        const run = this.doAttachSession(telegram, session, existingThreadId);
+        run.then(() => undefined, () => undefined);
+        this.attaching.set(session.id, run);
+        try {
+            return await run;
+        } finally {
+            this.attaching.delete(session.id);
+        }
+    }
+
+    private async doAttachSession(
         telegram: TelegramBotPlugin,
         session: SessionRow,
         existingThreadId?: number,
@@ -1141,7 +1160,10 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             try {
                 const state = await this.attachSession(telegram, session);
                 this.watched.set(id, state);
-                if (state.threadId !== null) this.prunePersistedThreadRivals(id, state.threadId);
+                if (state.threadId !== null) {
+                    this.resolveThreadRival(state);
+                    this.prunePersistedThreadRivals(id, state.threadId);
+                }
                 this.savePersisted();
             } catch (error) {
                 console.error(`Radar attach failed for session ${id}:`, error);
@@ -1243,6 +1265,26 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
             }
         }
         if (pruned) this.savePersisted();
+    }
+
+    private resolveThreadRival(state: WatchedSession): void {
+        if (state.threadId === null) return;
+        const rival = [...this.watched.entries()].find(
+            ([id, other]) => id !== state.session.id && other.threadId === state.threadId,
+        );
+        if (!rival) return;
+        const [rivalId, rivalState] = rival;
+        const stateNewer = state.session.time_updated >= rivalState.session.time_updated;
+        const loserId = stateNewer ? rivalId : state.session.id;
+        this.watched.delete(loserId);
+        this.dropSessionRefs(loserId);
+        const loserEntry = this.persisted[loserId];
+        if (loserEntry) loserEntry.threadId = null;
+        this.savePersisted();
+        console.warn(
+            `Radar resolved duplicate binding for topic ${state.threadId}: ` +
+                `detached ${loserId}, kept ${stateNewer ? state.session.id : rivalId}`,
+        );
     }
 
     private async safeReply(telegram: TelegramBotPlugin, state: WatchedSession, text: string): Promise<void> {
@@ -1428,6 +1470,28 @@ export class OpencodeRadarAgent extends BaseAgentSimple {
                     this.prunePersistedThreadRivals(existing.id, threadId);
                     this.savePersisted();
                     console.log(`Radar rebound session ${existing.id} to topic ${threadId}`);
+                    const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
+                    for (const queuedMessage of queued) {
+                        const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
+                        if (hasMediaMessage(queuedMessage)) {
+                            await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
+                        } else if (queuedText) {
+                            const queuedReplyTo = queuedMessage.reply_to_message?.message_id;
+                            if (await this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo)) continue;
+                            this.enqueuePrompt(state, queuedText);
+                        }
+                    }
+                    await this.pumpPrompts(telegram, opencode, state);
+                    return;
+                } else {
+                    const state = this.watched.get(existing.id)!;
+                    if (state.threadId === null) {
+                        state.threadId = threadId;
+                        this.persistThreadBinding(existing.id, threadId);
+                        this.prunePersistedThreadRivals(existing.id, threadId);
+                        this.savePersisted();
+                        console.log(`Radar restored topic ${threadId} for watched session ${existing.id}`);
+                    }
                     const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
                     for (const queuedMessage of queued) {
                         const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();

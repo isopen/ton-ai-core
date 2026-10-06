@@ -76,7 +76,7 @@ const config: OpencodeRadarConfig = {
         token: process.env.TELEGRAM_BOT_API_TOKEN || '',
         pollingTimeout: 30,
         pollingLimit: 100,
-        retryOnError: false,
+        retryOnError: true,
         maxRetries: 0,
         requestTimeoutMs: optionalInt('TELEGRAM_REQUEST_TIMEOUT_MS', 30000),
     },

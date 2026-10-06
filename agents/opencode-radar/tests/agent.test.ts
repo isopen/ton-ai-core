@@ -5439,3 +5439,82 @@ describe('radar general isolation', () => {
         assert.equal((state as { pending: unknown[] }).pending.length, 1);
     });
 });
+
+describe('radar duplicate topic binding', () => {
+    let now = 7000000;
+
+    beforeEach(() => {
+        now = 7000000;
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    test('message in a topic claimed by a concurrent attach is routed to the watched session, not to a fresh one', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        (agent as unknown as { persisted: Record<string, unknown> }).persisted = {
+            ses_old: { threadId: 999, contextMessageId: 55, pinnedThreadId: 999, lastSeen: now },
+        };
+        fake.setGetSessionImpl(async (id: string) => {
+            const state = await agent.attachSession(telegram, { ...SESSION, id: 'ses_old' }, 999);
+            (agent as unknown as { watched: Map<string, unknown> }).watched.set('ses_old', state);
+            return { ...SESSION, id: 'ses_old' };
+        });
+
+        await agent.handleUnknownThread(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, text: 'hello again' }, now), 999);
+
+        assert.deepEqual(fake.created, [], 'a bound topic must never get a rival session');
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_old', text: 'hello again' }]);
+        assert.ok(!calls.some((c) => c.op === 'create'));
+    });
+
+    test('duplicate topic binding resolves to the newer session', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const older = (await agent.attachSession(telegram, { ...SESSION, id: 'ses_old', time_updated: 100 }, 999)) as unknown as {
+            threadId: number | null;
+        };
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set('ses_old', older);
+        const newer = (await agent.attachSession(telegram, { ...SESSION, id: 'ses_new', time_updated: 200 }, 999)) as unknown as {
+            threadId: number | null;
+        };
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set('ses_new', newer);
+
+        await agent.resolveThreadRival(newer as never);
+
+        const watched = (agent as unknown as { watched: Map<string, unknown> }).watched;
+        assert.equal(watched.has('ses_new'), true, 'the newer session keeps the topic');
+        assert.equal(watched.has('ses_old'), false, 'the older session is detached');
+        const persisted = (agent as unknown as { persisted: Record<string, { threadId?: number }> }).persisted;
+        assert.equal(persisted['ses_old']?.threadId, null, 'the loser binding is cleared for a fresh topic');
+        assert.equal(persisted['ses_new']?.threadId, 999);
+    });
+
+    test('concurrent attaches of the same session share one attach run', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        stubOpencode();
+        let release: () => void = () => {};
+        (telegram as unknown as { createForumTopic: (params: Record<string, unknown>) => Promise<unknown> }).createForumTopic =
+            async (params: Record<string, unknown>) => {
+                await new Promise<void>((resolve) => { release = resolve; });
+                calls.push({ op: 'create', params });
+                return { message_thread_id: 555, name: params.name, icon_color: 0 };
+            };
+
+        const both = Promise.all([
+            agent.attachSession(telegram, { ...SESSION, id: 'ses_dupe' }),
+            agent.attachSession(telegram, { ...SESSION, id: 'ses_dupe' }),
+        ]);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        release();
+        const [first, second] = (await both) as unknown as [unknown, unknown];
+
+        assert.equal(first, second, 'both callers must receive the same attach result');
+        assert.equal(calls.filter((c) => c.op === 'create').length, 1, 'only one topic may be created');
+    });
+});
