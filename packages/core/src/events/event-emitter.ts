@@ -2,7 +2,7 @@ type EventListener = (...args: any[]) => void;
 
 export class EventEmitter {
   private _events = new Map<string, EventListener[]>();
-  private _onceEvents = new WeakMap<EventListener, EventListener>();
+  private _onceWrappers = new WeakMap<EventListener, Map<string, EventListener>>();
 
   on(event: string, listener: EventListener): this {
     const listeners = this._events.get(event);
@@ -15,11 +15,20 @@ export class EventEmitter {
   }
 
   once(event: string, listener: EventListener): this {
+    const byEvent = this._onceWrappers.get(listener) ?? new Map<string, EventListener>();
+    const existing = byEvent.get(event);
+    if (existing) {
+      const listeners = this._events.get(event);
+      if (listeners && listeners.includes(existing)) return this;
+      this.on(event, existing);
+      return this;
+    }
     const wrapper = (...args: any[]) => {
       this.off(event, wrapper);
       listener(...args);
     };
-    this._onceEvents.set(listener, wrapper);
+    byEvent.set(event, wrapper);
+    this._onceWrappers.set(listener, byEvent);
     this.on(event, wrapper);
     return this;
   }
@@ -32,14 +41,16 @@ export class EventEmitter {
       listeners.splice(idx, 1);
       if (listeners.length === 0) this._events.delete(event);
     }
-    const wrapper = this._onceEvents.get(listener);
-    if (wrapper) {
+    const byEvent = this._onceWrappers.get(listener);
+    const wrapper = byEvent?.get(event);
+    if (byEvent && wrapper) {
       const idx2 = listeners.lastIndexOf(wrapper);
       if (idx2 !== -1) {
         listeners.splice(idx2, 1);
         if (listeners.length === 0) this._events.delete(event);
       }
-      this._onceEvents.delete(listener);
+      byEvent.delete(event);
+      if (byEvent.size === 0) this._onceWrappers.delete(listener);
     }
     return this;
   }

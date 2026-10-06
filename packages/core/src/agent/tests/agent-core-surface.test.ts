@@ -1,5 +1,5 @@
 import { strict as assert } from 'assert';
-import { BaseAgentSimple } from '../base-agent-simple';
+import { BaseAgent } from '../base-agent';
 import { BasePlugin } from '../../plugin/base-plugin';
 import type { PluginMetadata } from '../../plugin/plugin-interface';
 
@@ -32,7 +32,7 @@ class ProbePlugin extends BasePlugin {
     }
 }
 
-class SurfaceAgent extends BaseAgentSimple {
+class SurfaceAgent extends BaseAgent {
     protected async onInitialize(): Promise<void> {}
     protected async onStart(): Promise<void> {}
     protected async onStop(): Promise<void> {}

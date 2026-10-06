@@ -208,7 +208,7 @@ describe('plugin manager lifecycle', () => {
     });
 
     it('provides the context with merged global and per activation config', async () => {
-        const manager = new PluginManager(undefined, { shared: 'global', overridden: 'global' });
+        const manager = new PluginManager({ shared: 'global', overridden: 'global' });
         let seen: PluginContext | null = null;
 
         class ConfigProbe extends BasePlugin {

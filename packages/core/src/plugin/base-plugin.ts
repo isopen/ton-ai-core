@@ -1,8 +1,8 @@
-import type { MCPClient } from '../client';
+import type { McpHub } from '../mcp';
 import { Plugin, PluginContext, PluginMetadata, EventBus } from './plugin-interface';
 
 export interface BasePluginConfig {
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export abstract class BasePlugin<TConfig extends BasePluginConfig = BasePluginConfig> implements Plugin {
@@ -12,8 +12,8 @@ export abstract class BasePlugin<TConfig extends BasePluginConfig = BasePluginCo
   protected config!: TConfig;
   protected initialized = false;
 
-  get mcp(): MCPClient | undefined {
-    return this.context?.mcp;
+  get mcpHub(): McpHub | undefined {
+    return this.context?.mcpHub;
   }
 
   get logger() {
@@ -40,9 +40,11 @@ export abstract class BasePlugin<TConfig extends BasePluginConfig = BasePluginCo
     this.initialized = false;
   }
 
-  async onConfigChange?(newConfig: Record<string, any>): Promise<void>;
+  async onConfigChange(newConfig: Record<string, unknown>): Promise<void> {
+    this.config = newConfig as TConfig;
+  }
 
-  protected mergeConfig(raw: Record<string, any>): TConfig {
+  protected mergeConfig(raw: Record<string, unknown>): TConfig {
     return { ...this.defaults(), ...raw } as TConfig;
   }
 

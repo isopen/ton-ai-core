@@ -1,6 +1,5 @@
 import { strict as assert } from 'assert';
 import { BaseAgent } from '../base-agent';
-import { BaseAgentSimple } from '../base-agent-simple';
 import { BasePlugin } from '../../plugin/base-plugin';
 import type { PluginMetadata } from '../../plugin/plugin-interface';
 
@@ -41,7 +40,7 @@ class LifecyclePlugin extends BasePlugin {
     }
 }
 
-class UnsubscribeAgent extends BaseAgentSimple {
+class UnsubscribeAgent extends BaseAgent {
     constructor(private readonly plugin: LifecyclePlugin, private readonly trace: string[]) {
         super({ name: 'unsubscribe-agent', plugins: {} });
     }

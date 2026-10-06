@@ -1,4 +1,4 @@
-import type { MCPClient } from '../client';
+import type { McpHub } from '../mcp';
 
 export interface EventBus {
   on(event: string, listener: (...args: any[]) => void): this;
@@ -17,15 +17,15 @@ export interface PluginMetadata {
 }
 
 export interface PluginContext {
-  mcp?: MCPClient;
+  mcpHub?: McpHub;
   events: EventBus;
   logger: {
-    info: (message: string, ...args: any[]) => void;
-    error: (message: string, ...args: any[]) => void;
-    warn: (message: string, ...args: any[]) => void;
-    debug: (message: string, ...args: any[]) => void;
+    info: (message: string, ...args: unknown[]) => void;
+    error: (message: string, ...args: unknown[]) => void;
+    warn: (message: string, ...args: unknown[]) => void;
+    debug: (message: string, ...args: unknown[]) => void;
   };
-  config: Record<string, any>;
+  config: Record<string, unknown>;
 }
 
 export interface Plugin {
@@ -36,5 +36,5 @@ export interface Plugin {
 
   onActivate?(): Promise<void>;
   onDeactivate?(): Promise<void>;
-  onConfigChange?(newConfig: Record<string, any>): Promise<void>;
+  onConfigChange?(newConfig: Record<string, unknown>): Promise<void>;
 }

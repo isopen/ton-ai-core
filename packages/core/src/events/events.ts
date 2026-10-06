@@ -11,13 +11,3 @@ export const PLUGIN_EVENTS = {
   ACTIVATED: 'plugin:activated',
   DEACTIVATED: 'plugin:deactivated'
 } as const;
-
-export const MCP_EVENTS = {
-  READY: 'mcp:ready',
-  ERROR: 'mcp:error',
-  CLOSED: 'mcp:closed',
-  BALANCE_UPDATE: 'mcp:balance:update',
-  TRANSACTION: 'mcp:transaction',
-  JETTON_UPDATE: 'mcp:jetton:update',
-  NFT_UPDATE: 'mcp:nft:update'
-} as const;

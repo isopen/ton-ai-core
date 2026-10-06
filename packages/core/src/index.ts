@@ -1,12 +1,26 @@
-export * from './types';
-export { MCPClient, createServerlessHandler } from './client';
+export { Logger, DEFAULT_LOGGER } from './logger';
+export { fromNano } from '@ton/core';
+export { McpHub, McpError, McpEmptyStreamError, mcpContentText, mcpCallJson, MCP_PROTOCOL_VERSION } from './mcp';
+export type {
+  McpServerConfig,
+  McpTool,
+  McpToolResult,
+  McpServerInfo,
+  McpHubOptions,
+  McpResource,
+  McpResourceContent,
+  McpPrompt,
+  McpCallOptions,
+  McpInputHandler,
+  McpInputRequests,
+  McpInputResponses,
+  McpSubscriptionFilter,
+} from './mcp';
 
 export {
   BaseAgentCore,
-  BaseAgentSimple,
   BaseAgent,
   AgentConfig,
-  SimpleAgentConfig,
 } from './agent';
 
 export {
@@ -22,8 +36,7 @@ export {
 export {
   EventEmitter,
   AGENT_EVENTS,
-  PLUGIN_EVENTS,
-  MCP_EVENTS
+  PLUGIN_EVENTS
 } from './events';
 
 export * from './crypton';

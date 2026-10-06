@@ -27,6 +27,36 @@ describe('event emitter', () => {
         assert.equal(emitter.listenerCount('tick'), 0);
     });
 
+    it('calls the listener once when once is registered twice for the same event', () => {
+        const emitter = new EventEmitter();
+        let calls = 0;
+        const listener = () => { calls += 1; };
+
+        emitter.once('tick', listener);
+        emitter.once('tick', listener);
+        emitter.emit('tick');
+        emitter.emit('tick');
+
+        assert.equal(calls, 1);
+        assert.equal(emitter.listenerCount('tick'), 0);
+    });
+
+    it('keeps independent once wrappers for the same listener across events', () => {
+        const emitter = new EventEmitter();
+        const seen: string[] = [];
+        const listener = (tag: string) => seen.push(tag);
+
+        emitter.once('a', listener);
+        emitter.once('b', listener);
+        emitter.emit('a', 'a1');
+        emitter.emit('a', 'a2');
+        emitter.emit('b', 'b1');
+
+        assert.deepEqual(seen, ['a1', 'b1']);
+        assert.equal(emitter.listenerCount('a'), 0);
+        assert.equal(emitter.listenerCount('b'), 0);
+    });
+
     it('removes a once wrapper when the original listener is passed to off', () => {
         const emitter = new EventEmitter();
         let calls = 0;

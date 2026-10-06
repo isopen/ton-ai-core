@@ -1,8 +1,8 @@
 import { strict as assert } from 'assert';
 import { PluginManager } from '../plugin-manager';
 import { BasePlugin } from '../base-plugin';
-import type { MCPClient } from '../../client';
-import type { PluginMetadata } from '../plugin-interface';
+import type { McpHub } from '../../mcp';
+import type { EventBus, PluginMetadata } from '../plugin-interface';
 
 interface ProbeOptions {
     dependencies?: string[];
@@ -34,7 +34,7 @@ class ProbePlugin extends BasePlugin {
 
     protected async onInit(): Promise<void> {
         this.trace.push(`${this.metadata.name}:init`);
-        this.seenContextMcp = this.context.mcp;
+        this.seenContextMcp = this.context.mcpHub;
         this.seenContextEvents = this.context.events;
         this.seenConfig = { ...this.config };
         if (this.options.onConfig) {
@@ -170,6 +170,28 @@ describe('plugin manager registry', () => {
         await assert.rejects(() => manager.updateConfig('ghost', {}), /Plugin ghost not found or not active/);
     });
 
+    it('syncs the plugin config on updateConfig without an onConfigChange override', async () => {
+        const manager = new PluginManager();
+
+        class HoldPlugin extends BasePlugin {
+            readonly metadata: PluginMetadata = { name: 'config-hold', version: '1.0.0', description: 'hold' };
+
+            protected async onInit(): Promise<void> {}
+
+            currentConfig(): Record<string, any> {
+                this.checkInitialized();
+                return this.config;
+            }
+        }
+
+        const plugin = new HoldPlugin();
+        await manager.registerPlugin(plugin);
+        await manager.activatePlugin('config-hold', { keep: 1 });
+        await manager.updateConfig('config-hold', { added: 2 });
+
+        assert.deepEqual(plugin.currentConfig(), { keep: 1, added: 2 });
+    });
+
     it('routes plugin logger calls back through manager log events', async () => {
         const manager = new PluginManager();
         const logs: Array<{ plugin: string; message: string; args: any[] }> = [];
@@ -194,21 +216,25 @@ describe('plugin manager registry', () => {
         assert.deepEqual(warns, ['careful']);
     });
 
-    it('hands the same manager as the event bus and the configured mcp to the context', async () => {
-        const mcpStub = { ready: true } as unknown as MCPClient;
-        const manager = new PluginManager(mcpStub);
+    it('hands the same manager as the event bus and the configured hub to the context', async () => {
+        const mcpStub = { ready: true } as unknown as McpHub;
+        const manager = new PluginManager({});
+        manager.setMcpHub(mcpStub);
         const plugin = new ProbePlugin('wired');
 
         await manager.registerPlugin(plugin);
         await manager.activatePlugin('wired');
 
         assert.equal(plugin.seenContextMcp, mcpStub);
-        assert.equal(plugin.seenContextEvents, manager);
+        let busRelay = 0;
+        manager.on('probe:bus-relay', () => { busRelay += 1; });
+        assert.equal((plugin.seenContextEvents as EventBus).emit('probe:bus-relay'), true);
+        assert.equal(busRelay, 1);
         assert.deepEqual(plugin.seenConfig, {});
         assert.equal(manager.getContext('wired'), manager.getContext('wired'));
 
-        const swapped = { ready: false } as unknown as MCPClient;
-        manager.setMCP(swapped);
+        const swapped = { ready: false } as unknown as McpHub;
+        manager.setMcpHub(swapped);
         await manager.deactivatePlugin('wired');
         await manager.activatePlugin('wired');
 

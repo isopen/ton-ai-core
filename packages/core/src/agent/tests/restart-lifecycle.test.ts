@@ -1,5 +1,5 @@
 import { strict as assert } from 'assert';
-import { BaseAgentSimple } from '../base-agent-simple';
+import { BaseAgent } from '../base-agent';
 import { BasePlugin } from '../../plugin/base-plugin';
 import type { PluginMetadata } from '../../plugin/plugin-interface';
 
@@ -30,7 +30,7 @@ class LifecyclePlugin extends BasePlugin {
     }
 }
 
-class RestartAgent extends BaseAgentSimple {
+class RestartAgent extends BaseAgent {
     constructor(private readonly plugin: LifecyclePlugin, private readonly trace: string[]) {
         super({ id: 'restart-agent', name: 'Restart Agent', plugins: {} });
     }
@@ -51,7 +51,7 @@ class RestartAgent extends BaseAgentSimple {
     }
 }
 
-class CountingAgent extends BaseAgentSimple {
+class CountingAgent extends BaseAgent {
     initCount = 0;
     startCount = 0;
     stopCount = 0;
@@ -69,7 +69,7 @@ class CountingAgent extends BaseAgentSimple {
     }
 }
 
-class FailingInitAgent extends BaseAgentSimple {
+class FailingInitAgent extends BaseAgent {
     protected async onInitialize(): Promise<void> {
         throw new Error('config missing');
     }
