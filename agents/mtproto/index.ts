@@ -8,7 +8,7 @@ function generateMsgId(odd: boolean = false): bigint {
     let id = ((now << 32n) | (randomPart & 0xFFFFFFFFn)) & 0x7FFFFFFFFFFFFFFFn;
     id = id & ~3n;
     if (odd) id = id | 1n;
-    else id = id & ~1n;
+    else id = id | 3n;
     return id;
 }
 
@@ -54,8 +54,8 @@ async function runMTProtoAgent() {
     const sharedSecret = client.computeSharedSecret(clientDH.privateKey, serverDH.publicKey);
     server.computeSharedSecret(serverDH.privateKey, clientDH.publicKey);
 
-    const clientAuthKey = await client.generateAuthKey(sharedSecret);
-    const serverAuthKey = await server.generateAuthKey(sharedSecret);
+    const clientAuthKey = await client.generateAuthKey(Buffer.from(sharedSecret));
+    const serverAuthKey = await server.generateAuthKey(Buffer.from(sharedSecret));
     client.setAuthKey(clientAuthKey);
     server.setAuthKey(serverAuthKey);
 
@@ -75,7 +75,7 @@ async function runMTProtoAgent() {
     console.log('Client encrypted:', encrypted.data.length, 'bytes');
 
     const decrypted = await server.decryptMessage(encrypted, sessionId, { expectOddMsgId: false });
-    console.log('Server decrypted:', decrypted.toString('utf-8'));
+    console.log('Server decrypted:', decrypted.data.toString('utf-8'));
 
     const serverMsgId = generateMsgId(true);
     const serverEncrypted = await server.encryptMessage(
@@ -84,7 +84,7 @@ async function runMTProtoAgent() {
     console.log('Server encrypted:', serverEncrypted.data.length, 'bytes');
 
     const clientDecrypted = await client.decryptMessage(serverEncrypted, sessionId);
-    console.log('Client decrypted:', clientDecrypted.toString('utf-8'), '\n');
+    console.log('Client decrypted:', clientDecrypted.data.toString('utf-8'), '\n');
 
     console.log('--- Secret Chat (Alice <-> Bob) ---');
     const alice = await createInstance('client');
@@ -116,9 +116,9 @@ async function runMTProtoAgent() {
 
     const decryptedByBob = await bob.decryptMessage(
         encryptedByAlice, secretSession,
-        { secret: true, isInitiator: true, expectOddMsgId: false }
+        { secret: true, isInitiator: false, expectOddMsgId: false }
     );
-    console.log('Bob decrypted:', decryptedByBob.toString('utf-8'));
+    console.log('Bob decrypted:', decryptedByBob.data.toString('utf-8'));
 
     const encryptedByBob = await bob.encryptMessage(
         Buffer.from('Roger that!', 'utf-8'), secretSession, generateMsgId(true), 1,
@@ -128,14 +128,14 @@ async function runMTProtoAgent() {
 
     const decryptedByAlice = await alice.decryptMessage(
         encryptedByBob, secretSession,
-        { secret: true, isInitiator: false, expectOddMsgId: true }
+        { secret: true, isInitiator: true, expectOddMsgId: true }
     );
-    console.log('Alice decrypted:', decryptedByAlice.toString('utf-8'));
+    console.log('Alice decrypted:', decryptedByAlice.data.toString('utf-8'));
 
     try {
         await bob.decryptMessage(
             encryptedByBob, secretSession,
-            { secret: true, isInitiator: true, expectOddMsgId: true }
+            { secret: true, isInitiator: false, expectOddMsgId: true }
         );
         console.log('ERROR: Should have thrown');
     } catch (e: any) {
