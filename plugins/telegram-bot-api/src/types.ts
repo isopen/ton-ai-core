@@ -1,4 +1,5 @@
-export interface TelegramBotConfig {
+import type { BasePluginConfig } from "@ton-ai/core";
+export interface TelegramBotConfig extends BasePluginConfig {
     token: string;
     apiBaseUrl?: string;
     pollingTimeout?: number;
@@ -85,7 +86,7 @@ export interface Message {
     author_signature?: string;
     text?: string;
     entities?: MessageEntity[];
-    link_preview_options?: any;
+    link_preview_options?: LinkPreviewOptions;
     effect_id?: string;
     rich_message?: RichMessage;
     animation?: Animation;
@@ -675,11 +676,364 @@ export interface ShippingOption {
     prices: LabeledPrice[];
 }
 
-export interface InlineQueryResult {
-    type: string;
-    id: string;
-    [key: string]: any;
+export interface LinkPreviewOptions {
+    is_disabled?: boolean;
+    url?: string;
+    prefer_small_media?: boolean;
+    prefer_large_media?: boolean;
+    show_above_text?: boolean;
 }
+export interface InputTextMessageContent {
+    message_text: string;
+    parse_mode?: string;
+    entities?: MessageEntity[];
+    link_preview_options?: LinkPreviewOptions;
+}
+export interface InputLocationMessageContent {
+    latitude: number;
+    longitude: number;
+    horizontal_accuracy?: number;
+    live_period?: number;
+    heading?: number;
+    proximity_alert_radius?: number;
+}
+export interface InputVenueMessageContent {
+    latitude: number;
+    longitude: number;
+    title: string;
+    address: string;
+    foursquare_id?: string;
+    foursquare_type?: string;
+    google_place_id?: string;
+    google_place_type?: string;
+}
+export interface InputContactMessageContent {
+    phone_number: string;
+    first_name: string;
+    last_name?: string;
+    vcard?: string;
+}
+export interface InputInvoiceMessageContent {
+    title: string;
+    description: string;
+    payload: string;
+    provider_token?: string;
+    currency: string;
+    prices: LabeledPrice[];
+    max_tip_amount?: number;
+    suggested_tip_amounts?: number[];
+    provider_data?: string;
+    photo_url?: string;
+    photo_size?: number;
+    photo_width?: number;
+    photo_height?: number;
+    need_name?: boolean;
+    need_phone_number?: boolean;
+    need_email?: boolean;
+    need_shipping_address?: boolean;
+    send_phone_number_to_provider?: boolean;
+    send_email_to_provider?: boolean;
+    is_flexible?: boolean;
+}
+export type InputMessageContent =
+    | InputTextMessageContent
+    | InputRichMessageContent
+    | InputLocationMessageContent
+    | InputVenueMessageContent
+    | InputContactMessageContent
+    | InputInvoiceMessageContent;
+export interface InlineQueryResultArticle {
+    type: 'article';
+    id: string;
+    title: string;
+    input_message_content: InputMessageContent;
+    reply_markup?: InlineKeyboardMarkup;
+    url?: string;
+    description?: string;
+    thumbnail_url?: string;
+    thumbnail_width?: number;
+    thumbnail_height?: number;
+}
+export interface InlineQueryResultPhoto {
+    type: 'photo';
+    id: string;
+    photo_url: string;
+    thumbnail_url: string;
+    photo_width?: number;
+    photo_height?: number;
+    title?: string;
+    description?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultGif {
+    type: 'gif';
+    id: string;
+    gif_url: string;
+    gif_width?: number;
+    gif_height?: number;
+    gif_duration?: number;
+    thumbnail_url: string;
+    thumbnail_mime_type?: string;
+    title?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultMpeg4Gif {
+    type: 'mpeg4_gif';
+    id: string;
+    mpeg4_url: string;
+    mpeg4_width?: number;
+    mpeg4_height?: number;
+    mpeg4_duration?: number;
+    thumbnail_url: string;
+    thumbnail_mime_type?: string;
+    title?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultVideo {
+    type: 'video';
+    id: string;
+    video_url: string;
+    mime_type: string;
+    thumbnail_url: string;
+    title: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+    video_width?: number;
+    video_height?: number;
+    video_duration?: number;
+    description?: string;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultAudio {
+    type: 'audio';
+    id: string;
+    audio_url: string;
+    title: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    performer?: string;
+    audio_duration?: number;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultVoice {
+    type: 'voice';
+    id: string;
+    voice_url: string;
+    title: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    voice_duration?: number;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultDocument {
+    type: 'document';
+    id: string;
+    title: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    document_url: string;
+    mime_type: string;
+    description?: string;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+    thumbnail_url?: string;
+    thumbnail_width?: number;
+    thumbnail_height?: number;
+}
+export interface InlineQueryResultLocation {
+    type: 'location';
+    id: string;
+    latitude: number;
+    longitude: number;
+    title: string;
+    horizontal_accuracy?: number;
+    live_period?: number;
+    heading?: number;
+    proximity_alert_radius?: number;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+    thumbnail_url?: string;
+    thumbnail_width?: number;
+    thumbnail_height?: number;
+}
+export interface InlineQueryResultVenue {
+    type: 'venue';
+    id: string;
+    latitude: number;
+    longitude: number;
+    title: string;
+    address: string;
+    foursquare_id?: string;
+    foursquare_type?: string;
+    google_place_id?: string;
+    google_place_type?: string;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+    thumbnail_url?: string;
+    thumbnail_width?: number;
+    thumbnail_height?: number;
+}
+export interface InlineQueryResultContact {
+    type: 'contact';
+    id: string;
+    phone_number: string;
+    first_name: string;
+    last_name?: string;
+    vcard?: string;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+    thumbnail_url?: string;
+    thumbnail_width?: number;
+    thumbnail_height?: number;
+}
+export interface InlineQueryResultGame {
+    type: 'game';
+    id: string;
+    game_short_name: string;
+    reply_markup?: InlineKeyboardMarkup;
+}
+export interface InlineQueryResultCachedPhoto {
+    type: 'photo';
+    id: string;
+    photo_file_id: string;
+    title?: string;
+    description?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultCachedGif {
+    type: 'gif';
+    id: string;
+    gif_file_id: string;
+    title?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultCachedMpeg4Gif {
+    type: 'mpeg4_gif';
+    id: string;
+    mpeg4_file_id: string;
+    title?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultCachedSticker {
+    type: 'sticker';
+    id: string;
+    sticker_file_id: string;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultCachedDocument {
+    type: 'document';
+    id: string;
+    title: string;
+    document_file_id: string;
+    description?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultCachedVideo {
+    type: 'video';
+    id: string;
+    video_file_id: string;
+    title: string;
+    description?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultCachedVoice {
+    type: 'voice';
+    id: string;
+    voice_file_id: string;
+    title: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultCachedAudio {
+    type: 'audio';
+    id: string;
+    audio_file_id: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    reply_markup?: InlineKeyboardMarkup;
+    input_message_content?: InputMessageContent;
+}
+export interface InlineQueryResultButton {
+    text: string;
+    web_app?: WebAppInfo;
+    start_parameter?: string;
+}
+export interface WebAppInfo {
+    url: string;
+}
+export type InlineQueryResult =
+    | InlineQueryResultArticle
+    | InlineQueryResultPhoto
+    | InlineQueryResultGif
+    | InlineQueryResultMpeg4Gif
+    | InlineQueryResultVideo
+    | InlineQueryResultAudio
+    | InlineQueryResultVoice
+    | InlineQueryResultDocument
+    | InlineQueryResultLocation
+    | InlineQueryResultVenue
+    | InlineQueryResultContact
+    | InlineQueryResultGame
+    | InlineQueryResultCachedPhoto
+    | InlineQueryResultCachedGif
+    | InlineQueryResultCachedMpeg4Gif
+    | InlineQueryResultCachedSticker
+    | InlineQueryResultCachedDocument
+    | InlineQueryResultCachedVideo
+    | InlineQueryResultCachedVoice
+    | InlineQueryResultCachedAudio;
 
 export interface ChatBoost {
     boost_id: string;
@@ -893,7 +1247,7 @@ export interface ExternalReplyInfo {
     origin?: any;
     chat?: Chat;
     message_id?: number;
-    link_preview_options?: any;
+    link_preview_options?: LinkPreviewOptions;
     animation?: Animation;
     audio?: Audio;
     document?: Document;
@@ -1012,7 +1366,7 @@ export interface SendMessageParams {
     direct_messages_topic_id?: number;
     parse_mode?: string;
     entities?: MessageEntity[];
-    link_preview_options?: any;
+    link_preview_options?: LinkPreviewOptions;
     disable_notification?: boolean;
     protect_content?: boolean;
     allow_paid_broadcast?: boolean;
@@ -1384,7 +1738,7 @@ export interface EditMessageTextParams {
     text?: string;
     parse_mode?: string;
     entities?: MessageEntity[];
-    link_preview_options?: any;
+    link_preview_options?: LinkPreviewOptions;
     rich_message?: InputRichMessage;
     reply_markup?: InlineKeyboardMarkup;
     business_connection_id?: string;
@@ -1754,7 +2108,7 @@ export interface AnswerInlineQueryParams {
     cache_time?: number;
     is_personal?: boolean;
     next_offset?: string;
-    button?: any;
+    button?: InlineQueryResultButton;
 }
 
 export interface AnswerWebAppQueryParams {
@@ -2501,7 +2855,7 @@ export interface EditEphemeralMessageTextParams {
     parse_mode?: string;
     entities?: MessageEntity[];
     rich_message?: InputRichMessage;
-    link_preview_options?: any;
+    link_preview_options?: LinkPreviewOptions;
     reply_markup?: InlineKeyboardMarkup;
 }
 
@@ -2781,7 +3135,7 @@ export interface SetBusinessAccountBioParams {
 }
 export interface SetBusinessAccountProfilePhotoParams {
     business_connection_id: string;
-    photo: any;
+    photo: InputProfilePhoto;
     is_public?: boolean;
 }
 export interface RemoveBusinessAccountProfilePhotoParams {
@@ -2791,7 +3145,7 @@ export interface RemoveBusinessAccountProfilePhotoParams {
 export interface SetBusinessAccountGiftSettingsParams {
     business_connection_id: string;
     show_gift_button: boolean;
-    accepted_gift_types: any;
+    accepted_gift_types: AcceptedGiftTypes;
 }
 export interface TransferBusinessAccountStarsParams {
     business_connection_id: string;
@@ -2799,23 +3153,23 @@ export interface TransferBusinessAccountStarsParams {
 }
 export interface PostStoryParams {
     business_connection_id: string;
-    content: any;
+    content: InputStoryContent;
     active_period: number;
     caption?: string;
     parse_mode?: string;
     caption_entities?: MessageEntity[];
-    areas?: any[];
+    areas?: StoryArea[];
     post_to_chat_page?: boolean;
     protect_content?: boolean;
 }
 export interface EditStoryParams {
     business_connection_id: string;
     story_id: number;
-    content: any;
+    content: InputStoryContent;
     caption?: string;
     parse_mode?: string;
     caption_entities?: MessageEntity[];
-    areas?: any[];
+    areas?: StoryArea[];
 }
 export interface DeleteStoryParams {
     business_connection_id: string;
@@ -2853,13 +3207,160 @@ export interface SavePreparedInlineMessageParams {
 }
 export interface SavePreparedKeyboardButtonParams {
     user_id: number;
-    button: any;
+    button: KeyboardButton;
 }
 export interface SetMyProfilePhotoParams {
-    photo: any;
+    photo: InputProfilePhoto;
 }
 export interface SetUserEmojiStatusParams {
     user_id: number;
     emoji_status_custom_emoji_id?: string;
     emoji_status_expiration_date?: number;
+}
+export interface InputProfilePhotoStatic {
+    type: 'static';
+    photo: InputFile | string;
+}
+export interface InputProfilePhotoAnimated {
+    type: 'animated';
+    animation: InputFile | string;
+    main_frame_timestamp?: number;
+}
+export type InputProfilePhoto = InputProfilePhotoStatic | InputProfilePhotoAnimated;
+export interface AcceptedGiftTypes {
+    unlimited_gifts: boolean;
+    limited_gifts: boolean;
+    unique_gifts: boolean;
+    premium_subscription: boolean;
+    gifts_from_channels: boolean;
+}
+export interface StarAmount {
+    amount: number;
+    nanostar_amount?: number;
+}
+export interface LocationAddress {
+    country_code: string;
+    state?: string;
+    city?: string;
+    street?: string;
+}
+export interface StoryAreaPosition {
+    x_percentage: number;
+    y_percentage: number;
+    width_percentage: number;
+    height_percentage: number;
+    rotation_angle: number;
+    corner_radius_percentage: number;
+}
+export interface StoryAreaTypeLocation {
+    type: 'location';
+    latitude: number;
+    longitude: number;
+    address?: LocationAddress;
+}
+export interface StoryAreaTypeSuggestedReaction {
+    type: 'suggested_reaction';
+    reaction_type: ReactionType;
+    is_dark?: boolean;
+    is_flipped?: boolean;
+}
+export interface StoryAreaTypeLink {
+    type: 'link';
+    url: string;
+}
+export interface StoryAreaTypeWeather {
+    type: 'weather';
+    temperature: number;
+    emoji: string;
+    background_color: number;
+}
+export interface StoryAreaTypeUniqueGift {
+    type: 'unique_gift';
+    name: string;
+}
+export type StoryArea =
+    | StoryAreaTypeLocation
+    | StoryAreaTypeSuggestedReaction
+    | StoryAreaTypeLink
+    | StoryAreaTypeWeather
+    | StoryAreaTypeUniqueGift;
+export interface InputStoryContentPhoto {
+    type: 'photo';
+    photo: InputFile | string;
+}
+export interface InputStoryContentVideo {
+    type: 'video';
+    video: InputFile | string;
+    duration?: number;
+    cover_frame_timestamp?: number;
+    is_animation?: boolean;
+}
+export type InputStoryContent = InputStoryContentPhoto | InputStoryContentVideo;
+export interface Story {
+    chat: Chat;
+    id: number;
+}
+export interface GiftBackground {
+    center_color: number;
+    edge_color: number;
+    text_color: number;
+}
+export interface Gift {
+    id: string;
+    sticker: Sticker;
+    star_count: number;
+    upgrade_star_count?: number;
+    is_premium?: boolean;
+    has_colors?: boolean;
+    total_count?: number;
+    remaining_count?: number;
+    personal_total_count?: number;
+    personal_remaining_count?: number;
+    background?: GiftBackground;
+    unique_gift_variant_count?: number;
+    publisher_chat?: Chat;
+}
+export interface Gifts {
+    gifts: Gift[];
+}
+export interface OwnedGiftRegular {
+    type: 'regular';
+    gift: Gift;
+    owned_gift_id?: string;
+    sender_user?: User;
+    send_date: number;
+    text?: string;
+    entities?: MessageEntity[];
+    is_private?: boolean;
+    is_saved?: boolean;
+    can_be_upgraded?: boolean;
+    was_refunded?: boolean;
+    convert_star_count?: number;
+    prepaid_upgrade_star_count?: number;
+    is_upgrade_separate?: boolean;
+    unique_gift_number?: number;
+}
+export interface OwnedGiftUnique {
+    type: 'unique';
+    gift: UniqueGift;
+    owned_gift_id?: string;
+    sender_user?: User;
+    send_date: number;
+    is_saved?: boolean;
+    can_be_transferred?: boolean;
+    transfer_star_count?: number;
+    next_transfer_date?: number;
+}
+export type OwnedGift = OwnedGiftRegular | OwnedGiftUnique;
+export interface OwnedGifts {
+    total_count: number;
+    gifts: OwnedGift[];
+    next_offset?: string;
+}
+export interface PreparedInlineMessage {
+    id: string;
+    expiration_date: number;
+}
+export interface PreparedKeyboardButton {
+    id: string;
 }

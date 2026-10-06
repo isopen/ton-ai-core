@@ -219,9 +219,16 @@ import {
     SavePreparedKeyboardButtonParams,
     SetMyProfilePhotoParams,
     SetUserEmojiStatusParams,
+    StarAmount,
+    Gifts,
+    OwnedGifts,
+    Story,
+    PreparedInlineMessage,
+    PreparedKeyboardButton,
     BotSubscriptionUpdated,
     MessageGenerationStopped,
     Community,
+    InlineQueryResult,
     SentGuestMessage,
     BotAccessSettings
 } from './types';
@@ -403,6 +410,9 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
                     if (update.guest_message) {
                         this.skills.handleGuestMessage(update.guest_message);
                     }
+                    if (update.message) {
+                        this.absorbCommunity(update.message);
+                    }
                     if (update.subscription) {
                         this.skills.handleSubscription(update.subscription);
                     }
@@ -459,6 +469,37 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         this.config.token = token;
         this.skills.setToken(token);
         this.events.emit('telegram-bot:token:updated');
+    }
+
+    private absorbCommunity(message: Message): void {
+        const added = message.community_chat_added?.community;
+        if (added) {
+            this.skills.handleCommunity(added);
+        }
+        const joined = message.community_chat_joined?.community;
+        if (joined) {
+            this.skills.handleCommunity(joined);
+        }
+        if (message.community_chat_removed) {
+            this.events.emit('telegram-bot:community-chat-removed', {
+                chat: message.chat,
+                message_id: message.message_id,
+            });
+        }
+    }
+
+    getCommunity(id: number): Community | null {
+        this.checkInitialized();
+        return this.components.communities.getCommunity(id);
+    }
+
+    onCommunity(callback: (community: Community) => void): string {
+        return this.onUpdate((update) => {
+            const message = update.message;
+            if (!message) return;
+            if (message.community_chat_added) callback(message.community_chat_added.community);
+            else if (message.community_chat_joined) callback(message.community_chat_joined.community);
+        });
     }
 
     async getMe(): Promise<User> {
@@ -1303,6 +1344,21 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.components.messages.getMessage(chatId, messageId);
     }
 
+    getCachedInlineQuery(queryId: string): InlineQuery | null {
+        this.checkInitialized();
+        return this.skills.getInlineQuery(queryId);
+    }
+
+    getCachedInlineResults(queryId: string): InlineQueryResult[] | null {
+        this.checkInitialized();
+        return this.skills.getInlineResults(queryId);
+    }
+
+    getCachedChosenInlineResult(resultId: string): ChosenInlineResult | null {
+        this.checkInitialized();
+        return this.skills.getChosenInlineResult(resultId);
+    }
+
     getCachedChat(chatId: number | string): Chat | null {
         this.checkInitialized();
         return this.components.chats.getChat(chatId);
@@ -1498,7 +1554,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.skills.editUserStarSubscription(params);
     }
 
-    async getMyStarBalance(): Promise<any> {
+    async getMyStarBalance(): Promise<StarAmount> {
         this.checkInitialized();
         return this.skills.getMyStarBalance();
     }
@@ -1508,17 +1564,17 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.skills.refundStarPayment(params);
     }
 
-    async getAvailableGifts(): Promise<any> {
+    async getAvailableGifts(): Promise<Gifts> {
         this.checkInitialized();
         return this.skills.getAvailableGifts();
     }
 
-    async getChatGifts(params: GetChatGiftsParams): Promise<any> {
+    async getChatGifts(params: GetChatGiftsParams): Promise<OwnedGifts> {
         this.checkInitialized();
         return this.skills.getChatGifts(params);
     }
 
-    async getUserGifts(params: GetUserGiftsParams): Promise<any> {
+    async getUserGifts(params: GetUserGiftsParams): Promise<OwnedGifts> {
         this.checkInitialized();
         return this.skills.getUserGifts(params);
     }
@@ -1548,12 +1604,12 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.skills.readBusinessMessage(params);
     }
 
-    async getBusinessAccountGifts(params: GetBusinessAccountGiftsParams): Promise<any> {
+    async getBusinessAccountGifts(params: GetBusinessAccountGiftsParams): Promise<OwnedGifts> {
         this.checkInitialized();
         return this.skills.getBusinessAccountGifts(params);
     }
 
-    async getBusinessAccountStarBalance(params: GetBusinessAccountStarBalanceParams): Promise<any> {
+    async getBusinessAccountStarBalance(params: GetBusinessAccountStarBalanceParams): Promise<StarAmount> {
         this.checkInitialized();
         return this.skills.getBusinessAccountStarBalance(params);
     }
@@ -1593,12 +1649,12 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.skills.transferBusinessAccountStars(params);
     }
 
-    async postStory(params: PostStoryParams): Promise<any> {
+    async postStory(params: PostStoryParams): Promise<Story> {
         this.checkInitialized();
         return this.skills.postStory(params);
     }
 
-    async editStory(params: EditStoryParams): Promise<any> {
+    async editStory(params: EditStoryParams): Promise<Story> {
         this.checkInitialized();
         return this.skills.editStory(params);
     }
@@ -1608,7 +1664,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.skills.deleteStory(params);
     }
 
-    async repostStory(params: RepostStoryParams): Promise<any> {
+    async repostStory(params: RepostStoryParams): Promise<Story> {
         this.checkInitialized();
         return this.skills.repostStory(params);
     }
@@ -1633,12 +1689,12 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         return this.skills.removeChatVerification(params);
     }
 
-    async savePreparedInlineMessage(params: SavePreparedInlineMessageParams): Promise<any> {
+    async savePreparedInlineMessage(params: SavePreparedInlineMessageParams): Promise<PreparedInlineMessage> {
         this.checkInitialized();
         return this.skills.savePreparedInlineMessage(params);
     }
 
-    async savePreparedKeyboardButton(params: SavePreparedKeyboardButtonParams): Promise<any> {
+    async savePreparedKeyboardButton(params: SavePreparedKeyboardButtonParams): Promise<PreparedKeyboardButton> {
         this.checkInitialized();
         return this.skills.savePreparedKeyboardButton(params);
     }

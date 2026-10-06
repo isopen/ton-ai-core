@@ -218,6 +218,13 @@ import {
     EditStoryParams,
     DeleteStoryParams,
     RepostStoryParams,
+    Community,
+    StarAmount,
+    Gifts,
+    OwnedGifts,
+    Story,
+    PreparedInlineMessage,
+    PreparedKeyboardButton,
     VerifyUserParams,
     VerifyChatParams,
     RemoveUserVerificationParams,
@@ -1319,6 +1326,9 @@ export class TelegramBotSkills {
     async getChat(params: GetChatParams): Promise<import('./types').ChatFullInfo> {
         const chat = await this.request<import('./types').ChatFullInfo>('getChat', params);
         this.components.chats.setChat(params.chat_id, chat);
+        if (chat.community) {
+            this.handleCommunity(chat.community);
+        }
         return chat;
     }
 
@@ -1997,6 +2007,18 @@ export class TelegramBotSkills {
         this.components.inline.setChosenResult(result.result_id, result);
     }
 
+    getInlineQuery(id: string): InlineQuery | null {
+        return this.components.inline.getInlineQuery(id);
+    }
+
+    getInlineResults(queryId: string): InlineQueryResult[] | null {
+        return this.components.inline.getResults(queryId);
+    }
+
+    getChosenInlineResult(resultId: string): ChosenInlineResult | null {
+        return this.components.inline.getChosenResult(resultId);
+    }
+
     handleShippingQuery(query: ShippingQuery): void {
         this.components.payments.setShippingQuery(query.id, query);
     }
@@ -2054,6 +2076,11 @@ export class TelegramBotSkills {
 
     handleGuestMessage(message: Message): void {
         this.context.events.emit('telegram-bot:guest-message', message);
+    }
+
+    handleCommunity(community: Community): void {
+        this.components.communities.setCommunity(community);
+        this.context.events.emit('telegram-bot:community', community);
     }
 
     handleSubscription(subscription: BotSubscriptionUpdated): void {
@@ -2276,24 +2303,24 @@ export class TelegramBotSkills {
         return this.request<boolean>('editUserStarSubscription', params);
     }
 
-    async getMyStarBalance(): Promise<any> {
-        return this.request<any>('getMyStarBalance');
+    async getMyStarBalance(): Promise<StarAmount> {
+        return this.request<StarAmount>('getMyStarBalance');
     }
 
     async refundStarPayment(params: RefundStarPaymentParams): Promise<boolean> {
         return this.request<boolean>('refundStarPayment', params);
     }
 
-    async getAvailableGifts(): Promise<any> {
-        return this.request<any>('getAvailableGifts');
+    async getAvailableGifts(): Promise<Gifts> {
+        return this.request<Gifts>('getAvailableGifts');
     }
 
-    async getChatGifts(params: GetChatGiftsParams): Promise<any> {
-        return this.request<any>('getChatGifts', params);
+    async getChatGifts(params: GetChatGiftsParams): Promise<OwnedGifts> {
+        return this.request<OwnedGifts>('getChatGifts', params);
     }
 
-    async getUserGifts(params: GetUserGiftsParams): Promise<any> {
-        return this.request<any>('getUserGifts', params);
+    async getUserGifts(params: GetUserGiftsParams): Promise<OwnedGifts> {
+        return this.request<OwnedGifts>('getUserGifts', params);
     }
 
     async giftPremiumSubscription(params: GiftPremiumSubscriptionParams): Promise<boolean> {
@@ -2316,12 +2343,12 @@ export class TelegramBotSkills {
         return this.request<boolean>('readBusinessMessage', params);
     }
 
-    async getBusinessAccountGifts(params: GetBusinessAccountGiftsParams): Promise<any> {
-        return this.request<any>('getBusinessAccountGifts', params);
+    async getBusinessAccountGifts(params: GetBusinessAccountGiftsParams): Promise<OwnedGifts> {
+        return this.request<OwnedGifts>('getBusinessAccountGifts', params);
     }
 
-    async getBusinessAccountStarBalance(params: GetBusinessAccountStarBalanceParams): Promise<any> {
-        return this.request<any>('getBusinessAccountStarBalance', params);
+    async getBusinessAccountStarBalance(params: GetBusinessAccountStarBalanceParams): Promise<StarAmount> {
+        return this.request<StarAmount>('getBusinessAccountStarBalance', params);
     }
 
     async setBusinessAccountName(params: SetBusinessAccountNameParams): Promise<boolean> {
@@ -2352,20 +2379,20 @@ export class TelegramBotSkills {
         return this.request<boolean>('transferBusinessAccountStars', params);
     }
 
-    async postStory(params: PostStoryParams): Promise<any> {
-        return this.request<any>('postStory', params);
+    async postStory(params: PostStoryParams): Promise<Story> {
+        return this.request<Story>('postStory', params);
     }
 
-    async editStory(params: EditStoryParams): Promise<any> {
-        return this.request<any>('editStory', params);
+    async editStory(params: EditStoryParams): Promise<Story> {
+        return this.request<Story>('editStory', params);
     }
 
     async deleteStory(params: DeleteStoryParams): Promise<boolean> {
         return this.request<boolean>('deleteStory', params);
     }
 
-    async repostStory(params: RepostStoryParams): Promise<any> {
-        return this.request<any>('repostStory', params);
+    async repostStory(params: RepostStoryParams): Promise<Story> {
+        return this.request<Story>('repostStory', params);
     }
 
     async verifyUser(params: VerifyUserParams): Promise<boolean> {
@@ -2384,12 +2411,12 @@ export class TelegramBotSkills {
         return this.request<boolean>('removeChatVerification', params);
     }
 
-    async savePreparedInlineMessage(params: SavePreparedInlineMessageParams): Promise<any> {
-        return this.request<any>('savePreparedInlineMessage', params);
+    async savePreparedInlineMessage(params: SavePreparedInlineMessageParams): Promise<PreparedInlineMessage> {
+        return this.request<PreparedInlineMessage>('savePreparedInlineMessage', params);
     }
 
-    async savePreparedKeyboardButton(params: SavePreparedKeyboardButtonParams): Promise<any> {
-        return this.request<any>('savePreparedKeyboardButton', params);
+    async savePreparedKeyboardButton(params: SavePreparedKeyboardButtonParams): Promise<PreparedKeyboardButton> {
+        return this.request<PreparedKeyboardButton>('savePreparedKeyboardButton', params);
     }
 
     async setMyProfilePhoto(params: SetMyProfilePhotoParams): Promise<boolean> {
