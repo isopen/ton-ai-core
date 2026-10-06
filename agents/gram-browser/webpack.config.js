@@ -59,6 +59,7 @@ module.exports = {
       crypto: false,
       path: false,
       fs: false,
+      child_process: false,
       url: false,
       'utf-8-validate': false,
       bufferutil: false,

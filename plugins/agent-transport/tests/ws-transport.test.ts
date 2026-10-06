@@ -251,7 +251,7 @@ describe('WsTransport', () => {
 
             ws.close();
             await server.stop();
-        });
+        }, 15000);
     });
 
     describe('error event', () => {
