@@ -1,4 +1,5 @@
 import { BaseAgent } from '@ton-ai/core';
+import { tonServer } from '@ton-ai/mcp-ton';
 import { WalletManagerPlugin } from '@ton-ai/wallet-manager';
 
 class SimpleWalletAgent extends BaseAgent {
@@ -40,9 +41,9 @@ class SimpleWalletAgent extends BaseAgent {
 async function main() {
   const agent = new SimpleWalletAgent({
     name: 'SimpleWallet',
-    mode: 'stdio',
-    network: 'testnet',
-    mnemonic: process.env.MNEMONIC
+    mcpServers: {
+      ton: tonServer({ network: 'testnet' }),
+    },
   });
 
   process.on('SIGINT', async () => {
