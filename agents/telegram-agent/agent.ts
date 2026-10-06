@@ -1,8 +1,8 @@
-import { BaseAgentSimple, SimpleAgentConfig, AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
+import { BaseAgent, AgentConfig, AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
 import { MTProtoCryptoPlugin } from '@ton-ai/mtproto';
 import { TelegramClientPlugin, AuthKeyResult } from '@ton-ai/telegram';
 
-export interface TelegramClientConfig extends SimpleAgentConfig {
+export interface TelegramClientConfig extends AgentConfig {
     apiId: number;
     apiHash: string;
     dcId?: number;
@@ -17,7 +17,7 @@ export interface TelegramClientConfig extends SimpleAgentConfig {
     targetChatId?: number;
 }
 
-export class TelegramClientAgent extends BaseAgentSimple {
+export class TelegramClientAgent extends BaseAgent {
     private mtproto: MTProtoCryptoPlugin;
     private telegram: TelegramClientPlugin;
     private agentConfig: TelegramClientConfig;

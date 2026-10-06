@@ -1,4 +1,4 @@
-import { BaseAgentSimple, SimpleAgentConfig, crypton } from '@ton-ai/core';
+import { BaseAgent, AgentConfig, crypton } from '@ton-ai/core';
 import {
     TelegramBotPlugin,
     Message,
@@ -11,7 +11,7 @@ import {
     BotCommand
 } from '@ton-ai/telegram-bot-api';
 
-interface ExtendedAgentConfig extends SimpleAgentConfig {
+interface ExtendedAgentConfig extends AgentConfig {
     botToken?: string;
     adminChatId?: number;
 }
@@ -37,7 +37,7 @@ interface PollData {
     votes: Map<number, number[]>;
 }
 
-export class TelegramBotApiAgent extends BaseAgentSimple {
+export class TelegramBotApiAgent extends BaseAgent {
     private telegramPlugin!: TelegramBotPlugin;
     private userSessions: Map<number, UserSession> = new Map();
     private polls: Map<string, PollData> = new Map();

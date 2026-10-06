@@ -1,7 +1,7 @@
-import { BaseAgentSimple, SimpleAgentConfig, AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
+import { BaseAgent, AgentConfig, AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
 import { OpenRouterPlugin, VisionAnalysisOptions, VisionAnalysisResult } from '@ton-ai/openrouter';
 
-export interface ContentCheckerConfig extends SimpleAgentConfig {
+export interface ContentCheckerConfig extends AgentConfig {
     openRouterApiKey: string;
     defaultModel?: string;
     systemPrompt?: string;
@@ -24,7 +24,7 @@ export interface EnhancedAnalysisResult extends VisionAnalysisResult {
     rating: ContentRating;
 }
 
-export class ContentCheckerAgent extends BaseAgentSimple {
+export class ContentCheckerAgent extends BaseAgent {
     private openRouter: OpenRouterPlugin;
     private agentConfig: ContentCheckerConfig;
     private requestCounter: number = 0;

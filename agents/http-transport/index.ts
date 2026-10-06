@@ -3,7 +3,7 @@ import { MTProtoCryptoPlugin } from '@ton-ai/mtproto';
 import { HttpTransportPlugin, HttpTransportType, MTProtoCryptoBackend } from '@ton-ai/agent-transport';
 
 function ctx() {
-    return { mcp: undefined as any, logger: console, events: new EventEmitter(), config: { mode: 'client' } };
+    return { logger: console, events: new EventEmitter(), config: { mode: 'client' } };
 }
 
 async function main() {
@@ -21,14 +21,14 @@ async function main() {
 
     const aliceHttp = new HttpTransportPlugin();
     await aliceHttp.initialize({
-        mcp: undefined as any, logger: console, events: new EventEmitter(),
+        logger: console, events: new EventEmitter(),
         config: { cryptoBackend: aliceCrypto, port: 9071, host: '127.0.0.1', localPeerId: 'alice', peers: { bob: '127.0.0.1:9072' } }
     });
     await aliceHttp.onActivate();
 
     const bobHttp = new HttpTransportPlugin();
     await bobHttp.initialize({
-        mcp: undefined as any, logger: console, events: new EventEmitter(),
+        logger: console, events: new EventEmitter(),
         config: { cryptoBackend: bobCrypto, port: 9072, host: '127.0.0.1', localPeerId: 'bob', peers: { alice: '127.0.0.1:9071' } }
     });
     await bobHttp.onActivate();

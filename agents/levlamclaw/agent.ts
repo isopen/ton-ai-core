@@ -1,4 +1,4 @@
-import { BaseAgentSimple } from '@ton-ai/core';
+import { BaseAgent } from '@ton-ai/core';
 import { OpenRouterPlugin, Message as OpenRouterMessage } from '@ton-ai/openrouter';
 import { TdlibPlugin } from '@ton-ai/tdlib';
 import { LevlamClawConfig, LevlamClawStatus } from './types';
@@ -19,7 +19,7 @@ Your communication style:
 
 Keep responses helpful but concise. If you don't know something, say so directly.`;
 
-export class LevlamClawAgent extends BaseAgentSimple {
+export class LevlamClawAgent extends BaseAgent {
     private agentConfig: LevlamClawConfig;
     private tdlibPlugin: TdlibPlugin | null = null;
     private openrouterPlugin: OpenRouterPlugin | null = null;

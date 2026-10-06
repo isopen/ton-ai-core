@@ -1,4 +1,4 @@
-import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
+import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import {
     GigaChatPlugin,
     GigaChatConfig,
@@ -20,7 +20,7 @@ const PLUGIN_NAMES = {
 
 const CURSOR_SYMBOL = "▍";
 
-export interface GigaClawConfig extends SimpleAgentConfig {
+export interface GigaClawConfig extends AgentConfig {
     gigachat: GigaChatConfig;
     telegram: TelegramBotConfig;
     systemPrompt?: string;
@@ -31,7 +31,7 @@ export interface GigaClawConfig extends SimpleAgentConfig {
     streamingMaxSpeed?: boolean;
 }
 
-export class GigaClawAgent extends BaseAgentSimple {
+export class GigaClawAgent extends BaseAgent {
     public readonly config: GigaClawConfig;
     private messageHistory: Map<number, GigaChatMessage[]> = new Map();
     private activeStreams: Map<number, boolean> = new Map();

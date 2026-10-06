@@ -1,4 +1,4 @@
-import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
+import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { TelegramBotPlugin, Message } from '@ton-ai/telegram-bot-api';
 import { DurevcodePlugin } from '@ton-ai/durevcode';
 import { supportsAnonymous, FREE_MODELS } from '@ton-ai/durevcode';
@@ -86,7 +86,7 @@ export interface DurevRadarWatch {
     statePath?: string;
 }
 
-export interface DurevRadarConfig extends SimpleAgentConfig {
+export interface DurevRadarConfig extends AgentConfig {
     telegram: { token: string };
     durevcode: {
         model?: string;
@@ -129,7 +129,7 @@ interface ThinkingState {
     since: number | null;
 }
 
-export class DurevRadarAgent extends BaseAgentSimple {
+export class DurevRadarAgent extends BaseAgent {
     public readonly config: DurevRadarConfig;
     private watched = new Map<number, WatchedSession>();
     private permPosted = new Map<number, { sessionId: string; permId: string; action: string; resource: string }>();

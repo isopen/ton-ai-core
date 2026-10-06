@@ -1,14 +1,14 @@
-import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
+import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { GigaChatPlugin, GigaChatMessage, GigaChatConfig } from '@ton-ai/gigachat';
 
-export interface GigaChatAgentConfig extends SimpleAgentConfig {
+export interface GigaChatAgentConfig extends AgentConfig {
     apiKey: string;
     systemPrompt?: string;
     temperature?: number;
     maxTokens?: number;
 }
 
-export class GigaChatAgent extends BaseAgentSimple {
+export class GigaChatAgent extends BaseAgent {
     private gigachatPlugin!: GigaChatPlugin;
     private extendedConfig: GigaChatAgentConfig;
     private conversationHistory: GigaChatMessage[] = [];

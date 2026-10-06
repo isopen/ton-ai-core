@@ -7,7 +7,7 @@ import {
 } from '@ton-ai/agent-transport';
 
 function ctx() {
-    return { mcp: undefined as any, logger: console, events: new EventEmitter(), config: { mode: 'client' } };
+    return { logger: console, events: new EventEmitter(), config: { mode: 'client' } };
 }
 
 async function createTcpNode(name: string, port: number, peers: Record<string, string>) {
@@ -17,7 +17,7 @@ async function createTcpNode(name: string, port: number, peers: Record<string, s
     const b = new MTProtoCryptoBackend(m);
     const tcp = new TcpTransportPlugin();
     await tcp.initialize({
-        mcp: undefined as any, logger: console, events: new EventEmitter(),
+        logger: console, events: new EventEmitter(),
         config: { cryptoBackend: b, port, host: '127.0.0.1', peers, transportType: TcpTransportType.INTERMEDIATE }
     });
     await tcp.onActivate();
@@ -32,7 +32,7 @@ async function createWsNode(name: string, port: number, peers: Record<string, st
     const b = new MTProtoCryptoBackend(m);
     const ws = new WsTransportPlugin();
     await ws.initialize({
-        mcp: undefined as any, logger: console, events: new EventEmitter(),
+        logger: console, events: new EventEmitter(),
         config: { cryptoBackend: b, port, host: '127.0.0.1', peers, transportType: WsTransportType.INTERMEDIATE }
     });
     await ws.onActivate();

@@ -1,4 +1,4 @@
-import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
+import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { RailwayPlugin } from '@ton-ai/railway';
 import type {
     RailwayPluginConfig,
@@ -10,7 +10,7 @@ const PLUGIN_NAMES = {
     RAILWAY: 'railway'
 } as const;
 
-export interface DeployerConfig extends SimpleAgentConfig {
+export interface DeployerConfig extends AgentConfig {
     railway: RailwayPluginConfig;
     github: {
         owner: string;
@@ -27,7 +27,7 @@ export interface DeployerConfig extends SimpleAgentConfig {
     environmentVariables?: Record<string, string>;
 }
 
-export class RailwayDeployerAgent extends BaseAgentSimple {
+export class RailwayDeployerAgent extends BaseAgent {
     public readonly config: DeployerConfig;
     private project: RailwayProject | null = null;
     private service: RailwayService | null = null;

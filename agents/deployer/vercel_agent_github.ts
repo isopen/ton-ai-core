@@ -1,4 +1,4 @@
-import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
+import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { VercelPlugin, VercelPluginConfig, VercelProject, VercelDeployment } from '@ton-ai/vercel';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -7,7 +7,7 @@ const PLUGIN_NAMES = {
     VERCEL: 'vercel'
 } as const;
 
-export interface DeployerConfig extends SimpleAgentConfig {
+export interface DeployerConfig extends AgentConfig {
     vercel: VercelPluginConfig;
     github: {
         owner: string;
@@ -24,7 +24,7 @@ export interface DeployerConfig extends SimpleAgentConfig {
     environmentVariables?: Record<string, string>;
 }
 
-export class UniversalDeployerAgent extends BaseAgentSimple {
+export class UniversalDeployerAgent extends BaseAgent {
     public readonly config: DeployerConfig;
     private project: VercelProject | null = null;
     private deployment: VercelDeployment | null = null;

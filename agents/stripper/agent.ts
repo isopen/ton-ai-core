@@ -1,8 +1,8 @@
-import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
+import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { CommentStripperPlugin, CommentStripperConfig, StripBatchResult, StripOptions, UnusedBatchResult } from '@ton-ai/comment-stripper';
 import * as fs from 'fs';
 
-export interface StripperAgentConfig extends SimpleAgentConfig {
+export interface StripperAgentConfig extends AgentConfig {
     commentStripper?: CommentStripperConfig;
     rootDir?: string;
     verbose?: boolean;
@@ -10,11 +10,11 @@ export interface StripperAgentConfig extends SimpleAgentConfig {
 
 const PLUGIN_NAME = 'comment-stripper';
 
-export class StripperAgent extends BaseAgentSimple {
+export class StripperAgent extends BaseAgent {
     private verbose: boolean;
 
     constructor(config: StripperAgentConfig = {}) {
-        super({ name: config.name || 'stripper', ...config, mcp: undefined });
+        super({ name: config.name || 'stripper', ...config });
         this.verbose = config.verbose ?? false;
     }
 

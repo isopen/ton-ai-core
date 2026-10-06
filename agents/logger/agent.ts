@@ -1,9 +1,9 @@
-import { BaseAgentSimple, SimpleAgentConfig, AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
+import { BaseAgent, AgentConfig, AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
 import { LanceDBPlugin } from '@ton-ai/lancedb';
 import * as arrow from 'apache-arrow';
 import { pipeline } from '@huggingface/transformers';
 
-export interface LoggerConfig extends SimpleAgentConfig {
+export interface LoggerConfig extends AgentConfig {
     lancedbUri?: string;
     defaultTable?: string;
     vectorDimension?: number;
@@ -37,7 +37,7 @@ export interface SearchOptions {
     fastSearch?: boolean;
 }
 
-export class LoggerAgent extends BaseAgentSimple {
+export class LoggerAgent extends BaseAgent {
     private agentConfig: LoggerConfig;
     private lancedb!: LanceDBPlugin;
     private logCounter: number = 0;

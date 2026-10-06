@@ -1,7 +1,7 @@
-import { BaseAgentSimple } from '@ton-ai/core';
+import { BaseAgent } from '@ton-ai/core';
 import { VercelPlugin } from '@ton-ai/vercel';
 
-class DeployerAgent extends BaseAgentSimple {
+class DeployerAgent extends BaseAgent {
     protected async onInitialize(): Promise<void> {
         console.log('Deployer agent initializing...');
     }

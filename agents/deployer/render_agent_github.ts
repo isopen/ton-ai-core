@@ -1,4 +1,4 @@
-import { BaseAgentSimple, SimpleAgentConfig } from '@ton-ai/core';
+import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { RenderPlugin } from '@ton-ai/render';
 import type { 
     RenderPluginConfig, 
@@ -11,7 +11,7 @@ const PLUGIN_NAMES = {
     RENDER: 'render'
 } as const;
 
-export interface DeployerConfig extends SimpleAgentConfig {
+export interface DeployerConfig extends AgentConfig {
     render: RenderPluginConfig;
     github: {
         owner: string;
@@ -28,7 +28,7 @@ export interface DeployerConfig extends SimpleAgentConfig {
     environmentVariables?: Record<string, string>;
 }
 
-export class RenderDeployerAgent extends BaseAgentSimple {
+export class RenderDeployerAgent extends BaseAgent {
     public readonly config: DeployerConfig;
     private project: RenderProject | null = null;
     private service: RenderService | null = null;

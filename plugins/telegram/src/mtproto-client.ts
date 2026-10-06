@@ -87,7 +87,6 @@ export class MtprotoClient {
         if (this.mtproto) return;
         const mtproto = new MTProtoCryptoPlugin();
         await mtproto.initialize({
-            mcp: {} as any,
             logger: console,
             events: new EventEmitter(),
             config: { mode: 'client', authKeyMode: 'telegram' },
