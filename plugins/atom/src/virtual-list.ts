@@ -20,6 +20,7 @@ export interface VirtualListProps<T> {
   onVisibleRangeChange?: (start: number, end: number) => void;
   startAtBottom?: boolean;
   scrollToKey?: string | number;
+  initialScrollKey?: string | number;
   topLoader?: VNode;
 
   estimateItem?: (item: T, index: number) => number;
@@ -45,6 +46,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     onVisibleRangeChange,
     startAtBottom,
     scrollToKey,
+    initialScrollKey,
     topLoader,
     estimateItem,
     className,
@@ -147,6 +149,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     prefixEstimator: unknown;
     anchor?: { key: string; top: number };
     wasAtBottom: boolean;
+    restoreHold: boolean;
   }>({
     heights: new Map(),
     prevKeys: '',
@@ -164,6 +167,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     prefixEstimator: null,
     anchor: undefined,
     wasAtBottom: true,
+    restoreHold: false,
   });
 
   const containerHeight = ch ?? measuredH;
@@ -499,6 +503,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         if (scrollToRetryRef.current) cancelAnimationFrame(scrollToRetryRef.current);
         scrollToRetryRef.current = 0;
         userScrolledRef.current = true;
+        st.current.restoreHold = false;
         suppressUntilRef.current = 0;
         programmaticTopRef.current = -1;
       } else {
@@ -506,6 +511,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       }
     } else if (!suppressed || Math.abs(el.scrollTop - expected) > 1) {
       userScrolledRef.current = true;
+      st.current.restoreHold = false;
       if (suppressed) {
         suppressUntilRef.current = 0;
         programmaticTopRef.current = -1;
@@ -569,8 +575,10 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     if (!startAtBottom || data.length === 0) return;
     const el = containerRef.current;
     if (!el) return;
+    if (initialScrollKey != null && !initialFiredRef.current) return;
     const pinKey = data.length + '|' + st.current.prevKeys + '|' + (startAtBottom ? 1 : 0) + '|' + containerHeight;
-    if (pinKey !== lastPinKeyRef.current) {
+    if (st.current.restoreHold && !st.current.wasAtBottom) return;
+    if (pinKey !== lastPinKeyRef.current || st.current.wasAtBottom) {
       lastPinKeyRef.current = pinKey;
       if (userScrolledRef.current && !st.current.wasAtBottom) return;
       const maxTop = el.scrollHeight - el.clientHeight;
@@ -642,20 +650,33 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
 
   const scrollToSeenRef = useRef<string | number | null>(null);
   const scrollToIdxRef = useRef(-1);
+  const initialSeenRef = useRef<string | number | null>(null);
+  const initialFiredRef = useRef(false);
+  const lastScrollToKeyRef = useRef<string | number | null | undefined>(null);
   useEffect(() => {
-    if (scrollToKey == null) {
+    if (initialScrollKey != null && initialSeenRef.current !== initialScrollKey) {
+      initialSeenRef.current = initialScrollKey;
+      initialFiredRef.current = false;
+    }
+    if (scrollToKey == null && (initialScrollKey == null || initialFiredRef.current)) {
       scrollToSeenRef.current = null;
       scrollToIdxRef.current = -1;
       scrollToFiredRef.current = false;
       return;
     }
-    if (scrollToSeenRef.current !== scrollToKey) {
+    if (scrollToKey != null && scrollToSeenRef.current !== scrollToKey) {
       scrollToSeenRef.current = scrollToKey;
       scrollToFiredRef.current = false;
     }
+    if (scrollToKey !== lastScrollToKeyRef.current) {
+      lastScrollToKeyRef.current = scrollToKey;
+      initialFiredRef.current = false;
+    }
     const el = containerRef.current;
     if (!el || data.length === 0 || el.clientHeight <= 0) return;
-    const k = String(scrollToKey);
+    if (userScrolledRef.current && !st.current.wasAtBottom) return;
+    let useInitial = initialScrollKey != null && !initialFiredRef.current;
+    const k = String(useInitial ? initialScrollKey : scrollToKey);
     let idx = -1;
     if (keyExtractor) {
       for (let i = 0; i < data.length; i++) {
@@ -681,9 +702,38 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
         }
       }
     }
+    if (idx < 0 && useInitial && scrollToKey != null) {
+      useInitial = false;
+      const kf = String(scrollToKey);
+      if (keyExtractor) {
+        for (let i = 0; i < data.length; i++) {
+          if (String(keyExtractor(data[i], i)) === kf) {
+            idx = i;
+            break;
+          }
+        }
+      } else {
+        const trimmed = kf.trim();
+        const isStrictInt = /^\d+$/.test(trimmed) && String(Number(trimmed)) === trimmed;
+        if (isStrictInt) {
+          const ki = Number(trimmed);
+          if (ki >= 0 && ki < data.length) idx = ki;
+        }
+        if (idx < 0) {
+          const map = keyByIndexRef.current;
+          for (let i = 0; i < map.length && i < data.length; i++) {
+            if (map[i] === kf) {
+              idx = i;
+              break;
+            }
+          }
+        }
+      }
+    }
     if (idx < 0) return;
     const rawPosEarly = dynamicMode ? ensurePrefix()[idx] : idx * itemHeight!;
     const posEarly = rawPosEarly + (topLoader ? TOP_LOADER_H : 0);
+    if (!useInitial && initialFiredRef.current) return;
     if (scrollToFiredRef.current && idx === scrollToIdxRef.current) {
       const elEarly = containerRef.current;
       if (elEarly) {
@@ -697,6 +747,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     scrollToIdxRef.current = idx;
 
     scrollToFiredRef.current = true;
+    if (useInitial) initialFiredRef.current = true;
     const rawPos = dynamicMode ? ensurePrefix()[idx] : idx * itemHeight!;
     const pos = rawPos + (topLoader ? TOP_LOADER_H : 0);
     const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
@@ -710,12 +761,16 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
     st.current.lastSH = el.scrollHeight;
     atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
     st.current.wasAtBottom = atBottomRef.current;
+    if (useInitial) st.current.restoreHold = !st.current.wasAtBottom;
     setScrollTop(el.scrollTop);
     updateThumb();
     if (scrollToRetryRef.current) cancelAnimationFrame(scrollToRetryRef.current);
     let attempts = 0;
+    const wantKey = useInitial ? initialScrollKey : scrollToKey;
+    const wantSeen = useInitial ? initialSeenRef.current : scrollToSeenRef.current;
     const retrySeek = () => {
       scrollToRetryRef.current = 0;
+      if (userScrolledRef.current && !st.current.wasAtBottom) return;
       if (!el.isConnected || containerRef.current !== el) {
         scrollToFiredRef.current = false;
         return;
@@ -736,7 +791,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       } catch {
         node = null;
       }
-      if (!node && containerRef.current === el && scrollToSeenRef.current === scrollToKey && attempts < 8) {
+      if (!node && containerRef.current === el && wantSeen === wantKey && attempts < 8) {
         attempts++;
         scrollToFiredRef.current = false;
         scrollToRetryRef.current = requestAnimationFrame(retrySeek);
@@ -746,7 +801,7 @@ export function VirtualList<T>(raw: VirtualListProps<T>): VNode {
       updateThumb();
     };
     scrollToRetryRef.current = requestAnimationFrame(retrySeek);
-  }, [scrollToKey, data, data.length, containerHeight]);
+  }, [scrollToKey, initialScrollKey, data, data.length, containerHeight]);
 
   useEffect(() => {
     if (!dynamicMode) return;
