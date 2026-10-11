@@ -134,7 +134,7 @@ describe('TdBinlog class', () => {
     assert.strictEqual(st2.serverTimeOffset, -100);
   });
 
-  test('file lock prevents concurrent binlog instances', async () => {
+  test('a held binlog lock is waited out, then the store opens anyway', async () => {
     const heldLocks = new Set<string>();
     (global as any).navigator.locks = {
       request: async (name: string, opts: any, fn: (lock: any) => Promise<any>) => {
@@ -151,12 +151,22 @@ describe('TdBinlog class', () => {
     };
     const binlog = new TdBinlog();
     await binlog.init('lock-session-1');
+
+    setTimeout(() => heldLocks.delete('gram-db-binlog-lock'), 250);
     const binlog2 = new TdBinlog();
-    await assert.rejects(() => binlog2.init('lock-session-1'), /locked by another instance/);
+    await binlog2.init('lock-session-1');
+    assert.ok(binlog2.getState(), 'second instance opened the store after the holder let go');
     heldLocks.delete('gram-db-binlog-lock');
-    const binlog3 = new TdBinlog();
-    await binlog3.init('lock-session-1');
-  });
+  }, 20000);
+
+  test('a binlog lock that is never released does not lose the session', async () => {
+    (global as any).navigator.locks = {
+      request: async (_name: string, opts: any, fn: (lock: any) => Promise<any>) => await fn(null),
+    };
+    const binlog = new TdBinlog();
+    await binlog.init('lock-session-stuck');
+    assert.ok(binlog.getState(), 'store opened despite a permanently held lock');
+  }, 20000);
 
   test('db key file persists across inits', async () => {
     void dir;

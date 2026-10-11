@@ -23,6 +23,8 @@ const FLAG_PARTIAL = 2;
 
 const KDF_ITERATIONS = 60002;
 const RAW_KDF_ITERATIONS = 2;
+const LOCK_WAIT_MS = 3000;
+const LOCK_POLL_MS = 100;
 
 function readU32(buf: Uint8Array, off: number): number {
   return (buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24)) >>> 0;
@@ -187,27 +189,44 @@ export class TdBinlog {
   private async acquireFileLock(): Promise<void> {
     const locks = (typeof navigator !== 'undefined' ? (navigator as any).locks : undefined);
     if (!locks?.request || this.lockRelease) return;
-    let grant!: (ok: boolean) => void;
-    const granted = new Promise<boolean>((r) => { grant = r; });
-    let release!: () => void;
-    const released = new Promise<void>((r) => { release = r; });
-    const holder = (async () => {
-      return await locks.request('gram-db-binlog-lock', { ifAvailable: true }, async (lock: any) => {
-        if (!lock) {
-          grant(false);
-          return;
+
+    const attempt = async (): Promise<(() => void) | null> => {
+      let grant!: (result: [boolean, () => void]) => void;
+      const granted = new Promise<[boolean, () => void]>((r) => { grant = r; });
+      const holder = (async () => {
+        try {
+          return await locks.request('gram-db-binlog-lock', { ifAvailable: true }, async (lock: any) => {
+            if (!lock) {
+              grant([false, () => {}]);
+              return;
+            }
+            let release!: () => void;
+            const released = new Promise<void>((r) => { release = r; });
+            grant([true, release]);
+            await released;
+          });
+        } catch {
+          grant([false, () => {}]);
         }
-        grant(true);
-        await released;
-      });
-    })();
-    holder.catch(() => {});
-    const ok = await granted;
-    if (!ok) {
-      throw new Error('gram-db binlog is locked by another instance');
+      })();
+      holder.catch(() => {});
+      const [ok, release] = await granted;
+      return ok ? release : null;
+    };
+
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    for (;;) {
+      const release = await attempt();
+      if (release) {
+        this.lockRelease = release;
+        log.info('[td-binlog] file lock acquired');
+        return;
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
     }
-    this.lockRelease = release;
-    log.info('[td-binlog] file lock acquired');
+
+    log.warn('[td-binlog] file lock still held after ' + LOCK_WAIT_MS + 'ms — continuing without it');
   }
 
   async init(sessionId: string, oldSessionId?: string): Promise<BinlogInfo> {
