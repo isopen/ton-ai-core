@@ -11,6 +11,7 @@
   --bg-surface: #1e1e1e;
   --bg-card: #25262d;
   --bg-input: #1e1f24;
+  --gift-card-bg: #1c2b28;
   --bg-hover: rgba(255,255,255,0.06);
   --bg-active: rgba(255,255,255,0.1);
   --text-primary: rgba(255,255,255,0.84);
@@ -57,6 +58,7 @@
   --bg-surface: #f4f4f5;
   --bg-card: #ffffff;
   --bg-input: #f0f0f2;
+  --gift-card-bg: #eef3f2;
   --bg-hover: rgba(0,0,0,0.04);
   --bg-active: rgba(0,0,0,0.08);
   --text-primary: rgba(0,0,0,0.84);
@@ -1256,7 +1258,16 @@ body {
   color: var(--text-on-accent);
   font-weight: 500;
   flex-shrink: 0;
+}
+
+.Avatar__clip {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
   overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .Avatar_size_small {
@@ -1479,6 +1490,141 @@ body {
   align-items: center;
 }
 
+.tgui-topics {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.tgui-topics-header {
+  padding: 8px var(--spacing-xl);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+}
+
+.tgui-topics-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--spacing-sm) 0;
+}
+
+.tgui-topics-loading,
+.tgui-topics-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+}
+
+.tgui-topic-back {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: calc(var(--message-font-size, 14px) * 1.4286);
+  line-height: 1;
+  padding: 4px 8px 4px 0;
+  cursor: pointer;
+}
+
+.tgui-goto-bottom-wrap {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  left: auto;
+  top: auto;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  pointer-events: none;
+}
+
+.tgui-goto-bottom {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  padding: 0;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(160deg, #3d9ef9 0%, #2785f3 100%);
+  color: #fff;
+  box-shadow: 0 5px 12px rgba(40, 130, 230, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform 150ms ease, box-shadow 150ms ease, filter 150ms ease;
+}
+
+.tgui-goto-bottom:hover {
+  filter: brightness(1.07);
+  box-shadow: 0 6px 16px rgba(40, 130, 230, 0.55);
+}
+
+.tgui-goto-bottom:active {
+  transform: scale(0.94);
+}
+
+.tgui-goto-bottom:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.tgui-goto-bottom-arrow {
+  display: block;
+  width: 18px;
+  height: 11px;
+}
+
+.tgui-goto-bottom-count {
+  position: relative;
+  z-index: 0;
+  display: block;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 6px rgba(40, 130, 230, 0.35));
+}
+
+.tgui-goto-bottom-count .Badge {
+  margin-left: 0;
+  border-radius: 999px;
+  min-width: 22px;
+  padding: 0 7px;
+}
+
+.tgui-goto-bottom-count::after {
+  content: '';
+  position: absolute;
+  right: 9px;
+  bottom: -3px;
+  z-index: -1;
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tgui-goto-bottom {
+    transition: none;
+  }
+  .tgui-goto-bottom:active {
+    transform: none;
+  }
+  .tgui-goto-bottom-count .Badge {
+    animation: none;
+  }
+}
+
 .tgui-chat-body {
   flex: 1;
   display: flex;
@@ -1501,7 +1647,7 @@ body {
   animation: tgui-wall-flow 18s linear infinite;
 }
 
-.tgui-chat-body > *:not(.tgui-chat-wallpattern) {
+.tgui-chat-body > *:not(.tgui-chat-wallpattern):not(.tgui-goto-bottom-wrap) {
   position: relative;
   z-index: 1;
 }
@@ -1791,8 +1937,17 @@ body {
   justify-content: center;
   background: transparent;
   border-radius: 16px;
-  overflow: hidden;
   position: relative;
+}
+
+.tgui-sticker-media {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .tgui-sticker-emoji {
@@ -1830,6 +1985,376 @@ body {
 .tgui-gift-label {
   margin-top: 4px;
   justify-content: center;
+}
+
+.MessageBubble_gift {
+  width: fit-content;
+  max-width: min(75%, calc(var(--gift-card-width, 248px) + 22px));
+  padding: 0;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.MessageBubble_gift .MessageBubble__text {
+  padding: 9px 12px 0;
+}
+
+.MessageBubble_gift .MessageBubble__media {
+  padding: 8px 10px 0;
+}
+
+.MessageBubble_gift .MessageBubble__kb {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.MessageBubble_gift .MessageBubble__meta {
+  justify-content: flex-end;
+  padding: 4px 12px 8px;
+}
+
+.tgui-gift-card__accent {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--gift-accent, var(--accent));
+}
+
+.tgui-gift-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: var(--gift-card-width, 248px);
+  max-width: 100%;
+  min-width: 0;
+  background: var(--gift-card-bg);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.MessageBubble_gift .tgui-msg-meta {
+  justify-content: flex-end;
+  padding: 4px 12px 8px;
+}
+
+.tgui-gift-card__head {
+  padding: 8px var(--gift-card-inset, 8px) 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tgui-gift-card__site {
+  color: var(--gift-accent, var(--accent));
+  font-weight: 500;
+  font-size: calc(var(--message-font-size, 14px) * 0.9286);
+  line-height: 1.2;
+}
+
+.tgui-gift-card__title {
+  font-weight: 600;
+  font-size: calc(var(--message-font-size, 14px) * 1.0);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.tgui-gift-card__meta {
+  color: var(--text-secondary);
+  font-size: calc(var(--message-font-size, 14px) * 0.8571);
+}
+
+.tgui-gift-backdrop {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--gift-edge-color, rgba(127, 127, 127, 0.08));
+}
+
+.tgui-gift-backdrop__halo {
+  width: 400px;
+  height: 400px;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: var(--gift-halo-offset-y, -100px);
+  pointer-events: none;
+  background: radial-gradient(
+    var(--gift-center-color, rgba(127, 127, 127, 0.08)) 0%,
+    var(--gift-edge-color, rgba(127, 127, 127, 0.08)) 50%
+  );
+}
+
+.tgui-gift-backdrop__halo_small {
+  width: 200px;
+  height: 200px;
+}
+
+.tgui-gift-backdrop__motif {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 1;
+  pointer-events: none;
+  transform-origin: center;
+  transform: translateX(-50%) scale(1);
+  transition: opacity 0.25s ease-in-out, transform 0.25s ease-in-out;
+}
+
+.tgui-gift-card__media {
+  position: relative;
+
+  margin: 0 4px;
+  width: auto;
+
+  min-height: 184px;
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.tgui-gift-card__img,
+.tgui-gift-card__video {
+  position: relative;
+  z-index: 2;
+  width: 120px;
+  height: 120px;
+  object-fit: contain;
+  display: block;
+}
+
+.tgui-gift-card__media .tgui-animated-sticker {
+  position: relative;
+  z-index: 2;
+}
+
+.tgui-gift-card__media .tgui-media-source-badge--dot {
+  position: absolute;
+  z-index: 2;
+  left: 8px;
+  right: auto;
+  bottom: 8px;
+}
+
+.tgui-gift-card__img--thumb {
+  object-fit: contain;
+}
+
+.tgui-gift-card__placeholder {
+  font-size: calc(var(--message-font-size, 14px) * 4.5714);
+  line-height: 1;
+}
+
+.tgui-gift-card__comment {
+  padding: 8px var(--gift-card-inset, 8px) 0;
+  font-size: calc(var(--message-font-size, 14px) * 0.9286);
+  overflow-wrap: anywhere;
+}
+
+.tgui-gift-card__action {
+  align-self: stretch;
+  margin: 8px var(--gift-card-inset, 8px) 0;
+  padding: 9px 0 11px;
+  border-top: 1px solid var(--bg-border, rgba(127, 127, 127, 0.2));
+  text-align: center;
+  background: none;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  color: var(--gift-accent, var(--accent));
+  font-weight: 600;
+  font-size: calc(var(--message-font-size, 14px) * 0.9286);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.tgui-gift-card__action:hover {
+  opacity: 0.85;
+}
+
+.tgui-gift-detail {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.tgui-gift-detail__panel {
+  width: 380px;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  border-radius: 16px;
+  background: var(--bg-surface);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+.tgui-gift-detail__hero {
+  position: relative;
+  padding: 24px 16px 16px;
+  border-radius: 16px 16px 0 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+}
+
+.tgui-gift-detail__art-wrap {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tgui-gift-detail__art {
+  width: 120px;
+  height: 120px;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.35));
+}
+
+.tgui-gift-detail__art--none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 72px;
+}
+
+.tgui-gift-detail__more {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  right: 8px;
+  border: 0;
+  background: rgba(0, 0, 0, 0.25);
+  color: #fff;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tgui-gift-detail__hero-text {
+  position: relative;
+  z-index: 2;
+  align-self: stretch;
+  padding: 0 16px;
+  text-align: center;
+  color: #fff;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.55);
+}
+
+.tgui-gift-detail__title {
+  font-weight: 700;
+  font-size: calc(var(--message-font-size, 14px) * 1.5714);
+  line-height: 1.2;
+}
+
+.tgui-gift-detail__subtitle {
+  margin-top: 2px;
+  font-size: calc(var(--message-font-size, 14px) * 1.0);
+  opacity: 0.9;
+}
+
+.tgui-gift-detail__body {
+  padding: 14px 16px 16px;
+  background: var(--bg-base, #212121);
+}
+
+.tgui-gift-detail__table {
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.tgui-gift-detail__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--bg-border, rgba(127, 127, 127, 0.18));
+  font-size: calc(var(--message-font-size, 14px) * 0.9286);
+}
+
+.tgui-gift-detail__row:last-child {
+  border-bottom: 0;
+}
+
+.tgui-gift-detail__label {
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+
+.tgui-gift-detail__value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.tgui-gift-detail__value-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tgui-gift-detail__avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+.tgui-gift-detail__pill {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-size: calc(var(--message-font-size, 14px) * 0.7857);
+  font-weight: 600;
+}
+
+.tgui-gift-detail__ok {
+  margin-top: 14px;
+  width: 100%;
+  padding: 13px;
+  border: 0;
+  border-radius: 24px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: calc(var(--message-font-size, 14px) * 1.0);
+  cursor: pointer;
+}
+
+.tgui-gift-detail__ok:hover {
+  opacity: 0.9;
+}
+
+.tgui-msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: calc(var(--message-font-size, 14px) * 0.8571);
 }
 
 .MessageBubble_media {
@@ -2708,16 +3233,42 @@ body {
   animation: tgui-dot-pop 160ms ease-out;
 }
 
-.tgui-media-source-badge--mem {
-  --dot: #22c55e;
+.picker__body .tgui-media-source-badge--dot {
+  z-index: 3;
+}
+
+.tgui-media-source-badge--srv {
+  --dot: #ef4444;
 }
 
 .tgui-media-source-badge--db {
   --dot: #eab308;
 }
 
-.tgui-media-source-badge--srv {
-  --dot: #ef4444;
+.tgui-media-source-badge--glyph {
+  --dot: #22c55e;
+}
+
+.Avatar .tgui-media-source-badge--dot,
+.tgui-sticker-preview .tgui-media-source-badge--dot,
+.tgui-emoji-slot .tgui-media-source-badge--dot {
+  bottom: -2px;
+  right: -2px;
+}
+
+.tgui-emoji-slot {
+  overflow: visible;
+}
+
+.tgui-emoji-slot-media,
+.tgui-emoji-cell-media {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 @keyframes tgui-dot-pop {
@@ -2737,8 +3288,16 @@ body {
   }
 }
 
-button .tgui-media-source-badge--dot {
-  display: none;
+.rich-btn .tgui-media-source-badge--dot,
+.rich-cell-btn .tgui-media-source-badge--dot,
+.MessageBubble__kb-btn .tgui-media-source-badge--dot {
+  width: 0.55em;
+  height: 0.55em;
+  bottom: -0.08em;
+  right: -0.08em;
+  box-shadow:
+    0 0 0 1px var(--bg-surface),
+    0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 .tgui-settings-row_toggle {
@@ -3776,6 +4335,7 @@ button .tgui-media-source-badge--dot {
   aspect-ratio: 1;
   display: grid;
   place-items: center;
+  position: relative;
   background: transparent;
   border: 0;
   border-radius: 8px;
@@ -3892,6 +4452,7 @@ button .tgui-media-source-badge--dot {
   aspect-ratio: 1;
   display: grid;
   place-items: center;
+  position: relative;
   background: transparent;
   border: 0;
   border-radius: 12px;
@@ -3967,6 +4528,7 @@ button .tgui-media-source-badge--dot {
   background: var(--bg-hover);
   border-radius: var(--radius-md);
   padding: 12px 8px;
+  position: relative;
   cursor: pointer;
   color: var(--text-primary);
   text-align: center;
@@ -4183,7 +4745,8 @@ button .tgui-media-source-badge--dot {
   cursor: pointer;
   border-radius: 4px;
   font-size: calc(var(--message-font-size, 14px) * 1.8571);
-  overflow: hidden;
+
+  overflow: visible;
 }
 
 .tgui-emoji-cell:hover {
@@ -4283,6 +4846,15 @@ button .tgui-media-source-badge--dot {
 .tgui-reaction__emoji {
   font-size: calc(var(--message-font-size, 14px) * 1.0714);
   line-height: 1;
+  position: relative;
+  display: inline-block;
+}
+
+.tgui-reaction__emoji .tgui-media-source-badge--dot {
+  width: 0.55em;
+  height: 0.55em;
+  bottom: -0.1em;
+  right: -0.15em;
 }
 
 .tgui-reaction__count {
@@ -6224,8 +6796,9 @@ button .tgui-media-source-badge--dot {
 }
 
 .Avatar {
-  overflow: hidden;
+  overflow: visible;
 }
+
 .Avatar__blur {
   position: absolute;
   inset: 0;

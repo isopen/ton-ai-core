@@ -4,6 +4,7 @@ export interface PeerInfo {
     type: 'user' | 'chat' | 'channel';
     id: string;
     accessHash?: string;
+    forum?: boolean;
     title?: string;
     firstName?: string;
     lastName?: string;
@@ -19,6 +20,7 @@ export interface Dialog {
     peer: PeerInfo;
     topMessage: number;
     unreadCount: number;
+    forum?: boolean;
     lastMsg: string;
     lastMsgEntities?: any[];
     date?: number;
@@ -43,10 +45,30 @@ export interface Message {
     entities?: any[];
     groupedId?: number | string;
     fwdFrom?: any;
+    replyToMsgId?: number;
+    topicId?: number;
 
     fwdName?: string;
 
     fwdPeer?: PeerInfo | null;
+}
+
+export interface ForumTopic {
+    id: number;
+    title: string;
+    iconColor?: number;
+    iconEmojiId?: string;
+    topMessage: number;
+    unreadCount: number;
+    date?: number;
+    closed?: boolean;
+    pinned?: boolean;
+}
+
+export interface SelectedTopic {
+    peerKey: string;
+    topicId: number;
+    title: string;
 }
 
 export interface Country {
@@ -70,6 +92,10 @@ export interface AppState {
     sessionId: string;
     dialogs: Dialog[];
     selectedPeer: PeerInfo | null;
+    selectedTopic: SelectedTopic | null;
+    topics: ForumTopic[];
+    topicsLoading: boolean;
+    scrollRestoreKey: string | null;
     messages: Message[];
     log: string[];
     sidebarCollapsed: boolean;
@@ -157,6 +183,10 @@ export type UIAction =
     | { type: 'SET_DIALOGS'; dialogs: Dialog[] }
     | { type: 'SET_MESSAGES'; messages: Message[]; photoSources?: Record<number, string> }
     | { type: 'SET_SELECTED_PEER'; peer: PeerInfo | null }
+    | { type: 'SET_SELECTED_TOPIC'; topic: SelectedTopic | null }
+    | { type: 'SET_TOPICS'; topics: ForumTopic[] }
+    | { type: 'SET_TOPICS_LOADING'; v: boolean }
+    | { type: 'SET_SCROLL_RESTORE'; key: string | null }
     | { type: 'ADD_LOG'; text: string }
     | { type: 'SET_SIDEBAR_COLLAPSED'; v: boolean }
     | { type: 'SET_EMOJI_PICKER'; v: boolean }

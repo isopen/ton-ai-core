@@ -190,17 +190,17 @@ export class WorkerTelegramService extends TelegramService {
         await this.workerClient.clearPendingAuth(phoneNumber);
     }
 
-    async sendMessage(message: string, peer: Record<string, any>, entities?: Array<{ offset: number; length: number; document_id: string }>): Promise<any> {
+    async sendMessage(message: string, peer: Record<string, any>, entities?: Array<{ offset: number; length: number; document_id: string }>, replyToMsgId?: number): Promise<any> {
         this.onLog?.('→ messages.sendMessage');
         if (!this.workerClient) throw new Error('not connected');
-        const r = await this.workerClient.sendMessage(message, peer, entities);
+        const r = await this.workerClient.sendMessage(message, peer, entities, replyToMsgId);
         return r;
     }
 
-    async sendMedia(peer: Record<string, any>, document: any, sticker?: boolean): Promise<any> {
+    async sendMedia(peer: Record<string, any>, document: any, sticker?: boolean, replyToMsgId?: number): Promise<any> {
         this.onLog?.('→ messages.sendMedia');
         if (!this.workerClient) throw new Error('not connected');
-        const r = await this.workerClient.sendMedia(peer, document, sticker);
+        const r = await this.workerClient.sendMedia(peer, document, sticker, replyToMsgId);
         return r;
     }
 
@@ -211,11 +211,43 @@ export class WorkerTelegramService extends TelegramService {
         return resp.result || resp;
     }
 
-    async fetchHistory(peer: PeerInfo, limit = 50, maxId = 0): Promise<any> {
+    async fetchHistory(peer: PeerInfo, limit = 50, maxId = 0, topMsgId?: number): Promise<any> {
         this.onLog?.('→ messages.getHistory');
         if (!this.workerClient) throw new Error('not connected');
-        const resp = await this.workerClient.getHistory(serializePeer(peer), limit, maxId);
+        const resp = await this.workerClient.getHistory(serializePeer(peer), limit, maxId, topMsgId);
         return resp.result || resp;
+    }
+
+    async getForumTopics(peer: PeerInfo, limit = 100, offsetTopic = 0): Promise<any[]> {
+        this.onLog?.('→ messages.getForumTopics');
+        if (!this.workerClient) throw new Error('not connected');
+        const resp = await this.workerClient.callRpc('messages.getForumTopics', {
+            peer: serializePeer(peer), q: '', offset_date: 0, offset_id: 0, offset_topic: offsetTopic, limit,
+        });
+        const data = resp.result || resp;
+        const raw = Array.isArray(data?.topics) ? data.topics : [];
+        return raw
+            .filter((t: any) => t && t._ !== 'forumTopicDeleted')
+            .map((t: any) => ({
+                id: Number(t.id) || 0,
+                title: String(t.title || ''),
+                iconColor: Number(t.icon_color) || 0,
+                iconEmojiId: t.icon_emoji_id != null ? String(t.icon_emoji_id) : undefined,
+                topMessage: Number(t.top_message) || 0,
+                unreadCount: Number(t.unread_count) || 0,
+                date: Number(t.date) || 0,
+                closed: !!t.closed,
+                pinned: !!t.pinned,
+            }))
+            .filter((t: any) => t.id > 0);
+    }
+
+    async readDiscussion(peer: PeerInfo, topMsgId: number, readMaxId: number): Promise<void> {
+        this.onLog?.('→ messages.readDiscussion');
+        if (!this.workerClient) throw new Error('not connected');
+        await this.workerClient.callRpc('messages.readDiscussion', {
+            peer: serializePeer(peer), msg_id: topMsgId, read_max_id: readMaxId,
+        });
     }
 
     async readHistory(peer: PeerInfo, maxId = 0): Promise<void> {

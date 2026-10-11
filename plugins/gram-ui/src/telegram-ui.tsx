@@ -4,7 +4,7 @@ import { ErrorBoundary } from '@ton-ai/atom/boundary';
 import { getLogger } from '@ton-ai/gram-debug';
 import { Panel } from './primitives/panel.js';
 import { Flex } from './primitives/flex.js';
-import type { AppState, UIAction, PeerInfo, Dialog, Message } from './types.js';
+import type { AppState, UIAction, PeerInfo, Dialog, Message, ForumTopic, SelectedTopic } from './types.js';
 import type { LangOption } from '@ton-ai/gram-lang';
 import type { Dispatch } from './state.js';
 import type { SkillDef } from './plugin/types.js';
@@ -25,6 +25,7 @@ import { AuthScreen } from './components/auth-screen.js';
 import { Sidebar } from './components/sidebar.js';
 import { ChatArea } from './components/chat-area.js';
 import { ChatInput } from './components/chat-input.js';
+import { TopicsView } from './components/topics-view.js';
 import { Toast } from './primitives/toast.js';
 import { DebugView } from './components/debug-view.js';
 import { SettingsView } from './components/settings-view.js';
@@ -53,6 +54,7 @@ export interface TelegramUICallbacks {
   loadHistory: () => Promise<void>;
   logout: () => Promise<void>;
   selectPeer: (peer: PeerInfo) => void;
+  selectTopic: (topic: SelectedTopic | null) => void;
   fetchWallpapers?: () => void;
   requestQrCode: () => Promise<void>;
   requestQrPreview?: () => Promise<void>;
@@ -193,6 +195,9 @@ export class TelegramUI {
         if (action.type === 'SET_SELECTED_PEER' && action.peer) {
           self.callbacks.selectPeer(action.peer);
         }
+        if (action.type === 'SET_SELECTED_TOPIC') {
+          self.callbacks.selectTopic(action.topic);
+        }
         if (action.type === 'SET_ACTIVE_SKILL' && action.id === '_settings_') {
           try { self.callbacks.fetchWallpapers?.(); } catch {}
         }
@@ -285,10 +290,14 @@ export class TelegramUI {
                   <Sidebar state={state} dispatch={self._dispatch} />
                 </ErrorBoundary>
                 <Flex direction="column" grow className="tgui-chat-column">
-                  <ErrorBoundary resetKeys={[state.selectedPeer?.type, state.selectedPeer?.id]} fallback={<div class="tgui-empty-chat">{t(S.CHAT_EMPTY)}</div>}>
-                    <ChatArea state={state} dispatch={self._dispatch} skills={self._pluginSkills} />
+                  <ErrorBoundary resetKeys={[state.selectedPeer?.type, state.selectedPeer?.id, state.selectedTopic?.topicId]} fallback={<div class="tgui-empty-chat">{t(S.CHAT_EMPTY)}</div>}>
+                    {state.selectedPeer?.forum && !state.selectedTopic
+                      ? <TopicsView state={state} dispatch={self._dispatch} />
+                      : <ChatArea state={state} dispatch={self._dispatch} skills={self._pluginSkills} />}
                   </ErrorBoundary>
-                  <ChatInput state={state} dispatch={self._dispatch} />
+                  {state.selectedPeer?.forum && !state.selectedTopic
+                    ? null
+                    : <ChatInput state={state} dispatch={self._dispatch} />}
                 </Flex>
               </Flex>
           }
@@ -353,6 +362,10 @@ export class TelegramUI {
   setSessionId(id: string) { this.dispatch({ type: 'SET_SESSION_ID', id }); }
   setDialogs(dialogs: Dialog[]) { this.dispatch({ type: 'SET_DIALOGS', dialogs }); }
   setMessages(messages: Message[]) { this.dispatch({ type: 'SET_MESSAGES', messages }); }
+  setTopics(topics: ForumTopic[]) { this.dispatch({ type: 'SET_TOPICS', topics }); }
+  setTopicsLoading(v: boolean) { this.dispatch({ type: 'SET_TOPICS_LOADING', v }); }
+  setSelectedTopic(topic: SelectedTopic | null) { this.dispatch({ type: 'SET_SELECTED_TOPIC', topic }); }
+  setScrollRestore(key: string | null) { this.dispatch({ type: 'SET_SCROLL_RESTORE', key }); }
   setLoadingMessages(v: boolean) { this.dispatch({ type: 'SET_LOADING_MESSAGES', v }); }
   setConnectionStatus(status: AppState['connectionStatus']) { this.dispatch({ type: 'SET_CONNECTION_STATUS', status }); }
   addLog(text: string) { this.dispatch({ type: 'ADD_LOG', text }); }
@@ -415,9 +428,21 @@ export class TelegramUI {
 
   scrollChatToBottom() {
     const el = document.getElementById('tg-msg-list-content');
-    if (el) {
-      requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
-    }
+    if (!el) return;
+    const startedAt = Date.now();
+    let lastTop = el.scrollTop;
+    const pin = () => {
+      if (!el.isConnected || Date.now() - startedAt > 800) return;
+      const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+      if (el.scrollTop < lastTop) return;
+      lastTop = el.scrollTop;
+      if (el.scrollTop < maxTop - 2) {
+        lastTop = maxTop;
+        el.scrollTop = maxTop;
+      }
+      requestAnimationFrame(pin);
+    };
+    requestAnimationFrame(pin);
   }
 
   mount() {

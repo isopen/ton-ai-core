@@ -1,7 +1,7 @@
 import { getLogger, isNoDialogsCache } from '@ton-ai/gram-debug';
 import { tpl } from '@ton-ai/gram-lang';
 import { buildPeerBlurThumb, requestPhoto } from '@ton-ai/gram-ui';
-import type { Dialog, Message, PeerInfo } from '@ton-ai/gram-ui';
+import type { Dialog, Message, PeerInfo, SelectedTopic } from '@ton-ai/gram-ui';
 import { dbGet, dbSet, dbDel, dbGetMany, dbKeys } from '@/utils/db';
 import { MESSAGE_CACHE_PREFIX, DIALOG_CACHE_KEY, EMOJI_PACK_MAP_KEY, ORPHANED_KEY, ORPHAN_MAX, ORPHAN_TTL_MS } from './gram-constants';
 import { maxPositiveHistoryId, trimHistoryMessages, HISTORY_MAX_CACHED_PEERS } from './gram-history';
@@ -11,6 +11,80 @@ import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources
 const log = getLogger('gram-browser');
 
 const persistQueue = new Map<string, Promise<void>>();
+
+export function topicCacheKey(peerKey: string, topicId?: number | null): string {
+  const id = Number(topicId) || 0;
+  return id > 1 ? peerKey + '|t' + id : peerKey;
+}
+
+export function activeTopicId(s: GramState, peerKey: string): number {
+  const t = s.selectedTopicRef?.current;
+  if (!t || t.peerKey !== peerKey) return 0;
+  return Number(t.topicId) || 0;
+}
+
+export function topicIdOfRaw(msg: any): number {
+  const rt = msg?.reply_to;
+  if (!rt) return 0;
+  const top = Number(rt.reply_to_top_id) || 0;
+  if (top > 0) return top;
+  if (rt.forum_topic) return Number(rt.reply_to_msg_id) || 0;
+  return 0;
+}
+
+export function repliedMsgIdOfRaw(msg: any): number {
+  const id = Number(msg?.reply_to?.reply_to_msg_id) || 0;
+  return id > 0 ? id : 0;
+}
+
+export function messageInTopic(msgId: number, replyToMsgId: number, topicId: number): boolean {
+  const tid = Number(topicId) || 0;
+  if (tid <= 0) return true;
+  if (tid === 1) return (Number(replyToMsgId) || 0) <= 1;
+  const mid = Number(msgId) || 0;
+  if (mid === tid) return true;
+  return (Number(replyToMsgId) || 0) === tid;
+}
+
+export function getFirstVisibleMsgId(): number {
+  const container = document.getElementById('tg-msg-list-content');
+  if (!container) return 0;
+  const containerRect = container.getBoundingClientRect();
+  const rows = container.querySelectorAll<HTMLElement>('.tgui-msg-row[id^="msg-"]');
+  let firstId = 0;
+  for (const row of rows) {
+    const rect = row.getBoundingClientRect();
+    const top = rect.top - containerRect.top;
+    const bottom = rect.bottom - containerRect.top;
+    if (top < containerRect.height && bottom > 0) {
+      const match = row.id.match(/^msg-(\d+)$/);
+      if (match) {
+        const id = parseInt(match[1], 10);
+        if (id > 0 && (firstId === 0 || id < firstId)) firstId = id;
+      }
+    }
+  }
+  return firstId;
+}
+
+export function listAtBottom(): boolean {
+  const el = document.getElementById('tg-msg-list-content');
+  if (!el) return true;
+  return el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+}
+
+export function saveScrollPosition(s: GramState, cacheKey: string): void {
+  if (listAtBottom()) {
+    s.scrollRestoreRef.current.delete(cacheKey);
+    return;
+  }
+  const id = getFirstVisibleMsgId();
+  if (id > 0) {
+    s.scrollRestoreRef.current.set(cacheKey, id);
+  } else {
+    s.scrollRestoreRef.current.delete(cacheKey);
+  }
+}
 
 export function addLog(s: GramState, text: string) {
   s.tgui.current?.addLog(text);
@@ -198,12 +272,15 @@ export function scheduleDialogsFlush(s: GramState) {
 }
 
 export function scheduleMessagesFlush(s: GramState) {
-  log.debug('[flush] scheduleMessagesFlush for', s.selectedPeerRef.current ? `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` : '(none)', 'cacheSize', s.selectedPeerRef.current ? (s.messagesCache.current.get(`${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}`)?.length || 0) : 0);
+  const baseKey = s.selectedPeerRef.current ? `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` : '';
+  const flushKey = topicCacheKey(baseKey, activeTopicId(s, baseKey));
+  log.debug('[flush] scheduleMessagesFlush for', baseKey || '(none)', 'cacheSize', baseKey ? (s.messagesCache.current.get(flushKey)?.length || 0) : 0);
   if (s.messageFlushRef.current !== null) cancelAnimationFrame(s.messageFlushRef.current);
   s.messageFlushRef.current = requestAnimationFrame(() => {
     s.messageFlushRef.current = null;
-    const cacheKey = s.selectedPeerRef.current ? `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` : '';
-    const cached = cacheKey ? s.messagesCache.current.get(cacheKey) : undefined;
+    const key = s.selectedPeerRef.current ? `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` : '';
+    const resolved = topicCacheKey(key, activeTopicId(s, key));
+    const cached = resolved ? s.messagesCache.current.get(resolved) : undefined;
     if (Array.isArray(cached)) {
       prefetchPhotoCaches(s, cached).catch(() => {});
       injectCachedDocumentSources(s, cached);
@@ -346,9 +423,10 @@ function scrollReadHandler(s: GramState) {
   s.scrollReadRef.current = setTimeout(() => {
     const peer = s.selectedPeerRef.current;
     if (!peer || peer.id === '_debug_' || peer.id === '_settings_') return;
+    const peerKey = `${peer.type}_${peer.id}`;
+    saveScrollPosition(s, topicCacheKey(peerKey, activeTopicId(s, peerKey)));
     const maxId = getLastVisibleMsgId();
     if (maxId > 0) {
-      const peerKey = `${peer.type}_${peer.id}`;
       applyReadReceipt(s, peerKey, maxId);
       s.tgService.current?.readHistory(peer, maxId).catch(() => {});
     }

@@ -1,6 +1,6 @@
 export { TelegramUI } from './telegram-ui.js';
 export type { TelegramUICallbacks, CustomEmojiEntity } from './telegram-ui.js';
-export type { PeerInfo, Dialog, Message, AppState, ImageSpec, ImageSource, ImageProps } from './types.js';
+export type { PeerInfo, Dialog, Message, AppState, ImageSpec, ImageSource, ImageProps, ForumTopic, SelectedTopic } from './types.js';
 export type { TguiImageProps } from './types.js';
 export { Image } from './primitives/image.js';
 export { IconButton } from './primitives/icon-button.js';

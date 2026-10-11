@@ -6,6 +6,7 @@ import {
   addLog, setMessageCache, getMaxLoadedMsgId,
   applyReadReceipt, attachScrollRead, addOrphanedDialog,
   resolveFwdHeader,
+  topicCacheKey, activeTopicId, topicIdOfRaw, repliedMsgIdOfRaw, messageInTopic, saveScrollPosition,
 } from './gram-utils';
 import { injectCachedPhotoUrls, prefetchPhotoCaches, injectCachedDocumentSources } from './gram-events';
 import { mergeHistoryMessages, insertHistoryMessage, minPositiveHistoryId } from './gram-history';
@@ -232,12 +233,15 @@ async function sendMediaDoc(s: GramState, stickerDoc: any, sticker: boolean, ref
     return;
   }
   const peerKey = `${p.type}_${p.id}`;
+  const topicId = activeTopicId(s, peerKey);
+  const cacheKey = topicCacheKey(peerKey, topicId);
   const alt = docAltOf(stickerDoc);
   const optimisticId = -(Date.now() % 1000000) - 1;
   const optimistic: Message = {
     id: optimisticId, fromId: null, sender: t(S.SENDER_YOU),
     date: Math.floor(Date.now() / 1000), message: alt, out: true, peerId: null,
     media: docMediaOf(stickerDoc) as any,
+    topicId: topicId > 1 ? topicId : undefined,
   };
   const msgs = [...(s.tgui.current?.state.messages || []), optimistic];
   s.tgui.current!.setMessages(msgs);
@@ -249,32 +253,29 @@ async function sendMediaDoc(s: GramState, stickerDoc: any, sticker: boolean, ref
     let data: any;
     histLog.info('[send] media doc id=' + String(stickerDoc?.id) + ' ref=' + (typeof stickerDoc?.file_reference === 'string' ? 'hex:' + String(stickerDoc.file_reference.length) : 'bin:' + String(stickerDoc?.file_reference?.length ?? 0)) + ' set=' + String(refresh?.setId ?? 'none'));
     try {
-      data = await s.tgService.current!.sendMedia(inputPeer, doc, sticker);
+      data = await s.tgService.current!.sendMedia(inputPeer, doc, sticker, topicId > 1 ? topicId : undefined);
     } catch (e: any) {
       if (!isRefError(e) || !refresh) throw e;
       histLog.warn('[send] stale file reference, refreshing doc id=' + String(stickerDoc?.id));
       const fresh = await refreshMediaDoc(s, stickerDoc, refresh);
       if (!fresh) throw e;
       doc = fresh;
-      data = await s.tgService.current!.sendMedia(inputPeer, doc, sticker);
+      data = await s.tgService.current!.sendMedia(inputPeer, doc, sticker, topicId > 1 ? topicId : undefined);
     }
     addLog(s, t(S.LOG_MESSAGE_SENT));
     const { sentId, sentDate, sentMedia, newMsgUpdate } = parseSentUpdates(data, optimisticId);
     const sentMsg = newMsgUpdate?.message;
     if (!sentMsg) histLog.warn('[send] updates without new-message, keeping optimistic id peer=', peerKey);
-    const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: sentMsg?.message ?? alt, out: true, peerId: null, media: sentMedia ?? optimistic.media, entities: sentMsg?.entities, groupedId: sentMsg?.grouped_id };
+    const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: sentMsg?.message ?? alt, out: true, peerId: null, media: sentMedia ?? optimistic.media, entities: sentMsg?.entities, groupedId: sentMsg?.grouped_id, topicId: topicId > 1 ? topicId : undefined, replyToMsgId: topicId > 1 ? topicId : undefined };
     const updatedMsgs = (s.tgui.current?.state.messages || []).map(m => m.id === optimisticId ? realMsg : m);
     s.tgui.current!.setMessages(updatedMsgs);
-    requestAnimationFrame(() => {
-      const el = document.getElementById('tg-msg-list-content');
-      if (el) el.scrollTop = el.scrollHeight;
-    });
-    const cached = s.messagesCache.current.get(peerKey);
+    s.tgui.current?.scrollChatToBottom();
+    const cached = s.messagesCache.current.get(cacheKey);
     if (Array.isArray(cached)) {
       const filtered = cached.filter(c => c.id !== optimisticId && c.id !== sentId);
-      await setMessageCache(s, peerKey, insertHistoryMessage(filtered, realMsg).list);
+      await setMessageCache(s, cacheKey, insertHistoryMessage(filtered, realMsg).list);
     } else {
-      await setMessageCache(s, peerKey, [realMsg]);
+      await setMessageCache(s, cacheKey, [realMsg]);
     }
     const dialogs = s.dialogsRef.current.map(d => {
       if (`${d.peer.type}_${d.peer.id}` === peerKey) {
@@ -302,6 +303,8 @@ export function createCallbacks(
       const p = s.selectedPeerRef.current;
       if (!p) return;
       const peerKey = `${p.type}_${p.id}`;
+      const topicId = activeTopicId(s, peerKey);
+      const cacheKey = topicCacheKey(peerKey, topicId);
       const optimisticId = -(Date.now() % 1000000) - 1;
       const uiEntities = entities && entities.length > 0
         ? entities.map((e) => ({ ...e, _: 'messageEntityCustomEmoji' }))
@@ -317,25 +320,15 @@ export function createCallbacks(
 
       try {
         const inputPeer = inputPeerOf(p);
-        const data = await s.tgService.current!.sendMessage(text, inputPeer, entities);
+        const data = await s.tgService.current!.sendMessage(text, inputPeer, entities, topicId > 1 ? topicId : undefined);
         addLog(s, t(S.LOG_MESSAGE_SENT));
         const { sentId, sentDate, sentMedia, newMsgUpdate } = parseSentUpdates(data, optimisticId);
         const sentMsg = newMsgUpdate?.message;
         if (!sentMsg) histLog.warn('[send] updates without new-message, keeping optimistic id peer=', peerKey);
-        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null, media: sentMedia, entities: sentMsg?.entities ?? uiEntities, groupedId: sentMsg?.grouped_id };
-        const wasNearBottom = (() => {
-          const el = document.getElementById('tg-msg-list-content');
-          return el && el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
-        })();
+        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null, media: sentMedia, entities: sentMsg?.entities ?? uiEntities, groupedId: sentMsg?.grouped_id, replyToMsgId: topicId > 1 ? topicId : undefined };
         const updatedMsgs = (s.tgui.current?.state.messages || []).map(p => p.id === optimisticId ? realMsg : p);
         s.tgui.current!.setMessages(updatedMsgs);
-        if (wasNearBottom) {
-          requestAnimationFrame(() => {
-            const el = document.getElementById('tg-msg-list-content');
-            if (el) el.scrollTop = el.scrollHeight;
-          });
-        }
-        const cacheKey = peerKey;
+        s.tgui.current?.scrollChatToBottom();
         const cached = s.messagesCache.current.get(cacheKey);
         if (Array.isArray(cached)) {
           const filtered = cached.filter(c => c.id !== optimisticId && c.id !== sentId);
@@ -344,15 +337,15 @@ export function createCallbacks(
           await setMessageCache(s, cacheKey, [realMsg]);
         }
         const dialogs = s.dialogsRef.current.map(d => {
-          if (`${d.peer.type}_${d.peer.id}` === cacheKey) {
+          if (`${d.peer.type}_${d.peer.id}` === peerKey) {
             return { ...d, topMessage: sentId, lastMsg: text, lastMsgEntities: sentMsg?.entities, date: sentDate, unreadCount: 0 };
           }
           return d;
         });
         s.dialogsRef.current = dialogs;
         s.tgui.current!.setDialogs(dialogs);
-        const updatedDialog = s.dialogsRef.current.find(d => `${d.peer.type}_${d.peer.id}` === cacheKey);
-        if (updatedDialog) addOrphanedDialog(s, cacheKey, updatedDialog);
+        const updatedDialog = s.dialogsRef.current.find(d => `${d.peer.type}_${d.peer.id}` === peerKey);
+        if (updatedDialog) addOrphanedDialog(s, peerKey, updatedDialog);
       } catch (e: any) {
         const filtered = (s.tgui.current?.state.messages || []).filter(p => p.id !== optimisticId);
         s.tgui.current!.setMessages(filtered);
@@ -369,15 +362,17 @@ export function createCallbacks(
       const p = s.selectedPeerRef.current;
       if (!p || p.id === '_debug_' || p.id === '_settings_') return;
       const peerKey = `${p.type}_${p.id}`;
-      if (s.loadingHistoryRef.current.has(peerKey)) return;
-      s.loadingHistoryRef.current.add(peerKey);
-      histLog.info('[history] load start peer=', peerKey, 'maxId=', s.maxFetchedIdRef.current.get(peerKey) || 0);
+      const topicId = activeTopicId(s, peerKey);
+      const cacheKey = topicCacheKey(peerKey, topicId);
+      if (s.loadingHistoryRef.current.has(cacheKey)) return;
+      s.loadingHistoryRef.current.add(cacheKey);
+      histLog.info('[history] load start peer=', cacheKey, 'maxId=', s.maxFetchedIdRef.current.get(cacheKey) || 0);
       s.tgui.current!.setLoadingMessages(true);
       try {
         let existing: Message[] = [];
-        const _cached = s.messagesCache.current.get(peerKey);
+        const _cached = s.messagesCache.current.get(cacheKey);
         if (Array.isArray(_cached)) existing = _cached;
-        let maxId = s.maxFetchedIdRef.current.get(peerKey) || 0;
+        let maxId = s.maxFetchedIdRef.current.get(cacheKey) || 0;
         const dialog = s.dialogsRef.current.find(d => `${d.peer.type}_${d.peer.id}` === peerKey);
         if (dialog && typeof dialog.topMessage === 'number' && dialog.topMessage > 0) {
           const maxCached = existing.length ? Math.max(...existing.map(m => Number(m.id) || 0)) : 0;
@@ -387,15 +382,20 @@ export function createCallbacks(
             s.historyEndRef.current.delete(peerKey);
           }
         }
-        if (maxId > 0 && s.historyEndRef.current.has(peerKey)) {
+        if (maxId > 0 && s.historyEndRef.current.has(cacheKey)) {
           histLog.info('[history] end reached, skip fetch peer=', peerKey);
+          const done = s.messagesCache.current.get(cacheKey);
+          const shown = s.tgui.current?.state.messages;
+          if (Array.isArray(done) && done.length > 0 && (!Array.isArray(shown) || shown.length === 0)) {
+            s.tgui.current!.dispatch({ type: 'SET_MESSAGES', messages: done });
+          }
           return;
         }
         const count = maxId === 0
           ? Math.ceil((document.getElementById('tg-msg-list')?.clientHeight || window.innerHeight) / 60) + 5
           : 50;
         const data = await withTimeout(
-          s.tgService.current!.fetchHistory(p, count, maxId),
+          s.tgService.current!.fetchHistory(p, count, maxId, topicId > 1 ? topicId : undefined),
           30000,
           'messages.getHistory',
         );
@@ -457,23 +457,25 @@ export function createCallbacks(
             sender: resolveSenderName(m.from_id, m.sender),
             date: m.date || 0, message: m.message || '',
             out: !!m.out, peerId: null, media: m.media, action: m.action, entities: m.entities,
+            replyToMsgId: repliedMsgIdOfRaw(m) || undefined,
+            topicId: topicIdOfRaw(m) || undefined,
             replyMarkup: (m as any).reply_markup,
             richMessage: (m as any).rich_message,
             groupedId: m.grouped_id, fwdFrom: m.fwd_from,
             ...resolveFwdHeader(s, m.fwd_from, data.users, data.chats),
           })).reverse();
           let result: Message[];
-          const live = s.messagesCache.current.get(peerKey);
+          const live = s.messagesCache.current.get(cacheKey);
           const current: Message[] = Array.isArray(live) ? live : [];
           const currentIds = new Set(current.map(m => Number(m.id) || 0));
           const addedFresh = msgs.filter((m: Message) => !currentIds.has(Number(m.id) || 0)).length;
           if (msgs.length === 0 || (maxId > 0 && addedFresh === 0)) {
-            s.historyEndRef.current.add(peerKey);
+            s.historyEndRef.current.add(cacheKey);
           }
           if (msgs.length === 0 && maxId === 0) {
             if (current.length === 0) {
-              await setMessageCache(s, peerKey, []);
-              s.maxFetchedIdRef.current.delete(peerKey);
+              await setMessageCache(s, cacheKey, []);
+              s.maxFetchedIdRef.current.delete(cacheKey);
             }
             result = current;
           } else {
@@ -481,12 +483,12 @@ export function createCallbacks(
               const name = resolveSenderName(m.fromId, m.sender);
               return name === m.sender ? m : { ...m, sender: name };
             });
-            await setMessageCache(s, peerKey, merged);
+            await setMessageCache(s, cacheKey, merged);
             const minId = minPositiveHistoryId(merged);
             if (minId > 0) {
-              s.maxFetchedIdRef.current.set(peerKey, minId);
+              s.maxFetchedIdRef.current.set(cacheKey, minId);
             } else {
-              s.maxFetchedIdRef.current.delete(peerKey);
+              s.maxFetchedIdRef.current.delete(cacheKey);
             }
             result = merged;
             const uniqIds = new Set(merged.map(m => Number(m.id))).size;
@@ -494,7 +496,7 @@ export function createCallbacks(
             log.debug(`[msgs] merged ${peerKey} n=${merged.length} uniq=${uniqIds} ids=[${merged.map(m => m.id).join(',')}]`);
             log.debug(`[msgs] texts ${peerKey} ` + merged.map(m => `${m.id}:len=${m.message?.length ?? 0}:${JSON.stringify(String(m.message || '').slice(0, 24))}`).join(' | '));
           }
-          if (s.selectedPeerRef.current?.id === p.id && s.selectedPeerRef.current?.type === p.type) {
+          if (s.selectedPeerRef.current?.id === p.id && s.selectedPeerRef.current?.type === p.type && activeTopicId(s, peerKey) === topicId) {
             await prefetchPhotoCaches(s, result);
             injectCachedDocumentSources(s, result);
             const { messages: injectedMsgs, cachedIds } = injectCachedPhotoUrls(result);
@@ -510,20 +512,22 @@ export function createCallbacks(
         } else {
           addLog(s, tpl(S.LOG_HISTORY_NO_MSGS, { peerKey }));
         }
-        if (!s.historyInitRef.current.has(peerKey)) {
-          s.historyInitRef.current.add(peerKey);
+        if (!s.historyInitRef.current.has(cacheKey)) {
+          s.historyInitRef.current.add(cacheKey);
         }
       } catch (e: any) {
         histLog.error('[history] FAILED peer=', peerKey, 'error=', e?.message || e);
         addLog(s, tpl(S.LOG_HISTORY_FAILED, { error: e.message, peerKey }));
       } finally {
-        s.loadingHistoryRef.current.delete(peerKey);
+        s.loadingHistoryRef.current.delete(cacheKey);
         if (s.selectedPeerRef.current?.id === p.id && s.selectedPeerRef.current?.type === p.type) {
           s.tgui.current!.setLoadingMessages(false);
           attachScrollRead(s);
           requestAnimationFrame(() => {
             const maxId = getMaxLoadedMsgId(s);
-            if (maxId > 0) {
+            if (maxId > 0 && topicId > 1) {
+              s.tgService.current?.readDiscussion(p, topicId, maxId).catch(() => {});
+            } else if (maxId > 0) {
               applyReadReceipt(s, peerKey, maxId);
               s.tgService.current?.readHistory(p, maxId).catch(() => {});
             }
@@ -532,6 +536,11 @@ export function createCallbacks(
       }
     },
     selectPeer: (peer: PeerInfo) => {
+      const prevPeer = s.selectedPeerRef.current;
+      if (prevPeer) {
+        const prevKey = `${prevPeer.type}_${prevPeer.id}`;
+        saveScrollPosition(s, topicCacheKey(prevKey, activeTopicId(s, prevKey)));
+      }
       const noCache = isNoDialogsCache();
       s.tgService.current?.cancelPhotoDownloads().catch(() => {});
       s.cancelDocumentDownloads();
@@ -539,13 +548,54 @@ export function createCallbacks(
         s.tgui.current?.dispatch({ type: 'CLEAR_BUTTON_INACTIVE' });
       } catch {}
       s.selectedPeerRef.current = peer;
+      s.selectedTopicRef.current = null;
       s.lastHeaderTyping.current = '';
       s.tgui.current?.setTypingText('');
       const peerKey = `${peer.type}_${peer.id}`;
+      const savedRestore = s.scrollRestoreRef.current.get(topicCacheKey(peerKey, 0));
+      s.tgui.current?.setScrollRestore(savedRestore != null ? String(savedRestore) : null);
+      if (peer.forum) {
+        void s.tgui.current?.setTopicsLoading(true);
+        const loadTopics = async (): Promise<any[]> => {
+          const pageSize = 100;
+          const maxTopics = 500;
+          let all: any[] = [];
+          let offsetTopic = 0;
+          for (let page = 0; page < 5; page += 1) {
+            const pageTopics = await s.tgService.current!.getForumTopics(peer, pageSize, offsetTopic);
+            all = all.concat(pageTopics);
+            if (pageTopics.length < pageSize || all.length >= maxTopics) break;
+            offsetTopic = pageTopics[pageTopics.length - 1].id;
+          }
+          return all;
+        };
+        loadTopics()
+          .then((topics) => {
+            if (s.selectedPeerRef.current?.id !== peer.id || s.selectedPeerRef.current?.type !== peer.type) return;
+            s.topicsCacheRef.current.set(peerKey, topics);
+            s.tgui.current?.setTopics(topics);
+            s.tgui.current?.setTopicsLoading(false);
+          })
+          .catch(() => {
+            if (s.selectedPeerRef.current?.id !== peer.id || s.selectedPeerRef.current?.type !== peer.type) return;
+            s.tgui.current?.setTopics([]);
+            s.tgui.current?.setTopicsLoading(false);
+          });
+      }
       void fetchPeerWallpaper(s, peer);
       void fetchAccountWallpapers(s);
       void fetchSelfWallpaper(s);
       histLog.info(wallpaperFetchStatus(s, peer));
+      if (peer.forum) {
+        s.tgui.current!.dispatch({ type: 'SET_MESSAGES', messages: [] });
+        s.tgui.current!.setLoadingMessages(false);
+        const cachedTopics = s.topicsCacheRef.current.get(peerKey);
+        if (Array.isArray(cachedTopics) && cachedTopics.length > 0) {
+          s.tgui.current?.setTopics(cachedTopics);
+          s.tgui.current?.setTopicsLoading(false);
+          return;
+        }
+      }
       const cached = noCache ? null : s.messagesCache.current.get(peerKey);
       const rawMsgs = Array.isArray(cached) ? cached : [];
       prefetchPhotoCaches(s, rawMsgs).catch(() => {});
@@ -594,6 +644,29 @@ export function createCallbacks(
           ];
         });
       }
+    },
+    selectTopic: (topic) => {
+      const p = s.selectedPeerRef.current;
+      if (!p) return;
+      const peerKey = `${p.type}_${p.id}`;
+      saveScrollPosition(s, topicCacheKey(peerKey, activeTopicId(s, peerKey)));
+      s.selectedTopicRef.current = topic && topic.peerKey === peerKey ? topic : null;
+      const nextKey = topicCacheKey(peerKey, topic ? topic.topicId : 0);
+      const savedTopicRestore = s.scrollRestoreRef.current.get(nextKey);
+      s.tgui.current?.setScrollRestore(savedTopicRestore != null ? String(savedTopicRestore) : null);
+      const key = topicCacheKey(peerKey, topic ? topic.topicId : 0);
+      const rawMsgs = s.messagesCache.current.get(key);
+      if (Array.isArray(rawMsgs) && rawMsgs.length > 0) {
+        prefetchPhotoCaches(s, rawMsgs).catch(() => {});
+        injectCachedDocumentSources(s, rawMsgs);
+        const { messages: cachedMsgs, cachedIds } = injectCachedPhotoUrls(rawMsgs);
+        const cachedSources: Record<number, string> = {};
+        for (const msgId of cachedIds) cachedSources[msgId] = 'memory';
+        s.tgui.current!.dispatch({ type: 'SET_MESSAGES', messages: cachedMsgs, photoSources: cachedSources });
+      } else {
+        s.tgui.current?.dispatch({ type: 'SET_MESSAGES', messages: [] });
+      }
+      getCallbacks().loadHistory();
     },
     sendTyping: () => {
       const p = s.selectedPeerRef.current;

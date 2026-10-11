@@ -6,6 +6,7 @@ import {
   addLog, setMessageCache, deleteMessageCache, scheduleDialogsFlush,
   scheduleMessagesFlush, applyReadReceipt, addOrphanedDialog,
   fetchPeerInfo, dispatchAvatarDownload, resolveFwdHeader, applyUpdateMessagePoll,
+  topicCacheKey, activeTopicId, topicIdOfRaw, repliedMsgIdOfRaw, messageInTopic,
 } from './gram-utils';
 import { isTypingUpdate, handleTypingUpdate } from './gram-typing';
 import { insertHistoryMessage, filterDeletedMessages } from './gram-history';
@@ -317,6 +318,8 @@ export function createHandleUpdate(s: GramState) {
             sender,
             date: msg.date || 0, edit_date: (msg as any).edit_date || 0, message: msg.message || '',
             out: !!msg.out, peerId: msg.peer_id, media: msg.media, action: msg.action, entities: msg.entities,
+            replyToMsgId: repliedMsgIdOfRaw(msg) || undefined,
+            topicId: topicIdOfRaw(msg) || undefined,
             replyMarkup: (msg as any).reply_markup,
             richMessage: (msg as any).rich_message,
             groupedId: msg.grouped_id, fwdFrom: msg.fwd_from,
@@ -345,8 +348,10 @@ export function createHandleUpdate(s: GramState) {
           } catch {}
           let isNew = false;
           let updated: Message[] = [];
+          const msgTopic = Number(m.topicId) || 0;
+          const targetKey = topicCacheKey(cacheKey, msgTopic);
           if (cacheKey) {
-            const prevList = s.messagesCache.current.get(cacheKey);
+            const prevList = s.messagesCache.current.get(targetKey);
             const base = Array.isArray(prevList) ? prevList : [];
             const prevMsg = base.find(c => Number(c.id) === Number(m.id));
             const prevEdit = prevMsg?.edit_date || 0;
@@ -365,12 +370,23 @@ export function createHandleUpdate(s: GramState) {
             }
             const log = getLogger('gram-browser');
             log.debug(`[msgs] new ${cacheKey} id=${m.id} out=${m.out} text=${(m.message || '').slice(0, 20)} cacheN=${updated.length} ${isNew ? 'APPEND' : 'REPLACED'}`);
-            setMessageCache(s, cacheKey, updated);
-            if (s.selectedPeerRef.current && `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` === cacheKey) {
+            setMessageCache(s, targetKey, updated);
+            if (msgTopic > 1) {
+              const cachedTopics = s.topicsCacheRef.current.get(cacheKey);
+              if (cachedTopics && !cachedTopics.some((t: any) => t.id === msgTopic)) {
+                s.topicsCacheRef.current.delete(cacheKey);
+              }
+            }
+            const activeKey = s.selectedPeerRef.current ? `${s.selectedPeerRef.current.type}_${s.selectedPeerRef.current.id}` : '';
+            const viewingTopic = activeTopicId(s, activeKey);
+            const visibleNow = !!activeKey && activeKey === cacheKey && (viewingTopic <= 0 || messageInTopic(m.id, msgTopic, viewingTopic));
+            if (visibleNow) {
               scheduleMessagesFlush(s);
-              if (!m.out && m.id) {
-                applyReadReceipt(s, cacheKey, m.id);
-                s.tgService.current?.readHistory(s.selectedPeerRef.current, m.id).catch(() => {});
+              if (!m.out && m.id && viewingTopic > 1) {
+                s.tgService.current?.readDiscussion(s.selectedPeerRef.current!, viewingTopic, m.id).catch(() => {});
+              } else if (!m.out && m.id && viewingTopic <= 1) {
+                applyReadReceipt(s, targetKey, m.id);
+                s.tgService.current?.readHistory(s.selectedPeerRef.current!, m.id).catch(() => {});
               }
             }
           }

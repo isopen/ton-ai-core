@@ -6,6 +6,7 @@ import { Suspense } from '@ton-ai/atom/suspense';
 import { ErrorBoundary } from '@ton-ai/atom/boundary';
 import type { ComponentType } from '@ton-ai/atom';
 import { Spinner } from '../primitives/spinner.js';
+import { GotoBottomButton, useShowGotoBottom, scrollListToBottom, countNewBelowViewport, listElement } from './goto-bottom.js';
 import { Avatar } from '../primitives/avatar.js';
 import { Flex } from '../primitives/flex.js';
 import { Button } from '../primitives/button.js';
@@ -31,7 +32,10 @@ import { MediaPlayer } from './media-player.js';
 import { VideoMessage } from './video-message.js';
 import { PhotoLoader } from './photo-loader.js';
 import { MediaSourceBadge } from './media-source-badge.js';
+import { UNKNOWN_SOURCE } from './emoji-source.js';
 import { WebPageBubble } from './link-preview.js';
+import { GiftCard, giftOfMessage, giftComment, isGiftCollection, describeGift, giftStickerResolution } from './gift-card.js';
+import { giftArtworkDocument, giftStickerIsEmptyRef, giftStickerIsVideo } from './gift-shared.js';
 import { MediaCollage, type MediaCollageItem } from './media-collage.js';
 import { MediaViewer, type MediaViewerItem, type MediaViewerPhotoItem, type MediaViewerVideoItem } from './media-viewer.js';
 import { AnimatedEmoji } from './emoji-text.js';
@@ -46,6 +50,7 @@ import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 const photoLog = getLogger('gram-ui:photo');
 const fxLog = getLogger('gram-ui:sticker-fx');
 const fallbackLog = getLogger('gram-ui:fallback');
+const giftLog = getLogger('gram-ui:gift');
 const kbLog = getLogger('gram-ui:kb');
 const wallLog = getLogger('gram-ui:wallpaper');
 
@@ -369,27 +374,30 @@ export function StickerBubble({ m, timeStr, out, status, documentUrls, documentP
   return (
     <div class="tgui-sticker" ref={handleRef} style="position:relative" data-server-fx={effectUrl ? '1' : undefined}>
       <div class="tgui-sticker-preview" style={{ position: 'relative' }}>
-        {staticThumb?.url ? (
-          <img class="tgui-sticker-thumb" src={staticThumb.url} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
-        ) : null}
-        {isTgs && url ? (
-          <button class="tgui-sticker-dl" type="button" title={t(S.DEBUG_DOWNLOAD_TGS)} onClick={downloadStickerSource}>⤓</button>
-        ) : null}
-        {showTgs
-          ? <AnimatedSticker tgsUrl={url} renderId={renderId} size={stickerSize} noPlay={!playing} onError={() => setAnimFailed(true)} />
-          : showImg && isVideoSticker
-            ? <video src={url} autoplay loop muted playsinline preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-            : showImg
-              ? <img src={url} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-              : isLoading
-                ? <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
-                    <div style={`width:${progress}%;height:4px;background:#fff;border-radius:2px`} />
-                  </div>
-                : downloadFailed && !staticThumb?.url
-                  ? <span class="tgui-sticker-emoji">{emoji || t(S.STICKER_FALLBACK)}</span>
-                  : null
-        }
-        {documentSource ? <MediaSourceBadge source={documentSource} variant="dot" /> : null}
+        <div class="tgui-sticker-media">
+          {staticThumb?.url ? (
+            <img class="tgui-sticker-thumb" src={staticThumb.url} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+          ) : null}
+          {isTgs && url ? (
+            <button class="tgui-sticker-dl" type="button" title={t(S.DEBUG_DOWNLOAD_TGS)} onClick={downloadStickerSource}>⤓</button>
+          ) : null}
+          {showTgs
+            ? <AnimatedSticker tgsUrl={url} renderId={renderId} size={stickerSize} noPlay={!playing} onError={() => setAnimFailed(true)} />
+            : showImg && isVideoSticker
+              ? <video src={url} autoplay loop muted playsinline preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              : showImg
+                ? <img src={url} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                : isLoading
+                  ? <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+                      <div style={`width:${progress}%;height:4px;background:#fff;border-radius:2px`} />
+                    </div>
+                  : downloadFailed && !staticThumb?.url
+                    ? <span class="tgui-sticker-emoji">{emoji || t(S.STICKER_FALLBACK)}</span>
+                    : null
+          }
+        </div>
+        {}
+        <MediaSourceBadge source={documentSource || UNKNOWN_SOURCE} variant="dot" />
       </div>
       <div class="tgui-sticker-meta">
         <span class="MessageBubble__time">{timeStr}</span>
@@ -399,7 +407,7 @@ export function StickerBubble({ m, timeStr, out, status, documentUrls, documentP
   );
 }
 
-function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, cacheSource, entities, documentUrls, onOpenPhoto }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; sameSenderPrev?: boolean; sameSenderNext?: boolean; cacheSource?: string; entities?: any[]; documentUrls?: Record<number, string>; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
+function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, cacheSource, entities, documentUrls, documentSources, onOpenPhoto }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; sameSenderPrev?: boolean; sameSenderNext?: boolean; cacheSource?: string; entities?: any[]; documentUrls?: Record<number, string>; documentSources?: Record<number | string, string>; onOpenPhoto?: (image: ImageSpec, index: number) => void }) {
   let cls = 'MessageBubble MessageBubble_photo';
   cls += out ? ' MessageBubble_out' : ' MessageBubble_in';
   if (sameSenderPrev) cls += ' MessageBubble_group_prev';
@@ -489,7 +497,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
             </>
           )
         ) : null}
-        {cacheSource ? <MediaSourceBadge source={cacheSource} /> : null}
+        <MediaSourceBadge source={cacheSource || UNKNOWN_SOURCE} />
         {!m.message ? (
           <div class="MessageBubble__meta MessageBubble__meta_overlay">
             <span class="MessageBubble__time">{timeStr}</span>
@@ -497,7 +505,7 @@ function PhotoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, 
           </div>
         ) : null}
       </div>
-      <MediaCaption text={m.message} entities={entities} documentUrls={documentUrls || {}} timeStr={timeStr} out={out} status={status} />
+      <MediaCaption text={m.message} entities={entities} documentUrls={documentUrls || {}} documentSources={documentSources} timeStr={timeStr} out={out} status={status} />
     </div>
   );
 }
@@ -542,107 +550,166 @@ function isUrlMessage(m: any): boolean {
   return /^https?:\/\/\S+$/i.test(m.message.trim());
 }
 
-function GiftBubble({ m, documentUrls, documentProgress }: { m: any; documentUrls: Record<number, string>; documentProgress?: Record<number, number> }) {
-  const action = m.action;
-  if (!action) return null;
-
-  const stickerDoc = action.gift?.sticker;
-  const isPremiumGift = action._ === 'messageActionGiftPremium';
-  const premiumDays = isPremiumGift ? Number(action.days) || 0 : 0;
-  const isTgs = isPremiumGift || (stickerDoc && (stickerDoc.mime_type || '').toLowerCase() === 'application/x-tgsticker');
-  const hasGiftVisual = !!stickerDoc || isPremiumGift;
-
-  if (hasGiftVisual) {
-    const url = documentUrls[m.id] || '';
-    const progress = documentProgress?.[m.id] ?? -1;
-    const isLoading = !url && progress >= 0 && progress < 100;
-    const rootRef = useRef<HTMLDivElement | null>(null);
-    const [visible, setVisible] = useState(false);
-    const [playing, setPlaying] = useState(false);
-    const [attachTick, setAttachTick] = useState(0);
-    const fetchRef = useRef(false);
-
-    const handleRef = useCallback((el: HTMLDivElement | null) => {
-      if (rootRef.current === el) return;
-      rootRef.current = el;
-      setAttachTick(t => t + 1);
-    }, []);
-
-    useEffect(() => {
-      const el = rootRef.current;
-      if (!el || typeof IntersectionObserver === 'undefined') return;
-      return observeVisibility(el, 80, (v) => setPlaying(v));
-    }, [attachTick]);
-
-    useEffect(() => {
-      if (visible) return;
-      const el = rootRef.current;
-      if (!el) return;
-      const observer = new IntersectionObserver(([entry]) => {
-        if (entry.isIntersecting) {
-          setVisible(true);
-          observer.disconnect();
-        }
-      }, { rootMargin: '100px' });
-      observer.observe(el);
-      return () => { observer.disconnect(); };
-    }, [visible, attachTick]);
-
-    useEffect(() => {
-      if (!visible) return;
-      if (isPremiumGift) {
-        if (fetchRef.current || url) return;
-        fetchRef.current = true;
-        window.dispatchEvent(new CustomEvent('tg-fetch-premium-gift', {
-          detail: { messageId: m.id, days: premiumDays },
-        }));
-        return;
-      }
-      if (url) return;
-      requestDocument(stickerDoc, m.id, 0, { tag: 'GiftBubble' });
-    }, [visible, url, isPremiumGift, premiumDays, stickerDoc, m.id]);
-
-    const giftRenderId = 'gift-' + String(stickerDoc?.id || m.id);
-    const showTgsGift = isTgs && url;
-
-    return (
-      <div class="tgui-service-msg" ref={handleRef}>
-        {showTgsGift
-          ? <AnimatedSticker tgsUrl={url} renderId={giftRenderId} size={100} noPlay={!playing} />
-          : !isTgs && url
-            ? <img src={url} style={{ width: 100, height: 100, objectFit: 'contain' }} />
-            : url && isTgs
-              ? <div style="width:100px;height:100px" />
-              : <span>🎁 {isLoading ? t(S.GIFT_LOADING) : t(S.GIFT_DEFAULT)}</span>
-        }
-        {isPremiumGift && showTgsGift ? <span class="tgui-gift-label">🎁 {premiumMonthsLabel(action, t)}</span> : null}
-      </div>
-    );
-  }
-
-  let label = '';
-  switch (action._) {
+function giftLabel(action: any): string {
+  switch (action?._) {
     case 'messageActionGiftPremium':
-      label = premiumMonthsLabel(action, t);
-      break;
+      return premiumMonthsLabel(action, t);
     case 'messageActionGiftCode':
-      label = t(S.GIFT_CODE);
-      break;
+      return t(S.GIFT_CODE);
     case 'messageActionGiftStars':
-      label = t(S.GIFT_STARS);
-      break;
+      return t(S.GIFT_STARS);
     case 'messageActionGiftTon':
-      label = t(S.GIFT_TON);
-      break;
+      return t(S.GIFT_TON);
     case 'messageActionStarGift':
-      label = t(S.GIFT_STAR);
-      break;
+      return t(S.GIFT_STAR);
+    case 'messageActionStarGiftUnique':
+      return t(S.GIFT_STAR_UNIQUE);
+    case 'messageActionStarGiftPurchaseOffer':
+      return t(S.GIFT_STAR_OFFER);
+    case 'messageActionStarGiftPurchaseOfferDeclined':
+      return t(S.GIFT_STAR_OFFER_DECLINED);
     default:
-      label = t(S.GIFT_DEFAULT);
+      return t(S.GIFT_DEFAULT);
   }
+}
+
+function GiftBubble({ m, documentUrl, documentProgress, documentSource }: {
+  m: any;
+  documentUrl?: string;
+  documentProgress?: number;
+  documentSource?: string;
+}) {
+  const action = m.action;
+  const rawGiftDoc = giftArtworkDocument(action?.gift);
+  const giftRefUnresolved = giftStickerIsEmptyRef(rawGiftDoc);
+
+  const [resolvedGiftDoc, setResolvedGiftDoc] = useState<any>(null);
+  useEffect(() => {
+    if (!giftRefUnresolved) { setResolvedGiftDoc(null); return; }
+    const onSticker = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      if (String(detail.messageId) !== String(m.id)) return;
+      if (detail.document && detail.document._ !== 'documentEmpty') setResolvedGiftDoc(detail.document);
+    };
+    window.addEventListener('tg-gift-sticker', onSticker);
+    return () => window.removeEventListener('tg-gift-sticker', onSticker);
+  }, [giftRefUnresolved, m.id]);
+
+  const stickerDoc = giftRefUnresolved ? resolvedGiftDoc : rawGiftDoc;
+  const isPremiumGift = action?._ === 'messageActionGiftPremium';
+  const premiumDays = isPremiumGift ? Number(action.days) || 0 : 0;
+
+  const wantsVisual = !!rawGiftDoc || isPremiumGift;
+
+  const isTgs = isPremiumGift || (!!stickerDoc && (stickerDoc.mime_type || '').toLowerCase() === 'application/x-tgsticker');
+
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [visible, setVisible] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [attachTick, setAttachTick] = useState(0);
+  const premiumRequested = useRef(false);
+  const askedGiftSticker = useRef('');
+  const giftVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  const url = documentUrl || '';
+  const progress = documentProgress ?? -1;
+  const isLoading = wantsVisual && !url && progress >= 0 && progress < 100;
+  const label = giftLabel(action);
+
+  const handleRef = useCallback((el: HTMLDivElement | null) => {
+    if (rootRef.current === el) return;
+    rootRef.current = el;
+    setAttachTick(t => t + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!wantsVisual) return;
+    const el = rootRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    return observeVisibility(el, 80, (v) => setPlaying(v));
+  }, [attachTick, wantsVisual]);
+
+  useEffect(() => {
+    if (!wantsVisual || visible) return;
+    const el = rootRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: '100px' });
+    observer.observe(el);
+    return () => { observer.disconnect(); };
+  }, [visible, attachTick, wantsVisual]);
+
+  useEffect(() => {
+    if (!visible || !wantsVisual || url) return;
+    if (isPremiumGift) {
+      if (premiumRequested.current) return;
+      premiumRequested.current = true;
+      window.dispatchEvent(new CustomEvent('tg-fetch-premium-gift', {
+        detail: { messageId: m.id, days: premiumDays },
+      }));
+      return;
+    }
+    if (!stickerDoc) return;
+    if (giftStickerIsEmptyRef(stickerDoc)) return;
+    requestDocument(stickerDoc, m.id, 1, { tag: 'GiftBubble' });
+  }, [visible, url, wantsVisual, isPremiumGift, premiumDays, stickerDoc, m.id]);
+
+  const giftResolution = giftStickerResolution(m, action?.gift);
+  useEffect(() => {
+    if (!visible || !giftResolution) return;
+    const key = giftResolution.slug + '/' + giftResolution.giftId;
+    if (askedGiftSticker.current === key) return;
+    askedGiftSticker.current = key;
+    window.dispatchEvent(new CustomEvent('tg-fetch-gift-sticker', {
+      detail: { messageId: m.id, slug: giftResolution.slug, giftId: giftResolution.giftId, documentId: giftResolution.documentId },
+    }));
+  }, [visible, giftResolution, m.id]);
+
+  useEffect(() => {
+    const video = giftVideoRef.current;
+    if (!video) return;
+    if (!playing) { video.pause(); return; }
+    let retry: any = null;
+    const start = () => {
+      const p = video.play();
+      if (p && typeof p.catch === 'function') p.catch(() => {
+        if (retry == null) retry = setTimeout(start, 250);
+      });
+    };
+    start();
+    return () => { if (retry != null) clearTimeout(retry); };
+  }, [playing, url]);
+
+  const giftRenderId = 'gift-' + String(stickerDoc?.id || m.id);
+
+  const isVideoSticker = !isTgs && !isPremiumGift && giftStickerIsVideo(stickerDoc);
+  const giftThumb = buildDocumentThumb(stickerDoc);
+
+  let visual: any;
+  if (isTgs && url) {
+    visual = <AnimatedSticker tgsUrl={url} renderId={giftRenderId} size={100} noPlay={!playing} />;
+  } else if (!isTgs && url && isVideoSticker) {
+    visual = <video ref={giftVideoRef} src={url} loop muted playsinline preload="auto" style={{ width: 100, height: 100, objectFit: 'contain' }} />;
+  } else if (!isTgs && url) {
+    visual = <img src={url} style={{ width: 100, height: 100, objectFit: 'contain' }} />;
+  } else if (giftThumb?.url) {
+    visual = <img src={giftThumb.url} style={{ width: 100, height: 100, objectFit: 'contain' }} />;
+  } else if (isLoading) {
+    visual = <span>🎁 {t(S.GIFT_LOADING)}</span>;
+  } else {
+    visual = <span>🎁 {label}</span>;
+  }
+
   return (
-    <div class="tgui-service-msg">
-      <span>🎁 {label}</span>
+    <div class="tgui-service-msg" ref={handleRef}>
+      {visual}
+      {}
+      {stickerDoc ? <MediaSourceBadge source={documentSource || UNKNOWN_SOURCE} variant="dot" /> : null}
+      {wantsVisual && isTgs && url ? <span class="tgui-gift-label">🎁 {label}</span> : null}
     </div>
   );
 }
@@ -653,15 +720,17 @@ function premiumMonthsLabel(action: any, t: (key: string) => string): string {
   return `${months} ${t(S.GIFT_PREMIUM)}`;
 }
 
+const GIFT_ACTION_PREFIXES = ['messageActionGift', 'messageActionStarGift'];
+
 function isGiftMessage(action: any): boolean {
   if (!action || typeof action !== 'object') return false;
-  const t = action._ || '';
-  return t.startsWith('messageActionGift');
+  const type = action._ || '';
+  return GIFT_ACTION_PREFIXES.some((p) => type.startsWith(p));
 }
 
 const DICE_SIZE = 208;
 
-function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: number | null; msgId: number | string }) {
+function DiceSticker({ emoticon, value, msgId, documentSources }: { emoticon: string; value: number | null; msgId: number | string; documentSources?: Record<number | string, string> }) {
   const isSlot = normalizeEmoji(emoticon) === '🎰';
   if (isSlot) {
     return <SlotMachineSticker value={value} size={DICE_SIZE} playKey={'slot-' + msgId} shouldPlay={value == null} />;
@@ -716,16 +785,16 @@ function DiceSticker({ emoticon, value, msgId }: { emoticon: string; value: numb
   if (!docId || !url) {
     return <span class="tgui-dice-loading" style={{ display: 'inline-block', width: DICE_SIZE + 'px', height: DICE_SIZE + 'px' }} />;
   }
-  return <AnimatedEmoji docId={docId} url={url} alt="" size={DICE_SIZE} autoplay={value == null} loop={value == null} playKey={'dice-' + msgId} showLastFrame={value != null} />;
+  return <AnimatedEmoji docId={docId} url={url} alt="" size={DICE_SIZE} autoplay={value == null} loop={value == null} playKey={'dice-' + msgId} showLastFrame={value != null} documentSources={documentSources} />;
 }
 
-function DiceBubble({ m, timeStr, out, status }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read' }) {
+function DiceBubble({ m, timeStr, out, status, documentSources }: { m: any; timeStr: string; out: boolean; status: 'pending' | 'sent' | 'delivered' | 'read'; documentSources?: Record<number | string, string> }) {
   const diceEmoji = m.media?.emoticon || m.media?.emoji || '🎲';
   const diceValue = typeof m.media?.value === 'number' ? m.media.value : null;
   return (
     <div class="MessageBubble MessageBubble_emojiOnly">
       <div class="MessageBubble__text">
-        <DiceSticker emoticon={diceEmoji} value={diceValue} msgId={m.id} />
+        <DiceSticker emoticon={diceEmoji} value={diceValue} msgId={m.id} documentSources={documentSources} />
       </div>
       <div class="MessageBubble__meta">
         <span class="MessageBubble__time">{timeStr}</span>
@@ -772,14 +841,56 @@ export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOu
 
   const fwdLabel = m.fwdName || fwdFromLabel(m.fwdFrom);
 
+  if (!loggedMsgTypes.has('gift:' + String(m.id))) {
+    loggedMsgTypes.add('gift:' + String(m.id));
+    const seen = describeGift(m);
+    if (seen.gift || isGiftMessage(m.action) || m?.media?.webpage) {
+      giftLog.info('[gift] msg=' + m.id + ' action=' + String(m.action?._ || '-') + ' via=' + seen.via + ' media=' + String(m.media?._ || '-'));
+    }
+  }
+
   if (isGiftMessage(m.action)) {
+    const gift = giftOfMessage(m);
+    const comment = giftComment(m.action);
+
+    if (gift) {
+      return (
+        <div id={`msg-${m.id}`} class={`tgui-msg-row ${out ? 'tgui-msg-row-out' : 'tgui-msg-row-in'}`} style={`margin-bottom:${marginBottom}px`}>
+          <MessageBubble
+            className="MessageBubble_gift"
+            text={bubbleText}
+            time={timeStr}
+            out={out}
+            status={status}
+            sameSenderPrev={sameSenderPrev}
+            sameSenderNext={sameSenderNext}
+            entities={m.entities}
+            documentUrls={emojiUrls}
+            documentSources={documentSources}
+            inactiveButtons={inactiveButtons}
+            buttonNotice={buttonNotice}
+            reactions={reactions}
+            reactionUrls={emojiUrls}
+            onReact={onReact ? (e: string) => onReact(e, true) : undefined}
+            messageId={m.id}
+            replyMarkup={m.replyMarkup}
+            richMessage={m.richMessage}
+            richDocumentUrls={emojiUrls}
+            onOpenPhoto={onOpenPhoto}
+            onKbButton={onKbButton}
+            onRichButton={(data, mid, e) => onKbButton({ kind: 'callback', data }, mid, e)}
+            media={<GiftCard m={m} gift={gift} comment={comment} documentUrl={documentUrl} documentSource={documentSource} photoSource={photoSource} />}
+          />
+        </div>
+      );
+    }
     return (
       <div
         id={`msg-${m.id}`}
         class="tgui-msg-row tgui-msg-row-service"
         style={`margin-bottom:${marginBottom}px`}
       >
-        <GiftBubble m={m} documentUrls={rowUrls} documentProgress={rowProgress} />
+        <GiftBubble m={m} documentUrl={documentUrl} documentProgress={progress} documentSource={documentSource} />
       </div>
     );
   }
@@ -808,19 +919,45 @@ export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOu
       {mediaType === 'sticker'
         ? <StickerBubble m={m} timeStr={timeStr} out={out} status={status} documentUrls={rowUrls} documentProgress={rowProgress} documentSource={documentSource} />
         : mediaType === 'dice'
-          ? <DiceBubble m={m} timeStr={timeStr} out={out} status={status} />
+          ? <DiceBubble m={m} timeStr={timeStr} out={out} status={status} documentSources={documentSources} />
           : mediaType === 'poll'
             ? <PollBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} onOpenPhoto={onOpenPhoto} documentUrls={emojiUrls} photoSource={photoSource} documentProgress={rowProgress} documentSources={documentSources} />
           : mediaType === 'photo' || mediaType === 'image'
-          ? <PhotoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} cacheSource={photoSource} entities={m.entities} documentUrls={rowUrls} onOpenPhoto={onOpenPhoto} />
+          ? <PhotoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} cacheSource={photoSource} entities={m.entities} documentUrls={rowUrls} documentSources={documentSources} onOpenPhoto={onOpenPhoto} />
           : mediaType === 'video' && isAnimatedMedia(m.media)
             ? <MediaPlayer m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} onOpenViewer={onOpenViewer} />
           : mediaType === 'video'
             ? <VideoMessage m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} documentUrls={rowUrls} documentProgress={rowProgress} documentSources={rowSources} onOpenViewer={onOpenViewer} />
           : mediaType === 'geo'
-            ? <GeoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} />
+            ? <GeoBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls || {}} documentSources={documentSources} />
           : isLinkMsg
-            ? <WebPageBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
+            ? giftOfMessage(m) && !isGiftCollection(m)
+              ? <MessageBubble
+                className="MessageBubble_gift"
+                text={bubbleText}
+                time={timeStr}
+                out={out}
+                status={status}
+                sameSenderPrev={sameSenderPrev}
+                sameSenderNext={sameSenderNext}
+                entities={m.entities}
+                documentUrls={emojiUrls}
+                documentSources={documentSources}
+                inactiveButtons={inactiveButtons}
+                buttonNotice={buttonNotice}
+                reactions={reactions}
+                reactionUrls={emojiUrls}
+                onReact={onReact ? (e: string) => onReact(e, true) : undefined}
+                messageId={m.id}
+                replyMarkup={m.replyMarkup}
+                richMessage={m.richMessage}
+                richDocumentUrls={emojiUrls}
+                onOpenPhoto={onOpenPhoto}
+                onKbButton={onKbButton}
+                onRichButton={(data, mid, e) => onKbButton({ kind: 'callback', data }, mid, e)}
+                media={<GiftCard m={m} gift={giftOfMessage(m) as any} documentUrl={documentUrl} documentSource={documentSource} photoSource={photoSource} />}
+              />
+              : <WebPageBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
             : <MessageBubble text={showUnsupported ? unsupportedText : bubbleText} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} documentSources={documentSources} inactiveButtons={inactiveButtons} buttonNotice={buttonNotice} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} messageId={m.id} replyMarkup={m.replyMarkup} richMessage={m.richMessage} richDocumentUrls={emojiUrls} onOpenPhoto={onOpenPhoto}
               onKbButton={onKbButton} onRichButton={(data, mid, e) => onKbButton({ kind: 'callback', data }, mid, e)} />
       }
@@ -832,9 +969,16 @@ const MessageItemMemo = memo(MessageItem as any);
 
 function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispatch: Dispatch; skills?: SkillDef[] }) {
   const peer = state.selectedPeer;
+  const peerKeyForList = peer ? `${peer.type}_${peer.id}_${state.selectedTopic?.topicId ?? 0}` : '';
+  const rowsRef = useRef<AlbumRow[]>([]);
+  const [newBelow, setNewBelow] = useState(0);
+  const syncNewBelow = useCallback(() => {
+    const next = countNewBelowViewport(listElement(), rowsRef.current);
+    setNewBelow((prev) => (prev === next ? prev : next));
+  }, []);
+  const showDownBtn = useShowGotoBottom(peerKeyForList, Array.isArray(state.messages) && state.messages.length > 0, syncNewBelow);
   const [visRange, setVisRange] = useState<[number, number]>([0, 0]);
   const [viewer, setViewer] = useState<{ items: MediaViewerItem[]; index: number } | null>(null);
-  const rowsRef = useRef<AlbumRow[]>([]);
   const sabPrev = useRef<boolean | null>(null);
   const wallReqRef = useRef<Record<string, string>>({});
   const wallSigRef = useRef('');
@@ -890,6 +1034,7 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
 
   useEffect(() => {
     setVisRange([0, 0]);
+    setNewBelow(0);
     setViewer(null);
   }, [peer?.id]);
 
@@ -1006,6 +1151,8 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
   const msgs = Array.isArray(state.messages) ? state.messages : [];
   const rows = useMemo(() => buildAlbumRows(msgs), [state.messages]);
   rowsRef.current = rows;
+  const restoreKey = state.scrollRestoreKey ?? null;
+  const restoreApplicable = restoreKey != null && rows.some((r) => String(r.key) === restoreKey);
 
   useEffect(() => {
     const urls: Record<string, string> = (state.documentUrls || {}) as any;
@@ -1100,6 +1247,7 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
     ? rows.findIndex(row => row.msgs.some(m => !m.out && Number(m.id) > readInboxMaxId))
     : -1;
   const hasUnread = firstUnreadRowIdx >= 0 && (currentDialog?.unreadCount ?? 0) > 0;
+  const jumpToUnread = hasUnread && !restoreApplicable;
   if (sabPrev.current !== !hasUnread) {
     sabPrev.current = !hasUnread;
     getLogger('gram-ui').info('[pollscroll] startAtBottom=' + (!hasUnread) + ' unread=' + (currentDialog?.unreadCount ?? 0) + ' n=' + msgs.length);
@@ -1136,6 +1284,9 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
     <div class={'tgui-chat-body' + (wallFlow ? ' tgui-chat-body_flow' : '')} style={wallRender.body}>
       {wallRender.showPattern ? <div class="tgui-chat-wallpattern" style={wallRender.pattern} /> : null}
       <div class="tgui-chat-header">
+        {state.selectedTopic ? (
+          <button class="tgui-topic-back" onClick={() => dispatch({ type: 'SET_SELECTED_TOPIC', topic: null })} aria-label="Back">←</button>
+        ) : null}
         <Avatar
           url={headerAvatar.url}
           blurUrl={headerAvatar.blurUrl}
@@ -1145,13 +1296,13 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
           source={state.avatarSources?.[`${p.type}_${p.id}`]}
         />
         <div class="tgui-chat-info">
-          <span class="tgui-chat-name">{p.type === 'user' && state.selfUserId && p.id === state.selfUserId ? t(S.SAVED_MESSAGES_PEER) : getPeerName(hp)}</span>
+          <span class="tgui-chat-name">{state.selectedTopic ? state.selectedTopic.title : (p.type === 'user' && state.selfUserId && p.id === state.selfUserId ? t(S.SAVED_MESSAGES_PEER) : getPeerName(hp))}</span>
           {state.typingText ? <span class="chat-subtitle"><TypingIndicator text={state.typingText} /></span> : null}
         </div>
       </div>
       {hasMessages ? (
         <VirtualList
-          key={`msg-list-${peer.id}`}
+          key={`msg-list-${peer.id}-${state.selectedTopic?.topicId ?? 0}`}
           id="tg-msg-list-content"
           className="tgui-msg-list"
           data={rows}
@@ -1159,7 +1310,8 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
           estimateItem={estimateRowHeight}
           startAtBottom={!hasUnread}
           keyExtractor={rowKeyOf}
-          scrollToKey={hasUnread ? rows[firstUnreadRowIdx]?.key : undefined}
+          scrollToKey={jumpToUnread ? rows[firstUnreadRowIdx]?.key : undefined}
+          initialScrollKey={restoreApplicable ? restoreKey : undefined}
           topLoader={state.loadingMessages && rows.length > 0 ? <Spinner size="small" /> : null}
           renderItem={({ item: row, index: i }: { item: AlbumRow; index: number }) => {
             const m = row.msgs[0];
@@ -1222,7 +1374,7 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
                       ? <div class="tgui-msg-sender" style={`color:${senderColor(m.sender || 'U')}`}>{m.sender}</div>
                       : null}
                     <div class="MessageBubble MessageBubble_photo MessageBubble_album">
-                      <MediaCollage items={items} timeStr={timeStr} status={status} caption={capMsg.message || ''} captionEntities={capMsg.entities} captionDocumentUrls={emojiUrls} onOpenAt={openAlbum} out={out} />
+                      <MediaCollage items={items} timeStr={timeStr} status={status} caption={capMsg.message || ''} captionEntities={capMsg.entities} captionDocumentUrls={emojiUrls} captionDocumentSources={state.documentSources} onOpenAt={openAlbum} out={out} />
                     </div>
                   </div>
                 </div>
@@ -1239,6 +1391,13 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
           onNearTop={handleNearTop}
         />
       ) : msgListChildren}
+      {hasMessages ? (
+        <GotoBottomButton
+          visible={showDownBtn}
+          newCount={showDownBtn ? newBelow : 0}
+          onGo={() => scrollListToBottom()}
+        />
+      ) : null}
       {viewer ? createPortal(
         <MediaViewer
           items={viewer.items}
@@ -1264,6 +1423,8 @@ export const areChatAreaPropsEqual = (a: any, b: any): boolean =>
   a.state.selfUserId === b.state.selfUserId &&
   a.state.typingText === b.state.typingText &&
   a.state.selectedPeer === b.state.selectedPeer &&
+  a.state.selectedTopic === b.state.selectedTopic &&
+  a.state.scrollRestoreKey === b.state.scrollRestoreKey &&
   a.state.photoSources === b.state.photoSources &&
   a.state.loadingMessages === b.state.loadingMessages &&
   a.state.documentSources === b.state.documentSources &&

@@ -1,5 +1,5 @@
 import type { WorkerTelegramService } from '@/utils/worker-telegram-service';
-import type { TelegramUI, PeerInfo, Dialog, Message } from '@ton-ai/gram-ui';
+import type { TelegramUI, PeerInfo, Dialog, Message, SelectedTopic, ForumTopic } from '@ton-ai/gram-ui';
 
 export interface GramState {
   sessionIdRef: { current: string };
@@ -7,6 +7,9 @@ export interface GramState {
   tgui: { current: TelegramUI | null };
   loadStringsRef: { current: (code?: string) => Promise<void> };
   selectedPeerRef: { current: PeerInfo | null };
+  selectedTopicRef: { current: SelectedTopic | null };
+  topicsCacheRef: { current: Map<string, ForumTopic[]> };
+  scrollRestoreRef: { current: Map<string, number> };
   messagesCache: { current: Map<string, Message[]> };
   dialogsRef: { current: Dialog[] };
   dialogsLoadedRef: { current: boolean };
@@ -43,6 +46,9 @@ export function createGramState(): GramState {
     tgui: { current: null },
     loadStringsRef: { current: async () => {} },
     selectedPeerRef: { current: null },
+    selectedTopicRef: { current: null },
+    topicsCacheRef: { current: new Map() },
+    scrollRestoreRef: { current: new Map() },
     messagesCache: { current: new Map() },
     dialogsRef: { current: [] },
     dialogsLoadedRef: { current: false },

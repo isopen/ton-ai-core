@@ -28,6 +28,10 @@ export function defaultState(): AppState {
     sessionId: '',
     dialogs: [],
     selectedPeer: null,
+    selectedTopic: null,
+    topics: [],
+    topicsLoading: false,
+    scrollRestoreKey: null,
     messages: [],
     log: [],
     sidebarCollapsed: false,
@@ -81,7 +85,11 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_SESSION_ID': return { ...state, sessionId: action.id };
     case 'SET_DIALOGS': return { ...state, dialogs: action.dialogs };
     case 'SET_MESSAGES': return { ...state, messages: action.messages, photoSources: { ...state.photoSources, ...(action.photoSources || {}) } };
-    case 'SET_SELECTED_PEER': return { ...state, selectedPeer: action.peer, photoSources: {} };
+    case 'SET_SELECTED_PEER': return { ...state, selectedPeer: action.peer, selectedTopic: null, topics: [], photoSources: {} };
+    case 'SET_SELECTED_TOPIC': return { ...state, selectedTopic: action.topic };
+    case 'SET_TOPICS': return { ...state, topics: action.topics };
+    case 'SET_TOPICS_LOADING': return { ...state, topicsLoading: action.v };
+    case 'SET_SCROLL_RESTORE': return { ...state, scrollRestoreKey: action.key };
     case 'ADD_LOG': return { ...state, log: state.log.length > 500 ? [...state.log.slice(-499), action.text] : [...state.log, action.text] };
     case 'SET_SIDEBAR_COLLAPSED': return { ...state, sidebarCollapsed: action.v };
     case 'SET_EMOJI_PICKER': return { ...state, showEmojiPicker: action.v };
@@ -247,7 +255,8 @@ export function reducer(state: AppState, action: UIAction): AppState {
       return { ...state, renderTick: state.renderTick + 1, messages };
     }
     case 'UPDATE_MESSAGE_DOCUMENT': {
-      if ((state.documentUrls as any)[action.messageId] === action.url) return state;
+      if ((state.documentUrls as any)[action.messageId] === action.url
+        && (!action.cacheSource || state.documentSources[action.messageId] === action.cacheSource)) return state;
       return {
         ...state,
         documentUrls: { ...state.documentUrls, [action.messageId]: action.url },
@@ -337,16 +346,18 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'CLEAR_EMOJI_DOCUMENTS': {
       const keys = action.keys;
       const documentUrls: Record<string, any> = { ...state.documentUrls };
+      const documentSources: Record<string, any> = { ...state.documentSources };
       let changed = false;
       for (const k of Object.keys(documentUrls)) {
         const isEmoji = k.startsWith('emojipack-') || k.startsWith('emoji-') || k === 'empty-chat';
         if (!isEmoji) continue;
         if (keys && !keys.includes(k)) continue;
         delete documentUrls[k];
+        delete documentSources[k];
         changed = true;
       }
       if (!changed) return state;
-      return { ...state, documentUrls };
+      return { ...state, documentUrls, documentSources };
     }
     case 'SET_MESSAGE_REACTIONS': {
       if (JSON.stringify(state.reactions[action.messageId]) === JSON.stringify(action.reactions)) return state;
