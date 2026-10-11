@@ -90,7 +90,11 @@
       "level": "debug"
     },
     "gram-ui:fallback": {
-      "enabled": false,
+      "enabled": true,
+      "level": "info"
+    },
+    "gram-ui:gift": {
+      "enabled": true,
       "level": "info"
     },
     "gram-ui:kb": {
@@ -116,6 +120,10 @@
     "gram-browser:history": {
       "enabled": true,
       "level": "info"
+    },
+    "gram-media:source-diag": {
+      "enabled": true,
+      "level": "debug"
     }
   }
 }

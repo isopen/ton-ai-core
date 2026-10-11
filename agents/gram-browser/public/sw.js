@@ -2,13 +2,6 @@ const CACHE = 'gram-v6';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
-  event.waitUntil(
-    caches.open(CACHE).then((cache) => {
-      return cache.addAll([
-        '/static/main.' + (self.__WB_MANIFEST ? '' : ''),
-      ].filter(Boolean)).catch(() => {});
-    })
-  );
 });
 
 self.addEventListener('activate', (event) => {
