@@ -54,7 +54,7 @@ export interface TodoRow {
 export type RadarEvent =
     | { kind: 'text'; text: string; time: number }
     | { kind: 'user'; text: string; time: number }
-    | { kind: 'tool'; tool: string; status: string; summary: string; output: string; time: number }
+    | { kind: 'tool'; tool: string; status: string; summary: string; output: string; time: number; durationSec?: number }
     | { kind: 'step'; tokens: number; cost: number; finish: string; time: number }
     | { kind: 'files'; files: string[]; time: number }
     | { kind: 'reasoning'; text: string; time: number };
@@ -151,8 +151,21 @@ export interface ModelApiInfo {
     providerID?: string;
     name?: string;
     status?: string;
+    capabilities?: {
+        tools?: boolean;
+        input?: string[];
+        output?: string[];
+    };
+    modalities?: {
+        input?: string[];
+        output?: string[];
+    };
+    attachment?: boolean;
+    reasoning?: boolean;
+    tool_call?: boolean;
     limit?: {
         context?: number;
+        input?: number;
         output?: number;
     };
 }

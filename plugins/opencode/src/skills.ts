@@ -71,6 +71,7 @@ export class OpencodeSkills {
     private modelLimits: Map<string, { limit: number | null; at: number }> = new Map();
     private cliRuns: Set<SpawnedProcess> = new Set();
     private eventSources: Set<AbortController> = new Set();
+    private ensureInFlight: Promise<boolean> | null = null;
     private ready: boolean = false;
 
     constructor(context: PluginContext, config: OpencodeConfig, spawnFn?: SpawnFn) {
@@ -85,9 +86,11 @@ export class OpencodeSkills {
     }
 
     configure(config: OpencodeConfig): void {
+        const nextBaseUrl = (config.baseUrl || '').replace(/\/+$/, '');
         const targetChanged =
-            (config.baseUrl || '') !== this.baseUrl || (config.binPath || '') !== this.binPath;
-        this.baseUrl = (config.baseUrl || '').replace(/\/+$/, '');
+            nextBaseUrl !== this.baseUrl || (config.binPath || '') !== this.binPath;
+        if (nextBaseUrl !== this.baseUrl) this.ready = false;
+        this.baseUrl = nextBaseUrl;
         this.timeoutMs = config.timeoutMs || 10000;
         this.maxRetries = config.maxRetries ?? 2;
         this.autoServe = config.autoServe ?? true;
@@ -126,6 +129,17 @@ export class OpencodeSkills {
     }
 
     async ensureServer(startTimeoutMs = 20000): Promise<boolean> {
+        if (this.ensureInFlight) return this.ensureInFlight;
+        const run = this.ensureServerInternal(startTimeoutMs);
+        this.ensureInFlight = run;
+        try {
+            return await run;
+        } finally {
+            this.ensureInFlight = null;
+        }
+    }
+
+    private async ensureServerInternal(startTimeoutMs: number): Promise<boolean> {
         try {
             await this.health();
             return true;
@@ -581,15 +595,18 @@ export class OpencodeSkills {
     }
 
     private getStore(): OpencodeStore | null {
-        if (this.store || this.storeFailed || !this.dbPath) return this.store;
+        if (this.store) return this.store;
+        if (!this.dbPath) return null;
+        if (this.storeFailed && !existsSync(this.dbPath)) return null;
         try {
             this.store = new OpencodeStore(this.dbPath);
         } catch (error) {
             this.storeFailed = true;
             this.storeErrorText = error instanceof Error ? error.message : String(error);
-            this.context.logger.warn('opencode local database unavailable:', error instanceof Error ? error.message : error);
+            this.context.logger.warn('opencode local database unavailable:', this.storeErrorText);
             return null;
         }
+        this.storeFailed = false;
         this.storeErrorText = null;
         return this.store;
     }
@@ -609,35 +626,43 @@ export class OpencodeSkills {
     private async request<T>(path: string, label: string, query?: Record<string, string>, init?: { method?: string; body?: string }): Promise<T> {
         const url = this.buildUrl(path, query);
         const method = init?.method || 'GET';
+        const retriable = method === 'GET';
         for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+            let response: Response;
             try {
-                const response = await fetch(url, {
+                response = await fetch(url, {
                     method,
                     headers: { 'Content-Type': 'application/json' },
                     body: init?.body,
                     signal: AbortSignal.timeout(this.timeoutMs),
                 });
-                if (!response.ok) {
-                    const detail = (await response.text().catch(() => '')).slice(0, 200);
-                    const apiError = new OpencodeApiError(
-                        `${label} failed: HTTP ${response.status}${detail ? ` ${detail}` : ''}`,
-                        response.status,
-                    );
-                    if (isPermanentStatus(response.status) || response.status === 409) throw apiError;
-                    if (attempt === this.maxRetries) throw apiError;
-                    await sleep(1000 * (attempt + 1));
-                    continue;
-                }
-                if (response.status === 204) return undefined as T;
-                const raw = await response.text();
-                if (!raw.trim()) return undefined as T;
-                return JSON.parse(raw) as T;
             } catch (error) {
-                if (error instanceof OpencodeApiError) throw error;
-                if (attempt === this.maxRetries) {
+                if (!retriable || attempt === this.maxRetries) {
                     throw new OpencodeApiError(`${label} failed: ${error instanceof Error ? error.message : String(error)}`);
                 }
                 await sleep(1000 * (attempt + 1));
+                continue;
+            }
+            if (!response.ok) {
+                const detail = (await response.text().catch(() => '')).slice(0, 200);
+                const apiError = new OpencodeApiError(
+                    `${label} failed: HTTP ${response.status}${detail ? ` ${detail}` : ''}`,
+                    response.status,
+                );
+                if (isPermanentStatus(response.status) || response.status === 409) throw apiError;
+                if (attempt === this.maxRetries) throw apiError;
+                await sleep(1000 * (attempt + 1));
+                continue;
+            }
+            if (response.status === 204) return undefined as T;
+            const raw = await response.text().catch(() => {
+                throw new OpencodeApiError(`${label} failed: response body read error`);
+            });
+            if (!raw.trim()) return undefined as T;
+            try {
+                return JSON.parse(raw) as T;
+            } catch {
+                throw new OpencodeApiError(`${label} failed: malformed JSON in response body`);
             }
         }
         throw new OpencodeApiError(`${label} failed: max retries exceeded`);

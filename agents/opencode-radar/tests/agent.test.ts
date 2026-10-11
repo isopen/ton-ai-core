@@ -444,11 +444,31 @@ describe('radar console feed', () => {
         );
     });
 
+    test('a network reset keeps the pinned message instead of re-pinning', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setEditImpl } = stubTelegram();
+        const state = (await agent.attachSession(telegram, SESSION)) as unknown as AnyState;
+        const netErr = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
+        setEditImpl(() => Promise.reject(netErr));
+        state.session = { ...SESSION, tokens_input: 950 };
+        for (let i = 0; i < 6; i += 1) {
+            now += 16000;
+            await agent.updateContext(telegram, state);
+        }
+        assert.deepEqual(
+            calls.map((c) => c.op),
+            ['create', 'send', 'pin', 'edit', 'edit', 'edit', 'edit', 'edit', 'edit'],
+        );
+        assert.notEqual(state.contextMessageId, null, 'a flaky network must not drop the pin');
+        assert.equal(state.consecutiveFailures, 0, 'transport errors are not delivery failures');
+    });
+
     test('three context failures resend and pin fresh', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls, setEditImpl } = stubTelegram();
         const state = (await agent.attachSession(telegram, SESSION)) as unknown as AnyState;
-        setEditImpl(() => Promise.reject(new Error('Internal Server Error: edit failed, retry later')));
+
+        setEditImpl(() => Promise.reject(new Error("Bad Request: can't parse entities")));
         state.session = { ...SESSION, tokens_input: 900 };
         now += 16000;
         await agent.updateContext(telegram, state);
@@ -629,7 +649,7 @@ describe('radar console feed', () => {
         const pinEdit = calls.filter((c) => c.op === 'edit').pop() as { params: Record<string, unknown> };
         assert.ok(String(pinEdit.params.text).includes('Context'));
         assert.ok(String(pinEdit.params.text).includes('5990252189799422376'));
-        // Пин — только инфо, без Stop: Stop живёт в отдельном сообщении в ленте.
+
         assert.deepEqual(pinEdit.params.reply_markup, { inline_keyboard: [] });
     });
 
@@ -651,7 +671,7 @@ describe('radar console feed', () => {
         assert.equal(edits.length, 1);
         assert.deepEqual((edits[0].params as Record<string, unknown>).reply_markup, { inline_keyboard: [] });
         assert.equal(state.stopButtonOn, false);
-        // Stop появляется отдельным сообщением в ленте — видно и на Desktop, и на Android.
+
         await agent.syncStopKeyboard(telegram, state);
         assert.ok(typeof state.stopMessageId === 'number');
         const controls = calls.filter((c) => c.op === 'send' && (c.params as Record<string, unknown>).reply_markup !== undefined);
@@ -660,7 +680,7 @@ describe('radar console feed', () => {
             inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
         };
         assert.equal(markup.inline_keyboard[0][0].callback_data, 'stop:ses_test01');
-        // Повторный sync переиспользует контрол, а не шлёт новый.
+
         await agent.syncStopKeyboard(telegram, state);
         assert.equal(calls.filter((c) => c.op === 'send').length, 1);
     });
@@ -3339,8 +3359,6 @@ describe('radar utf8 safety', () => {
         assert.ok(!rendered.includes('�'));
     });
 });
-
-
 });
 
 describe('radar prompt confirm', () => {
@@ -4490,7 +4508,7 @@ describe('radar stop control', () => {
         await agent.syncStopKeyboard(telegram, state);
         const controlId = state.stopMessageId;
         assert.ok(typeof controlId === 'number');
-        // Гасим активность — следующий sync должен снять кнопку, стерпев not-modified.
+
         state.promptQueue.length = 0;
         state.toolCalls = 0;
         state.lastText = '';
@@ -4791,7 +4809,7 @@ describe('radar typing indicator', () => {
     });
 
     test('a long running tool keeps the session active past event recency', () => {
-        const base = { finalized: false, promptQueue: [], cliRun: null, confirming: null, stoppedAt: 0, pending: [], pendingTodos: false, lastEventAt: 0 };
+        const base = { finalized: false, stopping: false, promptQueue: [], cliRun: null, confirming: null, stoppedAt: 0, pending: [], pendingTodos: false, lastEventAt: 0, knownPerms: [], knownQuestions: [], toolCalls: 0, lastText: '' };
         const stale = now - 60000;
         assert.equal(hasUnfinishedLiveTool({ liveTool: liveTool(stale) }, now), true);
         assert.equal(hasUnfinishedLiveTool({ liveTool: liveTool(stale, true) }, now), false);

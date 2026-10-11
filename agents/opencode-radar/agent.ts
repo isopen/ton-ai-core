@@ -6,11 +6,13 @@ import { ContextSnapshot, ModelApiInfo, OpencodeConfig, OpencodePlugin, Opencode
 import {
     EMOJI,
     checkIcon,
+    describeModelCapabilities,
     displayModel,
     escapeHtml,
     formatConsoleBatch,
     formatContextPin,
     formatLiveTool,
+    formatModelContext,
     formatQuestion,
     formatQuestionResolved,
     formatThinking,
@@ -90,6 +92,9 @@ const UPSTREAM_BACKOFF_MAX_MS = 60000;
 const DELIVERY_DEDUP_MS = 45000;
 const DELIVERY_DEDUP_KEEP = 8;
 const PROMPT_BUSY_BACKOFF_MS = 8000;
+const AUTO_CONTINUE_TEXT = 'Continue';
+const AUTO_CONTINUE_MIN_MS = 60000;
+const AUTO_CONTINUE_DEFAULT_MAX = 10;
 const PROMPT_TRANSIENT_BACKOFF_MS = 5000;
 const AUTO_PICK_WINDOW_MIN = 20;
 const AUTO_PICK_WINDOW_MULT = 5;
@@ -314,6 +319,9 @@ export interface RadarWatchConfig {
     pollMs: number;
     pollFanout?: number;
     idleSec: number;
+    autoContinueSec?: number;
+    autoContinueMax?: number;
+    autoFinish?: boolean;
 }
 
 export interface OpencodeRadarConfig extends AgentConfig {
@@ -385,6 +393,11 @@ interface WatchedSession {
     consecutiveFailures: number;
     missingReads: number;
     finalized: boolean;
+    autoNudges: number;
+    lastNudgeAt: number;
+    turnComplete: boolean;
+    autoFinished: boolean;
+    stoppedByUser: boolean;
 }
 
 interface PermissionReply {
@@ -453,6 +466,7 @@ export class OpencodeRadarAgent extends BaseAgent {
     private seenCallbacks = new Set<string>();
     private resolvingQuestions = new Set<string>();
     private submittedPrompts: Array<{ session: string; text: string; at: number }> = [];
+    private partialSends = new Map<string, { firstId: number; delivered: number; total: number; at: number }>();
 
     private isSelfSubmitted(sessionId: string, text: string, now: number): boolean {
         const fresh = this.submittedPrompts.filter((entry) => now - entry.at < SUBMITTED_WINDOW_MS);
@@ -838,6 +852,14 @@ export class OpencodeRadarAgent extends BaseAgent {
             throw new Error('Telegram upstream backoff active');
         }
         const parts = splitTelegramHtml(text);
+        const sig = deliverySignature(text);
+        for (const [key, pending] of this.partialSends) {
+            if (Date.now() - pending.at > DELIVERY_DEDUP_MS) this.partialSends.delete(key);
+        }
+        const prior = this.partialSends.get(sig);
+        const resumable = prior !== undefined && prior.total === parts.length && prior.delivered > 0;
+        let firstId: number | null = resumable ? prior.firstId : null;
+        const start = resumable ? Math.min(prior.delivered, parts.length) : 0;
         const sendOne = async (part: string, withMarkup: boolean): Promise<number> => {
             try {
                 const message = await telegram.sendMessage({
@@ -875,14 +897,18 @@ export class OpencodeRadarAgent extends BaseAgent {
                 throw error;
             }
         };
-        const firstId = await sendOne(parts[0], true);
-        for (const part of parts.slice(1)) {
+        for (let i = start; i < parts.length; i += 1) {
             if (Date.now() < this.rateLimitedUntil) {
                 throw new Error('Too Many Requests: radar backoff active');
             }
-            await sendOne(part, false);
+            const id = await sendOne(parts[i], i === 0);
+            if (i === 0) firstId = id;
+            if (i + 1 < parts.length && firstId !== null) {
+                this.partialSends.set(sig, { firstId, delivered: i + 1, total: parts.length, at: Date.now() });
+            }
         }
-        return firstId;
+        this.partialSends.delete(sig);
+        return firstId!;
     }
 
     private renderContextText(state: WatchedSession): string {
@@ -1053,6 +1079,11 @@ export class OpencodeRadarAgent extends BaseAgent {
             consecutiveFailures: 0,
             missingReads: 0,
             finalized: false,
+            autoNudges: 0,
+            lastNudgeAt: 0,
+            turnComplete: false,
+            autoFinished: false,
+            stoppedByUser: false,
         };
         if (existingThreadId !== undefined) {
             state.threadId = this.threadsEnabled ? existingThreadId : null;
@@ -1070,11 +1101,6 @@ export class OpencodeRadarAgent extends BaseAgent {
         state.needsTodoBaseline = state.knownParts.size > 0;
         await this.applyGatedPermissions(session.id);
         if (state.threadId !== null) {
-            // A restored thread may still carry the legacy `<tg-emoji>` name
-            // (topic names are plain text, the markup never rendered). The
-            // actual name is unknown here, so force one verification edit via
-            // syncTopicName instead of assuming the fresh format. A topic
-            // created just now already has the fresh name.
             const hadThread = existingThreadId !== undefined || (stored?.threadId ?? null) !== null;
             const reused = hadThread && stored?.threadId === state.threadId ? stored?.appliedTopicName : undefined;
             if (typeof reused === 'string' && reused.length > 0) {
@@ -1198,14 +1224,19 @@ export class OpencodeRadarAgent extends BaseAgent {
     private applyEvent(state: WatchedSession, event: RadarEvent): void {
         if (state.finalized && event.kind === 'step') return;
         state.lastEventAt = Date.now();
+        state.autoNudges = 0;
+        state.lastNudgeAt = 0;
         if (state.finalized) {
             state.finalized = false;
         }
+        state.autoFinished = false;
         switch (event.kind) {
             case 'text':
+                state.turnComplete = false;
                 state.lastText = event.text;
                 break;
             case 'tool': {
+                state.turnComplete = false;
                 const toolState = toToolState(event.status);
                 state.recentTools.push({ text: event.summary, state: toolState });
                 if (state.recentTools.length > 6) {
@@ -1217,10 +1248,15 @@ export class OpencodeRadarAgent extends BaseAgent {
                 break;
             }
             case 'step':
+                if (event.finish.trim().toLowerCase() === 'stop') state.turnComplete = true;
                 break;
             case 'reasoning':
+                state.turnComplete = false;
                 break;
             case 'user':
+                state.turnComplete = false;
+
+                state.stoppedByUser = false;
                 break;
             case 'files':
                 for (const file of event.files) {
@@ -1927,12 +1963,24 @@ export class OpencodeRadarAgent extends BaseAgent {
         };
     }
 
-    private modelCardText(currentId: string): string {
-        return `Model: <b>${escapeHtml(currentId || 'default')}</b> — tap to switch.`;
+    private modelCardText(currentId: string, models?: ModelApiInfo[]): string {
+        const current = (models ?? []).find((m) => m.id === currentId);
+        const context = formatModelContext(current?.limit);
+        const caps = current ? describeModelCapabilities(current) : [];
+        const lines = [`Model: <b>${escapeHtml(currentId || 'default')}</b> — tap to switch.`];
+        if (current) {
+            lines.push(`Context: <b>${escapeHtml(context || '—')}</b>${caps.length > 0 ? ` | ${escapeHtml(caps.join(', '))}` : ''}`);
+        }
+        return lines.join('\n');
     }
 
     private modelCardMarkup(models: ModelApiInfo[], currentId: string): InlineKeyboardMarkup {
-        const label = (m: ModelApiInfo) => `${m.id === currentId ? `${EMOJI.check} ` : ''}${truncate(m.name || m.id, 40)}`;
+        const label = (m: ModelApiInfo) => {
+            const prefix = m.id === currentId ? `${EMOJI.check} ` : '';
+            const context = formatModelContext(m.limit);
+            const base = truncate(m.name || m.id, context ? 28 : 40);
+            return context ? `${prefix}${base} · ${context}` : `${prefix}${base}`;
+        };
         return { inline_keyboard: models.map((m) => [{ text: label(m), callback_data: `model:${m.id}` }]) };
     }
 
@@ -1958,7 +2006,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             state.modelCardMessageId = await this.deliverMessage(
                 telegram,
                 state,
-                this.modelCardText(currentId),
+                this.modelCardText(currentId, models),
                 this.modelCardMarkup(models, currentId),
             );
         } catch (error) {
@@ -1974,7 +2022,7 @@ export class OpencodeRadarAgent extends BaseAgent {
     ): Promise<void> {
         const target = messageId ?? state.modelCardMessageId;
         const currentId = displayModel(state.session.model);
-        const text = this.modelCardText(currentId);
+        const text = this.modelCardText(currentId, models);
         const markup = this.modelCardMarkup(models, currentId);
         if (target !== null) {
             try {
@@ -2320,6 +2368,9 @@ export class OpencodeRadarAgent extends BaseAgent {
         try {
             const now = Date.now();
             state.stoppedAt = now;
+            state.stoppedByUser = true;
+            state.autoFinished = false;
+            state.turnComplete = false;
             const queued = state.promptQueue.length;
             const confirming = state.confirming;
             const cliRun = state.cliRun;
@@ -3324,7 +3375,18 @@ export class OpencodeRadarAgent extends BaseAgent {
 
         const idleFor = Date.now() - state.lastEventAt;
         const hasWork = state.toolCalls > 0 || state.lastText !== '';
-        if (!state.finalized && idleFor >= this.config.radar.idleSec * 1000 && hasWork && state.promptQueue.length === 0) {
+        const autoMs = this.autoContinueMs();
+        const maxNudges = this.config.radar.autoContinueMax ?? AUTO_CONTINUE_DEFAULT_MAX;
+        const quietFor = Date.now() - Math.max(state.lastEventAt, state.lastNudgeAt);
+        const canNudge = autoMs > 0 && hasWork && !state.turnComplete && state.autoNudges < maxNudges;
+
+        if (await this.autoFinishIfDone(telegram, state)) return;
+
+        if (!state.finalized && canNudge && quietFor >= autoMs) {
+            if (Date.now() >= this.rateLimitedUntil && (await this.autoContinue(telegram, opencode, state))) return;
+        }
+
+        if (!state.finalized && !canNudge && idleFor >= this.config.radar.idleSec * 1000 && hasWork && state.promptQueue.length === 0) {
             if (Date.now() < this.rateLimitedUntil) return;
             await this.finalizeSession(telegram, state);
             return;
@@ -3337,16 +3399,20 @@ export class OpencodeRadarAgent extends BaseAgent {
 
     private isSessionActive(state: WatchedSession): boolean {
         if (state.finalized) return false;
+        if (state.stopping) return false;
         if (state.promptQueue.length > 0) return true;
         if (state.cliRun) return true;
         if (state.confirming) return true;
         if (Date.now() - state.stoppedAt < STOP_QUIET_MS) return false;
+        if (state.knownPerms.length > 0) return false;
+        if (state.knownQuestions.length > 0) return false;
         if (state.pending.length > 0 || state.pendingTodos) return true;
         if (hasUnfinishedLiveTool(state, Date.now())) return true;
-        return Date.now() - state.lastEventAt < WORKING_RECENCY_MS;
+        return state.toolCalls > 0 || state.lastText !== '';
     }
 
     private wantStopButton(state: WatchedSession): boolean {
+        if (state.autoFinished) return true;
         if (state.finalized) return false;
         if (state.promptQueue.length > 0) return true;
         if (state.cliRun) return true;
@@ -3451,9 +3517,6 @@ export class OpencodeRadarAgent extends BaseAgent {
             if (state.contextMessageId === null) {
                 await this.sendFreshPin(telegram, state);
             } else {
-                // Пин — только инфо (контекст/токены). Кнопку Stop не вешаем:
-                // в закрепе её клавиатура не видна в превью на Desktop/Android,
-                // Stop живёт в отдельном контрольном сообщении в ленте топика.
                 await telegram.editMessageText({
                     chat_id: this.config.radar.chatId,
                     message_id: state.contextMessageId,
@@ -3471,7 +3534,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                 state.lastContextRendered = text;
                 state.lastContextEditAt = Date.now();
                 state.consecutiveFailures = 0;
-                // Пин без кнопок — рассинхрона Stop тут быть не должно.
+
                 state.stopButtonOn = false;
                 return;
             }
@@ -3482,6 +3545,14 @@ export class OpencodeRadarAgent extends BaseAgent {
                     Date.now() + waitSec * 1000 + 1000,
                 );
                 console.warn(`Radar context rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                return;
+            }
+            if (isUpstreamServerError(error)) {
+                state.lastContextEditAt = Date.now();
+                this.logger.debug(
+                    `Radar context edit hit a transport error, keeping the pinned message ` +
+                        `(session=${state.session.id}): ${error instanceof Error ? error.message : error}`,
+                );
                 return;
             }
             if (isMessageGoneError(error)) {
@@ -3731,6 +3802,67 @@ export class OpencodeRadarAgent extends BaseAgent {
                 console.debug('Radar events send failed:', error);
             }
         }
+    }
+
+    private autoContinueMs(): number {
+        const raw = this.config.radar.autoContinueSec;
+        if (raw === undefined) return 0;
+        const parsed = Math.floor(raw * 1000);
+        if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+        return Math.max(parsed, AUTO_CONTINUE_MIN_MS);
+    }
+
+    private autoContinueBlocked(state: WatchedSession): boolean {
+        if (state.finalized) return true;
+        if (state.promptQueue.length > 0) return true;
+        if (state.cliRun) return true;
+        if (state.confirming) return true;
+        if (state.stopping) return true;
+        if (state.stoppedByUser) return true;
+        if (Date.now() - state.stoppedAt < STOP_QUIET_MS) return true;
+        if (state.pending.length > 0 || state.pendingTodos) return true;
+        if (hasUnfinishedLiveTool(state, Date.now())) return true;
+        if (state.thinkingActive) return true;
+        if (state.knownPerms.length > 0) return true;
+        if (state.knownQuestions.length > 0) return true;
+        if (Date.now() < this.rateLimitedUntil) return true;
+        return false;
+    }
+
+    private async autoContinue(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'sendPrompt'>,
+        state: WatchedSession,
+    ): Promise<boolean> {
+        if (this.autoContinueBlocked(state)) return false;
+        state.autoNudges += 1;
+        state.lastNudgeAt = Date.now();
+        state.turnComplete = false;
+        this.logger.info(
+            `Radar auto-continue #${state.autoNudges} after quiet stretch (session=${state.session.id} thread=${state.threadId}).`,
+        );
+        this.enqueuePrompt(state, AUTO_CONTINUE_TEXT);
+        await this.pumpPrompts(telegram, opencode, state);
+        return true;
+    }
+
+    private async autoFinishIfDone(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {
+        if (this.config.radar.autoFinish === false) return false;
+        if (!state.turnComplete) return false;
+        if (state.lastText === '') return false;
+        if (state.finalized || state.stopping) return false;
+        if (state.promptQueue.length > 0 || state.confirming || state.cliRun) return false;
+        if (state.pending.length > 0 || state.pendingTodos || state.liveTool) return false;
+        if (Date.now() - state.stoppedAt < STOP_QUIET_MS) return false;
+        if (Date.now() < this.rateLimitedUntil) return false;
+        state.autoFinished = true;
+        this.logger.info(`Radar finished a turn on its own (session=${state.session.id} thread=${state.threadId}).`);
+        await this.finalizeSession(telegram, state);
+        if (Date.now() - state.lastStopMsgAt >= STOP_DEDUP_MS) {
+            state.lastStopMsgAt = Date.now();
+            await this.safeReply(telegram, state, `${icon('stop')} Stopped, send the task again.`);
+        }
+        return true;
     }
 
     private async finalizeSession(

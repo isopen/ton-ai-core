@@ -106,6 +106,9 @@ const config: OpencodeRadarConfig = {
         pollMs: optionalInt('RADAR_POLL_MS', 1000),
         pollFanout: optionalInt('RADAR_POLL_FANOUT', 3),
         idleSec: optionalInt('RADAR_IDLE_SEC', 90),
+        autoContinueSec: optionalInt('RADAR_AUTO_CONTINUE_SEC', 60),
+        autoContinueMax: optionalInt('RADAR_AUTO_CONTINUE_MAX', 10),
+        autoFinish: optionalFlag('RADAR_AUTO_FINISH', true),
     },
 };
 

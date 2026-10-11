@@ -3,10 +3,12 @@ export const RENDER_BUDGET = 3900;
 export const FORUM_TOPIC_NAME_LIMIT = 128;
 export const TOOL_OUTPUT_CAP = 1200;
 export const LIVE_OUTPUT_MAX = 3000;
+export const TOOL_DURATION_MIN_SEC = 1;
 
 export function formatLiveTool(event: RadarEvent, elapsedSec?: number): string {
     if (event.kind !== 'tool') return formatConsoleBatch([event], null);
-    const age = elapsedSec !== undefined ? ` · ${elapsedSec}s` : '';
+    const span = elapsedSec ?? event.durationSec;
+    const age = span !== undefined && span >= TOOL_DURATION_MIN_SEC ? ` · ${span}s` : '';
     const lines = [`${toolStateIcon(event.status)} ${escapeHtml(event.summary)}${age}`];
     if (event.output) {
         const tail = event.output.length > LIVE_OUTPUT_MAX ? `…${event.output.slice(-LIVE_OUTPUT_MAX)}` : event.output;
@@ -129,12 +131,6 @@ export function parseTopicTitle(name: string, sessionId: string): string {
     return (title || 'Untitled session').slice(0, 200);
 }
 
-/**
- * Forum topic icon, set via the dedicated createForumTopic field.
- * Topic names are plain text (Bot API applies no entities there), so the
- * custom emoji must NOT be embedded as `<tg-emoji>` markup — clients render
- * the raw tags and the 128-char limit eats the real title.
- */
 export const TOPIC_ICON_CUSTOM_EMOJI_ID = '5384090987024892581';
 
 export function formatTopicName(title: string, sessionId: string): string {
@@ -252,9 +248,10 @@ export function langFromPath(path: string): string {
 }
 
 export function markdownToTelegramHtml(text: string): string {
+    const source = text.replace(/[\uE000-\uF8FF]/g, '');
     const blocks: Array<{ code: string; lang: string }> = [];
     const codes: string[] = [];
-    let body = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_match: string, lang: string, code: string): string => {
+    let body = source.replace(/```(\w*)\n?([\s\S]*?)```/g, (_match: string, lang: string, code: string): string => {
         blocks.push({ code: code ?? '', lang: lang ?? '' });
         return `\uE000B${blocks.length - 1}\uE000`;
     });
@@ -408,6 +405,36 @@ export function displayModel(model: string): string {
     } catch {
     }
     return trimmed;
+}
+
+export function formatModelContext(limit: { context?: number; input?: number; output?: number } | undefined): string {
+    const context = typeof limit?.context === 'number' && limit.context > 0 ? Math.floor(limit.context) : 0;
+    if (!context) return '';
+    if (context >= 1000000) {
+        const v = context / 1000000;
+        return `${Number.isInteger(v) ? String(v) : v.toFixed(1)}M`;
+    }
+    if (context >= 1000) {
+        const v = context / 1000;
+        return `${Number.isInteger(v) ? String(v) : v.toFixed(1)}k`;
+    }
+    return String(context);
+}
+
+export function describeModelCapabilities(m: unknown): string[] {
+    const v = (m ?? {}) as { capabilities?: { tools?: unknown; input?: unknown }; modalities?: { input?: unknown }; attachment?: unknown; reasoning?: unknown; tool_call?: unknown };
+    const out: string[] = [];
+    const tools = v.capabilities?.tools ?? v.tool_call ?? false;
+    if (tools === true) out.push('tools');
+    const toList = (x: unknown): string[] => Array.isArray(x) ? x.map((s) => String(s).toLowerCase()) : [];
+    const input = [...toList(v.capabilities?.input), ...toList(v.modalities?.input)];
+    if (input.includes('image') || input.includes('vision')) out.push('vision');
+    if (input.includes('audio')) out.push('audio');
+    if (input.includes('video')) out.push('video');
+    if (input.includes('pdf')) out.push('pdf');
+    if (v.attachment === true) out.push('files');
+    if (v.reasoning === true) out.push('reasoning');
+    return [...new Set(out)];
 }
 
 export type TodoState = 'done' | 'active' | 'queued';
@@ -718,7 +745,9 @@ export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | nul
                 chunks.push([`${icon('chat')} <i>${escapeHtml(truncate(event.text, 500))}</i>`]);
                 break;
             case 'tool': {
-                const lines = [`${toolStateIcon(event.status)} ${escapeHtml(event.summary)}`];
+                const span = event.durationSec;
+                const age = span !== undefined && span >= TOOL_DURATION_MIN_SEC ? ` · ${span}s` : '';
+                const lines = [`${toolStateIcon(event.status)} ${escapeHtml(event.summary)}${age}`];
                 if (event.output) {
                     const clipped = truncate(event.output, TOOL_OUTPUT_CAP);
                     if (clipped.includes('```')) {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync, writeSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -27,7 +27,22 @@ export function isPidAlive(pid: number): boolean {
 
 export function acquireRadarLock(lockPath: string): RadarLock {
     mkdirSync(dirname(lockPath), { recursive: true });
-    if (existsSync(lockPath)) {
+    const payload = JSON.stringify({ pid: process.pid, startedAt: Date.now() });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        let fd: number | null = null;
+        try {
+            fd = openSync(lockPath, 'wx');
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+        if (fd !== null) {
+            try {
+                writeSync(fd, payload);
+            } finally {
+                closeSync(fd);
+            }
+            return { path: lockPath, pid: process.pid };
+        }
         let holder = 0;
         try {
             const raw = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid?: unknown };
@@ -38,9 +53,12 @@ export function acquireRadarLock(lockPath: string): RadarLock {
         if (holder > 0 && holder !== process.pid && isPidAlive(holder)) {
             throw new Error(`opencode-radar already running (pid ${holder}, lock ${lockPath})`);
         }
+        try {
+            rmSync(lockPath, { force: true });
+        } catch {
+        }
     }
-    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
-    return { path: lockPath, pid: process.pid };
+    throw new Error(`opencode-radar lock is contended: ${lockPath}`);
 }
 
 export function releaseRadarLock(lock: RadarLock | null): void {

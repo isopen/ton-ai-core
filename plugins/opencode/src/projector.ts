@@ -151,7 +151,16 @@ export function snapshotTotal(snapshot: ContextSnapshot): number {
     return snapshot.input + snapshot.output + snapshot.reasoning + snapshot.cacheRead + snapshot.cacheWrite;
 }
 
-export function mapPart(row: { id: string; time_updated: number; data: string }): RadarEvent | null {
+const RUNNING_TOOL_STATUSES = new Set(['running', 'pending', 'input-streaming', 'output-streaming']);
+
+export function toolDurationSec(status: string, created?: number, updated?: number): number | undefined {
+    if (RUNNING_TOOL_STATUSES.has(status)) return undefined;
+    if (!Number.isFinite(created) || !Number.isFinite(updated)) return undefined;
+    const span = Math.floor((updated as number) / 1000 - (created as number) / 1000);
+    return span > 0 ? span : undefined;
+}
+
+export function mapPart(row: { id: string; time_updated: number; time_created?: number; data: string }): RadarEvent | null {
     const data = parsePartData(row.data);
     if (!data) return null;
     const type = data.type;
@@ -171,7 +180,16 @@ export function mapPart(row: { id: string; time_updated: number; data: string })
         const state = data.state as Record<string, unknown> | undefined;
         const status = typeof state?.status === 'string' ? (state.status as string) : 'running';
         const summary = summarizeToolInput(tool, state?.input);
-        return { kind: 'tool', tool, status, summary, output: toolResultText(tool, state), time: row.time_updated };
+        const span = toolDurationSec(status, row.time_created, row.time_updated);
+        return {
+            kind: 'tool',
+            tool,
+            status,
+            summary,
+            output: toolResultText(tool, state),
+            time: row.time_updated,
+            ...(span !== undefined ? { durationSec: span } : {}),
+        };
     }
 
     if (type === 'step-finish') {

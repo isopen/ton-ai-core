@@ -60,10 +60,11 @@ export class OpencodePlugin extends BasePlugin<OpencodeConfig> {
         this.initialized = false;
     }
 
-    async onConfigChange(newConfig: Record<string, any>) {
-        this.config = { ...this.config, ...newConfig };
+    async onConfigChange(newConfig: Record<string, unknown>) {
+        const merged = { ...this.config, ...newConfig } as OpencodeConfig;
+        this.config = merged;
         this.logger.info('opencode config updated');
-        this.skills.configure(this.config);
+        this.skills.configure(merged);
         this.events.emit('opencode:config:updated');
     }
 
