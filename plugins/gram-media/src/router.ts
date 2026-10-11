@@ -1,4 +1,4 @@
-import { getLogger } from '@ton-ai/gram-debug';
+import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 import type { MediaHost, MediaTransport, MediaMessageLike, PhotoCacheProbeResult, EmojiKind } from './types.js';
 import type { EmojiPipeline } from './emoji.js';
 import { EmojiPipelineImpl } from './emoji.js';
@@ -6,10 +6,17 @@ import { PickerPipelineImpl } from './picker.js';
 
 const log = getLogger('gram-media');
 
+const sourceDiag = getLogger('gram-media:source-diag');
+
 const EMPTY_CHAT_MSG_ID = 'empty-chat';
 const PHOTO_URL_CACHE_MAX = 200;
 const PROBE_MSG_LIMIT = 60;
 const PROBE_LRU_MAX = 600;
+const DOC_SOURCE_LRU_MAX = 2048;
+
+function isLocalCacheSource(cacheSource: string | undefined): cacheSource is 'memory' | 'persisted' {
+    return cacheSource === 'memory' || cacheSource === 'persisted';
+}
 const MAX_ACTIVE_BLOB_URLS = 4096;
 const TGS_JSON_TTL_MS = 30 * 60 * 1000;
 const TGS_JSON_CACHE_MAX = 300;
@@ -53,6 +60,8 @@ export class GramMediaRouter {
     readonly debug: boolean;
 
     private activeBlobUrls = new Set<string>();
+
+    private externalBlobUrlHolders = new Map<string, number>();
     private emojiBlobUrls = new Set<string>();
     private tgsJsonByUrl = new Map<string, string>();
     private tgsJsonByUrlTs = new Map<string, number>();
@@ -60,6 +69,10 @@ export class GramMediaRouter {
 
     private photoUrlCache = new Map<string, string>();
     private probedCacheKeys = new Set<string>();
+
+    private docSourcesByDocId = new Map<string, string>();
+
+    private docReprobeIds = new Set<string>();
     private photoQueue: Array<{ photo: any; sizeType: string; messageId: number | string; ctx?: string; priority: number; seq: number }> = [];
     private photoQueuedKeys = new Set<string>();
     private photoInFlight = 0;
@@ -184,25 +197,120 @@ export class GramMediaRouter {
         });
     }
 
+    private rememberDocSource(docId: string, cacheSource: string | undefined): void {
+        if (!docId) return;
+        const id = String(docId);
+        if (isEnabled('gram-media:source-diag') && cacheSource && !isLocalCacheSource(cacheSource)) {
+            sourceDiag.debug('[media-source] NETWORK doc=' + id + ' from=' + cacheSource + ' (this view really went to a DC)');
+        }
+        if (!isLocalCacheSource(cacheSource)) {
+            this.docSourcesByDocId.delete(id);
+            this.docReprobeIds.add(id);
+            if (this.docReprobeIds.size > DOC_SOURCE_LRU_MAX) {
+                const oldest = this.docReprobeIds.values().next().value;
+                if (oldest !== undefined) this.docReprobeIds.delete(oldest);
+            }
+            return;
+        }
+        this.docReprobeIds.delete(id);
+        const prev = this.docSourcesByDocId.get(id);
+        if (prev === cacheSource) return;
+        this.docSourcesByDocId.delete(id);
+        this.docSourcesByDocId.set(id, cacheSource);
+        if (this.docSourcesByDocId.size > DOC_SOURCE_LRU_MAX) {
+            const oldest = this.docSourcesByDocId.keys().next().value;
+            if (oldest !== undefined) this.docSourcesByDocId.delete(oldest);
+        }
+    }
+
+    knownDocSource(docId: string | number | undefined | null): string | undefined {
+        if (docId == null || docId === '') return undefined;
+        return this.docSourcesByDocId.get(String(docId));
+    }
+
+    private publishKnownDocSources(docToKeys: Map<string, Array<number | string>>): Array<string> {
+        const unknown: Array<string> = [];
+        for (const [docId, keys] of docToKeys) {
+            const known = this.docSourcesByDocId.get(docId);
+
+            if (known && !this.docReprobeIds.has(docId)) {
+                for (const key of keys) {
+                    this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_SOURCE', messageId: key, cacheSource: known });
+                }
+                continue;
+            }
+
+            if (!this.markProbeKey('d:' + docId) && !this.markProbeKey('d2:' + docId)) continue;
+            unknown.push(docId);
+        }
+        return unknown;
+    }
+
     injectCachedDocumentSources(msgs: MediaMessageLike[]): Promise<void> {
         const docToMsgs = new Map<string, number[]>();
         for (const m of this.probeWindow(msgs)) {
             const doc = m.media?.document;
             if (!doc?.id) continue;
             const docId = doc.id.toString();
-            if (!this.markProbeKey('d:' + docId)) continue;
             if (!docToMsgs.has(docId)) docToMsgs.set(docId, []);
-            docToMsgs.get(docId)!.push(m.id);
+            if (!docToMsgs.get(docId)!.includes(m.id)) docToMsgs.get(docId)!.push(m.id);
         }
         if (docToMsgs.size === 0) return Promise.resolve();
-        const documents = Array.from(docToMsgs.keys()).map(id => ({ id }));
+        const unknown = this.publishKnownDocSources(docToMsgs as unknown as Map<string, Array<number | string>>);
+        if (unknown.length === 0) return Promise.resolve();
+        const documents = unknown.map(id => ({ id }));
         return (this.transport?.batchCheckDocumentCache(documents) || Promise.resolve({} as Record<string, string>)).then((cacheResult) => {
-            for (const [docId, cacheSource] of Object.entries(cacheResult)) {
+            const result = cacheResult || {};
+            if (isEnabled('gram-media:source-diag')) {
+                const hits = Object.keys(result).length;
+                sourceDiag.debug('[media-source] probe asked=' + unknown.length + ' local=' + hits + ' missing=' + (unknown.length - hits));
+                for (const [docId, cacheSource] of Object.entries(result)) {
+                    sourceDiag.debug('[media-source] probe HIT doc=' + docId + ' from=' + cacheSource);
+                }
+            }
+            for (const [docId, cacheSource] of Object.entries(result)) {
+                this.rememberDocSource(docId, cacheSource);
                 const msgIds = docToMsgs.get(docId);
                 if (msgIds) {
                     for (const msgId of msgIds) {
                         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_SOURCE', messageId: msgId, cacheSource });
                     }
+                }
+            }
+        });
+    }
+
+    probeEmojiSources(docIds: Array<string | number>): Promise<void> {
+        const docToKeys = new Map<string, Array<number | string>>();
+        for (const raw of docIds) {
+            if (raw == null || raw === '') continue;
+            const docId = String(raw);
+            const key = 'emojipack-' + docId;
+            const list = docToKeys.get(docId);
+            if (list) {
+                if (!list.includes(key)) list.push(key);
+            } else {
+                docToKeys.set(docId, [key]);
+            }
+        }
+        if (docToKeys.size === 0) return Promise.resolve();
+        const unknown = this.publishKnownDocSources(docToKeys);
+        if (unknown.length === 0) return Promise.resolve();
+        const documents = unknown.map(id => ({ id }));
+        return (this.transport?.batchCheckDocumentCache(documents) || Promise.resolve({} as Record<string, string>)).then((cacheResult) => {
+            const result = cacheResult || {};
+            if (isEnabled('gram-media:source-diag')) {
+                const hits = Object.keys(result).length;
+                sourceDiag.debug('[media-source] emoji probe asked=' + unknown.length + ' local=' + hits + ' missing=' + (unknown.length - hits));
+                for (const [docId, cacheSource] of Object.entries(result)) {
+                    sourceDiag.debug('[media-source] emoji probe HIT doc=' + docId + ' from=' + cacheSource);
+                }
+            }
+            for (const [docId, cacheSource] of Object.entries(result)) {
+                if (!cacheSource) continue;
+                this.rememberDocSource(docId, cacheSource);
+                for (const key of docToKeys.get(docId) || []) {
+                    this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_SOURCE', messageId: key, cacheSource });
                 }
             }
         });
@@ -357,6 +465,7 @@ export class GramMediaRouter {
                 const u = this.emojiUrlCache.get(k);
                 if (u) this.decEmojiUrlRef(u, k);
                 this.emojiUrlCache.delete(k);
+                this.emojiUrlSources.delete(k);
             }
         }
         this.emojiUrlCache.set(key, url);
@@ -367,6 +476,7 @@ export class GramMediaRouter {
         const prev = this.emojiUrlCache.get(key);
         if (prev) this.decEmojiUrlRef(prev, key);
         this.emojiUrlCache.delete(key);
+        this.emojiUrlSources.delete(key);
     }
 
     private incEmojiUrlRef(url: string, key: string): void {
@@ -414,6 +524,8 @@ export class GramMediaRouter {
             scanned++;
 
             if (this.isCachedEmojiUrl(oldest) || this.emojiBlobUrls.has(oldest)) continue;
+
+            if (this.externalBlobUrlHolders.has(oldest)) continue;
             this.activeBlobUrls.delete(oldest);
             this.dropCacheEntriesForUrl(oldest);
             URL.revokeObjectURL(oldest);
@@ -422,8 +534,23 @@ export class GramMediaRouter {
         return url;
     }
 
+    retainBlobUrl(url: string): () => void {
+        if (!url || !url.startsWith('blob:')) return () => {};
+        const next = (this.externalBlobUrlHolders.get(url) || 0) + 1;
+        this.externalBlobUrlHolders.set(url, next);
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            const count = (this.externalBlobUrlHolders.get(url) || 1) - 1;
+            if (count <= 0) this.externalBlobUrlHolders.delete(url);
+            else this.externalBlobUrlHolders.set(url, count);
+        };
+    }
+
     revokeBlobUrl(url?: string): boolean {
         if (!url || !url.startsWith('blob:')) return false;
+
         this.dropCacheEntriesForUrl(url);
         URL.revokeObjectURL(url);
         this.activeBlobUrls.delete(url);
@@ -562,6 +689,26 @@ export class GramMediaRouter {
     dispatchDocumentUrl(messageId: any, url: string, cacheSource?: string): void {
         if (String(messageId) === EMPTY_CHAT_MSG_ID) {
             this.lastEmptyChatUrl = url;
+        }
+
+        if (typeof messageId === 'string') {
+            if (cacheSource) {
+                if (isLocalCacheSource(cacheSource)) this.emojiUrlSources.set(messageId, cacheSource);
+            } else {
+                cacheSource = this.emojiUrlSources.get(messageId);
+
+                if (this.isEmojiKey(messageId)) {
+                    const docId = this.emojiDocIdOf(messageId);
+                    if (!cacheSource) cacheSource = this.docSourcesByDocId.get(docId);
+
+                    if (!cacheSource) void this.probeEmojiSources([docId]);
+                }
+            }
+        }
+
+        if (isEnabled('gram-media:source-diag')) {
+            const sid = String(messageId);
+            sourceDiag.debug('[media-source] ' + (cacheSource || 'NO-SOURCE') + ' messageId=' + sid + ' url=' + (url ? url.slice(0, 24) : 'EMPTY'));
         }
 
         this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT', messageId, url, cacheSource });
@@ -940,7 +1087,9 @@ export class GramMediaRouter {
                     if (isAvatar) this.avatarRequeueCounts.delete(String(messageId));
                     const url = this.bytesToBlobUrl(result.bytes, result.mime);
                     this.photoUrlCacheSet(ck2, url);
-                    this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url, cacheSource: result.cacheSource || 'home-server' });
+                    this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url,
+
+                    cacheSource: result.cacheSource });
                     if (String(messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(currentPhoto?.id ?? photo?.id ?? ''), url, messageId });
                     return;
                 }
@@ -949,7 +1098,9 @@ export class GramMediaRouter {
                     const ck2 = this.getPhotoCacheKey(currentPhoto, sizeType);
                     this.photoUrlCacheSet(ck2, result.photoUrl);
                     if (isAvatar) this.avatarRequeueCounts.delete(String(messageId));
-                    this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: result.photoUrl, cacheSource: result.cacheSource || 'home-server' });
+                    this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: result.photoUrl,
+
+                    cacheSource: result.cacheSource });
                     if (String(messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(currentPhoto?.id ?? photo?.id ?? ''), url: result.photoUrl, messageId });
                     return;
                 }
@@ -1151,7 +1302,7 @@ export class GramMediaRouter {
             const cachedUrl = this.emojiUrlCache.get(messageId);
             if (cachedUrl) {
                 if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 100 });
-                this.dispatchDocumentUrl(messageId, cachedUrl);
+                this.dispatchDocumentUrl(messageId, cachedUrl, this.emojiUrlSources.get(messageId));
                 return;
             }
         }
@@ -1319,6 +1470,7 @@ export class GramMediaRouter {
         if (result?.bytes && result.bytes.byteLength > 0) {
             const bytes = this.toArrayBuffer(result.bytes);
             if (emojiDocId) {
+                this.rememberDocSource(emojiDocId, result.cacheSource);
                 const { kind, url } = await this.emojiKindAndUrlFor(bytes, item.mime);
                 this.emoji.onEmojiDownloadSuccess(emojiDocId, url, kind);
                 this.notifyEmojiUrlKind(url, kind);
@@ -1327,6 +1479,7 @@ export class GramMediaRouter {
                 return;
             }
             if (gen !== this.documentDownloadGen) return;
+            this.rememberDocSource(String(item.document?.id ?? ''), result.cacheSource);
             const { kind, url } = await this.emojiKindAndUrlFor(bytes, item.mime);
             if (gen !== this.documentDownloadGen) return;
             this.notifyEmojiUrlKind(url, kind);
@@ -1387,6 +1540,7 @@ export class GramMediaRouter {
     }
 
     private announceDownloadedUrl(messageId: number | string, document: any, mime: string, url: string, cacheSource?: string): void {
+        this.rememberDocSource(String(document?.id ?? ''), cacheSource);
         if (typeof messageId === 'string' && this.isEmojiKey(messageId)) {
             this.emoji.onEmojiDownloadSuccess(this.emojiDocIdOf(messageId), url);
         }
@@ -1696,7 +1850,7 @@ export class GramMediaRouter {
         this.thumbInflight.add(thumbKey);
         if (this.debug) log.info('[gram-media] tg-download-document-thumb START messageId=' + messageId + ' thumbType=' + thumbType + ' docId=' + document.id);
         if (!this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS', messageId, progress: 0 });
-        const commit = (bytes: ArrayBuffer, freshDoc?: any): void => {
+        const commit = (bytes: ArrayBuffer, cacheSource: string | undefined, freshDoc?: any): void => {
             if (!bytes.byteLength) return;
             const url = this.bytesToBlobUrl(bytes, thumbType === 'f' ? 'application/x-tgsticker' : 'image/jpeg');
             if (!url) return;
@@ -1712,13 +1866,13 @@ export class GramMediaRouter {
             if (freshDoc?.id) this.registerStickerDoc(freshDoc);
             this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_THUMB', messageId, thumbType, url });
             if (typeof messageId === 'string' && this.isWallpaperKey(messageId)) {
-                this.dispatchDocumentUrl(messageId, url, undefined);
+                this.dispatchDocumentUrl(messageId, url, cacheSource);
             }
         };
         try {
             const result = await this.transport?.downloadFile({ document: { ...document, thumb_size: thumbType } });
             if (result?.bytes) {
-                commit(this.toArrayBuffer(result.bytes));
+                commit(this.toArrayBuffer(result.bytes), result.cacheSource);
             } else {
                 if (this.debug) log.info('[gram-media] tg-download-document-thumb NO_BYTES messageId=' + messageId + ' thumbType=' + thumbType);
             }
@@ -1738,7 +1892,7 @@ export class GramMediaRouter {
                     if (freshDoc?.id) {
                         const result2 = await this.transport?.downloadFile({ document: { ...freshDoc, thumb_size: thumbType } });
                         if (result2?.bytes) {
-                            commit(this.toArrayBuffer(result2.bytes), freshDoc);
+                            commit(this.toArrayBuffer(result2.bytes), result2.cacheSource, freshDoc);
                         }
                     }
                 } catch (e2: any) {
@@ -1754,6 +1908,7 @@ export class GramMediaRouter {
     }
 
     private emojiUrlCache = new Map<string, string>();
+    private emojiUrlSources = new Map<string, string>();
     private emojiUrlRefs = new Map<string, number>();
     private emojiKeysByUrl = new Map<string, Set<string>>();
     private thumbUrlCache = new Map<string, string>();

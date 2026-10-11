@@ -2,6 +2,7 @@ import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useCallback, useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedSticker } from './animated-sticker.js';
 import { MediaSourceBadge } from './media-source-badge.js';
+import { GLYPH_SOURCE, lookupDocumentSource, resolveEmojiSource } from './emoji-source.js';
 import { matchEmojiRuns, requestEmojiDownload } from './emoji-store.js';
 import { messageFontPx, readMessageFontSize, MESSAGE_FONT_DEFAULT } from '../utils.js';
 import { inflateTgs } from '@ton-ai/tgs';
@@ -284,16 +285,25 @@ export function scaledEmojiSize(base: number): number {
   return Math.round(base * readMessageFontSize() / MESSAGE_FONT_DEFAULT);
 }
 
+export function GlyphEmoji({ value, size, fontScaled = false, className = '' }: { value: string; size: number; fontScaled?: boolean; className?: string }) {
+  const box = fontScaled ? messageFontPx(size) : size + 'px';
+  return (
+    <span class={'tgui-emoji-static-wrap' + (className ? ' ' + className : '')} style={`position:relative;display:inline-block;width:${box};height:${box};vertical-align:-0.06em`}>
+      <span class="tgui-emoji-static" data-emoji={value} style={`display:block;min-width:${box};height:${box};line-height:${box};text-align:center;vertical-align:-0.06em;overflow:hidden;cursor:pointer`}>{value}</span>
+      <MediaSourceBadge source={GLYPH_SOURCE} variant="dot" />
+    </span>
+  );
+}
+
 export function StaticEmojiText({ value, size, fontScaled = false }: { value: string; size: number; fontScaled?: boolean }) {
   const runs = matchEmojiRuns(value);
   if (runs.length === 0) return <>{value}</>;
   const parts: any[] = [];
   let pos = 0;
   let key = 0;
-  const box = fontScaled ? messageFontPx(size) : size + 'px';
   for (const r of runs) {
     if (r.start > pos) parts.push(<span key={'t' + key++}>{value.slice(pos, r.start)}</span>);
-    parts.push(<span key={'e' + key++} class="tgui-emoji-static" data-emoji={r.emoji} style={`display:inline-block;min-width:${box};height:${box};line-height:${box};text-align:center;vertical-align:-0.06em;overflow:hidden;cursor:pointer`}>{r.emoji}</span>);
+    parts.push(<GlyphEmoji key={'e' + key++} value={r.emoji} size={size} fontScaled={fontScaled} />);
     pos = r.end;
   }
   if (pos < value.length) parts.push(<span key={'t' + key++}>{value.slice(pos)}</span>);
@@ -731,7 +741,7 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
       const did = s.docId;
       const url = urlFor(did);
       const k = kinds[did] || '-';
-      const src = documentSources?.['emojipack-' + did] || documentSources?.[did] || '-';
+      const src = lookupDocumentSource(did, documentSources) || '-';
       return {
         docId: did,
         u: url ? 'y' : 'n',
@@ -932,7 +942,8 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
   }
 
   const box = fontScaled ? messageFontPx(size) : size + 'px';
-  const slotStyle = `display:inline-block;width:${box};height:${box};vertical-align:-0.06em;overflow:hidden;position:relative`;
+
+  const slotStyle = `display:inline-block;width:${box};height:${box};vertical-align:-0.06em;position:relative`;
   let emojiIdx = -1;
   const align = vAlign === 'middle' ? 'middle' : 'top';
 
@@ -956,46 +967,63 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
           requestEmojiDownload(docId, s.value, 2, undefined, !!s.custom);
         };
         const tgsActive = kind === 'tgs' && url && !failed && tgsPaintable(docId);
-        const emojiSource = documentSources?.['emojipack-' + docId] || documentSources?.[docId];
+        const slotSource = resolveEmojiSource(docId, documentSources);
         return (
           <span key={s.type + ':' + (s.docId || s.value) + ':' + i} class="tgui-emoji-slot" data-doc={docId} style={slotStyle}>
-            {kind === 'video' && url && !failed ? (
-              (inView || everShown) ? (
-                <VideoSlot url={url} size={effSize} playing={playing} onError={onError} />
-              ) : (
-                <span style="display:block;width:100%;height:100%" />
-              )
-            ) : kind === 'img' && url && !failed ? (
-              <img
-                src={url}
-                width={effSize}
-                height={effSize}
-                style="display:block;width:100%;height:100%;object-fit:contain"
-                loading="eager"
-                decoding="async"
-                onError={onError}
-              />
-            ) : tgsActive ? (
-              shared ? (
-                (inView || everShown) && pos ? (
-                  <span style="position:relative;display:block;width:100%;height:100%">
-                    <AnimatedSticker
-                      key={'stk-' + renderId + ':' + idx}
-                      tgsUrl={url}
-                      renderId={renderId}
-                      size={effSize}
-                      sharedCanvas={sharedCanvasNode}
-                      coords={{ x: pos.x, y: pos.y }}
-                      isLowPriority
-                      noPlay={!playing}
-                      onLoad={() => onSlotLoaded(docId)}
-                      onError={onError}
-                    />
-                  </span>
+
+            <span class="tgui-emoji-slot-media">{kind === 'video' && url && !failed ? (
+                (inView || everShown) ? (
+                  <VideoSlot url={url} size={effSize} playing={playing} onError={onError} />
+                ) : (
+                  <span style="display:block;width:100%;height:100%" />
+                )
+              ) : kind === 'img' && url && !failed ? (
+                <img
+                  src={url}
+                  width={effSize}
+                  height={effSize}
+                  style="display:block;width:100%;height:100%;object-fit:contain"
+                  loading="eager"
+                  decoding="async"
+                  onError={onError}
+                />
+              ) : tgsActive ? (
+                shared ? (
+                  (inView || everShown) && pos ? (
+                    <span style="position:relative;display:block;width:100%;height:100%">
+                      <AnimatedSticker
+                        key={'stk-' + renderId + ':' + idx}
+                        tgsUrl={url}
+                        renderId={renderId}
+                        size={effSize}
+                        sharedCanvas={sharedCanvasNode}
+                        coords={{ x: pos.x, y: pos.y }}
+                        isLowPriority
+                        noPlay={!playing}
+                        onLoad={() => onSlotLoaded(docId)}
+                        onError={onError}
+                      />
+                    </span>
+                  ) : (inView || everShown) ? (
+                    <span style="position:relative;display:block;width:100%;height:100%">
+                      <AnimatedSticker
+                        key={'stk-fallback-' + renderId + ':' + idx}
+                        tgsUrl={url}
+                        renderId={renderId}
+                        size={effSize}
+                        isLowPriority
+                        noPlay={!playing}
+                        onLoad={() => onSlotLoaded(docId)}
+                        onError={onError}
+                      />
+                    </span>
+                  ) : (
+                    <span style="display:block;width:100%;height:100%" />
+                  )
                 ) : (inView || everShown) ? (
                   <span style="position:relative;display:block;width:100%;height:100%">
                     <AnimatedSticker
-                      key={'stk-fallback-' + renderId + ':' + idx}
+                      key={'stk-' + renderId + ':' + idx}
                       tgsUrl={url}
                       renderId={renderId}
                       size={effSize}
@@ -1008,26 +1036,11 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
                 ) : (
                   <span style="display:block;width:100%;height:100%" />
                 )
-              ) : (inView || everShown) ? (
-                <span style="position:relative;display:block;width:100%;height:100%">
-                  <AnimatedSticker
-                    key={'stk-' + renderId + ':' + idx}
-                    tgsUrl={url}
-                    renderId={renderId}
-                    size={effSize}
-                    isLowPriority
-                    noPlay={!playing}
-                    onLoad={() => onSlotLoaded(docId)}
-                    onError={onError}
-                  />
-                </span>
               ) : (
-                <span style="display:block;width:100%;height:100%" />
-              )
-            ) : (
-              <span style="display:block;width:100%;height:100%;overflow:hidden" />
-            )}
-            {emojiSource ? <MediaSourceBadge source={emojiSource} variant="dot" /> : null}
+                <span style="display:block;width:100%;height:100%;overflow:hidden" />
+              )}</span>
+            {}
+            <MediaSourceBadge source={slotSource} variant="dot" />
           </span>
         );
       })}

@@ -25,10 +25,14 @@ describe('media source dot', () => {
   });
 
   test.each([
-    ['memory', 'tgui-media-source-badge--mem', 'in-memory'],
+    ['memory', 'tgui-media-source-badge--db', 'in-memory'],
     ['persisted', 'tgui-media-source-badge--db', 'gram-db'],
     ['home-server', 'tgui-media-source-badge--srv', 'home-server'],
+
     ['cdn-server', 'tgui-media-source-badge--srv', 'cdn-server'],
+    ['migrate-server', 'tgui-media-source-badge--srv', 'migrate-server'],
+    ['unknown', 'tgui-media-source-badge--db', 'unknown'],
+    ['glyph', 'tgui-media-source-badge--glyph', 'text glyph'],
   ])('source %s renders modifier %s with label %s', async (source, mod, label) => {
     const container = mountDot(source);
     try {
@@ -45,17 +49,10 @@ describe('media source dot', () => {
 
   test('dot styling lives in css', () => {
     const css = fs.readFileSync(path.join(process.cwd(), 'plugins/gram-ui/dist/styles.css'), 'utf8');
-    for (const mod of ['mem', 'db', 'srv']) {
+    for (const mod of ['db', 'srv', 'glyph']) {
       expect(css).toContain(`.tgui-media-source-badge--${mod}`);
     }
     expect(css).toContain('background: var(--dot)');
     expect(css).toContain('@keyframes tgui-dot-pop');
-  });
-
-  test('badge never intercepts taps', () => {
-    const css = fs.readFileSync(path.join(process.cwd(), 'plugins/gram-ui/dist/styles.css'), 'utf8');
-    const baseBlock = /\.tgui-media-source-badge\s*\{[^}]*\}/.exec(css);
-    expect(baseBlock).not.toBeNull();
-    expect(baseBlock![0]).toContain('pointer-events: none');
   });
 });

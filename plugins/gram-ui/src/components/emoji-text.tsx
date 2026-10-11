@@ -5,6 +5,7 @@ import { EmojiCanvas, StaticEmojiText, fetchEmojiData, getCachedEmojiData, subsc
 import type { EmojiSegment } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
 import { MediaSourceBadge } from './media-source-badge.js';
+import { UNKNOWN_SOURCE, resolveEmojiSource } from './emoji-source.js';
 import { ensureEmojiStickers, getEmojiAlt, getEmojiDocId, isEmojiStickersLoaded, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
 import { messageFontPx, MESSAGE_FONT_DEFAULT } from '../utils.js';
 import { getLogger } from '@ton-ai/gram-debug';
@@ -135,7 +136,7 @@ function scaleWrap(size: number, node: any): any {
   return <span class="tgui-emoji-scaled" style={`width:${box};height:${box}`}>{node}</span>;
 }
 
-export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loop = true, playKey, showLastFrame, fontScaled = false, source }: { docId?: string; url: string; alt?: string; size?: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; fontScaled?: boolean; source?: string }) {
+export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loop = true, playKey, showLastFrame, fontScaled = false, source, documentSources }: { docId?: string; url: string; alt?: string; size?: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; fontScaled?: boolean; source?: string; documentSources?: Record<number | string, string> }) {
   useEffect(() => {
     if (!url) {
       requestEmojiDownload(docId, alt, 2);
@@ -143,13 +144,15 @@ export function AnimatedEmoji({ docId, url, alt, size = 56, autoplay = true, loo
   }, [docId, url, alt]);
   if (!docId && !url) {
     const stub = <span class="tgui-emoji-inline" style={`display:inline-block;width:${size}px;height:${size}px;vertical-align:-0.06em`} />;
-    if (!fontScaled) return stub;
+    const marked = <>{stub}<MediaSourceBadge source={UNKNOWN_SOURCE} variant="dot" absolute={true} /></>;
+    if (!fontScaled) return <span style="position:relative;display:inline-block">{marked}</span>;
     const box = messageFontPx(size);
-    return <span class="tgui-emoji-scaled" style={`width:${box};height:${box}`}>{stub}</span>;
+    return <span class="tgui-emoji-scaled" style={`width:${box};height:${box};position:relative;display:inline-block`}>{marked}</span>;
   }
   const inner = <EmojiInline docId={docId} url={url} alt={alt} size={size} autoplay={autoplay} loop={loop} playKey={playKey} showLastFrame={showLastFrame} fontScaled={fontScaled} />;
-  if (!source) return inner;
-  return <span style="position:relative;display:inline-block">{inner}<MediaSourceBadge source={source} variant="dot" absolute={true} /></span>;
+
+  const effSource = source ?? (docId ? resolveEmojiSource(docId, documentSources) : UNKNOWN_SOURCE);
+  return <span style="position:relative;display:inline-block">{inner}<MediaSourceBadge source={effSource} variant="dot" absolute={true} /></span>;
 }
 
 function appendMappedRuns(segments: EmojiSegment[], value: string): void {

@@ -6,6 +6,7 @@ import { buildDocumentThumb, isAnimatedMedia } from '../utils.js';
 import { GifPlayer } from './gif-player.js';
 import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
+import { UNKNOWN_SOURCE } from './emoji-source.js';
 import { requestDocument } from './media-source.js';
 import type { MediaViewerItem } from './media-viewer.js';
 
@@ -58,7 +59,7 @@ export function MediaPlayer(props: MediaPlayerProps) {
           ) : null}
         </div>
         <div style={captionStyle}>
-          <MediaCaption text={m.message} entities={m.entities} documentUrls={documentUrls} timeStr={timeStr} out={out} status={status} />
+          <MediaCaption text={m.message} entities={m.entities} documentUrls={documentUrls} documentSources={documentSources} timeStr={timeStr} out={out} status={status} />
         </div>
       </div>
     );
@@ -128,7 +129,7 @@ export function MediaPlayer(props: MediaPlayerProps) {
               log.error('[MediaPlayer] video error code:', el?.error?.code, 'msg:', mc, 'src:', el?.src?.slice(0, 60));
             }}
           />
-          {cacheSource ? <MediaSourceBadge source={cacheSource} /> : null}
+          <MediaSourceBadge source={cacheSource || UNKNOWN_SOURCE} />
           </>
         ) : (
           <div class="tgui-media-preview" style={containerStyle} onClick={isLoading ? undefined : triggerDownload}>
@@ -162,7 +163,7 @@ export function MediaPlayer(props: MediaPlayerProps) {
           {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}
         </div>
       </div>
-      <MediaCaption text={m.message} entities={m.entities} documentUrls={documentUrls} timeStr={timeStr} out={out} status={status} />
+      <MediaCaption text={m.message} entities={m.entities} documentUrls={documentUrls} documentSources={documentSources} timeStr={timeStr} out={out} status={status} />
     </div>
   );
 }

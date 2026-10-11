@@ -10,6 +10,7 @@ import { Checkbox } from '../primitives/checkbox.js';
 import { Image } from '../primitives/image.js';
 import { PhotoLoader } from './photo-loader.js';
 import { MediaSourceBadge } from './media-source-badge.js';
+import { UNKNOWN_SOURCE } from './emoji-source.js';
 import { VideoMessage } from './video-message.js';
 import { MediaPlayer } from './media-player.js';
 import { buildImageSpec, isInlinePhotoSize } from './photo-spec.js';
@@ -354,7 +355,7 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
   return (
     <div class={cls} data-zzpicked={Array.from(picked).join(',')} style={(attachSpec || attachVideo) ? 'width:fit-content;max-width:320px' : undefined}>
       <div class="tgui-poll-header">📊 {quiz ? t(S.POLL_QUIZ) : t(S.POLL_TITLE)}{closed ? ' · ' + t(S.POLL_CLOSED) : ''}</div>
-      <div class="tgui-poll-question"><EmojiText text={qText} entities={qEnts} documentUrls={documentUrls || {}} /></div>
+      <div class="tgui-poll-question"><EmojiText text={qText} entities={qEnts} documentUrls={documentUrls || {}} documentSources={documentSources} /></div>
       {!multi && !poll.public_voters ? <div class="tgui-poll-sub">{t(S.POLL_ANONYMOUS)}</div> : null}
       {multi ? <div class="tgui-poll-sub">{t(S.POLL_MULTI_HINT)}</div> : null}
       {attachSpec ? (
@@ -369,7 +370,7 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
                 <button class="tgui-photo-error-retry" type="button" onClick={retryPhoto}>{t(S.PHOTO_RETRY)}</button>
               </div>
             ) : null}
-            {photoSource ? <MediaSourceBadge key="src" source={photoSource} /> : null}
+            <MediaSourceBadge key="src" source={photoSource || UNKNOWN_SOURCE} />
           </div>
         </div>
       ) : attachVideo && videoM ? (
@@ -382,10 +383,10 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
         </div>
       ) : attachGeoM ? (
         <div key="cover-geo" class="tgui-poll-attach tgui-poll-attach_geo">
-          <GeoBubble m={attachGeoM} timeStr={timeStr} out={out} status={status} />
+          <GeoBubble m={attachGeoM} timeStr={timeStr} out={out} status={status} documentSources={documentSources} />
         </div>
       ) : null}
-      {capText ? <div class="tgui-poll-caption"><EmojiText text={capText} entities={capEnts} documentUrls={documentUrls || {}} /></div> : null}
+      {capText ? <div class="tgui-poll-caption"><EmojiText text={capText} entities={capEnts} documentUrls={documentUrls || {}} documentSources={documentSources} /></div> : null}
       <div class="tgui-poll-answers">
         {answers.map((a: any) => {
           const key = keyOf(a);
@@ -495,7 +496,7 @@ export function PollBubble({ m, timeStr, out, status, sameSenderPrev, sameSender
                         : <Radio size="large" checked={chosen} disabled={false} onChange={() => voteNow(key)} />}
                     </span>
                   ) : null}
-                  <span key="text" class="tgui-poll-text"><EmojiText text={a.text?.text || ''} entities={a.text?.entities || []} documentUrls={documentUrls || {}} /></span>
+                  <span key="text" class="tgui-poll-text"><EmojiText text={a.text?.text || ''} entities={a.text?.entities || []} documentUrls={documentUrls || {}} documentSources={documentSources} /></span>
                   {showStat || reverseRow ? <span key="cnt" class="tgui-poll-count">{showStat ? (v ? v.voters.toLocaleString('en-US') : '') : String(snapRow && snapRow.voters > 0 ? snapRow.voters : 0)}</span> : null}
                 </div>
                 {showStat || reverseRow ? (

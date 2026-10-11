@@ -3,6 +3,7 @@ import { useEffect, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import { buildDocumentThumb } from '../utils.js';
 import { PhotoLoader } from './photo-loader.js';
 import { MediaSourceBadge } from './media-source-badge.js';
+import { UNKNOWN_SOURCE } from './emoji-source.js';
 import { requestDocument } from './media-source.js';
 import type { MediaViewerItem } from './media-viewer.js';
 import type { ImageSpec } from '../types.js';
@@ -152,7 +153,7 @@ export function GifPlayer(props: GifPlayerProps) {
               onClick={onOpenViewer ? handleImageClick : undefined}
             />
           )}
-          {cacheSource ? <MediaSourceBadge source={cacheSource} /> : null}
+          <MediaSourceBadge source={cacheSource || UNKNOWN_SOURCE} />
         </>
       ) : (
         <div class="tgui-media-preview tgui-media-preview_loading" style={containerStyle} onClick={isLoading ? undefined : triggerDownload}>

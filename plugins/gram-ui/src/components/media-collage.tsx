@@ -5,6 +5,7 @@ import { PhotoLoader } from './photo-loader.js';
 import { Checkmark } from './checkmark.js';
 import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
+import { UNKNOWN_SOURCE } from './emoji-source.js';
 import type { ImageSpec } from '../types.js';
 import { calculateAlbumLayout } from './photo-album-layout.js';
 import { requestPhoto, requestDocumentThumb, photoAvailability } from './media-source.js';
@@ -50,6 +51,7 @@ export function MediaCollage({
   caption,
   captionEntities,
   captionDocumentUrls,
+  captionDocumentSources,
   onOpenAt,
   out = false,
 }: {
@@ -59,6 +61,8 @@ export function MediaCollage({
   caption?: string;
   captionEntities?: any[];
   captionDocumentUrls?: Record<number | string, string>;
+
+  captionDocumentSources?: Record<number | string, string>;
   onOpenAt?: (index: number) => void;
   out?: boolean;
 }) {
@@ -205,7 +209,7 @@ export function MediaCollage({
             {isMoreCell ? (
               <div class="MediaCollage__more-overlay">+{moreCount}</div>
             ) : null}
-            {item.cacheSource ? <MediaSourceBadge source={item.cacheSource} className="MediaCollage__src" absolute={false} /> : null}
+            <MediaSourceBadge source={item.cacheSource || UNKNOWN_SOURCE} className="MediaCollage__src" absolute={false} />
           </div>
         );
       })}
@@ -218,7 +222,7 @@ export function MediaCollage({
     </div>
     {caption ? (
       <div class={'MediaCollage__caption' + (out ? ' MediaCollage__caption_out' : '')} style={`max-width:${layout.width}px`}>
-        <MediaCaption text={caption} entities={captionEntities} documentUrls={captionDocumentUrls || {}} timeStr={timeStr} out={out} status={status} />
+        <MediaCaption text={caption} entities={captionEntities} documentUrls={captionDocumentUrls || {}} documentSources={captionDocumentSources} timeStr={timeStr} out={out} status={status} />
       </div>
     ) : null}
   </Fragment>

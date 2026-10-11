@@ -6,6 +6,8 @@ import { AnimatedSticker } from './animated-sticker.js';
 import { ensureEmojiStickers, getEmojiDocId, requestEmojiDownload, subscribeEmojiMap, ensureEmojiPicker, subscribeEmojiPicker, searchServerEmojis } from './emoji-store.js';
 import { ensureStickerSets, ensureStickerPack, loadMoreStickerPack, searchStickers, subscribeStickers, getStickerSets, getStickerPack, findStickerSetForDoc, getStickerRecent, getStickerSearch, ensureSavedGifs, subscribeGifs, getSavedGifs, searchGifsLocal, ensureStarGifts, subscribeGifts, getStarGifts, getGiftDocs, ensureEmojiSets, subscribeEmojiSets, getEmojiSets, ensureFeaturedStickers, ensureFeaturedEmojiSets, getFeaturedStickers, getFeaturedEmojiSets, resolveDocGlyph, loadPickerRecent, savePickerRecent, PICKER_DOCS_PAGE, PICKER_SETS_PAGE, type StickerPackState, type RecentEmoji } from './picker-store.js';
 import { requestDocument } from './media-source.js';
+import { MediaSourceBadge } from './media-source-badge.js';
+import { resolveEmojiSource, resolveStickerSource } from './emoji-source.js';
 import { Tabs } from '../primitives/tabs.js';
 import { beginHeavyAnimation } from '../utils/heavy-animation.js';
 import { clampMessageFontSize, readMessageFontSize, MESSAGE_FONT_DEFAULT, messageFontPx } from '../utils.js';
@@ -41,7 +43,7 @@ interface SlotPos {
   h: number;
 }
 
-function PickerCellImpl({ emoji, docId, size, url, coords, sharedCanvas, onPlayingChange, onPick }: {
+function PickerCellImpl({ emoji, docId, size, url, coords, sharedCanvas, onPlayingChange, onPick, source }: {
   emoji: string;
   docId?: string;
   size: number;
@@ -50,6 +52,7 @@ function PickerCellImpl({ emoji, docId, size, url, coords, sharedCanvas, onPlayi
   sharedCanvas?: HTMLCanvasElement | null;
   onPlayingChange: (playing: boolean) => void;
   onPick: (e: string) => void;
+  source?: string;
 }) {
   const ref = useRef<HTMLSpanElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -107,9 +110,12 @@ function PickerCellImpl({ emoji, docId, size, url, coords, sharedCanvas, onPlayi
     <span
       ref={ref}
       class="tgui-emoji-cell"
-      style={`width:${box};height:${box}`}
+      style={`width:${box};height:${box};position:relative`}
       onClick={() => onPick(emoji)}
     >
+      {}
+      <MediaSourceBadge source={source} variant="dot" />
+      <span class="tgui-emoji-cell-media">
       {animate ? (
         <AnimatedSticker
           tgsUrl={url}
@@ -127,19 +133,21 @@ function PickerCellImpl({ emoji, docId, size, url, coords, sharedCanvas, onPlayi
       ) : (
         <span class="tgui-emoji-cell-glyph">{emoji}</span>
       )}
+      </span>
     </span>
   );
 }
 
 const PickerCell = memo(PickerCellImpl as unknown as ComponentType);
 
-function CategorySection({ cat, index, mounted, limit, columns, documentUrls, onPick, onNeedMore }: {
+function CategorySection({ cat, index, mounted, limit, columns, documentUrls, documentSources, onPick, onNeedMore }: {
   cat: EmojiCategory;
   index: number;
   mounted: boolean;
   limit?: number;
   columns: number;
   documentUrls: Record<string, string>;
+  documentSources?: Record<number | string, string>;
   onPick: (e: string) => void;
   onNeedMore?: (index: number) => void;
 }) {
@@ -247,6 +255,7 @@ function CategorySection({ cat, index, mounted, limit, columns, documentUrls, on
         sharedCanvas={canvasRef.current}
         onPlayingChange={setCellPlaying(i)}
         onPick={onPick}
+        source={resolveEmojiSource(docId, documentSources)}
       />,
     );
   }
@@ -271,11 +280,12 @@ function docKeyId(prefix: string, doc: any): string {
   return prefix + String(doc?.id ?? '');
 }
 
-function StickerCell({ doc, documentUrls, size = 72, onPick }: { doc: any; documentUrls: Record<string, string>; size?: number; onPick: (doc: any) => void }) {
+function StickerCell({ doc, documentUrls, documentSources, size = 72, onPick }: { doc: any; documentUrls: Record<string, string>; documentSources?: Record<number | string, string>; size?: number; onPick: (doc: any) => void }) {
   const ref = useRef<HTMLButtonElement | null>(null);
   const [visible, setVisible] = useState(false);
   const key = docKeyId('sticker-', doc);
   const url = (documentUrls as any)[key] || '';
+  const source = resolveStickerSource(key, documentSources);
   const mime = String(doc?.mime_type || '').toLowerCase();
   const isTgs = mime === 'application/x-tgsticker';
   const isVideo = mime.startsWith('video/');
@@ -300,6 +310,7 @@ function StickerCell({ doc, documentUrls, size = 72, onPick }: { doc: any; docum
   }, [visible, url, key]);
   return (
     <button ref={ref} type="button" class="sticker" onClick={() => onPick(doc)} aria-label="Sticker">
+      <MediaSourceBadge source={source} variant="dot" />
       {!visible ? <span class="picker-sk" /> : url && isTgs ? (
         <AnimatedSticker tgsUrl={url} renderId={key + ':' + size} size={size} />
       ) : url && isVideo ? (
@@ -313,19 +324,20 @@ function StickerCell({ doc, documentUrls, size = 72, onPick }: { doc: any; docum
   );
 }
 
-export function EmojiDocCell({ docId, glyph, documentUrls, onPick }: { docId: string; glyph: string; documentUrls: Record<string, string>; onPick: () => void }) {
+export function EmojiDocCell({ docId, glyph, documentUrls, documentSources, onPick }: { docId: string; glyph: string; documentUrls: Record<string, string>; documentSources?: Record<number | string, string>; onPick: () => void }) {
   return (
     <button type="button" class="emoji-doc" onClick={onPick} aria-label="Emoji">
-      <EmojiCanvas segments={[{ type: 'emoji', docId, value: glyph, custom: true }]} documentUrls={documentUrls} size={ITEM_SIZE} fontScaled={true} />
+      <EmojiCanvas segments={[{ type: 'emoji', docId, value: glyph, custom: true }]} documentUrls={documentUrls} documentSources={documentSources as Record<string, string> | undefined} size={ITEM_SIZE} fontScaled={true} />
     </button>
   );
 }
 
-function GifCell({ doc, documentUrls, onPick }: { doc: any; documentUrls: Record<string, string>; onPick: (doc: any) => void }) {
+function GifCell({ doc, documentUrls, documentSources, onPick }: { doc: any; documentUrls: Record<string, string>; documentSources?: Record<number | string, string>; onPick: (doc: any) => void }) {
   const ref = useRef<HTMLButtonElement | null>(null);
   const [visible, setVisible] = useState(false);
   const key = docKeyId('gif-', doc);
   const url = (documentUrls as any)[key] || '';
+  const source = resolveStickerSource(key, documentSources);
   const mime = String(doc?.mime_type || '').toLowerCase();
   const isVideo = mime.startsWith('video/');
   useEffect(() => {
@@ -349,6 +361,7 @@ function GifCell({ doc, documentUrls, onPick }: { doc: any; documentUrls: Record
   }, [visible, url, key]);
   return (
     <button ref={ref} type="button" class="gif" onClick={() => onPick(doc)} aria-label="GIF">
+      <MediaSourceBadge source={source} variant="dot" />
       {!visible || !url ? <span class="picker-sk" /> : isVideo ? (
         <video src={url} style="width:100%;height:100%;object-fit:cover" loop muted playsinline autoplay />
       ) : (
@@ -371,10 +384,11 @@ function giftDocOf(g: any): any | null {
   return g?.sticker?.document || g?.document || g?.gift?.sticker?.document || null;
 }
 
-function GiftCell({ gift, documentUrls, onPick }: { gift: any; documentUrls: Record<string, string>; onPick: (gift: any) => void }) {
+function GiftCell({ gift, documentUrls, documentSources, onPick }: { gift: any; documentUrls: Record<string, string>; documentSources?: Record<number | string, string>; onPick: (gift: any) => void }) {
   const doc = giftDocOf(gift);
   const key = doc ? docKeyId('gift-', doc) : 'gift-' + giftTitle(gift);
   const url = doc ? ((documentUrls as any)[key] || '') : '';
+  const source = resolveStickerSource(key, documentSources);
   const [visible, setVisible] = useState(false);
   const ref = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
@@ -398,6 +412,7 @@ function GiftCell({ gift, documentUrls, onPick }: { gift: any; documentUrls: Rec
   }, [visible, url, key]);
   return (
     <button ref={ref} type="button" class="gift" onClick={() => onPick(gift)}>
+      <MediaSourceBadge source={source} variant="dot" />
       <div class="gift-art">{url ? <img src={url} style="width:64px;height:64px;object-fit:contain" loading="lazy" decoding="async" /> : <span>{'\u{1F381}'}</span>}</div>
       <b>{giftTitle(gift)}</b>
       <small>{giftPrice(gift) || t(S.GIFT_DEFAULT)}</small>
@@ -417,7 +432,7 @@ function PickerIcon({ name }: { name: string }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4" fill="currentColor" /><circle cx="12" cy="12" r="1.4" fill="currentColor" /><circle cx="19" cy="12" r="1.4" fill="currentColor" /></svg>;
 }
 
-export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className = '' }: { dispatch?: Dispatch; documentUrls: Record<string, string>; onPick?: (emoji: string) => void; onClose?: () => void; className?: string }) {
+export function EmojiPicker({ dispatch, documentUrls, documentSources, onPick, onClose, className = '' }: { dispatch?: Dispatch; documentUrls: Record<string, string>; documentSources?: Record<number | string, string>; onPick?: (emoji: string) => void; onClose?: () => void; className?: string }) {
   const cell = pickerCellSize();
   const [tab, setTab] = useState<PickerTab>('emoji');
   const [recent, setRecent] = useState<RecentEmoji[]>([]);
@@ -728,7 +743,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
         <div class="pack-head section-title--spaced"><b>{pack?.title || s.title || t(S.PICKER_EMOJI)}</b></div>
         <div class="emoji-grid" style={`grid-template-columns:repeat(auto-fill, ${cell}px)`}>
           {docs.map((d: any) => (
-            <EmojiDocCell key={String(d?.id)} docId={String(d?.id ?? '')} glyph={resolveDocGlyph(d, getStickerPack(s.id)) || ''} documentUrls={documentUrls} onPick={() => onPickEmojiDoc(d, getStickerPack(s.id))} />
+            <EmojiDocCell key={String(d?.id)} docId={String(d?.id ?? '')} glyph={resolveDocGlyph(d, getStickerPack(s.id)) || ''} documentUrls={documentUrls} documentSources={documentSources} onPick={() => onPickEmojiDoc(d, getStickerPack(s.id))} />
           ))}
         </div>
       </div>
@@ -743,7 +758,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
         <div class="pack-head"><b>{pack?.title || s.title || t(S.PICKER_STICKERS)}</b><a href="#" onClick={(e: any) => e.preventDefault()}>{t(S.PICKER_ADD)}</a></div>
         <div class="sticker-grid">
           {docs.map((d: any) => (
-            <StickerCell key={String(d?.id)} doc={d} documentUrls={documentUrls} onPick={(doc) => onPickSticker(doc, s.id, s.accessHash)} />
+            <StickerCell key={String(d?.id)} doc={d} documentUrls={documentUrls} documentSources={documentSources} onPick={(doc) => onPickSticker(doc, s.id, s.accessHash)} />
           ))}
         </div>
       </div>
@@ -779,7 +794,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
               searchResults.length === 0 ? (
                 <div class="tgui-emoji-empty">{t(S.PICKER_EMPTY)}</div>
               ) : (
-                <CategorySection key="search" cat={{ name: t(S.EMOJI_SEARCH_RESULTS), emojis: searchResults }} index={0} mounted columns={columns} documentUrls={documentUrls} onPick={onPickEmoji} />
+                <CategorySection key="search" cat={{ name: t(S.EMOJI_SEARCH_RESULTS), emojis: searchResults }} index={0} mounted columns={columns} documentUrls={documentUrls} documentSources={documentSources} onPick={onPickEmoji} />
               )
             ) : !emojiSetsList ? (
               <div class="tgui-emoji-empty">{t(S.PICKER_LOADING)}</div>
@@ -791,7 +806,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
                 <div class="recent-row">
                   {recent.slice(0, 8).map((r) => {
                     if (r.d) {
-                      return <EmojiDocCell key={'d' + r.d} docId={r.d} glyph={r.g} documentUrls={documentUrls} onPick={() => onPickRecent(r)} />;
+                      return <EmojiDocCell key={'d' + r.d} docId={r.d} glyph={r.g} documentUrls={documentUrls} documentSources={documentSources} onPick={() => onPickRecent(r)} />;
                     }
                     const docId = getEmojiDocId(r.g);
                     const url = docId ? (documentUrls['emojipack-' + docId] || '') : '';
@@ -825,7 +840,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
               ) : (
                 <div class="sticker-grid">
                   {stickerSearchState.documents.map((d: any) => (
-                    <StickerCell key={String(d?.id)} doc={d} documentUrls={documentUrls} onPick={onPickSticker} />
+                    <StickerCell key={String(d?.id)} doc={d} documentUrls={documentUrls} documentSources={documentSources} onPick={onPickSticker} />
                   ))}
                 </div>
               )
@@ -835,7 +850,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
               ) : (
                 <div class="sticker-grid">
                   {stickerRecent.map((d: any) => (
-                    <StickerCell key={String(d?.id)} doc={d} documentUrls={documentUrls} onPick={onPickSticker} />
+                    <StickerCell key={String(d?.id)} doc={d} documentUrls={documentUrls} documentSources={documentSources} onPick={onPickSticker} />
                   ))}
                 </div>
               )
@@ -874,7 +889,7 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
             ) : (
               <div class="gif-grid">
                 {gifVisible.map((d: any) => (
-                  <GifCell key={String(d?.id)} doc={d} documentUrls={documentUrls} onPick={onPickGif} />
+                  <GifCell key={String(d?.id)} doc={d} documentUrls={documentUrls} documentSources={documentSources} onPick={onPickGif} />
                 ))}
               </div>
             )}
@@ -894,10 +909,10 @@ export function EmojiPicker({ dispatch, documentUrls, onPick, onClose, className
             ) : (
               <div class="gift-grid">
                 {gifts.map((g: any, i: number) => (
-                  <GiftCell key={String(g?.id || g?.slug || i)} gift={g} documentUrls={documentUrls} onPick={onPickGift} />
+                  <GiftCell key={String(g?.id || g?.slug || i)} gift={g} documentUrls={documentUrls} documentSources={documentSources} onPick={onPickGift} />
                 ))}
                 {gifts.length === 0 && giftDocs.map((d: any) => (
-                  <StickerCell key={String(d?.id)} doc={d} documentUrls={documentUrls} onPick={onPickSticker} />
+                  <StickerCell key={String(d?.id)} doc={d} documentUrls={documentUrls} documentSources={documentSources} onPick={onPickSticker} />
                 ))}
               </div>
             )}

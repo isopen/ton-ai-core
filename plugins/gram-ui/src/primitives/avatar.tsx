@@ -1,6 +1,7 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { Image } from './image.js';
 import { MediaSourceBadge } from '../components/media-source-badge.js';
+import { UNKNOWN_SOURCE } from '../components/emoji-source.js';
 import type { ImageSpec } from '../types.js';
 
 interface AvatarProps {
@@ -31,11 +32,13 @@ export function Avatar({ url, blurUrl, initial, color, size = 'medium', classNam
   const initialCls = 'Avatar__initial' + (initial.length > 1 ? ' Avatar__initial_double' : '');
   return (
     <div class={cls} style={`background:${color};position:relative`}>
-      <span class={initialCls}>{initial}</span>
+      <div class="Avatar__clip">
+        <span class={initialCls}>{initial}</span>
+        {blurUrl ? <img class="Avatar__blur" src={blurUrl} alt="" /> : null}
+        {imageSpec && <Image image={imageSpec} width={dim} lazy={false} />}
+      </div>
       {}
-      {blurUrl ? <img class="Avatar__blur" src={blurUrl} alt="" /> : null}
-      {imageSpec && <Image image={imageSpec} width={dim} lazy={false} />}
-      {source ? <MediaSourceBadge source={source} variant="dot" /> : null}
+      {(url || blurUrl) ? <MediaSourceBadge source={source || UNKNOWN_SOURCE} variant="dot" /> : null}
     </div>
   );
 }

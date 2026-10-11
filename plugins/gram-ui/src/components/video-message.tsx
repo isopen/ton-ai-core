@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback, useDomEvent } from '@ton-ai/a
 import { buildDocumentThumb, animationsOff } from '../utils.js';
 import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
+import { UNKNOWN_SOURCE } from './emoji-source.js';
 import { requestDocument, requestDocumentThumb } from './media-source.js';
 import type { MediaViewerItem } from './media-viewer.js';
 
@@ -485,7 +486,7 @@ export function VideoMessage(props: VideoMessageProps) {
               </div>
             </div>
             <div class="video-message__top-right">
-              {documentSources?.[m.id] ? <MediaSourceBadge source={documentSources[m.id]} absolute={false} /> : null}
+              <MediaSourceBadge source={documentSources?.[m.id] || UNKNOWN_SOURCE} absolute={false} />
               <button type="button" class="badge badge--icon video-message__action" data-action="download" onClick={(e: any) => {
                 e.stopPropagation();
                 const doc = m.media?.document;
@@ -543,7 +544,7 @@ export function VideoMessage(props: VideoMessageProps) {
         </div>
 
       </div>
-      <MediaCaption text={m.message} entities={m.entities} documentUrls={documentUrls} timeStr={timeStr} out={out} status={status} />
+      <MediaCaption text={m.message} entities={m.entities} documentUrls={documentUrls} documentSources={documentSources} timeStr={timeStr} out={out} status={status} />
     </div>
   );
 }
