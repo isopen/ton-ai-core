@@ -60,8 +60,8 @@ export class TelegramWorkerClient {
         await this.client.clearPendingAuth(phoneNumber);
     }
 
-    async sendMessage(message: string, peer: Record<string, any>, entities?: Array<{ offset: number; length: number; document_id: string }>): Promise<any> {
-        return await this.client.sendMessage(message, peer, entities);
+    async sendMessage(message: string, peer: Record<string, any>, entities?: Array<{ offset: number; length: number; document_id: string }>, replyToMsgId?: number): Promise<any> {
+        return await this.client.sendMessage(message, peer, entities, replyToMsgId);
     }
 
     async sendMedia(peer: Record<string, any>, document: any, sticker?: boolean): Promise<any> {
@@ -100,8 +100,8 @@ export class TelegramWorkerClient {
         return this.client.getDialogs(limit);
     }
 
-    async getHistory(peer: Record<string, any>, limit = 50, offsetId = 0): Promise<any> {
-        return this.client.getHistory(peer, limit, offsetId);
+    async getHistory(peer: Record<string, any>, limit = 50, offsetId = 0, topMsgId?: number): Promise<any> {
+        return this.client.getHistory(peer, limit, offsetId, topMsgId);
     }
 
     async getCustomEmojiDocuments(documentId: string): Promise<any[]> {

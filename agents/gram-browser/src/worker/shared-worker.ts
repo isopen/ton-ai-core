@@ -217,11 +217,11 @@ async function _handleMessage(msg: Record<string, any>): Promise<any> {
             return { type: 'cleared' };
         }
         case 'sendMessage': {
-            const sendResult = await TW.sendMessage_({ message: msg.message, peer: msg.peer, entities: msg.entities });
+            const sendResult = await TW.sendMessage_({ message: msg.message, peer: msg.peer, entities: msg.entities, replyToMsgId: msg.replyToMsgId });
             return { type: 'messageSent', data: sendResult };
         }
         case 'sendMedia': {
-            const mediaResult = await TW.sendMedia_({ peer: msg.peer, document: msg.document, sticker: msg.sticker });
+            const mediaResult = await TW.sendMedia_({ peer: msg.peer, document: msg.document, sticker: msg.sticker, replyToMsgId: msg.replyToMsgId });
             return { type: 'messageSent', data: mediaResult };
         }
         case 'callRpc': {
@@ -248,10 +248,16 @@ async function _handleMessage(msg: Record<string, any>): Promise<any> {
         case 'getHistory': {
             const gPeer = await TW.resolvePeer(msg.peer);
             const offsetId = msg.offsetId || 0;
-            const historyResult = await TW.callRpc('messages.getHistory', {
-                peer: gPeer, offset_id: offsetId, offset_date: 0,
-                add_offset: offsetId ? -1 : 0, limit: msg.limit || 50, max_id: 0, min_id: 0, hash: BigInt(0),
-            });
+            const topMsgId = Number(msg.topMsgId) || 0;
+            const historyResult = topMsgId > 0
+                ? await TW.callRpc('messages.getReplies', {
+                    peer: gPeer, msg_id: topMsgId, offset_id: offsetId, offset_date: 0,
+                    add_offset: offsetId ? -1 : 0, limit: msg.limit || 50, max_id: 0, min_id: 0, hash: BigInt(0),
+                })
+                : await TW.callRpc('messages.getHistory', {
+                    peer: gPeer, offset_id: offsetId, offset_date: 0,
+                    add_offset: offsetId ? -1 : 0, limit: msg.limit || 50, max_id: 0, min_id: 0, hash: BigInt(0),
+                });
             return { type: 'historyResult', result: historyResult };
         }
         case 'downloadFile': {

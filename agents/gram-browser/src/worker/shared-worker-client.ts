@@ -132,12 +132,12 @@ export class SharedWorkerClient {
         this.setStatus('connected');
     }
 
-    async sendMessage(message: string, peer: Record<string, any>, entities?: Array<{ offset: number; length: number; document_id: string }>): Promise<any> {
-        return this.send({ type: 'sendMessage', message, peer, entities });
+    async sendMessage(message: string, peer: Record<string, any>, entities?: Array<{ offset: number; length: number; document_id: string }>, replyToMsgId?: number): Promise<any> {
+        return this.send({ type: 'sendMessage', message, peer, entities, replyToMsgId });
     }
 
-    async sendMedia(peer: Record<string, any>, document: any, sticker?: boolean): Promise<any> {
-        return this.send({ type: 'sendMedia', peer, document, sticker });
+    async sendMedia(peer: Record<string, any>, document: any, sticker?: boolean, replyToMsgId?: number): Promise<any> {
+        return this.send({ type: 'sendMedia', peer, document, sticker, replyToMsgId });
     }
 
     async callRpc(methodName: string, params: Record<string, any> = {}): Promise<any> {
@@ -274,8 +274,8 @@ export class SharedWorkerClient {
         return this.send({ type: 'getCustomEmojiDocs', documentId });
     }
 
-    async getHistory(peer: Record<string, any>, limit = 50, offsetId = 0): Promise<any> {
-        return this.send({ type: 'getHistory', peer, limit, offsetId });
+    async getHistory(peer: Record<string, any>, limit = 50, offsetId = 0, topMsgId?: number): Promise<any> {
+        return this.send({ type: 'getHistory', peer, limit, offsetId, topMsgId });
     }
 
     async cancelPhotoDownloads(): Promise<void> {

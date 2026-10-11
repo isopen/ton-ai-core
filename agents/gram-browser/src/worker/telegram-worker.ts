@@ -1679,7 +1679,7 @@ async function directRpcWith(
     return rpcResult;
 }
 
-async function requestPhotoDownload(photo: any, sizeType: string, messageId?: any, onProgress?: (pct: number) => void): Promise<{ bytes: ArrayBuffer; mime: string; cacheSource: string } | null> {
+async function requestPhotoDownload(photo: any, sizeType: string, messageId?: any, onProgress?: (pct: number) => void): Promise<{ bytes: ArrayBuffer; mime: string; cacheSource?: string } | null> {
     wlog('[worker] requestPhotoDownload CALLED', { sizeType, photoId: photo?.id?.toString(), hasId: !!photo?.id, hasAccessHash: !!photo?.access_hash, hasFileRef: !!photo?.file_reference, fileRefType: typeof photo?.file_reference, fileRefLen: photo?.file_reference?.length, messageId });
     if (!photo) { wlog('[worker] requestPhotoDownload: photo is null'); return null; }
     let locationOverride: Record<string, any> | null = null;
@@ -1753,7 +1753,8 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
         return null;
     }
     const mime = photoStorageMime(result.type);
-    return { bytes: result.bytes, mime, cacheSource: result.cacheSource || 'server' };
+
+    return { bytes: result.bytes, mime, cacheSource: result.cacheSource };
 }
 
 function photoStorageMime(fileType: string): string {
@@ -1888,6 +1889,7 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
         const peer = peerInfo(d.peer);
         if (!peer) continue;
         const pid = String(d.peer?.user_id ?? d.peer?.chat_id ?? d.peer?.channel_id ?? '');
+        const chatObj = d.peer?._ === 'peerChannel' ? chatsMap.get(pid) : undefined;
         const lastMsg = lastMsgMap.get(pid);
         let lastMsgText = '';
         let lastMsgEntities: any[] | undefined;
@@ -1920,7 +1922,10 @@ export async function processDialogsResult(dialogsResult: any): Promise<{ dialog
                 if (rp) lastMsgText = rp;
             }
         }
-        dialogs.push({ peer, topMessage: d.top_message, unreadCount: d.unread_count || 0, lastMsg: lastMsgText, lastMsgEntities, date: lastMsg?.date, readInboxMaxId: d.read_inbox_max_id, readOutboxMaxId: d.read_outbox_max_id });
+        if (peer.type === 'channel' && chatObj && (chatObj as any).forum) {
+            (peer as any).forum = true;
+        }
+        dialogs.push({ peer, topMessage: d.top_message, unreadCount: d.unread_count || 0, lastMsg: lastMsgText, lastMsgEntities, date: lastMsg?.date, readInboxMaxId: d.read_inbox_max_id, readOutboxMaxId: d.read_outbox_max_id, ...(peer.type === 'channel' && chatObj && (chatObj as any).forum ? { forum: true } : {}) });
     }
     return { dialogs };
 }
@@ -2744,19 +2749,23 @@ async function checkPassword(password: string): Promise<void> {
     setTimeout(() => initUpdates().catch(() => {}), 100);
 }
 
-async function sendMessageAction(params: { message: string; peer: Record<string, any>; entities?: Array<{ offset: number; length: number; document_id: string }> }): Promise<any> {
+async function sendMessageAction(params: { message: string; peer: Record<string, any>; entities?: Array<{ offset: number; length: number; document_id: string }>; replyToMsgId?: number }): Promise<any> {
     const randomId = crypton.getRandomBytes(8).readBigUInt64LE(0);
     const entities = Array.isArray(params.entities)
         ? params.entities
             .filter((e) => e && Number.isFinite(e.offset) && Number.isFinite(e.length) && e.document_id != null)
             .map((e) => ({ _: 'messageEntityCustomEmoji', offset: e.offset, length: e.length, document_id: BigInt(String(e.document_id)) }))
         : undefined;
+    const replyTo = Number.isFinite(params.replyToMsgId) && (params.replyToMsgId as number) > 0
+        ? { _: 'inputReplyToMessage', reply_to_msg_id: params.replyToMsgId }
+        : undefined;
     return await callRpc('messages.sendMessage', {
-        flags: 0,
+        flags: replyTo ? 1 : 0,
         peer: params.peer,
         message: params.message,
         random_id: randomId,
         ...(entities && entities.length > 0 ? { entities } : {}),
+        ...(replyTo ? { reply_to: replyTo } : {}),
     });
 }
 
@@ -2770,17 +2779,21 @@ function inputDocumentOf(document: any): Record<string, any> | null {
     return { _: 'inputDocument', id, access_hash: accessHash, file_reference: buf };
 }
 
-async function sendMediaAction(params: { peer: Record<string, any>; document: any; sticker?: boolean }): Promise<any> {
+async function sendMediaAction(params: { peer: Record<string, any>; document: any; sticker?: boolean; replyToMsgId?: number }): Promise<any> {
     const inputDocument = inputDocumentOf(params.document);
     if (!inputDocument) throw new Error('Document reference expired, reopen the picker');
     const randomId = crypton.getRandomBytes(8).readBigUInt64LE(0);
+    const replyTo = Number.isFinite(params.replyToMsgId) && (params.replyToMsgId as number) > 0
+        ? { _: 'inputReplyToMessage', reply_to_msg_id: params.replyToMsgId }
+        : undefined;
     return await callRpc('messages.sendMedia', {
-        flags: 0,
+        flags: replyTo ? 1 : 0,
         peer: params.peer,
         media: { _: 'inputMediaDocument', flags: 0, id: inputDocument },
         message: '',
         random_id: randomId,
         ...(params.sticker ? { update_stickersets_order: true } : {}),
+        ...(replyTo ? { reply_to: replyTo } : {}),
     });
 }
 
@@ -4001,26 +4014,27 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         if (!hasRange && (firstChunk.length < PART_SIZE || typeName !== 'storage.filePartial')) {
             wlog('[dl] single chunk id=' + id + ' label=' + label + ' chunkLen=' + firstChunk.length + ' type=' + typeName);
             const allBytes = Buffer.concat(chunks);
-        if (allBytes.length === 0) {
-            log.warn('[dl] empty chunk id=' + id + ' label=' + label + ' type=' + typeName + ' size=' + knownSize + ' dc=' + targetDc + ' — retrying precise');
-            try {
-                const r2 = await poolCall(() => doCall(BigInt(0), firstSize, true), firstSize);
-                const t2 = r2.type?._ || 'storage.fileUnknown';
-                const c2 = Buffer.from(r2.bytes || '', 'hex');
-                if (r2._ === 'upload.file' && c2.length > 0) {
-                    const res2: DownloadResult = { type: t2, bytes: bufToAb(c2) };
-                    if (cacheKey) {
-                        downloadCacheSet(cacheKey, { type: t2, bytes: c2.toString('base64') }, document?.mime_type);
-                        if (!isNoMediaCache()) persistDownloadCache(cacheKey, t2, c2.toString('base64'), document?.mime_type);
+            if (allBytes.length === 0) {
+                log.warn('[dl] empty chunk id=' + id + ' label=' + label + ' type=' + typeName + ' size=' + knownSize + ' dc=' + targetDc + ' — retrying precise');
+                try {
+                    const r2 = await poolCall(() => doCall(BigInt(0), firstSize, true), firstSize);
+                    const t2 = r2.type?._ || 'storage.fileUnknown';
+                    const c2 = Buffer.from(r2.bytes || '', 'hex');
+                    if (r2._ === 'upload.file' && c2.length > 0) {
+                        const res2: DownloadResult = { type: t2, bytes: bufToAb(c2), cacheSource: serverType };
+                        if (cacheKey) {
+                            downloadCacheSet(cacheKey, { type: t2, bytes: c2.toString('base64') }, document?.mime_type);
+                            if (!isNoMediaCache()) persistDownloadCache(cacheKey, t2, c2.toString('base64'), document?.mime_type);
+                        }
+                        return res2;
                     }
-                    return res2;
+                } catch (e2: any) {
+                    log.warn('[dl] precise retry error id=' + id + ' ' + e2.message);
                 }
-            } catch (e2: any) {
-                log.warn('[dl] precise retry error id=' + id + ' ' + e2.message);
+                return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
             }
-            return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
-        }
-        const res: DownloadResult = { type: finalType, bytes: bufToAb(allBytes) };
+
+            const res: DownloadResult = { type: finalType, bytes: bufToAb(allBytes), cacheSource: serverType };
             if (cacheKey) {
                 downloadCacheSet(cacheKey, { type: finalType, bytes: allBytes.toString('base64') }, document?.mime_type);
                 if (!isNoMediaCache()) persistDownloadCache(cacheKey, finalType, allBytes.toString('base64'), document?.mime_type);
