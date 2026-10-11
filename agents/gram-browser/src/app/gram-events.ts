@@ -21,6 +21,7 @@ const fallbackLog = getLogger('gram-ui:fallback');
 
 const log = getLogger('gram-browser');
 const cbLog = getLogger('gram-browser:updates');
+const giftStickerLog = getLogger('gram-ui:gift');
 
 let mediaRouter: GramMediaRouter | null = null;
 
@@ -753,6 +754,10 @@ export function setupEventListeners(s: GramState): void {
     debug: isEnabled('gram-browser'),
   });
   mediaRouter.attach();
+
+  (window as any).__gramMediaRouter = mediaRouter;
+
+  try { window.dispatchEvent(new CustomEvent('tg-media-router-ready')); } catch {}
   s.cancelDocumentDownloads = () => mediaRouter?.cancelDocumentDownloads();
 
   let premiumGiftDocs: any[] | null = null;
@@ -781,6 +786,113 @@ export function setupEventListeners(s: GramState): void {
     }
   };
   window.addEventListener('tg-fetch-premium-gift', onFetchPremiumGift);
+
+  const uniqueGiftCache = new Map<string, any>();
+  const uniqueGiftInflight = new Map<string, Promise<any>>();
+  const fetchUniqueGift = (slug: string): Promise<any> => {
+    if (!slug) return Promise.resolve(null);
+    const hit = uniqueGiftCache.get(slug);
+    if (hit) return Promise.resolve(hit);
+    const running = uniqueGiftInflight.get(slug);
+    if (running) return running;
+    const p = (async () => {
+      try {
+        const res: any = await s.tgService.current?.callRpc?.('payments.getUniqueStarGift', { slug });
+
+        const value: any = await s.tgService.current?.callRpc?.('payments.getUniqueStarGiftValueInfo', { slug })
+          .catch((err: any) => {
+            giftStickerLog.warn('[gift] getUniqueStarGiftValueInfo failed slug=' + slug, err?.message || err);
+            return null;
+          });
+
+        if (res?.gift) uniqueGiftCache.set(slug, { ...res, value });
+
+        window.dispatchEvent(new CustomEvent('tg-gift-details', {
+          detail: { slug, gift: res?.gift || null, chats: res?.chats, users: res?.users, value },
+        }));
+        return { ...res, value };
+      } catch (err: any) {
+        giftStickerLog.warn('[gift] getUniqueStarGift failed slug=' + slug, err?.message || err);
+        return null;
+      } finally {
+        uniqueGiftInflight.delete(slug);
+      }
+    })();
+    uniqueGiftInflight.set(slug, p);
+    return p;
+  };
+
+  const onFetchGiftDetails = async (e: Event) => {
+    const { slug } = (e as CustomEvent).detail || {};
+    if (!slug) return;
+
+    const cached = uniqueGiftCache.get(slug);
+    const res: any = cached || await fetchUniqueGift(slug);
+    window.dispatchEvent(new CustomEvent('tg-gift-details', {
+      detail: { slug, gift: res?.gift, chats: res?.chats, users: res?.users, value: res?.value },
+    }));
+  };
+  window.addEventListener('tg-fetch-gift-details', onFetchGiftDetails);
+
+  let starGiftDocs: Promise<any[]> | null = null;
+  const giftDocById = async (giftId: string): Promise<any | undefined> => {
+    const callRpc = s.tgService.current?.callRpc?.bind(s.tgService.current);
+    if (!callRpc || !giftId) return undefined;
+    if (!starGiftDocs) {
+      starGiftDocs = callRpc('payments.getStarGifts', { hash: BigInt(0) })
+        .then((res: any) => (Array.isArray(res?.gifts) ? res.gifts : []))
+        .catch((err: any) => {
+          log.error('[gram-app] payments.getStarGifts failed:', err?.message || err);
+          return [];
+        });
+    }
+    const gifts = await starGiftDocs;
+    return gifts.find((g: any) => String(g?.id) === giftId)?.sticker;
+  };
+
+  const giftStickerSets: Array<{ _: string }> = [
+    { _: 'inputStickerSetPremiumGifts' },
+    { _: 'inputStickerSetTonGifts' },
+  ];
+  let giftSetDocs: Promise<any[]> | null = null;
+  const docByIdInGiftSets = async (documentId: string): Promise<any | undefined> => {
+    const callRpc = s.tgService.current?.callRpc?.bind(s.tgService.current);
+    if (!callRpc || !documentId) return undefined;
+    if (!giftSetDocs) {
+      giftSetDocs = Promise.all(giftStickerSets.map((set) => mediaRouter?.fetchStickerSet('gift-' + set._, set).catch(() => null)))
+        .then((results) => results.flatMap((r: any) => (Array.isArray(r?.documents) ? r.documents : [])));
+    }
+    const docs = await giftSetDocs;
+    return docs.find((d: any) => String(d?.id) === documentId);
+  };
+
+  const onFetchGiftSticker = async (e: Event) => {
+    const { messageId, slug, giftId, documentId } = (e as CustomEvent).detail || {};
+    if (messageId == null || !mediaRouter) return;
+    if (!slug && !giftId) return;
+    try {
+      let doc: any;
+      if (slug) doc = (await fetchUniqueGift(slug))?.gift?.sticker;
+
+      if (!doc || doc._ === 'documentEmpty') doc = await giftDocById(String(giftId || ''));
+      if (!doc || doc._ === 'documentEmpty') {
+        doc = await docByIdInGiftSets(String(documentId || ''));
+        if (doc) giftStickerLog.info('[gift] sticker recovered from a gift set msg=' + messageId + ' docId=' + documentId);
+      }
+
+      if (!doc || doc._ === 'documentEmpty') {
+        giftStickerLog.info('[gift] no downloadable sticker msg=' + messageId + ' slug=' + (slug || '-') + ' giftId=' + (giftId || '-') + ' docId=' + (documentId || '-'));
+        return;
+      }
+
+      giftStickerLog.info('[gift] resolved sticker msg=' + messageId + ' mime=' + doc.mime_type + ' id=' + doc.id);
+      window.dispatchEvent(new CustomEvent('tg-gift-sticker', { detail: { messageId, slug, document: doc } }));
+      requestDocument(doc, messageId, 0, { tag: 'GiftSticker' });
+    } catch (err: any) {
+      giftStickerLog.warn('[gift] tg-fetch-gift-sticker failed msg=' + messageId, err?.message || err);
+    }
+  };
+  window.addEventListener('tg-fetch-gift-sticker', onFetchGiftSticker);
 
   let greetingStickerDocs: any[] | null = null;
   const onFetchGreetingSticker = async () => {
@@ -976,6 +1088,8 @@ export function setupEventListeners(s: GramState): void {
     window.removeEventListener('tg-image-quality-changed', onImageQualityChanged);
     window.removeEventListener('tg-animations-changed', onAnimationsChanged);
     window.removeEventListener('tg-fetch-premium-gift', onFetchPremiumGift);
+    window.removeEventListener('tg-fetch-gift-sticker', onFetchGiftSticker);
+    window.removeEventListener('tg-fetch-gift-details', onFetchGiftDetails);
     window.removeEventListener('tg-fetch-greeting-sticker', onFetchGreetingSticker);
     window.removeEventListener('tg-emoji-interaction', onEmojiInteraction);
     window.removeEventListener('tg-bot-callback', onBotCallback);
