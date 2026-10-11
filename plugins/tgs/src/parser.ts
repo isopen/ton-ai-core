@@ -327,7 +327,7 @@ function cacheGet(key: string): ParsedAnimation | undefined {
 function cachePut(key: string, value: ParsedAnimation): void {
     if (modelCacheSize <= 0) return;
     cacheGet(key);
-    modelCache.set(key, cloneAnimation(value));
+    modelCache.set(key, value);
     while (modelCache.size > modelCacheSize) {
         const oldest = modelCache.keys().next().value as string;
         modelCache.delete(oldest);
@@ -382,7 +382,10 @@ export function parseTgs(json: string, options?: ParseOptions): ParsedAnimation 
 
     const animation = parseAnimation(data);
 
-    if (key) cachePut(key, animation);
+    if (key) {
+        cachePut(key, animation);
+        return cloneAnimation(animation);
+    }
     return animation;
 }
 

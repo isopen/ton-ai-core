@@ -140,6 +140,8 @@ export class TgsRenderer implements IAnimatedRenderer {
 
   private isRendererInited = false;
 
+  private needsChangeData = false;
+
   private loggedFrameError = false;
 
   private stepErrorLogged = false;
@@ -342,7 +344,14 @@ export class TgsRenderer implements IAnimatedRenderer {
       instance.initFailed = false;
       instance.initAttempts = 0;
       instance.tgsJsonMisses = 0;
-      if (!instance.isRendererInited && !instance.isDestroyed) {
+      instance.loggedFrameError = false;
+      instance.needsChangeData = true;
+      instance.isRendererInited = false;
+
+      instance.initGeneration++;
+      if (instance.initInFlight) {
+        instance.initRetryQueued = true;
+      } else if (!instance.isDestroyed) {
         instance.initRenderer();
       }
     }
@@ -746,7 +755,8 @@ export class TgsRenderer implements IAnimatedRenderer {
       }
       this.tgsJsonMisses = 0;
       debugLog.info('[tgs] init attempt #' + this.initAttempts, this.renderId, 'json=' + (tgsJson ? tgsJson.length + 'B' : 'NONE'));
-      const res: any = await this.worker.request('tgs:init', { renderId: this.renderId, tgsUrl: this.tgsUrl, tgsJson, imgSize: this.imgSize, isLowPriority: this.params.isLowPriority || false, debug: !!(window as any).__TG_DEBUG_EMOJI });
+      const res: any = await this.worker.request(this.needsChangeData ? 'tgs:changeData' : 'tgs:init', { renderId: this.renderId, tgsUrl: this.tgsUrl, tgsJson, imgSize: this.imgSize, isLowPriority: this.params.isLowPriority || false, debug: !!(window as any).__TG_DEBUG_EMOJI });
+      this.needsChangeData = false;
       if (gen !== this.initGeneration || this.isDestroyed) return;
       if (res?.animDebug) {
         const w = window as any;

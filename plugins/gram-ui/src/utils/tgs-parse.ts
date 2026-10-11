@@ -10,7 +10,7 @@ let parseMsgId = 0;
 let parseRr = 0;
 const PARSE_WORKER_MAX = 4;
 const PARSE_WORKER_WATCHDOG_MS = 3000;
-const parsePending = new Map<number, { resolve: (p: ParsedAnimation) => void; reject: (e: Error) => void; key: string; json: string }>();
+const parsePending = new Map<number, { resolve: (p: ParsedAnimation) => void; reject: (e: Error) => void; key: string; json: string; timer: ReturnType<typeof setTimeout> }>();
 
 function parseInline(json: string, key: string): ParsedAnimation {
   const parsed = parseTgs(json);
@@ -30,6 +30,7 @@ function makeParseWorker() {
       const p = parsePending.get(msgId);
       if (!p) return;
       parsePending.delete(msgId);
+      clearTimeout(p.timer);
       if (ok && parsed) {
         cacheParsed(p.key, parsed);
         p.resolve(parsed);
@@ -88,8 +89,19 @@ function cacheParsed(key: string, parsed: ParsedAnimation) {
   parsedCache.set(key, parsed);
 }
 
+function jsonKey(json: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < json.length; i++) {
+    const c = json.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 + c, 0x85ebca6b) >>> 0;
+  }
+  return `j${json.length}:${h1.toString(36)}${h2.toString(36)}`;
+}
+
 export function parseTgsJson(json: string, cacheKey?: string): Promise<ParsedAnimation> {
-  const key = cacheKey || json;
+  const key = cacheKey || jsonKey(json);
   const cached = parsedCache.get(key);
   if (cached) return Promise.resolve(cached);
   const w = getParseWorker();
@@ -102,10 +114,7 @@ export function parseTgsJson(json: string, cacheKey?: string): Promise<ParsedAni
   }
   return new Promise((resolve, reject) => {
     const msgId = ++parseMsgId;
-    parsePending.set(msgId, { resolve, reject, key, json });
-    w.pending.add(msgId);
-    w.w.postMessage({ msgId, json });
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       const p = parsePending.get(msgId);
       if (!p) return;
       parsePending.delete(msgId);
@@ -121,5 +130,8 @@ export function parseTgsJson(json: string, cacheKey?: string): Promise<ParsedAni
         reject(e instanceof Error ? e : new Error(String(e)));
       }
     }, PARSE_WORKER_WATCHDOG_MS);
+    parsePending.set(msgId, { resolve, reject, key, json, timer });
+    w.pending.add(msgId);
+    w.w.postMessage({ msgId, json });
   });
 }

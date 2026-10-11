@@ -797,6 +797,9 @@ function maxPropertyNumber(prop: ParsedProperty | undefined, fallback: number): 
     return m;
 }
 
+const REPEATER_DRAW_BUDGET = 200000;
+let repeaterDraws = 0;
+
 function renderRepeatCopies(ctx: CanvasRenderingContext2D, rec: RepeatCopyRec, frame: number) {
     const r = rec.shape;
     const copiesFloat = toNumber(resolveProp(r.copies, frame, 0));
@@ -812,6 +815,8 @@ function renderRepeatCopies(ctx: CanvasRenderingContext2D, rec: RepeatCopyRec, f
     const eo = tr ? toNumber(resolveProp(tr.endOpacity, frame, 100)) / 100 : 1;
     const visible = Math.trunc(copiesFloat);
     for (let i = 0; i < maxCopies; i++) {
+        if (repeaterDraws >= REPEATER_DRAW_BUDGET) break;
+        repeaterDraws += 1;
         let alpha = rec.alpha * (so + (eo - so) * (i / copiesFloat));
         if (i >= visible) alpha = 0;
         if (alpha <= 0) continue;
@@ -1082,10 +1087,8 @@ function drawPaints(ctx: CanvasRenderingContext2D, paints: PaintRec[], frame: nu
         const paint = paints[i];
         const type = paint.shape.type;
 
-        const items: PaintItem[] = paint.items.map((it) => ({ cmds: it.cmds.slice(), matrix: it.matrix }));
-
         const cmds: PathCmd[] = [];
-        for (const it of items) {
+        for (const it of paint.items) {
             if (it.cmds.length === 0) continue;
             cmds.push(...transformCmds(it.cmds, it.matrix));
         }
@@ -1194,7 +1197,10 @@ let bufferPoolPixels = 0;
 function getBuffer(w: number, h: number, tag: string): HTMLCanvasElement {
     const key = tag + ':' + w + 'x' + h;
     let c = bufferPool.get(key);
-    if (!c) {
+    if (c) {
+        bufferPool.delete(key);
+        bufferPool.set(key, c);
+    } else {
         const el: HTMLCanvasElement | OffscreenCanvas = typeof document !== 'undefined'
             ? document.createElement('canvas')
             : new OffscreenCanvas(w, h);
@@ -1482,7 +1488,12 @@ function evictOldestImageCache(): void {
 
 function decodeImageAsset(a: ParsedAsset): ImageBitmap | null {
     if (!a.p) return null;
-    if (imageBitmaps.has(a.id)) return imageBitmaps.get(a.id) || null;
+    const cachedBmp = imageBitmaps.get(a.id);
+    if (cachedBmp !== undefined && cachedBmp !== null) {
+        imageBitmaps.delete(a.id);
+        imageBitmaps.set(a.id, cachedBmp);
+        return cachedBmp;
+    }
     if (imageDecodes.has(a.id)) return null;
     const raw = a.p;
     const b64 = raw.startsWith('data:') ? raw.slice(raw.indexOf(',') + 1) : raw;
@@ -1942,6 +1953,7 @@ export function renderFrame(
 ) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    repeaterDraws = 0;
 
     const dispW = displayW ?? (canvas.clientWidth || anim.width);
     const dispH = displayH ?? (canvas.clientHeight || anim.height);

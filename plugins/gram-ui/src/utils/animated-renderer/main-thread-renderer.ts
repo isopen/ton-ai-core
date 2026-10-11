@@ -132,7 +132,12 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       instancesByRenderId.set(renderId, instance);
     } else if (instance.tgsUrl !== tgsUrl) {
       instance.tgsUrl = tgsUrl;
-      if (!instance.anim) instance.load();
+      instance.anim = undefined;
+      instance.loadFailed = false;
+      instance.framesCount = 1;
+      instance.isStatic = false;
+      for (const view of instance.views.values()) view.isLoaded = false;
+      if (!instance.isDestroyed) instance.load();
     }
     instance.addView(viewId, container, onLoad, onError, onFrame, params.coords);
     return instance;
