@@ -55,9 +55,15 @@ describe('table overflow guards', () => {
     expect(row).toContain('flex-wrap: wrap');
   });
 
-  test('badge dots never render inside buttons', () => {
+  test('badge dots scale with the font inside rich and keyboard buttons', () => {
     const css = builtCss();
-    expect(css).toContain('button .tgui-media-source-badge--dot');
+    const group = /\.rich-btn \.tgui-media-source-badge--dot,\s*\.rich-cell-btn \.tgui-media-source-badge--dot,\s*\.MessageBubble__kb-btn \.tgui-media-source-badge--dot\s*\{[^}]*\}/.exec(css);
+    expect(group).not.toBeNull();
+
+    expect(group![0]).toMatch(/width:\s*[\d.]+em/);
+    expect(group![0]).not.toContain('display: none');
+
+    expect(css).not.toMatch(/^button\s+\.tgui-media-source-badge--dot\s*\{/m);
   });
 
   test('rich table width cap scales with font', () => {

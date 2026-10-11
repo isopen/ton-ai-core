@@ -17,7 +17,7 @@ function ChatInputView({ state, dispatch }: { state: AppState; dispatch: Dispatc
         documentUrls={(state.documentUrls || {}) as Record<string, string>}
         onEmojiToggle={() => dispatch({ type: 'SET_EMOJI_PICKER', v: !state.showEmojiPicker })}
       />
-      {state.showEmojiPicker ? <EmojiPicker dispatch={dispatch} documentUrls={(state.documentUrls || {}) as Record<string, string>} onClose={() => dispatch({ type: 'SET_EMOJI_PICKER', v: false })} /> : null}
+      {state.showEmojiPicker ? <EmojiPicker dispatch={dispatch} documentUrls={(state.documentUrls || {}) as Record<string, string>} documentSources={state.documentSources} onClose={() => dispatch({ type: 'SET_EMOJI_PICKER', v: false })} /> : null}
     </div>
   );
 }
@@ -27,6 +27,7 @@ export const ChatInput = memo(ChatInputView as ComponentType, (a, b) =>
   a.state.selectedPeer === b.state.selectedPeer &&
   a.state.showEmojiPicker === b.state.showEmojiPicker &&
   a.state.documentUrls === b.state.documentUrls &&
+  a.state.documentSources === b.state.documentSources &&
   a.state.messageFontSize === b.state.messageFontSize &&
   a.state.langCode === b.state.langCode,
 );

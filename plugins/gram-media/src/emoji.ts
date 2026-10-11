@@ -117,6 +117,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiStickerSetIds = new Set<string>();
     private emojiMapExpandPending = false;
     private emojiMapExpandDone = false;
+    private emojiMapExpandPromise: Promise<void> | null = null;
     private altSemaActive = 0;
     private altSemaQueue: Array<() => void> = [];
     private emojiBadDocIds = new Map<string, number>();
@@ -1058,6 +1059,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             if (!resolved?.id) {
                 this.requestedEmojiAlts.delete(nAlt);
                 this.markEmojiNoSticker(nAlt);
+                void this.resolveAltAfterMapExpand(alt, nAlt, priority, ctx);
                 return;
             }
             if (!this.emojiStickerDocs) this.emojiStickerDocs = {};
@@ -1200,8 +1202,16 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         void this.resolveUnknownCustomIds(ids, (list) => void this.downloadEmojiList(list));
     }
 
-    private async expandEmojiMap(): Promise<void> {
-        if (this.emojiMapExpandPending || this.emojiMapExpandDone) return;
+    private expandEmojiMap(): Promise<void> {
+        if (this.emojiMapExpandDone) return Promise.resolve();
+        if (this.emojiMapExpandPromise) return this.emojiMapExpandPromise;
+        this.emojiMapExpandPromise = this.runEmojiMapExpand().finally(() => {
+            this.emojiMapExpandPromise = null;
+        });
+        return this.emojiMapExpandPromise;
+    }
+
+    private async runEmojiMapExpand(): Promise<void> {
         this.emojiMapExpandPending = true;
         let ok = false;
         try {
@@ -1247,6 +1257,25 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
     }
 
+    private async resolveAltAfterMapExpand(alt: string, nAlt: string, priority: number, ctx?: string): Promise<void> {
+        try {
+            await this.expandEmojiMap();
+        } catch {
+            return;
+        }
+        const doc = this.emojiStickerDocs ? this.emojiStickerDocs[nAlt] : undefined;
+        if (!doc?.id) return;
+        const id = String(doc.id);
+        this.emojiNoStickerAlts.delete(nAlt);
+        this.requestedEmojiAlts.delete(nAlt);
+        if (!this.canRequestEmojiDoc(id)) return;
+        this.markEmojiDocInFlight(id);
+        this.indexEmojiDocs();
+        this.notifyEmojiDocsReady([{ alt: nAlt, docId: id }]);
+        this.downloadEmojiDoc(doc, id, priority, ctx);
+        if (this.debug) log.info('[gram-media] emoji alt resolved from full set index: ' + alt + ' -> ' + id);
+    }
+
     private async requestEmojiAlt(alt: string, priority: number, ctx?: string): Promise<{ id: string; doc: any; priority: number; ctx?: string } | null> {
         const nAlt = normalizeEmoji(alt);
         if (!nAlt) return null;
@@ -1278,6 +1307,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             if (!doc?.id) {
                 this.requestedEmojiAlts.delete(nAlt);
                 this.markEmojiNoSticker(nAlt);
+                void this.resolveAltAfterMapExpand(alt, nAlt, priority, ctx);
                 return null;
             }
             if (!this.emojiStickerDocs) this.emojiStickerDocs = {};
@@ -1311,6 +1341,8 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             if (/EMOTICON_EMPTY|EMOTICON_INVALID/.test(msg)) {
                 this.requestedEmojiAlts.delete(nAlt);
                 this.markEmojiNoSticker(nAlt);
+
+                void this.resolveAltAfterMapExpand(alt, nAlt, priority, ctx);
                 if (this.debug) log.info('[gram-media] emoji alt no-sticker:', alt);
                 return null;
             }
@@ -1358,6 +1390,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     }
 
     private async downloadEmojiList(resolved: Array<{ id: string; doc: any; priority: number; ctx?: string }>): Promise<void> {
+        void this.router.probeEmojiSources(resolved.map((r) => r.id));
         const stillNeeded: Array<{ id: string; doc: any; priority: number; ctx?: string }> = [];
         for (const r of resolved) {
             if (isStubEmojiDoc(r.doc)) {

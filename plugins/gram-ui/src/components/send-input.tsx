@@ -68,7 +68,7 @@ export function insertInputText(root: HTMLDivElement | null, text: string): void
   root.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-export function refreshEmojiPreviews(root: HTMLDivElement | null, documentUrls: Record<string, string>): void {
+export function refreshEmojiPreviews(root: HTMLDivElement | null, documentUrls: Record<string, string>, documentSources?: Record<number | string, string>): void {
   if (!root) return;
   const spans = root.querySelectorAll('span.ci-emoji');
   for (const node of Array.from(spans)) {
@@ -78,14 +78,14 @@ export function refreshEmojiPreviews(root: HTMLDivElement | null, documentUrls: 
     const alt = typeof el.getAttribute === 'function' ? el.getAttribute('data-alt') || '' : '';
     if (!docId || !alt) continue;
     try {
-      render(() => h(EmojiCanvas as any, { segments: [{ type: 'emoji', docId, value: alt, custom: true }], documentUrls: documentUrls || {}, size: 22, fontScaled: true } as any), el);
+      render(() => h(EmojiCanvas as any, { segments: [{ type: 'emoji', docId, value: alt, custom: true }], documentUrls: documentUrls || {}, documentSources: documentSources as Record<string, string> | undefined, size: 22, fontScaled: true } as any), el);
     } catch {
       el.textContent = alt;
     }
   }
 }
 
-export function insertInputEmoji(root: HTMLDivElement | null, docId: string, alt: string, documentUrls: Record<string, string>): void {
+export function insertInputEmoji(root: HTMLDivElement | null, docId: string, alt: string, documentUrls: Record<string, string>, documentSources?: Record<number | string, string>): void {
   if (!root || !docId || !alt) return;
   const span = document.createElement('span');
   span.className = 'ci-emoji';
@@ -93,7 +93,7 @@ export function insertInputEmoji(root: HTMLDivElement | null, docId: string, alt
   span.setAttribute('data-doc-id', String(docId));
   span.setAttribute('data-alt', alt);
   insertNodeAtCaret(root, span);
-  refreshEmojiPreviews(root, documentUrls);
+  refreshEmojiPreviews(root, documentUrls, documentSources);
   root.dispatchEvent(new Event('input', { bubbles: true }));
 }
 

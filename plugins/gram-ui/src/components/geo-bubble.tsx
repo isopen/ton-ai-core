@@ -16,7 +16,7 @@ function fmtCountdown(totalSeconds: number): string {
   return mm + ':' + (ss < 10 ? '0' : '') + ss;
 }
 
-export function GeoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, entities, documentUrls, header }: {
+export function GeoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderNext, entities, documentUrls, documentSources, header }: {
   m: any;
   timeStr: string;
   out: boolean;
@@ -25,6 +25,8 @@ export function GeoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderN
   sameSenderNext?: boolean;
   entities?: any[];
   documentUrls?: Record<number | string, string>;
+
+  documentSources?: Record<number | string, string>;
   header?: any;
 }) {
   const frameRef = useRef<HTMLDivElement | null>(null);
@@ -129,7 +131,7 @@ export function GeoBubble({ m, timeStr, out, status, sameSenderPrev, sameSenderN
           ) : null}
         </div>
       </div>
-      <MediaCaption text={m.message} entities={entities || m.entities} documentUrls={documentUrls || {}} timeStr={timeStr} out={out} status={status} />
+      <MediaCaption text={m.message} entities={entities || m.entities} documentUrls={documentUrls || {}} documentSources={documentSources} timeStr={timeStr} out={out} status={status} />
     </div>
   );
 }

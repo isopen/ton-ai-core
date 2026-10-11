@@ -146,7 +146,7 @@ describe('rich message emoji tap', () => {
     }
   });
 
-  test('CustomEmojiNode without source renders no dot', async () => {
+  test('CustomEmojiNode without a reported source renders a neutral dot', async () => {
     const container = document.createElement('div');
     document.body.appendChild(container);
     const Probe: any = () => h(CustomEmojiNode as any, {
@@ -155,7 +155,9 @@ describe('rich message emoji tap', () => {
     render(Probe, container);
     await new Promise((r) => setTimeout(r, 30));
     try {
-      expect(container.querySelector('.tgui-media-source-badge--dot')).toBeNull();
+      const dot = container.querySelector('.tgui-media-source-badge--dot') as HTMLElement;
+      expect(dot).not.toBeNull();
+      expect(dot.className).toContain('tgui-media-source-badge--db');
     } finally {
       document.body.removeChild(container);
     }

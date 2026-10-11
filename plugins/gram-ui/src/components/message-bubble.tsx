@@ -43,6 +43,8 @@ interface MessageBubbleProps {
   replyMarkup?: any;
   richMessage?: any;
   richDocumentUrls?: Record<number | string, string>;
+
+  media?: any;
   inactiveButtons?: Record<string, true>;
   buttonNotice?: ButtonNoticeData | null;
   onKbButton?: (button: KbButton, messageId: number | string, e?: any) => void;
@@ -70,6 +72,7 @@ export function MessageBubble(props: MessageBubbleProps) {
     replyMarkup,
     richMessage,
     richDocumentUrls,
+    media,
     inactiveButtons,
     buttonNotice,
     onKbButton,
@@ -100,13 +103,15 @@ export function MessageBubble(props: MessageBubbleProps) {
               onButton={(data: string, e?: any) => onRichButton?.(data, messageId ?? '', e)}
               onOpenPhoto={onOpenPhoto} />
           : isTmd
-            ? <TmdView text={text} foreignEntities={entities} documentUrls={documentUrls || {}} inactiveButtons={inactiveButtons} time={time} status={status} out={out} messageId={messageId ?? ''} onOpenPhoto={onOpenPhoto} />
+            ? <TmdView text={text} foreignEntities={entities} documentUrls={documentUrls || {}} documentSources={documentSources} inactiveButtons={inactiveButtons} time={time} status={status} out={out} messageId={messageId ?? ''} onOpenPhoto={onOpenPhoto} />
             : <EmojiText text={text} entities={entities} documentUrls={documentUrls || {}} documentSources={documentSources} />}
       </div>
+      {media ? <div class="MessageBubble__media">{media}</div> : null}
       {buttonNotice ? <ButtonNotice notice={buttonNotice} /> : null}
       <InlineKeyboard
         rows={normalizeReplyMarkup(replyMarkup)}
         documentUrls={richDocumentUrls || documentUrls || {}}
+        documentSources={documentSources}
         inactiveButtons={inactiveButtons}
         messageId={messageId ?? ''}
         onButton={(b, e) => onKbButton?.(b, messageId ?? '', e)}
@@ -118,7 +123,7 @@ export function MessageBubble(props: MessageBubbleProps) {
         </div>
       )}
       {reactions && onReact ? (
-        <Reactions reactions={reactions} documentUrls={reactionUrls || {}} onToggle={onReact} />
+        <Reactions reactions={reactions} documentUrls={reactionUrls || {}} documentSources={documentSources} onToggle={onReact} />
       ) : null}
     </div>
   );

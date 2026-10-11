@@ -15,11 +15,13 @@ interface DialogItemProps {
   typingText: string;
   selfUserId?: string;
   avatarSource?: string;
+  documentUrls?: Record<string, string>;
+  documentSources?: Record<number | string, string>;
   onClick: () => void;
 }
 
 export function DialogItem(props: DialogItemProps) {
-  const { d, selected, collapsed, typingText, selfUserId, avatarSource, onClick } = props;
+  const { d, selected, collapsed, typingText, selfUserId, avatarSource, documentUrls, documentSources, onClick } = props;
   const avatarBg = d.peer.avatarUrl ? 'transparent' : (d.peer.type === 'user' ? '#1a4d8c' : '#2d5a27');
   const initial = getInitials(d.peer);
 
@@ -53,8 +55,8 @@ export function DialogItem(props: DialogItemProps) {
       collapsed={collapsed}
       onClick={onClick}
     >
-      <span class="Text Text_variant_label"><EmojiText text={getPeerName(d.peer, selfUserId)} documentUrls={{}} inlineSize={20} singleLine ctx="dialog" /></span>
-      {typingText ? <TypingIndicator text={typingText} /> : <span class="Text Text_variant_desc"><EmojiText text={d.lastMsg || ''} entities={d.lastMsgEntities} documentUrls={{}} inlineSize={17} singleLine ctx="dialog" /></span>}
+      <span class="Text Text_variant_label"><EmojiText text={getPeerName(d.peer, selfUserId)} documentUrls={documentUrls || {}} documentSources={documentSources} inlineSize={20} singleLine ctx="dialog" /></span>
+      {typingText ? <TypingIndicator text={typingText} /> : <span class="Text Text_variant_desc"><EmojiText text={d.lastMsg || ''} entities={d.lastMsgEntities} documentUrls={documentUrls || {}} documentSources={documentSources} inlineSize={17} singleLine ctx="dialog" /></span>}
     </ListItem>
   );
 }

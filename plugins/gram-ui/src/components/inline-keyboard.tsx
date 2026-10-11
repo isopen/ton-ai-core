@@ -73,7 +73,7 @@ function toBase64(data: any): string {
   try { return btoa(bin); } catch { return ''; }
 }
 
-function ButtonText({ text, documentUrls }: { text: string; documentUrls?: Record<string, string> }) {
+function ButtonText({ text, documentUrls, documentSources }: { text: string; documentUrls?: Record<string, string>; documentSources?: Record<number | string, string> }) {
   const isTmd = hasTmd(text);
   const htmlRef = useRef<HTMLSpanElement | null>(null);
   const html = isTmd ? (() => {
@@ -92,11 +92,13 @@ function ButtonText({ text, documentUrls }: { text: string; documentUrls?: Recor
       const docId = s.getAttribute('data-doc-id') || '';
       const alt = s.getAttribute('data-alt') || '';
       const url = (documentUrls as any)?.['emojipack-' + docId] || (documentUrls as any)?.[docId] || '';
-      const cacheKey = docId + '|' + url;
+      const src = (documentSources as any)?.['emojipack-' + docId] || (documentSources as any)?.[docId] || '';
+
+      const cacheKey = docId + '|' + url + '|' + src;
       if ((s as any).__mounted === cacheKey) return;
       (s as any).__mounted = cacheKey;
       s.innerHTML = '';
-      try { render(() => h(AnimatedEmoji as any, { docId, alt, url, size: 16, fontScaled: true } as any), s); } catch {}
+      try { render(() => h(AnimatedEmoji as any, { docId, alt, url, size: 16, fontScaled: true, documentSources } as any), s); } catch {}
     });
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
     const tNodes: Text[] = [];
@@ -125,14 +127,14 @@ function ButtonText({ text, documentUrls }: { text: string; documentUrls?: Recor
         span.style.verticalAlign = '-0.06em';
         span.style.margin = '0 1px';
         const url2 = docId ? ((documentUrls as any)?.['emojipack-' + docId] || '') : '';
-        try { render(() => h(AnimatedEmoji as any, { docId: docId || undefined, alt: emoji, url: url2 || '', size: 16, fontScaled: true } as any), span); } catch {}
+        try { render(() => h(AnimatedEmoji as any, { docId: docId || undefined, alt: emoji, url: url2 || '', size: 16, fontScaled: true, documentSources } as any), span); } catch {}
         frag.appendChild(span);
         pos = r.end;
       }
       if (pos < txt.length) frag.appendChild(document.createTextNode(txt.slice(pos)));
       tn.parentNode?.replaceChild(frag, tn);
     }
-  }, [html, documentUrls, text]);
+  }, [html, documentUrls, documentSources, text]);
 
   if (isTmd && html) {
     return <span ref={(e: HTMLSpanElement | null) => { htmlRef.current = e; }} style="display:inline-flex;align-items:center;gap:4px;vertical-align:middle;color:inherit;flex-wrap:wrap" dangerouslySetInnerHTML={{ __html: html }} />;
@@ -147,13 +149,13 @@ function ButtonText({ text, documentUrls }: { text: string; documentUrls?: Recor
     const emoji = r.emoji;
     const docId = getEmojiDocId(emoji);
     const url = docId ? ((documentUrls as any)?.['emojipack-' + docId] || '') : '';
-    parts.push(<span key={'e' + idx} style="display:inline-flex;align-items:center;vertical-align:middle;margin:0 2px"><AnimatedEmoji docId={docId} alt={emoji} url={url} size={16} fontScaled={true} /></span>);
+    parts.push(<span key={'e' + idx} style="display:inline-flex;align-items:center;vertical-align:middle;margin:0 2px"><AnimatedEmoji docId={docId} alt={emoji} url={url} size={16} fontScaled={true} documentSources={documentSources} /></span>);
     pos = r.end;
   }
   if (pos < text.length) parts.push(<span key="tend">{text.slice(pos)}</span>);
   return <span style="display:inline-flex;align-items:center;gap:4px;vertical-align:middle;color:inherit">{parts}</span>;
 }
-export function InlineKeyboard({ rows, onButton, documentUrls, inactiveButtons, messageId }: { rows: KbButton[][] | null; onButton?: (b: KbButton, e?: any) => void; documentUrls?: Record<string, string>; inactiveButtons?: Record<string, true>; messageId?: number | string }) {
+export function InlineKeyboard({ rows, onButton, documentUrls, documentSources, inactiveButtons, messageId }: { rows: KbButton[][] | null; onButton?: (b: KbButton, e?: any) => void; documentUrls?: Record<string, string>; documentSources?: Record<number | string, string>; inactiveButtons?: Record<string, true>; messageId?: number | string }) {
   if (!rows || rows.length === 0) return null;
   const kbSig = String(messageId ?? '') + '|' + rows.map((row) => row.map((b) => {
     if (b.kind === 'disabled') return 'disabled';
@@ -183,7 +185,7 @@ export function InlineKeyboard({ rows, onButton, documentUrls, inactiveButtons, 
                 type="button"
                 disabled={inactive}
                 onClick={(e: any) => { if (!inactive) onButton?.(b, e); }}
-              ><ButtonText text={b.text} documentUrls={documentUrls} /></button>
+              ><ButtonText text={b.text} documentUrls={documentUrls} documentSources={documentSources} /></button>
             );
           })}
         </div>

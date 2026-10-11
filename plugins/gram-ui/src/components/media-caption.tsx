@@ -6,16 +6,18 @@ export interface MediaCaptionProps {
   text?: string;
   entities?: any;
   documentUrls?: Record<number | string, string>;
+
+  documentSources?: Record<number | string, string>;
   timeStr: string;
   out: boolean;
   status: 'pending' | 'sent' | 'delivered' | 'read';
 }
 
-export function MediaCaption({ text, entities, documentUrls, timeStr, out, status }: MediaCaptionProps) {
+export function MediaCaption({ text, entities, documentUrls, documentSources, timeStr, out, status }: MediaCaptionProps) {
   if (!text) return null;
   return (
     <>
-      <div class="MessageBubble__text"><EmojiText text={text} entities={entities} documentUrls={documentUrls || {}} /></div>
+      <div class="MessageBubble__text"><EmojiText text={text} entities={entities} documentUrls={documentUrls || {}} documentSources={documentSources} /></div>
       <div class="MessageBubble__meta">
         <span class="MessageBubble__time">{timeStr}</span>
         {out ? <Checkmark status={status} className="MessageBubble__status" /> : null}

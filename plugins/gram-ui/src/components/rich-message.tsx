@@ -2,6 +2,8 @@ import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { t, S } from '@ton-ai/gram-lang';
 import { useEffect, useRef, useState } from '@ton-ai/atom/hooks';
 import { AnimatedEmoji, EmojiAutoplayContext } from './emoji-text.js';
+import { GlyphEmoji } from './emoji-canvas.js';
+import { resolveEmojiSource } from './emoji-source.js';
 import { getLogger } from '@ton-ai/gram-debug';
 import { matchEmojiRuns, getEmojiDocId, normalizeEmoji } from './emoji-store.js';
 import { hexToDataUrl, strippedToDataUrl, buttonStyleClass, isInactiveButtonData, isButtonInactive, isDisabledButtonType, decodeButtonAction } from '../utils.js';
@@ -211,7 +213,7 @@ function renderPlainWithEmojis(text: string, documentUrls?: Record<string, strin
     const docId = getEmojiDocId(emoji);
     const url = docId ? ((documentUrls as any)?.['emojipack-' + docId] || (documentUrls as any)?.[docId] || '') : '';
     if (!docId) {
-      parts.push(emoji);
+      parts.push(<GlyphEmoji key={'g' + i} value={emoji} size={16} fontScaled={true} />);
     } else {
       parts.push(<span key={'e' + i} data-doc={docId} style="display:contents"><AnimatedEmoji docId={docId} alt={emoji} url={url} size={16} fontScaled={true} source={richSourceFor(messageId, docId)} /></span>);
     }
@@ -242,9 +244,7 @@ export function setRichSources(messageId: number | string, sources?: Record<numb
 
 function richSourceFor(messageId: number | string | undefined, docId: string): string | undefined {
   if (messageId === '' || messageId == null) return undefined;
-  const m = richSourcesByMessage.get(messageId);
-  if (!m) return undefined;
-  return m['emojipack-' + docId] || m['emoji-' + docId] || m[docId];
+  return resolveEmojiSource(docId, richSourcesByMessage.get(messageId));
 }
 
 export function CustomEmojiNode({ documentId, alt, documentUrls, messageId }: { documentId: string; alt: string; documentUrls?: Record<number | string, string>; messageId?: number | string }): any {

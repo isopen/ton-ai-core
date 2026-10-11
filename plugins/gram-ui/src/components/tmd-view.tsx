@@ -4,6 +4,8 @@ import { parseTmdEntities, remapEntities, applyEntitiesHtml, hasCommonTmd, rende
 import { getLogger } from '@ton-ai/gram-debug';
 import type { ImageSpec } from '../types.js';
 import { AnimatedEmoji, EmojiText } from './emoji-text.js';
+import { GlyphEmoji } from './emoji-canvas.js';
+import { resolveEmojiSource } from './emoji-source.js';
 import { matchEmojiRuns, getEmojiDocId } from './emoji-store.js';
 import { render } from '@ton-ai/atom/render';
 import { Checkmark } from './checkmark.js';
@@ -11,42 +13,45 @@ import { isInactiveButtonData, isButtonInactive, buttonBubbleRel } from '../util
 
 const tmdLog = getLogger('gram-ui:tmd');
 
-function mountCustomEmojis(root: HTMLElement, documentUrls: Record<string, string> = {}) {
-  const customs = root.querySelectorAll('span.tmd-emoji-custom[data-doc-id]');
+function mountCustomEmojis(root: HTMLElement, documentUrls: Record<string, string> = {}, documentSources?: Record<number | string, string>) {
+const customs = root.querySelectorAll('span.md-emoji-custom[data-doc-id], span.tmd-emoji-custom[data-doc-id]');
   customs.forEach((el) => {
     const span = el as HTMLElement;
     const docId = span.getAttribute('data-doc-id') || '';
     const alt = span.getAttribute('data-alt') || '';
     if (!docId) return;
     const url = (documentUrls as any)['emojipack-' + docId] || (documentUrls as any)[docId] || '';
-    const cacheKey = docId + '|' + url;
+    const src = resolveEmojiSource(docId, documentSources) || '';
+
+    const cacheKey = docId + '|' + url + '|' + src;
     if ((span as any).__tmdMounted === cacheKey) return;
     (span as any).__tmdMounted = cacheKey;
     span.innerHTML = '';
     try {
-      render(() => h(AnimatedEmoji as any, { docId, alt, url, size: 20, fontScaled: true } as any), span);
+      render(() => h(AnimatedEmoji as any, { docId, alt, url, size: 20, fontScaled: true, documentSources } as any), span);
     } catch (e) {
       tmdLog.error('[TmdView] mount custom emoji failed', e);
     }
   });
 }
 
-function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, string> = {}) {
+function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, string> = {}, documentSources?: Record<number | string, string>) {
   const existing = root.querySelectorAll('span.tmd-emoji-std[data-doc-id]');
   existing.forEach((el) => {
     const span = el as HTMLElement;
     const docId = span.getAttribute('data-doc-id') || '';
     const alt = span.getAttribute('data-alt') || '';
     const url = docId ? ((documentUrls as any)['emojipack-' + docId] || '') : '';
-    const cacheKey = (docId || alt) + '|' + url;
+    const src = docId ? (resolveEmojiSource(docId, documentSources) || '') : '';
+    const cacheKey = (docId || alt) + '|' + url + '|' + src;
     if ((span as any).__tmdStdMounted === cacheKey) return;
     (span as any).__tmdStdMounted = cacheKey;
     span.innerHTML = '';
     try {
-      render(() => h(AnimatedEmoji as any, { docId: docId || undefined, alt, url: url || '', size: 20, fontScaled: true } as any), span);
+      render(() => h(AnimatedEmoji as any, { docId: docId || undefined, alt, url: url || '', size: 20, fontScaled: true, documentSources } as any), span);
     } catch {}
   });
-  if (existing.length > 0) return;
+
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
   const textNodes: Text[] = [];
   let n: Node | null;
@@ -54,7 +59,7 @@ function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, str
     const tn = n as Text;
     const parent = tn.parentElement;
     if (!parent) continue;
-    if (parent.closest('span.tmd-emoji-custom, span.tmd-emoji-std, code, pre')) continue;
+    if (parent.closest('span.md-emoji-custom, span.tmd-emoji-custom, span.tmd-emoji-std, code, pre')) continue;
     if (!tn.nodeValue || !tn.nodeValue.trim()) continue;
     if (matchEmojiRuns(tn.nodeValue).length === 0) continue;
     textNodes.push(tn);
@@ -80,9 +85,12 @@ function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, str
       span.style.margin = '0 1px';
       frag.appendChild(span);
       const url = docId ? ((documentUrls as any)['emojipack-' + docId] || '') : '';
-      (span as any).__tmdStdMounted = (docId || emoji) + '|' + url;
+      const src = docId ? ((documentSources as any)?.['emojipack-' + docId] || (documentSources as any)?.[docId] || '') : '';
+      (span as any).__tmdStdMounted = (docId || emoji) + '|' + url + '|' + src;
       try {
-        render(() => h(AnimatedEmoji as any, { docId: docId || undefined, alt: emoji, url: url || '', size: 20, fontScaled: true } as any), span);
+        render(() => (docId
+          ? h(AnimatedEmoji as any, { docId, alt: emoji, url: url || '', size: 20, fontScaled: true, documentSources } as any)
+          : h(GlyphEmoji as any, { value: emoji, size: 20, fontScaled: true } as any)), span);
       } catch {}
       pos = r.end;
     }
@@ -91,10 +99,11 @@ function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, str
   }
 }
 
-export function TmdView({ text, foreignEntities, documentUrls, inactiveButtons, className = '', time, status, out, messageId, onOpenPhoto }: {
+export function TmdView({ text, foreignEntities, documentUrls, documentSources, inactiveButtons, className = '', time, status, out, messageId, onOpenPhoto }: {
   text: string;
   foreignEntities?: any[];
   documentUrls?: Record<number, string>;
+  documentSources?: Record<number | string, string>;
   inactiveButtons?: Record<string, true>;
   className?: string;
   time?: string;
@@ -105,9 +114,13 @@ export function TmdView({ text, foreignEntities, documentUrls, inactiveButtons, 
 }) {
   if (!text) return null;
 
+  const serverSaysCode = (foreignEntities ?? []).some(
+    (e: any) => e?._ === 'messageEntityPre' || e?._ === 'messageEntityCode',
+  );
+
   const html = useMemo(() => {
     try {
-      if (hasCommonTmd(text)) {
+      if (hasCommonTmd(text) && !serverSaysCode) {
         const out = renderCommonMark(text, { safe: true, entities: foreignEntities } as any);
         tmdLog.info('[TmdView] commonmark len=', text.length, 'htmlLen=', out.length);
         return out;
@@ -122,7 +135,7 @@ export function TmdView({ text, foreignEntities, documentUrls, inactiveButtons, 
       tmdLog.error('[TmdView] parse failed, falling back to plain:', e);
       return '';
     }
-  }, [text, foreignEntities]);
+  }, [text, foreignEntities, serverSaysCode]);
 
   const ref = useRef<HTMLDivElement | null>(null);
   const hasTime = typeof time === 'string' && time.length > 0;
@@ -130,30 +143,30 @@ export function TmdView({ text, foreignEntities, documentUrls, inactiveButtons, 
   if (!html) {
     if (hasTime) {
       return h('div', { class: 'tmd-body md-body' + (className ? ' ' + className : '') },
-        h(EmojiText as any, { text, entities: foreignEntities, documentUrls: documentUrls || {} } as any),
+        h(EmojiText as any, { text, entities: foreignEntities, documentUrls: documentUrls || {}, documentSources } as any),
         h('div', { class: 'tmd-body__footer' },
           h('span', { class: 'tmd-body__time' }, time!),
           out ? h(Checkmark as any, { status: status || 'sent', className: 'tmd-body__status' } as any) : null
         )
       );
     }
-    return h(EmojiText as any, { text, entities: foreignEntities, documentUrls: documentUrls || {} } as any);
+    return h(EmojiText as any, { text, entities: foreignEntities, documentUrls: documentUrls || {}, documentSources } as any);
   }
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    mountCustomEmojis(el, (documentUrls || {}) as any);
+    mountCustomEmojis(el, (documentUrls || {}) as any, documentSources);
 
-    requestAnimationFrame(() => mountStandardEmojis(el, (documentUrls || {}) as any));
-  }, [html]);
+    requestAnimationFrame(() => mountStandardEmojis(el, (documentUrls || {}) as any, documentSources));
+  }, [html, documentSources]);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    mountCustomEmojis(el, (documentUrls || {}) as any);
-    mountStandardEmojis(el, (documentUrls || {}) as any);
-  }, [documentUrls]);
+    mountCustomEmojis(el, (documentUrls || {}) as any, documentSources);
+    mountStandardEmojis(el, (documentUrls || {}) as any, documentSources);
+  }, [documentUrls, documentSources]);
 
   const handleTableClick = (e: any) => {
     try {

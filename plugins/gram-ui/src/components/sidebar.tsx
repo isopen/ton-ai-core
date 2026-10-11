@@ -59,6 +59,8 @@ function SidebarView({ state, dispatch }: { state: AppState; dispatch: Dispatch 
                   typingText={state.selectedPeer?.id === d.peer.id && state.selectedPeer?.type === d.peer.type ? '' : (state.typingByPeer[`${d.peer.type}_${d.peer.id}`] || '')}
                   selfUserId={state.selfUserId}
                   avatarSource={state.avatarSources?.[`${d.peer.type}_${d.peer.id}`]}
+                  documentUrls={state.documentUrls as Record<string, string>}
+                  documentSources={state.documentSources}
                   onClick={getDialogClick(d.peer)}
                 />
               ))
@@ -80,6 +82,8 @@ export const Sidebar = memo(SidebarView as ComponentType, (a, b) =>
   a.state.typingByPeer === b.state.typingByPeer &&
   a.state.selfUserId === b.state.selfUserId &&
   a.state.avatarSources === b.state.avatarSources &&
+  a.state.documentUrls === b.state.documentUrls &&
+  a.state.documentSources === b.state.documentSources &&
   a.state.langCode === b.state.langCode &&
   a.state.activeSkill === b.state.activeSkill &&
   a.state.pluginSkills === b.state.pluginSkills,

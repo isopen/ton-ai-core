@@ -2,6 +2,7 @@ import { h } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef } from '@ton-ai/atom/hooks';
 import { t, S } from '@ton-ai/gram-lang';
 import { requestPhoto } from './media-source.js';
+import { useNearViewport } from './use-near-viewport.js';
 
 function siteColor(site: string): string {
   let hash = 0;
@@ -44,26 +45,17 @@ export function WebPageBubble({ m, timeStr, out, status, sameSenderPrev, sameSen
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const wpPhoto = wp?.photo;
+  const { visible } = useNearViewport(() => rootRef.current, m.id);
   useEffect(() => {
-    if (hasImage) return;
-    const el = rootRef.current;
-    if (!el || !wpPhoto?.sizes?.length) return;
+    if (!visible || hasImage || !wpPhoto?.sizes?.length) return;
     const prio = ['m', 'x', 'y'];
-    const obs = new IntersectionObserver(([entry]) => {
-      if (!entry.isIntersecting) return;
-      let best: any;
-      for (const t of prio) {
-        best = wpPhoto.sizes.find((sz: any) => sz.type === t && !sz.url && !sz.src);
-        if (best) break;
-      }
-      if (best) {
-        requestPhoto(wpPhoto, m.id, { sizeType: best.type, tag: 'LinkPreview' });
-      }
-      obs.disconnect();
-    }, { rootMargin: '200px' });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [m.id, hasImage, wpPhoto]);
+    let best: any;
+    for (const t of prio) {
+      best = wpPhoto.sizes.find((sz: any) => sz.type === t && !sz.url && !sz.src);
+      if (best) break;
+    }
+    if (best) requestPhoto(wpPhoto, m.id, { sizeType: best.type, tag: 'LinkPreview' });
+  }, [visible, m.id, hasImage, wpPhoto]);
 
   const wpType = wp?.type || '';
   const isVideo = wpType === 'video' || wp?.embed_type === 'video' || wp?.embed_type === 'iframe';
