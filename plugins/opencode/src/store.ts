@@ -12,6 +12,34 @@ function oneRow<T>(db: DatabaseSync, sql: string, ...params: Array<string | numb
     return row ?? null;
 }
 
+function parseTodoInput(input: unknown): TodoRow[] {
+    if (typeof input !== 'string' || input.length === 0) return [];
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(input);
+    } catch {
+        return [];
+    }
+    if (!parsed || typeof parsed !== 'object') return [];
+    const list = (parsed as { todos?: unknown }).todos;
+    if (!Array.isArray(list)) return [];
+    const rows: TodoRow[] = [];
+    list.forEach((entry: unknown, index: number) => {
+        if (!entry || typeof entry !== 'object') return;
+        const record = entry as Record<string, unknown>;
+        const content = typeof record.content === 'string' ? record.content.trim() : '';
+        const status = typeof record.status === 'string' ? record.status : 'pending';
+        if (!content) return;
+        rows.push({
+            content,
+            status,
+            priority: typeof record.priority === 'string' ? record.priority : '',
+            position: rows.length + 1,
+        });
+    });
+    return rows;
+}
+
 export class OpencodeStore {
     private db: DatabaseSync;
     private ownsConnection: boolean;
@@ -43,6 +71,18 @@ export class OpencodeStore {
     }
 
     listSessions(directory?: string, limit = 20): SessionRow[] {
+        if (this.hasTable('session_v2')) {
+            const v2Columns = `id, title, directory, '' AS agent, COALESCE(model, '') AS model,
+                    time_created, time_updated, COALESCE(cost, 0) AS cost, COALESCE(tokens_input, 0) AS tokens_input,
+                    COALESCE(tokens_output, 0) AS tokens_output, COALESCE(tokens_reasoning, 0) AS tokens_reasoning`;
+            const v2Sql = directory
+                ? `SELECT ${v2Columns} FROM session_v2 WHERE directory = ? ORDER BY time_updated DESC LIMIT ?`
+                : `SELECT ${v2Columns} FROM session_v2 ORDER BY time_updated DESC LIMIT ?`;
+            const rows = directory
+                ? allRows<SessionRow>(this.db, v2Sql, directory, limit)
+                : allRows<SessionRow>(this.db, v2Sql, limit);
+            if (rows.length > 0) return rows;
+        }
         const columns = `id, title, directory, COALESCE(agent, '') AS agent, COALESCE(model, '') AS model,
                 time_created, time_updated, COALESCE(cost, 0) AS cost, COALESCE(tokens_input, 0) AS tokens_input,
                 COALESCE(tokens_output, 0) AS tokens_output, COALESCE(tokens_reasoning, 0) AS tokens_reasoning`;
@@ -57,12 +97,14 @@ export class OpencodeStore {
 
     readSessionParents(ids: string[]): Map<string, string> {
         const parents = new Map<string, string>();
-        if (ids.length === 0 || !this.hasTable('session')) return parents;
+        if (ids.length === 0) return parents;
+        const table = this.hasTable('session_v2') ? 'session_v2' : (this.hasTable('session') ? 'session' : null);
+        if (!table) return parents;
         try {
             const placeholders = ids.map(() => '?').join(', ');
             const rows = allRows<{ id: string; parent_id: string | null }>(
                 this.db,
-                `SELECT id, parent_id FROM session WHERE parent_id IS NOT NULL AND parent_id != '' AND id IN (${placeholders})`,
+                `SELECT id, parent_id FROM ${table} WHERE parent_id IS NOT NULL AND parent_id != '' AND id IN (${placeholders})`,
                 ...ids,
             );
             for (const row of rows) {
@@ -101,6 +143,31 @@ export class OpencodeStore {
     }
 
     readTodos(sessionId: string): TodoRow[] {
+        if (this.hasTable('session_message')) {
+            try {
+                const rows = allRows<{ input: string | null }>(
+                    this.db,
+                    `SELECT json_extract(j.value, '$.state.input') AS input
+                     FROM session_message AS sm, json_each(sm.data, '$.content') AS j
+                     WHERE sm.session_id = ? AND json_valid(sm.data) = 1
+                       AND json_extract(j.value, '$.type') = 'tool'
+                       AND json_extract(j.value, '$.name') = 'todowrite'
+                     ORDER BY sm.time_updated DESC
+                     LIMIT 1`,
+                    sessionId,
+                );
+                const todos = parseTodoInput(rows[0]?.input);
+                if (todos.length > 0) return todos;
+                const legacyEmpty = allRows<{ found: number }>(
+                    this.db,
+                    `SELECT 1 AS found FROM todo WHERE session_id = ? LIMIT 1`,
+                    sessionId,
+                );
+                if (legacyEmpty.length === 0) return [];
+            } catch {
+                return [];
+            }
+        }
         return allRows<TodoRow>(
             this.db,
             `SELECT content, status, priority, position FROM todo

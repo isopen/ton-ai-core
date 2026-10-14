@@ -2,6 +2,134 @@ import { strict as assert } from 'assert';
 import { DatabaseSync } from 'node:sqlite';
 import { OpencodeStore } from '../src/store';
 
+describe('opencode v2 store', () => {
+    function v2Db(): DatabaseSync {
+        const db = new DatabaseSync(':memory:');
+        db.exec(
+            `CREATE TABLE session (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, directory TEXT NOT NULL,
+                agent TEXT, model TEXT,
+                time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL,
+                cost REAL DEFAULT 0 NOT NULL, tokens_input INTEGER DEFAULT 0 NOT NULL,
+                tokens_output INTEGER DEFAULT 0 NOT NULL, tokens_reasoning INTEGER DEFAULT 0 NOT NULL
+            )`,
+        );
+        db.exec(
+            `CREATE TABLE session_v2 (
+                id TEXT PRIMARY KEY, project_id TEXT NOT NULL, workspace_id TEXT, parent_id TEXT,
+                title TEXT, directory TEXT, version TEXT NOT NULL,
+                cost REAL DEFAULT 0 NOT NULL, tokens_input INTEGER DEFAULT 0 NOT NULL,
+                tokens_output INTEGER DEFAULT 0 NOT NULL, tokens_reasoning INTEGER DEFAULT 0 NOT NULL,
+                model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL
+            )`,
+        );
+        db.exec(
+            `CREATE TABLE session_message (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL,
+                time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL
+            )`,
+        );
+        db.exec(
+            `CREATE TABLE todo (
+                session_id TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL,
+                priority TEXT NOT NULL, position INTEGER NOT NULL, time_created INTEGER NOT NULL,
+                time_updated INTEGER NOT NULL, PRIMARY KEY (session_id, position)
+            )`,
+        );
+        return db;
+    }
+
+    test('listSessions prefers the live session_v2 table over the frozen legacy one', () => {
+        const db = v2Db();
+        db.prepare('INSERT INTO session (id, title, directory, agent, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?)')
+            .run('legacy', 'Legacy row', '/repo', 'build', 100, 100);
+        db.prepare(
+            'INSERT INTO session_v2 (id, project_id, title, directory, version, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        ).run('v2', 'proj', 'Live row', '/repo', '2.0.29', 200, 500);
+        try {
+            const store = new OpencodeStore(db);
+            assert.deepEqual(JSON.parse(JSON.stringify(store.listSessions('/repo', 10))).map((s: { id: string }) => s.id), ['v2']);
+            assert.equal(store.listSessions('/repo', 10)[0].agent, '');
+        } finally {
+            db.close();
+        }
+    });
+
+    test('readSessionParents reads parents from session_v2', () => {
+        const db = v2Db();
+        db.prepare(
+            'INSERT INTO session_v2 (id, project_id, parent_id, title, directory, version, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        ).run('child', 'proj', 'root', 'Child', '/repo', '2.0.29', 100, 200);
+        try {
+            const store = new OpencodeStore(db);
+            assert.equal(store.readSessionParents(['child']).get('child'), 'root');
+        } finally {
+            db.close();
+        }
+    });
+
+    test('readTodos takes the plan from the newest todowrite part', () => {
+        const db = v2Db();
+        const older = {
+            time: { created: 100 },
+            content: [
+                { type: 'tool', name: 'todowrite', state: { status: 'completed', input: { todos: [{ content: 'old one', status: 'completed', priority: 'high' }] } } },
+            ],
+        };
+        const newer = {
+            time: { created: 200 },
+            content: [
+                { type: 'text', text: 'planning' },
+                {
+                    type: 'tool',
+                    name: 'todowrite',
+                    state: {
+                        status: 'completed',
+                        input: {
+                            todos: [
+                                { content: 'first', status: 'in_progress', priority: 'high' },
+                                { content: 'second', status: 'pending', priority: 'low' },
+                            ],
+                        },
+                    },
+                },
+                { type: 'tool', name: 'bash', state: { status: 'completed', input: { command: 'ls' } } },
+            ],
+        };
+        db.prepare('INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run('m1', 's1', 'assistant', 1, 100, 100, JSON.stringify(older));
+        db.prepare('INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run('m2', 's1', 'assistant', 2, 200, 200, JSON.stringify(newer));
+        db.prepare('INSERT INTO todo (session_id, content, status, priority, position, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run('s1', 'stale legacy row', 'pending', 'high', 1, 50, 50);
+        try {
+            const store = new OpencodeStore(db);
+            assert.deepEqual(store.readTodos('s1'), [
+                { content: 'first', status: 'in_progress', priority: 'high', position: 1 },
+                { content: 'second', status: 'pending', priority: 'low', position: 2 },
+            ]);
+        } finally {
+            db.close();
+        }
+    });
+
+    test('readTodos falls back to the legacy todo table when no todowrite part exists', () => {
+        const db = v2Db();
+        db.prepare('INSERT INTO todo (session_id, content, status, priority, position, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run('s1', 'legacy plan', 'pending', 'medium', 1, 50, 50);
+        db.prepare('INSERT INTO todo (session_id, content, status, priority, position, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run('s2', 'other plan', 'pending', 'medium', 1, 50, 50);
+        try {
+            const store = new OpencodeStore(db);
+            assert.equal(JSON.stringify(store.readTodos('s1')), JSON.stringify([{ content: 'legacy plan', status: 'pending', priority: 'medium', position: 1 }]));
+            assert.equal(JSON.stringify(store.readTodos('s2')), JSON.stringify([{ content: 'other plan', status: 'pending', priority: 'medium', position: 1 }]));
+            assert.equal(JSON.stringify(store.readTodos('ghost')), '[]');
+        } finally {
+            db.close();
+        }
+    });
+});
+
 describe('opencode store', () => {
     test('listSessions separates directories and orders by recency', () => {
         const db = new DatabaseSync(':memory:');

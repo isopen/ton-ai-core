@@ -141,6 +141,11 @@ export class OpencodePlugin extends BasePlugin<OpencodeConfig> {
         return this.skills.listModels();
     }
 
+    async deleteSession(sessionId: string): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.deleteSession(sessionId);
+    }
+
     async setModel(sessionId: string, model: { id: string; providerID: string }): Promise<boolean> {
         this.checkInitialized();
         return this.skills.setModel(sessionId, model);

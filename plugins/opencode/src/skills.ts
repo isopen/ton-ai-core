@@ -75,7 +75,7 @@ export class OpencodeSkills {
     private storeFailed: boolean = false;
     private storeErrorText: string | null = null;
     private modelLimits: Map<string, { limit: number | null; at: number }> = new Map();
-    private formKeys: Map<string, Array<{ key: string; multiple: boolean }>> = new Map();
+    private formKeys: Map<string, Array<{ key: string; multiple: boolean; values: Map<string, string> }>> = new Map();
     private cliRuns: Set<SpawnedProcess> = new Set();
     private eventSources: Set<AbortController> = new Set();
     private ensureInFlight: Promise<boolean> | null = null;
@@ -526,7 +526,7 @@ export class OpencodeSkills {
                 ? Object.values(rawFields)
                 : [];
         const questions: QuestionRequest['questions'] = [];
-        const keyed: Array<{ key: string; multiple: boolean }> = [];
+        const keyed: Array<{ key: string; multiple: boolean; values: Map<string, string> }> = [];
         for (const field of fields) {
             if (!field || typeof field !== 'object') continue;
             const key = typeof field.key === 'string' && field.key.length > 0 ? field.key : null;
@@ -539,16 +539,19 @@ export class OpencodeSkills {
                 continue;
             }
             const rawOptions = Array.isArray(field.options) ? field.options : field.values;
+            const values = new Map<string, string>();
             const options = Array.isArray(rawOptions)
                 ? rawOptions.flatMap((entry) => {
-                    if (typeof entry === 'string') return entry.length > 0 ? [{ label: entry }] : [];
+                    if (typeof entry === 'string') {
+                        if (entry.length === 0) return [];
+                        values.set(entry, entry);
+                        return [{ label: entry }];
+                    }
                     if (entry && typeof entry === 'object') {
-                        const label = typeof entry.label === 'string' && entry.label.length > 0
-                            ? entry.label
-                            : entry.value !== undefined
-                                ? String(entry.value)
-                                : '';
+                        const value = entry.value !== undefined && entry.value !== null ? String(entry.value) : '';
+                        const label = typeof entry.label === 'string' && entry.label.length > 0 ? entry.label : value;
                         if (!label) return [];
+                        values.set(label, value || label);
                         const option: { label: string; description?: string } = { label };
                         if (typeof entry.description === 'string' && entry.description.length > 0) {
                             option.description = entry.description;
@@ -564,7 +567,7 @@ export class OpencodeSkills {
                 options,
                 ...(type === 'multiselect' || field.multiple === true ? { multiple: true } : {}),
             });
-            keyed.push({ key, multiple: type === 'multiselect' || field.multiple === true });
+            keyed.push({ key, multiple: type === 'multiselect' || field.multiple === true, values });
         }
         if (questions.length === 0) return null;
         this.formKeys.set(`${sessionId}:${form.id}`, keyed);
@@ -578,7 +581,9 @@ export class OpencodeSkills {
             answers.forEach((labels, index) => {
                 const field = fields[index];
                 if (!field) return;
-                const picked = (labels || []).filter((label) => typeof label === 'string');
+                const picked = (labels || [])
+                    .filter((label) => typeof label === 'string')
+                    .map((label) => field.values.get(label) ?? label);
                 answer[field.key] = field.multiple ? picked : (picked[0] ?? '');
             });
             await this.request<unknown>(
@@ -602,6 +607,21 @@ export class OpencodeSkills {
                 'opencode renameSession',
                 undefined,
                 { method: 'PATCH', body: JSON.stringify({ title }) },
+            );
+            return true;
+        } catch (error) {
+            if (error instanceof OpencodeApiError && error.status === 404) return false;
+            throw error;
+        }
+    }
+
+    async deleteSession(sessionId: string): Promise<boolean> {
+        try {
+            await this.request<unknown>(
+                `/api/session/${encodeURIComponent(sessionId)}`,
+                'opencode deleteSession',
+                undefined,
+                { method: 'DELETE' },
             );
             return true;
         } catch (error) {

@@ -118,10 +118,25 @@ describe('opencode prompts and permissions', () => {
         const rules = [{ permission: 'edit', pattern: '*', action: 'ask' as const }];
         assert.equal(await skills.setSessionPermissions('ses_1', rules), true);
         assert.equal(seen[0].method, 'PATCH');
-        assert.ok(seen[0].url.endsWith('/session/ses_1'));
+        assert.ok(seen[0].url.endsWith('/api/session/ses_1'));
         assert.deepEqual(JSON.parse(seen[0].body), { permission: rules });
         globalThis.fetch = (async () => response(false, 404, { _tag: 'SessionNotFoundError' })) as typeof fetch;
         assert.equal(await skills.setSessionPermissions('ses_gone', rules), false);
+        skills.close();
+    });
+
+    test('deleteSession removes the session and reports a missing one as gone', async () => {
+        const seen: Array<{ url: string; method: string }> = [];
+        globalThis.fetch = (async (url: unknown, init: unknown) => {
+            seen.push({ url: String(url), method: String((init as { method?: string }).method || 'GET') });
+            return response(true, 204, {});
+        }) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        assert.equal(await skills.deleteSession('ses_1'), true);
+        assert.equal(seen[0].method, 'DELETE');
+        assert.ok(seen[0].url.endsWith('/api/session/ses_1'));
+        globalThis.fetch = (async () => response(false, 404, { _tag: 'SessionNotFoundError' })) as typeof fetch;
+        assert.equal(await skills.deleteSession('ses_gone'), false);
         skills.close();
     });
 
@@ -241,6 +256,43 @@ describe('opencode questions', () => {
         assert.deepEqual(JSON.parse(seen[0].body), { answer: { color: 'B', tags: ['x', 'y'] } });
         globalThis.fetch = (async () => response(false, 404, { _tag: 'FormNotFoundError' })) as typeof fetch;
         assert.equal(await skills.replyQuestion('ses_1', 'frm_gone', [['A']]), false);
+        skills.close();
+    });
+
+    test('replyQuestion maps a picked label back to the v2 option value', async () => {
+        const seen: Array<{ url: string; body: string }> = [];
+        globalThis.fetch = (async (url: unknown, init: unknown) => {
+            const target = String(url);
+            if (target.endsWith('/form')) {
+                return response(true, 200, {
+                    data: [
+                        {
+                            id: 'frm_1',
+                            sessionID: 'ses_1',
+                            fields: [
+                                {
+                                    key: 'plan',
+                                    title: 'Plan?',
+                                    type: 'select',
+                                    options: [
+                                        { label: 'Ship it', value: 'ship' },
+                                        { label: 'Wait', value: 'wait' },
+                                    ],
+                                },
+                                { key: 'tags', title: 'Tags', type: 'multiselect', options: [{ label: 'alpha', value: 'a' }, { label: 'beta', value: 'b' }] },
+                                { key: 'note', title: 'Note', type: 'text' },
+                            ],
+                        },
+                    ],
+                });
+            }
+            seen.push({ url: target, body: String((init as { body: string }).body) });
+            return response(true, 200, {});
+        }) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        await skills.listQuestions('ses_1');
+        await skills.replyQuestion('ses_1', 'frm_1', [['Ship it'], ['beta', 'alpha'], ['free text']]);
+        assert.deepEqual(JSON.parse(seen[0].body), { answer: { plan: 'ship', tags: ['b', 'a'], note: 'free text' } });
         skills.close();
     });
 
