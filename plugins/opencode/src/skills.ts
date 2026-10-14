@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { PluginContext } from '@ton-ai/core';
 import { OpencodeStore } from './store';
@@ -6,6 +7,9 @@ import { parseServeTarget, serveArgs, ServeTarget, SpawnedProcess, SpawnFn } fro
 import { mapPart, mapSessionMessage, normalizeSessionApi } from './projector';
 import {
     ContextSnapshot,
+    FormApiField,
+    FormApiInfo,
+    FormApiList,
     ModelApiInfo,
     ModelApiList,
     OpencodeConfig,
@@ -39,8 +43,8 @@ function isPermanentStatus(status: number): boolean {
     return status === 400 || status === 401 || status === 403 || status === 404;
 }
 
-function defaultSpawn(command: string, args: string[]): SpawnedProcess {
-    const child = spawn(command, args, { stdio: 'ignore' });
+function defaultSpawn(command: string, args: string[], opts?: { env?: Record<string, string | undefined> }): SpawnedProcess {
+    const child = spawn(command, args, { stdio: 'ignore', env: { ...process.env, ...opts?.env } });
     return {
         pid: child.pid,
         kill: (signal?: string) => child.kill(signal as NodeJS.Signals | undefined),
@@ -60,6 +64,8 @@ export class OpencodeSkills {
     private dbPath: string;
     private autoServe: boolean;
     private binPath: string;
+    private serverUsername: string;
+    private serverPassword: string;
     private spawnFn: SpawnFn;
     private serverProcess: SpawnedProcess | null = null;
     private ownsServer: boolean = false;
@@ -69,6 +75,7 @@ export class OpencodeSkills {
     private storeFailed: boolean = false;
     private storeErrorText: string | null = null;
     private modelLimits: Map<string, { limit: number | null; at: number }> = new Map();
+    private formKeys: Map<string, Array<{ key: string; multiple: boolean }>> = new Map();
     private cliRuns: Set<SpawnedProcess> = new Set();
     private eventSources: Set<AbortController> = new Set();
     private ensureInFlight: Promise<boolean> | null = null;
@@ -82,6 +89,8 @@ export class OpencodeSkills {
         this.dbPath = config.dbPath || '';
         this.autoServe = config.autoServe ?? true;
         this.binPath = config.binPath || 'opencode';
+        this.serverUsername = config.serverUsername || process.env.OPENCODE_SERVER_USERNAME || 'opencode';
+        this.serverPassword = config.serverPassword || process.env.OPENCODE_SERVER_PASSWORD || '';
         this.spawnFn = spawnFn || defaultSpawn;
     }
 
@@ -95,6 +104,8 @@ export class OpencodeSkills {
         this.maxRetries = config.maxRetries ?? 2;
         this.autoServe = config.autoServe ?? true;
         this.binPath = config.binPath || 'opencode';
+        if (config.serverUsername !== undefined) this.serverUsername = config.serverUsername;
+        if (config.serverPassword) this.serverPassword = config.serverPassword;
         if (targetChanged) this.stopServer();
         if (config.dbPath !== this.dbPath) {
             this.closeStore();
@@ -123,7 +134,12 @@ export class OpencodeSkills {
     }
 
     async health(): Promise<boolean> {
-        await this.request<unknown>('/api/health', 'opencode health');
+        try {
+            await this.request<unknown>('/api/health', 'opencode health');
+        } catch (error) {
+            if (!(error instanceof OpencodeApiError) || error.status !== 404) throw error;
+            await this.request<unknown>('/api/session', 'opencode health', { limit: '1' });
+        }
         this.ready = true;
         return true;
     }
@@ -139,11 +155,22 @@ export class OpencodeSkills {
         }
     }
 
+    private authHeader(): Record<string, string> {
+        if (!this.serverPassword) return {};
+        return { Authorization: `Basic ${Buffer.from(`${this.serverUsername}:${this.serverPassword}`).toString('base64')}` };
+    }
+
     private async ensureServerInternal(startTimeoutMs: number): Promise<boolean> {
         try {
             await this.health();
             return true;
-        } catch {
+        } catch (error) {
+            if (error instanceof OpencodeApiError && error.status === 401 && !this.serverPassword) {
+                this.context.logger.warn(
+                    'opencode server requires authentication (HTTP 401). Set OPENCODE_SERVER_PASSWORD ' +
+                    'to the password of the server you connect to; a server started by this plugin uses it automatically.',
+                );
+            }
             if (!this.autoServe) return false;
         }
         const target = parseServeTarget(this.baseUrl);
@@ -209,7 +236,11 @@ export class OpencodeSkills {
         this.stopServer();
         const args = serveArgs(target);
         this.context.logger.info(`starting opencode server: ${this.binPath} ${args.join(' ')}`);
-        const child = this.spawnFn(this.binPath, args);
+        if (!this.serverPassword) {
+            this.serverPassword = randomBytes(16).toString('hex');
+            this.context.logger.info('generated a password for the managed opencode server');
+        }
+        const child = this.spawnFn(this.binPath, args, { env: { OPENCODE_SERVER_PASSWORD: this.serverPassword } });
         child.on('error', (cause: unknown) => {
             this.serverError = cause instanceof Error ? cause.message : String(cause);
         });
@@ -332,7 +363,7 @@ export class OpencodeSkills {
                 `/api/session/${encodeURIComponent(sessionId)}/prompt`,
                 'opencode sendPrompt',
                 undefined,
-                { method: 'POST', body: JSON.stringify({ prompt: { text } }) },
+                { method: 'POST', body: JSON.stringify({ text }) },
             );
             return { admitted: true, busy: false, messageId: admitted.data?.id };
         } catch (error) {
@@ -348,7 +379,7 @@ export class OpencodeSkills {
         try {
             response = await fetch(this.buildUrl(`/api/session/${encodeURIComponent(sessionId)}/interrupt`), {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...this.authHeader() },
                 signal: AbortSignal.timeout(this.timeoutMs),
             });
         } catch (error) {
@@ -412,7 +443,7 @@ export class OpencodeSkills {
 
     private async readEventStream(handler: (event: OpencodeServerEvent) => void, signal: AbortSignal): Promise<void> {
         const response = await fetch(`${this.baseUrl}/api/event`, {
-            headers: { Accept: 'text/event-stream' },
+            headers: { Accept: 'text/event-stream', ...this.authHeader() },
             signal,
         });
         if (!response.ok || !response.body) {
@@ -473,28 +504,90 @@ export class OpencodeSkills {
     }
 
     async listQuestions(sessionId: string): Promise<QuestionRequest[]> {
-        const list = await this.request<{ data: QuestionRequest[] }>(
-            `/api/session/${encodeURIComponent(sessionId)}/question`,
-            'opencode listQuestions',
+        const list = await this.request<FormApiList>(
+            `/api/session/${encodeURIComponent(sessionId)}/form`,
+            'opencode listForms',
         );
         if (!Array.isArray(list.data)) return [];
-        return list.data.filter(
-            (item): item is QuestionRequest =>
-                !!item &&
-                typeof item.id === 'string' &&
-                typeof item.sessionID === 'string' &&
-                Array.isArray(item.questions),
-        );
+        const out: QuestionRequest[] = [];
+        for (const form of list.data) {
+            const request = this.normalizeForm(sessionId, form);
+            if (request) out.push(request);
+        }
+        return out;
+    }
+
+    private normalizeForm(sessionId: string, form: FormApiInfo): QuestionRequest | null {
+        if (!form || typeof form.id !== 'string' || form.id.length === 0) return null;
+        const rawFields = form.fields;
+        const fields: FormApiField[] = Array.isArray(rawFields)
+            ? rawFields
+            : rawFields && typeof rawFields === 'object'
+                ? Object.values(rawFields)
+                : [];
+        const questions: QuestionRequest['questions'] = [];
+        const keyed: Array<{ key: string; multiple: boolean }> = [];
+        for (const field of fields) {
+            if (!field || typeof field !== 'object') continue;
+            const key = typeof field.key === 'string' && field.key.length > 0 ? field.key : null;
+            if (!key) continue;
+            const title = typeof field.title === 'string' && field.title.length > 0 ? field.title : key;
+            const type = typeof field.type === 'string' ? field.type : '';
+            if (type !== '' && type !== 'select' && type !== 'multiselect' && type !== 'text'
+                && type !== 'boolean' && type !== 'number' && type !== 'integer' && type !== 'external') {
+                this.context.logger.debug(`opencode form field type not mapped: ${type}`);
+                continue;
+            }
+            const rawOptions = Array.isArray(field.options) ? field.options : field.values;
+            const options = Array.isArray(rawOptions)
+                ? rawOptions.flatMap((entry) => {
+                    if (typeof entry === 'string') return entry.length > 0 ? [{ label: entry }] : [];
+                    if (entry && typeof entry === 'object') {
+                        const label = typeof entry.label === 'string' && entry.label.length > 0
+                            ? entry.label
+                            : entry.value !== undefined
+                                ? String(entry.value)
+                                : '';
+                        if (!label) return [];
+                        const option: { label: string; description?: string } = { label };
+                        if (typeof entry.description === 'string' && entry.description.length > 0) {
+                            option.description = entry.description;
+                        }
+                        return [option];
+                    }
+                    return [];
+                })
+                : [];
+            questions.push({
+                ...(typeof field.description === 'string' && field.description.length > 0 ? { header: field.description } : {}),
+                question: title,
+                options,
+                ...(type === 'multiselect' || field.multiple === true ? { multiple: true } : {}),
+            });
+            keyed.push({ key, multiple: type === 'multiselect' || field.multiple === true });
+        }
+        if (questions.length === 0) return null;
+        this.formKeys.set(`${sessionId}:${form.id}`, keyed);
+        return { id: form.id, sessionID: form.sessionID || sessionId, questions };
     }
 
     async replyQuestion(sessionId: string, requestId: string, answers: string[][]): Promise<boolean> {
         try {
+            const fields = this.formKeys.get(`${sessionId}:${requestId}`) ?? [];
+            const answer: Record<string, string | string[]> = {};
+            answers.forEach((labels, index) => {
+                const field = fields[index];
+                if (!field) return;
+                const picked = (labels || []).filter((label) => typeof label === 'string');
+                answer[field.key] = field.multiple ? picked : (picked[0] ?? '');
+            });
             await this.request<unknown>(
-                `/api/session/${encodeURIComponent(sessionId)}/question/${encodeURIComponent(requestId)}/reply`,
-                'opencode replyQuestion',
+                `/api/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(requestId)}/reply`,
+                'opencode replyForm',
                 undefined,
-                { method: 'POST', body: JSON.stringify({ answers }) },
+                { method: 'POST', body: JSON.stringify({ answer }) },
             );
+            this.formKeys.delete(`${sessionId}:${requestId}`);
             return true;
         } catch (error) {
             if (error instanceof OpencodeApiError && error.status === 404) return false;
@@ -505,7 +598,7 @@ export class OpencodeSkills {
     async renameSession(sessionId: string, title: string): Promise<boolean> {
         try {
             await this.request<unknown>(
-                `/session/${encodeURIComponent(sessionId)}`,
+                `/api/session/${encodeURIComponent(sessionId)}`,
                 'opencode renameSession',
                 undefined,
                 { method: 'PATCH', body: JSON.stringify({ title }) },
@@ -526,7 +619,7 @@ export class OpencodeSkills {
     async setSessionPermissions(sessionId: string, rules: SessionPermissionRule[]): Promise<boolean> {
         try {
             await this.request<unknown>(
-                `/session/${encodeURIComponent(sessionId)}`,
+                `/api/session/${encodeURIComponent(sessionId)}`,
                 'opencode setSessionPermissions',
                 undefined,
                 { method: 'PATCH', body: JSON.stringify({ permission: rules }) },
@@ -632,7 +725,7 @@ export class OpencodeSkills {
             try {
                 response = await fetch(url, {
                     method,
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', ...this.authHeader() },
                     body: init?.body,
                     signal: AbortSignal.timeout(this.timeoutMs),
                 });

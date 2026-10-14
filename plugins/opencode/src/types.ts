@@ -6,6 +6,8 @@ export interface OpencodeConfig extends BasePluginConfig {
     dbPath: string;
     autoServe: boolean;
     binPath: string;
+    serverUsername?: string;
+    serverPassword?: string;
     cliFallback?: boolean;
     cliFirst?: boolean;
 }
@@ -214,6 +216,27 @@ export interface QuestionRequest {
     questions: QuestionItem[];
 }
 
+export interface FormApiField {
+    key?: string;
+    title?: string;
+    description?: string;
+    type?: string;
+    options?: Array<string | { label?: string; value?: unknown; description?: string }>;
+    values?: Array<string | { label?: string; value?: unknown; description?: string }>;
+    multiple?: boolean;
+}
+
+export interface FormApiInfo {
+    id: string;
+    sessionID: string;
+    title?: string;
+    fields?: FormApiField[] | Record<string, FormApiField>;
+}
+
+export interface FormApiList {
+    data: FormApiInfo[];
+}
+
 export type PermissionDecision = 'once' | 'always' | 'reject';
 
 export type SessionPermissionAction = 'ask' | 'allow' | 'deny';
@@ -226,6 +249,7 @@ export interface SessionPermissionRule {
 
 export interface OpencodeServerError {
     name?: string;
+    type?: string;
     message?: string;
     data?: { message?: string };
 }
@@ -233,7 +257,14 @@ export interface OpencodeServerError {
 export interface OpencodeServerEvent {
     id?: string;
     type: string;
-    properties: {
+    properties?: {
+        sessionID?: string;
+        error?: OpencodeServerError | string;
+        status?: unknown;
+    };
+    sessionID?: string;
+    error?: OpencodeServerError | string;
+    data?: {
         sessionID?: string;
         error?: OpencodeServerError | string;
         status?: unknown;

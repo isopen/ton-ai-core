@@ -50,10 +50,16 @@ describe('opencode prompts and permissions', () => {
     });
 
     test('sendPrompt admits and returns message id', async () => {
-        globalThis.fetch = (async () => response(true, 200, { data: { id: 'msg_1' } })) as typeof fetch;
+        const seen: Array<{ url: string; body: string }> = [];
+        globalThis.fetch = (async (url: unknown, init: unknown) => {
+            seen.push({ url: String(url), body: String((init as { body: string }).body) });
+            return response(true, 200, { data: { id: 'msg_1' } });
+        }) as typeof fetch;
         const skills = new OpencodeSkills(stubContext(), config());
         const receipt = await skills.sendPrompt('ses_1', 'hello');
         assert.deepEqual(receipt, { admitted: true, busy: false, messageId: 'msg_1' });
+        assert.ok(seen[0].url.endsWith('/api/session/ses_1/prompt'));
+        assert.deepEqual(JSON.parse(seen[0].body), { text: 'hello' });
         skills.close();
     });
 
@@ -143,31 +149,98 @@ describe('opencode questions', () => {
         globalThis.fetch = realFetch;
     });
 
-    test('listQuestions filters shaped requests', async () => {
+    test('listQuestions normalizes v2 forms into shaped requests', async () => {
         const payload = {
             data: [
-                { id: 'que_1', sessionID: 'ses_1', questions: [{ header: 'H', question: 'Q?', options: [{ label: 'A' }] }] },
+                {
+                    id: 'frm_1',
+                    sessionID: 'ses_1',
+                    title: 'Pick one',
+                    fields: [
+                        { key: 'color', title: 'Color?', type: 'select', options: [{ label: 'Red' }, { label: 'Blue', description: 'Cool' }] },
+                        { key: 'note', title: 'Note', type: 'text' },
+                        { type: 'select', options: [] },
+                    ],
+                },
                 { id: 7, sessionID: 'ses_1' },
             ],
         };
         globalThis.fetch = (async () => response(true, 200, payload)) as typeof fetch;
         const skills = new OpencodeSkills(stubContext(), config());
-        assert.deepEqual(await skills.listQuestions('ses_1'), [payload.data[0]]);
+        assert.deepEqual(await skills.listQuestions('ses_1'), [
+            {
+                id: 'frm_1',
+                sessionID: 'ses_1',
+                questions: [
+                    { question: 'Color?', options: [{ label: 'Red' }, { label: 'Blue', description: 'Cool' }] },
+                    { question: 'Note', options: [] },
+                ],
+            },
+        ]);
         skills.close();
     });
 
-    test('replyQuestion posts answers and maps missing to false', async () => {
+    test('listQuestions accepts record-shaped fields and multiselect flags', async () => {
+        const payload = {
+            data: [
+                {
+                    id: 'frm_2',
+                    sessionID: 'ses_1',
+                    fields: {
+                        first: { key: 'tags', title: 'Tags', type: 'multiselect', options: ['a', 'b'] },
+                    },
+                },
+            ],
+        };
+        globalThis.fetch = (async () => response(true, 200, payload)) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        assert.deepEqual(await skills.listQuestions('ses_1'), [
+            {
+                id: 'frm_2',
+                sessionID: 'ses_1',
+                questions: [{ question: 'Tags', options: [{ label: 'a' }, { label: 'b' }], multiple: true }],
+            },
+        ]);
+        skills.close();
+    });
+
+    test('replyQuestion posts an answer record and maps missing to false', async () => {
         const seen: Array<{ url: string; body: string }> = [];
         globalThis.fetch = (async (url: unknown, init: unknown) => {
-            seen.push({ url: String(url), body: String((init as { body: string }).body) });
+            const target = String(url);
+            if (target.endsWith('/form')) {
+                return response(true, 200, {
+                    data: [
+                        {
+                            id: 'frm_1',
+                            sessionID: 'ses_1',
+                            fields: [
+                                { key: 'color', title: 'Color?', type: 'select', options: [{ label: 'A' }, { label: 'B' }] },
+                                { key: 'tags', title: 'Tags', type: 'multiselect', options: ['x', 'y'] },
+                            ],
+                        },
+                    ],
+                });
+            }
+            seen.push({ url: target, body: String((init as { body: string }).body) });
             return response(true, 200, {});
         }) as typeof fetch;
         const skills = new OpencodeSkills(stubContext(), config());
-        assert.equal(await skills.replyQuestion('ses_1', 'que_1', [['A', 'B']]), true);
-        assert.ok(seen[0].url.endsWith('/api/session/ses_1/question/que_1/reply'));
-        assert.deepEqual(JSON.parse(seen[0].body), { answers: [['A', 'B']] });
-        globalThis.fetch = (async () => response(false, 404, { _tag: 'QuestionV2.NotFoundError' })) as typeof fetch;
-        assert.equal(await skills.replyQuestion('ses_1', 'que_gone', [['A']]), false);
+        assert.deepEqual(await skills.listQuestions('ses_1'), [
+            {
+                id: 'frm_1',
+                sessionID: 'ses_1',
+                questions: [
+                    { question: 'Color?', options: [{ label: 'A' }, { label: 'B' }] },
+                    { question: 'Tags', options: [{ label: 'x' }, { label: 'y' }], multiple: true },
+                ],
+            },
+        ]);
+        assert.equal(await skills.replyQuestion('ses_1', 'frm_1', [['B'], ['x', 'y']]), true);
+        assert.ok(seen[0].url.endsWith('/api/session/ses_1/form/frm_1/reply'));
+        assert.deepEqual(JSON.parse(seen[0].body), { answer: { color: 'B', tags: ['x', 'y'] } });
+        globalThis.fetch = (async () => response(false, 404, { _tag: 'FormNotFoundError' })) as typeof fetch;
+        assert.equal(await skills.replyQuestion('ses_1', 'frm_gone', [['A']]), false);
         skills.close();
     });
 

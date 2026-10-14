@@ -28,6 +28,8 @@ export class OpencodePlugin extends BasePlugin<OpencodeConfig> {
             dbPath: process.env.OPENCODE_DB_PATH || '',
             autoServe: process.env.OPENCODE_AUTO_SERVE !== '0',
             binPath: process.env.OPENCODE_BIN || 'opencode',
+            serverUsername: process.env.OPENCODE_SERVER_USERNAME || 'opencode',
+            serverPassword: process.env.OPENCODE_SERVER_PASSWORD || '',
         };
     }
 

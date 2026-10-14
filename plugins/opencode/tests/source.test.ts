@@ -267,8 +267,7 @@ describe('opencode single source', () => {
             const skills = new OpencodeSkills(stubContext(), config(path));
             assert.equal(await skills.renameSession('ses_1', 'New title'), true);
             assert.equal(seen.length, 1);
-            assert.ok(seen[0].url.endsWith('/session/ses_1'));
-            assert.ok(!seen[0].url.includes('/api/session/ses_1'));
+            assert.ok(seen[0].url.endsWith('/api/session/ses_1'));
             assert.equal(seen[0].method, 'PATCH');
             assert.deepEqual(JSON.parse(seen[0].body), { title: 'New title' });
             skills.close();

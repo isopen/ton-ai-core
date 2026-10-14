@@ -12,7 +12,7 @@ export interface SpawnedProcess {
     on(event: string, listener: (...args: Array<unknown>) => void): void;
 }
 
-export type SpawnFn = (command: string, args: string[]) => SpawnedProcess;
+export type SpawnFn = (command: string, args: string[], opts?: { env?: Record<string, string | undefined> }) => SpawnedProcess;
 
 export function parseServeTarget(baseUrl: string): ServeTarget {
     try {

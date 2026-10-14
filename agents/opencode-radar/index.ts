@@ -87,6 +87,8 @@ const config: OpencodeRadarConfig = {
         dbPath: process.env.RADAR_DB_PATH || join(homedir(), '.local', 'share', 'opencode', 'opencode.db'),
         autoServe: optionalFlag('OPENCODE_AUTO_SERVE', true),
         binPath: process.env.OPENCODE_BIN || 'opencode',
+        serverUsername: process.env.OPENCODE_SERVER_USERNAME || 'opencode',
+        serverPassword: process.env.OPENCODE_SERVER_PASSWORD || '',
         cliFallback: optionalFlag('OPENCODE_CLI_FALLBACK', true),
         cliFirst: optionalFlag('RADAR_CLI_FIRST', false),
     },
