@@ -314,7 +314,7 @@ test('auto-finish announces the stop so the user knows the session closed', asyn
         assert.equal(state.finalized, true);
     });
 
-test('the Stop button stays armed after auto-finish', async () => {
+test('auto-finish hides the Stop button in the pin', async () => {
         const agent = makeAgent();
         const calls: Array<{ op: string; text: string }> = [];
         const telegram = telegramStub(calls);
@@ -341,8 +341,8 @@ test('the Stop button stays armed after auto-finish', async () => {
         assert.equal(state.finalized, true, 'auto-finish still closes the turn');
         assert.equal(
             (agent as unknown as { wantStopButton: (s: unknown) => boolean }).wantStopButton(state),
-            true,
-            'Stop must stay available so the user can still stop the session',
+            false,
+            'a finished session has nothing left to stop, so the Stop button must go away',
         );
     });
 

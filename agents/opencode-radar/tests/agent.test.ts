@@ -558,26 +558,30 @@ describe('radar console feed', () => {
         }
     });
 
-    test('deleted topic is recreated on next send', async () => {
+    test('deleted topic deletes the session instead of being recreated', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls, setSendImpl } = stubTelegram();
+        const deleted: string[] = [];
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' || name === 'telegram'
+                ? telegram
+                : { deleteSession: async (id: string) => { deleted.push(id); return true; } };
         const state = (await agent.attachSession(telegram, SESSION)) as unknown as AnyState;
         assert.equal(state.threadId, 8);
         (state as unknown as { promptQueue: string[] }).promptQueue = ['run it'];
-        let failedOnce = false;
-        setSendImpl((params) => {
-            const thread = params.message_thread_id;
-            if (!failedOnce && thread === 8) {
-                failedOnce = true;
-                return Promise.reject(new Error('Bad Request: message thread not found'));
-            }
-            return Promise.resolve({ message_id: 500 });
-        });
+        setSendImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
         state.pending = [{ kind: 'text', text: 'after delete', time: now }];
         await agent.flushEvents(telegram, state);
         const ops = calls.map((c) => c.op);
-        assert.deepEqual(ops, ['create', 'send', 'pin', 'send', 'create', 'send']);
-        assert.equal(state.threadId, 9);
+        assert.deepEqual(ops, ['create', 'send', 'pin', 'send'], 'a deleted topic must not be recreated');
+        assert.equal(state.threadId, null);
+        assert.deepEqual(deleted, [SESSION.id], 'the opencode session must be deleted');
+        assert.equal(
+            calls.filter((c) => c.op === 'send' && (c.params as Record<string, unknown>).message_thread_id === undefined).length,
+            0,
+            'nothing may be posted into General',
+        );
+        assert.equal((state as { pending: unknown[] }).pending.length, 0, 'a deleted session takes its pending events with it');
     });
 
     test('long message is delivered in several parts', async () => {
@@ -1708,29 +1712,85 @@ describe('radar typing progress', () => {
         assert.equal((typing[1].params as Record<string, unknown>).chat_id, 1);
     });
 
-    test('deleted topic heals on typing retry', async () => {
+    test('deleted topic deletes the session on typing instead of healing', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls, setTypingImpl } = stubTelegram();
+        const deleted: string[] = [];
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' || name === 'telegram'
+                ? telegram
+                : { deleteSession: async (id: string) => { deleted.push(id); return true; } };
         const state = (await agent.attachSession(telegram, SESSION)) as unknown as {
             threadId: number | null;
             lastTypingAt: number;
         };
         assert.equal(state.threadId, 8);
         (state as unknown as { promptQueue: string[] }).promptQueue = ['run it'];
-        let failedOnce = false;
-        setTypingImpl((params: Record<string, unknown>) => {
-            if (!failedOnce && params.message_thread_id === 8) {
-                failedOnce = true;
-                return Promise.reject(new Error('Bad Request: message thread not found'));
-            }
-            return Promise.resolve(true);
-        });
+        setTypingImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
         await agent.sendProgressTyping(telegram, state);
-        assert.equal(state.threadId, 9);
-        const typing = calls.filter((c) => c.op === 'typing');
-        assert.equal(typing.length, 2);
-        assert.equal((typing[1].params as Record<string, unknown>).message_thread_id, 9);
-        assert.equal(state.lastTypingAt, now);
+        assert.equal(state.threadId, null, 'a deleted topic is not recreated on typing');
+        assert.equal(state.lastTypingAt, 0, 'no typing is sent to a deleted topic');
+        assert.deepEqual(deleted, [SESSION.id], 'the opencode session must be deleted');
+        assert.equal(
+            calls.filter((c) => c.op === 'typing').length,
+            1,
+            'the typing action is not retried in a fresh topic',
+        );
+        assert.equal(
+            calls.filter((c) => c.op === 'typing' && (c.params as Record<string, unknown>).message_thread_id === undefined).length,
+            0,
+            'nothing may be posted into General',
+        );
+    });
+
+    test('every thread-gone branch deletes the session instead of recreating the topic', async () => {
+        for (const entryPoint of ['send', 'typing', 'context'] as const) {
+            const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+                watched: Map<string, unknown>;
+            };
+            const { telegram, calls, setSendImpl, setTypingImpl, setEditImpl } = stubTelegram();
+            const deleted: string[] = [];
+            (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+                name === 'telegram-bot-api' || name === 'telegram'
+                    ? telegram
+                    : { deleteSession: async (id: string) => { deleted.push(id); return true; } };
+            const gone = new Error('Bad Request: message thread not found');
+            const state = (await agent.attachSession(telegram, SESSION)) as unknown as AnyState & {
+                threadId: number | null;
+                lastContextEditAt: number;
+                contextMessageId: number | null;
+            };
+            agent.watched.set(SESSION.id, state);
+            calls.length = 0;
+            state.contextMessageId = 42;
+            (state as unknown as { promptQueue: string[] }).promptQueue = ['run it'];
+            state.lastContextEditAt = 0;
+            if (entryPoint === 'send') {
+                setSendImpl(() => Promise.reject(gone));
+                state.pending = [{ kind: 'text', text: 'after delete', time: now }];
+                await agent.flushEvents(telegram, state);
+            } else if (entryPoint === 'typing') {
+                setTypingImpl(() => Promise.reject(gone));
+                await agent.sendProgressTyping(telegram, state);
+            } else {
+                state.session = { ...SESSION, tokens_input: 777 };
+                setEditImpl(() => Promise.reject(gone));
+                await agent.updateContext(telegram, state);
+            }
+            assert.deepEqual(deleted, [SESSION.id], `${entryPoint}: the opencode session must be deleted`);
+            assert.equal(state.threadId, null, `${entryPoint}: the gone topic must not be recreated`);
+            assert.equal(agent.watched.has(SESSION.id), false, `${entryPoint}: the session must stop being watched`);
+            assert.equal(
+                calls.filter((c) => c.op === 'create').length,
+                0,
+                `${entryPoint}: no replacement topic may be created`,
+            );
+            assert.equal(
+                calls.filter((c) => c.op === 'send' && (c.params as Record<string, unknown>).message_thread_id === undefined).length,
+                0,
+                `${entryPoint}: nothing may be posted into General`,
+            );
+        }
     });
 });
 
@@ -4044,6 +4104,45 @@ describe('radar stop control', () => {
         };
     }
 
+    test('auto-finish hides the stop button in the pinned message', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & {
+            contextMessageId: number | null;
+            stopMessageId: number | null;
+            stopControlText: string | null;
+            lastText: string;
+            turnComplete: boolean;
+            stoppedAt: number;
+        };
+        state.contextMessageId = 5;
+        state.lastText = 'The task is done.';
+        state.turnComplete = true;
+        state.stoppedAt = 0;
+        await agent.syncStopKeyboard(telegram, state);
+        assert.equal(state.stopButtonOn, true, 'a working session shows the button');
+
+        state.turnComplete = true;
+        await (agent as unknown as {
+            autoFinishIfDone: (t: unknown, s: unknown) => Promise<boolean>;
+        }).autoFinishIfDone(telegram, state);
+
+        assert.equal(state.stopButtonOn, false, 'auto-finish must hide the stop button');
+        assert.equal(state.stopMessageId, null, 'auto-finish must drop the stop control');
+        const cleared = calls.filter(
+            (c) => c.op === 'markup'
+                && JSON.stringify((c.params as { reply_markup?: unknown }).reply_markup) === '{"inline_keyboard":[]}',
+        );
+        assert.ok(cleared.length >= 1, `the button must be cleared, got ${JSON.stringify(calls.filter((c) => c.op === 'markup'))}`);
+        const notice = calls
+            .filter((c) => c.op === 'send')
+            .map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(notice.some((text) => text.includes('Stopped, send the task again.')), `the stop notice must be sent, got ${JSON.stringify(notice)}`);
+
+        await agent.syncStopKeyboard(telegram, state);
+        assert.equal(state.stopButtonOn, false, 'the button must stay hidden while the session stays finished');
+    });
+
     test('stop command interrupts the server and clears local work', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -4740,6 +4839,37 @@ describe('radar model error wording', () => {
         assert.ok(notice!.includes('OpenCode\'s free tier can only be used from within OpenCode.'), notice!);
     });
 
+    test('a provider failure arrives as session.execution.failed and reaches the chat', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await agent.attachSession(telegram, SESSION)) as unknown as {
+            serverErrorText: string | null;
+        };
+        agent.watched.set(SESSION.id, state);
+        const failure = (type: string) => ({
+            id: 'evt_13aed5770001oUXZHUWxsJU1oP',
+            type,
+            durable: { aggregateID: SESSION.id, seq: 324, version: 2 },
+            data: {
+                timestamp: 1791989995376,
+                sessionID: SESSION.id,
+                assistantMessageID: 'msg_1',
+                error: { type: 'provider.no-route', message: 'Model unavailable: opencode/nope-model' },
+            },
+        }) as unknown as Parameters<typeof serverEventSessionId>[0];
+        for (const type of ['session.execution.failed', 'session.step.failed']) {
+            state.serverErrorText = null;
+            await agent.handleServerEvent(telegram, failure(type));
+            assert.equal(state.serverErrorText, 'Model unavailable: opencode/nope-model', `${type} must be recorded`);
+        }
+        const notice = calls
+            .filter((c) => c.op === 'send')
+            .map((c) => String((c.params as Record<string, unknown>).text))
+            .find((text) => text.includes('opencode error'));
+        assert.ok(notice !== undefined, 'the reason must reach the chat');
+        assert.ok(notice!.includes('Model unavailable'), notice!);
+    });
+
     test('an aborted step is not reported as a model error', () => {
         assert.equal(isAbortedServerError({ type: 'aborted' }), true);
         assert.equal(isAbortedServerError({ name: 'MessageAbortedError' }), true);
@@ -4914,6 +5044,106 @@ describe('radar poll resilience', () => {
         assert.equal(isTopicNotModifiedError(new Error('Too Many Requests: retry after 5')), false);
         assert.equal(isTopicNotModifiedError(new Error('message thread not found')), false);
         assert.equal(isTopicNotModifiedError(null), false);
+    });
+});
+
+describe('radar topic probe', () => {
+    let now = 2000000;
+
+    beforeEach(() => {
+        now = 2000000;
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    test('the poll loop probes watched topics so a deleted one is caught without a restart', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            getPlugin: (name: string) => unknown;
+            watched: Map<string, unknown>;
+        };
+        const { telegram, setTypingImpl } = stubTelegram();
+        const deleted: string[] = [];
+        const state = (await agent.attachSession(telegram, { ...SESSION, id: 'ses_probe' })) as unknown as {
+            threadId: number | null;
+        };
+        agent.watched.set('ses_probe', state);
+        agent.getPlugin = (name: string) =>
+            name === 'telegram-bot-api' || name === 'telegram'
+                ? telegram
+                : {
+                    health: async () => true,
+                    listSessions: async () => [],
+                    getSession: async () => null,
+                    readEvents: async () => [],
+                    readTodos: async () => [],
+                    getModelLimit: async () => null,
+                    readContextSnapshot: async () => null,
+                    deleteSession: async (id: string) => { deleted.push(id); return true; },
+                };
+        setTypingImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
+        now += 10 * 60 * 1000;
+        await agent.pollTick(telegram);
+        assert.deepEqual(deleted, ['ses_probe'], 'the poll loop must detect the deleted topic by itself');
+        assert.equal(agent.watched.has('ses_probe'), false);
+    });
+
+    test('an idle session with a deleted topic is detected without any restart', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+            topicProbedAt: Map<string, number>;
+        };
+        const { telegram, calls, setTypingImpl } = stubTelegram();
+        const deleted: string[] = [];
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' || name === 'telegram'
+                ? telegram
+                : { deleteSession: async (id: string) => { deleted.push(id); return true; } };
+        const state = (await agent.attachSession(telegram, SESSION)) as unknown as { threadId: number | null };
+        agent.watched.set(SESSION.id, state);
+        calls.length = 0;
+        let probes = 0;
+        setTypingImpl(() => {
+            probes += 1;
+            return Promise.reject(new Error('Bad Request: message thread not found'));
+        });
+        now += 10 * 60 * 1000;
+        await agent.probeWatchedTopics(telegram);
+        assert.equal(probes, 1, 'an idle session must still be probed');
+        assert.deepEqual(deleted, [SESSION.id], 'a vanished topic deletes the session in real time');
+        assert.equal(agent.watched.has(SESSION.id), false);
+        assert.equal(state.threadId, null);
+    });
+
+    test('the topic probe does not repeat within its interval', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+        };
+        const { telegram, calls, setTypingImpl } = stubTelegram();
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' || name === 'telegram' ? telegram : {};
+        const state = (await agent.attachSession(telegram, SESSION)) as unknown as { threadId: number | null };
+        agent.watched.set(SESSION.id, state);
+        calls.length = 0;
+        let probes = 0;
+        setTypingImpl(() => {
+            probes += 1;
+            return Promise.resolve(true);
+        });
+        now += 10 * 60 * 1000;
+        await agent.probeWatchedTopics(telegram);
+        assert.equal(probes, 1);
+        for (let tick = 0; tick < 4; tick += 1) {
+            now += 2000;
+            await agent.probeWatchedTopics(telegram);
+        }
+        assert.equal(probes, 1, 'a healthy topic must not be probed on every poll tick');
+        assert.equal(agent.watched.has(SESSION.id), true, 'a healthy session keeps being watched');
+        now += 10 * 60 * 1000;
+        await agent.probeWatchedTopics(telegram);
+        assert.equal(probes, 2, 'the probe resumes after the interval');
     });
 });
 
@@ -5559,34 +5789,173 @@ describe('radar general isolation', () => {
         assert.equal((agent.watched.get('ses_a01') as { threadId: number | null }).threadId, null);
     });
 
-    test('a deleted topic that cannot be recreated never falls back to General', async () => {
-        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
-        const { telegram, calls, setSendImpl } = stubTelegram();
-        let creates = 0;
-        (telegram as unknown as { createForumTopic: unknown }).createForumTopic = async () => {
-            creates += 1;
-            if (creates === 1) return { message_thread_id: 77, name: 'Alpha', icon_color: 0 };
-            throw new Error('Bad Request: not enough rights');
+    test('a deleted topic deletes the session and never falls back to General', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
         };
+        const { telegram, calls, setSendImpl } = stubTelegram();
+        const deleted: string[] = [];
+        const live = { ...livePlugin([row('ses_a01', 'Alpha')]), deleteSession: async (id: string) => {
+            deleted.push(id);
+            return true;
+        } };
         (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
-            name === 'telegram-bot-api' ? telegram : livePlugin([row('ses_a01', 'Alpha')]);
+            name === 'telegram-bot-api' || name === 'telegram' ? telegram : live;
         const state = (await agent.attachSession(telegram, row('ses_a01', 'Alpha'))) as unknown as {
             threadId: number | null;
             pending: Array<{ kind: string; text: string; time: number }>;
             lastEventMessageAt: number;
         };
-        assert.equal(state.threadId, 77);
+        assert.equal(state.threadId, 8);
         calls.length = 0;
         setSendImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
         state.pending = [{ kind: 'text', text: 'after delete', time: now }];
         await agent.flushEvents(telegram, state as never);
         assert.equal(state.threadId, null);
+        assert.deepEqual(deleted, ['ses_a01'], 'the opencode session must be deleted');
+        assert.equal(agent.watched.has('ses_a01'), false, 'a deleted session stops being watched');
         assert.equal(
             calls.filter((c) => c.op === 'send' && (c.params as Record<string, unknown>).message_thread_id === undefined).length,
             0,
             'nothing may be sent without a message_thread_id',
         );
-        assert.equal((state as { pending: unknown[] }).pending.length, 1);
+        assert.equal((state as { pending: unknown[] }).pending.length, 0, 'a deleted session takes its pending events with it');
+    });
+
+    test('a deleted session is not re-attached while opencode still lists it', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+        };
+        const { telegram, calls, setSendImpl } = stubTelegram();
+        const deleted: string[] = [];
+        const rows = [row('ses_a01', 'Alpha')];
+        const live = { ...livePlugin(rows), deleteSession: async (id: string) => {
+            deleted.push(id);
+            return true;
+        } };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' || name === 'telegram' ? telegram : live;
+        await agent.syncSessions();
+        assert.equal(agent.watched.has('ses_a01'), true);
+        const state = agent.watched.get('ses_a01') as { threadId: number | null; pending: Array<unknown> };
+        calls.length = 0;
+        setSendImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
+        state.pending = [{ kind: 'text', text: 'after delete', time: now }];
+        await agent.flushEvents(telegram, agent.watched.get('ses_a01') as never);
+        assert.deepEqual(deleted, ['ses_a01']);
+        assert.equal(agent.watched.has('ses_a01'), false);
+        calls.length = 0;
+        await agent.syncSessions();
+        assert.equal(agent.watched.has('ses_a01'), false, 'the stale server listing must not resurrect the session');
+        assert.equal(agent.watched.size, 0);
+        assert.equal(
+            calls.filter((c) => c.op === 'create').length,
+            0,
+            'no replacement topic may be created for a deleted session',
+        );
+    });
+
+    test('a vanished session is not deleted twice while its tombstone ages', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+        };
+        const { telegram, setSendImpl } = stubTelegram();
+        const deleted: string[] = [];
+        const rows = [row('ses_a01', 'Alpha')];
+        const live = { ...livePlugin(rows), deleteSession: async (id: string) => {
+            deleted.push(id);
+            return true;
+        } };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' || name === 'telegram' ? telegram : live;
+        await agent.syncSessions();
+        setSendImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
+        const state = agent.watched.get('ses_a01') as { pending: Array<unknown> };
+        state.pending = [{ kind: 'text', text: 'after delete', time: now }];
+        await agent.flushEvents(telegram, agent.watched.get('ses_a01') as never);
+        assert.deepEqual(deleted, ['ses_a01']);
+        for (let tick = 0; tick < 5; tick += 1) {
+            now += 3000;
+            await agent.syncSessions();
+        }
+        assert.equal(deleted.length, 1, 'a deleted session must never be deleted again while it is still listed');
+        assert.equal(agent.watched.size, 0);
+    });
+
+    test('auto-pick backfills past tombstoned sessions instead of watching fewer', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+            tombstonedSessions: Map<string, number>;
+        };
+        const { telegram } = stubTelegram();
+        const rows = [
+            { ...row('ses_new1', 'Newest'), time_updated: 9000 },
+            { ...row('ses_dead1', 'Dead one'), time_updated: 8000 },
+            { ...row('ses_dead2', 'Dead two'), time_updated: 7000 },
+            { ...row('ses_new2', 'Second newest'), time_updated: 6000 },
+            { ...row('ses_new3', 'Third newest'), time_updated: 5000 },
+        ];
+        const live = { ...livePlugin(rows), deleteSession: async () => true };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' || name === 'telegram' ? telegram : live;
+        await agent.syncSessions();
+        for (const dead of ['ses_dead1', 'ses_dead2']) {
+            await (agent as unknown as { onTopicGone: (t: unknown, s: unknown) => Promise<void> })
+                .onTopicGone(telegram, { ...(agent.watched.get(dead) as object), threadId: 5 } as never);
+        }
+        assert.deepEqual([...agent.tombstonedSessions.keys()].sort(), ['ses_dead1', 'ses_dead2']);
+        await agent.syncSessions();
+        assert.deepEqual(
+            [...agent.watched.keys()].sort(),
+            ['ses_new1', 'ses_new2', 'ses_new3'],
+            'the free slots must be backfilled',
+        );
+    });
+
+    test('a tombstone is released only after the grace period and a missing listing', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+            tombstonedSessions: Map<string, number>;
+        };
+        const { telegram } = stubTelegram();
+        const rows = [row('ses_a01', 'Alpha')];
+        const live = { ...livePlugin(rows), deleteSession: async () => true };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' || name === 'telegram' ? telegram : live;
+        await agent.syncSessions();
+        await (agent as unknown as { onTopicGone: (t: unknown, s: unknown) => Promise<void> })
+            .onTopicGone(telegram, agent.watched.get('ses_a01') as never);
+        assert.equal(agent.tombstonedSessions.has('ses_a01'), true);
+        await agent.syncSessions();
+        assert.equal(agent.tombstonedSessions.has('ses_a01'), true, 'still listed, so still suppressed');
+        assert.equal(agent.watched.size, 0);
+        rows.length = 0;
+        await agent.syncSessions();
+        assert.equal(agent.tombstonedSessions.has('ses_a01'), true, 'the tombstone survives the listing gap');
+        now += RADAR_THREAD_TIMINGS.tombstoneGraceMs + 1000;
+        await agent.syncSessions();
+        assert.equal(agent.tombstonedSessions.has('ses_a01'), false, 'the tombstone must not grow forever');
+    });
+
+    test('persisted bindings of vanished sessions are pruned without touching live ones', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+            persisted: Record<string, { threadId: number | null; contextMessageId: number | null; pinnedThreadId: number | null; lastSeen: number }>;
+        };
+        const { telegram } = stubTelegram();
+        const rows = [row('ses_a01', 'Alpha')];
+        const live = livePlugin(rows);
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'telegram-bot-api' || name === 'telegram' ? telegram : live;
+        (agent as unknown as { persisted: Record<string, unknown> }).persisted = {
+            ses_a01: { threadId: 8, contextMessageId: 9, pinnedThreadId: 8, lastSeen: now },
+            ses_gone: { threadId: 77, contextMessageId: 78, pinnedThreadId: 77, lastSeen: now },
+            ses_gone2: { threadId: 79, contextMessageId: 80, pinnedThreadId: 79, lastSeen: now },
+        };
+        await agent.syncSessions();
+        assert.equal(agent.persisted.ses_a01 !== undefined, true, 'a live session keeps its binding');
+        assert.equal(agent.persisted.ses_gone, undefined, 'a binding of a vanished session must be pruned');
+        assert.equal(agent.persisted.ses_gone2, undefined, 'pruning is not limited to a single entry per tick');
     });
 });
 

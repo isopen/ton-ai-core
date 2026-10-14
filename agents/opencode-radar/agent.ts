@@ -105,6 +105,14 @@ const CONFIRM_TIMEOUT_MS = 20000;
 const SERVER_ERROR_DEDUP_MS = 60000;
 const MODEL_ERROR_DETAIL_MS = 5 * 60 * 1000;
 const SERVER_STEP_FAILED_EVENT = 'session.next.step.failed';
+const SERVER_STEP_FAILED_EVENT_V2 = 'session.step.failed';
+const SERVER_EXECUTION_FAILED_EVENT_V2 = 'session.execution.failed';
+const SERVER_ERROR_EVENTS = new Set([
+    'session.error',
+    SERVER_STEP_FAILED_EVENT,
+    SERVER_STEP_FAILED_EVENT_V2,
+    SERVER_EXECUTION_FAILED_EVENT_V2,
+]);
 const MAX_QUEUED_PROMPTS = 5;
 const MAX_SEEN_INBOUND = 500;
 const MAX_SUBMITTED_PROMPTS = 100;
@@ -122,8 +130,16 @@ const RADAR_GATED_PERMISSIONS: SessionPermissionRule[] = [
 ];
 const THREAD_RETRY_MS = 60 * 1000;
 const THREAD_NOTICE_MS = 60 * 60 * 1000;
+const TOMBSTONE_GRACE_MS = 15 * 60 * 1000;
 
-export const RADAR_THREAD_TIMINGS = { retryMs: THREAD_RETRY_MS, noticeMs: THREAD_NOTICE_MS };
+export const RADAR_THREAD_TIMINGS = {
+    retryMs: THREAD_RETRY_MS,
+    noticeMs: THREAD_NOTICE_MS,
+    tombstoneGraceMs: TOMBSTONE_GRACE_MS,
+};
+const TOMBSTONE_CAP = 200;
+const DEAD_PRUNE_PER_TICK = 3;
+const TOPIC_PROBE_MS = 5 * 60 * 1000;
 const DOC_MAX_BYTES = 512 * 1024;
 const DOC_MAX_CHARS = 20000;
 const MEDIA_MAX_BYTES = 20 * 1024 * 1024;
@@ -451,7 +467,6 @@ interface WatchedSession {
     autoNudges: number;
     lastNudgeAt: number;
     turnComplete: boolean;
-    autoFinished: boolean;
     stoppedByUser: boolean;
 }
 
@@ -497,6 +512,8 @@ export class OpencodeRadarAgent extends BaseAgent {
 
     private watched = new Map<string, WatchedSession>();
     private persisted: Record<string, PersistedSession> = {};
+    private tombstonedSessions = new Map<string, number>();
+    private topicProbedAt = new Map<string, number>();
     private pollTimer: NodeJS.Timeout | null = null;
     private typingTimer: NodeJS.Timeout | null = null;
     private typingTickBusy: boolean = false;
@@ -822,10 +839,59 @@ export class OpencodeRadarAgent extends BaseAgent {
         const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
         if (!opencode) return [];
         const explicit = this.explicitSessionIds();
-        if (explicit.length > 0) return explicit;
+        if (explicit.length > 0) return explicit.filter((id) => !this.tombstonedSessions.has(id));
         const window = Math.max(AUTO_PICK_WINDOW_MIN, this.config.radar.maxSessions * AUTO_PICK_WINDOW_MULT);
         const latest = await opencode.listSessions(this.config.radar.directory, window);
-        return rankSessionIds(latest, this.config.radar.maxSessions);
+        this.reapTombstones(latest.map((entry) => entry.id));
+        const available = latest.filter((entry) => !this.tombstonedSessions.has(entry.id));
+        return rankSessionIds(available, this.config.radar.maxSessions);
+    }
+
+    private markTombstoned(sessionId: string): void {
+        this.tombstonedSessions.delete(sessionId);
+        this.tombstonedSessions.set(sessionId, Date.now());
+        while (this.tombstonedSessions.size > TOMBSTONE_CAP) {
+            const oldest = this.tombstonedSessions.keys().next();
+            if (oldest.done === true) break;
+            this.tombstonedSessions.delete(oldest.value);
+        }
+    }
+
+    private reapTombstones(liveIds: string[]): void {
+        if (this.tombstonedSessions.size === 0) return;
+        const live = new Set(liveIds);
+        const now = Date.now();
+        for (const [id, markedAt] of [...this.tombstonedSessions]) {
+            if (live.has(id)) continue;
+            if (now - markedAt < TOMBSTONE_GRACE_MS) continue;
+            this.tombstonedSessions.delete(id);
+        }
+    }
+
+    private async pruneDeadBindings(opencode: OpencodePlugin, liveIds: Set<string>): Promise<void> {
+        const candidates = Object.entries(this.persisted)
+            .filter(([id, entry]) => entry.threadId !== null && !liveIds.has(id) && !this.watched.has(id))
+            .filter(([id]) => !this.tombstonedSessions.has(id));
+        if (candidates.length === 0) return;
+        let pruned = 0;
+        for (const [id] of candidates.slice(0, DEAD_PRUNE_PER_TICK)) {
+            try {
+                const session = await opencode.getSession(id);
+                if (session) continue;
+                delete this.persisted[id];
+                this.dropSessionRefs(id);
+                pruned += 1;
+            } catch (error) {
+                console.debug('Radar dead binding check failed:', error instanceof Error ? error.message : error);
+                return;
+            }
+        }
+        if (pruned === 0) return;
+        this.savePersisted();
+        console.warn(
+            `Radar pruned ${pruned} persisted topic binding(s) whose opencode session no longer exists ` +
+                `so their topics can be reused.`,
+        );
     }
 
     private async ensureThreadId(
@@ -934,20 +1000,8 @@ export class OpencodeRadarAgent extends BaseAgent {
                     );
                 }
                 if (state.threadId !== null && isThreadGoneError(error)) {
-                    state.threadId = null;
-                    const fresh = await this.ensureThreadId(telegram, state);
-                    if (fresh === null) {
-                        throw new Error('Radar topic gone and could not be recreated: refusing to post into General');
-                    }
-                    const retry = await telegram.sendMessage({
-                        chat_id: chatId,
-                        message_thread_id: fresh,
-                        text: part,
-                        parse_mode: 'HTML',
-                        ...(withMarkup && markup ? { reply_markup: markup } : {}),
-                    });
-                    this.savePersisted();
-                    return retry.message_id;
+                    await this.onTopicGone(telegram, state);
+                    throw new Error('Radar topic gone, session deleted');
                 }
                 throw error;
             }
@@ -1137,7 +1191,6 @@ export class OpencodeRadarAgent extends BaseAgent {
             autoNudges: 0,
             lastNudgeAt: 0,
             turnComplete: false,
-            autoFinished: false,
             stoppedByUser: false,
         };
         if (existingThreadId !== undefined) {
@@ -1225,6 +1278,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         if (ids.length === 0 && this.watched.size === 0) {
             console.debug(`Radar: no sessions yet for directory: ${this.config.radar.directory}`);
         }
+        await this.pruneDeadBindings(opencode, new Set(ids));
         const seen = new Set<string>();
         for (const id of ids) {
             seen.add(id);
@@ -1247,6 +1301,13 @@ export class OpencodeRadarAgent extends BaseAgent {
                 }
                 this.savePersisted();
             } catch (error) {
+                if (this.tombstonedSessions.has(id)) {
+                    console.log(
+                        `Radar attach stopped for session ${id}: its topic was deleted, ` +
+                            `the session was dropped on purpose (not an error).`,
+                    );
+                    continue;
+                }
                 console.error(`Radar attach failed for session ${id}:`, error);
             }
         }
@@ -1284,7 +1345,6 @@ export class OpencodeRadarAgent extends BaseAgent {
         if (state.finalized) {
             state.finalized = false;
         }
-        state.autoFinished = false;
         switch (event.kind) {
             case 'text':
                 state.turnComplete = false;
@@ -1345,6 +1405,50 @@ export class OpencodeRadarAgent extends BaseAgent {
         for (const [token, ctx] of this.questPicks) {
             if (ctx.sessionId === sessionId) this.questPicks.delete(token);
         }
+    }
+
+    private async dropSessionEverywhere(state: WatchedSession): Promise<string> {
+        const sessionId = state.session.id;
+        const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
+        this.watched.delete(sessionId);
+        delete this.persisted[sessionId];
+        this.dropSessionRefs(sessionId);
+        this.markTombstoned(sessionId);
+        if (typeof opencode?.deleteSession !== 'function') {
+            return 'no-deleteSession';
+        }
+        try {
+            const deleted = await opencode.deleteSession(sessionId);
+            return deleted ? 'deleted' : 'already-gone';
+        } catch (error) {
+            console.warn(
+                `Radar opencode deleteSession(${sessionId}) failed: ` +
+                    `${error instanceof Error ? error.message : String(error)}`,
+            );
+            return 'failed';
+        }
+    }
+
+    private async onTopicGone(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        const sessionId = state.session.id;
+        const threadId = state.threadId;
+        state.threadId = null;
+        state.contextMessageId = null;
+        state.pinnedThreadId = null;
+        state.consecutiveFailures = 0;
+        state.promptQueue = [];
+        state.confirming = null;
+        state.liveTool = null;
+        state.pending = [];
+        state.pendingKeys.clear();
+        state.pendingTodos = false;
+        const outcome = await this.dropSessionEverywhere(state);
+        this.savePersisted();
+        console.warn(
+            `Radar topic gone (chat=${this.config.radar.chatId} thread=${threadId} session=${sessionId}): ` +
+                `opencode session ${outcome}; no notice was sent because the topic is gone ` +
+                `and posting into General is not allowed. Write in a fresh topic to start a new session.`,
+        );
     }
 
     private prunePersistedThreadRivals(keepId: string, threadId: number): void {
@@ -2424,7 +2528,6 @@ export class OpencodeRadarAgent extends BaseAgent {
             const now = Date.now();
             state.stoppedAt = now;
             state.stoppedByUser = true;
-            state.autoFinished = false;
             state.turnComplete = false;
             const queued = state.promptQueue.length;
             const confirming = state.confirming;
@@ -2842,7 +2945,7 @@ export class OpencodeRadarAgent extends BaseAgent {
     }
 
     private async handleServerEvent(telegram: TelegramBotPlugin, event: OpencodeServerEvent): Promise<void> {
-        if (!event || (event.type !== 'session.error' && event.type !== SERVER_STEP_FAILED_EVENT)) return;
+        if (!event || !SERVER_ERROR_EVENTS.has(event.type)) return;
         const sessionId = serverEventSessionId(event);
         if (!sessionId) return;
         const state = this.watched.get(sessionId);
@@ -3105,6 +3208,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         this.pollInFlight = true;
         try {
             await this.checkServerHealth(telegram, opencode);
+            await this.probeWatchedTopics(telegram);
             await this.syncSessions();
             const fanout = Math.max(1, Math.floor(this.config.radar.pollFanout ?? 3));
             const states = [...this.watched.values()];
@@ -3461,6 +3565,41 @@ export class OpencodeRadarAgent extends BaseAgent {
         await this.syncThinkingMessage(telegram, state);
     }
 
+    private async probeWatchedTopics(telegram: TelegramBotPlugin): Promise<void> {
+        if (!this.threadsEnabled) return;
+        if (Date.now() < this.rateLimitedUntil) return;
+        const now = Date.now();
+        for (const [sessionId, state] of [...this.watched]) {
+            if (state.threadId === null) continue;
+            if (now - (this.topicProbedAt.get(sessionId) ?? 0) < TOPIC_PROBE_MS) continue;
+            this.topicProbedAt.set(sessionId, now);
+            try {
+                await telegram.sendChatAction({
+                    chat_id: this.config.radar.chatId,
+                    message_thread_id: state.threadId,
+                    action: 'typing',
+                });
+            } catch (error) {
+                if (isThreadGoneError(error)) {
+                    await this.onTopicGone(telegram, state);
+                    continue;
+                }
+                if (isRateLimitError(error)) {
+                    const waitSec = getRetryAfterSec(error) ?? 10;
+                    this.rateLimitedUntil = Math.max(
+                        this.rateLimitedUntil,
+                        Date.now() + waitSec * 1000 + 1000,
+                    );
+                    return;
+                }
+                console.debug(
+                    `Radar topic probe failed (session=${sessionId}):`,
+                    error instanceof Error ? error.message : error,
+                );
+            }
+        }
+    }
+
     private isSessionActive(state: WatchedSession): boolean {
         if (state.finalized) return false;
         if (state.stopping) return false;
@@ -3476,7 +3615,6 @@ export class OpencodeRadarAgent extends BaseAgent {
     }
 
     private wantStopButton(state: WatchedSession): boolean {
-        if (state.autoFinished) return true;
         if (state.finalized) return false;
         if (state.promptQueue.length > 0) return true;
         if (state.cliRun) return true;
@@ -3515,30 +3653,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                 return;
             }
             if (state.threadId !== null && isThreadGoneError(error)) {
-                state.threadId = null;
-                try {
-                    const fresh = await this.ensureThreadId(telegram, state);
-                    if (fresh !== null) {
-                        await telegram.sendChatAction({
-                            chat_id: this.config.radar.chatId,
-                            message_thread_id: fresh,
-                            action: 'typing',
-                        });
-                        state.lastTypingAt = Date.now();
-                        this.savePersisted();
-                    }
-                } catch (retryError) {
-                    if (isRateLimitError(retryError)) {
-                        const waitSec = getRetryAfterSec(retryError) ?? 10;
-                        this.rateLimitedUntil = Math.max(
-                            this.rateLimitedUntil,
-                            Date.now() + waitSec * 1000 + 1000,
-                        );
-                        console.warn(`Radar typing rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
-                        return;
-                    }
-                    console.debug('Radar typing failed:', retryError instanceof Error ? retryError.message : retryError);
-                }
+                await this.onTopicGone(telegram, state);
                 return;
             }
             console.debug('Radar typing failed:', error instanceof Error ? error.message : error);
@@ -3632,20 +3747,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                 return;
             }
             if (state.threadId !== null && isThreadGoneError(error)) {
-                console.warn(
-                    `Radar topic gone, recreating it ` +
-                        `(chat=${this.config.radar.chatId} thread=${state.threadId} ` +
-                        `session=${state.session.id}).`,
-                );
-                state.threadId = null;
-                state.contextMessageId = null;
-                state.consecutiveFailures = 0;
-                this.savePersisted();
-                try {
-                    await this.sendFreshPin(telegram, state);
-                } catch (pinError) {
-                    console.debug('Radar topic-heal pin failed:', pinError instanceof Error ? pinError.message : pinError);
-                }
+                await this.onTopicGone(telegram, state);
                 return;
             }
             state.consecutiveFailures += 1;
@@ -3927,7 +4029,6 @@ export class OpencodeRadarAgent extends BaseAgent {
         if (state.pending.length > 0 || state.pendingTodos || state.liveTool) return false;
         if (Date.now() - state.stoppedAt < STOP_QUIET_MS) return false;
         if (Date.now() < this.rateLimitedUntil) return false;
-        state.autoFinished = true;
         this.logger.info(`Radar finished a turn on its own (session=${state.session.id} thread=${state.threadId}).`);
         await this.finalizeSession(telegram, state);
         if (Date.now() - state.lastStopMsgAt >= STOP_DEDUP_MS) {
