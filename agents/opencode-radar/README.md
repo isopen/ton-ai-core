@@ -56,6 +56,7 @@ Write in a session topic and opencode executes it: the message text becomes a se
 - `RADAR_ALLOWED_USERS` restricts who can drive sessions (empty = everyone; denied users are ignored silently);
 - a prompt sent while the session is busy is queued per session (max 5, oldest drops) and sent when the session frees up, with a `⏳` notice;
 - permission requests raised by tools are posted into the topic; reply `/allow` or `/deny` to that message to decide (`once` / `reject`);
+- the agent can close the task itself: an answer that ends with a standalone `/stop` line (optionally `/stop@bot`, on its own line) is split there — the answer is posted, then the command arrives as its own message, then the session goes through the same stop as the typed command and `Stopped, send the task again.` lands last. A `/stop` mentioned inside the prose is ordinary text.
 - text documents are inlined into the prompt (up to 20000 chars, binaries declined); captions are prepended.
 - photos, GIFs, videos and PDF/video documents are downloaded into `<RADAR_DIR>/tmp/.radar-inbox/` (max 20 MB, filename sanitized, inbox capped at 200 files) and passed to opencode as a `[file name] saved to <path>` reference for the read tool; captions are prepended.
 - voice, video notes, audio and stickers can't be parsed yet — the bot replies with a notice suggesting photo/document/text instead.

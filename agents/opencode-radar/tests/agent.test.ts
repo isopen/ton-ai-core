@@ -2,7 +2,7 @@ import { strict as assert } from 'assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Message } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
-import { OpencodeRadarAgent, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, RADAR_THREAD_TIMINGS } from '../agent';
+import { OpencodeRadarAgent, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, serverEventError, RADAR_THREAD_TIMINGS } from '../agent';
 import { EMOJI, formatThinking, splitTelegramHtml, truncate, wellFormed } from '../formatter';
 
 const NOT_MODIFIED =
@@ -4650,6 +4650,138 @@ describe('radar stop control', () => {
             inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
         };
         assert.equal(markup.inline_keyboard[0][0].callback_data, 'stop:ses_test01');
+    });
+});
+
+describe('radar model error wording', () => {
+    let now = 6000000;
+
+    beforeEach(() => {
+        now = 6000000;
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    const freeTier = 'LLM.Error: RequestExecutor.execute: Provider request failed with HTTP 403: '
+        + '{"type":"error","error":{"type":"FreeTierError","message":"OpenCode\'s free tier can only be used from within OpenCode."}}';
+
+    test('the free tier refusal is explained in plain words and keeps the raw text', () => {
+        const notice = modelErrorNotice(freeTier);
+        assert.ok(notice.includes('free-tier'), notice);
+        assert.ok(notice.includes('opencode said:'), 'the provider message must stay visible');
+        assert.ok(notice.includes('OpenCode\'s free tier can only be used from within OpenCode.'), notice);
+    });
+
+    test('an unknown model variant is explained', () => {
+        assert.ok(explainModelError('Variant unavailable for opencode/x: max').includes('variant'));
+    });
+
+    test('rate limits, auth, context overflow and network each get their own wording', () => {
+        assert.ok(explainModelError('HTTP 429 too many requests').includes('rate limiting'));
+        assert.ok(explainModelError('HTTP 401 unauthorized').includes('credentials'));
+        assert.ok(explainModelError('maximum context length exceeded').includes('context window'));
+        assert.ok(explainModelError('ECONNREFUSED 127.0.0.1:4096').includes('could not be reached'));
+        assert.ok(explainModelError('').includes('did not report'));
+        assert.ok(explainModelError('something odd happened').includes('unclear'));
+    });
+
+    test('the error is read from the shape the server actually sends', () => {
+        const inData = {
+            id: 'evt_1',
+            type: 'session.error',
+            data: { sessionID: 'ses_x', error: { name: 'LLM.Error', message: 'FreeTierError here' } },
+        } as unknown as Parameters<typeof serverEventSessionId>[0];
+        assert.equal(serverEventSessionId(inData), 'ses_x', 'the live server puts sessionID into data');
+        assert.equal(serverErrorText(serverEventError(inData)), 'FreeTierError here');
+        const inProperties = {
+            id: 'evt_2',
+            type: 'session.error',
+            properties: { sessionID: 'ses_y', error: 'plain text error' },
+        } as unknown as Parameters<typeof serverEventSessionId>[0];
+        assert.equal(serverEventSessionId(inProperties), 'ses_y', 'older shapes must keep working');
+        assert.equal(serverEventError(inProperties), 'plain text error');
+        const atTop = { type: 'session.error', sessionID: 'ses_z', error: 'top level' } as unknown as Parameters<typeof serverEventSessionId>[0];
+        assert.equal(serverEventSessionId(atTop), 'ses_z');
+        assert.equal(serverEventSessionId({ type: 'session.error' } as unknown as Parameters<typeof serverEventSessionId>[0]), null);
+    });
+
+    test('a provider failure arrives as session.next.step.failed and reaches the chat', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await agent.attachSession(telegram, SESSION)) as unknown as {
+            serverErrorText: string | null;
+        };
+        agent.watched.set(SESSION.id, state);
+        await agent.handleServerEvent(telegram, {
+            id: 'evt_13aed5770001oUXZHUWxsJU1oP',
+            type: 'session.next.step.failed',
+            durable: { aggregateID: SESSION.id, seq: 324, version: 2 },
+            data: {
+                timestamp: 1791989995376,
+                sessionID: SESSION.id,
+                assistantMessageID: 'msg_1',
+                error: {
+                    type: 'unknown',
+                    message: 'Provider request failed with HTTP 403: {"type":"error","error":{"type":"FreeTierError","message":"OpenCode\'s free tier can only be used from within OpenCode."}}',
+                },
+            },
+        } as unknown as Parameters<typeof serverEventSessionId>[0]);
+        assert.ok(state.serverErrorText !== null, 'the failure reason must be recorded');
+        assert.ok(state.serverErrorText!.includes('FreeTierError'), state.serverErrorText!);
+        const notice = calls
+            .filter((c) => c.op === 'send')
+            .map((c) => String((c.params as Record<string, unknown>).text))
+            .find((text) => text.includes('opencode error'));
+        assert.ok(notice !== undefined, 'the reason must reach the chat');
+        assert.ok(notice!.includes('free-tier'), notice!);
+        assert.ok(notice!.includes('OpenCode\'s free tier can only be used from within OpenCode.'), notice!);
+    });
+
+    test('an aborted step is not reported as a model error', () => {
+        assert.equal(isAbortedServerError({ type: 'aborted' }), true);
+        assert.equal(isAbortedServerError({ name: 'MessageAbortedError' }), true);
+        assert.equal(isAbortedServerError({ type: 'unknown', message: 'boom' }), false);
+    });
+
+    test('a stopped turn carries the provider reason, not only the stop reason', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await agent.attachSession(telegram, SESSION)) as unknown as {
+            serverErrorText: string | null;
+            serverErrorAt: number;
+        };
+        state.serverErrorText = freeTier;
+        state.serverErrorAt = now;
+        await agent.reportStepFailure(telegram, state as never, 'error');
+        const notice = calls
+            .filter((c) => c.op === 'send')
+            .map((c) => String((c.params as Record<string, unknown>).text))
+            .find((text) => text.includes('opencode stopped the turn'));
+        assert.ok(notice !== undefined, 'the turn failure must be reported');
+        assert.ok(notice!.includes('free-tier'), notice);
+        assert.ok(notice!.includes('OpenCode\'s free tier can only be used from within OpenCode.'), notice);
+    });
+
+    test('a stale provider error is not blamed on a later failure', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await agent.attachSession(telegram, SESSION)) as unknown as {
+            serverErrorText: string | null;
+            serverErrorAt: number;
+        };
+        state.serverErrorText = freeTier;
+        state.serverErrorAt = now - 60 * 60 * 1000;
+        await agent.reportStepFailure(telegram, state as never, 'error');
+        const notice = calls
+            .filter((c) => c.op === 'send')
+            .map((c) => String((c.params as Record<string, unknown>).text))
+            .find((text) => text.includes('opencode stopped the turn'));
+        assert.ok(notice !== undefined, 'the turn failure must be reported');
+        assert.ok(!notice!.includes('free-tier'), notice);
+        assert.ok(notice!.includes('did not report'), notice);
     });
 });
 

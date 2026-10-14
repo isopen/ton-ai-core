@@ -345,4 +345,41 @@ test('the Stop button stays armed after auto-finish', async () => {
             'Stop must stay available so the user can still stop the session',
         );
     });
+
+    test('an agent-written trailing /stop splits the answer, posts the command, then stops', async () => {
+        const agent = makeAgent();
+        const calls: Array<{ op: string; text: string }> = [];
+        const telegram = telegramStub(calls);
+        const state = await attachFinalized(agent, telegram);
+        state.pending = [{ kind: 'text', text: 'All done.\n/stop', time: Date.now() }];
+        state.pendingTodos = false;
+        state.lastEventMessageAt = 0;
+        await (agent as unknown as {
+            flushEvents: (t: unknown, s: unknown) => Promise<void>;
+        }).flushEvents(telegram, state);
+        const sends = calls.filter((c) => c.op === 'send').map((c) => c.text);
+        const answerAt = sends.findIndex((text) => text.includes('All done.'));
+        const commandAt = sends.findIndex((text) => text.trim() === '/stop');
+        const stoppedAt = sends.findIndex((text) => text.includes('Stopped, send the task again.'));
+        assert.ok(answerAt >= 0, `the answer must be posted, got: ${JSON.stringify(sends)}`);
+        assert.ok(commandAt > answerAt, `the command must arrive as its own message after the answer, got: ${JSON.stringify(sends)}`);
+        assert.ok(stoppedAt > commandAt, `the stop notice must land last, got: ${JSON.stringify(sends)}`);
+    });
+
+    test('a /stop inside the prose is ordinary text and stops nothing', async () => {
+        const agent = makeAgent();
+        const calls: Array<{ op: string; text: string }> = [];
+        const telegram = telegramStub(calls);
+        const state = await attachFinalized(agent, telegram);
+        state.promptQueue = [];
+        state.pending = [{ kind: 'text', text: 'Use /stop to end the run', time: Date.now() }];
+        state.pendingTodos = false;
+        state.lastEventMessageAt = 0;
+        await (agent as unknown as {
+            flushEvents: (t: unknown, s: unknown) => Promise<void>;
+        }).flushEvents(telegram, state);
+        const sends = calls.filter((c) => c.op === 'send').map((c) => c.text);
+        assert.ok(sends.some((text) => text.includes('Use /stop to end the run')), `the prose must be posted untouched, got: ${JSON.stringify(sends)}`);
+        assert.ok(!sends.some((text) => text.includes('Stopped, send the task again.')), `no stop must happen, got: ${JSON.stringify(sends)}`);
+    });
 });

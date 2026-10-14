@@ -23,6 +23,18 @@ export function formatLiveTool(event: RadarEvent, elapsedSec?: number): string {
     return lines.join('\n');
 }
 
+const STOP_COMMAND_LINE = /^\/stop(?:@[A-Za-z0-9_]+)?$/;
+
+export function takeStopCommand(text: string): { text: string; command: string | null } {
+    const trimmed = text.replace(/\s+$/, '');
+    if (!trimmed) return { text: '', command: null };
+    const lines = trimmed.split('\n');
+    const command = lines[lines.length - 1].trim();
+    if (!STOP_COMMAND_LINE.test(command)) return { text: trimmed, command: null };
+    const rest = lines.slice(0, -1).join('\n').replace(/\s+$/, '');
+    return { text: rest, command };
+}
+
 export const EMOJI = {
     stop: '⛔️',
     coffee: '☕️',

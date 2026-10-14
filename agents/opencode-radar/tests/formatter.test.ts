@@ -18,6 +18,7 @@ import {
     langFromPath,
     splitTelegramHtml,
     truncateHtml,
+    takeStopCommand,
     displayModel,
     toTodoState,
     toToolState,
@@ -518,5 +519,26 @@ describe('formatter code collapse', () => {
             null,
         );
         assert.ok(batch.includes('<blockquote expandable><pre><code class="language-solidity">'));
+    });
+});
+
+describe('formatter stop command split', () => {
+    test('a trailing standalone /stop is split off the answer', () => {
+        assert.deepEqual(takeStopCommand('Done.\n/stop'), { text: 'Done.', command: '/stop' });
+    });
+
+    test('a /stop with a bot suffix is split off too', () => {
+        assert.deepEqual(takeStopCommand('Done.\n/stop@ton_ai_core_bot  '), { text: 'Done.', command: '/stop@ton_ai_core_bot' });
+    });
+
+    test('a /stop inside the prose stays ordinary text', () => {
+        assert.deepEqual(takeStopCommand('Use /stop to end it'), { text: 'Use /stop to end it', command: null });
+        assert.deepEqual(takeStopCommand('/stop now, then continue'), { text: '/stop now, then continue', command: null });
+    });
+
+    test('a lone /stop is only the command', () => {
+        assert.deepEqual(takeStopCommand('/stop'), { text: '', command: '/stop' });
+        assert.deepEqual(takeStopCommand(''), { text: '', command: null });
+        assert.deepEqual(takeStopCommand('   \n  '), { text: '', command: null });
     });
 });

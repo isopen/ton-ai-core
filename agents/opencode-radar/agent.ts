@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync,
 import { basename, dirname, join } from 'node:path';
 import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup } from '@ton-ai/telegram-bot-api';
-import { ContextSnapshot, ModelApiInfo, OpencodeConfig, OpencodePlugin, OpencodeServerEvent, PermissionDecision, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionPermissionRule, SessionRow, snapshotTotal, SpawnedProcess } from '@ton-ai/opencode';
+import { ContextSnapshot, ModelApiInfo, OpencodeConfig, OpencodePlugin, OpencodeServerError, OpencodeServerEvent, PermissionDecision, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionPermissionRule, SessionRow, snapshotTotal, SpawnedProcess } from '@ton-ai/opencode';
 import {
     EMOJI,
     checkIcon,
@@ -23,6 +23,7 @@ import {
     formatTopicName,
     parseTopicTitle,
     splitTelegramHtml,
+    takeStopCommand,
     TOPIC_ICON_CUSTOM_EMOJI_ID,
     toTodoState,
     toToolState,
@@ -102,6 +103,8 @@ const EMPTY_SESSION_GRACE_MS = 10 * 60 * 1000;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const CONFIRM_TIMEOUT_MS = 20000;
 const SERVER_ERROR_DEDUP_MS = 60000;
+const MODEL_ERROR_DETAIL_MS = 5 * 60 * 1000;
+const SERVER_STEP_FAILED_EVENT = 'session.next.step.failed';
 const MAX_QUEUED_PROMPTS = 5;
 const MAX_SEEN_INBOUND = 500;
 const MAX_SUBMITTED_PROMPTS = 100;
@@ -256,7 +259,59 @@ export function serverErrorText(error: unknown): string {
 
 export function isAbortedServerError(error: unknown): boolean {
     if (!error || typeof error !== 'object' || Array.isArray(error)) return false;
-    return (error as Record<string, unknown>).name === 'MessageAbortedError';
+    const record = error as Record<string, unknown>;
+    return record.name === 'MessageAbortedError' || record.type === 'aborted';
+}
+
+export function serverEventSessionId(event: OpencodeServerEvent): string | null {
+    const candidates = [event?.properties?.sessionID, event?.sessionID, event?.data?.sessionID];
+    for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.length > 0) return candidate;
+    }
+    return null;
+}
+
+export function serverEventError(event: OpencodeServerEvent): OpencodeServerError | string | undefined {
+    const candidates = [event?.properties?.error, event?.error, event?.data?.error];
+    for (const candidate of candidates) {
+        if (candidate !== undefined && candidate !== null) return candidate;
+    }
+    return undefined;
+}
+
+export function explainModelError(text: string): string {
+    const raw = text.trim();
+    const has = (pattern: RegExp): boolean => pattern.test(raw);
+    if (has(/FreeTierError|free tier can only be used/i)) {
+        return 'the provider refuses free-tier models for requests that do not come from the OpenCode client itself. '
+            + 'The radar drives a local opencode server, so those models answer with HTTP 403 here. '
+            + 'Pick a model with your own API key, or run the task from the OpenCode app where the free tier is allowed.';
+    }
+    if (has(/VariantUnavailableError|Variant unavailable/i)) {
+        return 'the session is pinned to a model variant the model does not offer, so the turn cannot start. '
+            + 'Switch the model in the topic if it repeats.';
+    }
+    if (has(/429|rate.?limit|too many requests/i)) {
+        return 'the provider is rate limiting this model. The task is kept; write again in a minute.';
+    }
+    if (has(/401|unauthor|forbidden|api key/i)) {
+        return 'the provider rejected the credentials for this model. Fix the API key for the session model.';
+    }
+    if (has(/context length|context_length|maximum context|too many tokens/i)) {
+        return 'the request no longer fits the model context window. Start a fresh session for this topic.';
+    }
+    if (has(/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|socket hang up|network/i)) {
+        return 'the provider endpoint could not be reached. Check the network and the opencode server.';
+    }
+    if (!raw) return 'opencode did not report why the turn stopped.';
+    return 'the model call failed for an unclear reason.';
+}
+
+export function modelErrorNotice(text: string): string {
+    const raw = text.trim();
+    const explanation = explainModelError(raw);
+    if (!raw) return explanation;
+    return `${explanation}\n\nopencode said: ${truncate(raw, 400)}`;
 }
 
 const NORMAL_STEP_FINISHES = new Set(['stop', 'tool-calls']);
@@ -2769,11 +2824,16 @@ export class OpencodeRadarAgent extends BaseAgent {
         const text = stepFinishText(finish);
         console.warn(`Radar step failed (session=${state.session.id}): ${text}`);
         await this.flushEvents(telegram, state);
+        const fresh = Date.now() - state.serverErrorAt <= MODEL_ERROR_DETAIL_MS
+            ? state.serverErrorText
+            : null;
+        const detail = modelErrorNotice(fresh ?? '');
+        const reason = finish === 'error' ? detail : `${text} — ${detail}`;
         try {
             await this.deliverMessage(
                 telegram,
                 state,
-                `${icon('warn')} opencode stopped the turn (${escapeHtml(text)}). Write again to continue.`,
+                `${icon('warn')} opencode stopped the turn: ${escapeHtml(reason)}\n\nWrite again to continue.`,
             );
         } catch (error) {
             console.debug('Radar step failure notice failed:', error instanceof Error ? error.message : error);
@@ -2782,12 +2842,12 @@ export class OpencodeRadarAgent extends BaseAgent {
     }
 
     private async handleServerEvent(telegram: TelegramBotPlugin, event: OpencodeServerEvent): Promise<void> {
-        if (!event || event.type !== 'session.error') return;
-        const sessionId = event.properties?.sessionID;
+        if (!event || (event.type !== 'session.error' && event.type !== SERVER_STEP_FAILED_EVENT)) return;
+        const sessionId = serverEventSessionId(event);
         if (!sessionId) return;
         const state = this.watched.get(sessionId);
         if (!state) return;
-        const raw = event.properties?.error;
+        const raw = serverEventError(event);
         if (isAbortedServerError(raw)) return;
         const text = serverErrorText(raw);
         if (!text) return;
@@ -2797,7 +2857,11 @@ export class OpencodeRadarAgent extends BaseAgent {
         state.serverErrorAt = now;
         console.warn(`Radar server error (session=${sessionId}): ${text.slice(0, 200)}`);
         await this.flushEvents(telegram, state);
-        await this.safeReply(telegram, state, `${icon('warn')} opencode error: ${escapeHtml(truncate(text, 800))}`);
+        await this.safeReply(
+            telegram,
+            state,
+            `${icon('warn')} opencode error: ${escapeHtml(modelErrorNotice(text))}`,
+        );
         await this.finalizeSession(telegram, state, false);
     }
 
@@ -3766,7 +3830,15 @@ export class OpencodeRadarAgent extends BaseAgent {
             const substantive = state.pending.some(
                 (event) => event.kind === 'text' || event.kind === 'files' || (event.kind === 'tool' && event.output !== ''),
             );
-            await this.deliverMessage(telegram, state, text);
+            const { text: answer, command: stopCommand } = takeStopCommand(text);
+            if (answer) {
+                await this.deliverMessage(telegram, state, answer);
+            }
+            if (stopCommand) {
+                await this.deliverMessage(telegram, state, stopCommand);
+                const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
+                await this.stopSession(telegram, opencode ?? {}, state);
+            }
             console.log(
                 `Radar events delivered (session=${state.session.id} count=${flushedCount} in ${Date.now() - flushMark}ms).`,
             );
