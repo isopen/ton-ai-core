@@ -244,6 +244,17 @@ describe('opencode projector', () => {
         assert.deepEqual(mapSessionMessage(broken), []);
     });
 
+    test('mapSessionMessage turns a finished idle row into a completed step', () => {
+        assert.deepEqual(mapSessionMessage(sessionMessage('idle', { outcome: 'succeeded' })), [
+            { index: 0, key: 'idle', event: { kind: 'step', tokens: 0, cost: 0, finish: 'stop', time: 1000 } },
+        ]);
+        assert.deepEqual(mapSessionMessage(sessionMessage('idle', { outcome: 'Succeeded' })), [
+            { index: 0, key: 'idle', event: { kind: 'step', tokens: 0, cost: 0, finish: 'stop', time: 1000 } },
+        ]);
+        assert.deepEqual(mapSessionMessage(sessionMessage('idle', { outcome: 'interrupted' })), []);
+        assert.deepEqual(mapSessionMessage(sessionMessage('idle', {})), []);
+    });
+
     test('parseSessionMessageTokens reads top-level tokens of assistant rows', () => {
         assert.deepEqual(
             parseSessionMessageTokens(

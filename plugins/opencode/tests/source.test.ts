@@ -52,6 +52,12 @@ function dbFile(): string {
             time_created INTEGER NOT NULL
         )`,
     );
+    db.exec(
+        `CREATE TABLE session_inbox (
+            id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL,
+            delivery TEXT NOT NULL, enqueued_seq INTEGER NOT NULL, time_created INTEGER NOT NULL
+        )`,
+    );
     db.prepare('INSERT INTO session (id, title, directory, time_created, time_updated) VALUES (?, ?, ?, ?, ?)')
         .run('ses_1', 'Demo', '/repo', 100, 200);
     db.prepare('INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)')
@@ -98,6 +104,12 @@ function dbFile(): string {
     db.prepare(
         'INSERT INTO session_input (id, session_id, prompt, delivery, admitted_seq, promoted_seq, time_created) VALUES (?, ?, ?, ?, ?, ?, ?)',
     ).run('msg_new_user', 'ses_1', JSON.stringify({ text: 'ping' }), 'steer', 1, 2, 190);
+    db.prepare(
+        'INSERT INTO session_inbox (id, session_id, type, payload, delivery, enqueued_seq, time_created) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run('msg_steer', 'ses_1', 'user', JSON.stringify({ text: 'busy follow-up' }), 'steer', 7, 220);
+    db.prepare(
+        'INSERT INTO session_inbox (id, session_id, type, payload, delivery, enqueued_seq, time_created) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run('msg_steer_other', 'ses_other', 'user', JSON.stringify({ text: 'other session' }), 'queue', 1, 221);
     db.close();
     return path;
 }
@@ -250,6 +262,21 @@ describe('opencode single source', () => {
             assert.equal(await skills.hasMessage('ses_1', 'msg_new_user'), true);
             assert.equal(await skills.hasMessage('ses_1', 'msg_new_asst'), true);
             assert.equal(await skills.hasMessage('ses_ghost', 'msg_new_asst'), false);
+            skills.close();
+        } finally {
+            rmSync(path, { force: true });
+        }
+    });
+
+    test('hasMessage lands prompts parked in the v2 session_inbox', async () => {
+        const path = dbFile();
+        try {
+            const skills = new OpencodeSkills(stubContext(), config(path));
+            assert.equal(await skills.hasMessage('ses_1', 'msg_steer'), true);
+            assert.equal(await skills.hasMessage('ses_ghost', 'msg_steer'), false);
+            assert.equal(await skills.hasMessage('ses_1', 'msg_steer_other'), false);
+            assert.equal(await skills.hasMessage('ses_other', 'msg_steer_other'), true);
+            assert.equal(await skills.hasMessage('ses_1', 'msg_unknown'), false);
             skills.close();
         } finally {
             rmSync(path, { force: true });

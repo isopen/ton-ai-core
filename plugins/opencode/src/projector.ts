@@ -220,6 +220,10 @@ export function mapSessionMessage(row: SessionMessageRow): Array<{ index: number
         if (!text) return [];
         return [{ index: 0, key: '0', event: { kind: 'user', text, time } }];
     }
+    if (row.type === 'idle') {
+        if (asString(data.outcome).trim().toLowerCase() !== 'succeeded') return [];
+        return [{ index: 0, key: 'idle', event: { kind: 'step', tokens: 0, cost: 0, finish: 'stop', time } }];
+    }
     if (row.type !== 'assistant') return [];
     const content = data.content;
     if (!Array.isArray(content)) return [];

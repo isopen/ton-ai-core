@@ -145,28 +145,16 @@ export class OpencodeStore {
             sessionId,
         );
         if (legacy !== null) return true;
-        if (this.hasTable('session_message')) {
+        for (const table of ['session_message', 'session_inbox', 'session_input']) {
+            if (!this.hasTable(table)) continue;
             try {
-                const fresh = oneRow<{ found: number }>(
+                const found = oneRow<{ found: number }>(
                     this.db,
-                    `SELECT 1 AS found FROM session_message WHERE id = ? AND session_id = ? LIMIT 1`,
+                    `SELECT 1 AS found FROM ${table} WHERE id = ? AND session_id = ? LIMIT 1`,
                     messageId,
                     sessionId,
                 );
-                if (fresh !== null) return true;
-            } catch {
-                return false;
-            }
-        }
-        if (this.hasTable('session_input')) {
-            try {
-                const admitted = oneRow<{ found: number }>(
-                    this.db,
-                    `SELECT 1 AS found FROM session_input WHERE id = ? AND session_id = ? LIMIT 1`,
-                    messageId,
-                    sessionId,
-                );
-                if (admitted !== null) return true;
+                if (found !== null) return true;
             } catch {
                 return false;
             }
