@@ -2,7 +2,7 @@ import { strict as assert } from 'assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Message } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
-import { OpencodeRadarAgent, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, serverEventError, RADAR_THREAD_TIMINGS } from '../agent';
+import { OpencodeRadarAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, serverEventError, RADAR_THREAD_TIMINGS } from '../agent';
 import { EMOJI, formatThinking, splitTelegramHtml, truncate, wellFormed } from '../formatter';
 
 const NOT_MODIFIED =
@@ -4247,22 +4247,54 @@ describe('radar stop control', () => {
         assert.equal(calls.filter((c) => c.op === 'send').length, sendsBefore);
     });
 
+const MODE_AGENTS = [
+        {
+            id: 'build',
+            name: 'Build',
+            mode: 'primary',
+            permissions: [{ action: '*', resource: '*', effect: 'allow' }],
+        },
+        {
+            id: 'plan',
+            name: 'Plan',
+            mode: 'primary',
+            permissions: [
+                { action: '*', resource: '*', effect: 'allow' },
+                { action: 'edit', resource: '*', effect: 'deny' },
+            ],
+        },
+        { id: 'general', name: 'General', mode: 'subagent', permissions: [{ action: '*', resource: '*', effect: 'allow' }] },
+    ];
+
+    function modePlugin(switched: Array<{ sessionId: string; agent: string }>, over: Record<string, unknown> = {}): Record<string, unknown> {
+        return {
+            listAgents: async () => MODE_AGENTS,
+            setAgent: async (sessionId: string, agent: string) => {
+                switched.push({ sessionId, agent });
+                return true;
+            },
+            ...over,
+        };
+    }
+
     test('/mode posts card with current mode and buttons', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
-        const fake = stubOpencode();
+        const switched: Array<{ sessionId: string; agent: string }> = [];
         const state = (await attachWatched(agent, telegram)) as unknown as StopState & { buildMode: boolean };
         assert.equal(state.buildMode, true);
-        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 760, text: '/mode' }, now));
-        const cards = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Render mode'));
+        await agent.handleInbound(telegram, modePlugin(switched), inboundMsg({ message_id: 760, text: '/mode' }, now));
+        const cards = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Mode:'));
         assert.equal(cards.length, 1);
-        assert.ok(String((cards[0].params as Record<string, unknown>).text).includes('Build'));
+        const text = String((cards[0].params as Record<string, unknown>).text);
+        assert.ok(text.includes('Build'), text);
+        assert.ok(text.includes('the model may edit files'), text);
         const markup = (cards[0].params as Record<string, unknown>).reply_markup as {
             inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
         };
         assert.deepEqual(
             markup.inline_keyboard[0].map((b) => b.callback_data),
-            ['mode:plain', 'mode:build'],
+            ['mode:plan', 'mode:build'],
         );
     });
 
@@ -4276,25 +4308,137 @@ describe('radar stop control', () => {
             message: { message_id: 201, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
             data,
         });
-        const fake = {};
-        await agent.handleCallback(telegram, fake, queryFor('cb_m1', 'mode:plain'));
+        const switched: Array<{ sessionId: string; agent: string }> = [];
+        await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_m1', 'mode:plan'));
         assert.equal(state.buildMode, false);
-        const confirms = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Plain'));
+        const confirms = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Plan'));
         assert.equal(confirms().length, 1);
-        await agent.handleCallback(telegram, fake, queryFor('cb_m2', 'mode:plain'));
+        await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_m2', 'mode:plan'));
         assert.equal(confirms().length, 1);
-        await agent.handleCallback(telegram, fake, queryFor('cb_m3', 'mode:build'));
+        await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_m3', 'mode:build'));
         assert.equal(state.buildMode, true);
         const path = (agent as unknown as { config: { radar: { statePath: string } } }).config.radar.statePath;
         const saved = JSON.parse(readFileSync(path, 'utf8')) as { sessions: Record<string, { buildMode?: boolean }> };
         assert.equal(saved.sessions['ses_test01']?.buildMode, undefined);
-        await agent.handleCallback(telegram, fake, queryFor('cb_m4', 'mode:plain'));
+        await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_m4', 'mode:plan'));
         const savedAgain = JSON.parse(readFileSync(path, 'utf8')) as { sessions: Record<string, { buildMode?: boolean }> };
         assert.equal(savedAgain.sessions['ses_test01']?.buildMode, false);
         const pinEdits = calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('Context'));
         assert.ok(pinEdits.length >= 1);
-        assert.ok(String((pinEdits[pinEdits.length - 1].params as Record<string, unknown>).text).includes('Plain'));
+        assert.ok(String((pinEdits[pinEdits.length - 1].params as Record<string, unknown>).text).includes('Plan'));
         rmSync(path, { force: true });
+    });
+
+    test('mode tap switches the session agent to the edit-free one and back', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & { buildMode: boolean; threadId: number | null; sessionAgent: string };
+        const queryFor = (id: string, data: string) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 203, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data,
+        });
+        const switched: Array<{ sessionId: string; agent: string }> = [];
+        await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_ag1', 'mode:plan'));
+        assert.deepEqual(switched, [{ sessionId: 'ses_test01', agent: 'plan' }]);
+        assert.equal(state.buildMode, false);
+        assert.equal(state.sessionAgent, 'plan');
+        const notice = calls
+            .filter((c) => c.op === 'send')
+            .map((c) => String((c.params as Record<string, unknown>).text))
+            .find((text) => text.includes('will not edit anything'));
+        assert.ok(notice !== undefined, `plain must be confirmed, got ${JSON.stringify(calls.filter((c) => c.op === 'send').map((c) => (c.params as Record<string, unknown>).text))}`);
+
+        await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_ag2', 'mode:build'));
+        assert.deepEqual(switched.map((s) => s.agent), ['plan', 'build']);
+        assert.equal(state.buildMode, true);
+        assert.equal(state.sessionAgent, 'build');
+    });
+
+    test('the active mode carries a checkmark and the card updates in place', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const switched: Array<{ sessionId: string; agent: string }> = [];
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & { buildMode: boolean; threadId: number | null };
+        await agent.handleInbound(telegram, modePlugin(switched), inboundMsg({ message_id: 771, text: '/mode' }, now));
+        const card = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Mode:')).pop();
+        assert.ok(card, 'the mode card must be posted');
+        const buttons = (card.params as { reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } })
+            .reply_markup.inline_keyboard[0];
+        assert.equal(buttons.find((b) => b.callback_data === 'mode:build')!.text.startsWith(EMOJI.check), true);
+        assert.equal(buttons.find((b) => b.callback_data === 'mode:plan')!.text.startsWith(EMOJI.check), false);
+
+        const queryFor = (id: string, data: string) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 900, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data,
+        });
+        calls.length = 0;
+        await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_chk1', 'mode:plan'));
+        const edited = calls.filter((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === 900);
+        assert.equal(edited.length, 1, 'the tapped card must be edited in place');
+        const editedButtons = (edited[0].params as { reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } })
+            .reply_markup.inline_keyboard[0];
+        assert.equal(editedButtons.find((b) => b.callback_data === 'mode:plan')!.text.startsWith(EMOJI.check), true);
+        assert.equal(editedButtons.find((b) => b.callback_data === 'mode:build')!.text.startsWith(EMOJI.check), false);
+        const pinId = (state as unknown as { contextMessageId: number | null }).contextMessageId;
+        const stray = calls
+            .filter((c) => c.op === 'edit')
+            .map((c) => (c.params as Record<string, unknown>).message_id)
+            .filter((id) => id !== 900 && id !== pinId);
+        assert.deepEqual(stray, [], 'only the mode card and the context pin may be edited by a mode tap');
+    });
+
+    test('a failed agent switch keeps the previous mode', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & { buildMode: boolean; threadId: number | null };
+        const queryFor = (id: string, data: string) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 204, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data,
+        });
+        await agent.handleCallback(
+            telegram,
+            modePlugin([], { setAgent: async () => { throw new Error('opencode setAgent failed: HTTP 500 boom'); } }),
+            queryFor('cb_ag3', 'mode:plain'),
+        );
+        assert.equal(state.buildMode, true, 'the mode must not flip when the server refused');
+        assert.ok(
+            calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Could not switch mode')),
+        );
+    });
+
+    test('an old card with mode:plain still switches to the plan agent', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const switched: Array<{ sessionId: string; agent: string }> = [];
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & { buildMode: boolean; threadId: number | null };
+        await agent.handleCallback(telegram, modePlugin(switched), {
+            id: 'cb_old1',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 205, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data: 'mode:plain',
+        });
+        assert.equal(state.buildMode, false, 'the legacy callback name must keep working');
+        assert.deepEqual(switched, [{ sessionId: 'ses_test01', agent: 'plan' }]);
+    });
+
+    test('the persisted mode is applied to the session agent on attach', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const switched: Array<{ sessionId: string; agent: string }> = [];
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === PLUGIN_NAMES.TELEGRAM ? telegram : modePlugin(switched);
+        (agent as unknown as { persisted: Record<string, unknown> }).persisted = {
+            [SESSION.id]: { threadId: 8, contextMessageId: null, pinnedThreadId: null, lastSeen: now, buildMode: false },
+        };
+        await (agent as unknown as { attachSession: (t: unknown, s: unknown) => Promise<unknown> }).attachSession(telegram, SESSION);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        assert.deepEqual(switched, [{ sessionId: SESSION.id, agent: 'plan' }]);
     });
 
     test('mode tap refreshes posted stop control text', async () => {
@@ -4310,11 +4454,12 @@ describe('radar stop control', () => {
             message: { message_id: 201, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
             data,
         });
-        await agent.handleCallback(telegram, {}, queryFor('cb_m5', 'mode:plain'));
+        const switched: Array<{ sessionId: string; agent: string }> = [];
+        await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_m5', 'mode:plan'));
         assert.equal(state.buildMode, false);
         const controlEdits = calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('Running'));
         assert.equal(controlEdits.length, 1);
-        assert.ok(String((controlEdits[0].params as Record<string, unknown>).text).includes('Plain'));
+        assert.ok(String((controlEdits[0].params as Record<string, unknown>).text).includes('Plan'));
     });
 
     test('plain mode keeps builds in batch, never live', async () => {
@@ -4373,7 +4518,8 @@ describe('radar stop control', () => {
             message: { message_id: 201, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
             data,
         });
-        await agent.handleCallback(telegram, {}, queryFor('cb_sw', 'mode:plain'));
+        const switched: Array<{ sessionId: string; agent: string }> = [];
+        await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_sw', 'mode:plan'));
         assert.equal(state.buildMode, false);
         assert.equal(state.liveTool, null);
         assert.equal(state.pending.length, 1);
@@ -4400,6 +4546,42 @@ describe('radar stop control', () => {
             ['model:m-a', 'model:test-model'],
         );
         assert.ok(markup.inline_keyboard[1][0].text.includes('Current Model'));
+    });
+
+    test('model card offers only the variants the model itself returns', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = {
+            listModels: async () => [
+                {
+                    id: 'm-var',
+                    providerID: 'p',
+                    name: 'Variants',
+                    variants: [{ id: 'low' }, { id: 'max' }, { id: 'low' }],
+                },
+                { id: 'm-plain', providerID: 'p', name: 'No variants', variants: [] },
+            ],
+        };
+        const state = await attachWatched(agent, telegram) as unknown as StopState & { session: typeof SESSION };
+        state.session = { ...SESSION, model: JSON.stringify({ id: 'm-var', providerID: 'p', variant: 'low' }) };
+        await agent.handleInbound(telegram, fake, inboundMsg({ message_id: 780, text: '/model' }, now));
+        const card = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Model:'));
+        assert.equal(card.length, 1);
+        const markup = (card[0].params as Record<string, unknown>).reply_markup as {
+            inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+        };
+        assert.deepEqual(
+            markup.inline_keyboard.map((row) => row.map((cell) => cell.callback_data)),
+            [
+                ['model:m-var'],
+                ['model:m-plain'],
+                ['modelvariant:low', 'modelvariant:max'],
+            ],
+            'only the variants returned by the model appear, deduplicated',
+        );
+        const text = String((card[0].params as Record<string, unknown>).text);
+        assert.ok(text.includes('Effort: <b>low</b> — options: low, max'), text);
+        assert.ok(!text.includes('no variants'), text);
     });
 
     test('model tap switches session, limit and pin', async () => {
@@ -4441,6 +4623,39 @@ describe('radar stop control', () => {
         assert.ok(cardMarkup.inline_keyboard[1][0].text.startsWith(EMOJI.check) === false);
         assert.ok(String((card.params as Record<string, unknown>).text).includes('m-a'));
         assert.equal(calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).startsWith('Model:')).length, 0);
+    });
+
+    test('variant tap sends the variant and refuses one the model does not offer', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const switched: Array<{ sessionId: string; model: Record<string, unknown> }> = [];
+        const fake = {
+            listModels: async () => [
+                { id: 'test-model', providerID: 'p', name: 'Current', variants: [{ id: 'low' }, { id: 'high' }] },
+            ],
+            setModel: async (sessionId: string, model: Record<string, unknown>) => {
+                switched.push({ sessionId, model });
+                return true;
+            },
+        };
+        const state = await attachWatched(agent, telegram) as unknown as StopState & {
+            threadId: number | null;
+            session: typeof SESSION;
+        };
+        state.session = { ...SESSION, model: JSON.stringify({ id: 'test-model', providerID: 'p', variant: 'default' }) };
+        const queryFor = (id: string, data: string) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 202, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data,
+        });
+        await agent.handleCallback(telegram, fake, queryFor('cb_var1', 'modelvariant:high'));
+        assert.deepEqual(switched, [{ sessionId: 'ses_test01', model: { id: 'test-model', providerID: 'p', variant: 'high' } }]);
+        assert.equal(state.session.model, JSON.stringify({ id: 'test-model', providerID: 'p', variant: 'high' }));
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Effort:')));
+
+        await agent.handleCallback(telegram, fake, queryFor('cb_var2', 'modelvariant:bogus'));
+        assert.equal(switched.length, 1, 'a variant the model does not offer must never be sent');
     });
 
     test('failed model switch keeps the card and reports the error', async () => {
@@ -4723,6 +4938,87 @@ describe('radar stop control', () => {
         assert.equal(notices.length, 1);
         release(true);
         await Promise.resolve();
+    });
+
+    test('a fresh pin retires the old stop control instead of orphaning its button', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & {
+            contextMessageId: number | null;
+            stopMessageId: number | null;
+            stopControlText: string | null;
+            lastText: string;
+            promptQueue: string[];
+        };
+        state.promptQueue.push('work');
+        await agent.syncStopKeyboard(telegram, state);
+        const firstControl = state.stopMessageId;
+        assert.ok(typeof firstControl === 'number', 'a control must be posted while working');
+
+        calls.length = 0;
+        state.contextMessageId = null;
+        await agent.sendFreshPin(telegram, state);
+
+        const retired = calls.filter(
+            (c) => c.op === 'markup' && (c.params as { message_id: number }).message_id === firstControl,
+        );
+        assert.equal(retired.length, 1, 'the old control must lose its button exactly once');
+        assert.deepEqual((retired[0].params as { reply_markup: unknown }).reply_markup, { inline_keyboard: [] });
+        assert.equal(
+            calls.filter((c) => c.op === 'markup').length,
+            2,
+            'only the retired control and the fresh pin may be touched',
+        );
+        assert.ok(typeof state.stopMessageId === 'number', 'a working session gets a fresh control');
+        assert.notEqual(state.stopMessageId, firstControl, 'the fresh control is a new message');
+        const stillButtoned = calls.filter(
+            (c) => c.op === 'markup'
+                && (c.params as { message_id: number }).message_id === firstControl
+                && JSON.stringify((c.params as { reply_markup: unknown }).reply_markup) !== '{"inline_keyboard":[]}',
+        );
+        assert.equal(stillButtoned.length, 0, 'no live Stop button may stay on the retired control');
+    });
+
+    test('re-attaching a watched session keeps its stop control instead of posting a second one', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            watched: Map<string, unknown>;
+        };
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        (state as unknown as { promptQueue: string[] }).promptQueue.push('work');
+        await agent.syncStopKeyboard(telegram, state);
+        const firstControl = (state as unknown as { stopMessageId: number | null }).stopMessageId;
+        assert.ok(typeof firstControl === 'number');
+        calls.length = 0;
+
+        const again = await agent.attachSession(telegram, { ...SESSION, title: 'Radar разработка' });
+        assert.equal(again, state, 'a watched session must not be rebuilt into a second state object');
+        await agent.syncStopKeyboard(telegram, again);
+        assert.equal((again as unknown as { stopMessageId: number | null }).stopMessageId, firstControl);
+        assert.equal(calls.filter((c) => c.op === 'send').length, 0, 'no second Running message may be posted');
+        assert.equal(calls.filter((c) => c.op === 'markup').length, 0, 'no second control may be touched');
+    });
+
+    test('a concurrent second pin does not post a second stop control', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & {
+            contextMessageId: number | null;
+            stopMessageId: number | null;
+            pinSending: boolean;
+            promptQueue: string[];
+        };
+        (state as unknown as { promptQueue: string[] }).promptQueue.push('work');
+        state.contextMessageId = null;
+        calls.length = 0;
+        await Promise.all([
+            agent.sendFreshPin(telegram, state),
+            agent.sendFreshPin(telegram, state),
+        ]);
+        const controls = calls.filter((c) => c.op === 'send');
+        assert.equal(controls.length, 2, 'one pin and one control, never two controls');
+        const pinned = calls.filter((c) => c.op === 'pin');
+        assert.equal(pinned.length, 1, 'the pin must be posted once');
     });
 
     test('fresh pin resets stale stop state, control restores in feed', async () => {

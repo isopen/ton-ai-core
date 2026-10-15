@@ -128,7 +128,7 @@ export function hourglassIcon(): string {
 const CODE_SPOILER_LINES = 8;
 const CODE_NOTE_CHARS = 240;
 
-import type { QuestionRequest, RadarEvent } from '@ton-ai/opencode';
+import type { ModelApiInfo, ModelVariantInfo, QuestionRequest, RadarEvent } from '@ton-ai/opencode';
 import { parseTmdEntities, safeHref, codeLangClass, TmdEntity } from '@ton-ai/tmd';
 
 export function parseTopicTitle(name: string, sessionId: string): string {
@@ -406,17 +406,36 @@ export function formatDuration(startedAt: number, finishedAt: number): string {
 }
 
 export function displayModel(model: string): string {
+    return modelRef(model).id;
+}
+
+export function modelVariant(model: string): string {
+    return modelRef(model).variant;
+}
+
+export function modelRef(model: string): { id: string; variant: string } {
     const trimmed = model.trim();
-    if (!trimmed) return '';
+    if (!trimmed) return { id: '', variant: '' };
     try {
         const parsed: unknown = JSON.parse(trimmed);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            const id = (parsed as Record<string, unknown>).id;
-            if (typeof id === 'string' && id.length > 0) return id;
+            const record = parsed as Record<string, unknown>;
+            const id = typeof record.id === 'string' ? record.id : '';
+            const variant = typeof record.variant === 'string' ? record.variant : '';
+            if (id) return { id, variant };
         }
     } catch {
     }
-    return trimmed;
+    return { id: trimmed, variant: '' };
+}
+
+export function modelVariantIds(model: ModelApiInfo | { variants?: ModelVariantInfo[] }): string[] {
+    const variants = model?.variants;
+    if (!Array.isArray(variants)) return [];
+    const ids = variants
+        .map((variant) => (variant && typeof variant.id === 'string' ? variant.id : ''))
+        .filter((id) => id.length > 0);
+    return [...new Set(ids)];
 }
 
 export function formatModelContext(limit: { context?: number; input?: number; output?: number } | undefined): string {

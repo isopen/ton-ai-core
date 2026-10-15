@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { BaseAgent, AgentConfig } from '@ton-ai/core';
-import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup } from '@ton-ai/telegram-bot-api';
-import { ContextSnapshot, ModelApiInfo, OpencodeConfig, OpencodePlugin, OpencodeServerError, OpencodeServerEvent, PermissionDecision, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionPermissionRule, SessionRow, snapshotTotal, SpawnedProcess } from '@ton-ai/opencode';
+import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton } from '@ton-ai/telegram-bot-api';
+import { ContextSnapshot, ModelApiInfo, OpencodeConfig, OpencodePlugin, OpencodeServerError, OpencodeServerEvent, PermissionDecision, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionPermissionRule, SessionRow, pickModeAgents, snapshotTotal, SpawnedProcess } from '@ton-ai/opencode';
 import {
     EMOJI,
     checkIcon,
@@ -13,6 +13,9 @@ import {
     formatContextPin,
     formatLiveTool,
     formatModelContext,
+    modelVariant,
+    modelRef,
+    modelVariantIds,
     formatQuestion,
     formatQuestionResolved,
     formatThinking,
@@ -34,7 +37,7 @@ import {
     ResultSnippet,
 } from './formatter';
 
-const PLUGIN_NAMES = {
+export const PLUGIN_NAMES = {
     TELEGRAM: 'telegram-bot-api',
     OPENCODE: 'opencode',
 } as const;
@@ -52,6 +55,13 @@ export function selectSessionIds(
 export function hasSessionWork(session: SessionRow): boolean {
     if (session.tokens_input + session.tokens_output + session.tokens_reasoning > 0) return true;
     return session.time_updated !== session.time_created;
+}
+
+function variantForModel(model: ModelApiInfo, current: string): string {
+    const available = modelVariantIds(model);
+    if (available.length === 0) return '';
+    if (current && available.includes(current)) return current;
+    return '';
 }
 
 export function isSubagentSession(session: SessionRow): boolean {
@@ -442,6 +452,7 @@ interface WatchedSession {
     stopButtonOn: boolean;
     stopMessageId: number | null;
     stopControlSending: boolean;
+    pinSending: boolean;
     stopControlText: string | null;
     thinkingMessageId: number | null;
     modelCardMessageId: number | null;
@@ -468,6 +479,8 @@ interface WatchedSession {
     lastNudgeAt: number;
     turnComplete: boolean;
     stoppedByUser: boolean;
+    sessionAgent: string;
+    modeSynced: boolean;
 }
 
 interface PermissionReply {
@@ -514,6 +527,7 @@ export class OpencodeRadarAgent extends BaseAgent {
     private persisted: Record<string, PersistedSession> = {};
     private tombstonedSessions = new Map<string, number>();
     private topicProbedAt = new Map<string, number>();
+    private lastSessionAgents = new Map<string, string>();
     private pollTimer: NodeJS.Timeout | null = null;
     private typingTimer: NodeJS.Timeout | null = null;
     private typingTickBusy: boolean = false;
@@ -844,6 +858,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         const latest = await opencode.listSessions(this.config.radar.directory, window);
         this.reapTombstones(latest.map((entry) => entry.id));
         const available = latest.filter((entry) => !this.tombstonedSessions.has(entry.id));
+        for (const entry of available) this.lastSessionAgents.set(entry.id, entry.agent ?? '');
         return rankSessionIds(available, this.config.radar.maxSessions);
     }
 
@@ -1031,7 +1046,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             cacheWrite: snapshot ? snapshot.cacheWrite : 0,
             limit: state.contextLimit,
             cost: state.session.cost,
-            mode: state.buildMode ? 'Build' : 'Plain',
+            mode: state.buildMode ? 'Build' : 'Plan',
         });
     }
 
@@ -1074,18 +1089,23 @@ export class OpencodeRadarAgent extends BaseAgent {
             );
             return;
         }
-        const pinText = this.renderContextText(state);
-        state.contextMessageId = await this.deliverMessage(telegram, state, pinText);
-        state.lastContextRendered = pinText;
-        state.lastContextEditAt = Date.now();
-        state.pinnedThreadId = state.threadId;
-        state.consecutiveFailures = 0;
-        state.stopButtonOn = false;
-        state.stopMessageId = null;
-        state.stopControlText = null;
-        this.savePersisted();
-        await this.pinContextMessage(telegram, state);
-        await this.syncStopKeyboard(telegram, state);
+        if (state.pinSending) return;
+        state.pinSending = true;
+        try {
+            const pinText = this.renderContextText(state);
+            state.contextMessageId = await this.deliverMessage(telegram, state, pinText);
+            state.lastContextRendered = pinText;
+            state.lastContextEditAt = Date.now();
+            state.pinnedThreadId = state.threadId;
+            state.consecutiveFailures = 0;
+            state.stopButtonOn = false;
+            await this.discardStopControl(telegram, state);
+            this.savePersisted();
+            await this.pinContextMessage(telegram, state);
+            await this.syncStopKeyboard(telegram, state);
+        } finally {
+            state.pinSending = false;
+        }
     }
 
     private async applyGatedPermissions(sessionId: string): Promise<void> {
@@ -1109,6 +1129,8 @@ export class OpencodeRadarAgent extends BaseAgent {
     ): Promise<WatchedSession> {
         const inFlight = this.attaching.get(session.id);
         if (inFlight) return inFlight;
+        const tracked = this.watched.get(session.id);
+        if (tracked) return tracked;
         const run = this.doAttachSession(telegram, session, existingThreadId);
         run.then(() => undefined, () => undefined);
         this.attaching.set(session.id, run);
@@ -1166,6 +1188,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             stopButtonOn: false,
             stopMessageId: null,
             stopControlSending: false,
+            pinSending: false,
             stopControlText: null,
             thinkingMessageId: null,
             modelCardMessageId: null,
@@ -1192,6 +1215,8 @@ export class OpencodeRadarAgent extends BaseAgent {
             lastNudgeAt: 0,
             turnComplete: false,
             stoppedByUser: false,
+            sessionAgent: '',
+            modeSynced: false,
         };
         if (existingThreadId !== undefined) {
             state.threadId = this.threadsEnabled ? existingThreadId : null;
@@ -1261,7 +1286,54 @@ export class OpencodeRadarAgent extends BaseAgent {
         };
         this.savePersisted();
         console.log(`Radar attached session ${session.id} (${session.title.slice(0, 60)})`);
+        void this.syncSessionMode(telegram, state);
         return state;
+    }
+
+    private async syncSessionMode(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        if (state.modeSynced) return;
+        const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
+        if (!opencode || typeof opencode.setAgent !== 'function' || typeof opencode.listAgents !== 'function') return;
+        let agents: { build: string; plan: string };
+        try {
+            const list = await opencode.listAgents();
+            if (list.length === 0) return;
+            agents = pickModeAgents(list);
+        } catch (error) {
+            console.debug('Radar agent list failed:', error instanceof Error ? error.message : error);
+            return;
+        }
+        const wanted = state.buildMode ? agents.build : agents.plan;
+        const current = this.sessionAgentOf(state);
+        if (current === wanted) {
+            state.sessionAgent = wanted;
+            state.modeSynced = true;
+            return;
+        }
+        let switched = false;
+        try {
+            switched = await opencode.setAgent(state.session.id, wanted);
+        } catch (error) {
+            console.debug('Radar mode sync failed:', error instanceof Error ? error.message : error);
+            return;
+        }
+        if (!switched) return;
+        state.sessionAgent = wanted;
+        state.modeSynced = true;
+        this.savePersisted();
+        console.log(
+            `Radar session ${state.session.id} mode ${state.buildMode ? 'Build' : 'Plan'} applied (agent=${wanted}).`,
+        );
+        if (state.contextMessageId !== null) {
+            state.lastContextEditAt = 0;
+            await this.updateContext(telegram, state);
+        }
+    }
+
+    private sessionAgentOf(state: WatchedSession): string {
+        if (state.sessionAgent) return state.sessionAgent;
+        const fromList = this.lastSessionAgents.get(state.session.id);
+        return fromList ?? '';
     }
 
     private async syncSessions(): Promise<void> {
@@ -1492,7 +1564,7 @@ export class OpencodeRadarAgent extends BaseAgent {
 
     private async handleInbound(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion' | 'createSession' | 'sendPrompt' | 'getSession' | 'renameSession' | 'listModels'> & Partial<Pick<OpencodePlugin, 'interruptSession'>>,
+        opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion' | 'createSession' | 'sendPrompt' | 'getSession' | 'renameSession' | 'listModels'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'listAgents' | 'setAgent'>>,
         message: Message,
     ): Promise<void> {
         const from = message.from;
@@ -1571,7 +1643,7 @@ export class OpencodeRadarAgent extends BaseAgent {
 
     private async dispatchInboxCommand(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion' | 'createSession' | 'sendPrompt' | 'getSession' | 'renameSession' | 'listModels'> & Partial<Pick<OpencodePlugin, 'interruptSession'>>,
+        opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion' | 'createSession' | 'sendPrompt' | 'getSession' | 'renameSession' | 'listModels'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'listAgents' | 'setAgent'>>,
         state: WatchedSession,
         text: string,
         replyTo: number | undefined,
@@ -1582,7 +1654,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             return true;
         }
         if (command === '/mode') {
-            await this.sendModeCard(telegram, state);
+            await this.sendModeCard(telegram, opencode, state);
             return true;
         }
         if (command === '/model') {
@@ -2113,16 +2185,17 @@ export class OpencodeRadarAgent extends BaseAgent {
         return { inline_keyboard: [[{ text: `${EMOJI.coffee} Stop`, callback_data: `stop:${state.session.id}` }]] };
     }
 
-    private modeMarkup(): InlineKeyboardMarkup {
+    private modeMarkup(build: boolean): InlineKeyboardMarkup {
+        const label = (text: string, active: boolean) => (active ? `${EMOJI.check} ${text}` : text);
         return {
             inline_keyboard: [[
-                { text: 'Plain', callback_data: 'mode:plain' },
-                { text: 'Build', callback_data: 'mode:build' },
+                { text: label('Plan', !build), callback_data: 'mode:plan' },
+                { text: label('Build', build), callback_data: 'mode:build' },
             ]],
         };
     }
 
-    private modelCardText(currentId: string, models?: ModelApiInfo[]): string {
+    private modelCardText(currentId: string, currentVariant: string, models?: ModelApiInfo[]): string {
         const current = (models ?? []).find((m) => m.id === currentId);
         const context = formatModelContext(current?.limit);
         const caps = current ? describeModelCapabilities(current) : [];
@@ -2130,17 +2203,38 @@ export class OpencodeRadarAgent extends BaseAgent {
         if (current) {
             lines.push(`Context: <b>${escapeHtml(context || '—')}</b>${caps.length > 0 ? ` | ${escapeHtml(caps.join(', '))}` : ''}`);
         }
+        const variants = current ? modelVariantIds(current) : [];
+        lines.push(
+            `Effort: <b>${escapeHtml(currentVariant || 'default')}</b>` +
+                (variants.length > 0 ? ` — options: ${escapeHtml(variants.join(', '))}` : ' — no variants.'),
+        );
         return lines.join('\n');
     }
 
-    private modelCardMarkup(models: ModelApiInfo[], currentId: string): InlineKeyboardMarkup {
+    private modelCardMarkup(
+        models: ModelApiInfo[],
+        currentId: string,
+        currentVariant: string,
+    ): InlineKeyboardMarkup {
         const label = (m: ModelApiInfo) => {
             const prefix = m.id === currentId ? `${EMOJI.check} ` : '';
             const context = formatModelContext(m.limit);
             const base = truncate(m.name || m.id, context ? 28 : 40);
             return context ? `${prefix}${base} · ${context}` : `${prefix}${base}`;
         };
-        return { inline_keyboard: models.map((m) => [{ text: label(m), callback_data: `model:${m.id}` }]) };
+        const rows: InlineKeyboardButton[][] = models.map((m) => [{
+            text: label(m),
+            callback_data: `model:${m.id}`,
+        }]);
+        const current = models.find((m) => m.id === currentId);
+        const variants = current ? modelVariantIds(current) : [];
+        if (variants.length > 0) {
+            rows.push(variants.map((variant) => ({
+                text: variant === currentVariant ? `${EMOJI.check} ${variant}` : variant,
+                callback_data: `modelvariant:${variant}`,
+            })));
+        }
+        return { inline_keyboard: rows };
     }
 
     private async sendModelCard(
@@ -2161,12 +2255,13 @@ export class OpencodeRadarAgent extends BaseAgent {
             return;
         }
         const currentId = displayModel(state.session.model);
+        const currentVariant = modelVariant(state.session.model);
         try {
             state.modelCardMessageId = await this.deliverMessage(
                 telegram,
                 state,
-                this.modelCardText(currentId, models),
-                this.modelCardMarkup(models, currentId),
+                this.modelCardText(currentId, currentVariant, models),
+                this.modelCardMarkup(models, currentId, currentVariant),
             );
         } catch (error) {
             console.debug('Radar model card failed:', error instanceof Error ? error.message : error);
@@ -2181,8 +2276,9 @@ export class OpencodeRadarAgent extends BaseAgent {
     ): Promise<void> {
         const target = messageId ?? state.modelCardMessageId;
         const currentId = displayModel(state.session.model);
-        const text = this.modelCardText(currentId, models);
-        const markup = this.modelCardMarkup(models, currentId);
+        const currentVariant = modelVariant(state.session.model);
+        const text = this.modelCardText(currentId, currentVariant, models);
+        const markup = this.modelCardMarkup(models, currentId, currentVariant);
         if (target !== null) {
             try {
                 await telegram.editMessageText({
@@ -2210,21 +2306,52 @@ export class OpencodeRadarAgent extends BaseAgent {
         }
     }
 
-    private async sendModeCard(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+    private async sendModeCard(
+        telegram: TelegramBotPlugin,
+        opencode: Partial<Pick<OpencodePlugin, 'listAgents'>> | null | undefined,
+        state: WatchedSession,
+    ): Promise<void> {
+        const agents = await this.loadModeAgents(opencode);
+        const text = this.modeCardText(state, agents);
         try {
-            await this.deliverMessage(
-                telegram,
-                state,
-                `Render mode: <b>${state.buildMode ? 'Build' : 'Plain'}</b> — tap to switch.`,
-                this.modeMarkup(),
-            );
+            await this.deliverMessage(telegram, state, text, this.modeMarkup(state.buildMode));
         } catch (error) {
             console.debug('Radar mode card failed:', error instanceof Error ? error.message : error);
         }
     }
 
+    private modeCardText(state: WatchedSession, agents: { build: string; plan: string } | null): string {
+        const current = this.modeAgentName(agents, state.buildMode) || state.sessionAgent;
+        return `Mode: <b>${state.buildMode ? 'Build' : 'Plan'}</b>` +
+            `${current ? ` (${escapeHtml(current)})` : ''}` +
+            ` — tap to switch.\n` +
+            `<b>Build</b> — the model may edit files.\n` +
+            `<b>Plan</b> — the model reads and answers only, no edits.`;
+    }
+
+    private async loadModeAgents(
+        opencode: Partial<Pick<OpencodePlugin, 'listAgents'>> | null | undefined,
+    ): Promise<{ build: string; plan: string } | null> {
+        if (!opencode || typeof opencode.listAgents !== 'function') return null;
+        try {
+            const agents = await opencode.listAgents();
+            if (agents.length === 0) return null;
+            return pickModeAgents(agents);
+        } catch (error) {
+            console.debug('Radar agent list failed:', error instanceof Error ? error.message : error);
+            return null;
+        }
+    }
+
+    private modeAgentName(agents: { build: string; plan: string } | null, build: boolean): string {
+        if (!agents) return '';
+        const id = build ? agents.build : agents.plan;
+        return id || '';
+    }
+
     private async applyRenderMode(
         telegram: TelegramBotPlugin,
+        opencode: Partial<Pick<OpencodePlugin, 'listAgents' | 'setAgent'>> | null | undefined,
         query: CallbackQuery,
         state: WatchedSession,
         build: boolean,
@@ -2235,15 +2362,72 @@ export class OpencodeRadarAgent extends BaseAgent {
             console.debug('Radar mode ack failed:', error instanceof Error ? error.message : error);
         }
         if (state.buildMode === build) return;
+        const target = await this.loadModeAgents(opencode);
+        const agentId = build ? target?.build : target?.plan;
+        if (!opencode || typeof opencode.setAgent !== 'function' || !agentId) {
+            await this.safeReply(telegram, state, `${icon('fail')} Cannot switch mode: agent control is unavailable.`);
+            return;
+        }
+        let switched = false;
+        try {
+            switched = await opencode.setAgent(state.session.id, agentId);
+        } catch (error) {
+            console.debug('Radar mode switch failed:', error instanceof Error ? error.message : error);
+            await this.safeReply(telegram, state, `${icon('fail')} Could not switch mode, try again.`);
+            return;
+        }
+        if (!switched) {
+            await this.safeReply(telegram, state, `${icon('fail')} Could not switch mode, session is gone.`);
+            return;
+        }
         state.buildMode = build;
+        state.sessionAgent = agentId;
+        state.modeSynced = true;
         this.savePersisted();
-        await this.safeReply(telegram, state, `Render mode: <b>${build ? 'Build' : 'Plain'}</b>.`);
+        await this.refreshModeCard(telegram, opencode, query, state);
+        await this.safeReply(
+            telegram,
+            state,
+            `Mode: <b>${build ? 'Build' : 'Plan'}</b> — the model now runs as <b>${escapeHtml(agentId)}</b> and ` +
+                `${build ? 'may edit files' : 'will not edit anything'}.`,
+        );
         if (!build) this.abandonLiveTool(state);
         if (state.contextMessageId !== null) {
             state.lastContextEditAt = 0;
             await this.updateContext(telegram, state);
         }
         await this.syncStopKeyboard(telegram, state);
+    }
+
+    private async refreshModeCard(
+        telegram: TelegramBotPlugin,
+        opencode: Partial<Pick<OpencodePlugin, 'listAgents'>> | null | undefined,
+        query: CallbackQuery,
+        state: WatchedSession,
+    ): Promise<void> {
+        const cardId = query.message?.message_id;
+        if (typeof cardId !== 'number') return;
+        const agents = await this.loadModeAgents(opencode);
+        const text = this.modeCardText(state, agents);
+        try {
+            await telegram.editMessageText({
+                chat_id: this.config.radar.chatId,
+                message_id: cardId,
+                text: wellFormed(text),
+                parse_mode: 'HTML',
+                reply_markup: this.modeMarkup(state.buildMode),
+            });
+        } catch (error) {
+            if (isMessageGoneError(error)) {
+                try {
+                    await this.deliverMessage(telegram, state, text, this.modeMarkup(state.buildMode));
+                } catch (resendError) {
+                    console.debug('Radar mode card resend failed:', resendError instanceof Error ? resendError.message : resendError);
+                }
+                return;
+            }
+            console.debug('Radar mode card edit failed:', error instanceof Error ? error.message : error);
+        }
     }
 
     private async applySessionModel(
@@ -2269,16 +2453,21 @@ export class OpencodeRadarAgent extends BaseAgent {
             await this.safeReply(telegram, state, 'Could not load models, try again.');
             return;
         }
+        const currentVariant = modelVariant(state.session.model);
         const picked = models.find((m) => m.id === modelId);
         if (!picked || !picked.providerID) {
             await dismiss('Outdated, ask again.');
             return;
         }
+        const variant = variantForModel(picked, currentVariant);
         await dismiss();
-        if (displayModel(state.session.model) === picked.id) return;
+        if (displayModel(state.session.model) === picked.id && currentVariant === variant) return;
         let switched = false;
         try {
-            switched = await opencode.setModel(state.session.id, { id: picked.id, providerID: picked.providerID });
+            switched = await opencode.setModel(
+                state.session.id,
+                { id: picked.id, providerID: picked.providerID, ...(variant ? { variant } : {}) },
+            );
         } catch (error) {
             if (isRateLimitError(error)) {
                 const waitSec = getRetryAfterSec(error) ?? 10;
@@ -2297,7 +2486,9 @@ export class OpencodeRadarAgent extends BaseAgent {
             await dismiss('Outdated, ask again.');
             return;
         }
-        state.session = { ...state.session, model: JSON.stringify({ id: picked.id, providerID: picked.providerID }) };
+        const nextModel: { id: string; providerID: string; variant?: string } = { id: picked.id, providerID: picked.providerID };
+        if (variant) nextModel.variant = variant;
+        state.session = { ...state.session, model: JSON.stringify(nextModel) };
         state.limitChecked = false;
         const getLimit = opencode.getModelLimit;
         if (typeof getLimit === 'function') {
@@ -2308,6 +2499,81 @@ export class OpencodeRadarAgent extends BaseAgent {
             state.lastContextEditAt = 0;
             await this.updateContext(telegram, state);
         }
+    }
+
+    private async applySessionVariant(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'setModel' | 'listModels'> & Partial<Pick<OpencodePlugin, 'getModelLimit'>>,
+        query: CallbackQuery,
+        state: WatchedSession,
+        variant: string,
+    ): Promise<void> {
+        const dismiss = async (text?: string): Promise<void> => {
+            try {
+                await telegram.answerCallbackQuery({ callback_query_id: query.id, ...(text ? { text } : {}) });
+            } catch (error) {
+                console.debug('Radar model ack failed:', error instanceof Error ? error.message : error);
+            }
+        };
+        const currentRef = modelRef(state.session.model);
+        if (!currentRef.id) {
+            await dismiss('No model yet, pick one above.');
+            return;
+        }
+        let models: ModelApiInfo[];
+        try {
+            models = await opencode.listModels();
+        } catch (error) {
+            console.debug('Radar model list failed:', error instanceof Error ? error.message : error);
+            await dismiss();
+            await this.safeReply(telegram, state, 'Could not load models, try again.');
+            return;
+        }
+        const current = models.find((m) => m.id === currentRef.id);
+        if (!current || !current.providerID) {
+            await dismiss('Outdated, ask again.');
+            return;
+        }
+        if (!modelVariantIds(current).includes(variant)) {
+            await dismiss('That effort is not offered for this model.');
+            return;
+        }
+        if (currentRef.variant === variant) {
+            await dismiss('Already set.');
+            return;
+        }
+        await dismiss();
+        let switched = false;
+        try {
+            switched = await opencode.setModel(
+                state.session.id,
+                { id: current.id, providerID: current.providerID, ...(variant ? { variant } : {}) },
+            );
+        } catch (error) {
+            if (isRateLimitError(error)) {
+                const waitSec = getRetryAfterSec(error) ?? 10;
+                this.rateLimitedUntil = Math.max(this.rateLimitedUntil, Date.now() + waitSec * 1000 + 1000);
+                console.warn(`Radar model switch rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                return;
+            }
+            console.debug('Radar model switch failed:', error instanceof Error ? error.message : error);
+            await this.safeReply(telegram, state, 'Could not switch model, try again.');
+            return;
+        }
+        if (!switched) {
+            await dismiss('Outdated, ask again.');
+            return;
+        }
+        state.session = {
+            ...state.session,
+            model: JSON.stringify({ id: current.id, providerID: current.providerID, ...(variant ? { variant } : {}) }),
+        };
+        await this.editModelCard(telegram, state, models, query.message?.message_id ?? null);
+        if (state.contextMessageId !== null) {
+            state.lastContextEditAt = 0;
+            await this.updateContext(telegram, state);
+        }
+        await this.safeReply(telegram, state, `Effort: <b>${escapeHtml(variant)}</b> for <b>${escapeHtml(current.id)}</b>.`);
     }
 
     private async ensureStopControl(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
@@ -2332,7 +2598,7 @@ export class OpencodeRadarAgent extends BaseAgent {
     }
 
     private renderStopControlText(state: WatchedSession): string {
-        const mode = state.buildMode ? 'Build' : 'Plain';
+        const mode = state.buildMode ? 'Build' : 'Plan';
         const base = `${rocketIcon()} Running · ${mode} — tap Stop to interrupt and rewrite the task.`;
         if (state.toolCalls <= 0) return base;
         const last = state.recentTools[state.recentTools.length - 1];
@@ -2465,6 +2731,28 @@ export class OpencodeRadarAgent extends BaseAgent {
         }
     }
 
+    private async discardStopControl(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        if (state.stopMessageId === null) {
+            state.stopControlText = null;
+            return;
+        }
+        const controlId = state.stopMessageId;
+        state.stopMessageId = null;
+        state.stopControlText = null;
+        try {
+            await telegram.editMessageReplyMarkup({
+                chat_id: this.config.radar.chatId,
+                message_id: controlId,
+                reply_markup: { inline_keyboard: [] },
+            });
+            console.log(`Radar stop control retired (session=${state.session.id} control=${controlId}).`);
+        } catch (error) {
+            if (!isMessageNotModifiedError(error)) {
+                console.debug('Radar stop control retire failed:', error instanceof Error ? error.message : error);
+            }
+        }
+    }
+
     private async syncStopKeyboard(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         const want = this.wantStopButton(state);
         if (want) {
@@ -2472,21 +2760,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             await this.updateStopControlText(telegram, state);
         } else if (state.stopMessageId !== null) {
             if (!state.finalized && Date.now() - state.stoppedAt >= STOP_QUIET_MS) return;
-            const controlId = state.stopMessageId;
-            state.stopMessageId = null;
-            state.stopControlText = null;
-            try {
-                await telegram.editMessageReplyMarkup({
-                    chat_id: this.config.radar.chatId,
-                    message_id: controlId,
-                    reply_markup: { inline_keyboard: [] },
-                });
-                console.log(`Radar stop button hidden (session=${state.session.id} control=${controlId}).`);
-            } catch (error) {
-                if (!isMessageNotModifiedError(error)) {
-                    console.debug('Radar stop control clear failed:', error instanceof Error ? error.message : error);
-                }
-            }
+            await this.discardStopControl(telegram, state);
         }
         if (state.contextMessageId === null) return;
         if (Date.now() < this.rateLimitedUntil) return;
@@ -2970,7 +3244,7 @@ export class OpencodeRadarAgent extends BaseAgent {
 
     private async handleCallback(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'replyQuestion' | 'setModel' | 'listModels' | 'replyPermission' | 'listPermissions'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'getModelLimit'>>,
+        opencode: Pick<OpencodePlugin, 'replyQuestion' | 'setModel' | 'listModels' | 'replyPermission' | 'listPermissions'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'getModelLimit' | 'listAgents' | 'setAgent'>>,
         query: CallbackQuery,
     ): Promise<void> {
         const dismiss = async (text?: string): Promise<void> => {
@@ -3010,7 +3284,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             await this.stopSession(telegram, opencode, state);
             return;
         }
-        const modeMatch = data.match(/^mode:(plain|build)$/);
+        const modeMatch = data.match(/^mode:(plan|plain|build)$/);
         if (modeMatch) {
             const from = query.from;
             if (!from || from.is_bot) return;
@@ -3029,7 +3303,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                 await dismiss('Outdated, ask again.');
                 return;
             }
-            await this.applyRenderMode(telegram, query, target, modeMatch[1] === 'build');
+            await this.applyRenderMode(telegram, opencode, query, target, modeMatch[1] === 'build');
             return;
         }
         const modelMatch = data.match(/^model:([A-Za-z0-9._-]{1,50})$/);
@@ -3052,6 +3326,28 @@ export class OpencodeRadarAgent extends BaseAgent {
                 return;
             }
             await this.applySessionModel(telegram, opencode, query, target, modelMatch[1]);
+            return;
+        }
+        const variantMatch = data.match(/^modelvariant:([A-Za-z0-9._-]{1,50})$/);
+        if (variantMatch) {
+            const from = query.from;
+            if (!from || from.is_bot) return;
+            if (query.message && query.message.chat.id !== this.config.radar.chatId) return;
+            const allowed = this.config.radar.allowedUsers;
+            if (allowed.length > 0 && !allowed.includes(from.id)) {
+                console.warn(`Radar model denied for user ${from.id}.`);
+                await dismiss();
+                return;
+            }
+            const threadId = query.message?.message_thread_id;
+            const target = threadId !== undefined && threadId !== null
+                ? this.findSessionByThread(threadId)
+                : [...this.watched.values()][0] ?? null;
+            if (!target) {
+                await dismiss('Outdated, ask again.');
+                return;
+            }
+            await this.applySessionVariant(telegram, opencode, query, target, variantMatch[1]);
             return;
         }
         const permMatch = data.match(/^p(per_[A-Za-z0-9]{1,56}):(always|once|reject)$/);
@@ -3274,6 +3570,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             await this.syncStopKeyboard(telegram, state);
             await this.pollPermissions(telegram, opencode, state);
             await this.pollQuestions(telegram, opencode, state);
+            if (!state.modeSynced) await this.syncSessionMode(telegram, state);
         } catch (error) {
             console.error(`Radar update failed for session ${state.session.id}:`, error);
         }
