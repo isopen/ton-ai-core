@@ -125,6 +125,25 @@ describe('opencode prompts and permissions', () => {
         skills.close();
     });
 
+    test('setModel sends the variant only when one is picked', async () => {
+        const seen: Array<{ url: string; method: string; body: string }> = [];
+        globalThis.fetch = (async (url: unknown, init: Record<string, unknown>) => {
+            seen.push({
+                url: String(url),
+                method: String(init?.method || 'GET'),
+                body: String(init?.body || ''),
+            });
+            return response(true, 204, {});
+        }) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        assert.equal(await skills.setModel('ses_1', { id: 'm-a', providerID: 'p', variant: 'max' }), true);
+        assert.ok(seen[0].url.endsWith('/api/session/ses_1/model'));
+        assert.deepEqual(JSON.parse(seen[0].body), { model: { id: 'm-a', providerID: 'p', variant: 'max' } });
+        await skills.setModel('ses_1', { id: 'm-a', providerID: 'p' });
+        assert.deepEqual(JSON.parse(seen[1].body), { model: { id: 'm-a', providerID: 'p' } });
+        skills.close();
+    });
+
     test('deleteSession removes the session and reports a missing one as gone', async () => {
         const seen: Array<{ url: string; method: string }> = [];
         globalThis.fetch = (async (url: unknown, init: unknown) => {
@@ -293,6 +312,110 @@ describe('opencode questions', () => {
         await skills.listQuestions('ses_1');
         await skills.replyQuestion('ses_1', 'frm_1', [['Ship it'], ['beta', 'alpha'], ['free text']]);
         assert.deepEqual(JSON.parse(seen[0].body), { answer: { plan: 'ship', tags: ['b', 'a'], note: 'free text' } });
+        skills.close();
+    });
+
+    test('v2 string fields are mapped, boolean gets Yes/No and typed answers', async () => {
+        const seen: Array<{ url: string; body: string }> = [];
+        globalThis.fetch = (async (url: unknown, init: unknown) => {
+            const target = String(url);
+            if (target.endsWith('/form')) {
+                return response(true, 200, {
+                    data: [
+                        {
+                            id: 'frm_v2',
+                            sessionID: 'ses_1',
+                            fields: [
+                                { key: 'name', title: 'Your name?', type: 'string' },
+                                {
+                                    key: 'plan',
+                                    title: 'Plan?',
+                                    type: 'string',
+                                    options: [{ label: 'Ship it', value: 'ship' }, { label: 'Wait', value: 'wait' }],
+                                },
+                                { key: 'confirm', title: 'Confirm?', type: 'boolean' },
+                                { key: 'retries', title: 'How many?', type: 'integer' },
+                                { key: 'ratio', title: 'Ratio?', type: 'number' },
+                                { key: 'tags', title: 'Tags', type: 'multiselect', options: [{ label: 'alpha', value: 'a' }] },
+                                { key: 'mystery', title: 'Mystery', type: 'quantum' },
+                            ],
+                        },
+                    ],
+                });
+            }
+            seen.push({ url: target, body: String((init as { body: string }).body) });
+            return response(true, 200, {});
+        }) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        const questions = await skills.listQuestions('ses_1');
+        assert.deepEqual(
+            questions[0].questions.map((q) => ({ question: q.question, options: q.options, multiple: q.multiple })),
+            [
+                { question: 'Your name?', options: [], multiple: undefined },
+                { question: 'Plan?', options: [{ label: 'Ship it' }, { label: 'Wait' }], multiple: undefined },
+                { question: 'Confirm?', options: [{ label: 'Yes' }, { label: 'No' }], multiple: undefined },
+                { question: 'How many?', options: [], multiple: undefined },
+                { question: 'Ratio?', options: [], multiple: undefined },
+                { question: 'Tags', options: [{ label: 'alpha' }], multiple: true },
+            ],
+            'an unknown v2 field type must be skipped, string/boolean/number must be mapped',
+        );
+        await skills.replyQuestion('ses_1', 'frm_v2', [
+            ['Ann'],
+            ['Ship it'],
+            ['Yes'],
+            ['3'],
+            ['0.5'],
+            ['alpha'],
+        ]);
+        assert.deepEqual(JSON.parse(seen[0].body), {
+            answer: { name: 'Ann', plan: 'ship', confirm: true, retries: 3, ratio: 0.5, tags: ['a'] },
+        });
+        skills.close();
+    });
+
+    test('a question-tool form shows the description as the question and the title as the header', async () => {
+        const payload = {
+            data: [
+                {
+                    id: 'frm_q',
+                    sessionID: 'ses_1',
+                    title: 'Questions',
+                    metadata: { kind: 'question', tool: { messageID: 'msg_1', id: 'call_1' } },
+                    fields: [
+                        {
+                            key: 'q0',
+                            title: 'Чай или кофе',
+                            description: 'Что выбираешь — чай или кофе?',
+                            type: 'string',
+                            options: [
+                                { label: 'Чай', value: 'Чай', description: 'Греемся — в Барнауле снег и +1 °C' },
+                                { label: 'Кофе', value: 'Кофе', description: 'Бодримся — осенний вечер' },
+                            ],
+                            custom: true,
+                        },
+                    ],
+                },
+            ],
+        };
+        globalThis.fetch = (async () => response(true, 200, payload)) as typeof fetch;
+        const skills = new OpencodeSkills(stubContext(), config());
+        assert.deepEqual(await skills.listQuestions('ses_1'), [
+            {
+                id: 'frm_q',
+                sessionID: 'ses_1',
+                questions: [
+                    {
+                        header: 'Чай или кофе',
+                        question: 'Что выбираешь — чай или кофе?',
+                        options: [
+                            { label: 'Чай', description: 'Греемся — в Барнауле снег и +1 °C' },
+                            { label: 'Кофе', description: 'Бодримся — осенний вечер' },
+                        ],
+                    },
+                ],
+            },
+        ]);
         skills.close();
     });
 

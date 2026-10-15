@@ -148,11 +148,35 @@ export interface ApiMessageList {
     };
 }
 
+export interface SessionAgentPermission {
+    action: string;
+    resource: string;
+    effect: string;
+}
+
+export interface SessionAgentInfo {
+    id: string;
+    name?: string;
+    description?: string;
+    mode?: string;
+    hidden?: boolean;
+    permissions?: SessionAgentPermission[];
+}
+
+export interface AgentApiList {
+    data?: SessionAgentInfo[];
+}
+
+export interface ModelVariantInfo {
+    id?: string;
+}
+
 export interface ModelApiInfo {
     id: string;
     providerID?: string;
     name?: string;
     status?: string;
+    variants?: ModelVariantInfo[];
     capabilities?: {
         tools?: boolean;
         input?: string[];

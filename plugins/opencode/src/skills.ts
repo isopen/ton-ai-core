@@ -6,6 +6,7 @@ import { OpencodeStore } from './store';
 import { parseServeTarget, serveArgs, ServeTarget, SpawnedProcess, SpawnFn } from './serve';
 import { mapPart, mapSessionMessage, normalizeSessionApi } from './projector';
 import {
+    AgentApiList,
     ContextSnapshot,
     FormApiField,
     FormApiInfo,
@@ -13,6 +14,7 @@ import {
     ModelApiInfo,
     ModelApiList,
     OpencodeConfig,
+    SessionAgentInfo,
     OpencodeServerEvent,
     PermissionDecision,
     SessionPermissionRule,
@@ -54,6 +56,49 @@ function defaultSpawn(command: string, args: string[], opts?: { env?: Record<str
     };
 }
 
+export function agentDeniesEdits(agent: SessionAgentInfo): boolean {
+    const permissions = Array.isArray(agent.permissions) ? agent.permissions : [];
+    for (const rule of permissions) {
+        const action = String(rule?.action ?? '').toLowerCase();
+        if (action !== 'edit' && action !== 'patch' && action !== 'write') continue;
+        if (String(rule?.effect ?? '').toLowerCase() === 'deny') return true;
+    }
+    return false;
+}
+
+export function pickModeAgents(agents: SessionAgentInfo[]): { build: string; plan: string } {
+    const primary = agents.filter((agent) => String(agent.mode ?? 'primary').toLowerCase() !== 'subagent');
+    const plan = primary.find((agent) => agentDeniesEdits(agent));
+    const build = primary.find((agent) => !agentDeniesEdits(agent)) ?? primary[0];
+    return {
+        build: build && build.id ? build.id : 'build',
+        plan: plan && plan.id ? plan.id : (build && build.id ? build.id : 'build'),
+    };
+}
+
+function coerceFormAnswer(
+    raw: string | string[],
+    kind: 'text' | 'boolean' | 'number',
+    multiple: boolean,
+): string | boolean | number | Array<string | boolean | number> {
+    if (multiple) {
+        return (Array.isArray(raw) ? raw : [raw]).map((entry) => coerceScalar(entry, kind));
+    }
+    return coerceScalar(Array.isArray(raw) ? (raw[0] ?? '') : raw, kind);
+}
+
+function coerceScalar(raw: string, kind: 'text' | 'boolean' | 'number'): string | boolean | number {
+    if (kind === 'boolean') {
+        const normalized = raw.trim().toLowerCase();
+        return normalized === 'true' || normalized === 'yes' || normalized === 'y' || normalized === '1' || normalized === 'да';
+    }
+    if (kind === 'number') {
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) ? parsed : raw;
+    }
+    return raw;
+}
+
 export class OpencodeSkills {
     private static readonly MODEL_LIMIT_TTL_MS = 3600000;
 
@@ -75,7 +120,7 @@ export class OpencodeSkills {
     private storeFailed: boolean = false;
     private storeErrorText: string | null = null;
     private modelLimits: Map<string, { limit: number | null; at: number }> = new Map();
-    private formKeys: Map<string, Array<{ key: string; multiple: boolean; values: Map<string, string> }>> = new Map();
+    private formKeys: Map<string, Array<{ key: string; multiple: boolean; values: Map<string, string>; kind: 'text' | 'boolean' | 'number' }>> = new Map();
     private cliRuns: Set<SpawnedProcess> = new Set();
     private eventSources: Set<AbortController> = new Set();
     private ensureInFlight: Promise<boolean> | null = null;
@@ -526,48 +571,69 @@ export class OpencodeSkills {
                 ? Object.values(rawFields)
                 : [];
         const questions: QuestionRequest['questions'] = [];
-        const keyed: Array<{ key: string; multiple: boolean; values: Map<string, string> }> = [];
+        const keyed: Array<{ key: string; multiple: boolean; values: Map<string, string>; kind: 'text' | 'boolean' | 'number' }> = [];
         for (const field of fields) {
             if (!field || typeof field !== 'object') continue;
             const key = typeof field.key === 'string' && field.key.length > 0 ? field.key : null;
             if (!key) continue;
-            const title = typeof field.title === 'string' && field.title.length > 0 ? field.title : key;
+            const header = typeof field.title === 'string' && field.title.length > 0 ? field.title : '';
+            const description = typeof field.description === 'string' && field.description.length > 0 ? field.description : '';
+            const title = description || header || key;
             const type = typeof field.type === 'string' ? field.type : '';
-            if (type !== '' && type !== 'select' && type !== 'multiselect' && type !== 'text'
-                && type !== 'boolean' && type !== 'number' && type !== 'integer' && type !== 'external') {
+            const MULTISELECT_TYPES = new Set(['multiselect']);
+            const BOOLEAN_TYPES = new Set(['boolean']);
+            const NUMBER_TYPES = new Set(['number', 'integer']);
+            const KNOWN_TYPES = new Set([
+                'string', 'text', 'select', 'multiselect', 'boolean', 'number', 'integer', 'external',
+            ]);
+            if (type !== '' && !KNOWN_TYPES.has(type)) {
                 this.context.logger.debug(`opencode form field type not mapped: ${type}`);
                 continue;
             }
+            const isMultiple = MULTISELECT_TYPES.has(type) || field.multiple === true;
+            const isBoolean = BOOLEAN_TYPES.has(type);
+            const isNumber = NUMBER_TYPES.has(type);
             const rawOptions = Array.isArray(field.options) ? field.options : field.values;
             const values = new Map<string, string>();
-            const options = Array.isArray(rawOptions)
-                ? rawOptions.flatMap((entry) => {
-                    if (typeof entry === 'string') {
-                        if (entry.length === 0) return [];
-                        values.set(entry, entry);
-                        return [{ label: entry }];
-                    }
-                    if (entry && typeof entry === 'object') {
-                        const value = entry.value !== undefined && entry.value !== null ? String(entry.value) : '';
-                        const label = typeof entry.label === 'string' && entry.label.length > 0 ? entry.label : value;
-                        if (!label) return [];
-                        values.set(label, value || label);
-                        const option: { label: string; description?: string } = { label };
-                        if (typeof entry.description === 'string' && entry.description.length > 0) {
-                            option.description = entry.description;
+            if (isBoolean) {
+                values.set('Yes', 'true');
+                values.set('No', 'false');
+            }
+            const options = isBoolean
+                ? [{ label: 'Yes' }, { label: 'No' }]
+                : Array.isArray(rawOptions)
+                    ? rawOptions.flatMap((entry) => {
+                        if (typeof entry === 'string') {
+                            if (entry.length === 0) return [];
+                            values.set(entry, entry);
+                            return [{ label: entry }];
                         }
-                        return [option];
-                    }
-                    return [];
-                })
-                : [];
+                        if (entry && typeof entry === 'object') {
+                            const value = entry.value !== undefined && entry.value !== null ? String(entry.value) : '';
+                            const label = typeof entry.label === 'string' && entry.label.length > 0 ? entry.label : value;
+                            if (!label) return [];
+                            values.set(label, value || label);
+                            const option: { label: string; description?: string } = { label };
+                            if (typeof entry.description === 'string' && entry.description.length > 0) {
+                                option.description = entry.description;
+                            }
+                            return [option];
+                        }
+                        return [];
+                    })
+                    : [];
             questions.push({
-                ...(typeof field.description === 'string' && field.description.length > 0 ? { header: field.description } : {}),
+                ...(header && description ? { header } : {}),
                 question: title,
                 options,
-                ...(type === 'multiselect' || field.multiple === true ? { multiple: true } : {}),
+                ...(isMultiple ? { multiple: true } : {}),
             });
-            keyed.push({ key, multiple: type === 'multiselect' || field.multiple === true, values });
+            keyed.push({
+                key,
+                multiple: isMultiple,
+                values,
+                kind: isBoolean ? 'boolean' : isNumber ? 'number' : 'text',
+            });
         }
         if (questions.length === 0) return null;
         this.formKeys.set(`${sessionId}:${form.id}`, keyed);
@@ -577,14 +643,15 @@ export class OpencodeSkills {
     async replyQuestion(sessionId: string, requestId: string, answers: string[][]): Promise<boolean> {
         try {
             const fields = this.formKeys.get(`${sessionId}:${requestId}`) ?? [];
-            const answer: Record<string, string | string[]> = {};
+            const answer: Record<string, string | boolean | number | Array<string | boolean | number>> = {};
             answers.forEach((labels, index) => {
                 const field = fields[index];
                 if (!field) return;
                 const picked = (labels || [])
                     .filter((label) => typeof label === 'string')
                     .map((label) => field.values.get(label) ?? label);
-                answer[field.key] = field.multiple ? picked : (picked[0] ?? '');
+                const raw = field.multiple ? picked : (picked[0] ?? '');
+                answer[field.key] = coerceFormAnswer(raw, field.kind, field.multiple);
             });
             await this.request<unknown>(
                 `/api/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(requestId)}/reply`,
@@ -607,6 +674,29 @@ export class OpencodeSkills {
                 'opencode renameSession',
                 undefined,
                 { method: 'PATCH', body: JSON.stringify({ title }) },
+            );
+            return true;
+        } catch (error) {
+            if (error instanceof OpencodeApiError && error.status === 404) return false;
+            throw error;
+        }
+    }
+
+async listAgents(): Promise<SessionAgentInfo[]> {
+        const list = await this.request<AgentApiList>('/api/agent', 'opencode listAgents');
+        const rows = Array.isArray(list.data) ? list.data : [];
+        return rows.filter(
+            (agent) => agent && typeof agent.id === 'string' && agent.id.length > 0 && agent.hidden !== true,
+        );
+    }
+
+    async setAgent(sessionId: string, agent: string): Promise<boolean> {
+        try {
+            await this.request<unknown>(
+                `/api/session/${encodeURIComponent(sessionId)}/agent`,
+                'opencode setAgent',
+                undefined,
+                { method: 'POST', body: JSON.stringify({ agent }) },
             );
             return true;
         } catch (error) {
@@ -651,13 +741,18 @@ export class OpencodeSkills {
         }
     }
 
-    async setModel(sessionId: string, model: { id: string; providerID: string }): Promise<boolean> {
+    async setModel(sessionId: string, model: { id: string; providerID: string; variant?: string }): Promise<boolean> {
         try {
+            const payload: { id: string; providerID: string; variant?: string } = {
+                id: model.id,
+                providerID: model.providerID,
+            };
+            if (model.variant) payload.variant = model.variant;
             await this.request<unknown>(
                 `/api/session/${encodeURIComponent(sessionId)}/model`,
                 'opencode setModel',
                 undefined,
-                { method: 'POST', body: JSON.stringify({ model }) },
+                { method: 'POST', body: JSON.stringify({ model: payload }) },
             );
             return true;
         } catch (error) {
