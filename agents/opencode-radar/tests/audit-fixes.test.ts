@@ -1,5 +1,4 @@
 import { strict as assert } from 'assert';
-import { crypton } from '@ton-ai/core';
 import { OpencodeRadarAgent, OpencodeRadarConfig } from '../agent';
 import { markdownToTelegramHtml } from '../formatter';
 
