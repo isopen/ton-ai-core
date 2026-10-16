@@ -1,6 +1,6 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { t, S } from '@ton-ai/gram-lang';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 
 const log = getLogger('gram-ui');
 

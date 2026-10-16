@@ -1,13 +1,13 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 
-import { AES256CTR, AesCtrCipher } from '../aes-256-ctr';
-import { AES256IGE } from '../aes-256-ige';
-import { AES256CBC } from '../aes-256-cbc';
-import { AES256ECB } from '../aes-256-ecb';
-import { AES256CBC_ETM } from '../aes-256-cbc-etm';
-import { MTProtoKDF } from '../kdf';
-import { crypton } from '../index';
+import { AES256CTR, AesCtrCipher } from '../src/aes-256-ctr';
+import { AES256IGE } from '../src/aes-256-ige';
+import { AES256CBC } from '../src/aes-256-cbc';
+import { AES256ECB } from '../src/aes-256-ecb';
+import { AES256CBC_ETM } from '../src/aes-256-cbc-etm';
+import { MTProtoKDF } from '../src/kdf';
+import { crypton } from '../src/index';
 
 async function expectAsyncRejection(fn: () => Promise<unknown>, re: RegExp): Promise<void> {
     let promise: Promise<unknown> | undefined;

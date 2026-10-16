@@ -4,7 +4,7 @@ import { TelegramWsConnection, TelegramTcpConnection } from './telegram-transpor
 import { AuthKeyCreator, DefaultPublicRsaKey } from '@ton-ai/mtproto';
 import { doObfuscatedWsRequest, parseNoCryptoResponse } from './ws-request';
 import { TLSerializer, TLDeserializer } from '@ton-ai/tl-language';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { getSchemaRegistry } from './schema-loader';

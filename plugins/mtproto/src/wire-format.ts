@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { AuthKey } from './types';
 
 export interface WireMessage {

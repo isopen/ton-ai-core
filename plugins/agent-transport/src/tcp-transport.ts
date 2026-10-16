@@ -1,6 +1,6 @@
 import net from 'net';
 import { EventEmitter } from 'events';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { MAX_MESSAGE_SIZE, MAX_CONNECTIONS, INTERMEDIATE_MAGIC, PADDED_INTERMEDIATE_MAGIC, ABRIDGED_MAGIC } from './types';
 import { BufferStream } from './buffer-stream';
 import { connectThroughProxy, ProxyConfig } from './proxy-connect';

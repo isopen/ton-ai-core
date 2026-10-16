@@ -1,4 +1,5 @@
-import { BaseAgent, AgentConfig, crypton } from '@ton-ai/core';
+import { BaseAgent, AgentConfig } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import {
     TelegramBotPlugin,
     Message,

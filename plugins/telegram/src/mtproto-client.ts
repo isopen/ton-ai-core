@@ -1,5 +1,5 @@
 import { MTProtoCryptoPlugin, AuthKey } from '@ton-ai/mtproto';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { TLSerializer, TLDeserializer, SchemaSerializer, SchemaDeserializer } from '@ton-ai/tl-language';
 import { EventEmitter } from 'events';
 import { IConnection, TL_CONSTRUCTORS, API_LAYER } from './types';

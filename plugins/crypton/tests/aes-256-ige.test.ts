@@ -1,8 +1,8 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { AES256IGE } from '../aes-256-ige';
-import { AES256ECB } from '../aes-256-ecb';
-import { isNode } from '../utils';
+import { AES256IGE } from '../src/aes-256-ige';
+import { AES256ECB } from '../src/aes-256-ecb';
+import { isNode } from '../src/utils';
 
 describe('AES-256-IGE', () => {
     const key = Buffer.from('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f', 'hex');

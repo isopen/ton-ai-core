@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { abridgedEncode, abridgedDecodeLength, intermediateEncode, intermediateDecodeLength, generateObfuscationInit, aes256CtrProcess } from '../src/obfuscation-utils';
 
 test('abridgedEncode small data (< 0x7F ints)', () => {

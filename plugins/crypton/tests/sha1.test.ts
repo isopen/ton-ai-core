@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { sha1 } from '../sha1';
+import { sha1 } from '../src/sha1';
 
 describe('SHA-1', () => {
     test('determinism', async () => {

@@ -1,5 +1,5 @@
 import { MTProtoCryptoPlugin } from '@ton-ai/mtproto';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { EventEmitter } from 'events';
 
 function generateMsgId(odd: boolean = false): bigint {

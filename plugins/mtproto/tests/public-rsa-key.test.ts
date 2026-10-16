@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import { DefaultPublicRsaKey } from '../src/public-rsa-key';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 
 describe('PublicRsaKey', () => {
     function createWithKeys(entries: { fp: bigint; pem: string; modulus: bigint; exponent: bigint }[]): DefaultPublicRsaKey {

@@ -1,4 +1,4 @@
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { getLogger } from '@ton-ai/gram-debug';
 import { Buffer } from 'buffer';
 import type { GramDbConfig } from './types';

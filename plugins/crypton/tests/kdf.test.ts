@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { MTProtoKDF } from '../kdf';
-import { getRandomBytes } from '../utils';
+import { MTProtoKDF } from '../src/kdf';
+import { getRandomBytes } from '../src/utils';
 
 describe('MTProtoKDF', () => {
     const authKey = getRandomBytes(256);

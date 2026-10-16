@@ -51,6 +51,5 @@ tdlib_files/
 libtdjson.*
 .next/
 
-# crypton-rs WASM build output
-packages/core/src/crypton/wasm/
-packages/crypton-rs/target/
+# tgcloud CLI state (access tokens)
+.tgcloud/

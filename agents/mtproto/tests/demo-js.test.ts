@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 import { EventEmitter } from 'events';
-import { crypton, isCryptonWasmActive } from '@ton-ai/core';
+import { crypton, isCryptonWasmActive } from '@ton-ai/crypton';
 import { MTProtoCryptoPlugin } from '@ton-ai/mtproto';
 
 function generateMsgId(odd: boolean): bigint {

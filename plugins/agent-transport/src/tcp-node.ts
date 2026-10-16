@@ -2,7 +2,7 @@ import type { BasePluginConfig } from "@ton-ai/core";
 import { EventEmitter } from 'events';
 import { ICryptoBackend } from './crypto-backend';
 import { TcpTransport, TcpTransportType } from './tcp-transport';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, DEFAULT_HOST, HANDSHAKE_TIMEOUT_MS } from './types';
 import { BufferStream } from './buffer-stream';
 import { ProxyConfig } from './proxy-connect';

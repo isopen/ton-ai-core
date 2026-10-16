@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { rsaVerify, pemToBigInts, rsaFingerprint, rsaEncryptRaw } from '../rsa';
+import { rsaVerify, pemToBigInts, rsaFingerprint, rsaEncryptRaw } from '../src/rsa';
 import * as crypto from 'crypto';
 
 describe('RSA Verify', () => {

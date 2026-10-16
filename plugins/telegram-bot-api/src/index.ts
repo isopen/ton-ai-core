@@ -1,4 +1,5 @@
-import { BasePlugin, crypton } from '@ton-ai/core';
+import { BasePlugin } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { TelegramBotComponents } from './components';
 import { TelegramBotSkills } from './skills';
 import {

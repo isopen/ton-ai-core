@@ -1,0 +1,19 @@
+{
+  "name": "@ton-ai/crypton",
+  "version": "0.1.0",
+  "description": "Cryptography primitives for TON AI Framework (AES, RSA, KDF, MTProto crypto)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "Boost Software License 1.0",
+  "scripts": {
+    "build": "tsc && rm -rf dist/wasm && cp -r src/wasm dist/wasm",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@ton/crypto": "3.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.16",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 
 export const TEST_RSA_KEY_PEM = `-----BEGIN RSA PUBLIC KEY-----
 MIIBCgKCAQEA6LszBcC1LGzyr992NzE0ieY+BSaOW622Aa9Bd4ZHLl+TuFQ4lo4g

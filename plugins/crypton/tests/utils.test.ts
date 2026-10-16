@@ -21,7 +21,7 @@ import {
   hkdfExtract,
   hkdfExpand,
   hkdfSha512,
-} from '../utils';
+} from '../src/utils';
 
 describe('Utils', () => {
     test('isNode returns boolean', () => {

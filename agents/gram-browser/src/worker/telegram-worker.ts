@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { getLogger, isNoMediaCache } from '@ton-ai/gram-debug';
 import { AuthKeyCreator, DefaultPublicRsaKey } from '@ton-ai/mtproto';
 import { TLSerializer, TLDeserializer } from '@ton-ai/tl-language';

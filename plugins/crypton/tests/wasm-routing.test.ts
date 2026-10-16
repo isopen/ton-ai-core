@@ -2,21 +2,21 @@ import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 
 describe('crypton WASM routing', () => {
-    let crypton: typeof import('../index').crypton;
-    let initWasmCrypton: typeof import('../index').initWasmCrypton;
-    let AES256ECB: typeof import('../aes-256-ecb').AES256ECB;
-    let AES256CTR: typeof import('../aes-256-ctr').AES256CTR;
-    let AES256IGE: typeof import('../aes-256-ige').AES256IGE;
-    let AES256CBC: typeof import('../aes-256-cbc').AES256CBC;
-    let AES256CBC_ETM: typeof import('../aes-256-cbc-etm').AES256CBC_ETM;
+    let crypton: typeof import('../src/index').crypton;
+    let initWasmCrypton: typeof import('../src/index').initWasmCrypton;
+    let AES256ECB: typeof import('../src/aes-256-ecb').AES256ECB;
+    let AES256CTR: typeof import('../src/aes-256-ctr').AES256CTR;
+    let AES256IGE: typeof import('../src/aes-256-ige').AES256IGE;
+    let AES256CBC: typeof import('../src/aes-256-cbc').AES256CBC;
+    let AES256CBC_ETM: typeof import('../src/aes-256-cbc-etm').AES256CBC_ETM;
 
     beforeAll(async () => {
-        ({ crypton, initWasmCrypton } = await import('../index'));
-        ({ AES256ECB } = await import('../aes-256-ecb'));
-        ({ AES256CTR } = await import('../aes-256-ctr'));
-        ({ AES256IGE } = await import('../aes-256-ige'));
-        ({ AES256CBC } = await import('../aes-256-cbc'));
-        ({ AES256CBC_ETM } = await import('../aes-256-cbc-etm'));
+        ({ crypton, initWasmCrypton } = await import('../src/index'));
+        ({ AES256ECB } = await import('../src/aes-256-ecb'));
+        ({ AES256CTR } = await import('../src/aes-256-ctr'));
+        ({ AES256IGE } = await import('../src/aes-256-ige'));
+        ({ AES256CBC } = await import('../src/aes-256-cbc'));
+        ({ AES256CBC_ETM } = await import('../src/aes-256-cbc-etm'));
         await initWasmCrypton();
     }, 60000);
 

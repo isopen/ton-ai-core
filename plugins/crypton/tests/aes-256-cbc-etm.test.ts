@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { AES256CBC_ETM } from '../aes-256-cbc-etm';
+import { AES256CBC_ETM } from '../src/aes-256-cbc-etm';
 
 describe('AES-256-CBC EtM', () => {
     const macKey = Buffer.from('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f', 'hex');

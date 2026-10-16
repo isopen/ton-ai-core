@@ -16,6 +16,7 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
+    "@ton-ai/crypton": "*",
     "@types/ws": "^8.18.1",
     "ws": "^8.17.1"
   }

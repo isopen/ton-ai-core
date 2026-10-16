@@ -1,5 +1,5 @@
 import { PluginContext } from '@ton-ai/core';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { EventEmitter } from 'events';
 import { PublicRsaKeyInterface } from './public-rsa-key';
 import { WireFormat } from './wire-format';

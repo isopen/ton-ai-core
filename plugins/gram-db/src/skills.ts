@@ -1,4 +1,4 @@
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { getLogger } from '@ton-ai/gram-debug';
 import { GramDbComponents, KeyManager, EncryptedStore, StorageEngine, DbVersion, currentDbVersion, KEY_SALT_SIZE } from './components';
 import type { StoredSession } from './types';

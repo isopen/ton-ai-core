@@ -13,7 +13,7 @@ import {
     unwrapPayload,
     TransportType,
 } from '../../agent-transport/src/transport-protocol';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 
 describe('Transport Protocol', () => {
     describe('Intermediate', () => {

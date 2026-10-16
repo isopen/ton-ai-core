@@ -1,5 +1,5 @@
 import { TransportType, INTERMEDIATE_HEADER_SIZE, ABRIDGED_HEADER_SIZE } from './types';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 
 export { TransportType };
 

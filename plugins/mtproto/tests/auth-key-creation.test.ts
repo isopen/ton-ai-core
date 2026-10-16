@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { AuthKeyCreator, createAuthKeyCreator } from '../src/auth-key-creation';
 import { TLSerializer, TLDeserializer } from '@ton-ai/tl-language';
 import { PublicRsaKeyInterface } from '../src/public-rsa-key';

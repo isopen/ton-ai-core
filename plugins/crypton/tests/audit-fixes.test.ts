@@ -1,6 +1,6 @@
 import assert from 'assert';
-import { rsaVerify } from '../rsa';
-import { hexToBytes } from '../utils';
+import { rsaVerify } from '../src/rsa';
+import { hexToBytes } from '../src/utils';
 
 const FAKE_PEM = '-----BEGIN PUBLIC KEY-----\nQUJD\n-----END PUBLIC KEY-----\n';
 

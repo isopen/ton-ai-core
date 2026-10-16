@@ -1,5 +1,5 @@
 import * as TW from './telegram-worker';
-import { initWasmCrypton, isCryptonWasmActive, getWasmCallStats } from '@ton-ai/core';
+import { initWasmCrypton, isCryptonWasmActive, getWasmCallStats } from '@ton-ai/crypton';
 import { getLogger } from '@ton-ai/gram-debug';
 
 const log = getLogger('gram-browser');

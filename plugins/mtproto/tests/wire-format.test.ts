@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 import { WireFormat } from '../src/wire-format';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { AuthKey } from '../src/types';
 
 describe('WireFormat', () => {

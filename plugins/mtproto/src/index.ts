@@ -35,7 +35,7 @@ export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
 
     protected async onInit() {
         this.logger.info('Initializing MTProto Crypto plugin...');
-        const { initWasmCrypton, isCryptonWasmActive } = await import('@ton-ai/core');
+        const { initWasmCrypton, isCryptonWasmActive } = await import('@ton-ai/crypton');
         if (process.env.CRYPTON_WASM === '0') {
             this.logger.info('crypton-rs WASM disabled by CRYPTON_WASM=0 — using pure JS crypto');
         } else {

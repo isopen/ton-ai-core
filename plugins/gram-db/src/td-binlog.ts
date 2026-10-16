@@ -1,4 +1,4 @@
-import { crypton, AesCtrCipher } from '@ton-ai/core';
+import { crypton, AesCtrCipher } from '@ton-ai/crypton';
 import { crc32, tlBytesLength, readTlString, readTlBytes, writeTlBytes } from '@ton-ai/tl-language';
 import { getLogger } from '@ton-ai/gram-debug';
 import { Buffer } from 'buffer';

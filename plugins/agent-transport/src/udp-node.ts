@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { ICryptoBackend } from './crypto-backend';
 import { UdpTransport } from './udp-transport';
 import { UdpConfig, PeerInfo, UdpPacketType, SessionState, MAX_PEERS, DEFAULT_HOST, HANDSHAKE_TIMEOUT_MS, REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX } from './types';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { encodeContainer, ContainerMessage } from './container';
 
 export class UdpNode extends EventEmitter {

@@ -1,4 +1,4 @@
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 
 export interface RsaKeyInfo {
   pem: string;

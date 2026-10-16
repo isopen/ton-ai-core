@@ -1,7 +1,7 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import { startFpsLogging } from '@ton-ai/gram-ui';
 import { setDevWarnings, traceComponent } from '@ton-ai/atom';
-import { initWasmCrypton } from '@ton-ai/core';
+import { initWasmCrypton } from '@ton-ai/crypton';
 import { GramApp } from './app/gram-app';
 
 const log = getLogger('gram-browser');

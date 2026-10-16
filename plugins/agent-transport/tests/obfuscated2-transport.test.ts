@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 import net from 'net';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { Obfuscated2Transport, Obfuscated2TransportType } from '../src/obfuscated2-transport';
 import { deriveObfuscationKeys, generateInitPayload, createObfuscatedInit, obfuscateData, deobfuscateData } from '../src/obfuscation';
 import { OBFUSCATION_INIT_SIZE, MAX_CONNECTIONS, INTERMEDIATE_MAGIC, PADDED_INTERMEDIATE_MAGIC } from '../src/types';

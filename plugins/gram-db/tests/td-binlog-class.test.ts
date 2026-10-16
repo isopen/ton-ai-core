@@ -179,7 +179,7 @@ describe('TdBinlog class', () => {
   });
 
   test('legacy sessionId binlog migrates to raw db key', async () => {
-    const { crypton, AesCtrCipher } = require('@ton-ai/core');
+    const { crypton, AesCtrCipher } = require('@ton-ai/crypton');
     const { buildEncryptionPayload } = require('../src/td-binlog');
     const salt = crypton.getRandomBytes(32);
     const iv = crypton.getRandomBytes(16);

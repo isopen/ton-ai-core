@@ -7,7 +7,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..', '..', '..');
 
 const deps = [
-  { dir: 'packages/core', extra: ['dist/crypton/index.js'] },
+  { dir: 'packages/core', extra: [] },
+  { dir: 'plugins/crypton', extra: ['dist/index.js'] },
   { dir: 'plugins/gram-debug', extra: [] },
   { dir: 'plugins/atom', extra: [] },
   { dir: 'plugins/tl-language', extra: [] },

@@ -51,7 +51,7 @@ module.exports = {
     '<rootDir>/packages/core/src/mcp/tests',
     '<rootDir>/mcp/ton/tests',
     '<rootDir>/agents/mrtr-demo/tests',
-    '<rootDir>/packages/core/src/crypton/tests',
+    '<rootDir>/plugins/crypton/tests',
     '<rootDir>/plugins/tl-language/tests',
     '<rootDir>/plugins/agent-transport/tests',
     '<rootDir>/plugins/telegram/tests',
@@ -69,7 +69,9 @@ module.exports = {
     '<rootDir>/plugins/opencode/tests',
     '<rootDir>/plugins/telegram-bot-api/tests',
     '<rootDir>/plugins/durevcode/tests',
-    '<rootDir>/agents/durev-radar/tests'
+    '<rootDir>/agents/durev-radar/tests',
+    '<rootDir>/plugins/tgcloud-hello/tests',
+    '<rootDir>/agents/tgcloud-agent/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
@@ -77,7 +79,7 @@ module.exports = {
     '^.+\\.tsx$': ['ts-jest', tsOpts],
     '^.+\\.ts$': ['ts-jest', tsOpts],
     'gram-ui/dist/.+\\.js$': '<rootDir>/scripts/jest.esm-transformer.cjs',
-    'packages/core/src/crypton/wasm/.+\\.js$': '<rootDir>/scripts/jest.esm-transformer.cjs',
+    'plugins/crypton/src/wasm/.+\\.js$': '<rootDir>/scripts/jest.esm-transformer.cjs',
   },
   transformIgnorePatterns: ['/node_modules/(?!(@ton-ai)/)'],
   moduleNameMapper: {
@@ -102,6 +104,8 @@ module.exports = {
     '^@ton-ai/gram-db$': '<rootDir>/plugins/gram-db/src/index.ts',
     '^@ton-ai/gram-lang$': '<rootDir>/plugins/gram-lang/src/index.ts',
     '^@ton-ai/durevcode$': '<rootDir>/plugins/durevcode/src/index.ts',
+    '^@ton-ai/crypton$': '<rootDir>/plugins/crypton/src/index.ts',
+    '^@ton-ai/tgcloud-hello$': '<rootDir>/plugins/tgcloud-hello/src/index.ts',
     '^@ton-ai/telegram-bot-api$': '<rootDir>/plugins/telegram-bot-api/src/index.ts',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },

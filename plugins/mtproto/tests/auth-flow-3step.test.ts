@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { TLSerializer, TLDeserializer } from '@ton-ai/tl-language';
 import {
   toBE, toLE, toBI, factor, rsaPad, doRequest, xor,

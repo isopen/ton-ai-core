@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 
 describe('PQ Factorization and RSA', () => {
     test('even PQ factors to 2 * (pq/2)', () => {

@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
-import { crypton, AesCtrCipher } from '@ton-ai/core';
+import { crypton, AesCtrCipher } from '@ton-ai/crypton';
 import { crc32, encodeTlString, readTlString, encodeKvPayload, decodeKvPayload, tlBytesLength, writeTlBytes, readTlBytes } from '@ton-ai/tl-language';
 import {
   buildEvent, parseEventHeader, validateEventCrc,

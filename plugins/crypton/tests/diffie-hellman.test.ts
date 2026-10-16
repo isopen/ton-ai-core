@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
-import { DiffieHellman } from '../diffie-hellman';
-import { modPow } from '../utils';
+import { DiffieHellman } from '../src/diffie-hellman';
+import { modPow } from '../src/utils';
 
 describe('DiffieHellman', () => {
     const min = 1n << (2048n - 64n);

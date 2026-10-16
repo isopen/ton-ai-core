@@ -6,7 +6,7 @@ import {
   isCryptonWasmActive,
   getWasmCallStats,
   resetWasmCallStats,
-} from '@ton-ai/core';
+} from '@ton-ai/crypton';
 import { CryptoClient } from '../src/components';
 import type { AuthKey } from '../src/types';
 

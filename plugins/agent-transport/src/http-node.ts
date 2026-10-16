@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import http from 'http';
 import { ICryptoBackend } from './crypto-backend';
 import { HttpTransport, HttpTransportType } from './http-transport';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { REKEY_MESSAGE_THRESHOLD, REKEY_TIME_THRESHOLD_MS, DEFAULT_HOST, HANDSHAKE_TIMEOUT_MS } from './types';
 
 export interface HttpConfig extends BasePluginConfig {

@@ -1,4 +1,4 @@
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { CONTAINER_CONSTRUCTOR, GZIP_CONTAINER_CONSTRUCTOR } from './types';
 
 export interface ContainerMessage {

@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { TLSerializer, TLDeserializer } from '@ton-ai/tl-language';
 import { PublicRsaKeyInterface, RsaKeyInfo } from './public-rsa-key';
 

@@ -1,6 +1,6 @@
 import { ICryptoBackend } from './crypto-backend';
 import { MTProtoCryptoPlugin } from '@ton-ai/mtproto';
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { SessionState, REPLAY_WINDOW_SIZE } from './types';
 
 export class MTProtoCryptoBackend implements ICryptoBackend {

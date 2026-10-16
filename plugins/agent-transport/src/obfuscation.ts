@@ -1,4 +1,4 @@
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 import { OBFUSCATION_INIT_SIZE } from './types';
 
 const BLOCKED_PREFIXES = [

@@ -2,13 +2,13 @@ import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 import { randomBytes } from 'crypto';
 
-import { crypton, initWasmCrypton, deinitWasmCrypton, isCryptonWasmActive, getWasmCallStats } from '../index';
-import { AES256ECB } from '../aes-256-ecb';
-import { AES256CBC } from '../aes-256-cbc';
-import { AES256CTR } from '../aes-256-ctr';
-import { AES256IGE } from '../aes-256-ige';
-import { AES256CBC_ETM } from '../aes-256-cbc-etm';
-import { MTProtoKDF } from '../kdf';
+import { crypton, initWasmCrypton, deinitWasmCrypton, isCryptonWasmActive, getWasmCallStats } from '../src/index';
+import { AES256ECB } from '../src/aes-256-ecb';
+import { AES256CBC } from '../src/aes-256-cbc';
+import { AES256CTR } from '../src/aes-256-ctr';
+import { AES256IGE } from '../src/aes-256-ige';
+import { AES256CBC_ETM } from '../src/aes-256-cbc-etm';
+import { MTProtoKDF } from '../src/kdf';
 
 describe('crypton WASM routing lifecycle', () => {
   beforeAll(async () => { await initWasmCrypton(); }, 60000);

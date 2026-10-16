@@ -1,4 +1,4 @@
-import { crypton } from '@ton-ai/core';
+import { crypton } from '@ton-ai/crypton';
 
 const OBFUSCATION_INIT_SIZE = 64;
 
