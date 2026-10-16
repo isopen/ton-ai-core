@@ -1,17 +1,51 @@
 import { Buffer } from 'buffer';
 import { AES256ECB } from './aes-256-ecb';
-import { isNode } from './utils';
+
+function addCounterInto(block: Buffer, add: number): void {
+  let carry = add >>> 0;
+  for (let i = 15; i >= 0 && carry > 0; i--) {
+    const sum = block[i] + carry;
+    block[i] = sum & 0xFF;
+    carry = sum >>> 8;
+  }
+}
 
 function counterAdd(iv: Buffer, add: number): Buffer {
   const c = Buffer.alloc(16);
   iv.copy(c);
-  let carry = add >>> 0;
-  for (let i = 15; i >= 0 && carry > 0; i--) {
-    const sum = c[i] + carry;
-    c[i] = sum & 0xFF;
-    carry = sum >>> 8;
-  }
+  addCounterInto(c, add);
   return c;
+}
+
+class CtrKeystream {
+  private readonly ecb: AES256ECB;
+  private readonly counter: Buffer;
+  private readonly keystream: Buffer;
+  private pos = 0;
+
+  constructor(iv: Buffer, ecb: AES256ECB, startCounter = 0) {
+    this.ecb = ecb;
+    this.counter = Buffer.alloc(16);
+    iv.copy(this.counter);
+    addCounterInto(this.counter, startCounter);
+    this.keystream = Buffer.alloc(16);
+  }
+
+  xorInto(out: Uint8Array, data: Uint8Array): void {
+    let i = 0;
+    while (i < data.length) {
+      if (this.pos === 0) {
+        this.counter.copy(this.keystream);
+        this.ecb.encryptBlockInPlace(this.keystream);
+        addCounterInto(this.counter, 1);
+      }
+      const n = Math.min(16 - this.pos, data.length - i);
+      const pos = this.pos;
+      for (let j = 0; j < n; j++) out[i + j] = data[i + j] ^ this.keystream[pos + j];
+      i += n;
+      this.pos = (this.pos + n) & 15;
+    }
+  }
 }
 
 const CTR_MAX_START_COUNTER = 0xFFFFFFFF;
@@ -27,7 +61,6 @@ export function assertCtrRange(startCounter: number, dataLength: number): void {
 }
 
 export class AES256CTR {
-  private static readonly BLOCK_SIZE = 16;
   private static readonly KEY_SIZE = 32;
   private static readonly IV_SIZE = 16;
 
@@ -41,64 +74,14 @@ export class AES256CTR {
     assertCtrRange(startCounter, data.length);
 
     const result = Buffer.alloc(data.length);
-    let offset = 0;
-    let counter = startCounter >>> 0;
-    const counterBlock = Buffer.alloc(this.BLOCK_SIZE);
+    if (data.length === 0) return result;
 
-    if (isNode()) {
-      const crypto = require('crypto');
-      const ecb = crypto.createCipheriv('aes-256-ecb', key, null);
-      ecb.setAutoPadding(false);
-      const enc = Buffer.alloc(this.BLOCK_SIZE);
-      try {
-        while (offset < data.length) {
-          iv.copy(counterBlock);
-          if (counter > 0) {
-            let carry = counter;
-            for (let i = 15; i >= 0 && carry > 0; i--) {
-              const sum = counterBlock[i] + carry;
-              counterBlock[i] = sum & 0xFF;
-              carry = sum >>> 8;
-            }
-          }
-          enc.set(ecb.update(counterBlock));
-          const chunkLen = Math.min(this.BLOCK_SIZE, data.length - offset);
-          for (let i = 0; i < chunkLen; i++) {
-            result[offset + i] = data[offset + i] ^ enc[i];
-          }
-          offset += this.BLOCK_SIZE;
-          counter = (counter + 1) >>> 0;
-        }
-      } finally {
-        ecb.final();
-        enc.fill(0);
-      }
-    } else {
-      const aesEcb = new AES256ECB(key);
-      try {
-        while (offset < data.length) {
-          iv.copy(counterBlock);
-          if (counter > 0) {
-            let carry = counter;
-            for (let i = 15; i >= 0 && carry > 0; i--) {
-              const sum = counterBlock[i] + carry;
-              counterBlock[i] = sum & 0xFF;
-              carry = sum >>> 8;
-            }
-          }
-          const enc = aesEcb.encryptBlock(counterBlock);
-          const chunkLen = Math.min(this.BLOCK_SIZE, data.length - offset);
-          for (let i = 0; i < chunkLen; i++) {
-            result[offset + i] = data[offset + i] ^ enc[i];
-          }
-          offset += this.BLOCK_SIZE;
-          counter = (counter + 1) >>> 0;
-        }
-      } finally {
-        aesEcb.destroy();
-      }
+    const ecb = new AES256ECB(key);
+    try {
+      new CtrKeystream(iv, ecb, startCounter).xorInto(result, data);
+    } finally {
+      ecb.destroy();
     }
-
     return result;
   }
 
@@ -126,30 +109,42 @@ export class AES256CTR {
 }
 
 export class AesCtrCipher {
-  private key: Buffer;
   private iv: Buffer;
   private blockCounter: number;
+  private blockOffset = 0;
   private destroyed = false;
+  private ecb: AES256ECB;
+  private keystream: CtrKeystream;
 
   constructor(key: Uint8Array, iv: Uint8Array, startCounter: number) {
     if (!key || key.length !== 32) throw new Error(`AesCtrCipher key must be 32 bytes, got ${key?.length}`);
     if (!iv || iv.length !== 16) throw new Error(`AesCtrCipher IV must be 16 bytes, got ${iv?.length}`);
     assertCtrRange(startCounter, 0);
-    this.key = Buffer.from(key);
     this.iv = Buffer.from(iv);
     this.blockCounter = startCounter >>> 0;
+    this.ecb = new AES256ECB(Buffer.from(key));
+    this.keystream = new CtrKeystream(this.iv, this.ecb, this.blockCounter);
   }
 
   process(data: Uint8Array): Uint8Array {
     if (this.destroyed) throw new Error('AesCtrCipher instance destroyed');
-    assertCtrRange(this.blockCounter, data.length);
-    const blocks = (data.length + 15) >>> 4;
+    const len = data.length;
+    if (len === 0) return new Uint8Array(0);
+
+    const total = this.blockOffset + len;
+    assertCtrRange(this.blockCounter, total);
+    const blocks = Math.ceil(total / 16);
     if (this.blockCounter + blocks > CTR_MAX_START_COUNTER + 1) {
       throw new Error('CTR counter overflow: streaming cipher spans past 2^32 blocks');
     }
-    const result = AES256CTR.process(Buffer.from(data), this.key, this.iv, this.blockCounter);
-    this.blockCounter = (this.blockCounter + blocks) >>> 0;
-    return new Uint8Array(result);
+
+    const result = new Uint8Array(len);
+    this.keystream.xorInto(result, data);
+
+    const consumedBlocks = Math.floor(total / 16);
+    this.blockCounter = (this.blockCounter + consumedBlocks) >>> 0;
+    this.blockOffset = total % 16;
+    return result;
   }
 
   get counter(): number {
@@ -159,8 +154,9 @@ export class AesCtrCipher {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    this.key.fill(0);
     this.iv.fill(0);
+    this.ecb.destroy();
     this.blockCounter = 0;
+    this.blockOffset = 0;
   }
 }

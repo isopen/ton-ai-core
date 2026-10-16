@@ -8,6 +8,8 @@ describe('MTProtoKDF', () => {
     const shortAuthKey = getRandomBytes(128);
     const PLAIN_LEN = 36;
     const plain = Buffer.alloc(PLAIN_LEN, 0x41);
+    const plaintext = getRandomBytes(64);
+    const padding = getRandomBytes(32);
     const validPadding = Buffer.alloc(12, 0);
     const shortPadding = Buffer.alloc(6, 0);
     const longPadding = Buffer.alloc(1025, 0);
@@ -120,6 +122,43 @@ describe('MTProtoKDF', () => {
         const keys2 = await MTProtoKDF.deriveKeys(authKey, msgKey1, true);
         assert.ok(keys2.aesKey.equals(keys1.aesKey));
         assert.ok(keys2.aesIv.equals(keys1.aesIv));
+    });
+
+    describe('matched against the published MTProto 2.0 formulas', () => {
+        const { createHash } = require('crypto');
+        const specSha256 = (b: Buffer): Buffer => createHash('sha256').update(b).digest();
+        const specSha1 = (b: Buffer): Buffer => createHash('sha1').update(b).digest();
+
+        for (const isClient of [true, false]) {
+            test(`msg_key / aes_key / aes_iv (isClient=${isClient})`, async () => {
+                const x = isClient ? 0 : 8;
+                const msgKeyLarge = specSha256(Buffer.concat([
+                    authKey.subarray(88 + x, 88 + x + 32), plaintext, padding,
+                ]));
+                const expectedMsgKey = msgKeyLarge.subarray(8, 24);
+                const got = await MTProtoKDF.computeMsgKey(authKey, plaintext, padding, isClient);
+                assert.ok(got.equals(expectedMsgKey), 'msg_key must be the middle 16 bytes of the specified SHA-256');
+
+                const sha256_a = specSha256(Buffer.concat([expectedMsgKey, authKey.subarray(x, x + 36)]));
+                const sha256_b = specSha256(Buffer.concat([authKey.subarray(40 + x, 40 + x + 36), expectedMsgKey]));
+                const expectedKeys = {
+                    aesKey: Buffer.concat([sha256_a.subarray(0, 8), sha256_b.subarray(8, 24), sha256_a.subarray(24, 32)]),
+                    aesIv: Buffer.concat([sha256_b.subarray(0, 8), sha256_a.subarray(8, 24), sha256_b.subarray(24, 32)]),
+                };
+                const keys = await MTProtoKDF.deriveKeys(authKey, expectedMsgKey, isClient);
+                assert.ok(keys.aesKey.equals(expectedKeys.aesKey), 'aes_key formula mismatch');
+                assert.ok(keys.aesIv.equals(expectedKeys.aesIv), 'aes_iv formula mismatch');
+            });
+        }
+
+        test('auth_key_id is the low 64 bits of SHA1(auth_key)', async () => {
+            const digest = specSha1(authKey);
+            assert.ok((await MTProtoKDF.computeAuthKeyIdBuffer(authKey)).equals(digest.subarray(12, 20)));
+            assert.strictEqual(
+                (await MTProtoKDF.computeAuthKeyId(authKey)),
+                digest.readBigUInt64LE(12),
+            );
+        });
     });
 
     test('different isClient gives different keys', async () => {

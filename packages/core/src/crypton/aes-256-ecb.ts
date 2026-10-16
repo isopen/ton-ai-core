@@ -221,6 +221,29 @@ export class AES256ECB {
     xorKey(s, this.roundKeys[0]);
     return s;
   }
+
+  encryptBlockInPlace(s: Buffer): Buffer {
+    this.assertAlive();
+    if (!s || s.length !== 16) throw new Error('Block must be 16 bytes');
+    if (this.useNative) {
+      const out = Buffer.from(this.getNativeEnc().update(s));
+      out.copy(s);
+      return s;
+    }
+    let i: number;
+    xorKey(s, this.roundKeys[0]);
+    for (let round = 1; round < 14; round++) {
+      const rk = this.roundKeys[round];
+      for (i = 0; i < 16; i++) s[i] = S[s[i]];
+      shiftRows(s);
+      mixColumns(s);
+      xorKey(s, rk);
+    }
+    for (i = 0; i < 16; i++) s[i] = S[s[i]];
+    shiftRows(s);
+    xorKey(s, this.roundKeys[14]);
+    return s;
+  }
 }
 
 function xorKey(s: Buffer, rk: Buffer): void {

@@ -22,6 +22,9 @@ let randomBytesImpl: RandomBytesFn = defaultGetRandomBytes;
 export function setRandomBytesImplementation(fn: RandomBytesFn): void {
   randomBytesImpl = fn;
 }
+export function getRandomBytesImplementation(): RandomBytesFn {
+  return randomBytesImpl;
+}
 export function getRandomBytes(length: number): Buffer {
   if (!Number.isInteger(length) || length < 0) throw new Error(`Invalid random length: ${length}`);
   if (length > (1 << 20)) throw new Error(`Random length exceeds 1 MiB limit: ${length}`);
@@ -100,29 +103,33 @@ let hmacSha256Impl: HmacSha256Fn = defaultHmacSha256;
 export function setHmacSha256Implementation(fn: HmacSha256Fn): void {
   hmacSha256Impl = fn;
 }
+export function getHmacSha256Implementation(): HmacSha256Fn {
+  return hmacSha256Impl;
+}
 export async function hmacSha256(key: Buffer, data: Uint8Array): Promise<Buffer> {
   return hmacSha256Impl(key, data);
 }
 
+const HEX_STRING = /^[0-9a-fA-F]*$/;
+
 export function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
+  return Buffer.isBuffer(bytes) ? bytes.toString('hex') : Buffer.from(bytes).toString('hex');
 }
 
 export function hexToBytes(hex: string): Uint8Array {
   if (hex.length % 2 !== 0) {
     throw new Error('Hex string must have an even length');
   }
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    const chunk = hex.substring(i, i + 2);
-    if (!/^[0-9a-fA-F]{2}$/.test(chunk)) {
-      throw new Error(`Invalid hex byte at position ${i}: "${chunk}"`);
+  if (hex.length === 0) return new Uint8Array(0);
+  if (!HEX_STRING.test(hex)) {
+    for (let i = 0; i < hex.length; i += 2) {
+      const chunk = hex.substring(i, i + 2);
+      if (!/^[0-9a-fA-F]{2}$/.test(chunk)) {
+        throw new Error(`Invalid hex byte at position ${i}: "${chunk}"`);
+      }
     }
-    bytes[i / 2] = parseInt(chunk, 16);
   }
-  return bytes;
+  return new Uint8Array(Buffer.from(hex, 'hex'));
 }
 
 type ModPowFn = (base: bigint, exponent: bigint, modulus: bigint) => bigint;
@@ -130,8 +137,18 @@ let modPowImpl: ModPowFn = jsModPow;
 export function setModPowImplementation(fn: ModPowFn): void {
   modPowImpl = fn;
 }
+export function getModPowImplementation(): ModPowFn {
+  return modPowImpl;
+}
+
+export function checkModPowArgs(b: bigint, e: bigint, m: bigint): void {
+  if (m <= 0n) throw new Error('Modulus must be positive');
+  if (b < 0n) throw new Error('Negative base is not supported');
+  if (e < 0n) throw new Error('Negative exponent is not supported');
+}
 
 export function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
+  checkModPowArgs(base, exponent, modulus);
   return modPowImpl(base, exponent, modulus);
 }
 
@@ -185,6 +202,9 @@ let isPrimeImpl: IsPrimeFn = (n, k) => isProbablyPrimeUncached(n, k);
 export function setIsProbablyPrimeImplementation(fn: IsPrimeFn): void {
   isPrimeImpl = fn;
   primeCache.clear();
+}
+export function getIsProbablyPrimeImplementation(): IsPrimeFn {
+  return isPrimeImpl;
 }
 
 export function clearPrimeCache(): void {

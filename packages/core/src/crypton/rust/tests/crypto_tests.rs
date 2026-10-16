@@ -161,6 +161,14 @@ fn mod_pow_basic() {
 }
 
 #[test]
+fn mod_pow_modulus_one_is_zero_in_every_path() {
+    assert_eq!(mod_pow_hex_checked("2", "10", "1").unwrap(), "0");
+    assert_eq!(mod_pow_hex_checked("2", "10001", "1").unwrap(), "0");
+    assert_eq!(mod_pow_hex_checked("ff", "ffffffffffffffff", "1").unwrap(), "0");
+    assert_eq!(mod_pow_hex_checked("0", "5", "1").unwrap(), "0");
+}
+
+#[test]
 fn mod_pow_large() {
     let base = "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74";
     let exp = "010001";

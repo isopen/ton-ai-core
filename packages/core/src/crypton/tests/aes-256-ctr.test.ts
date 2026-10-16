@@ -1,6 +1,7 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 import { AES256CTR, AesCtrCipher } from '../aes-256-ctr';
+import { getRandomBytes as randomBytes } from '../utils';
 
 describe('AES-256-CTR', () => {
   const key = Buffer.from('603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4', 'hex');
@@ -235,14 +236,90 @@ describe('AesCtrCipher', () => {
     assert.throws(() => c.process(new Uint8Array(32)), /overflow/i);
   });
 
+  test('chunk boundaries inside a block keep the keystream in sync', () => {
+    const k = Buffer.alloc(32, 0x5A);
+    const iv = Buffer.alloc(16, 0x11);
+    const data = randomBytes(200);
+    const oneShot = AES256CTR.process(data, k, iv, 0);
+    for (const chunk of [1, 2, 3, 4, 5, 7, 13, 15, 16, 17, 31, 33]) {
+      const cipher = new AesCtrCipher(k, iv, 0);
+      const parts: Buffer[] = [];
+      for (let i = 0; i < data.length; i += chunk) {
+        parts.push(Buffer.from(cipher.process(data.subarray(i, i + chunk))));
+      }
+      assert.ok(Buffer.concat(parts).equals(oneShot), `chunked stream (chunk=${chunk}) must match one-shot`);
+      assert.strictEqual(cipher.counter, Math.floor(data.length / 16),
+        `chunk=${chunk}: counter must count fully consumed blocks, not chunks`);
+    }
+  });
+
+  test('mixed chunk sizes and non-zero startCounter stay in sync', () => {
+    const k = randomBytes(32);
+    const iv = randomBytes(16);
+    const data = randomBytes(517);
+    for (const start of [0, 1, 7, 0x100]) {
+      const oneShot = AES256CTR.process(data, k, iv, start);
+      const cipher = new AesCtrCipher(k, iv, start);
+      const parts: Buffer[] = [];
+      let pos = 0;
+      for (const chunk of [1, 16, 15, 32, 3, 64, 17, 48, 5]) {
+        if (pos >= data.length) break;
+        parts.push(Buffer.from(cipher.process(data.subarray(pos, pos + chunk))));
+        pos += chunk;
+      }
+      if (pos < data.length) parts.push(Buffer.from(cipher.process(data.subarray(pos))));
+      assert.ok(Buffer.concat(parts).equals(oneShot), `mixed chunks from startCounter=${start}`);
+      assert.strictEqual(cipher.counter, (start + Math.floor(data.length / 16)) >>> 0);
+    }
+  });
+
+  test('independent enc/dec ciphers with unaligned chunks roundtrip', () => {
+    const k = randomBytes(32);
+    const iv = randomBytes(16);
+    const plain = randomBytes(300);
+    const enc = new AesCtrCipher(k, iv, 0);
+    const dec = new AesCtrCipher(k, iv, 0);
+    const ct: Buffer[] = [];
+    const pt: Buffer[] = [];
+    for (let i = 0; i < plain.length; i += 7) {
+      const slice = plain.subarray(i, i + 7);
+      ct.push(Buffer.from(enc.process(slice)));
+    }
+    const ciphertext = Buffer.concat(ct);
+    for (let i = 0; i < ciphertext.length; i += 5) {
+      pt.push(Buffer.from(dec.process(ciphertext.subarray(i, i + 5))));
+    }
+    assert.ok(Buffer.concat(pt).equals(plain), 'encryption and decryption may use different chunk sizes');
+    assert.ok(ciphertext.equals(AES256CTR.process(plain, k, iv, 0)));
+  });
+
+  test('1MB stream chunked at 7 bytes matches one-shot (counter carry)', () => {
+    const k = Buffer.alloc(32, 0x7F);
+    const iv = Buffer.alloc(16, 0x01);
+    const len = 1024 * 1024;
+    const plain = new Uint8Array(len);
+    for (let i = 0; i < len; i++) plain[i] = (i * 31 + 7) & 0xFF;
+    const expected = AES256CTR.process(Buffer.from(plain), k, iv, 0);
+    const cipher = new AesCtrCipher(k, iv, 0);
+    const out: Buffer[] = [];
+    for (let i = 0; i < len; i += 7) {
+      out.push(Buffer.from(cipher.process(plain.subarray(i, i + 7))));
+    }
+    assert.ok(Buffer.concat(out).equals(expected), 'large unaligned stream must stay in sync');
+    assert.strictEqual(cipher.counter, Math.floor(len / 16));
+  });
+
   test('destroy wipes key material and blocks reuse', () => {
     const k = new Uint8Array(32).fill(0xAB);
     const iv = new Uint8Array(16).fill(0xCD);
     const c = new AesCtrCipher(k, iv, 0);
     c.process(new Uint8Array(16));
+    const ecb = (c as any).ecb as AES256ECB;
+    ecb.encryptBlock(Buffer.alloc(16));
     c.destroy();
-    assert.ok((c as any).key.every((b: number) => b === 0));
     assert.ok((c as any).iv.every((b: number) => b === 0));
+    assert.throws(() => ecb.encryptBlock(Buffer.alloc(16)), /destroyed/);
+    assert.throws(() => ecb.encryptBlockInPlace(Buffer.alloc(16)), /destroyed/);
     assert.throws(() => c.process(new Uint8Array(16)), /destroyed/);
     c.destroy();
   });

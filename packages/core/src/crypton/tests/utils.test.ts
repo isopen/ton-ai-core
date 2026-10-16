@@ -86,6 +86,30 @@ describe('Utils', () => {
         const largeMod = 1000000007n;
         const largeResult = modPow(largeBase, largeExp, largeMod);
         assert.ok(typeof largeResult === 'bigint');
+        assert.strictEqual(modPow(2n, 10n, 1n), 0n);
+        assert.strictEqual(modPow(123n, 456n, 1n), 0n);
+        assert.throws(() => modPow(-1n, 2n, 10n), /Negative base/);
+        assert.throws(() => modPow(2n, -2n, 10n), /Negative exponent/);
+        assert.throws(() => modPow(2n, 2n, 0n), /Modulus must be positive/);
+    });
+
+    test('modPow matches a BigInt reference and modPowBranchless', () => {
+        const ref = (b: bigint, e: bigint, m: bigint): bigint => {
+            let r = 1n;
+            let base = ((b % m) + m) % m;
+            let exp = e;
+            while (exp > 0n) { if (exp & 1n) r = (r * base) % m; base = (base * base) % m; exp >>= 1n; }
+            return r % m;
+        };
+        for (const m of [1n, 2n, 97n, 1000000007n, (1n << 2048n) - 59n, (1n << 2048n) - 60n]) {
+            for (const e of [0n, 1n, 3n, 65537n]) {
+                for (const b of [0n, 1n, 2n, 123456789n]) {
+                    assert.strictEqual(modPow(b, e, m), ref(b, e, m), `modPow(${b}, ${e}, ${m % 97n})`);
+                    assert.strictEqual(modPowBranchless(b, e, m, e === 0n ? 1 : e.toString(2).length),
+                                       ref(b, e, m), `modPowBranchless(${b}, ${e}, ${m % 97n})`);
+                }
+            }
+        }
     });
 
     test('isProbablyPrime for known primes', () => {

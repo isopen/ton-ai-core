@@ -5,12 +5,18 @@ let sha256Impl: Sha256Fn = defaultSha256;
 export function setKdfSha256Implementation(fn: Sha256Fn): void {
     sha256Impl = fn;
 }
+export function getKdfSha256Implementation(): Sha256Fn {
+    return sha256Impl;
+}
 import { sha1 as defaultSha1 } from './sha1';
 
 type Sha1Fn = (data: Buffer) => Promise<Buffer>;
 let sha1Impl: Sha1Fn = defaultSha1;
 export function setKdfSha1Implementation(fn: Sha1Fn): void {
     sha1Impl = fn;
+}
+export function getKdfSha1Implementation(): Sha1Fn {
+    return sha1Impl;
 }
 import { Buffer } from 'buffer';
 import { bigIntToBufferLE } from './utils';

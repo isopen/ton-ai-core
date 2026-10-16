@@ -7,6 +7,9 @@ let sha1SyncImpl: Sha1SyncFn = defaultSha1Sync;
 export function setRsaSha1SyncImplementation(fn: Sha1SyncFn): void {
   sha1SyncImpl = fn;
 }
+export function getRsaSha1SyncImplementation(): Sha1SyncFn {
+  return sha1SyncImpl;
+}
 
 function extractPemBody(pem: string): string {
   const lines = pem.split(/\r?\n/);

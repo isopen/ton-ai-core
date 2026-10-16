@@ -96,4 +96,18 @@ describe('crypton WASM routing', () => {
             'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
         );
     });
+
+    test('WASM routing keeps the argument validation of the public wrappers', async () => {
+        assert.throws(() => crypton.getRandomBytes(1.5), /Invalid random length/);
+        assert.throws(() => crypton.getRandomBytes(-1), /Invalid random length/);
+        assert.throws(() => crypton.getRandomBytes(2 * 1024 * 1024), /1 MiB/);
+        assert.strictEqual(crypton.modPow(2n, 10n, 1n), 0n);
+        assert.strictEqual(crypton.modPow(0n, 0n, 1n), 0n);
+        for (const [b, e, m] of [[2n, 10n, 1n], [3n, 5n, 6n], [123n, 0n, 257n], [7n, 65537n, (1n << 2048n) - 59n]] as Array<[bigint, bigint, bigint]>) {
+            const want = (() => { let r = 1n, base = b % m, exp = e; while (exp > 0n) { if (exp & 1n) r = (r * base) % m; base = (base * base) % m; exp >>= 1n; } return r; })();
+            assert.strictEqual(crypton.modPow(b, e, m), want, `modPow(${b}, ${e}, ${m % 97n})`);
+        }
+        assert.throws(() => crypton.modPow(-1n, 2n, 10n), /Negative base/);
+        assert.throws(() => crypton.modPow(2n, 2n, 0n), /Modulus must be positive/);
+    });
 });
