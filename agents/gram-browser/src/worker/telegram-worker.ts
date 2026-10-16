@@ -2749,15 +2749,16 @@ async function checkPassword(password: string): Promise<void> {
     setTimeout(() => initUpdates().catch(() => {}), 100);
 }
 
-async function sendMessageAction(params: { message: string; peer: Record<string, any>; entities?: Array<{ offset: number; length: number; document_id: string }>; replyToMsgId?: number }): Promise<any> {
+async function sendMessageAction(params: { message: string; peer: Record<string, any>; entities?: Array<{ offset: number; length: number; document_id: string }>; topMsgId?: number }): Promise<any> {
     const randomId = crypton.getRandomBytes(8).readBigUInt64LE(0);
     const entities = Array.isArray(params.entities)
         ? params.entities
             .filter((e) => e && Number.isFinite(e.offset) && Number.isFinite(e.length) && e.document_id != null)
             .map((e) => ({ _: 'messageEntityCustomEmoji', offset: e.offset, length: e.length, document_id: BigInt(String(e.document_id)) }))
         : undefined;
-    const replyTo = Number.isFinite(params.replyToMsgId) && (params.replyToMsgId as number) > 0
-        ? { _: 'inputReplyToMessage', reply_to_msg_id: params.replyToMsgId }
+    const topMsgId = Number.isFinite(params.topMsgId) && (params.topMsgId as number) > 0 ? (params.topMsgId as number) : 0;
+    const replyTo = topMsgId > 0
+        ? { _: 'inputReplyToMessage', flags: 0b1, reply_to_msg_id: 0, top_msg_id: topMsgId }
         : undefined;
     return await callRpc('messages.sendMessage', {
         flags: replyTo ? 1 : 0,
@@ -2779,12 +2780,13 @@ function inputDocumentOf(document: any): Record<string, any> | null {
     return { _: 'inputDocument', id, access_hash: accessHash, file_reference: buf };
 }
 
-async function sendMediaAction(params: { peer: Record<string, any>; document: any; sticker?: boolean; replyToMsgId?: number }): Promise<any> {
+async function sendMediaAction(params: { peer: Record<string, any>; document: any; sticker?: boolean; topMsgId?: number }): Promise<any> {
     const inputDocument = inputDocumentOf(params.document);
     if (!inputDocument) throw new Error('Document reference expired, reopen the picker');
     const randomId = crypton.getRandomBytes(8).readBigUInt64LE(0);
-    const replyTo = Number.isFinite(params.replyToMsgId) && (params.replyToMsgId as number) > 0
-        ? { _: 'inputReplyToMessage', reply_to_msg_id: params.replyToMsgId }
+    const topMsgId = Number.isFinite(params.topMsgId) && (params.topMsgId as number) > 0 ? (params.topMsgId as number) : 0;
+    const replyTo = topMsgId > 0
+        ? { _: 'inputReplyToMessage', flags: 0b1, reply_to_msg_id: 0, top_msg_id: topMsgId }
         : undefined;
     return await callRpc('messages.sendMedia', {
         flags: replyTo ? 1 : 0,

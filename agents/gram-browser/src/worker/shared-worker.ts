@@ -217,11 +217,11 @@ async function _handleMessage(msg: Record<string, any>): Promise<any> {
             return { type: 'cleared' };
         }
         case 'sendMessage': {
-            const sendResult = await TW.sendMessage_({ message: msg.message, peer: msg.peer, entities: msg.entities, replyToMsgId: msg.replyToMsgId });
+            const sendResult = await TW.sendMessage_({ message: msg.message, peer: msg.peer, entities: msg.entities, topMsgId: msg.topMsgId });
             return { type: 'messageSent', data: sendResult };
         }
         case 'sendMedia': {
-            const mediaResult = await TW.sendMedia_({ peer: msg.peer, document: msg.document, sticker: msg.sticker, replyToMsgId: msg.replyToMsgId });
+            const mediaResult = await TW.sendMedia_({ peer: msg.peer, document: msg.document, sticker: msg.sticker, topMsgId: msg.topMsgId });
             return { type: 'messageSent', data: mediaResult };
         }
         case 'callRpc': {

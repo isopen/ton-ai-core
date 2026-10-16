@@ -266,7 +266,7 @@ async function sendMediaDoc(s: GramState, stickerDoc: any, sticker: boolean, ref
     const { sentId, sentDate, sentMedia, newMsgUpdate } = parseSentUpdates(data, optimisticId);
     const sentMsg = newMsgUpdate?.message;
     if (!sentMsg) histLog.warn('[send] updates without new-message, keeping optimistic id peer=', peerKey);
-    const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: sentMsg?.message ?? alt, out: true, peerId: null, media: sentMedia ?? optimistic.media, entities: sentMsg?.entities, groupedId: sentMsg?.grouped_id, topicId: topicId > 1 ? topicId : undefined, replyToMsgId: topicId > 1 ? topicId : undefined };
+    const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: sentMsg?.message ?? alt, out: true, peerId: null, media: sentMedia ?? optimistic.media, entities: sentMsg?.entities, groupedId: sentMsg?.grouped_id, topicId: topicId > 1 ? topicId : undefined };
     const updatedMsgs = (s.tgui.current?.state.messages || []).map(m => m.id === optimisticId ? realMsg : m);
     s.tgui.current!.setMessages(updatedMsgs);
     s.tgui.current?.scrollChatToBottom();
@@ -325,7 +325,7 @@ export function createCallbacks(
         const { sentId, sentDate, sentMedia, newMsgUpdate } = parseSentUpdates(data, optimisticId);
         const sentMsg = newMsgUpdate?.message;
         if (!sentMsg) histLog.warn('[send] updates without new-message, keeping optimistic id peer=', peerKey);
-        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null, media: sentMedia, entities: sentMsg?.entities ?? uiEntities, groupedId: sentMsg?.grouped_id, replyToMsgId: topicId > 1 ? topicId : undefined };
+        const realMsg: Message = { id: sentId, fromId: null, sender: t(S.SENDER_YOU), date: sentDate, message: text, out: true, peerId: null, media: sentMedia, entities: sentMsg?.entities ?? uiEntities, groupedId: sentMsg?.grouped_id, topicId: topicId > 1 ? topicId : undefined };
         const updatedMsgs = (s.tgui.current?.state.messages || []).map(p => p.id === optimisticId ? realMsg : p);
         s.tgui.current!.setMessages(updatedMsgs);
         s.tgui.current?.scrollChatToBottom();
