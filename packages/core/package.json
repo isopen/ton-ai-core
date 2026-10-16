@@ -6,17 +6,10 @@
   "types": "dist/index.d.ts",
   "license": "Boost Software License 1.0",
   "scripts": {
-    "build": "tsc && rm -rf dist/crypton/wasm && cp -r src/crypton/wasm dist/crypton/wasm",
+    "build": "tsc",
     "clean": "rm -rf dist"
   },
-  "dependencies": {
-    "@ton/crypto": "3.3.0",
-    "@ton/mcp": "^0.1.13",
-    "@ton/walletkit": "^0.0.10",
-    "@ton/core": "^0.62.1"
-  },
   "devDependencies": {
-    "@types/node": "^20.11.16",
     "typescript": "^5.9.3"
   }
 }
