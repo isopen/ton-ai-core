@@ -1,4 +1,3 @@
-import { spawn, type ChildProcess } from 'child_process';
 import {
     McpError,
     isMcpResponse,
@@ -11,6 +10,30 @@ import {
     type McpTransport,
 } from './types';
 
+export interface McpProcessStdio {
+    setEncoding(encoding: string): void;
+    on(event: string, listener: (...args: Array<never>) => void): void;
+    once(event: string, listener: (...args: Array<never>) => void): void;
+    write(data: string): void;
+    end(): void;
+}
+
+export interface McpProcess {
+    readonly stdin?: McpProcessStdio | null;
+    readonly stdout?: McpProcessStdio | null;
+    readonly stderr?: McpProcessStdio | null;
+    readonly exitCode: number | null;
+    on(event: string, listener: (...args: Array<never>) => void): void;
+    once(event: string, listener: (...args: Array<never>) => void): void;
+    kill?(signal?: string): void;
+}
+
+export type McpProcessSpawner = (
+    command: string,
+    args: string[],
+    options: { env?: Record<string, string>; cwd?: string },
+) => McpProcess;
+
 export interface McpStdioOptions {
     command: string;
     args?: string[];
@@ -18,6 +41,7 @@ export interface McpStdioOptions {
     cwd?: string;
     killTimeoutMs?: number;
     logger?: McpLogger;
+    spawn?: McpProcessSpawner;
 }
 
 interface PendingRequest {
@@ -26,7 +50,7 @@ interface PendingRequest {
 }
 
 export class McpStdioTransport implements McpTransport {
-    private proc: ChildProcess | null = null;
+    private proc: McpProcess | null = null;
     private notificationHandler: ((notification: McpJsonRpcNotification) => void) | null = null;
     private buffer = '';
     private pending = new Map<number | string, PendingRequest>();
@@ -41,10 +65,16 @@ export class McpStdioTransport implements McpTransport {
 
     async start(): Promise<void> {
         if (this.proc) return;
+        const spawn = this.options.spawn;
+        if (!spawn) {
+            throw new McpError(
+                'MCP stdio transport requires a process spawner in this runtime ' +
+                    `(command=${this.options.command}): pass spawn in McpStdioOptions`,
+            );
+        }
         const proc = spawn(this.options.command, this.options.args ?? [], {
-            env: { ...process.env, ...(this.options.env ?? {}) },
+            env: this.options.env,
             cwd: this.options.cwd,
-            stdio: ['pipe', 'pipe', 'pipe'],
         });
         this.proc = proc;
         proc.stdout?.setEncoding('utf8');
@@ -138,7 +168,7 @@ export class McpStdioTransport implements McpTransport {
         }
         const stdinTimeout = setTimeout(() => {
             try {
-                proc.kill('SIGTERM');
+                proc.kill?.('SIGTERM');
             } catch {
                 /* already gone */
             }
@@ -148,7 +178,7 @@ export class McpStdioTransport implements McpTransport {
         const escalateTimer = setTimeout(() => {
             if (proc.exitCode === null) {
                 try {
-                    proc.kill('SIGKILL');
+                    proc.kill?.('SIGKILL');
                 } catch {
                     /* already gone */
                 }

@@ -2,6 +2,7 @@ import { strict as assert } from 'assert';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { McpHub, McpHttpTransport, McpEmptyStreamError, McpError, mcpCallJson } from '../index';
 import type { McpLogger } from '../types';
+import { nodeProcessSpawner } from './helpers';
 
 interface Route {
     method: string;
@@ -473,7 +474,7 @@ rl.on('line', (line) => {
             debug: (message) => debugLines.push(String(message)),
         };
         const hub = new McpHub(
-            { srv: { transport: 'stdio', command: process.execPath, args: ['-e', LEGACY_SERVER] } },
+            { srv: { transport: 'stdio', spawn: nodeProcessSpawner, command: process.execPath, args: ['-e', LEGACY_SERVER] } },
             { logger },
         );
         await hub.connect();

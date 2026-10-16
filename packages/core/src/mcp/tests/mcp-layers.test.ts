@@ -2,12 +2,14 @@ import { strict as assert } from 'assert';
 import { join } from 'node:path';
 import { McpHub, McpError, mcpContentText } from '../index';
 import type { McpJsonRpcNotification } from '../types';
+import { nodeProcessSpawner } from './helpers';
 
 const RICH_SERVER = join(__dirname, 'fake-rich-server.cjs');
 
 function richConfig() {
     return {
         transport: 'stdio' as const,
+        spawn: nodeProcessSpawner,
         command: process.execPath,
         args: [RICH_SERVER],
     };

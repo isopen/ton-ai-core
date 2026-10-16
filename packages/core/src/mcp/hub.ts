@@ -77,6 +77,7 @@ function createTransport(config: McpServerConfig, logger?: McpLogger): McpTransp
         env: config.env,
         cwd: config.cwd,
         logger,
+        spawn: config.spawn,
     });
 }
 
@@ -94,12 +95,29 @@ function listCacheKey(method: string): string {
     return `${method}:list`;
 }
 
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function utf8ToBase64(value: string): string {
+    const bytes = new TextEncoder().encode(value);
+    let out = '';
+    for (let i = 0; i < bytes.length; i += 3) {
+        const a = bytes[i];
+        const b = i + 1 < bytes.length ? bytes[i + 1] : 0;
+        const c = i + 2 < bytes.length ? bytes[i + 2] : 0;
+        const n = (a << 16) | (b << 8) | c;
+        out += BASE64_ALPHABET[(n >> 18) & 63] + BASE64_ALPHABET[(n >> 12) & 63];
+        out += i + 1 < bytes.length ? BASE64_ALPHABET[(n >> 6) & 63] : '=';
+        out += i + 2 < bytes.length ? BASE64_ALPHABET[n & 63] : '=';
+    }
+    return out;
+}
+
 function encodeHeaderValue(value: string): string {
     const looksEncoded = value.startsWith('=?base64?') && value.endsWith('?=');
     if (/^[\x20\x09\x21-\x7E]*$/.test(value) && value.trim() === value && !looksEncoded) {
         return value;
     }
-    return `=?base64?${Buffer.from(value, 'utf8').toString('base64')}?=`;
+    return `=?base64?${utf8ToBase64(value)}?=`;
 }
 
 const HEADER_TOKEN = /^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/;

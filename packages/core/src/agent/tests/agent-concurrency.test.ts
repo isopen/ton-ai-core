@@ -1,6 +1,7 @@
 import { strict as assert } from 'assert';
 import { BaseAgent } from '../base-agent';
 import type { McpHub, McpServerConfig } from '../../mcp';
+import { nodeProcessSpawner } from '../../mcp/tests/helpers';
 
 const FAKE_SERVER = `
 const readline = require('readline');
@@ -19,7 +20,7 @@ rl.on('line', (line) => {
 `;
 
 function fakeServer(): McpServerConfig {
-    return { transport: 'stdio', command: process.execPath, args: ['-e', FAKE_SERVER] };
+    return { transport: 'stdio', spawn: nodeProcessSpawner, command: process.execPath, args: ['-e', FAKE_SERVER] };
 }
 
 class CountingAgent extends BaseAgent {

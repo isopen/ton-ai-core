@@ -1,5 +1,6 @@
 import { strict as assert } from 'assert';
 import { McpHub, McpError } from '../index';
+import { nodeProcessSpawner } from './helpers';
 
 const MODERN_SERVER = `
 const readline = require('readline');
@@ -85,6 +86,7 @@ rl.on('line', (line) => {
 function modernConfig(script: string = MODERN_SERVER) {
     return {
         transport: 'stdio' as const,
+        spawn: nodeProcessSpawner,
         command: process.execPath,
         args: ['-e', script],
     };

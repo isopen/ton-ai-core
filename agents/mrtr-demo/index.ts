@@ -1,5 +1,14 @@
+import { spawn as nodeSpawn } from 'node:child_process';
 import { join } from 'node:path';
+import type { McpProcess, McpProcessSpawner } from '@ton-ai/core';
 import { MrtrDemoAgent } from './agent';
+
+const nodeProcessSpawner: McpProcessSpawner = (command, args, options) =>
+    nodeSpawn(command, args, {
+        env: { ...process.env, ...(options.env ?? {}) },
+        cwd: options.cwd,
+        stdio: ['pipe', 'pipe', 'pipe'],
+    }) as unknown as McpProcess;
 
 async function main(): Promise<void> {
   const agent = new MrtrDemoAgent(undefined, {
@@ -8,6 +17,7 @@ async function main(): Promise<void> {
     mcpServers: {
       demo: {
         transport: 'stdio',
+        spawn: nodeProcessSpawner,
         command: process.execPath,
         args: [join(__dirname, 'server.mjs')],
       },

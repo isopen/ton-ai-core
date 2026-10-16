@@ -1,5 +1,6 @@
 import { strict as assert } from 'assert';
 import { McpHub, McpError, mcpContentText } from '../index';
+import { nodeProcessSpawner } from './helpers';
 
 const FAKE_SERVER = `
 const readline = require('readline');
@@ -41,6 +42,7 @@ const SILENT_SERVER = `process.stdin.resume();`;
 function stdioConfig(script: string = FAKE_SERVER) {
     return {
         transport: 'stdio' as const,
+        spawn: nodeProcessSpawner,
         command: process.execPath,
         args: ['-e', script],
     };
@@ -107,7 +109,7 @@ describe('mcp stdio transport and hub', () => {
 
     test('a dead command fails the connect', async () => {
         const hub = new McpHub({
-            fake: { transport: 'stdio', command: '/definitely/not/here-mcp-server' },
+            fake: { transport: 'stdio', spawn: nodeProcessSpawner, command: '/definitely/not/here-mcp-server' },
         });
         await assert.rejects(hub.connect(), (error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);

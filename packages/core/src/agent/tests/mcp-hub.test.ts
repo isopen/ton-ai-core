@@ -4,6 +4,7 @@ import { BasePlugin } from '../../plugin/base-plugin';
 import type { PluginMetadata } from '../../plugin/plugin-interface';
 import type { McpHub } from '../../mcp';
 import type { McpServerConfig } from '../../mcp';
+import { nodeProcessSpawner } from '../../mcp/tests/helpers';
 
 const FAKE_SERVER = `
 const readline = require('readline');
@@ -26,7 +27,7 @@ rl.on('line', (line) => {
 `;
 
 function fakeServer(): McpServerConfig {
-    return { transport: 'stdio', command: process.execPath, args: ['-e', FAKE_SERVER] };
+    return { transport: 'stdio', spawn: nodeProcessSpawner, command: process.execPath, args: ['-e', FAKE_SERVER] };
 }
 
 class HubProbePlugin extends BasePlugin {
@@ -101,7 +102,7 @@ describe('mcp hub agent and plugin wiring', () => {
         const agent = new McpAgent(plugin, {
             name: 'mcp-agent',
             plugins: {},
-            mcpServers: { fake: { transport: 'stdio', command: '/definitely/not/here-mcp-server' } },
+            mcpServers: { fake: { transport: 'stdio', spawn: nodeProcessSpawner, command: '/definitely/not/here-mcp-server' } },
         });
         await assert.rejects(agent.initialize(), (error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);

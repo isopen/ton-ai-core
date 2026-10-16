@@ -30,6 +30,6 @@ export {
     type McpLogger,
     type McpHubOptions,
 } from './types';
-export { McpStdioTransport, type McpStdioOptions } from './stdio-transport';
+export { McpStdioTransport, type McpStdioOptions, type McpProcess, type McpProcessSpawner, type McpProcessStdio } from './stdio-transport';
 export { McpHttpTransport, type McpHttpOptions } from './http-transport';
 export { McpHub, mcpCallJson, MCP_PROTOCOL_VERSION } from './hub';

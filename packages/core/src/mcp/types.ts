@@ -1,3 +1,5 @@
+import type { McpProcessSpawner } from './stdio-transport';
+
 export type McpServerConfig =
     | {
         transport: 'stdio';
@@ -5,6 +7,7 @@ export type McpServerConfig =
         args?: string[];
         env?: Record<string, string>;
         cwd?: string;
+        spawn?: McpProcessSpawner;
     }
     | {
         transport: 'http';
