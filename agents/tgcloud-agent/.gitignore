@@ -1,0 +1,7 @@
+# GENERATED at deploy time from @ton-ai/tgcloud-hello and @ton-ai/core — never commit.
+# Regenerate: npm run sync -w @ton-ai/tgcloud-agent
+tgcloud/lib/
+
+# GENERATED client vendor for app/ (agent framework) — never commit.
+# Regenerate: npm run sync -w @ton-ai/tgcloud-agent
+app/vendor/

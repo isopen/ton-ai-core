@@ -1,0 +1,20 @@
+{
+  "name": "@ton-ai/tgcloud-agent",
+  "version": "0.1.0",
+  "description": "Telegram Serverless Mini App agent cycling demo labels from @ton-ai/tgcloud-hello",
+  "author": "TON AI Core Team",
+  "license": "Boost Software License 1.0",
+  "scripts": {
+    "sync": "node scripts/sync.mjs",
+    "check": "node scripts/check-clean.mjs",
+    "predeploy": "npm run sync && npm run check"
+  },
+  "devDependencies": {
+    "@tgcloud/cli": "^0.2.0",
+    "@types/jest": "^30.0.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@ton-ai/tgcloud-hello": "^0.1.0"
+  }
+}

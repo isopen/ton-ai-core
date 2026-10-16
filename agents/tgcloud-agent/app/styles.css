@@ -1,0 +1,38 @@
+:root {
+  color-scheme: light dark;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  font-family: -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif;
+  background: var(--tg-theme-bg-color, #ffffff);
+  color: var(--tg-theme-text-color, #111111);
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+#label {
+  font-size: clamp(32px, 9vw, 64px);
+  font-weight: 800;
+  text-align: center;
+  padding: 0 24px;
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+#label.swap-out {
+  opacity: 0;
+  transform: translateY(14px) scale(0.97);
+}
+#label.swap-in {
+  opacity: 0;
+  transform: translateY(-14px) scale(0.97);
+}
+#hint {
+  font-size: 14px;
+  opacity: 0.55;
+}
