@@ -1,4 +1,5 @@
-import { fromNano, mcpCallJson, type McpHub } from '@ton-ai/core';
+import { fromNano } from '@ton/core';
+import { mcpCallJson, type McpHub } from '@ton-ai/core';
 
 export class TonMcpClient {
   private cachedAddress: string | undefined;

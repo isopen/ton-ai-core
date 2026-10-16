@@ -13,6 +13,7 @@
   "private": true,
   "dependencies": {
     "@ton-ai/core": "*",
+    "@ton/core": "^0.62.1",
     "@ton/mcp": "^0.1.13"
   },
   "devDependencies": {
