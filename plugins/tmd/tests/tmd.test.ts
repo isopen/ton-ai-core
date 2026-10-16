@@ -1,6 +1,7 @@
 import { parseTmdEntities, remapEntities, hasTmd, hasCommonTmd } from '../src/parser.js';
 import { applyEntitiesHtml, renderTmdHtml, renderCommonMarkHtml, escapeHtml } from '../src/renderer.js';
 import { renderCommonMark, hasCommonMark } from '../src/commonmark.js';
+import { detectLang, resolveLang, codeDisplayName } from '../src/highlight.js';
 
 const parse = (src: string) => parseTmdEntities(src);
 
@@ -386,4 +387,103 @@ describe('renderCommonMarkHtml wrapper', () => {
     expect(renderCommonMarkHtml(src)).toContain('md-h1');
     expect(renderCommonMarkHtml(src)).toContain('md-strong');
   });
+});
+
+describe('detectLang', () => {
+  const cases: Array<[string, string, string]> = [
+    ['rust by fn/impl/let mut', 'fn main() {\n    let mut v = Vec::new();\n    impl Drop for S {}\n}', 'rust'],
+    ['typescript by interface and type annotation', 'interface A { x: string }\nconst n: number = 1;', 'typescript'],
+    ['tsx by component tag', 'export const A = () => (\n  <div className="x">\n    hi\n  </div>\n);', 'jsx'],
+    ['tsx when typescript markers present', 'interface Props {\n  name: string;\n}\nexport const A = ({ name }: Props) => (\n  <div className="x">{name}</div>\n);', 'tsx'],
+    ['javascript by const arrow', "const f = (a) => a + 1;\nmodule.exports = f;", 'javascript'],
+    ['python by def and self', 'class A:\n    def go(self):\n        print(self.x)', 'python'],
+    ['go by package and :=', 'package main\n\nfunc main() {\n\tx := 1\n}', 'go'],
+    ['bash by shebang', '#!/usr/bin/env bash\nset -e\necho "hi"', 'bash'],
+    ['json by object shape', '{\n  "name": "x",\n  "ok": true\n}', 'json'],
+    ['html by doctype', '<!DOCTYPE html>\n<html><body>hi</body></html>', 'html'],
+    ['css by rule block', '.a {\n  color: red;\n}', 'css'],
+    ['sql by select from', 'SELECT id FROM users WHERE a = 1;', 'sql'],
+    ['dockerfile by FROM', 'FROM node:20\nRUN npm ci', 'dockerfile'],
+    ['diff by git header', 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@', 'diff'],
+    ['c++ by std::', '#include <vector>\nint main() { std::cout << 1; }', 'cpp'],
+    ['c by include only', '#include <stdio.h>\nint main() { return 0; }', 'c'],
+    ['solidity by pragma', 'pragma solidity ^0.8.0;\ncontract A {}', 'solidity'],
+  ];
+  for (const [name, code, want] of cases) {
+    test(name, () => {
+      expect(detectLang(code)).toBe(want);
+    });
+  }
+
+  test('unknown text returns empty', () => {
+    expect(detectLang('just some words here')).toBe('');
+    expect(detectLang('')).toBe('');
+  });
+
+  test('oversized input is not scanned', () => {
+    expect(detectLang('x'.repeat(60000))).toBe('');
+  });
+
+  test('explicit alias wins over detection', () => {
+    expect(resolveLang('ts', 'fn main() {}')).toBe('typescript');
+    expect(resolveLang('', 'fn main() {}')).toBe('rust');
+    expect(resolveLang(undefined, '')).toBe('');
+  });
+
+  test('codeDisplayName shows the label Telegram Web A shows', () => {
+    expect(codeDisplayName('ts')).toBe('TypeScript');
+    expect(codeDisplayName('rs')).toBe('Rust');
+    expect(codeDisplayName('')).toBe('code');
+  });
+});
+
+describe('applyEntitiesHtml keeps server ranges', () => {
+    const TEXT = 'Готово.\n\nЧто было не так\n\nbug_38.png и var(--bg-surface) тут\n\nКонец';
+    const at = (s: string) => {
+        const i = TEXT.indexOf(s);
+        if (i < 0) throw new Error('not found ' + s);
+        return { offset: i, length: s.length };
+    };
+
+    test('bold and code close exactly at their end', () => {
+        const html = applyEntitiesHtml(TEXT, [
+            { _: 'messageEntityBold', ...at('Что было не так') } as any,
+            { _: 'messageEntityBold', ...at('bug_38.png') } as any,
+            { _: 'messageEntityCode', ...at('var(--bg-surface)') } as any,
+            { _: 'messageEntityBold', ...at('Конец') } as any,
+        ]);
+        expect(html).toBe(
+            'Готово.<br><br><strong class="md-strong">Что было не так</strong><br><br>' +
+            '<strong class="md-strong">bug_38.png</strong> и <code class="md-code">var(--bg-surface)</code> тут<br><br>' +
+            '<strong class="md-strong">Конец</strong>',
+        );
+    });
+
+    test('newlines become <br> outside pre and stay as newlines inside pre', () => {
+        const text = 'a\nb';
+        expect(applyEntitiesHtml(text, [])).toBe('a<br>b');
+        const pre = applyEntitiesHtml(text, [{ _: 'messageEntityPre', offset: 0, length: text.length } as any]);
+        expect(pre).toBe('<pre class="md-pre"><code class="md-code-block">a\nb</code></pre>');
+    });
+
+    test('adjacent entities on one line keep their own tags', () => {
+        const text = 'x bold y code z bold w';
+        const at2 = (s: string) => { const i = text.indexOf(s); return { offset: i, length: s.length }; };
+        const secondBold = text.indexOf('bold', text.indexOf('bold') + 1);
+        const html = applyEntitiesHtml(text, [
+            { _: 'messageEntityBold', ...at2('bold') } as any,
+            { _: 'messageEntityCode', ...at2('code') } as any,
+            { _: 'messageEntityBold', offset: secondBold, length: 4 } as any,
+        ]);
+        expect(html).toBe('x <strong class="md-strong">bold</strong> y <code class="md-code">code</code> z <strong class="md-strong">bold</strong> w');
+    });
+
+    test('nested entities close from the inside out', () => {
+        const text = 'aa bb cc dd';
+        const html = applyEntitiesHtml(text, [
+            { _: 'messageEntityBold', offset: 0, length: 11 } as any,
+            { _: 'messageEntityCode', offset: 3, length: 5 } as any,
+        ]);
+        expect(html).toBe('<strong class="md-strong">aa <code class="md-code">bb cc</code> dd</strong>');
+    });
 });

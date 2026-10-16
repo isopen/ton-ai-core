@@ -111,84 +111,83 @@ export function codeLangClass(raw?: string): string {
   return n ? `language-${n}` : 'language-text';
 }
 
-const KEYWORDS = [
-  'const', 'let', 'var', 'function', 'return', 'if', 'else', 'elif', 'for', 'while',
-  'do', 'switch', 'case', 'default', 'break', 'continue', 'new', 'delete', 'typeof',
-  'instanceof', 'in', 'of', 'try', 'catch', 'finally', 'throw', 'throws', 'async',
-  'await', 'yield', 'class', 'extends', 'implements', 'interface', 'type', 'enum',
-  'struct', 'impl', 'trait', 'fn', 'pub', 'mut', 'ref', 'move', 'match', 'use',
-  'mod', 'crate', 'where', 'loop', 'as', 'is', 'not', 'and', 'or', 'import',
-  'from', 'export', 'require', 'module', 'package', 'func', 'defer', 'go', 'chan',
-  'select', 'fallthrough', 'def', 'lambda', 'pass', 'raise', 'with', 'assert',
-  'print', 'echo', 'static', 'public', 'private', 'protected', 'final', 'void',
-  'int', 'float', 'double', 'bool', 'boolean', 'string', 'char', 'long', 'short',
-  'true', 'false', 'null', 'nil', 'none', 'undefined', 'nan', 'self', 'super',
-  'this', 'constructor', 'get', 'set', 'operator', 'template', 'typename',
-  'namespace', 'virtual', 'override', 'abstract', 'sealed', 'readonly', 'volatile',
-  'synchronized', 'throws', 'extends', 'super', 'SELECT', 'FROM', 'WHERE', 'JOIN',
-  'LEFT', 'RIGHT', 'INNER', 'OUTER', 'ON', 'GROUP', 'BY', 'ORDER', 'HAVING',
-  'LIMIT', 'OFFSET', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE',
-  'CREATE', 'TABLE', 'ALTER', 'DROP', 'INDEX', 'VIEW', 'UNION', 'ALL', 'DISTINCT',
-  'AND', 'OR', 'NOT', 'NULL', 'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES',
+interface LangRule {
+  lang: string;
+  test: RegExp;
+  weight?: number;
+  needs?: RegExp[];
+}
+
+const JSX_SYNTAX = /<[A-Za-z][\w.-]*(?:\s[^<>]*)?>[\s\S]*<\/[A-Za-z][\w.-]*>|className=/;
+const TS_DECL = /\b(?:interface|type|enum)\s+\w+/;
+const TS_ANNOTATION = /:\s*(?:string|number|boolean|void|any|unknown|never|JSX\.Element|React\.\w+)\b/;
+
+const STRONG_RULES: LangRule[] = [
+  { lang: 'bash', test: /^\s*#!\s*\/(usr\/bin\/env\s+)?(bash|sh|zsh)\b/ },
+  { lang: 'bash', test: /^\s*(#!\/(bin\/(ba)?sh)|source\s+\S+|\$\{?\w+\}?\s*=) /m },
+  { lang: 'python', test: /^\s*#!\s*\/(usr\/bin\/env\s+)?python\d?\b/ },
+  { lang: 'python', test: /\bdef\s+\w+\s*\([^)]*\)\s*(->\s*[\w\[\], .]+)?:\s*$/m, weight: 5 },
+  { lang: 'python', test: /\b(print|self|elif|lambda|yield from|__init__|__name__)\b/, weight: 5 },
+  { lang: 'rust', test: /\b(fn|impl|trait|struct|enum|match|mod|use|crate|pub|mut|where|loop)\b[\s\S]*?(->|::|\{)/ },
+  { lang: 'rust', test: /\blet\s+(mut\s+)?\w+\s*(:\s*[\w:<>]+)?\s*=/ },
+  { lang: 'rust', test: /&(mut\s+)?(str|String|self|[\w:]+)/ },
+  { lang: 'go', test: /\b(package|func|import)\s+(main|\w+|\()[\s\S]*?(\{|\n)/ },
+  { lang: 'go', test: /:=\s|= err\b|\bgo func\b|\bdefer\s+\w+\(/ },
+  { lang: 'java', test: /\b(public|private|protected)\s+(static\s+)?(final\s+)?[\w<>\[\]]+\s+\w+\s*\(/ },
+  { lang: 'kotlin', test: /\b(fun|val|var|object|companion|data class|sealed|suspend)\b/ },
+  { lang: 'swift', test: /\b(func|let|var|import Swift|@objc|guard let|defer)\b/ },
+  { lang: 'csharp', test: /\b(namespace|using System|public class|private class|Console\.WriteLine|var\s+\w+\s*=)/ },
+  { lang: 'php', test: /<\?php|\$this->|\becho\s+["']/ },
+  { lang: 'ruby', test: /\b(def|end|require|puts|attr_accessor|module|class)\b[\s\S]*?\bend\b/ },
+  { lang: 'typescript', test: /\b(interface|type|enum|namespace|implements|declare|readonly|private|public)\b/ },
+  { lang: 'typescript', test: /:\s*(string|number|boolean|void|any|unknown|never|Promise<[\w<>]+>|[\w]+\[\])\b/ },
+  { lang: 'typescript', test: /<[A-Z]\w*(Props|State|Ref)\b/ },
+  { lang: 'tsx', test: JSX_SYNTAX, needs: [TS_DECL, TS_ANNOTATION], weight: 5 },
+  { lang: 'tsx', test: JSX_SYNTAX, needs: [TS_DECL], weight: 5 },
+  { lang: 'tsx', test: JSX_SYNTAX, needs: [TS_ANNOTATION], weight: 5 },
+  { lang: 'jsx', test: JSX_SYNTAX, weight: 4 },
+  { lang: 'javascript', test: /\b(const|let|var|function|=>|require\(|module\.exports|export default|async|await)\b/ },
+  { lang: 'html', test: /<!DOCTYPE html>|<html[\s>]|<head[\s>]|<body[\s>]/i, weight: 6 },
+  { lang: 'xml', test: /^<\?xml\s+version/i },
+  { lang: 'svg', test: /<svg[\s>]|<path\s+d=/i },
+  { lang: 'css', test: /\{\s*[\w-]+\s*:\s*[^;]+;\s*\}/, weight: 1 },
+  { lang: 'css', test: /@media\s|@import\s|@keyframes\s/ },
+  { lang: 'scss', test: /\$[\w-]+\s*:|@include\s|@mixin\s/ },
+  { lang: 'json', test: /^\s*[{\[]\s*("[^"]*"\s*:\s*[^,]+,?\s*)+[}\]]\s*$/ },
+  { lang: 'json', test: /^\s*\{\s*\n\s*"/ },
+  { lang: 'yaml', test: /^\s*[\w.-]+:\s*(&|$|\S)/m, weight: 1 },
+  { lang: 'yaml', test: /^\s*-\s+[\w.-]+:/m },
+  { lang: 'toml', test: /^\s*\[[\w.-]+\]\s*$/m, weight: 1 },
+  { lang: 'sql', test: /\b(SELECT|INSERT INTO|UPDATE|DELETE FROM|CREATE TABLE|ALTER TABLE|DROP TABLE)\b[\s\S]*?\b(FROM|INTO|TABLE|SET|VALUES)\b/i },
+  { lang: 'dockerfile', test: /^\s*FROM\s+\S+\s*$/m },
+  { lang: 'dockerfile', test: /^\s*(RUN|CMD|ENTRYPOINT|COPY|ADD|ENV|WORKDIR|EXPOSE)\s+/m },
+  { lang: 'diff', test: /^(diff --git|---\s|\+\+\+\s|@@\s.*@@)/m },
+  { lang: 'markdown', test: /^#{1,6}\s+\S/m, weight: 1 },
+  { lang: 'markdown', test: /^\s*[-*+]\s+\S/m, weight: 1 },
+  { lang: 'solidity', test: /\b(pragma solidity|contract\s+\w+|function\s*\([^)]*\)\s*(public|external|internal|private)?\s*(view|pure|payable)?\s*(returns)?\s*\()/ },
+  { lang: 'cpp', test: /\b(std::|cout|cin|endl|namespace\s+\w+|template\s*<|class\s+\w+\s*(final)?\s*[:{])/, weight: 4 },
+  { lang: 'c', test: /#include\s*<[\w./]+>/, weight: 1 },
 ];
 
-const KW_RE_SRC = '\\b(?:' + KEYWORDS.join('|') + ')\\b';
+const DETECT_MAX_LEN = 20000;
 
-const TOKEN_RE = new RegExp(
-  '(?<comment>\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/|<!--[\\s\\S]*?-->|(?:^|\\n)\\s*#[^\\n]*)' +
-    '|(?<str>"(?:[^"\\\\\\n]|\\\\.)*"?|\'(?:[^\'\\\\\\n]|\\\\.)*\'?|`(?:[^`\\\\]|\\\\.)*`?)' +
-    '|(?<kw>' + KW_RE_SRC + ')' +
-    '|(?<num>\\b0x[0-9a-fA-F_]+\\b|\\b\\d[\\d_]*(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b)' +
-    '|(?<fn>[A-Za-z_$][\\w$]*(?=\\s*\\())',
-  'g',
-);
-
-const MAX_HIGHLIGHT_LEN = 60000;
-
-export function highlightCode(src: string, _lang?: string): string {
-  if (src == null) return '';
-  const text = String(src);
-  if (!text) return '';
-  if (text.length > MAX_HIGHLIGHT_LEN) return escHtml(text);
-  TOKEN_RE.lastIndex = 0;
-  if (!TOKEN_RE.test(text)) return escHtml(text);
-  TOKEN_RE.lastIndex = 0;
-
-  let out = '';
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = TOKEN_RE.exec(text)) !== null) {
-    const idx = m.index;
-    if (idx > last) out += escHtml(text.slice(last, idx));
-    const g = (m.groups || {}) as Record<string, string | undefined>;
-    const tok = m[0];
-    if (g.comment !== undefined) {
-      if (tok.charAt(0) === '\n') {
-        out += '\n' + '<span class="tok-c">' + escHtml(tok.slice(1)) + '</span>';
-      } else {
-        out += '<span class="tok-c">' + escHtml(tok) + '</span>';
-      }
-    } else if (g.str !== undefined) {
-      out += '<span class="tok-s">' + escHtml(tok) + '</span>';
-    } else if (g.kw !== undefined) {
-      out += '<span class="tok-k">' + escHtml(tok) + '</span>';
-    } else if (g.num !== undefined) {
-      out += '<span class="tok-n">' + escHtml(tok) + '</span>';
-    } else if (g.fn !== undefined) {
-      out += '<span class="tok-f">' + escHtml(tok) + '</span>';
-    } else {
-      out += escHtml(tok);
-    }
-    last = idx + tok.length;
-    if (tok.length === 0) {
-      TOKEN_RE.lastIndex++;
-      last = TOKEN_RE.lastIndex;
-    }
-    if (out.length > MAX_HIGHLIGHT_LEN * 6) {
-      out += escHtml(text.slice(last));
-      return out;
-    }
+export function detectLang(code: string): string {
+  if (!code) return '';
+  const text = String(code);
+  if (text.length > DETECT_MAX_LEN) return '';
+  let bestLang = '';
+  let bestScore = 0;
+  for (const rule of STRONG_RULES) {
+    if (!rule.test.test(text)) continue;
+    if (rule.needs && !rule.needs.every((re) => re.test(text))) continue;
+    const score = rule.weight ?? 3;
+    if (score > bestScore) { bestScore = score; bestLang = rule.lang; }
   }
-  if (last < text.length) out += escHtml(text.slice(last));
-  return out;
+  return bestLang;
+}
+
+export function resolveLang(raw: string | undefined, code: string): string {
+  const explicit = normalizeLang(raw);
+  if (explicit) return explicit;
+  return detectLang(code);
 }
