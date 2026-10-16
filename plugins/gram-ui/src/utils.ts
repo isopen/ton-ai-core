@@ -602,3 +602,23 @@ export function wallpaperRender(wallpaper: any, url: string, seedAngle?: string)
     }
     return { body, pattern: patternStyle, showPattern };
 }
+
+export function copyToClipboard(text: string): Promise<void> {
+  const nav = typeof navigator !== 'undefined' ? (navigator as any) : null;
+  if (nav?.clipboard?.writeText) return nav.clipboard.writeText(text);
+  return new Promise((resolve, reject) => {
+    try {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+      resolve();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}

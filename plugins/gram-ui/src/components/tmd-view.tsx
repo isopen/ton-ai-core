@@ -1,15 +1,18 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useMemo } from '@ton-ai/atom/hooks';
+import { t, S } from '@ton-ai/gram-lang';
 import { parseTmdEntities, remapEntities, applyEntitiesHtml, hasCommonTmd, renderCommonMark } from '@ton-ai/tmd';
 import { getLogger } from '@ton-ai/gram-debug';
 import type { ImageSpec } from '../types.js';
+import { CodeBlock } from '../primitives/code-block.js';
 import { AnimatedEmoji, EmojiText } from './emoji-text.js';
 import { GlyphEmoji } from './emoji-canvas.js';
 import { resolveEmojiSource } from './emoji-source.js';
 import { matchEmojiRuns, getEmojiDocId } from './emoji-store.js';
 import { render } from '@ton-ai/atom/render';
 import { Checkmark } from './checkmark.js';
-import { isInactiveButtonData, isButtonInactive, buttonBubbleRel } from '../utils.js';
+import { isInactiveButtonData, isButtonInactive, buttonBubbleRel, copyToClipboard } from '../utils.js';
+import { useApp } from '../app-context.js';
 
 const tmdLog = getLogger('gram-ui:tmd');
 
@@ -99,6 +102,87 @@ function mountStandardEmojis(root: HTMLElement, documentUrls: Record<string, str
   }
 }
 
+function mountCodeBlocks(root: HTMLElement) {
+  const blocks = root.querySelectorAll('pre.md-pre');
+  blocks.forEach((el) => {
+    const pre = el as HTMLElement;
+    if (pre.dataset.codeblockMounted === '1') return;
+    if (pre.closest('.md-codeblock')) return;
+    pre.dataset.codeblockMounted = '1';
+    const code = pre.querySelector('code');
+    const lang = pre.getAttribute('data-lang') || code?.getAttribute('data-lang') || '';
+    const raw = (code?.textContent ?? pre.textContent ?? '').replace(/\n$/, '');
+    if (!raw) return;
+    const host = document.createElement('div');
+    host.className = 'md-codeblock-slot';
+    host.dataset.codeblockMounted = '1';
+    pre.parentNode?.insertBefore(host, pre);
+    pre.remove();
+    try {
+      render(() => h(CodeBlock as any, { code: raw, lang } as any), host);
+    } catch (e) {
+      tmdLog.error('[TmdView] code block mount failed', e);
+      host.remove();
+      pre.dataset.codeblockMounted = '0';
+      if (pre.parentNode) pre.parentNode.insertBefore(pre, host);
+    }
+  });
+}
+
+const PATH_RE = /(?:\.{0,2}\/)?(?:[\w.@-]+\/)+[\w.@-]+\.[A-Za-z0-9]{1,10}\b/g;
+
+function mountPathChips(root: HTMLElement) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const nodes: Text[] = [];
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    const tn = n as Text;
+    const parent = tn.parentElement;
+    if (!parent) continue;
+    if (parent.closest('pre, a, .md-path')) continue;
+    const value = tn.nodeValue;
+    if (!value) continue;
+    PATH_RE.lastIndex = 0;
+    if (!PATH_RE.test(value)) continue;
+    nodes.push(tn);
+  }
+  for (const tn of nodes) {
+    const text = tn.nodeValue || '';
+    const frag = document.createDocumentFragment();
+    let pos = 0;
+    PATH_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = PATH_RE.exec(text)) !== null) {
+      if (m.index > pos) frag.appendChild(document.createTextNode(text.slice(pos, m.index)));
+      const chip = document.createElement('span');
+      chip.className = 'md-path';
+      chip.setAttribute('role', 'button');
+      chip.setAttribute('tabindex', '0');
+      chip.textContent = m[0];
+      frag.appendChild(chip);
+      pos = m.index + m[0].length;
+      if (m[0].length === 0) PATH_RE.lastIndex += 1;
+    }
+    if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+    tn.parentNode?.replaceChild(frag, tn);
+  }
+}
+
+const SERVER_FORMATTED_ENTITIES = new Set([
+  'messageEntityBold',
+  'messageEntityItalic',
+  'messageEntityUnderline',
+  'messageEntityStrike',
+  'messageEntityCode',
+  'messageEntityPre',
+  'messageEntityBlockquote',
+  'messageEntityExpandableBlockquote',
+  'messageEntitySpoiler',
+  'messageEntityTextUrl',
+  'messageEntityUrl',
+  'messageEntityMentionName',
+]);
+
 export function TmdView({ text, foreignEntities, documentUrls, documentSources, inactiveButtons, className = '', time, status, out, messageId, onOpenPhoto }: {
   text: string;
   foreignEntities?: any[];
@@ -114,28 +198,31 @@ export function TmdView({ text, foreignEntities, documentUrls, documentSources, 
 }) {
   if (!text) return null;
 
-  const serverSaysCode = (foreignEntities ?? []).some(
-    (e: any) => e?._ === 'messageEntityPre' || e?._ === 'messageEntityCode',
-  );
+  const foreignList = Array.isArray(foreignEntities) ? foreignEntities : [];
+  const serverFormatted = foreignList.some((e: any) => SERVER_FORMATTED_ENTITIES.has(e?._));
 
   const html = useMemo(() => {
     try {
-      if (hasCommonTmd(text) && !serverSaysCode) {
-        const out = renderCommonMark(text, { safe: true, entities: foreignEntities } as any);
-        tmdLog.info('[TmdView] commonmark len=', text.length, 'htmlLen=', out.length);
-        return out;
-      } else {
-        const { text: plain, entities, srcToPlain } = parseTmdEntities(text);
-        const merged = [...entities, ...remapEntities(foreignEntities || [], srcToPlain)];
-        const out = applyEntitiesHtml(plain, merged);
-        tmdLog.info('[TmdView] legacy len=', text.length, 'plain=', plain.length, 'ents=', merged.length);
+      if (serverFormatted) {
+        const out = applyEntitiesHtml(text, foreignList as any);
+        tmdLog.info('[TmdView] server entities len=', text.length, 'ents=', foreignList.length);
         return out;
       }
+      if (hasCommonTmd(text)) {
+        const out = renderCommonMark(text, { safe: true, entities: foreignList } as any);
+        tmdLog.info('[TmdView] commonmark len=', text.length, 'htmlLen=', out.length);
+        return out;
+      }
+      const { text: plain, entities, srcToPlain } = parseTmdEntities(text);
+      const merged = [...entities, ...remapEntities(foreignList, srcToPlain)];
+      const out = applyEntitiesHtml(plain, merged);
+      tmdLog.info('[TmdView] legacy len=', text.length, 'plain=', plain.length, 'ents=', merged.length);
+      return out;
     } catch (e) {
       tmdLog.error('[TmdView] parse failed, falling back to plain:', e);
       return '';
     }
-  }, [text, foreignEntities, serverSaysCode]);
+  }, [text, foreignEntities, serverFormatted]);
 
   const ref = useRef<HTMLDivElement | null>(null);
   const hasTime = typeof time === 'string' && time.length > 0;
@@ -153,19 +240,27 @@ export function TmdView({ text, foreignEntities, documentUrls, documentSources, 
     return h(EmojiText as any, { text, entities: foreignEntities, documentUrls: documentUrls || {}, documentSources } as any);
   }
 
+  const { dispatch } = useApp();
+
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     mountCustomEmojis(el, (documentUrls || {}) as any, documentSources);
+    mountCodeBlocks(el);
 
-    requestAnimationFrame(() => mountStandardEmojis(el, (documentUrls || {}) as any, documentSources));
+    requestAnimationFrame(() => {
+      mountStandardEmojis(el, (documentUrls || {}) as any, documentSources);
+      mountPathChips(el);
+    });
   }, [html, documentSources]);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     mountCustomEmojis(el, (documentUrls || {}) as any, documentSources);
+    mountCodeBlocks(el);
     mountStandardEmojis(el, (documentUrls || {}) as any, documentSources);
+    mountPathChips(el);
   }, [documentUrls, documentSources]);
 
   const handleTableClick = (e: any) => {
@@ -238,7 +333,28 @@ export function TmdView({ text, foreignEntities, documentUrls, documentSources, 
     }
   };
 
-  const handleContentClick = (e: any) => { if (handleImageClick(e)) return; handleTableClick(e); handleQuoteClick(e); };
+  const handlePathClick = (e: any) => {
+    try {
+      const target = e?.target as HTMLElement | null;
+      const chip = target && typeof (target as any).closest === 'function'
+        ? ((target as any).closest('.md-path') as HTMLElement | null)
+        : null;
+      if (!chip) return;
+      const path = chip.textContent || '';
+      if (!path) return;
+      e.preventDefault();
+      e.stopPropagation();
+      copyToClipboard(path).then(() => {
+        dispatch({ type: 'SET_ERROR', error: t(S.PATH_COPIED) });
+      }).catch((err) => {
+        tmdLog.error('[TmdView] path copy failed', err);
+      });
+    } catch (err) {
+      tmdLog.error('[TmdView] path click failed', err);
+    }
+  };
+
+  const handleContentClick = (e: any) => { handlePathClick(e); if (handleImageClick(e)) return; handleTableClick(e); handleQuoteClick(e); };
 
   return h('div', { class: 'tmd-body md-body' + (className ? ' ' + className : ''), onClick: handleContentClick },
     h('div', { ref: (e: HTMLDivElement | null) => { ref.current = e; }, dangerouslySetInnerHTML: { __html: html } } as any),

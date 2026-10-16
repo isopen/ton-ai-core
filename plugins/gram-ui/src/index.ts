@@ -3,6 +3,8 @@ export type { TelegramUICallbacks, CustomEmojiEntity } from './telegram-ui.js';
 export type { PeerInfo, Dialog, Message, AppState, ImageSpec, ImageSource, ImageProps, ForumTopic, SelectedTopic } from './types.js';
 export type { TguiImageProps } from './types.js';
 export { Image } from './primitives/image.js';
+export { CodeBlock, codeBlockLangClass } from './primitives/code-block.js';
+export type { CodeBlockProps } from './primitives/code-block.js';
 export { IconButton } from './primitives/icon-button.js';
 export { Tabs } from './primitives/tabs.js';
 export type { TabsItem, TabsProps } from './primitives/tabs.js';
