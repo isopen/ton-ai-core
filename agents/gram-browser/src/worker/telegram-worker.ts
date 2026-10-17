@@ -91,6 +91,12 @@ const WEBFILE_DC_ID = 4;
 const DC_RPC_SLOT_TIMEOUT_MS = 15000;
 const CDN_PROBE_TIMEOUT_MS = 3000;
 const cdnUnreachableDcs = new Set<number>();
+
+function cdnChunkIv(iv: Buffer, offset: number): Buffer {
+    const out = Buffer.from(iv);
+    out.writeUInt32BE(Math.floor(offset / 16) >>> 0, 12);
+    return out;
+}
 let cdnProbeStarted = false;
 
 let conn: BrowserObfuscatedConnection | null = null;
@@ -3681,7 +3687,7 @@ async function processDownloadQueue(): Promise<void> {
 
             const effPoolKey = item.bucket || poolKey(dc, small);
             if (poolFree(effPoolKey) < effSize) continue;
-            if (item.priority >= bestPriority) {
+            if (item.priority > bestPriority) {
                 bestPriority = item.priority;
                 bestIdx = i;
             }
@@ -3936,8 +3942,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 }
                 if (result._ === 'upload.cdnFile') {
                     const encrypted = Buffer.from(result.bytes || '', 'hex');
-                    const startCounter = Number(ofs) / 16;
-                    const decrypted = crypton.AES256CTR.process(encrypted, cdnKey!, cdnIv!, startCounter);
+                    const decrypted = crypton.AES256CTR.process(encrypted, cdnKey!, cdnChunkIv(cdnIv!, Number(ofs)), 0);
                     if (!(await verifyCdnChunk(ofs, decrypted))) {
                         wlog('[dl] CDN hash mismatch id=' + id + ' ofs=' + ofs + ' — falling back to origin DC');
                         cdnUnreachableDcs.add(cdnDcId);
@@ -4079,6 +4084,9 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
 if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen : photoDownloadGen)) throw new Error('ABORTED');
                 wlog('[dl] part retry id=' + id + ' label=' + label + ' idx=' + partIdx + ' attempt=' + (attempt + 1) + ' err=' + ((lastErr as Error)?.message || lastErr));
                 if (attempt < 4) await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+            }
+            if (resumed && resumed.parts.size > 0 && cacheKey && !isNoMediaCache()) {
+                void persistDownloadParts(cacheKey, resumed.parts, PART_SIZE, finalType).catch(() => {});
             }
             throw lastErr;
         };
@@ -4290,8 +4298,7 @@ async function downloadFileStream_(document: any, onChunk: (ab: ArrayBuffer, fin
             }
             if (result._ === 'upload.cdnFile') {
                 const encrypted = Buffer.from(result.bytes || '', 'hex');
-                const startCounter = Number(ofs) / 16;
-                const decrypted = crypton.AES256CTR.process(encrypted, cdnKey!, cdnIv!, startCounter);
+                const decrypted = crypton.AES256CTR.process(encrypted, cdnKey!, cdnChunkIv(cdnIv!, Number(ofs)), 0);
                 if (!(await verifyStreamCdnChunk(ofs, decrypted))) {
                     vlog('CDN hash mismatch ofs=' + ofs + ' — falling back to origin DC');
                     cdnUnreachableDcs.add(cdnDcId);
