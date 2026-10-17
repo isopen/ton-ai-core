@@ -118,3 +118,16 @@ describe('wallpaper preview card', () => {
         expect(cardBlock![0]).toContain('480px');
         expect(cardBlock![0]).toContain('100dvh');
     });
+
+    test('preview bar is pinned to card edges with centered equal buttons', () => {
+        const css = builtCss();
+        const barBlock = /\.tgui-wall-preview-bar\s*\{[^}]*\}/.exec(css);
+        expect(barBlock).not.toBeNull();
+        expect(barBlock![0]).toContain('left: 0');
+        expect(barBlock![0]).toContain('right: 0');
+        expect(barBlock![0]).toContain('justify-content: center');
+        const btnBlock = /\.tgui-wall-preview-bar \.Button\s*\{[^}]*\}/.exec(css);
+        expect(btnBlock).not.toBeNull();
+        expect(btnBlock![0]).toContain('flex: 1 1 0');
+        expect(btnBlock![0]).toContain('max-width: 200px');
+    });

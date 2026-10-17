@@ -42,11 +42,10 @@ describe('wallpaper preview bar centered over image', () => {
     expect(bar).toContain('align-items: center');
   });
 
-  test('buttons form compact centered cluster', () => {
+  test('buttons form equal-centered row', () => {
     const css = builtCss();
     const btn = barButtonBlock(css);
-    expect(btn).toContain('flex: 0 1 auto');
-    expect(btn).not.toContain('flex: 1 1 0');
+    expect(btn).toContain('flex: 1 1 0');
     expect(btn).toContain('max-width: 200px');
   });
 
