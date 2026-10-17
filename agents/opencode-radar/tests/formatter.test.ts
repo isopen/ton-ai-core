@@ -77,7 +77,7 @@ describe('formatter', () => {
             updatedAt: 60000,
         });
         assert.ok(text.includes('Test session &lt;x&gt;'));
-        assert.ok(text.includes('План 1/3'));
+        assert.ok(text.includes('Plan 1/3'));
         assert.ok(text.includes('5258046117932711905'));
         assert.ok(text.includes('first'));
         assert.ok(text.includes('5766933926429854499'));

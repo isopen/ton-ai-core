@@ -419,6 +419,7 @@ interface WatchedSession {
     appliedTopicName: string | null;
     buildMode: boolean;
     knownParts: Map<string, number>;
+    seenPartKeys: Set<string>;
     knownEventSig: Map<string, string>;
     todos: TodoItem[];
     recentTools: ToolItem[];
@@ -536,6 +537,7 @@ export class OpencodeRadarAgent extends BaseAgent {
     private threadsEnabled: boolean = true;
     private rateLimitedUntil: number = 0;
     private serverOutageNoticed: boolean = false;
+    private storeOutageNoticed: boolean = false;
     private pollInFlight: boolean = false;
     private inboundSub: string | null = null;
     private callbackSub: string | null = null;
@@ -786,6 +788,13 @@ export class OpencodeRadarAgent extends BaseAgent {
                         : {}),
                     ...(cursor ? { knownParts: cursor } : {}),
                     ...(sigs ? { knownEventSig: sigs } : {}),
+                    ...(Array.isArray(record.knownPerms)
+                        ? {
+                            knownPerms: (record.knownPerms as unknown[])
+                                .filter((x): x is string => typeof x === 'string' && x.length > 0)
+                                .slice(-PERSISTED_CURSOR_CAP),
+                        }
+                        : {}),
                 };
             }
             const winnerByThread = new Map<number, string>();
@@ -1155,6 +1164,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             appliedTopicName: null,
             buildMode: stored?.buildMode ?? true,
             knownParts: new Map(),
+            seenPartKeys: new Set(),
             knownEventSig: new Map(),
             todos: [],
             recentTools: [],
@@ -1406,6 +1416,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                 this.dropSessionRefs(id);
                 console.warn(`Radar evicted session ${id} (watched cap ${cap} exceeded)`);
             }
+            this.savePersisted();
         }
     }
 
@@ -1752,7 +1763,10 @@ export class OpencodeRadarAgent extends BaseAgent {
                     return;
                 } else {
                     const state = this.watched.get(existing.id)!;
-                    if (state.threadId === null) {
+                    if (state.threadId === null || state.threadId !== threadId) {
+                        if (state.threadId !== null && state.threadId !== threadId) {
+                            console.log(`Radar rebinds watched session ${existing.id} from topic ${state.threadId} to ${threadId}`);
+                        }
                         state.threadId = threadId;
                         this.persistThreadBinding(existing.id, threadId);
                         this.prunePersistedThreadRivals(existing.id, threadId);
@@ -1786,6 +1800,8 @@ export class OpencodeRadarAgent extends BaseAgent {
                 if (hasMediaMessage(queuedMessage)) {
                     await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
                 } else if (queuedText) {
+                    const queuedReplyTo = queuedMessage.reply_to_message?.message_id;
+                    if (await this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo)) continue;
                     this.enqueuePrompt(state, queuedText);
                 }
             }
@@ -1808,6 +1824,7 @@ export class OpencodeRadarAgent extends BaseAgent {
     private enqueuePrompt(state: WatchedSession, text: string): void {
         if (state.promptQueue.length >= MAX_QUEUED_PROMPTS) {
             state.promptQueue.shift();
+            console.warn(`Radar prompt queue full, dropping oldest prompt (session=${state.session.id}).`);
         }
         const wasEmpty = state.promptQueue.length === 0;
         state.promptQueue.push(text);
@@ -2222,11 +2239,16 @@ export class OpencodeRadarAgent extends BaseAgent {
             const base = truncate(m.name || m.id, context ? 28 : 40);
             return context ? `${prefix}${base} · ${context}` : `${prefix}${base}`;
         };
-        const rows: InlineKeyboardButton[][] = models.map((m) => [{
+        const cappedModels = models.slice(0, 20);
+if (currentId && !cappedModels.some((m) => m.id === currentId)) {
+    const currentModel = models.find((m) => m.id === currentId);
+    if (currentModel && cappedModels.length > 0) cappedModels[cappedModels.length - 1] = currentModel;
+}
+const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             text: label(m),
             callback_data: `model:${m.id}`,
         }]);
-        const current = models.find((m) => m.id === currentId);
+        const current = cappedModels.find((m) => m.id === currentId);
         const variants = current ? modelVariantIds(current) : [];
         if (variants.length > 0) {
             rows.push(variants.map((variant) => ({
@@ -3350,7 +3372,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             await this.applySessionVariant(telegram, opencode, query, target, variantMatch[1]);
             return;
         }
-        const permMatch = data.match(/^p(per_[A-Za-z0-9]{1,56}):(always|once|reject)$/);
+        const permMatch = data.match(/^p(per_[A-Za-z0-9_-]{1,56}):(always|once|reject)$/);
         if (permMatch) {
             const from = query.from;
             if (!from || from.is_bot) return;
@@ -3528,6 +3550,10 @@ export class OpencodeRadarAgent extends BaseAgent {
                         console.warn(
                             `Radar poll batch exceeded ${batchTimeoutMs}ms, moving on (sessions=${states.slice(i, i + fanout).map((s) => s.session.id).join(',')}).`,
                         );
+                        await Promise.race([batch, new Promise<void>((resolve) => {
+                            const t = setTimeout(resolve, 2000);
+                            t.unref?.();
+                        })]);
                     }
                     if (timer) clearTimeout(timer);
                 } else {
@@ -3582,7 +3608,7 @@ export class OpencodeRadarAgent extends BaseAgent {
 
     private async checkServerHealth(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'health'>,
+        opencode: Pick<OpencodePlugin, 'health' | 'storeError'>,
     ): Promise<void> {
         try {
             await opencode.health();
@@ -3598,6 +3624,17 @@ export class OpencodeRadarAgent extends BaseAgent {
         if (this.serverOutageNoticed) {
             this.serverOutageNoticed = false;
             this.logServiceNotice(`${checkIcon()} opencode server is back, streaming resumed.`);
+        }
+        const storeErr = typeof opencode.storeError === 'function' ? opencode.storeError() : null;
+        if (storeErr) {
+            if (!this.storeOutageNoticed) {
+                this.storeOutageNoticed = true;
+                console.warn(`Radar opencode database unavailable: ${storeErr}`);
+                this.logServiceNotice(`${icon('warn')} opencode database unavailable (${escapeHtml(storeErr)}). Streaming is degraded.`);
+            }
+        } else if (this.storeOutageNoticed) {
+            this.storeOutageNoticed = false;
+            this.logServiceNotice(`${checkIcon()} opencode database is back, streaming resumed.`);
         }
     }
 
@@ -3758,6 +3795,9 @@ export class OpencodeRadarAgent extends BaseAgent {
             const known = state.knownParts.get(key);
             if (known !== undefined && known >= event.time) continue;
             const firstSeen = known === undefined;
+            const wasEverSeen = state.seenPartKeys.has(key);
+            state.seenPartKeys.add(key);
+            if (state.seenPartKeys.size > 5000) state.seenPartKeys.clear();
             state.knownParts.set(key, event.time);
             if (state.knownParts.size > 2000) {
                 const oldest = [...state.knownParts.keys()].slice(0, 500);
@@ -3786,7 +3826,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                 continue;
             }
             if (event.kind === 'tool') {
-                if (firstSeen) state.toolCalls += 1;
+                if (firstSeen && !wasEverSeen) state.toolCalls += 1;
                 if (event.tool === 'question') continue;
             }
             if (event.kind === 'user' && this.isSelfSubmitted(state.session.id, event.text, Date.now())) continue;
@@ -4232,6 +4272,10 @@ export class OpencodeRadarAgent extends BaseAgent {
             const { text: answer, command: stopCommand } = takeStopCommand(text);
             if (answer) {
                 await this.deliverMessage(telegram, state, answer);
+                state.recentDelivered.push({ sig: deliverySignature(answer), at: Date.now() });
+                if (state.recentDelivered.length > DELIVERY_DEDUP_KEEP) {
+                    state.recentDelivered.splice(0, state.recentDelivered.length - DELIVERY_DEDUP_KEEP);
+                }
             }
             if (stopCommand) {
                 await this.deliverMessage(telegram, state, stopCommand);

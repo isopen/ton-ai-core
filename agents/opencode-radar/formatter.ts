@@ -631,7 +631,7 @@ export function formatProgress(state: ProgressState): string {
     const todos = state.todos.slice(0, 8);
     if (todos.length > 0) {
         const done = todos.filter((t) => t.state === 'done').length;
-        lines.push(`${icon('plan')} План ${done}/${todos.length}`);
+        lines.push(`${icon('plan')} Plan ${done}/${todos.length}`);
         for (const todo of todos) {
             lines.push(`${todoIcon(todo.state)} ${escapeHtml(truncate(todo.content, 120))}`);
         }
