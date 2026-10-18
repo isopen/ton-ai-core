@@ -1215,6 +1215,38 @@ describe('durevcode forum control', () => {
         assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Permission needed')));
     });
 
+    test('rate-limited permission notice retries instead of being lost', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, setSendImpl } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setPerms([{ id: 'per_rl', sessionID: 'ses_test01', action: 'bash', resources: [] }]);
+        const state = await attachWatched(agent, telegram);
+        let failing = true;
+        let noticesLanded = 0;
+        setSendImpl((params) => {
+            if (failing) throw new Error('Telegram API error: Too Many Requests: retry after 3');
+            if (String((params as Record<string, unknown>).text).includes('Permission needed')) noticesLanded += 1;
+            return Promise.resolve({ message_id: 600 + noticesLanded });
+        });
+
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        assert.equal(noticesLanded, 0, 'notice did not land while rate limited');
+        assert.deepEqual((state as unknown as { knownPerms: string[] }).knownPerms, [], 'perm must not be marked known on failed delivery');
+
+        (agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil = 0;
+        failing = false;
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        assert.equal(noticesLanded, 1, 'notice is retried once backoff clears');
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        await agent.pollPermissions(telegram, fake.opencode, state);
+        assert.equal(noticesLanded, 1, 'no duplicate notices while the request is pending');
+    });
+
     test('permission notice ships allow and deny buttons', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -3843,6 +3875,37 @@ describe('durevcode questions', () => {
         await agent.pollQuestions(telegram, fake, state);
         await agent.pollQuestions(telegram, fake, state);
         assert.equal(calls.filter((c) => c.op === 'send').length, 2);
+    });
+
+    test('rate-limited question card is retried instead of being lost', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, setSendImpl } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const fake = { listQuestions: async () => [QUEST] };
+        let failing = true;
+        let cardsLanded = 0;
+        setSendImpl((params) => {
+            if (failing) throw new Error('Telegram API error: Too Many Requests: retry after 2');
+            if (String((params as Record<string, unknown>).text).includes('Which one?')) cardsLanded += 1;
+            return Promise.resolve({ message_id: 700 + cardsLanded });
+        });
+
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        assert.equal(cardsLanded, 0, 'card did not land while rate limited');
+        assert.deepEqual((state as unknown as { knownQuestions: string[] }).knownQuestions, [], 'question must not be marked known on failed delivery');
+
+        (agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil = 0;
+        failing = false;
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        assert.equal(cardsLanded, 1, 'card is retried once backoff clears');
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        assert.equal(cardsLanded, 1, 'no duplicate cards while the question is pending');
     });
 
     test('single option tap answers and resolves the card', async () => {

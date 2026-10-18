@@ -4,6 +4,40 @@ Durevcode agent: streams an opencode session (thinking summaries, tool calls, ou
 
 Built on `@ton-ai/core` + `@ton-ai/opencode` 0.1.0 + `@ton-ai/telegram-bot-api` 0.2.0. Session metadata comes from the local opencode server API (`opencode serve`); message content falls back to the opencode SQLite database in read-only mode when the server has no projection for a session — no opencode modifications required.
 
+## Run
+
+1. Install OpenCode v2:
+
+```sh
+curl -fsSL https://opencode.ai/v2/install | bash
+```
+
+2. The opencode server does not need to be started manually — the bot starts it
+   automatically (`opencode serve --port 4096` when the server is unreachable,
+   `OPENCODE_AUTO_SERVE=1`) and stops its own server instance on shutdown. Set
+   `OPENCODE_AUTO_SERVE=0` only if you manage the server yourself.
+
+3. Build the project:
+
+```sh
+make rebuild-durevcode
+```
+
+4. Start the bot:
+
+```sh
+cd agents/durevcode
+cp .env.example .env  # fill in TELEGRAM_BOT_API_TOKEN and DUREVCODE_CHAT_ID
+npm start
+```
+
+`.env` in this directory is loaded automatically (real env vars take
+precedence); or export the variables inline:
+
+```sh
+TELEGRAM_BOT_API_TOKEN=<token> DUREVCODE_CHAT_ID=<chat_id> npm start --prefix agents/durevcode
+```
+
 ## How it works
 
 1. The `@ton-ai/opencode` plugin lists sessions via `GET /api/session` and reads content via `GET /api/session/{id}/message`, falling back to read-only `opencode.db` (`session` / `part` / `todo` tables) for sessions owned by another process.
@@ -60,31 +94,3 @@ Write in a session topic and opencode executes it: the message text becomes a se
 - text documents are inlined into the prompt (up to 20000 chars, binaries declined); captions are prepended.
 - photos, GIFs, videos and PDF/video documents are downloaded into `<DUREVCODE_DIR>/tmp/.agent-inbox/` (max 20 MB, filename sanitized, inbox capped at 200 files) and passed to opencode as a `[file name] saved to <path>` reference for the read tool; captions are prepended.
 - voice, video notes, audio and stickers can't be parsed yet — the bot replies with a notice suggesting photo/document/text instead.
-
-## Run
-
-The opencode plugin starts `opencode serve --port 4096` by itself when the
-configured server is unreachable (`OPENCODE_AUTO_SERVE=1`, binary from
-`OPENCODE_BIN`), and stops its own server instance on shutdown. A server you
-started manually is left alone. To manage the server yourself, set
-`OPENCODE_AUTO_SERVE=0` and start it first:
-
-```sh
-opencode serve --port 4096
-```
-
-Then:
-
-```sh
-cd agents/durevcode
-npm install
-cp .env.example .env  # fill in TELEGRAM_BOT_API_TOKEN and DUREVCODE_CHAT_ID
-npx ts-node index.ts
-```
-
-`.env` in this directory is loaded automatically (real env vars take
-precedence); or export the variables inline:
-
-```sh
-TELEGRAM_BOT_API_TOKEN=<token> DUREVCODE_CHAT_ID=<chat_id> npx ts-node agents/durevcode/index.ts
-```

@@ -2892,12 +2892,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         for (const request of current) {
             alive.add(request.id);
             if (state.knownPerms.includes(request.id)) continue;
-            state.knownPerms.push(request.id);
             if (!state.buildMode && isFileModifyingTool(request.action)) {
                 try {
                     await opencode.replyPermission(state.session.id, request.id, 'reject');
+                    state.knownPerms.push(request.id);
                 } catch (error) {
-                    console.debug('Durevcode plain-mode deny failed:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode plain-mode deny failed, will retry:', error instanceof Error ? error.message : error);
                 }
                 continue;
             }
@@ -2915,9 +2915,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     lines.join('\n'),
                     this.permKeyboard(request.id),
                 );
+                state.knownPerms.push(request.id);
                 this.permReplies.set(sentId, { sessionId: state.session.id, permId: request.id });
             } catch (error) {
-                console.debug('Durevcode permission notice failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode permission notice failed, will retry:', error instanceof Error ? error.message : error);
             }
         }
         state.knownPerms = state.knownPerms.filter((id) => alive.has(id));
@@ -3028,7 +3029,6 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (request.questions.length === 0) continue;
             alive.add(request.id);
             if (state.knownQuestions.includes(request.id)) continue;
-            state.knownQuestions.push(request.id);
             const token = String((this.questSeq += 1));
             const ctx: QuestionPick = {
                 sessionId: state.session.id,
@@ -3040,11 +3040,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             };
             try {
                 const sentId = await this.deliverMessage(telegram, state, formatQuestion(request), this.questKeyboard(ctx));
+                state.knownQuestions.push(request.id);
                 ctx.msgId = sentId;
                 this.questPicks.set(token, ctx);
                 this.questReplies.set(sentId, { sessionId: state.session.id, reqId: request.id, questions: request.questions });
             } catch (error) {
-                console.debug('Durevcode question notice failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode question notice failed, will retry:', error instanceof Error ? error.message : error);
             }
         }
         state.knownQuestions = state.knownQuestions.filter((id) => alive.has(id));
