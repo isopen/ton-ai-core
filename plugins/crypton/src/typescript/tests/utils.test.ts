@@ -213,9 +213,14 @@ describe('Utils', () => {
         const a = Buffer.from('010203', 'hex');
         const b = Buffer.from('0405', 'hex');
         const out = Buffer.alloc(2);
-        xorInto(out, a, b);
-        assert.strictEqual(out[0], 0x01 ^ 0x04);
-        assert.strictEqual(out[1], 0x02 ^ 0x05);
+        assert.throws(() => xorInto(out, a, b), /same length/);
+    });
+
+    test('xorInto rejects undersized output', () => {
+        const a = Buffer.from('010203', 'hex');
+        const b = Buffer.from('040506', 'hex');
+        const out = Buffer.alloc(2);
+        assert.throws(() => xorInto(out, a, b), /Output buffer too small/);
     });
 
     test('modPowConstantTime correctness', () => {

@@ -5,9 +5,15 @@
 
 
 import { TextDecoder, TextEncoder } from 'node:util';
+import { webcrypto } from 'node:crypto';
 
 (globalThis as any).TextDecoder = TextDecoder;
 (globalThis as any).TextEncoder = TextEncoder;
+Object.defineProperty(globalThis, 'crypto', {
+  value: webcrypto,
+  writable: true,
+  configurable: true,
+});
 
 import { createStandaloneGramDb } from '@ton-ai/gram-db';
 

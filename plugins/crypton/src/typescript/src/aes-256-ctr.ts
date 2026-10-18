@@ -1,5 +1,11 @@
 import { Buffer } from 'buffer';
 import { AES256ECB } from './aes-256-ecb';
+import { isWasmAvailable, wasmAes256CtrProcess } from '../../wasm-adapter';
+
+function must<T>(v: T | null, what: string): T {
+  if (v === null || v === undefined) throw new Error(`crypton-rs ${what} unavailable`);
+  return v;
+}
 
 function addCounterInto(block: Buffer, add: number): void {
   let carry = add >>> 0;
@@ -46,6 +52,12 @@ class CtrKeystream {
       this.pos = (this.pos + n) & 15;
     }
   }
+
+  destroy(): void {
+    this.counter.fill(0);
+    this.keystream.fill(0);
+    this.pos = 0;
+  }
 }
 
 const CTR_MAX_START_COUNTER = 0xFFFFFFFF;
@@ -76,11 +88,17 @@ export class AES256CTR {
     const result = Buffer.alloc(data.length);
     if (data.length === 0) return result;
 
+    if (isWasmAvailable()) {
+        return must(wasmAes256CtrProcess(data, key, iv, startCounter * 16), 'aes_ctr_process');
+    }
+
     const ecb = new AES256ECB(key);
+    const ks = new CtrKeystream(iv, ecb, startCounter);
     try {
-      new CtrKeystream(iv, ecb, startCounter).xorInto(result, data);
+      ks.xorInto(result, data);
     } finally {
       ecb.destroy();
+      ks.destroy();
     }
     return result;
   }
@@ -93,6 +111,10 @@ export class AES256CTR {
       throw new Error(`Invalid IV length: expected ${this.IV_SIZE}, got ${iv.length}`);
     }
     assertCtrRange(startCounter, data.length);
+
+    if (isWasmAvailable()) {
+        return must(wasmAes256CtrProcess(data, key, iv, startCounter * 16), 'aes_ctr_process');
+    }
 
     const gCrypto = (globalThis as any).crypto;
     if (gCrypto?.subtle && typeof gCrypto.subtle.encrypt === 'function') {
@@ -110,6 +132,7 @@ export class AES256CTR {
 
 export class AesCtrCipher {
   private iv: Buffer;
+  private key: Buffer;
   private blockCounter: number;
   private blockOffset = 0;
   private destroyed = false;
@@ -121,6 +144,7 @@ export class AesCtrCipher {
     if (!iv || iv.length !== 16) throw new Error(`AesCtrCipher IV must be 16 bytes, got ${iv?.length}`);
     assertCtrRange(startCounter, 0);
     this.iv = Buffer.from(iv);
+    this.key = Buffer.from(key);
     this.blockCounter = startCounter >>> 0;
     this.ecb = new AES256ECB(Buffer.from(key));
     this.keystream = new CtrKeystream(this.iv, this.ecb, this.blockCounter);
@@ -133,9 +157,11 @@ export class AesCtrCipher {
 
     const total = this.blockOffset + len;
     assertCtrRange(this.blockCounter, total);
-    const blocks = Math.ceil(total / 16);
-    if (this.blockCounter + blocks > CTR_MAX_START_COUNTER + 1) {
-      throw new Error('CTR counter overflow: streaming cipher spans past 2^32 blocks');
+
+    if (this.blockOffset === 0 && len % 16 === 0 && isWasmAvailable()) {
+      const out = must(wasmAes256CtrProcess(Buffer.from(data), this.key, this.iv, this.blockCounter * 16), 'aes_ctr_process');
+      this.blockCounter = (this.blockCounter + len / 16) >>> 0;
+      return out;
     }
 
     const result = new Uint8Array(len);
@@ -155,7 +181,9 @@ export class AesCtrCipher {
     if (this.destroyed) return;
     this.destroyed = true;
     this.iv.fill(0);
+    this.key.fill(0);
     this.ecb.destroy();
+    this.keystream.destroy();
     this.blockCounter = 0;
     this.blockOffset = 0;
   }

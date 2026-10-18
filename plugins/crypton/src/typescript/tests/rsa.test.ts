@@ -47,13 +47,12 @@ describe('RSA Verify', () => {
         assert.strictEqual(result, false, 'Corrupted signature must return false');
     });
 
-    test('invalid PEM key resolves false', async () => {
+    test('invalid PEM key throws', async () => {
         const data = Buffer.from('Test data for RSA verification');
         const signer = crypto.createSign('RSA-SHA256');
         signer.update(data);
         const validSignature = signer.sign(privateKey);
-        const valid = await rsaVerify(data, validSignature, 'INVALID PEM STRING');
-        assert.strictEqual(valid, false, 'Invalid PEM must resolve false');
+        await assert.rejects(() => rsaVerify(data, validSignature, 'INVALID PEM STRING'));
     });
 
     test('empty data verification works', async () => {

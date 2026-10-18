@@ -1,23 +1,27 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
+import { readWasmBinary } from './wasm-binary';
 
 describe('crypton WASM routing', () => {
-    let crypton: typeof import('../src/index').crypton;
-    let initWasmCrypton: typeof import('../src/index').initWasmCrypton;
+    let crypton: typeof import('../../index').crypton;
+    let initWasmCrypton: typeof import('../../index').initWasmCrypton;
+    let getWasmCallStats: typeof import('../../index').getWasmCallStats;
+    let resetWasmCallStats: typeof import('../../index').resetWasmCallStats;
     let AES256ECB: typeof import('../src/aes-256-ecb').AES256ECB;
     let AES256CTR: typeof import('../src/aes-256-ctr').AES256CTR;
+    let AesCtrCipher: typeof import('../src/aes-256-ctr').AesCtrCipher;
     let AES256IGE: typeof import('../src/aes-256-ige').AES256IGE;
     let AES256CBC: typeof import('../src/aes-256-cbc').AES256CBC;
     let AES256CBC_ETM: typeof import('../src/aes-256-cbc-etm').AES256CBC_ETM;
 
     beforeAll(async () => {
-        ({ crypton, initWasmCrypton } = await import('../src/index'));
+        ({ crypton, initWasmCrypton, getWasmCallStats, resetWasmCallStats } = await import('../../index'));
         ({ AES256ECB } = await import('../src/aes-256-ecb'));
-        ({ AES256CTR } = await import('../src/aes-256-ctr'));
+        ({ AES256CTR, AesCtrCipher } = await import('../src/aes-256-ctr'));
         ({ AES256IGE } = await import('../src/aes-256-ige'));
         ({ AES256CBC } = await import('../src/aes-256-cbc'));
         ({ AES256CBC_ETM } = await import('../src/aes-256-cbc-etm'));
-        await initWasmCrypton();
+        await initWasmCrypton({ wasmBinary: readWasmBinary() });
     }, 60000);
 
     test('WASM backend is active', () => {
@@ -39,6 +43,65 @@ describe('crypton WASM routing', () => {
         const dec = AES256CTR.process(enc, key, iv, 3);
         assert.ok(dec.equals(data));
         assert.throws(() => AES256CTR.process(Buffer.alloc(32), key, iv, 0xffffffff), /overflow|range/i);
+    });
+
+    test('sync AES256CTR.process routes through WASM aes_ctr_process', async () => {
+        const key = Buffer.alloc(32, 1);
+        const iv = Buffer.alloc(16, 2);
+        const data = Buffer.alloc(65, 3);
+        resetWasmCallStats();
+        const synced = AES256CTR.process(data, key, iv, 7);
+        const stats = getWasmCallStats();
+        assert.ok((stats['aes_ctr_process'] ?? 0) >= 1, 'sync CTR did not route to WASM: ' + JSON.stringify(stats));
+        const asynced = await AES256CTR.processAsync(data, key, iv, 7);
+        assert.ok(synced.equals(asynced), 'sync and async CTR outputs differ');
+    });
+
+    test('AesCtrCipher aligned process routes through WASM aes_ctr_process', async () => {
+        const key = Buffer.alloc(32, 5);
+        const iv = Buffer.alloc(16, 6);
+        const cipher = new AesCtrCipher(key, iv, 3);
+        const data = Buffer.alloc(48, 9);
+        resetWasmCallStats();
+        const out = cipher.process(data);
+        const stats = getWasmCallStats();
+        assert.ok((stats['aes_ctr_process'] ?? 0) >= 1, 'aligned streaming did not route to WASM: ' + JSON.stringify(stats));
+        assert.strictEqual(cipher.counter, 6);
+        assert.ok(out.equals(AES256CTR.process(data, key, iv, 3)), 'streaming fast path differs from static process');
+        cipher.destroy();
+        assert.throws(() => cipher.process(data), /destroyed/);
+    });
+
+    test('AesCtrCipher unaligned process matches static process', async () => {
+        const key = Buffer.alloc(32, 5);
+        const iv = Buffer.alloc(16, 6);
+        const sequences: number[][] = [[5, 21, 16], [39, 20, 4], [4, 12, 32], [64]];
+        for (const seq of sequences) {
+            const full = Buffer.alloc(seq.reduce((sum, n) => sum + n, 0), 40);
+            const cipher = new AesCtrCipher(key, iv, 11);
+            const parts: Buffer[] = [];
+            let at = 0;
+            for (const size of seq) {
+                parts.push(Buffer.from(cipher.process(full.subarray(at, at + size))));
+                at += size;
+            }
+            cipher.destroy();
+            const streamed = Buffer.concat(parts);
+            const want = AES256CTR.process(full, key, iv, 11);
+            assert.ok(streamed.equals(want), 'streaming parity for sequence ' + seq.join('/'));
+        }
+    });
+
+    test('hkdfExtract routes hmac_sha512 through WASM', async () => {
+        const salt = Buffer.alloc(32, 0x07);
+        const ikm = Buffer.alloc(64, 0x08);
+        resetWasmCallStats();
+        const prk = await crypton.hkdfExtract(salt, ikm);
+        const stats = getWasmCallStats();
+        assert.ok((stats['hmac_sha512'] ?? 0) >= 1, 'hkdfExtract did not route hmac_sha512 to WASM: ' + JSON.stringify(stats));
+        assert.strictEqual(prk.length, 64);
+        const node = require('crypto').createHmac('sha512', salt).update(ikm).digest();
+        assert.ok(prk.equals(node), 'WASM hmac_sha512 differs from node reference');
     });
 
     test('IGE roundtrip under WASM', async () => {

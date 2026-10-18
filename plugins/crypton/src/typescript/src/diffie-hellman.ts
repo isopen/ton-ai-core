@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer';
-import { getRandomBytes, bigIntToBuffer, bufferToBigInt, modPow, isProbablyPrime } from './utils';
+import { getRandomBytes, bigIntToBuffer, bufferToBigInt, modPow, modPowBranchless, isProbablyPrime } from './utils';
 
 export interface DHKeys {
   privateKey: bigint;
@@ -72,7 +72,7 @@ export class DiffieHellman {
     do {
       if (++iter > maxIter) throw new Error('Failed to generate valid DH public key');
       privateKey = this.generatePrivateKey(prime);
-      publicKey = modPow(generator, privateKey, prime);
+      publicKey = modPowBranchless(generator, privateKey, prime);
     } while (!this.isValidPublicKey(publicKey, prime));
 
     const privateKeyBuf = bigIntToBuffer(privateKey, 256);
@@ -82,7 +82,7 @@ export class DiffieHellman {
   static computeSharedSecret(privateKey: bigint, peerPublicKey: bigint, p?: bigint): Buffer {
     const prime = p ?? this.DEFAULT_P;
     this.validatePublicKey(peerPublicKey, prime);
-    const shared = modPow(peerPublicKey, privateKey, prime);
+    const shared = modPowBranchless(peerPublicKey, privateKey, prime);
     if (shared <= this.MIN_DH_VALUE || shared >= prime - this.MIN_DH_VALUE) {
       throw new Error('Weak shared secret');
     }
@@ -98,7 +98,8 @@ export class DiffieHellman {
   static computePublicKey(privateKey: bigint, p?: bigint, g?: bigint): bigint {
     const prime = p ?? this.DEFAULT_P;
     const generator = g ?? this.DEFAULT_G;
-    return modPow(generator, privateKey, prime);
+    const expBits = privateKey.toString(2).length;
+    return modPowBranchless(generator, privateKey, prime, expBits);
   }
 
   static validatePublicKey(publicKey: bigint, p?: bigint): void {

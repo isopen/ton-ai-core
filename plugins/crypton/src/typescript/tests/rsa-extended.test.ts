@@ -91,11 +91,10 @@ describe('RSA', () => {
         assert.strictEqual(valid, false, 'invalid signature fails');
     });
 
-    test('rsaVerify returns false on malformed key instead of throwing', async () => {
+    test('rsaVerify throws on malformed key', async () => {
         const data = Buffer.from('test data');
         const fakeSig = Buffer.alloc(256, 0xFF);
-        const valid = await rsaVerify(data, fakeSig, '-----BEGIN RSA PUBLIC KEY-----\nAAAA\n-----END RSA PUBLIC KEY-----');
-        assert.strictEqual(valid, false, 'malformed key resolves false');
+        await assert.rejects(() => rsaVerify(data, fakeSig, '-----BEGIN RSA PUBLIC KEY-----\nAAAA\n-----END RSA PUBLIC KEY-----'));
     });
 
     test('rsaVerify returns false on short signature instead of throwing', async () => {

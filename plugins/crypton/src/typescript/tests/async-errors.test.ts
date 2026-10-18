@@ -7,7 +7,7 @@ import { AES256CBC } from '../src/aes-256-cbc';
 import { AES256ECB } from '../src/aes-256-ecb';
 import { AES256CBC_ETM } from '../src/aes-256-cbc-etm';
 import { MTProtoKDF } from '../src/kdf';
-import { crypton } from '../src/index';
+import { crypton } from '../../index';
 
 async function expectAsyncRejection(fn: () => Promise<unknown>, re: RegExp): Promise<void> {
     let promise: Promise<unknown> | undefined;
@@ -57,10 +57,8 @@ describe('async API error contract', () => {
         await expectAsyncRejection(() => MTProtoKDF.computeKeyFingerprint(authKey.subarray(0, 16)), /authKey length/);
     });
 
-    test('rsaVerify resolves to false instead of throwing', async () => {
-        let result: unknown = 'unset';
-        await assert.doesNotReject(async () => { result = await crypton.rsaVerify(Buffer.from('data'), Buffer.alloc(256), 'not-a-key'); });
-        assert.strictEqual(result, false);
+    test('rsaVerify rejects on invalid key instead of returning false', async () => {
+        await assert.rejects(() => crypton.rsaVerify(Buffer.from('data'), Buffer.alloc(256), 'not-a-key'));
     });
 
     test('sync APIs still throw synchronously', () => {

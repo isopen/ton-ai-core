@@ -1,10 +1,19 @@
 import { AES256ECB } from './aes-256-ecb';
+import { isWasmAvailable, wasmAes256CbcEncrypt, wasmAes256CbcDecrypt } from '../../wasm-adapter';
+
+function must<T>(v: T | null, what: string): T {
+  if (v === null || v === undefined) throw new Error(`crypton-rs ${what} unavailable`);
+  return v;
+}
 
 export class AES256CBC {
     static encrypt(plaintext: Buffer, key: Buffer, iv: Buffer): Buffer {
         if (key.length !== 32) throw new Error('AES-256 requires a 32-byte key');
         if (iv.length !== 16) throw new Error('IV must be 16 bytes');
         if (plaintext.length % 16 !== 0) throw new Error('Plaintext must be multiple of 16 bytes');
+        if (isWasmAvailable()) {
+            return must(wasmAes256CbcEncrypt(key, iv, plaintext), 'aes_cbc_encrypt');
+        }
 
         const ecb = new AES256ECB(key);
         const result = Buffer.alloc(plaintext.length);
@@ -31,6 +40,9 @@ export class AES256CBC {
         if (key.length !== 32) throw new Error('AES-256 requires a 32-byte key');
         if (iv.length !== 16) throw new Error('IV must be 16 bytes');
         if (ciphertext.length % 16 !== 0) throw new Error('Ciphertext must be multiple of 16 bytes');
+        if (isWasmAvailable()) {
+            return must(wasmAes256CbcDecrypt(key, iv, ciphertext), 'aes_cbc_decrypt');
+        }
 
         const ecb = new AES256ECB(key);
         const result = Buffer.alloc(ciphertext.length);

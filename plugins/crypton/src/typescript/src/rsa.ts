@@ -232,34 +232,23 @@ export async function rsaVerify(
   signature: Buffer,
   publicKeyPem: string
 ): Promise<boolean> {
-  if (typeof process !== 'undefined' && process.versions?.node) {
-    try {
-      const crypto = require('crypto');
-      const verifier = crypto.createVerify('RSA-SHA256');
-      verifier.update(data);
-      return verifier.verify(publicKeyPem, signature);
-    } catch {
-      return false;
-    }
+  const cryptoApi = (globalThis as { crypto?: typeof globalThis.crypto }).crypto;
+  if (!cryptoApi?.subtle) {
+    throw new Error('WebCrypto RSA-SHA256 verify is not available in this environment');
+  }
+  const pemContents = extractPemBody(publicKeyPem);
+  let der: Uint8Array = Buffer.from(pemContents, 'base64');
+
+  if (isPKCS1(publicKeyPem)) {
+    der = pkcs1ToSPKI(der);
   }
 
-  try {
-    const pemContents = extractPemBody(publicKeyPem);
-    let der: Uint8Array = Buffer.from(pemContents, 'base64');
-
-    if (isPKCS1(publicKeyPem)) {
-      der = pkcs1ToSPKI(der);
-    }
-
-    const key = await crypto.subtle.importKey(
-      'spki',
-      der,
-      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
-    return await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, data);
-  } catch {
-    return false;
-  }
+  const key = await cryptoApi.subtle.importKey(
+    'spki',
+    der,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['verify']
+  );
+  return await cryptoApi.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, data);
 }

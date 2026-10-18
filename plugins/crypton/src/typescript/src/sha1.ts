@@ -1,12 +1,12 @@
 import { Buffer } from 'buffer';
 
 export async function sha1(data: Buffer): Promise<Buffer> {
-  if (typeof process !== 'undefined' && process.versions?.node) {
-    const crypto = require('crypto');
-    return crypto.createHash('sha1').update(data).digest();
+  const cryptoApi = (globalThis as { crypto?: typeof globalThis.crypto }).crypto;
+  if (!cryptoApi?.subtle) {
+    throw new Error('WebCrypto SHA-1 is not available in this environment');
   }
-  const hash = await crypto.subtle.digest('SHA-1', data);
-  return Buffer.from(hash);
+  const hash = await cryptoApi.subtle.digest('SHA-1', data);
+  return Buffer.from(new Uint8Array(hash));
 }
 
 export function sha1Sync(data: Buffer): Buffer {

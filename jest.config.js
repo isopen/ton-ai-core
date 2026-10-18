@@ -51,7 +51,7 @@ module.exports = {
     '<rootDir>/packages/core/src/mcp/tests',
     '<rootDir>/mcp/ton/tests',
     '<rootDir>/agents/mrtr-demo/tests',
-    '<rootDir>/plugins/crypton/tests',
+    '<rootDir>/plugins/crypton/src/typescript/tests',
     '<rootDir>/plugins/tl-language/tests',
     '<rootDir>/plugins/agent-transport/tests',
     '<rootDir>/plugins/telegram/tests',

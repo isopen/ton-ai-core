@@ -1,5 +1,10 @@
 import { Buffer } from 'buffer';
-import { isNode } from './utils';
+import { isWasmAvailable, wasmAes256EcbEncrypt, wasmAes256EcbDecrypt } from '../../wasm-adapter';
+
+function must<T>(v: T | null, what: string): T {
+  if (v === null || v === undefined) throw new Error(`crypton-rs ${what} unavailable`);
+  return v;
+}
 
 const S = new Uint8Array([
   0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
@@ -70,54 +75,27 @@ export class AES256ECB {
   static readonly invSBox = Si;
 
   private key: Buffer;
-  private useNative: boolean;
   private roundKeys: Buffer[] = [];
   private destroyed = false;
-
-  private nativeEnc: any = null;
-  private nativeDec: any = null;
 
   constructor(key: Uint8Array) {
     if (!key) throw new Error('Key must not be null or undefined');
     if (key.length !== 32) throw new Error('AES-256 requires a 32-byte key');
     this.key = Buffer.from(key);
-    this.useNative = isNode();
-    if (!this.useNative) {
-      this.keyExpansion(this.key);
-    }
   }
 
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    for (const ctx of [this.nativeEnc, this.nativeDec]) {
-      if (ctx) {
-        try { ctx.final(); } catch {}
-      }
-    }
-    this.nativeEnc = null;
-    this.nativeDec = null;
     this.key.fill(0);
     for (const rk of this.roundKeys) rk.fill(0);
     this.roundKeys = [];
   }
 
-  private getNativeEnc(): any {
-    if (!this.nativeEnc) {
-      const crypto = require('crypto');
-      this.nativeEnc = crypto.createCipheriv('aes-256-ecb', this.key, null);
-      this.nativeEnc.setAutoPadding(false);
+  private ensureRoundKeys(): void {
+    if (this.roundKeys.length === 0) {
+      this.keyExpansion(this.key);
     }
-    return this.nativeEnc;
-  }
-
-  private getNativeDec(): any {
-    if (!this.nativeDec) {
-      const crypto = require('crypto');
-      this.nativeDec = crypto.createDecipheriv('aes-256-ecb', this.key, null);
-      this.nativeDec.setAutoPadding(false);
-    }
-    return this.nativeDec;
   }
 
   private keyExpansion(key: Buffer): void {
@@ -153,9 +131,10 @@ export class AES256ECB {
     this.assertAlive();
     if (!block) throw new Error('Block must not be null or undefined');
     if (block.length !== 16) throw new Error('Block must be 16 bytes');
-    if (this.useNative) {
-      return Buffer.from(this.getNativeEnc().update(block));
+    if (isWasmAvailable()) {
+      return must(wasmAes256EcbEncrypt(this.key, Buffer.from(block)), 'aes_ecb_encrypt');
     }
+    this.ensureRoundKeys();
     const s = Buffer.from(block);
     let i: number;
 
@@ -179,9 +158,10 @@ export class AES256ECB {
     this.assertAlive();
     if (!block) throw new Error('Block must not be null or undefined');
     if (block.length !== 16) throw new Error('Block must be 16 bytes');
-    if (this.useNative) {
-      return Buffer.from(this.getNativeDec().update(block));
+    if (isWasmAvailable()) {
+      return must(wasmAes256EcbDecrypt(this.key, Buffer.from(block)), 'aes_ecb_decrypt');
     }
+    this.ensureRoundKeys();
     const s = Buffer.from(block);
     let i: number;
 
@@ -203,11 +183,12 @@ export class AES256ECB {
   decryptBlockInPlace(s: Buffer): Buffer {
     this.assertAlive();
     if (!s || s.length !== 16) throw new Error('Block must be 16 bytes');
-    if (this.useNative) {
-      const out = Buffer.from(this.getNativeDec().update(s));
+    if (isWasmAvailable()) {
+      const out = must(wasmAes256EcbDecrypt(this.key, s), 'aes_ecb_decrypt');
       out.copy(s);
       return s;
     }
+    this.ensureRoundKeys();
     let i: number;
     xorKey(s, this.roundKeys[14]);
     for (let round = 13; round >= 1; round--) {
@@ -225,11 +206,12 @@ export class AES256ECB {
   encryptBlockInPlace(s: Buffer): Buffer {
     this.assertAlive();
     if (!s || s.length !== 16) throw new Error('Block must be 16 bytes');
-    if (this.useNative) {
-      const out = Buffer.from(this.getNativeEnc().update(s));
+    if (isWasmAvailable()) {
+      const out = must(wasmAes256EcbEncrypt(this.key, s), 'aes_ecb_encrypt');
       out.copy(s);
       return s;
     }
+    this.ensureRoundKeys();
     let i: number;
     xorKey(s, this.roundKeys[0]);
     for (let round = 1; round < 14; round++) {

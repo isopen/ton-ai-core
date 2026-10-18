@@ -1,5 +1,4 @@
 import { Buffer } from 'buffer';
-import { hmac_sha512 } from '@ton/crypto';
 
 export function isNode(): boolean {
   return typeof process !== 'undefined' && process.versions?.node !== undefined;
@@ -7,15 +6,14 @@ export function isNode(): boolean {
 
 type RandomBytesFn = (length: number) => Buffer;
 function defaultGetRandomBytes(length: number): Buffer {
-  if (isNode()) {
-    const crypto = require('crypto');
-    return crypto.randomBytes(length);
-  }
-  if (typeof crypto === 'undefined' || !crypto.getRandomValues) {
+  const cryptoApi = (globalThis as { crypto?: typeof globalThis.crypto }).crypto;
+  if (!cryptoApi?.getRandomValues) {
     throw new Error('Secure random number generation is not available in this environment');
   }
   const arr = new Uint8Array(length);
-  crypto.getRandomValues(arr);
+  for (let offset = 0; offset < length; offset += 65536) {
+    cryptoApi.getRandomValues(arr.subarray(offset, Math.min(offset + 65536, length)));
+  }
   return Buffer.from(arr);
 }
 let randomBytesImpl: RandomBytesFn = defaultGetRandomBytes;
@@ -62,15 +60,20 @@ export function xor(a: Buffer, b: Buffer): Buffer {
 }
 
 export function xorInto(out: Buffer, a: Buffer, b: Buffer): void {
-  const len = Math.min(a.length, b.length, out.length);
+  if (a.length !== b.length) {
+    throw new Error('Buffers must have the same length');
+  }
+  if (out.length < a.length) {
+    throw new Error(`Output buffer too small: got ${out.length}, need ${a.length}`);
+  }
   let i = 0;
-  for (; i + 4 <= len; i += 4) {
+  for (; i + 4 <= a.length; i += 4) {
     out[i] = a[i] ^ b[i];
     out[i+1] = a[i+1] ^ b[i+1];
     out[i+2] = a[i+2] ^ b[i+2];
     out[i+3] = a[i+3] ^ b[i+3];
   }
-  for (; i < len; i++) {
+  for (; i < a.length; i++) {
     out[i] = a[i] ^ b[i];
   }
 }
@@ -87,17 +90,17 @@ export function constantTimeEqual(a: Buffer, b: Buffer): boolean {
 
 type HmacSha256Fn = (key: Buffer, data: Uint8Array) => Promise<Buffer>;
 async function defaultHmacSha256(key: Buffer, data: Uint8Array): Promise<Buffer> {
-  if (isNode()) {
-    const crypto = require('crypto');
-    return crypto.createHmac('sha256', key).update(data).digest();
+  const cryptoApi = (globalThis as { crypto?: typeof globalThis.crypto }).crypto;
+  if (!cryptoApi?.subtle) {
+    throw new Error('WebCrypto HMAC-SHA256 is not available in this environment');
   }
-  const keyMaterial = await crypto.subtle.importKey(
+  const keyMaterial = await cryptoApi.subtle.importKey(
     'raw', new Uint8Array(key),
     { name: 'HMAC', hash: 'SHA-256' },
     false, ['sign']
   );
-  const sig = await crypto.subtle.sign('HMAC', keyMaterial, data);
-  return Buffer.from(sig);
+  const sig = await cryptoApi.subtle.sign('HMAC', keyMaterial, data);
+  return Buffer.from(new Uint8Array(sig));
 }
 let hmacSha256Impl: HmacSha256Fn = defaultHmacSha256;
 export function setHmacSha256Implementation(fn: HmacSha256Fn): void {
@@ -108,6 +111,31 @@ export function getHmacSha256Implementation(): HmacSha256Fn {
 }
 export async function hmacSha256(key: Buffer, data: Uint8Array): Promise<Buffer> {
   return hmacSha256Impl(key, data);
+}
+
+type HmacSha512Fn = (key: Buffer, data: Uint8Array) => Promise<Buffer>;
+async function defaultHmacSha512(key: Buffer, data: Uint8Array): Promise<Buffer> {
+  const cryptoApi = (globalThis as { crypto?: typeof globalThis.crypto }).crypto;
+  if (!cryptoApi?.subtle) {
+    throw new Error('WebCrypto HMAC-SHA512 is not available in this environment');
+  }
+  const keyMaterial = await cryptoApi.subtle.importKey(
+    'raw', new Uint8Array(key),
+    { name: 'HMAC', hash: 'SHA-512' },
+    false, ['sign']
+  );
+  const sig = await cryptoApi.subtle.sign('HMAC', keyMaterial, data);
+  return Buffer.from(new Uint8Array(sig));
+}
+let hmacSha512Impl: HmacSha512Fn = defaultHmacSha512;
+export function setHmacSha512Implementation(fn: HmacSha512Fn): void {
+  hmacSha512Impl = fn;
+}
+export function getHmacSha512Implementation(): HmacSha512Fn {
+  return hmacSha512Impl;
+}
+export async function hmacSha512(key: Buffer, data: Uint8Array): Promise<Buffer> {
+  return hmacSha512Impl(key, data);
 }
 
 const HEX_STRING = /^[0-9a-fA-F]*$/;
@@ -286,7 +314,7 @@ export function bigIntToBufferLE(value: bigint, length: number): Buffer {
 }
 
 export async function hkdfExtract(salt: Buffer, ikm: Buffer): Promise<Buffer> {
-  return hmac_sha512(salt, ikm);
+  return hmacSha512(salt, ikm);
 }
 
 export async function hkdfExpand(prk: Buffer, info: Buffer, length: number): Promise<Buffer> {
@@ -299,7 +327,7 @@ export async function hkdfExpand(prk: Buffer, info: Buffer, length: number): Pro
   let prev: Buffer = Buffer.alloc(0);
 
   for (let i = 1; i <= n; i++) {
-    const h = await hmac_sha512(prk, Buffer.concat([prev, info, Buffer.from([i])]));
+    const h = await hmacSha512(prk, Buffer.concat([prev, info, Buffer.from([i])]));
     const block = Buffer.from(h);
     h.fill(0);
     prev.fill(0);
@@ -338,15 +366,13 @@ export async function pbkdf2Sha256(
   if (!Number.isInteger(keyLen) || keyLen <= 0) throw new Error(`Invalid PBKDF2 key length: ${keyLen}`);
   if (keyLen > 255 * 64) throw new Error(`PBKDF2 key length exceeds ${255 * 64} bytes: ${keyLen}`);
   const gCrypto = globalThis.crypto;
-  if (gCrypto?.subtle && typeof gCrypto.subtle.importKey === 'function') {
-    const key = await gCrypto.subtle.importKey('raw', password, 'PBKDF2', false, ['deriveBits']);
-    const bits = await gCrypto.subtle.deriveBits(
-      { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
-      key, keyLen * 8,
-    );
-    return Buffer.from(new Uint8Array(bits));
+  if (!gCrypto?.subtle || typeof gCrypto.subtle.importKey !== 'function') {
+    throw new Error('WebCrypto PBKDF2-SHA256 is not available in this environment');
   }
-
-  const { pbkdf2Sync } = require('crypto');
-  return pbkdf2Sync(password, salt, iterations, keyLen, 'sha256') as Buffer;
+  const key = await gCrypto.subtle.importKey('raw', password, 'PBKDF2', false, ['deriveBits']);
+  const bits = await gCrypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    key, keyLen * 8,
+  );
+  return Buffer.from(new Uint8Array(bits));
 }

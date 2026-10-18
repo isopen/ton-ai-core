@@ -23,5 +23,5 @@ bash src/rust/build.sh
 ## Tests
 
 ```text
-npx jest plugins/crypton/tests/
+npx jest plugins/crypton/src/typescript/tests/
 ```

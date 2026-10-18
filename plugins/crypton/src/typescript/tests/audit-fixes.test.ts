@@ -24,7 +24,7 @@ describe('rsaVerify browser-path contract', () => {
     const data = Buffer.from('payload');
     const signature = Buffer.from('signature');
 
-    test('rejected subtle.verify resolves to false', async () => {
+    test('rejected subtle.verify rejects', async () => {
         const restore = stubBrowserCrypto({
             importKey: async () => ({ kty: 'mock' }),
             verify: async () => {
@@ -32,13 +32,13 @@ describe('rsaVerify browser-path contract', () => {
             },
         });
         try {
-            await expect(rsaVerify(data, signature, FAKE_PEM)).resolves.toBe(false);
+            await expect(rsaVerify(data, signature, FAKE_PEM)).rejects.toThrow();
         } finally {
             restore();
         }
     });
 
-    test('rejected importKey resolves to false', async () => {
+    test('rejected importKey rejects', async () => {
         const restore = stubBrowserCrypto({
             importKey: async () => {
                 throw new Error('DataError: malformed SPKI');
@@ -46,7 +46,7 @@ describe('rsaVerify browser-path contract', () => {
             verify: async () => true,
         });
         try {
-            await expect(rsaVerify(data, signature, FAKE_PEM)).resolves.toBe(false);
+            await expect(rsaVerify(data, signature, FAKE_PEM)).rejects.toThrow();
         } finally {
             restore();
         }

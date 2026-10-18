@@ -1,5 +1,7 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
 import {
   crypton,
   initWasmCrypton,
@@ -10,6 +12,10 @@ import {
 import { CryptoClient } from '../src/components';
 import type { AuthKey } from '../src/types';
 
+const wasmBinary = new Uint8Array(readFileSync(
+  join(dirname(require.resolve('@ton-ai/crypton')), 'wasm', 'crypton_wasm_bg.wasm'),
+));
+
 function createTestContext() {
     return {
         logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
@@ -19,7 +25,7 @@ function createTestContext() {
 
 describe('mtproto over WASM crypton', () => {
     beforeAll(async () => {
-        await initWasmCrypton();
+        await initWasmCrypton({ wasmBinary });
         assert.ok(isCryptonWasmActive(), 'expected WASM backend after initWasmCrypton');
     }, 60000);
 

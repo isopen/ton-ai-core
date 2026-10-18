@@ -2,19 +2,20 @@ import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 import { randomBytes } from 'crypto';
 
-import { crypton, initWasmCrypton, deinitWasmCrypton, isCryptonWasmActive, getWasmCallStats } from '../src/index';
+import { crypton, initWasmCrypton, deinitWasmCrypton, isCryptonWasmActive, getWasmCallStats } from '../../index';
 import { AES256ECB } from '../src/aes-256-ecb';
 import { AES256CBC } from '../src/aes-256-cbc';
 import { AES256CTR } from '../src/aes-256-ctr';
 import { AES256IGE } from '../src/aes-256-ige';
 import { AES256CBC_ETM } from '../src/aes-256-cbc-etm';
 import { MTProtoKDF } from '../src/kdf';
+import { readWasmBinary } from './wasm-binary';
 
 describe('crypton WASM routing lifecycle', () => {
-  beforeAll(async () => { await initWasmCrypton(); }, 60000);
+  beforeAll(async () => { await initWasmCrypton({ wasmBinary: readWasmBinary() }); }, 60000);
   afterAll(async () => {
     deinitWasmCrypton();
-    await initWasmCrypton();
+    await initWasmCrypton({ wasmBinary: readWasmBinary() });
   }, 60000);
 
   test('WASM is active before deinit', () => {
@@ -70,7 +71,7 @@ describe('crypton WASM routing lifecycle', () => {
     const key = randomBytes(32);
     const iv = randomBytes(16);
     const data = randomBytes(32);
-    await initWasmCrypton();
+    await initWasmCrypton({ wasmBinary: readWasmBinary() });
     assert.ok(isCryptonWasmActive(), 're-init must restore the WASM routing');
     const viaWasm = AES256CTR.process(data, key, iv, 0);
     deinitWasmCrypton();
@@ -81,7 +82,7 @@ describe('crypton WASM routing lifecycle', () => {
 
   test('legacySha1: false disables SHA-1 in the KDF and RSA paths as well', async () => {
     const authKey = randomBytes(256);
-    await initWasmCrypton({ legacySha1: false });
+    await initWasmCrypton({ legacySha1: false, wasmBinary: readWasmBinary() });
     assert.throws(() => crypton.sha1Sync(Buffer.from('x')), /SHA-1 disabled/);
     await assert.rejects(() => crypton.sha1(Buffer.from('x')), /SHA-1 disabled/);
     await assert.rejects(() => MTProtoKDF.computeAuthKeyId(authKey), /SHA-1 disabled/);

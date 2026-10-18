@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert';
 import { Buffer } from 'buffer';
 import { MTProtoKDF } from '../src/kdf';
-import { getRandomBytes } from '../src/utils';
+import { getRandomBytes, setHmacSha512Implementation, getHmacSha512Implementation, hkdfExtract } from '../src/utils';
 
 describe('MTProtoKDF', () => {
     const authKey = getRandomBytes(256);
@@ -182,5 +182,39 @@ describe('MTProtoKDF', () => {
 
     test('computeMsgKey rejects invalid padding', async () => {
         await assert.rejects(() => MTProtoKDF.computeMsgKey(authKey, Buffer.alloc(31), Buffer.alloc(1025), true), /Padding length must be between/);
+    });
+
+    describe('HMAC-SHA512 injection slot', () => {
+        const original = getHmacSha512Implementation();
+        let calls: Array<{ key: Buffer; data: Uint8Array }> = [];
+
+        beforeEach(() => {
+            calls = [];
+            setHmacSha512Implementation(async (key: Buffer, data: Uint8Array) => {
+                calls.push({ key: Buffer.from(key), data: Buffer.from(data) });
+                return Buffer.alloc(64, 0xab);
+            });
+        });
+
+        afterEach(() => {
+            setHmacSha512Implementation(original);
+        });
+
+        test('hkdfExtract routes through the injected implementation', async () => {
+            const salt = Buffer.from([1, 2, 3]);
+            const ikm = Buffer.from([4, 5, 6]);
+            const out = await hkdfExtract(salt, ikm);
+            assert.ok(out.length === 64);
+            assert.ok(calls.length > 0);
+            assert.ok(calls[0].key.equals(salt));
+            assert.ok(calls[0].data.equals(ikm));
+        });
+
+        test('getHmacSha512Implementation returns the last set value', () => {
+            const fn = async () => Buffer.alloc(0);
+            setHmacSha512Implementation(fn);
+            assert.strictEqual(getHmacSha512Implementation(), fn);
+            setHmacSha512Implementation(original);
+        });
     });
 });

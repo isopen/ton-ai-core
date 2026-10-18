@@ -161,7 +161,7 @@ pub fn mod_pow_blind_with(base: &[u64], exp: &[u64], modulus: &[u64], blinder: &
 pub fn mod_pow_auto(base: &[u64], exp: &[u64], modulus: &[u64]) -> Result<Vec<u64>, CryptoError> {
     if bigint::is_zero(modulus) { return Err(CryptoError::ModulusIsZero); }
     if modulus.len() == 1 && modulus[0] == 1 { return Ok(vec![0]); }
-    let exp_wide = exp.len() * 64 > 32;
+    let exp_wide = exp.len() > 1;
     if exp_wide {
         for _ in 0..128 {
             let mut raw = random_bytes(modulus.len() * 8)?;

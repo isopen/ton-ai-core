@@ -15,7 +15,7 @@
     "clean": "npm run clean -ws --if-present",
     "test": "npx jest",
     "test:mtproto": "npx jest plugins/mtproto/tests/",
-    "test:crypton": "npx jest plugins/crypton/tests/",
+    "test:crypton": "npx jest plugins/crypton/src/typescript/tests/",
     "test:tl-language": "npx jest plugins/tl-language/tests/",
     "test:agent-transport": "npx jest plugins/agent-transport/tests/",
     "test:all": "npx jest",
