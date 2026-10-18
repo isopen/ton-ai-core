@@ -2,7 +2,7 @@ import { strict as assert } from 'assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Message } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
-import { OpencodeRadarAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, serverEventError, RADAR_THREAD_TIMINGS } from '../agent';
+import { DurevcodeAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, serverEventError, DUREVCODE_THREAD_TIMINGS } from '../agent';
 import { EMOJI, formatThinking, splitTelegramHtml, truncate, wellFormed } from '../formatter';
 
 const NOT_MODIFIED =
@@ -90,33 +90,33 @@ function stubTelegram() {
 
 let stateCounter = 0;
 
-function makeAgent(): OpencodeRadarAgent {
+function makeAgent(): DurevcodeAgent {
     stateCounter += 1;
-    return new OpencodeRadarAgent({
-        name: 'radar-test',
+    return new DurevcodeAgent({
+        name: 'durevcode-test',
         plugins: {},
         telegram: { token: 'x' },
         opencode: { baseUrl: 'http://127.0.0.1:1', timeoutMs: 1000, maxRetries: 0, dbPath: '', autoServe: false, binPath: 'opencode-test-bin' },
-        radar: {
+        durevcode: {
             chatId: 1,
             directory: '/repo',
             allowedUsers: [],
             maxSessions: 3,
             useThreads: true,
-            statePath: `/tmp/opencode/radar-test-state-${process.pid}-${stateCounter}.json`,
+            statePath: `/tmp/opencode/durevcode-test-state-${process.pid}-${stateCounter}.json`,
             pollMs: 1000,
             idleSec: 90,
         },
     });
 }
 
-function makeAgentWithState(statePath: string): OpencodeRadarAgent {
-    return new OpencodeRadarAgent({
-        name: 'radar-test',
+function makeAgentWithState(statePath: string): DurevcodeAgent {
+    return new DurevcodeAgent({
+        name: 'durevcode-test',
         plugins: {},
         telegram: { token: 'x' },
         opencode: { baseUrl: 'http://127.0.0.1:1', timeoutMs: 1000, maxRetries: 0, dbPath: '', autoServe: false, binPath: 'opencode-test-bin' },
-        radar: {
+        durevcode: {
             chatId: 1,
             directory: '/repo',
             allowedUsers: [],
@@ -154,7 +154,7 @@ type AnyState = {
     contextLimit: number | null;
 };
 
-describe('radar console feed', () => {
+describe('durevcode console feed', () => {
     let now = 1000000;
 
     beforeEach(() => {
@@ -168,7 +168,7 @@ describe('radar console feed', () => {
             const dir = '/tmp/opencode';
             if (existsSync(dir)) {
                 for (const file of readdirSync(dir)) {
-                    if (file.startsWith('radar-test-state-')) {
+                    if (file.startsWith('durevcode-test-state-')) {
                         rmSync(`${dir}/${file}`, { force: true });
                     }
                 }
@@ -298,7 +298,7 @@ describe('radar console feed', () => {
     });
 
     test('restart reuses persisted context message instead of resending', async () => {
-        const statePath = `/tmp/opencode/radar-test-state-reuse-${process.pid}.json`;
+        const statePath = `/tmp/opencode/durevcode-test-state-reuse-${process.pid}.json`;
         const first = makeAgentWithState(statePath) as unknown as Record<
             string,
             (...args: never[]) => Promise<never>
@@ -491,7 +491,7 @@ describe('radar console feed', () => {
     });
 
     test('attach heals homeless pin into the stored topic', async () => {
-        const statePath = `/tmp/opencode/radar-test-state-heal-${process.pid}.json`;
+        const statePath = `/tmp/opencode/durevcode-test-state-heal-${process.pid}.json`;
         writeFileSync(
             statePath,
             JSON.stringify({ version: 1, sessions: { ses_test01: { threadId: 50, contextMessageId: 60, lastSeen: now } } }),
@@ -534,7 +534,7 @@ describe('radar console feed', () => {
     });
 
     test('disabled threads do not erase stored topic', async () => {
-        const statePath = `/tmp/opencode/radar-test-state-poison-${process.pid}.json`;
+        const statePath = `/tmp/opencode/durevcode-test-state-poison-${process.pid}.json`;
         writeFileSync(
             statePath,
             JSON.stringify({ version: 1, sessions: { ses_test01: { threadId: 50, contextMessageId: 60, pinnedThreadId: 50, lastSeen: now } } }),
@@ -770,7 +770,7 @@ async function attachWatched(
     return state;
 }
 
-describe('radar forum control', () => {
+describe('durevcode forum control', () => {
     let now = 2000000;
 
     beforeEach(() => {
@@ -814,7 +814,7 @@ describe('radar forum control', () => {
     });
 
     test('redelivery after restart is ignored via persisted seen set', async () => {
-        const statePath = `/tmp/opencode/radar-restart-dedup-${process.pid}.json`;
+        const statePath = `/tmp/opencode/durevcode-restart-dedup-${process.pid}.json`;
         const first = makeAgentWithState(statePath) as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const stub1 = stubTelegram();
         const fake = stubOpencode();
@@ -833,13 +833,13 @@ describe('radar forum control', () => {
 
     test('denied users are ignored', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
-        (agent as unknown as { config: { radar: { allowedUsers: number[] } } }).config.radar.allowedUsers = [43];
+        (agent as unknown as { config: { durevcode: { allowedUsers: number[] } } }).config.durevcode.allowedUsers = [43];
         const { telegram } = stubTelegram();
         const fake = stubOpencode();
         const state = await attachWatched(agent, telegram);
         await agent.handleInbound(telegram, fake.opencode, inboundMsg({}, now));
         assert.deepEqual(state.promptQueue, []);
-        (agent as unknown as { config: { radar: { allowedUsers: number[] } } }).config.radar.allowedUsers = [42];
+        (agent as unknown as { config: { durevcode: { allowedUsers: number[] } } }).config.durevcode.allowedUsers = [42];
         await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 702 }, now));
         assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'do it' }]);
         assert.deepEqual(state.promptQueue, []);
@@ -1418,8 +1418,8 @@ describe('radar forum control', () => {
 
     test('photo is stored to inbox and queued with a path reference', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
-        (agent as unknown as { config: { radar: { directory: string } } }).config.radar.directory =
-            `/tmp/radar-inbox-photo-${process.pid}`;
+        (agent as unknown as { config: { durevcode: { directory: string } } }).config.durevcode.directory =
+            `/tmp/durevcode-inbox-photo-${process.pid}`;
         const { telegram, calls, setDownloadImpl } = stubTelegram();
         setDownloadImpl(async () => Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]));
         const fake = stubOpencode();
@@ -1439,22 +1439,22 @@ describe('radar forum control', () => {
             );
             assert.equal(fake.prompts.length, 1);
             assert.ok(fake.prompts[0].text.includes('describe it'));
-            assert.ok(fake.prompts[0].text.includes('.radar-inbox/'));
+            assert.ok(fake.prompts[0].text.includes('.durevcode-inbox/'));
             assert.ok(fake.prompts[0].text.includes('photo_1280x800.jpg'));
             assert.deepEqual(state.promptQueue, []);
-            const saved = (fake.prompts[0].text.match(/\.radar-inbox\/[^\s]+/) ?? [])[0] as string | undefined;
+            const saved = (fake.prompts[0].text.match(/\.durevcode-inbox\/[^\s]+/) ?? [])[0] as string | undefined;
             assert.ok(saved);
-            assert.ok(existsSync(`/tmp/radar-inbox-photo-${process.pid}/tmp/.radar-inbox/${saved.split('/')[1].replace(/\.+$/, '')}`));
+            assert.ok(existsSync(`/tmp/durevcode-inbox-photo-${process.pid}/tmp/.durevcode-inbox/${saved.split('/')[1].replace(/\.+$/, '')}`));
         } finally {
-            rmSync(`/tmp/radar-inbox-photo-${process.pid}`, { recursive: true, force: true });
+            rmSync(`/tmp/durevcode-inbox-photo-${process.pid}`, { recursive: true, force: true });
         }
         assert.ok(calls.some((c) => c.op === 'send'));
     });
 
     test('image document is stored, not inlined as text', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
-        (agent as unknown as { config: { radar: { directory: string } } }).config.radar.directory =
-            `/tmp/radar-inbox-imgdoc-${process.pid}`;
+        (agent as unknown as { config: { durevcode: { directory: string } } }).config.durevcode.directory =
+            `/tmp/durevcode-inbox-imgdoc-${process.pid}`;
         const { telegram, setDownloadImpl } = stubTelegram();
         setDownloadImpl(async () => Buffer.from([0x89, 0x50, 0x4e, 0x47]));
         const fake = stubOpencode();
@@ -1466,18 +1466,18 @@ describe('radar forum control', () => {
                 inboundMsg({ text: '', document: { file_id: 'f7', file_unique_id: 'u7', file_name: 'pic.png', mime_type: 'image/png' } }, now),
             );
             assert.equal(fake.prompts.length, 1);
-            assert.ok(fake.prompts[0].text.includes('.radar-inbox/'));
+            assert.ok(fake.prompts[0].text.includes('.durevcode-inbox/'));
             assert.ok(!fake.prompts[0].text.includes('alpha beta'));
             assert.deepEqual(state.promptQueue, []);
         } finally {
-            rmSync(`/tmp/radar-inbox-imgdoc-${process.pid}`, { recursive: true, force: true });
+            rmSync(`/tmp/durevcode-inbox-imgdoc-${process.pid}`, { recursive: true, force: true });
         }
     });
 
     test('video message is stored to inbox with a path reference', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
-        (agent as unknown as { config: { radar: { directory: string } } }).config.radar.directory =
-            `/tmp/radar-inbox-video-${process.pid}`;
+        (agent as unknown as { config: { durevcode: { directory: string } } }).config.durevcode.directory =
+            `/tmp/durevcode-inbox-video-${process.pid}`;
         const { telegram, setDownloadImpl } = stubTelegram();
         setDownloadImpl(async () => Buffer.from([0x00, 0x00, 0x00, 0x18]));
         const fake = stubOpencode();
@@ -1494,21 +1494,21 @@ describe('radar forum control', () => {
             );
             assert.equal(fake.prompts.length, 1);
             assert.ok(fake.prompts[0].text.includes('watch it'));
-            assert.ok(fake.prompts[0].text.includes('.radar-inbox/'));
+            assert.ok(fake.prompts[0].text.includes('.durevcode-inbox/'));
             assert.ok(fake.prompts[0].text.includes('.mp4'));
             assert.deepEqual(state.promptQueue, []);
-            const saved = (fake.prompts[0].text.match(/\.radar-inbox\/[^\s]+/) ?? [])[0] as string | undefined;
+            const saved = (fake.prompts[0].text.match(/\.durevcode-inbox\/[^\s]+/) ?? [])[0] as string | undefined;
             assert.ok(saved);
-            assert.ok(existsSync(`/tmp/radar-inbox-video-${process.pid}/tmp/.radar-inbox/${saved.split('/')[1].replace(/\.+$/, '')}`));
+            assert.ok(existsSync(`/tmp/durevcode-inbox-video-${process.pid}/tmp/.durevcode-inbox/${saved.split('/')[1].replace(/\.+$/, '')}`));
         } finally {
-            rmSync(`/tmp/radar-inbox-video-${process.pid}`, { recursive: true, force: true });
+            rmSync(`/tmp/durevcode-inbox-video-${process.pid}`, { recursive: true, force: true });
         }
     });
 
     test('pdf document is stored, not inlined as text', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
-        (agent as unknown as { config: { radar: { directory: string } } }).config.radar.directory =
-            `/tmp/radar-inbox-pdfdoc-${process.pid}`;
+        (agent as unknown as { config: { durevcode: { directory: string } } }).config.durevcode.directory =
+            `/tmp/durevcode-inbox-pdfdoc-${process.pid}`;
         const { telegram, setDownloadImpl } = stubTelegram();
         setDownloadImpl(async () => Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d]));
         const fake = stubOpencode();
@@ -1520,11 +1520,11 @@ describe('radar forum control', () => {
                 inboundMsg({ text: '', document: { file_id: 'f8', file_unique_id: 'u8', file_name: 'doc.pdf', mime_type: 'application/pdf' } }, now),
             );
             assert.equal(fake.prompts.length, 1);
-            assert.ok(fake.prompts[0].text.includes('.radar-inbox/'));
+            assert.ok(fake.prompts[0].text.includes('.durevcode-inbox/'));
             assert.ok(fake.prompts[0].text.includes('.pdf'));
             assert.deepEqual(state.promptQueue, []);
         } finally {
-            rmSync(`/tmp/radar-inbox-pdfdoc-${process.pid}`, { recursive: true, force: true });
+            rmSync(`/tmp/durevcode-inbox-pdfdoc-${process.pid}`, { recursive: true, force: true });
         }
     });
 
@@ -1568,7 +1568,7 @@ describe('radar forum control', () => {
     });
 });
 
-describe('radar typing progress', () => {
+describe('durevcode typing progress', () => {
     let now = 3000000;
 
     beforeEach(() => {
@@ -1656,7 +1656,7 @@ describe('radar typing progress', () => {
 
     test('typing disabled via config sends nothing', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
-        (agent as unknown as { config: { radar: { typingEnabled?: boolean } } }).config.radar.typingEnabled = false;
+        (agent as unknown as { config: { durevcode: { typingEnabled?: boolean } } }).config.durevcode.typingEnabled = false;
         const { telegram, calls } = stubTelegram();
         const state = (await agent.attachSession(telegram, SESSION)) as unknown as Record<string, unknown>;
         await agent.sendProgressTyping(telegram, state);
@@ -1794,7 +1794,7 @@ describe('radar typing progress', () => {
     });
 });
 
-describe('radar context pin', () => {
+describe('durevcode context pin', () => {
     let now = 4000000;
 
     beforeEach(() => {
@@ -1860,7 +1860,7 @@ describe('radar context pin', () => {
     });
 });
 
-describe('radar new topics', () => {
+describe('durevcode new topics', () => {
     let now = 5000000;
 
     beforeEach(() => {
@@ -1937,7 +1937,7 @@ describe('radar new topics', () => {
 
     test('creation disabled via config keeps unknown topics ignored', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
-        (agent as unknown as { config: { radar: { newTopics?: boolean } } }).config.radar.newTopics = false;
+        (agent as unknown as { config: { durevcode: { newTopics?: boolean } } }).config.durevcode.newTopics = false;
         const { telegram } = stubTelegram();
         const fake = stubOpencode();
         await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, text: 'build it' }, now));
@@ -1959,7 +1959,7 @@ describe('radar new topics', () => {
     });
 });
 
-describe('radar thread binding survival', () => {
+describe('durevcode thread binding survival', () => {
     let now = 6000000;
 
     beforeEach(() => {
@@ -2223,7 +2223,7 @@ describe('radar thread binding survival', () => {
     });
 
     test('delivered events are checkpointed to the state file', async () => {
-        const agent = makeAgentWithState(`/tmp/opencode/radar-cursor-test-${process.pid}.json`);
+        const agent = makeAgentWithState(`/tmp/opencode/durevcode-cursor-test-${process.pid}.json`);
         const typed = agent as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram } = stubTelegram();
         const state = await attachWatched(agent, telegram);
@@ -2236,7 +2236,7 @@ describe('radar thread binding survival', () => {
         };
         (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => live;
         await typed.updateSession(telegram, state);
-        const path = (agent as unknown as { config: { radar: { statePath: string } } }).config.radar.statePath;
+        const path = (agent as unknown as { config: { durevcode: { statePath: string } } }).config.durevcode.statePath;
         const saved = JSON.parse(readFileSync(path, 'utf8')) as {
             sessions: Record<string, { knownParts?: Record<string, number> }>;
         };
@@ -2668,7 +2668,7 @@ describe('radar thread binding survival', () => {
     });
 
     test('restored threads without a stored name get one verification rename', async () => {
-        const statePath = `/tmp/opencode/radar-test-state-migrate-${process.pid}.json`;
+        const statePath = `/tmp/opencode/durevcode-test-state-migrate-${process.pid}.json`;
         writeFileSync(
             statePath,
             JSON.stringify({ version: 1, sessions: { ses_test01: { threadId: 50, contextMessageId: 60, pinnedThreadId: 50, lastSeen: now } } }),
@@ -2709,7 +2709,7 @@ describe('radar thread binding survival', () => {
     });
 
     test('stored topic names survive restarts without extra renames', async () => {
-        const statePath = `/tmp/opencode/radar-test-state-rename-${process.pid}.json`;
+        const statePath = `/tmp/opencode/durevcode-test-state-rename-${process.pid}.json`;
         writeFileSync(
             statePath,
             JSON.stringify({
@@ -2750,8 +2750,8 @@ describe('radar thread binding survival', () => {
     });
 
     test('state load keeps the freshest session per topic', async () => {
-        const agent = makeAgentWithState(`/tmp/opencode/radar-dedup-test-${process.pid}.json`);
-        const path = (agent as unknown as { config: { radar: { statePath: string } } }).config.radar.statePath;
+        const agent = makeAgentWithState(`/tmp/opencode/durevcode-dedup-test-${process.pid}.json`);
+        const path = (agent as unknown as { config: { durevcode: { statePath: string } } }).config.durevcode.statePath;
         writeFileSync(
             path,
             JSON.stringify({
@@ -2770,7 +2770,7 @@ describe('radar thread binding survival', () => {
     });
 });
 
-describe('radar server outage', () => {
+describe('durevcode server outage', () => {
     test('outage is logged once until recovery and never posted to General', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -2805,7 +2805,7 @@ describe('radar server outage', () => {
     });
 });
 
-describe('radar poll fanout', () => {
+describe('durevcode poll fanout', () => {
     let now = 9000000;
 
     beforeEach(() => {
@@ -2819,7 +2819,7 @@ describe('radar poll fanout', () => {
             const dir = '/tmp/opencode';
             if (existsSync(dir)) {
                 for (const file of readdirSync(dir)) {
-                    if (file.startsWith('radar-test-state-')) {
+                    if (file.startsWith('durevcode-test-state-')) {
                         rmSync(`${dir}/${file}`, { force: true });
                     }
                 }
@@ -3127,7 +3127,7 @@ describe('radar poll fanout', () => {
     });
 });
 
-describe('radar thinking feed', () => {
+describe('durevcode thinking feed', () => {
     let now = 9600000;
 
     beforeEach(() => {
@@ -3141,7 +3141,7 @@ describe('radar thinking feed', () => {
             const dir = '/tmp/opencode';
             if (existsSync(dir)) {
                 for (const file of readdirSync(dir)) {
-                    if (file.startsWith('radar-test-state-')) {
+                    if (file.startsWith('durevcode-test-state-')) {
                         rmSync(`${dir}/${file}`, { force: true });
                     }
                 }
@@ -3340,7 +3340,7 @@ describe('radar thinking feed', () => {
     });
 
     test('event signatures persist and reload with validation', async () => {
-        const path = `/tmp/opencode/radar-sig-test-${process.pid}.json`;
+        const path = `/tmp/opencode/durevcode-sig-test-${process.pid}.json`;
         writeFileSync(
             path,
             JSON.stringify({
@@ -3376,7 +3376,7 @@ describe('radar thinking feed', () => {
     });
 });
 
-describe('radar utf8 safety', () => {
+describe('durevcode utf8 safety', () => {
     test('wellFormed replaces lone surrogates', async () => {
         assert.equal(wellFormed('a\uD83D\uDE00b'), 'a\uD83D\uDE00b');
         assert.equal(wellFormed('a\uD83Db'), 'a�b');
@@ -3421,7 +3421,7 @@ describe('radar utf8 safety', () => {
 });
 });
 
-describe('radar prompt confirm', () => {
+describe('durevcode prompt confirm', () => {
     let now = 7000000;
 
     beforeEach(() => {
@@ -3506,7 +3506,7 @@ describe('radar prompt confirm', () => {
     });
 });
 
-describe('radar cli fallback', () => {
+describe('durevcode cli fallback', () => {
     let now = 8000000;
 
     beforeEach(() => {
@@ -3613,7 +3613,7 @@ describe('radar cli fallback', () => {
     });
 });
 
-describe('radar startup baseline', () => {
+describe('durevcode startup baseline', () => {
     let now = 9700000;
 
     beforeEach(() => {
@@ -3693,7 +3693,7 @@ describe('radar startup baseline', () => {
     });
 });
 
-describe('radar thinking state', () => {
+describe('durevcode thinking state', () => {
     let now = 9000000;
 
     beforeEach(() => {
@@ -3787,7 +3787,7 @@ describe('radar thinking state', () => {
     });
 });
 
-describe('radar questions', () => {
+describe('durevcode questions', () => {
     let now = 10000000;
 
     beforeEach(() => {
@@ -4069,7 +4069,7 @@ describe('radar questions', () => {
     });
 });
 
-describe('radar stop control', () => {
+describe('durevcode stop control', () => {
     let now = 3000000;
 
     beforeEach(() => {
@@ -4317,7 +4317,7 @@ const MODE_AGENTS = [
         assert.equal(confirms().length, 1);
         await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_m3', 'mode:build'));
         assert.equal(state.buildMode, true);
-        const path = (agent as unknown as { config: { radar: { statePath: string } } }).config.radar.statePath;
+        const path = (agent as unknown as { config: { durevcode: { statePath: string } } }).config.durevcode.statePath;
         const saved = JSON.parse(readFileSync(path, 'utf8')) as { sessions: Record<string, { buildMode?: boolean }> };
         assert.equal(saved.sessions['ses_test01']?.buildMode, undefined);
         await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_m4', 'mode:plan'));
@@ -4717,7 +4717,7 @@ const MODE_AGENTS = [
             creates += 1;
             throw new Error('Bad Request: bot is not an admin');
         };
-        now += RADAR_THREAD_TIMINGS.noticeMs;
+        now += DUREVCODE_THREAD_TIMINGS.noticeMs;
         const state = (await attachWatched(agent, telegram)) as unknown as StopState & { threadId: number | null };
         assert.equal(state.threadId, null);
         assert.equal(creates, 2);
@@ -4725,7 +4725,7 @@ const MODE_AGENTS = [
         assert.equal(notices().length, 0, 'topic failures are logged, never posted to General');
         await agent.ensureThreadId(telegram, state);
         assert.equal(creates, 2);
-        now += RADAR_THREAD_TIMINGS.retryMs + 1000;
+        now += DUREVCODE_THREAD_TIMINGS.retryMs + 1000;
         await agent.ensureThreadId(telegram, state);
         assert.equal(creates, 4);
         assert.equal(notices().length, 0);
@@ -4991,7 +4991,7 @@ const MODE_AGENTS = [
         assert.ok(typeof firstControl === 'number');
         calls.length = 0;
 
-        const again = await agent.attachSession(telegram, { ...SESSION, title: 'Radar разработка' });
+        const again = await agent.attachSession(telegram, { ...SESSION, title: 'Durevcode разработка' });
         assert.equal(again, state, 'a watched session must not be rebuilt into a second state object');
         await agent.syncStopKeyboard(telegram, again);
         assert.equal((again as unknown as { stopMessageId: number | null }).stopMessageId, firstControl);
@@ -5048,7 +5048,7 @@ const MODE_AGENTS = [
     });
 });
 
-describe('radar model error wording', () => {
+describe('durevcode model error wording', () => {
     let now = 6000000;
 
     beforeEach(() => {
@@ -5211,7 +5211,7 @@ describe('radar model error wording', () => {
     });
 });
 
-describe('radar server errors', () => {
+describe('durevcode server errors', () => {
     let now = 4000000;
 
     beforeEach(() => {
@@ -5315,7 +5315,7 @@ describe('radar server errors', () => {
     });
 });
 
-describe('radar poll resilience', () => {
+describe('durevcode poll resilience', () => {
     test('a session already ticking is skipped instead of run twice', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
             sessionTicks: Set<string>;
@@ -5343,7 +5343,7 @@ describe('radar poll resilience', () => {
     });
 });
 
-describe('radar topic probe', () => {
+describe('durevcode topic probe', () => {
     let now = 2000000;
 
     beforeEach(() => {
@@ -5443,7 +5443,7 @@ describe('radar topic probe', () => {
     });
 });
 
-describe('radar typing indicator', () => {
+describe('durevcode typing indicator', () => {
     let now = 2000000;
 
     beforeEach(() => {
@@ -5517,7 +5517,7 @@ describe('radar typing indicator', () => {
     });
 });
 
-describe('radar upstream failures', () => {
+describe('durevcode upstream failures', () => {
     test('gateway errors are recognised as upstream, not client, failures', () => {
         assert.equal(isUpstreamServerError({ errorCode: 502, message: 'Telegram API error: Bad Gateway' }), true);
         assert.equal(isUpstreamServerError({ errorCode: 503, message: 'Telegram API error: Service Unavailable' }), true);
@@ -5558,7 +5558,7 @@ describe('radar upstream failures', () => {
     });
 });
 
-describe('radar prompt delivery independence', () => {
+describe('durevcode prompt delivery independence', () => {
     test('a telegram upstream backoff does not hold back prompts to the model', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
             upstreamBackoffUntil: number;
@@ -5587,13 +5587,13 @@ describe('radar prompt delivery independence', () => {
         assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'вопрос' }]);
         await assert.rejects(
             () => agent.deliverMessage(telegram, state, 'text'),
-            /Too Many Requests: radar backoff active/,
+            /Too Many Requests: durevcode backoff active/,
         );
         assert.equal(calls.filter((c) => c.op === 'send').length, sendsBefore);
     });
 });
 
-describe('radar event flush concurrency', () => {
+describe('durevcode event flush concurrency', () => {
     test('a slow flush blocks a second one instead of sending the same batch twice', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -5639,7 +5639,7 @@ describe('radar event flush concurrency', () => {
     });
 });
 
-describe('radar session lifecycle races', () => {
+describe('durevcode session lifecycle races', () => {
     test('a session with an in-flight tick is neither detached nor re-attached', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
             sessionTicks: Set<string>;
@@ -5675,7 +5675,7 @@ describe('radar session lifecycle races', () => {
     });
 });
 
-describe('radar delivery dedup', () => {
+describe('durevcode delivery dedup', () => {
     test('the same batch text is not delivered twice within the window', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -5707,7 +5707,7 @@ describe('radar delivery dedup', () => {
     });
 });
 
-describe('radar topic count', () => {
+describe('durevcode topic count', () => {
     let now = 13000000;
 
     beforeEach(() => {
@@ -5719,7 +5719,7 @@ describe('radar topic count', () => {
         jest.restoreAllMocks();
     });
 
-    function radarRows() {
+    function durevcodeRows() {
         return [
             { id: 'ses_a01', title: 'Alpha', directory: '/repo', agent: 'build', model: '{"id":"test-model"}', time_created: 1000, time_updated: 5000, cost: 0, tokens_input: 10, tokens_output: 5, tokens_reasoning: 0 },
             { id: 'ses_b02', title: 'Bravo', directory: '/repo', agent: 'build', model: '{"id":"test-model"}', time_created: 1000, time_updated: 4000, cost: 0, tokens_input: 10, tokens_output: 5, tokens_reasoning: 0 },
@@ -5727,7 +5727,7 @@ describe('radar topic count', () => {
         ];
     }
 
-    function radarLive(rows: Array<Record<string, unknown>>, reads: Record<string, boolean>) {
+    function durevcodeLive(rows: Array<Record<string, unknown>>, reads: Record<string, boolean>) {
         return {
             listSessions: async () => rows,
             getSession: async (sessionId: string) => rows.find((row) => row.id === sessionId) ?? null,
@@ -5742,7 +5742,7 @@ describe('radar topic count', () => {
     }
 
     test('a slow context send never creates a second topic for the same session', async () => {
-        const statePath = `/tmp/opencode/radar-test-state-topics-${process.pid}.json`;
+        const statePath = `/tmp/opencode/durevcode-test-state-topics-${process.pid}.json`;
         rmSync(statePath, { force: true });
         try {
             const agent = makeAgentWithState(statePath) as unknown as Record<
@@ -5750,10 +5750,10 @@ describe('radar topic count', () => {
                 (...args: never[]) => Promise<never>
             > & { getPlugin: (name: string) => unknown; watched: Map<string, unknown> };
             const { telegram, calls, setSendImpl } = stubTelegram();
-            const rows = radarRows();
+            const rows = durevcodeRows();
             const reads: Record<string, boolean> = {};
             agent.getPlugin = (name: string) =>
-                name === 'telegram-bot-api' ? telegram : radarLive(rows, reads);
+                name === 'telegram-bot-api' ? telegram : durevcodeLive(rows, reads);
             const saved = (): Array<{ threadId: number | null }> => {
                 const parsed = JSON.parse(readFileSync(statePath, 'utf8')) as {
                     sessions: Record<string, { threadId: number | null }>;
@@ -5781,7 +5781,7 @@ describe('radar topic count', () => {
     });
 
     test('a slow context send on every tick still yields exactly three topics', async () => {
-        const statePath = `/tmp/opencode/radar-test-state-topics2-${process.pid}.json`;
+        const statePath = `/tmp/opencode/durevcode-test-state-topics2-${process.pid}.json`;
         rmSync(statePath, { force: true });
         try {
             const agent = makeAgentWithState(statePath) as unknown as Record<
@@ -5789,10 +5789,10 @@ describe('radar topic count', () => {
                 (...args: never[]) => Promise<never>
             > & { watched: Map<string, unknown> };
             const { telegram, calls, setSendImpl } = stubTelegram();
-            const rows = radarRows();
+            const rows = durevcodeRows();
             const reads: Record<string, boolean> = {};
             agent.getPlugin = (name: string) =>
-                name === 'telegram-bot-api' ? telegram : radarLive(rows, reads);
+                name === 'telegram-bot-api' ? telegram : durevcodeLive(rows, reads);
             setSendImpl(() => Promise.reject(new Error('fetch failed: socket hang up')));
             for (let round = 0; round < 4; round += 1) {
                 await agent.syncSessions();
@@ -5813,7 +5813,7 @@ describe('radar topic count', () => {
     });
 });
 
-describe('radar session pick order', () => {
+describe('durevcode session pick order', () => {
     let now = 14000000;
 
     beforeEach(() => {
@@ -5878,7 +5878,7 @@ describe('radar session pick order', () => {
     });
 });
 
-describe('radar context placement', () => {
+describe('durevcode context placement', () => {
     let now = 15000000;
 
     beforeEach(() => {
@@ -5953,7 +5953,7 @@ describe('radar context placement', () => {
         assert.equal(calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Context')).length, 0);
 
         createFails = false;
-        now += RADAR_THREAD_TIMINGS.retryMs + 1000;
+        now += DUREVCODE_THREAD_TIMINGS.retryMs + 1000;
         const state = agent.watched.get('ses_a01') as { threadId: number | null };
         await agent.runSessionTick(telegram, livePlugin([row('ses_a01', 'Alpha')]) as never, state as never);
         assert.equal(state.threadId, 77);
@@ -5991,7 +5991,7 @@ describe('radar context placement', () => {
     });
 });
 
-describe('radar general isolation', () => {
+describe('durevcode general isolation', () => {
     let now = 16000000;
 
     beforeEach(() => {
@@ -6228,7 +6228,7 @@ describe('radar general isolation', () => {
         rows.length = 0;
         await agent.syncSessions();
         assert.equal(agent.tombstonedSessions.has('ses_a01'), true, 'the tombstone survives the listing gap');
-        now += RADAR_THREAD_TIMINGS.tombstoneGraceMs + 1000;
+        now += DUREVCODE_THREAD_TIMINGS.tombstoneGraceMs + 1000;
         await agent.syncSessions();
         assert.equal(agent.tombstonedSessions.has('ses_a01'), false, 'the tombstone must not grow forever');
     });
@@ -6255,7 +6255,7 @@ describe('radar general isolation', () => {
     });
 });
 
-describe('radar duplicate topic binding', () => {
+describe('durevcode duplicate topic binding', () => {
     let now = 7000000;
 
     beforeEach(() => {

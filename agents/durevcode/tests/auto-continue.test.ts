@@ -1,5 +1,5 @@
 import { strict as assert } from 'assert';
-import { OpencodeRadarAgent } from '../agent';
+import { DurevcodeAgent } from '../agent';
 
 const SESSION = {
     id: 'ses_auto01',
@@ -24,10 +24,10 @@ type State = Record<string, unknown> & {
 
 let counter = 0;
 
-function makeAgent(over: Record<string, unknown> = {}): OpencodeRadarAgent {
+function makeAgent(over: Record<string, unknown> = {}): DurevcodeAgent {
     counter += 1;
-    return new OpencodeRadarAgent({
-        name: 'radar-auto',
+    return new DurevcodeAgent({
+        name: 'durevcode-auto',
         plugins: {},
         telegram: { token: 'x' },
         opencode: {
@@ -38,13 +38,13 @@ function makeAgent(over: Record<string, unknown> = {}): OpencodeRadarAgent {
             autoServe: false,
             binPath: 'opencode-test-bin',
         },
-        radar: {
+        durevcode: {
             chatId: 1,
             directory: '/repo',
             allowedUsers: [],
             maxSessions: 3,
             useThreads: false,
-            statePath: `/tmp/opencode/radar-auto-state-${process.pid}-${counter}.json`,
+            statePath: `/tmp/opencode/durevcode-auto-state-${process.pid}-${counter}.json`,
             pollMs: 1000,
             idleSec: 90,
             autoContinueSec: 60,
@@ -71,7 +71,7 @@ function stubTelegram(): Record<string, unknown> {
     };
 }
 
-async function attach(agent: OpencodeRadarAgent, telegram: unknown): Promise<State> {
+async function attach(agent: DurevcodeAgent, telegram: unknown): Promise<State> {
     const state = (await (agent as unknown as {
         attachSession: (t: unknown, s: unknown) => Promise<unknown>;
     }).attachSession(telegram, SESSION)) as State;
@@ -101,7 +101,7 @@ function prime(state: State, idleMs: number): void {
     state.lastNudgeAt = 0;
 }
 
-async function tick(agent: OpencodeRadarAgent, telegram: unknown, state: State): Promise<void> {
+async function tick(agent: DurevcodeAgent, telegram: unknown, state: State): Promise<void> {
     const live = livePlugin(agent.__sent as string[]);
     (agent as unknown as { getPlugin: (n: string) => unknown }).getPlugin = () => live;
     await (agent as unknown as { updateSession: (t: unknown, s: unknown) => Promise<void> }).updateSession(
@@ -110,7 +110,7 @@ async function tick(agent: OpencodeRadarAgent, telegram: unknown, state: State):
     );
 }
 
-describe('radar auto-continue', () => {
+describe('durevcode auto-continue', () => {
     test('sends Continue after the quiet window', async () => {
         const agent = makeAgent();
         (agent as unknown as { __sent: string[] }).__sent = [];

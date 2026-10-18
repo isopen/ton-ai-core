@@ -1,17 +1,17 @@
 {
-  "name": "@ton-ai/durev-radar",
+  "name": "@ton-ai/durevcode-agent",
   "version": "0.1.0",
-  "description": "Radar agent: drives durev-core sessions from Telegram via @ton-ai/telegram-bot-api",
+  "description": "Durevcode agent: streams opencode session progress to Telegram via @ton-ai/telegram-bot-api",
   "main": "index.js",
   "scripts": {
     "start": "npx ts-node index.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "TON AI Core Team",
+  "author": "testertesterov",
   "license": "Boost Software License 1.0",
   "dependencies": {
     "@ton-ai/core": "*",
-    "@ton-ai/durevcode": "*",
+    "@ton-ai/opencode": "*",
     "@ton-ai/telegram-bot-api": "*",
     "@ton-ai/tmd": "*"
   },

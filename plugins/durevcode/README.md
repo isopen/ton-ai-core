@@ -119,6 +119,6 @@ cargo test --manifest-path plugins/durevcode/rust/Cargo.toml
 npx jest plugins/durevcode/tests/durevcode.test.ts
 ```
 
-## durev-radar
+## Telegram companion agent
 
-The Telegram agent lives in `agents/durev-radar`. Full launch instructions are in its README.
+The Telegram companion agent lived in `agents/durev-radar` and has been removed; the durevcode plugin remains the durable store for chat sessions.

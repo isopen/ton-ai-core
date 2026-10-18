@@ -1,5 +1,5 @@
 import { strict as assert } from 'assert';
-import { OpencodeRadarAgent } from '../agent';
+import { DurevcodeAgent } from '../agent';
 
 const SESSION = {
     id: 'ses_stop01',
@@ -17,10 +17,10 @@ const SESSION = {
 
 let counter = 0;
 
-function makeAgent(): OpencodeRadarAgent {
+function makeAgent(): DurevcodeAgent {
     counter += 1;
-    return new OpencodeRadarAgent({
-        name: 'radar-stop',
+    return new DurevcodeAgent({
+        name: 'durevcode-stop',
         plugins: {},
         telegram: { token: 'x' },
         opencode: {
@@ -31,13 +31,13 @@ function makeAgent(): OpencodeRadarAgent {
             autoServe: false,
             binPath: 'opencode-test-bin',
         },
-        radar: {
+        durevcode: {
             chatId: 1,
             directory: '/repo',
             allowedUsers: [],
             maxSessions: 3,
             useThreads: true,
-            statePath: `/tmp/opencode/radar-stop-state-${process.pid}-${counter}.json`,
+            statePath: `/tmp/opencode/durevcode-stop-state-${process.pid}-${counter}.json`,
             pollMs: 1000,
             idleSec: 90,
             autoContinueSec: 60,
@@ -80,7 +80,7 @@ function stopMsg(over: Record<string, unknown> = {}): any {
     };
 }
 
-async function attachFinalized(agent: OpencodeRadarAgent, telegram: unknown): Promise<any> {
+async function attachFinalized(agent: DurevcodeAgent, telegram: unknown): Promise<any> {
     const state = await (agent as unknown as {
         attachSession: (t: unknown, s: unknown) => Promise<any>;
     }).attachSession(telegram, SESSION);

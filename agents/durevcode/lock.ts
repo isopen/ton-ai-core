@@ -2,7 +2,7 @@ import { mkdirSync, openSync, closeSync, writeSync, readFileSync, rmSync } from 
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-export interface RadarLock {
+export interface DurevcodeLock {
     path: string;
     pid: number;
 }
@@ -12,8 +12,8 @@ export function lockPathFor(statePath: string): string {
 }
 
 export function sharedChatLockPath(chatId: number, baseDir?: string): string {
-    const dir = baseDir ?? join(homedir(), '.local', 'share', 'opencode-radar');
-    return join(dir, `radar-chat-${chatId}.lock`);
+    const dir = baseDir ?? join(homedir(), '.local', 'share', 'durevcode');
+    return join(dir, `durevcode-chat-${chatId}.lock`);
 }
 
 export function isPidAlive(pid: number): boolean {
@@ -26,7 +26,7 @@ export function isPidAlive(pid: number): boolean {
     }
 }
 
-export function acquireRadarLock(lockPath: string): RadarLock {
+export function acquireDurevcodeLock(lockPath: string): DurevcodeLock {
     mkdirSync(dirname(lockPath), { recursive: true });
     const payload = JSON.stringify({ pid: process.pid, startedAt: Date.now() });
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -52,17 +52,17 @@ export function acquireRadarLock(lockPath: string): RadarLock {
             holder = 0;
         }
         if (holder > 0 && holder !== process.pid && isPidAlive(holder)) {
-            throw new Error(`opencode-radar already running (pid ${holder}, lock ${lockPath})`);
+            throw new Error(`durevcode already running (pid ${holder}, lock ${lockPath})`);
         }
         try {
             rmSync(lockPath, { force: true });
         } catch {
         }
     }
-    throw new Error(`opencode-radar lock is contended: ${lockPath}`);
+    throw new Error(`durevcode lock is contended: ${lockPath}`);
 }
 
-export function releaseRadarLock(lock: RadarLock | null): void {
+export function releaseDurevcodeLock(lock: DurevcodeLock | null): void {
     if (!lock) return;
     try {
         const raw = JSON.parse(readFileSync(lock.path, 'utf8')) as { pid?: unknown };

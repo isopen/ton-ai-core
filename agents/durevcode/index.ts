@@ -1,8 +1,8 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
-import { OpencodeRadarAgent, OpencodeRadarConfig } from './agent';
-import { acquireRadarLock, lockPathFor, releaseRadarLock, sharedChatLockPath, RadarLock } from './lock';
+import { DurevcodeAgent, DurevcodeConfig } from './agent';
+import { acquireDurevcodeLock, lockPathFor, releaseDurevcodeLock, sharedChatLockPath, DurevcodeLock } from './lock';
 import { AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
 
 function loadDotEnv(): void {
@@ -51,15 +51,15 @@ function optionalFlag(name: string, fallback: boolean): boolean {
 }
 
 function userIdList(): number[] {
-    return (process.env.RADAR_ALLOWED_USERS ?? '')
+    return (process.env.DUREVCODE_ALLOWED_USERS ?? '')
         .split(',')
         .map((id) => Number.parseInt(id.trim(), 10))
         .filter((id) => Number.isFinite(id));
 }
 
 function sessionIdList(): string[] {
-    const single = process.env.RADAR_SESSION_ID?.trim();
-    const multiple = (process.env.RADAR_SESSION_IDS ?? '')
+    const single = process.env.DUREVCODE_SESSION_ID?.trim();
+    const multiple = (process.env.DUREVCODE_SESSION_IDS ?? '')
         .split(',')
         .map((id) => id.trim())
         .filter((id) => id.length > 0);
@@ -67,10 +67,10 @@ function sessionIdList(): string[] {
     return multiple;
 }
 
-const maxSessionsDefault = optionalInt('RADAR_MAX_SESSIONS', 3);
+const maxSessionsDefault = optionalInt('DUREVCODE_MAX_SESSIONS', 3);
 
-const config: OpencodeRadarConfig = {
-    name: 'opencode-radar',
+const config: DurevcodeConfig = {
+    name: 'durevcode',
     plugins: {},
     telegram: {
         token: process.env.TELEGRAM_BOT_API_TOKEN || '',
@@ -84,46 +84,46 @@ const config: OpencodeRadarConfig = {
         baseUrl: process.env.OPENCODE_SERVER_URL || 'http://127.0.0.1:4096',
         timeoutMs: optionalInt('OPENCODE_TIMEOUT_MS', 10000),
         maxRetries: optionalInt('OPENCODE_MAX_RETRIES', 2),
-        dbPath: process.env.RADAR_DB_PATH || join(homedir(), '.local', 'share', 'opencode', 'opencode.db'),
+        dbPath: process.env.DUREVCODE_DB_PATH || join(homedir(), '.local', 'share', 'opencode', 'opencode.db'),
         autoServe: optionalFlag('OPENCODE_AUTO_SERVE', true),
         binPath: process.env.OPENCODE_BIN || 'opencode',
         serverUsername: process.env.OPENCODE_SERVER_USERNAME || 'opencode',
         serverPassword: process.env.OPENCODE_SERVER_PASSWORD || '',
         cliFallback: optionalFlag('OPENCODE_CLI_FALLBACK', true),
-        cliFirst: optionalFlag('RADAR_CLI_FIRST', false),
+        cliFirst: optionalFlag('DUREVCODE_CLI_FIRST', false),
     },
-    radar: {
-        chatId: Number.parseInt(process.env.RADAR_CHAT_ID || '', 10),
-        directory: process.env.RADAR_DIR || process.cwd(),
+    durevcode: {
+        chatId: Number.parseInt(process.env.DUREVCODE_CHAT_ID || '', 10),
+        directory: process.env.DUREVCODE_DIR || process.cwd(),
         allowedUsers: userIdList(),
-        sessionId: process.env.RADAR_SESSION_ID || undefined,
+        sessionId: process.env.DUREVCODE_SESSION_ID || undefined,
         sessionIds: sessionIdList(),
         maxSessions: maxSessionsDefault,
-        useThreads: optionalFlag('RADAR_USE_THREADS', true),
-        typingEnabled: optionalFlag('RADAR_TYPING', true),
-        newTopics: optionalFlag('RADAR_NEW_TOPICS', true),
+        useThreads: optionalFlag('DUREVCODE_USE_THREADS', true),
+        typingEnabled: optionalFlag('DUREVCODE_TYPING', true),
+        newTopics: optionalFlag('DUREVCODE_NEW_TOPICS', true),
         statePath:
-            process.env.RADAR_STATE_PATH ||
-            join(homedir(), '.local', 'share', 'opencode-radar', 'state.json'),
-        pollMs: optionalInt('RADAR_POLL_MS', 1000),
-        pollFanout: optionalInt('RADAR_POLL_FANOUT', 3),
-        idleSec: optionalInt('RADAR_IDLE_SEC', 90),
-        autoContinueSec: optionalInt('RADAR_AUTO_CONTINUE_SEC', 60),
-        autoContinueMax: optionalInt('RADAR_AUTO_CONTINUE_MAX', 10),
-        autoFinish: optionalFlag('RADAR_AUTO_FINISH', true),
+            process.env.DUREVCODE_STATE_PATH ||
+            join(homedir(), '.local', 'share', 'durevcode', 'state.json'),
+        pollMs: optionalInt('DUREVCODE_POLL_MS', 1000),
+        pollFanout: optionalInt('DUREVCODE_POLL_FANOUT', 3),
+        idleSec: optionalInt('DUREVCODE_IDLE_SEC', 90),
+        autoContinueSec: optionalInt('DUREVCODE_AUTO_CONTINUE_SEC', 60),
+        autoContinueMax: optionalInt('DUREVCODE_AUTO_CONTINUE_MAX', 10),
+        autoFinish: optionalFlag('DUREVCODE_AUTO_FINISH', true),
     },
 };
 
 async function main(): Promise<void> {
-    console.log('Starting opencode-radar agent...');
+    console.log('Starting durevcode agent...');
     required('TELEGRAM_BOT_API_TOKEN');
-    const chatIdRaw = required('RADAR_CHAT_ID');
+    const chatIdRaw = required('DUREVCODE_CHAT_ID');
     if (!Number.isFinite(Number.parseInt(chatIdRaw, 10))) {
-        console.error('Error: RADAR_CHAT_ID must be an integer chat id');
+        console.error('Error: DUREVCODE_CHAT_ID must be an integer chat id');
         process.exit(1);
     }
 
-    const agent = new OpencodeRadarAgent(config);
+    const agent = new DurevcodeAgent(config);
 
     agent.on(AGENT_EVENTS.INITIALIZED, () => {
         console.log('Agent initialized');
@@ -153,25 +153,25 @@ async function main(): Promise<void> {
         console.log(`Plugin deactivated: ${data.name}`);
     });
 
-    let lock: RadarLock | null = null;
-    let chatLock: RadarLock | null = null;
+    let lock: DurevcodeLock | null = null;
+    let chatLock: DurevcodeLock | null = null;
     const releaseLocks = () => {
-        releaseRadarLock(chatLock);
+        releaseDurevcodeLock(chatLock);
         chatLock = null;
-        releaseRadarLock(lock);
+        releaseDurevcodeLock(lock);
         lock = null;
     };
     try {
-        lock = acquireRadarLock(lockPathFor(config.radar.statePath));
-        console.log(`Radar lock acquired: ${lock.path}`);
+        lock = acquireDurevcodeLock(lockPathFor(config.durevcode.statePath));
+        console.log(`Durevcode lock acquired: ${lock.path}`);
         try {
-            chatLock = acquireRadarLock(sharedChatLockPath(config.radar.chatId));
+            chatLock = acquireDurevcodeLock(sharedChatLockPath(config.durevcode.chatId));
         } catch (error) {
-            releaseRadarLock(lock);
+            releaseDurevcodeLock(lock);
             lock = null;
             throw error;
         }
-        console.log(`Radar chat lock acquired: ${(chatLock as RadarLock).path}`);
+        console.log(`Durevcode chat lock acquired: ${(chatLock as DurevcodeLock).path}`);
         await agent.start();
 
         const shutdown = () => {

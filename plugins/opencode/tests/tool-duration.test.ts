@@ -9,7 +9,7 @@ function toolPart(status: string, over: Record<string, unknown> = {}): Record<st
     return { type: 'tool', tool: 'bash', state: { status, input: { command: 'npx jest' }, output: 'ok', ...over } };
 }
 
-import { formatLiveTool, formatConsoleBatch, TOOL_DURATION_MIN_SEC } from '@ton-ai/opencode-radar/formatter';
+import { formatLiveTool, formatConsoleBatch, TOOL_DURATION_MIN_SEC } from '@ton-ai/durevcode-agent/formatter';
 
 function toolEvent(over: Record<string, unknown> = {}): any {
     return { kind: 'tool', tool: 'bash', status: 'completed', summary: 'npx jest 2>&1 | tail -6', output: 'ok', time: 7000, ...over };

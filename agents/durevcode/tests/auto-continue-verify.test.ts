@@ -1,5 +1,5 @@
 import { strict as assert } from 'assert';
-import { OpencodeRadarAgent } from '../agent';
+import { DurevcodeAgent } from '../agent';
 
 const SESSION = {
     id: 'ses_verify01',
@@ -25,10 +25,10 @@ type State = Record<string, unknown> & {
 
 let counter = 0;
 
-function makeAgent(radar: Record<string, unknown> = {}): OpencodeRadarAgent {
+function makeAgent(durevcode: Record<string, unknown> = {}): DurevcodeAgent {
     counter += 1;
-    return new OpencodeRadarAgent({
-        name: 'radar-verify',
+    return new DurevcodeAgent({
+        name: 'durevcode-verify',
         plugins: {},
         telegram: { token: 'x' },
         opencode: {
@@ -39,16 +39,16 @@ function makeAgent(radar: Record<string, unknown> = {}): OpencodeRadarAgent {
             autoServe: false,
             binPath: 'opencode-test-bin',
         },
-        radar: {
+        durevcode: {
             chatId: 1,
             directory: '/repo',
             allowedUsers: [],
             maxSessions: 3,
             useThreads: false,
-            statePath: `/tmp/opencode/radar-verify-state-${process.pid}-${counter}.json`,
+            statePath: `/tmp/opencode/durevcode-verify-state-${process.pid}-${counter}.json`,
             pollMs: 1000,
             idleSec: 90,
-            ...radar,
+            ...durevcode,
         } as never,
     });
 }
@@ -70,7 +70,7 @@ function telegramStub(): Record<string, unknown> {
     };
 }
 
-async function attach(agent: OpencodeRadarAgent, telegram: unknown): Promise<State> {
+async function attach(agent: DurevcodeAgent, telegram: unknown): Promise<State> {
     const state = (await (agent as unknown as {
         attachSession: (t: unknown, s: unknown) => Promise<unknown>;
     }).attachSession(telegram, SESSION)) as State;
@@ -401,7 +401,7 @@ test('auto-finish can be switched off', async () => {
             telegram,
             state,
         );
-        assert.equal(state.finalized, false, 'RADAR_AUTO_FINISH=0 must keep the session open');
+        assert.equal(state.finalized, false, 'DUREVCODE_AUTO_FINISH=0 must keep the session open');
     });
 
 test('manual and auto nudge share one queue path', async () => {

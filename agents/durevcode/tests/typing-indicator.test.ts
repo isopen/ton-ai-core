@@ -1,5 +1,5 @@
 import { strict as assert } from 'assert';
-import { OpencodeRadarAgent } from '../agent';
+import { DurevcodeAgent } from '../agent';
 
 const SESSION = {
     id: 'ses_typing01',
@@ -36,10 +36,10 @@ type State = Record<string, unknown> & {
 
 let counter = 0;
 
-function makeAgent(): OpencodeRadarAgent {
+function makeAgent(): DurevcodeAgent {
     counter += 1;
-    return new OpencodeRadarAgent({
-        name: 'radar-typing',
+    return new DurevcodeAgent({
+        name: 'durevcode-typing',
         plugins: {},
         telegram: { token: 'x' },
         opencode: {
@@ -50,13 +50,13 @@ function makeAgent(): OpencodeRadarAgent {
             autoServe: false,
             binPath: 'opencode-test-bin',
         },
-        radar: {
+        durevcode: {
             chatId: 1,
             directory: '/repo',
             allowedUsers: [],
             maxSessions: 3,
             useThreads: false,
-            statePath: `/tmp/opencode/radar-typing-state-${process.pid}-${counter}.json`,
+            statePath: `/tmp/opencode/durevcode-typing-state-${process.pid}-${counter}.json`,
             pollMs: 1000,
             idleSec: 90,
         },
@@ -83,7 +83,7 @@ function telegramStub(calls: Array<{ op: string }>): Record<string, unknown> {
     };
 }
 
-async function attach(agent: OpencodeRadarAgent, telegram: unknown): Promise<State> {
+async function attach(agent: DurevcodeAgent, telegram: unknown): Promise<State> {
     const state = (await (agent as unknown as {
         attachSession: (t: unknown, s: unknown) => Promise<unknown>;
     }).attachSession(telegram, SESSION)) as State;
@@ -91,7 +91,7 @@ async function attach(agent: OpencodeRadarAgent, telegram: unknown): Promise<Sta
     return state;
 }
 
-function typingCalls(agent: OpencodeRadarAgent): Promise<unknown> {
+function typingCalls(agent: DurevcodeAgent): Promise<unknown> {
     return (agent as unknown as { typingTick: () => Promise<void> }).typingTick();
 }
 

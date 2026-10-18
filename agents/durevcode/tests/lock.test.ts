@@ -1,30 +1,30 @@
 import { strict as assert } from 'assert';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { acquireRadarLock, isPidAlive, lockPathFor, releaseRadarLock, sharedChatLockPath } from '../lock';
+import { acquireDurevcodeLock, isPidAlive, lockPathFor, releaseDurevcodeLock, sharedChatLockPath } from '../lock';
 
 let lockCounter = 0;
 
 function lockPath(): string {
     lockCounter += 1;
-    return `/tmp/opencode/radar-lock-test-${process.pid}-${lockCounter}.json.lock`;
+    return `/tmp/opencode/durevcode-lock-test-${process.pid}-${lockCounter}.json.lock`;
 }
 
-describe('radar single-instance lock', () => {
+describe('durevcode single-instance lock', () => {
     test('lockPathFor derives from the state path', () => {
         assert.equal(lockPathFor('/tmp/x/state.json'), '/tmp/x/state.json.lock');
     });
 
     test('second acquire fails while the holder is alive', () => {
         const path = lockPath();
-        const first = acquireRadarLock(path);
+        const first = acquireDurevcodeLock(path);
         assert.equal(first.pid, process.pid);
-        releaseRadarLock(first);
+        releaseDurevcodeLock(first);
         const child = spawn('sleep', ['30']);
         writeFileSync(path, JSON.stringify({ pid: child.pid, startedAt: 1 }));
         try {
             assert.ok(isPidAlive(child.pid as number));
-            assert.throws(() => acquireRadarLock(path), /already running/);
+            assert.throws(() => acquireDurevcodeLock(path), /already running/);
         } finally {
             child.kill();
         }
@@ -36,34 +36,34 @@ describe('radar single-instance lock', () => {
         const path = lockPath();
         writeFileSync(path, JSON.stringify({ pid: 2147483647, startedAt: 1 }));
         assert.equal(isPidAlive(2147483647), false);
-        const lock = acquireRadarLock(path);
+        const lock = acquireDurevcodeLock(path);
         assert.equal(lock.pid, process.pid);
         const saved = JSON.parse(readFileSync(path, 'utf8')) as { pid: number };
         assert.equal(saved.pid, process.pid);
-        releaseRadarLock(lock);
+        releaseDurevcodeLock(lock);
     });
 
     test('release keeps a foreign lock file', () => {
         const path = lockPath();
-        const mine = acquireRadarLock(path);
+        const mine = acquireDurevcodeLock(path);
         writeFileSync(path, JSON.stringify({ pid: mine.pid + 1, startedAt: 1 }));
-        releaseRadarLock(mine);
+        releaseDurevcodeLock(mine);
         assert.equal(existsSync(path), true);
     });
 
-    test('shared chat lock blocks a second radar on one chat', () => {
-        const dir = `/tmp/opencode/radar-chat-lock-${process.pid}`;
+    test('shared chat lock blocks a second durevcode on one chat', () => {
+        const dir = `/tmp/opencode/durevcode-chat-lock-${process.pid}`;
         mkdirSync(dir, { recursive: true });
         const same = sharedChatLockPath(777, dir);
         const other = sharedChatLockPath(778, dir);
-        assert.ok(same.endsWith('radar-chat-777.lock'));
+        assert.ok(same.endsWith('durevcode-chat-777.lock'));
         const child = spawn('sleep', ['30']);
         writeFileSync(same, JSON.stringify({ pid: child.pid, startedAt: 1 }));
         try {
             assert.ok(isPidAlive(child.pid as number));
-            assert.throws(() => acquireRadarLock(same), /already running/);
-            const free = acquireRadarLock(other);
-            releaseRadarLock(free);
+            assert.throws(() => acquireDurevcodeLock(same), /already running/);
+            const free = acquireDurevcodeLock(other);
+            releaseDurevcodeLock(free);
             rmSync(other, { force: true });
         } finally {
             child.kill();

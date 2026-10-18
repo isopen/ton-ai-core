@@ -1,28 +1,28 @@
 import { strict as assert } from 'assert';
-import { OpencodeRadarAgent, OpencodeRadarConfig } from '../agent';
+import { DurevcodeAgent, DurevcodeConfig } from '../agent';
 import { markdownToTelegramHtml } from '../formatter';
 
-function makeAgent(): OpencodeRadarAgent {
+function makeAgent(): DurevcodeAgent {
     const config = {
-        name: 'radar-audit',
+        name: 'durevcode-audit',
         plugins: {},
         telegram: { token: 'test' },
         opencode: { baseUrl: 'http://127.0.0.1:4096' },
-        radar: {
+        durevcode: {
             chatId: 1,
             directory: '/tmp',
             allowedUsers: [],
             maxSessions: 3,
             useThreads: true,
-            statePath: '/tmp/radar-audit-state.json',
+            statePath: '/tmp/durevcode-audit-state.json',
             pollMs: 1000,
             idleSec: 90,
         },
-    } as unknown as OpencodeRadarConfig;
-    return new OpencodeRadarAgent(config);
+    } as unknown as DurevcodeConfig;
+    return new DurevcodeAgent(config);
 }
 
-describe('opencode-radar audit fixes', () => {
+describe('durevcode audit fixes', () => {
     test('multi-part delivery resumes instead of re-sending delivered parts', async () => {
         const agent = makeAgent();
         (agent as unknown as { threadsEnabled: boolean }).threadsEnabled = true;

@@ -134,7 +134,7 @@ export function isFileModifyingTool(action: string): boolean {
     return FILE_MODIFYING_PERMISSIONS.has(action.trim().toLowerCase());
 }
 
-const RADAR_GATED_PERMISSIONS: SessionPermissionRule[] = [
+const DUREVCODE_GATED_PERMISSIONS: SessionPermissionRule[] = [
     { permission: 'edit', pattern: '*', action: 'ask' },
     { permission: 'external_directory', pattern: '*', action: 'ask' },
 ];
@@ -142,7 +142,7 @@ const THREAD_RETRY_MS = 60 * 1000;
 const THREAD_NOTICE_MS = 60 * 60 * 1000;
 const TOMBSTONE_GRACE_MS = 15 * 60 * 1000;
 
-export const RADAR_THREAD_TIMINGS = {
+export const DUREVCODE_THREAD_TIMINGS = {
     retryMs: THREAD_RETRY_MS,
     noticeMs: THREAD_NOTICE_MS,
     tombstoneGraceMs: TOMBSTONE_GRACE_MS,
@@ -153,7 +153,7 @@ const TOPIC_PROBE_MS = 5 * 60 * 1000;
 const DOC_MAX_BYTES = 512 * 1024;
 const DOC_MAX_CHARS = 20000;
 const MEDIA_MAX_BYTES = 20 * 1024 * 1024;
-const INBOX_DIR = 'tmp/.radar-inbox';
+const INBOX_DIR = 'tmp/.durevcode-inbox';
 const INBOX_MAX_FILES = 200;
 
 export function hasMediaMessage(message: Message): boolean {
@@ -310,7 +310,7 @@ export function explainModelError(text: string): string {
     const has = (pattern: RegExp): boolean => pattern.test(raw);
     if (has(/FreeTierError|free tier can only be used/i)) {
         return 'the provider refuses free-tier models for requests that do not come from the OpenCode client itself. '
-            + 'The radar drives a local opencode server, so those models answer with HTTP 403 here. '
+            + 'The agent drives a local opencode server, so those models answer with HTTP 403 here. '
             + 'Pick a model with your own API key, or run the task from the OpenCode app where the free tier is allowed.';
     }
     if (has(/VariantUnavailableError|Variant unavailable/i)) {
@@ -386,7 +386,7 @@ export interface PersistedSession {
 const PERSISTED_TTL_MS = 30 * 24 * 3600 * 1000;
 const PERSISTED_CURSOR_CAP = 200;
 
-export interface RadarWatchConfig {
+export interface DurevcodeWatchConfig {
     chatId: number;
     directory: string;
     allowedUsers: number[];
@@ -405,10 +405,10 @@ export interface RadarWatchConfig {
     autoFinish?: boolean;
 }
 
-export interface OpencodeRadarConfig extends AgentConfig {
+export interface DurevcodeConfig extends AgentConfig {
     telegram: TelegramBotConfig;
     opencode: OpencodeConfig;
-    radar: RadarWatchConfig;
+    durevcode: DurevcodeWatchConfig;
 }
 
 interface WatchedSession {
@@ -521,8 +521,8 @@ function permissionDecisionText(decision: PermissionDecision): string {
     return `${checkIcon()} ${decision === 'always' ? 'Allowed always.' : 'Allowed once.'}`;
 }
 
-export class OpencodeRadarAgent extends BaseAgent {
-    public readonly config: OpencodeRadarConfig;
+export class DurevcodeAgent extends BaseAgent {
+    public readonly config: DurevcodeConfig;
 
     private watched = new Map<string, WatchedSession>();
     private persisted: Record<string, PersistedSession> = {};
@@ -562,13 +562,13 @@ export class OpencodeRadarAgent extends BaseAgent {
         return fresh.some((entry) => entry.session === sessionId && entry.text === text);
     }
 
-    constructor(config: OpencodeRadarConfig) {
+    constructor(config: DurevcodeConfig) {
         super(config);
         this.config = config;
     }
 
     protected async onInitialize(): Promise<void> {
-        console.log('Initializing opencode-radar agent...');
+        console.log('Initializing durevcode agent...');
         await this.registerPlugin(new OpencodePlugin());
         console.log('opencode plugin registered');
         await this.registerPlugin(new TelegramBotPlugin());
@@ -576,7 +576,7 @@ export class OpencodeRadarAgent extends BaseAgent {
     }
 
     protected async onStart(): Promise<void> {
-        console.log('Starting opencode-radar agent...');
+        console.log('Starting durevcode agent...');
 
         if (!this.isPluginActive(PLUGIN_NAMES.OPENCODE)) {
             await this.activatePlugin(PLUGIN_NAMES.OPENCODE, this.config.opencode);
@@ -586,7 +586,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             throw new Error('opencode plugin is not available');
         }
         await this.waitForOpencode(opencode);
-        console.log(`Radar opencode source: ${this.config.opencode.baseUrl}`);
+        console.log(`Durevcode opencode source: ${this.config.opencode.baseUrl}`);
 
         if (!this.isPluginActive(PLUGIN_NAMES.TELEGRAM)) {
             await this.activatePlugin(PLUGIN_NAMES.TELEGRAM, this.config.telegram);
@@ -597,24 +597,24 @@ export class OpencodeRadarAgent extends BaseAgent {
         }
         await this.waitForTelegram(telegram);
         const me = await telegram.getMe();
-        console.log(`Radar bot: @${me.username ?? me.id}`);
+        console.log(`Durevcode bot: @${me.username ?? me.id}`);
         this.inboundSub = telegram.onMessage((message) => {
             const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
             if (!opencode) return;
-            void this.handleInbound(telegram, opencode, message).catch((error) => console.error('Radar inbound failed:', error));
+            void this.handleInbound(telegram, opencode, message).catch((error) => console.error('Durevcode inbound failed:', error));
         });
         this.callbackSub = telegram.onCallbackQuery((query) => {
             const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
             if (!opencode) return;
-            void this.handleCallback(telegram, opencode, query).catch((error) => console.error('Radar callback failed:', error));
+            void this.handleCallback(telegram, opencode, query).catch((error) => console.error('Durevcode callback failed:', error));
         });
         this.eventUnsub = opencode.subscribeEvents((event) => {
             const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
             if (!telegram) return;
-            void this.handleServerEvent(telegram, event).catch((error) => console.error('Radar server event failed:', error));
+            void this.handleServerEvent(telegram, event).catch((error) => console.error('Durevcode server event failed:', error));
         });
 
-        this.threadsEnabled = this.config.radar.useThreads;
+        this.threadsEnabled = this.config.durevcode.useThreads;
         this.loadPersisted();
         await this.syncSessions();
         const demanded = this.explicitSessionIds();
@@ -623,22 +623,22 @@ export class OpencodeRadarAgent extends BaseAgent {
         }
 
         this.pollTimer = setInterval(() => {
-            void this.pollTick().catch((error) => console.error('Radar poll failed:', error));
-        }, this.config.radar.pollMs);
+            void this.pollTick().catch((error) => console.error('Durevcode poll failed:', error));
+        }, this.config.durevcode.pollMs);
         this.typingTimer = setInterval(() => {
-            void this.typingTick().catch((error) => console.error('Radar typing tick failed:', error));
+            void this.typingTick().catch((error) => console.error('Durevcode typing tick failed:', error));
         }, TYPING_TICK_MS);
         await this.pollTick();
 
-        const maxSessions = this.config.radar.maxSessions;
+        const maxSessions = this.config.durevcode.maxSessions;
         const extra = Math.max(0, this.watched.size - maxSessions);
         console.log(
-            `Radar watching ${this.watched.size} session(s) (auto-pick ${maxSessions}${extra > 0 ? `, ${extra} kept active/rebound above the pick limit` : ''})`,
+            `Durevcode watching ${this.watched.size} session(s) (auto-pick ${maxSessions}${extra > 0 ? `, ${extra} kept active/rebound above the pick limit` : ''})`,
         );
     }
 
     protected async onStop(): Promise<void> {
-        console.log('Stopping opencode-radar agent...');
+        console.log('Stopping durevcode agent...');
         if (this.typingTimer) {
             clearInterval(this.typingTimer);
             this.typingTimer = null;
@@ -673,7 +673,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         if (this.isPluginActive(PLUGIN_NAMES.OPENCODE)) {
             await this.deactivatePlugin(PLUGIN_NAMES.OPENCODE);
         }
-        console.log('opencode-radar stopped');
+        console.log('durevcode stopped');
     }
 
     private async waitForOpencode(opencode: OpencodePlugin): Promise<void> {
@@ -733,8 +733,8 @@ export class OpencodeRadarAgent extends BaseAgent {
     private loadPersisted(): void {
         this.persisted = {};
         try {
-            if (!existsSync(this.config.radar.statePath)) return;
-            const parsed: unknown = JSON.parse(readFileSync(this.config.radar.statePath, 'utf8'));
+            if (!existsSync(this.config.durevcode.statePath)) return;
+            const parsed: unknown = JSON.parse(readFileSync(this.config.durevcode.statePath, 'utf8'));
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
             const rawSeen = (parsed as Record<string, unknown>).seenInbound;
             if (Array.isArray(rawSeen)) {
@@ -811,7 +811,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                 }
             }
         } catch (error) {
-            console.debug('Radar state load failed, starting fresh:', error);
+            console.debug('Durevcode state load failed, starting fresh:', error);
             this.persisted = {};
         }
     }
@@ -838,24 +838,24 @@ export class OpencodeRadarAgent extends BaseAgent {
                     ...(state.knownPerms.length > 0 ? { knownPerms: state.knownPerms } : {}),
                 };
             }
-            mkdirSync(dirname(this.config.radar.statePath), { recursive: true });
-            writeFileSync(this.config.radar.statePath, JSON.stringify({
+            mkdirSync(dirname(this.config.durevcode.statePath), { recursive: true });
+            writeFileSync(this.config.durevcode.statePath, JSON.stringify({
                 version: 1,
                 sessions,
                 seenInbound: [...this.seenInbound].slice(-MAX_SEEN_INBOUND),
                 seenCallbacks: [...this.seenCallbacks].slice(-MAX_SEEN_INBOUND),
             }));
         } catch (error) {
-            console.debug('Radar state save failed:', error);
+            console.debug('Durevcode state save failed:', error);
         }
     }
 
     private explicitSessionIds(): string[] {
-        const explicit = [...(this.config.radar.sessionIds ?? [])];
-        if (this.config.radar.sessionId && !explicit.includes(this.config.radar.sessionId)) {
-            explicit.push(this.config.radar.sessionId);
+        const explicit = [...(this.config.durevcode.sessionIds ?? [])];
+        if (this.config.durevcode.sessionId && !explicit.includes(this.config.durevcode.sessionId)) {
+            explicit.push(this.config.durevcode.sessionId);
         }
-        return selectSessionIds(explicit, [], this.config.radar.maxSessions);
+        return selectSessionIds(explicit, [], this.config.durevcode.maxSessions);
     }
 
     private async resolveSessionIds(): Promise<string[]> {
@@ -863,12 +863,12 @@ export class OpencodeRadarAgent extends BaseAgent {
         if (!opencode) return [];
         const explicit = this.explicitSessionIds();
         if (explicit.length > 0) return explicit.filter((id) => !this.tombstonedSessions.has(id));
-        const window = Math.max(AUTO_PICK_WINDOW_MIN, this.config.radar.maxSessions * AUTO_PICK_WINDOW_MULT);
-        const latest = await opencode.listSessions(this.config.radar.directory, window);
+        const window = Math.max(AUTO_PICK_WINDOW_MIN, this.config.durevcode.maxSessions * AUTO_PICK_WINDOW_MULT);
+        const latest = await opencode.listSessions(this.config.durevcode.directory, window);
         this.reapTombstones(latest.map((entry) => entry.id));
         const available = latest.filter((entry) => !this.tombstonedSessions.has(entry.id));
         for (const entry of available) this.lastSessionAgents.set(entry.id, entry.agent ?? '');
-        return rankSessionIds(available, this.config.radar.maxSessions);
+        return rankSessionIds(available, this.config.durevcode.maxSessions);
     }
 
     private markTombstoned(sessionId: string): void {
@@ -906,14 +906,14 @@ export class OpencodeRadarAgent extends BaseAgent {
                 this.dropSessionRefs(id);
                 pruned += 1;
             } catch (error) {
-                console.debug('Radar dead binding check failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode dead binding check failed:', error instanceof Error ? error.message : error);
                 return;
             }
         }
         if (pruned === 0) return;
         this.savePersisted();
         console.warn(
-            `Radar pruned ${pruned} persisted topic binding(s) whose opencode session no longer exists ` +
+            `Durevcode pruned ${pruned} persisted topic binding(s) whose opencode session no longer exists ` +
                 `so their topics can be reused.`,
         );
     }
@@ -929,7 +929,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         for (const withIcon of [true, false]) {
             try {
                 const topic = await telegram.createForumTopic({
-                    chat_id: this.config.radar.chatId,
+                    chat_id: this.config.durevcode.chatId,
                     name: formatTopicName(state.session.title, state.session.id),
                     ...(withIcon ? { icon_custom_emoji_id: TOPIC_ICON_CUSTOM_EMOJI_ID } : {}),
                 });
@@ -937,7 +937,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                 this.threadRetryAt.delete(state.session.id);
                 this.persistThreadBinding(state.session.id, topic.message_thread_id);
                 if (!withIcon) {
-                    console.warn(`Radar topic icon rejected, created plain topic (session=${state.session.id}).`);
+                    console.warn(`Durevcode topic icon rejected, created plain topic (session=${state.session.id}).`);
                 }
                 return state.threadId;
             } catch (error) {
@@ -952,7 +952,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             : 'unknown error';
         this.threadRetryAt.set(state.session.id, Date.now() + THREAD_RETRY_MS);
         console.warn(
-            `Radar forum topic creation failed, retrying later (session=${state.session.id}): ${detail}`,
+            `Durevcode forum topic creation failed, retrying later (session=${state.session.id}): ${detail}`,
         );
         if (Date.now() - this.threadNoticeAt >= THREAD_NOTICE_MS) {
             this.threadNoticeAt = Date.now();
@@ -986,12 +986,12 @@ export class OpencodeRadarAgent extends BaseAgent {
         text: string,
         markup?: InlineKeyboardMarkup,
     ): Promise<number> {
-        const chatId = this.config.radar.chatId;
+        const chatId = this.config.durevcode.chatId;
         if (this.threadsEnabled && state.threadId === null) {
-            throw new Error('Radar topic missing: refusing to post into General');
+            throw new Error('Durevcode topic missing: refusing to post into General');
         }
         if (Date.now() < this.rateLimitedUntil) {
-            throw new Error('Too Many Requests: radar backoff active');
+            throw new Error('Too Many Requests: durevcode backoff active');
         }
         if (Date.now() < this.upstreamBackoffUntil) {
             throw new Error('Telegram upstream backoff active');
@@ -1025,14 +1025,14 @@ export class OpencodeRadarAgent extends BaseAgent {
                 }
                 if (state.threadId !== null && isThreadGoneError(error)) {
                     await this.onTopicGone(telegram, state);
-                    throw new Error('Radar topic gone, session deleted');
+                    throw new Error('Durevcode topic gone, session deleted');
                 }
                 throw error;
             }
         };
         for (let i = start; i < parts.length; i += 1) {
             if (Date.now() < this.rateLimitedUntil) {
-                throw new Error('Too Many Requests: radar backoff active');
+                throw new Error('Too Many Requests: durevcode backoff active');
             }
             const id = await sendOne(parts[i], i === 0);
             if (i === 0) firstId = id;
@@ -1063,7 +1063,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         if (state.contextMessageId === null) return 'failed';
         try {
             await telegram.pinChatMessage({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_id: state.contextMessageId,
                 disable_notification: true,
             });
@@ -1071,22 +1071,22 @@ export class OpencodeRadarAgent extends BaseAgent {
         } catch (error) {
             if (isMessageGoneError(error)) {
                 console.debug(
-                    `Radar context pin gone, will resend (chat=${this.config.radar.chatId} thread=${state.threadId} ` +
+                    `Durevcode context pin gone, will resend (chat=${this.config.durevcode.chatId} thread=${state.threadId} ` +
                         `message=${state.contextMessageId} session=${state.session.id}).`,
                 );
                 return 'gone';
             }
             if (isPinRightsError(error)) {
                 console.warn(
-                    `Radar context pin failed ` +
-                        `(chat=${this.config.radar.chatId} thread=${state.threadId} ` +
+                    `Durevcode context pin failed ` +
+                        `(chat=${this.config.durevcode.chatId} thread=${state.threadId} ` +
                         `message=${state.contextMessageId} session=${state.session.id}): ` +
                         `${error instanceof Error ? error.message : error}. ` +
                         `Give the bot the Pin Messages (can_pin_messages) admin right.`,
                 );
                 return 'failed';
             }
-            console.debug('Radar context pin failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode context pin failed:', error instanceof Error ? error.message : error);
             return 'failed';
         }
     }
@@ -1094,7 +1094,7 @@ export class OpencodeRadarAgent extends BaseAgent {
     private async sendFreshPin(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         if (this.threadsEnabled && state.threadId === null) {
             console.debug(
-                `Radar context card deferred, no topic yet (session=${state.session.id} thread=${state.threadId}).`,
+                `Durevcode context card deferred, no topic yet (session=${state.session.id} thread=${state.threadId}).`,
             );
             return;
         }
@@ -1122,10 +1122,10 @@ export class OpencodeRadarAgent extends BaseAgent {
         const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
         if (!opencode || typeof opencode.setSessionPermissions !== 'function') return;
         try {
-            const ok = await opencode.setSessionPermissions(sessionId, RADAR_GATED_PERMISSIONS);
-            if (!ok) console.warn(`Radar permissions not applied, session gone (${sessionId}).`);
+            const ok = await opencode.setSessionPermissions(sessionId, DUREVCODE_GATED_PERMISSIONS);
+            if (!ok) console.warn(`Durevcode permissions not applied, session gone (${sessionId}).`);
         } catch (error) {
-            console.warn('Radar permissions failed:', error instanceof Error ? error.message : error);
+            console.warn('Durevcode permissions failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -1267,14 +1267,14 @@ export class OpencodeRadarAgent extends BaseAgent {
                 if (reusedPin !== null) {
                     try {
                         await telegram.editMessageReplyMarkup({
-                            chat_id: this.config.radar.chatId,
+                            chat_id: this.config.durevcode.chatId,
                             message_id: reusedPin,
                             reply_markup: { inline_keyboard: [] },
                         });
                         state.stopButtonOn = false;
                     } catch (error) {
                         if (!isMessageNotModifiedError(error) && !isMessageGoneError(error)) {
-                            console.debug('Radar stop button reset failed:', error instanceof Error ? error.message : error);
+                            console.debug('Durevcode stop button reset failed:', error instanceof Error ? error.message : error);
                         } else {
                             state.stopButtonOn = false;
                         }
@@ -1295,7 +1295,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                 : {}),
         };
         this.savePersisted();
-        console.log(`Radar attached session ${session.id} (${session.title.slice(0, 60)})`);
+        console.log(`Durevcode attached session ${session.id} (${session.title.slice(0, 60)})`);
         void this.syncSessionMode(telegram, state);
         return state;
     }
@@ -1310,7 +1310,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             if (list.length === 0) return;
             agents = pickModeAgents(list);
         } catch (error) {
-            console.debug('Radar agent list failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode agent list failed:', error instanceof Error ? error.message : error);
             return;
         }
         const wanted = state.buildMode ? agents.build : agents.plan;
@@ -1324,7 +1324,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         try {
             switched = await opencode.setAgent(state.session.id, wanted);
         } catch (error) {
-            console.debug('Radar mode sync failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode mode sync failed:', error instanceof Error ? error.message : error);
             return;
         }
         if (!switched) return;
@@ -1332,7 +1332,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         state.modeSynced = true;
         this.savePersisted();
         console.log(
-            `Radar session ${state.session.id} mode ${state.buildMode ? 'Build' : 'Plan'} applied (agent=${wanted}).`,
+            `Durevcode session ${state.session.id} mode ${state.buildMode ? 'Build' : 'Plan'} applied (agent=${wanted}).`,
         );
         if (state.contextMessageId !== null) {
             state.lastContextEditAt = 0;
@@ -1354,11 +1354,11 @@ export class OpencodeRadarAgent extends BaseAgent {
         try {
             ids = await this.resolveSessionIds();
         } catch (error) {
-            console.debug('Radar session list failed:', error);
+            console.debug('Durevcode session list failed:', error);
             return;
         }
         if (ids.length === 0 && this.watched.size === 0) {
-            console.debug(`Radar: no sessions yet for directory: ${this.config.radar.directory}`);
+            console.debug(`Durevcode: no sessions yet for directory: ${this.config.durevcode.directory}`);
         }
         await this.pruneDeadBindings(opencode, new Set(ids));
         const seen = new Set<string>();
@@ -1370,7 +1370,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             try {
                 session = await opencode.getSession(id);
             } catch (error) {
-                console.debug('Radar session read failed:', error);
+                console.debug('Durevcode session read failed:', error);
                 continue;
             }
             if (!session) continue;
@@ -1385,12 +1385,12 @@ export class OpencodeRadarAgent extends BaseAgent {
             } catch (error) {
                 if (this.tombstonedSessions.has(id)) {
                     console.log(
-                        `Radar attach stopped for session ${id}: its topic was deleted, ` +
+                        `Durevcode attach stopped for session ${id}: its topic was deleted, ` +
                             `the session was dropped on purpose (not an error).`,
                     );
                     continue;
                 }
-                console.error(`Radar attach failed for session ${id}:`, error);
+                console.error(`Durevcode attach failed for session ${id}:`, error);
             }
         }
         for (const [id, state] of this.watched) {
@@ -1399,9 +1399,9 @@ export class OpencodeRadarAgent extends BaseAgent {
             if (!state.finalized && !isStaleEmptyWatch(state, Date.now())) continue;
             this.watched.delete(id);
             this.dropSessionRefs(id);
-            console.log(`Radar detached session ${id} (out of auto-pick window)`);
+            console.log(`Durevcode detached session ${id} (out of auto-pick window)`);
         }
-        const cap = Math.max(10, this.config.radar.maxSessions * 2);
+        const cap = Math.max(10, this.config.durevcode.maxSessions * 2);
         if (this.watched.size > cap) {
             const byAge = [...this.watched.entries()].sort((a, b) => {
                 const aThreadless = a[1].threadId === null ? 0 : 1;
@@ -1414,7 +1414,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                 if (this.sessionTicks.has(id)) continue;
                 this.watched.delete(id);
                 this.dropSessionRefs(id);
-                console.warn(`Radar evicted session ${id} (watched cap ${cap} exceeded)`);
+                console.warn(`Durevcode evicted session ${id} (watched cap ${cap} exceeded)`);
             }
             this.savePersisted();
         }
@@ -1505,7 +1505,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             return deleted ? 'deleted' : 'already-gone';
         } catch (error) {
             console.warn(
-                `Radar opencode deleteSession(${sessionId}) failed: ` +
+                `Durevcode opencode deleteSession(${sessionId}) failed: ` +
                     `${error instanceof Error ? error.message : String(error)}`,
             );
             return 'failed';
@@ -1528,7 +1528,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         const outcome = await this.dropSessionEverywhere(state);
         this.savePersisted();
         console.warn(
-            `Radar topic gone (chat=${this.config.radar.chatId} thread=${threadId} session=${sessionId}): ` +
+            `Durevcode topic gone (chat=${this.config.durevcode.chatId} thread=${threadId} session=${sessionId}): ` +
                 `opencode session ${outcome}; no notice was sent because the topic is gone ` +
                 `and posting into General is not allowed. Write in a fresh topic to start a new session.`,
         );
@@ -1560,7 +1560,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         if (loserEntry) loserEntry.threadId = null;
         this.savePersisted();
         console.warn(
-            `Radar resolved duplicate binding for topic ${state.threadId}: ` +
+            `Durevcode resolved duplicate binding for topic ${state.threadId}: ` +
                 `detached ${loserId}, kept ${stateNewer ? state.session.id : rivalId}`,
         );
     }
@@ -1569,7 +1569,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         try {
             await this.deliverMessage(telegram, state, text);
         } catch (error) {
-            console.debug('Radar reply failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode reply failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -1580,14 +1580,14 @@ export class OpencodeRadarAgent extends BaseAgent {
     ): Promise<void> {
         const from = message.from;
         if (!from || from.is_bot) return;
-        if (message.chat.id !== this.config.radar.chatId) {
-            console.debug(`Radar inbound ignored: foreign chat ${message.chat.id} message ${message.message_id}.`);
+        if (message.chat.id !== this.config.durevcode.chatId) {
+            console.debug(`Durevcode inbound ignored: foreign chat ${message.chat.id} message ${message.message_id}.`);
             return;
         }
         const threadId = message.message_thread_id;
         if (!threadId) {
             console.debug(
-                `Radar inbound ignored: no topic (chat=${message.chat.id} message=${message.message_id} user=${from.id}).`,
+                `Durevcode inbound ignored: no topic (chat=${message.chat.id} message=${message.message_id} user=${from.id}).`,
             );
             return;
         }
@@ -1605,10 +1605,10 @@ export class OpencodeRadarAgent extends BaseAgent {
             await this.handleUnknownThread(telegram, opencode, message, threadId);
             return;
         }
-        const allowed = this.config.radar.allowedUsers;
+        const allowed = this.config.durevcode.allowedUsers;
         if (allowed.length > 0 && !allowed.includes(from.id)) {
             console.warn(
-                `Radar inbound denied for user ${from.id} (session=${state.session.id} thread=${threadId}).`,
+                `Durevcode inbound denied for user ${from.id} (session=${state.session.id} thread=${threadId}).`,
             );
             return;
         }
@@ -1625,30 +1625,30 @@ export class OpencodeRadarAgent extends BaseAgent {
             const inboundMark = Date.now();
             await this.pumpPrompts(telegram, opencode, state);
             console.log(
-                `Radar inbound pump took ${Date.now() - inboundMark}ms (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
+                `Durevcode inbound pump took ${Date.now() - inboundMark}ms (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
             );
             if (state.promptQueue.length > before) await this.syncStopKeyboard(telegram, state);
             return;
         }
         if (!text) {
             console.debug(
-                `Radar inbound ignored: empty text (session=${state.session.id} thread=${threadId} message=${message.message_id}).`,
+                `Durevcode inbound ignored: empty text (session=${state.session.id} thread=${threadId} message=${message.message_id}).`,
             );
             return;
         }
         this.enqueuePrompt(state, text);
         console.debug(
-            `Radar prompt queued (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
+            `Durevcode prompt queued (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
         );
         const inboundMark = Date.now();
         await this.pumpPrompts(telegram, opencode, state);
         console.log(
-            `Radar inbound pump took ${Date.now() - inboundMark}ms (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
+            `Durevcode inbound pump took ${Date.now() - inboundMark}ms (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
         );
         const syncMark = Date.now();
         await this.syncStopKeyboard(telegram, state);
         console.log(
-            `Radar inbound sync took ${Date.now() - syncMark}ms (session=${state.session.id} thread=${threadId}).`,
+            `Durevcode inbound sync took ${Date.now() - syncMark}ms (session=${state.session.id} thread=${threadId}).`,
         );
     }
 
@@ -1695,32 +1695,32 @@ export class OpencodeRadarAgent extends BaseAgent {
         threadId: number,
     ): Promise<void> {
         if (!this.threadsEnabled) {
-            console.debug(`Radar unknown topic ignored: threads disabled (thread=${threadId}).`);
+            console.debug(`Durevcode unknown topic ignored: threads disabled (thread=${threadId}).`);
             return;
         }
         if (threadId === 1) {
-            console.debug(`Radar unknown topic ignored: general topic (message=${message.message_id}).`);
+            console.debug(`Durevcode unknown topic ignored: general topic (message=${message.message_id}).`);
             return;
         }
-        if (this.config.radar.newTopics === false) {
-            console.debug(`Radar unknown topic ignored: new topics disabled (thread=${threadId}).`);
+        if (this.config.durevcode.newTopics === false) {
+            console.debug(`Durevcode unknown topic ignored: new topics disabled (thread=${threadId}).`);
             return;
         }
         const from = message.from;
         if (!from || from.is_bot) return;
-        const allowed = this.config.radar.allowedUsers;
+        const allowed = this.config.durevcode.allowedUsers;
         if (allowed.length > 0 && !allowed.includes(from.id)) {
-            console.warn(`Radar new-topic denied for user ${from.id} (thread=${threadId}).`);
+            console.warn(`Durevcode new-topic denied for user ${from.id} (thread=${threadId}).`);
             return;
         }
         const replyTo = message.reply_to_message?.message_id;
         if (replyTo !== undefined && this.permReplies.has(replyTo)) {
-            console.debug(`Radar unknown topic ignored: permission reply (thread=${threadId}).`);
+            console.debug(`Durevcode unknown topic ignored: permission reply (thread=${threadId}).`);
             return;
         }
         const text = (message.text || message.caption || '').trim();
         if (!text && !hasMediaMessage(message)) {
-            console.debug(`Radar unknown topic ignored: empty text (thread=${threadId} message=${message.message_id}).`);
+            console.debug(`Durevcode unknown topic ignored: empty text (thread=${threadId} message=${message.message_id}).`);
             return;
         }
         const pending = this.creatingThreads.get(threadId);
@@ -1736,18 +1736,18 @@ export class OpencodeRadarAgent extends BaseAgent {
                 try {
                     existing = await opencode.getSession(reboundId);
                 } catch (error) {
-                    console.debug('Radar rebind read failed:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode rebind read failed:', error instanceof Error ? error.message : error);
                 }
                 if (!existing) {
                     delete this.persisted[reboundId];
                     this.savePersisted();
-                    console.warn(`Radar dropped stale topic binding: session ${reboundId} is gone, thread ${threadId} will get a fresh one`);
+                    console.warn(`Durevcode dropped stale topic binding: session ${reboundId} is gone, thread ${threadId} will get a fresh one`);
                 } else if (!this.watched.has(existing.id)) {
                     const state = await this.attachSession(telegram, existing, threadId);
                     this.watched.set(existing.id, state);
                     this.prunePersistedThreadRivals(existing.id, threadId);
                     this.savePersisted();
-                    console.log(`Radar rebound session ${existing.id} to topic ${threadId}`);
+                    console.log(`Durevcode rebound session ${existing.id} to topic ${threadId}`);
                     const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
                     for (const queuedMessage of queued) {
                         const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
@@ -1765,13 +1765,13 @@ export class OpencodeRadarAgent extends BaseAgent {
                     const state = this.watched.get(existing.id)!;
                     if (state.threadId === null || state.threadId !== threadId) {
                         if (state.threadId !== null && state.threadId !== threadId) {
-                            console.log(`Radar rebinds watched session ${existing.id} from topic ${state.threadId} to ${threadId}`);
+                            console.log(`Durevcode rebinds watched session ${existing.id} from topic ${state.threadId} to ${threadId}`);
                         }
                         state.threadId = threadId;
                         this.persistThreadBinding(existing.id, threadId);
                         this.prunePersistedThreadRivals(existing.id, threadId);
                         this.savePersisted();
-                        console.log(`Radar restored topic ${threadId} for watched session ${existing.id}`);
+                        console.log(`Durevcode restored topic ${threadId} for watched session ${existing.id}`);
                     }
                     const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
                     for (const queuedMessage of queued) {
@@ -1788,12 +1788,12 @@ export class OpencodeRadarAgent extends BaseAgent {
                     return;
                 }
             }
-            const session = await opencode.createSession(this.config.radar.directory);
+            const session = await opencode.createSession(this.config.durevcode.directory);
             const state = await this.attachSession(telegram, session, threadId);
             this.watched.set(session.id, state);
             this.prunePersistedThreadRivals(session.id, threadId);
             this.savePersisted();
-            console.log(`Radar created session ${session.id} for new topic ${threadId}`);
+            console.log(`Durevcode created session ${session.id} for new topic ${threadId}`);
             const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
             for (const queuedMessage of queued) {
                 const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
@@ -1807,10 +1807,10 @@ export class OpencodeRadarAgent extends BaseAgent {
             }
             await this.pumpPrompts(telegram, opencode, state);
         } catch (error) {
-            console.error(`Radar new-topic session create failed (thread=${threadId}):`, error);
+            console.error(`Durevcode new-topic session create failed (thread=${threadId}):`, error);
             try {
                 await telegram.sendMessage({
-                    chat_id: this.config.radar.chatId,
+                    chat_id: this.config.durevcode.chatId,
                     message_thread_id: threadId,
                     text: `${icon('fail')} Could not create a session for this topic, try again.`,
                 });
@@ -1824,7 +1824,7 @@ export class OpencodeRadarAgent extends BaseAgent {
     private enqueuePrompt(state: WatchedSession, text: string): void {
         if (state.promptQueue.length >= MAX_QUEUED_PROMPTS) {
             state.promptQueue.shift();
-            console.warn(`Radar prompt queue full, dropping oldest prompt (session=${state.session.id}).`);
+            console.warn(`Durevcode prompt queue full, dropping oldest prompt (session=${state.session.id}).`);
         }
         const wasEmpty = state.promptQueue.length === 0;
         state.promptQueue.push(text);
@@ -1949,7 +1949,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         try {
             data = await telegram.downloadFile(fileId);
         } catch (error) {
-            console.debug('Radar media download failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode media download failed:', error instanceof Error ? error.message : error);
             await this.safeReply(telegram, state, `${icon('fail')} Could not download the file.`);
             return;
         }
@@ -1964,11 +1964,11 @@ export class OpencodeRadarAgent extends BaseAgent {
             return;
         }
         const name = sanitizeInboxName(rawName, `${kind}_file.bin`);
-        const dir = join(this.config.radar.directory, INBOX_DIR);
+        const dir = join(this.config.durevcode.directory, INBOX_DIR);
         try {
             mkdirSync(dir, { recursive: true });
         } catch (error) {
-            console.debug('Radar inbox mkdir failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode inbox mkdir failed:', error instanceof Error ? error.message : error);
             await this.safeReply(telegram, state, `${icon('fail')} Could not store the file.`);
             return;
         }
@@ -1978,7 +1978,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         try {
             writeFileSync(join(dir, stored), buffer);
         } catch (error) {
-            console.debug('Radar inbox write failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode inbox write failed:', error instanceof Error ? error.message : error);
             await this.safeReply(telegram, state, `${icon('fail')} Could not store the file.`);
             return;
         } finally {
@@ -2030,7 +2030,7 @@ export class OpencodeRadarAgent extends BaseAgent {
         try {
             data = await telegram.downloadFile(document.file_id);
         } catch (error) {
-            console.debug('Radar document download failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode document download failed:', error instanceof Error ? error.message : error);
             await this.safeReply(telegram, state, `${icon('fail')} Could not download the file.`);
             return;
         }
@@ -2066,7 +2066,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             }
         });
         console.log(
-            `Radar prompt executing via CLI fallback (session=${state.session.id})` +
+            `Durevcode prompt executing via CLI fallback (session=${state.session.id})` +
                 (unlandedSec === null ? '.' : ` after ${unlandedSec}s unlanded.`),
         );
         if (announce) {
@@ -2115,7 +2115,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                     return;
                 }
             } catch (error) {
-                console.debug('Radar CLI-first spawn failed, trying server:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode CLI-first spawn failed, trying server:', error instanceof Error ? error.message : error);
             } finally {
                 state.promptPumping = false;
             }
@@ -2142,7 +2142,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                 receipt.messageId !== undefined
                     ? { messageId: receipt.messageId, text: head, since: Date.now(), notified: false }
                     : null;
-            console.log(`Radar prompt sent (session=${state.session.id} thread=${state.threadId}) in ${Date.now() - pumpMark}ms.`);
+            console.log(`Durevcode prompt sent (session=${state.session.id} thread=${state.threadId}) in ${Date.now() - pumpMark}ms.`);
             await this.ensureStopControl(telegram, state);
             return;
         } catch (error) {
@@ -2160,7 +2160,7 @@ export class OpencodeRadarAgent extends BaseAgent {
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar prompt rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode prompt rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
             if (isPermanentPromptError(error)) {
@@ -2192,7 +2192,7 @@ export class OpencodeRadarAgent extends BaseAgent {
             } catch {
             }
             console.warn(
-                `Radar prompt transient failure, keeping it queued (session=${state.session.id}):`,
+                `Durevcode prompt transient failure, keeping it queued (session=${state.session.id}):`,
                 error instanceof Error ? error.message : error,
             );
         }
@@ -2268,7 +2268,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             models = await opencode.listModels();
         } catch (error) {
-            console.debug('Radar model list failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model list failed:', error instanceof Error ? error.message : error);
             await this.safeReply(telegram, state, 'Could not load models, try again.');
             return;
         }
@@ -2286,7 +2286,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 this.modelCardMarkup(models, currentId, currentVariant),
             );
         } catch (error) {
-            console.debug('Radar model card failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model card failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -2304,7 +2304,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (target !== null) {
             try {
                 await telegram.editMessageText({
-                    chat_id: this.config.radar.chatId,
+                    chat_id: this.config.durevcode.chatId,
                     message_id: target,
                     text: wellFormed(text),
                     parse_mode: 'HTML',
@@ -2318,13 +2318,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     return;
                 }
                 if (isMessageGoneError(error)) state.modelCardMessageId = null;
-                console.debug('Radar model card edit failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode model card edit failed:', error instanceof Error ? error.message : error);
             }
         }
         try {
             state.modelCardMessageId = await this.deliverMessage(telegram, state, text, markup);
         } catch (error) {
-            console.debug('Radar model card resend failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model card resend failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -2338,7 +2338,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             await this.deliverMessage(telegram, state, text, this.modeMarkup(state.buildMode));
         } catch (error) {
-            console.debug('Radar mode card failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode mode card failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -2360,7 +2360,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (agents.length === 0) return null;
             return pickModeAgents(agents);
         } catch (error) {
-            console.debug('Radar agent list failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode agent list failed:', error instanceof Error ? error.message : error);
             return null;
         }
     }
@@ -2381,7 +2381,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             await telegram.answerCallbackQuery({ callback_query_id: query.id });
         } catch (error) {
-            console.debug('Radar mode ack failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode mode ack failed:', error instanceof Error ? error.message : error);
         }
         if (state.buildMode === build) return;
         const target = await this.loadModeAgents(opencode);
@@ -2394,7 +2394,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             switched = await opencode.setAgent(state.session.id, agentId);
         } catch (error) {
-            console.debug('Radar mode switch failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode mode switch failed:', error instanceof Error ? error.message : error);
             await this.safeReply(telegram, state, `${icon('fail')} Could not switch mode, try again.`);
             return;
         }
@@ -2433,7 +2433,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const text = this.modeCardText(state, agents);
         try {
             await telegram.editMessageText({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_id: cardId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
@@ -2444,11 +2444,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 try {
                     await this.deliverMessage(telegram, state, text, this.modeMarkup(state.buildMode));
                 } catch (resendError) {
-                    console.debug('Radar mode card resend failed:', resendError instanceof Error ? resendError.message : resendError);
+                    console.debug('Durevcode mode card resend failed:', resendError instanceof Error ? resendError.message : resendError);
                 }
                 return;
             }
-            console.debug('Radar mode card edit failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode mode card edit failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -2463,14 +2463,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             try {
                 await telegram.answerCallbackQuery({ callback_query_id: query.id, ...(text ? { text } : {}) });
             } catch (error) {
-                console.debug('Radar model ack failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode model ack failed:', error instanceof Error ? error.message : error);
             }
         };
         let models: ModelApiInfo[];
         try {
             models = await opencode.listModels();
         } catch (error) {
-            console.debug('Radar model list failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model list failed:', error instanceof Error ? error.message : error);
             await dismiss();
             await this.safeReply(telegram, state, 'Could not load models, try again.');
             return;
@@ -2497,10 +2497,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar model switch rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode model switch rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
-            console.debug('Radar model switch failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model switch failed:', error instanceof Error ? error.message : error);
             await this.safeReply(telegram, state, 'Could not switch model, try again.');
             return;
         }
@@ -2534,7 +2534,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             try {
                 await telegram.answerCallbackQuery({ callback_query_id: query.id, ...(text ? { text } : {}) });
             } catch (error) {
-                console.debug('Radar model ack failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode model ack failed:', error instanceof Error ? error.message : error);
             }
         };
         const currentRef = modelRef(state.session.model);
@@ -2546,7 +2546,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             models = await opencode.listModels();
         } catch (error) {
-            console.debug('Radar model list failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model list failed:', error instanceof Error ? error.message : error);
             await dismiss();
             await this.safeReply(telegram, state, 'Could not load models, try again.');
             return;
@@ -2575,10 +2575,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (isRateLimitError(error)) {
                 const waitSec = getRetryAfterSec(error) ?? 10;
                 this.rateLimitedUntil = Math.max(this.rateLimitedUntil, Date.now() + waitSec * 1000 + 1000);
-                console.warn(`Radar model switch rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode model switch rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
-            console.debug('Radar model switch failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model switch failed:', error instanceof Error ? error.message : error);
             await this.safeReply(telegram, state, 'Could not switch model, try again.');
             return;
         }
@@ -2611,9 +2611,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 this.stopMarkup(state),
             );
             state.stopControlText = text;
-            console.log(`Radar stop control posted (session=${state.session.id} msg=${state.stopMessageId}).`);
+            console.log(`Durevcode stop control posted (session=${state.session.id} msg=${state.stopMessageId}).`);
         } catch (error) {
-            console.debug('Radar stop control failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode stop control failed:', error instanceof Error ? error.message : error);
         } finally {
             state.stopControlSending = false;
         }
@@ -2636,14 +2636,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (text === state.stopControlText) return;
         try {
             await telegram.editMessageText({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_id: state.stopMessageId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
                 reply_markup: this.stopMarkup(state),
             });
             state.stopControlText = text;
-            console.log(`Radar stop control updated (session=${state.session.id}).`);
+            console.log(`Durevcode stop control updated (session=${state.session.id}).`);
         } catch (error) {
             if (isMessageNotModifiedError(error)) {
                 state.stopControlText = text;
@@ -2652,7 +2652,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (isMessageGoneError(error)) {
                 state.stopMessageId = null;
                 state.stopControlText = null;
-                console.log(`Radar stop control gone, will repost (session=${state.session.id}).`);
+                console.log(`Durevcode stop control gone, will repost (session=${state.session.id}).`);
                 return;
             }
             if (isRateLimitError(error)) {
@@ -2661,10 +2661,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar stop control rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode stop control rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
-            console.debug('Radar stop control update failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode stop control update failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -2678,9 +2678,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 state.thinkingMessageId = await this.deliverMessage(telegram, state, text);
                 state.thinkingRendered = text;
                 state.thinkingAt = Date.now();
-                console.log(`Radar thinking posted (session=${state.session.id}).`);
+                console.log(`Durevcode thinking posted (session=${state.session.id}).`);
             } catch (error) {
-                console.debug('Radar thinking post failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode thinking post failed:', error instanceof Error ? error.message : error);
             }
             return;
         }
@@ -2688,7 +2688,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (Date.now() - state.thinkingAt < THINKING_EDIT_MS) return;
         try {
             await telegram.editMessageText({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_id: state.thinkingMessageId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
@@ -2712,10 +2712,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar thinking rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode thinking rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
-            console.debug('Radar thinking update failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode thinking update failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -2731,12 +2731,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (Date.now() < this.rateLimitedUntil) return;
         try {
             await telegram.editMessageText({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_id: id,
                 text: wellFormed(formatThought(Date.now() - since)),
                 parse_mode: 'HTML',
             });
-            console.log(`Radar thought finalized (session=${state.session.id}).`);
+            console.log(`Durevcode thought finalized (session=${state.session.id}).`);
         } catch (error) {
             if (isMessageNotModifiedError(error)) return;
             if (isMessageGoneError(error)) return;
@@ -2746,10 +2746,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar thought rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode thought rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
-            console.debug('Radar thought finalize failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode thought finalize failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -2763,14 +2763,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state.stopControlText = null;
         try {
             await telegram.editMessageReplyMarkup({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_id: controlId,
                 reply_markup: { inline_keyboard: [] },
             });
-            console.log(`Radar stop control retired (session=${state.session.id} control=${controlId}).`);
+            console.log(`Durevcode stop control retired (session=${state.session.id} control=${controlId}).`);
         } catch (error) {
             if (!isMessageNotModifiedError(error)) {
-                console.debug('Radar stop control retire failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode stop control retire failed:', error instanceof Error ? error.message : error);
             }
         }
     }
@@ -2789,12 +2789,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (want === state.stopButtonOn) return;
         try {
             await telegram.editMessageReplyMarkup({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_id: state.contextMessageId,
                 reply_markup: want ? this.stopMarkup(state) : { inline_keyboard: [] },
             });
             state.stopButtonOn = want;
-            console.log(`Radar stop button ${want ? 'shown' : 'hidden'} (session=${state.session.id}).`);
+            console.log(`Durevcode stop button ${want ? 'shown' : 'hidden'} (session=${state.session.id}).`);
         } catch (error) {
             if (isMessageNotModifiedError(error)) {
                 state.stopButtonOn = want;
@@ -2806,10 +2806,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar stop button rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode stop button rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
-            console.debug('Radar stop button sync failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode stop button sync failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -2832,10 +2832,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (typeof opencode.interruptSession === 'function') {
                 void opencode.interruptSession(sessionId).then(
                     (interrupted) => {
-                        console.log(`Radar stopped session ${sessionId} (interrupt=${interrupted}).`);
+                        console.log(`Durevcode stopped session ${sessionId} (interrupt=${interrupted}).`);
                     },
                     (error) => {
-                        console.debug('Radar interrupt failed:', error instanceof Error ? error.message : error);
+                        console.debug('Durevcode interrupt failed:', error instanceof Error ? error.message : error);
                     },
                 );
             }
@@ -2843,7 +2843,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 try {
                     cliRun.kill('SIGTERM');
                 } catch (error) {
-                    console.debug('Radar CLI stop failed:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode CLI stop failed:', error instanceof Error ? error.message : error);
                 }
                 if (state.cliRun === cliRun) state.cliRun = null;
             }
@@ -2885,7 +2885,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             current = await opencode.listPermissions(state.session.id);
         } catch (error) {
-            console.debug('Radar permissions read failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode permissions read failed:', error instanceof Error ? error.message : error);
             return;
         }
         const alive = new Set<string>();
@@ -2897,7 +2897,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 try {
                     await opencode.replyPermission(state.session.id, request.id, 'reject');
                 } catch (error) {
-                    console.debug('Radar plain-mode deny failed:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode plain-mode deny failed:', error instanceof Error ? error.message : error);
                 }
                 continue;
             }
@@ -2917,7 +2917,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 );
                 this.permReplies.set(sentId, { sessionId: state.session.id, permId: request.id });
             } catch (error) {
-                console.debug('Radar permission notice failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode permission notice failed:', error instanceof Error ? error.message : error);
             }
         }
         state.knownPerms = state.knownPerms.filter((id) => alive.has(id));
@@ -2927,12 +2927,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 if (Date.now() >= this.rateLimitedUntil) {
                     try {
                         await telegram.editMessageReplyMarkup({
-                            chat_id: this.config.radar.chatId,
+                            chat_id: this.config.durevcode.chatId,
                             message_id: messageId,
                             reply_markup: { inline_keyboard: [] },
                         });
                     } catch (error) {
-                        console.debug('Radar permission keyboard cleanup failed:', error instanceof Error ? error.message : error);
+                        console.debug('Durevcode permission keyboard cleanup failed:', error instanceof Error ? error.message : error);
                     }
                 }
             }
@@ -2967,12 +2967,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 if (Date.now() >= this.rateLimitedUntil) {
                     try {
                         await telegram.editMessageReplyMarkup({
-                            chat_id: this.config.radar.chatId,
+                            chat_id: this.config.durevcode.chatId,
                             message_id: replyTo,
                             reply_markup: { inline_keyboard: [] },
                         });
                     } catch (error) {
-                        console.debug('Radar permission keyboard cleanup failed:', error instanceof Error ? error.message : error);
+                        console.debug('Durevcode permission keyboard cleanup failed:', error instanceof Error ? error.message : error);
                     }
                 }
                 state.knownPerms = state.knownPerms.filter((id) => id !== permId);
@@ -2984,10 +2984,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                         this.rateLimitedUntil,
                         Date.now() + waitSec * 1000 + 1000,
                     );
-                    console.warn(`Radar permission rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                    console.warn(`Durevcode permission rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                     return;
                 }
-                console.warn('Radar permission reply failed:', error instanceof Error ? error.message : error);
+                console.warn('Durevcode permission reply failed:', error instanceof Error ? error.message : error);
                 await this.safeReply(telegram, state, `${icon('fail')} Could not send the decision, try again.`);
             }
         } finally {
@@ -3020,7 +3020,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             current = await opencode.listQuestions(state.session.id);
         } catch (error) {
-            console.debug('Radar questions read failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode questions read failed:', error instanceof Error ? error.message : error);
             return;
         }
         const alive = new Set<string>();
@@ -3044,7 +3044,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 this.questPicks.set(token, ctx);
                 this.questReplies.set(sentId, { sessionId: state.session.id, reqId: request.id, questions: request.questions });
             } catch (error) {
-                console.debug('Radar question notice failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode question notice failed:', error instanceof Error ? error.message : error);
             }
         }
         state.knownQuestions = state.knownQuestions.filter((id) => alive.has(id));
@@ -3055,13 +3055,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 if (Date.now() >= this.rateLimitedUntil) {
                     try {
                         await telegram.editMessageReplyMarkup({
-                            chat_id: this.config.radar.chatId,
+                            chat_id: this.config.durevcode.chatId,
                             message_id: messageId,
                             reply_markup: { inline_keyboard: [] },
                         });
                     } catch (error) {
                         if (!isMessageNotModifiedError(error) && !isMessageGoneError(error)) {
-                            console.debug('Radar dead question disarm failed:', error instanceof Error ? error.message : error);
+                            console.debug('Durevcode dead question disarm failed:', error instanceof Error ? error.message : error);
                         }
                     }
                 }
@@ -3091,13 +3091,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         for (const messageId of msgIds) {
             try {
                 await telegram.editMessageReplyMarkup({
-                    chat_id: this.config.radar.chatId,
+                    chat_id: this.config.durevcode.chatId,
                     message_id: messageId,
                     reply_markup: { inline_keyboard: [] },
                 });
             } catch (error) {
                 if (!isMessageNotModifiedError(error) && !isMessageGoneError(error)) {
-                    console.debug('Radar stop disarm failed:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode stop disarm failed:', error instanceof Error ? error.message : error);
                 }
             }
         }
@@ -3131,11 +3131,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar question rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode question rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 this.resolvingQuestions.delete(ref.reqId);
                 return;
             }
-            console.debug('Radar question reply failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode question reply failed:', error instanceof Error ? error.message : error);
             await this.safeReply(telegram, state, `${icon('fail')} Could not send the answer, try again.`);
             this.resolvingQuestions.delete(ref.reqId);
             return;
@@ -3143,7 +3143,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state.knownQuestions = state.knownQuestions.filter((id) => id !== ref.reqId);
         const request: QuestionRequest = { id: ref.reqId, sessionID: state.session.id, questions: ref.questions };
         if (!resolved) {
-            console.debug(`Radar question gone on server (session=${state.session.id} req=${ref.reqId}).`);
+            console.debug(`Durevcode question gone on server (session=${state.session.id} req=${ref.reqId}).`);
             await this.disarmQuestionCard(telegram, request);
             this.dropQuestionRefs(state.session.id, ref.reqId);
             this.resolvingQuestions.delete(ref.reqId);
@@ -3170,12 +3170,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (Date.now() < this.rateLimitedUntil) return;
         try {
             await telegram.editMessageReplyMarkup({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_id: msgId,
                 reply_markup: { inline_keyboard: [] },
             });
         } catch (error) {
-            console.debug('Radar question disarm failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode question disarm failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -3201,14 +3201,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (Date.now() < this.rateLimitedUntil) return;
         try {
             await telegram.editMessageText({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_id: msgId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
                 reply_markup: { inline_keyboard: [] },
             });
         } catch (error) {
-            console.debug('Radar question resolve edit failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode question resolve edit failed:', error instanceof Error ? error.message : error);
             if (!resolved) return;
             await this.safeReply(telegram, state, text);
         }
@@ -3221,7 +3221,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     ): Promise<void> {
         if (state.finalized) return;
         const text = stepFinishText(finish);
-        console.warn(`Radar step failed (session=${state.session.id}): ${text}`);
+        console.warn(`Durevcode step failed (session=${state.session.id}): ${text}`);
         await this.flushEvents(telegram, state);
         const fresh = Date.now() - state.serverErrorAt <= MODEL_ERROR_DETAIL_MS
             ? state.serverErrorText
@@ -3235,7 +3235,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 `${icon('warn')} opencode stopped the turn: ${escapeHtml(reason)}\n\nWrite again to continue.`,
             );
         } catch (error) {
-            console.debug('Radar step failure notice failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode step failure notice failed:', error instanceof Error ? error.message : error);
         }
         await this.finalizeSession(telegram, state, false);
     }
@@ -3254,7 +3254,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (state.serverErrorText === text && now - state.serverErrorAt < SERVER_ERROR_DEDUP_MS) return;
         state.serverErrorText = text;
         state.serverErrorAt = now;
-        console.warn(`Radar server error (session=${sessionId}): ${text.slice(0, 200)}`);
+        console.warn(`Durevcode server error (session=${sessionId}): ${text.slice(0, 200)}`);
         await this.flushEvents(telegram, state);
         await this.safeReply(
             telegram,
@@ -3273,7 +3273,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             try {
                 await telegram.answerCallbackQuery({ callback_query_id: query.id, ...(text ? { text } : {}) });
             } catch (error) {
-                console.debug('Radar callback ack failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode callback ack failed:', error instanceof Error ? error.message : error);
             }
         };
         if (this.seenCallbacks.has(query.id)) {
@@ -3290,10 +3290,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (stopMatch) {
             const from = query.from;
             if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.radar.chatId) return;
-            const allowed = this.config.radar.allowedUsers;
+            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
+            const allowed = this.config.durevcode.allowedUsers;
             if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Radar stop denied for user ${from.id} (session=${stopMatch[1]}).`);
+                console.warn(`Durevcode stop denied for user ${from.id} (session=${stopMatch[1]}).`);
                 await dismiss();
                 return;
             }
@@ -3310,10 +3310,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (modeMatch) {
             const from = query.from;
             if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.radar.chatId) return;
-            const allowed = this.config.radar.allowedUsers;
+            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
+            const allowed = this.config.durevcode.allowedUsers;
             if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Radar mode denied for user ${from.id}.`);
+                console.warn(`Durevcode mode denied for user ${from.id}.`);
                 await dismiss();
                 return;
             }
@@ -3332,10 +3332,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (modelMatch) {
             const from = query.from;
             if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.radar.chatId) return;
-            const allowed = this.config.radar.allowedUsers;
+            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
+            const allowed = this.config.durevcode.allowedUsers;
             if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Radar model denied for user ${from.id}.`);
+                console.warn(`Durevcode model denied for user ${from.id}.`);
                 await dismiss();
                 return;
             }
@@ -3354,10 +3354,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (variantMatch) {
             const from = query.from;
             if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.radar.chatId) return;
-            const allowed = this.config.radar.allowedUsers;
+            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
+            const allowed = this.config.durevcode.allowedUsers;
             if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Radar model denied for user ${from.id}.`);
+                console.warn(`Durevcode model denied for user ${from.id}.`);
                 await dismiss();
                 return;
             }
@@ -3376,10 +3376,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (permMatch) {
             const from = query.from;
             if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.radar.chatId) return;
-            const permAllowed = this.config.radar.allowedUsers;
+            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
+            const permAllowed = this.config.durevcode.allowedUsers;
             if (permAllowed.length > 0 && !permAllowed.includes(from.id)) {
-                console.warn(`Radar permission denied for user ${from.id}.`);
+                console.warn(`Durevcode permission denied for user ${from.id}.`);
                 await dismiss();
                 return;
             }
@@ -3396,7 +3396,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             try {
                 pending = await opencode.listPermissions(permState.session.id);
             } catch (error) {
-                console.debug('Radar permission recheck failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode permission recheck failed:', error instanceof Error ? error.message : error);
                 await dismiss();
                 return;
             }
@@ -3427,10 +3427,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const from = query.from;
         if (!from || from.is_bot) return;
-        if (query.message && query.message.chat.id !== this.config.radar.chatId) return;
-        const allowed = this.config.radar.allowedUsers;
+        if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
+        const allowed = this.config.durevcode.allowedUsers;
         if (allowed.length > 0 && !allowed.includes(from.id)) {
-            console.warn(`Radar question denied for user ${from.id} (session=${ctx.sessionId}).`);
+            console.warn(`Durevcode question denied for user ${from.id} (session=${ctx.sessionId}).`);
             await dismiss();
             return;
         }
@@ -3476,12 +3476,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (Date.now() < this.rateLimitedUntil) return;
         try {
             await telegram.editMessageReplyMarkup({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_id: ctx.msgId,
                 reply_markup: this.questKeyboard(ctx),
             });
         } catch (error) {
-            console.debug('Radar question toggle failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode question toggle failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -3509,7 +3509,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 try {
                     await this.sendProgressTyping(telegram, state);
                 } catch (error) {
-                    console.debug('Radar typing tick failed:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode typing tick failed:', error instanceof Error ? error.message : error);
                 }
             }
         } finally {
@@ -3522,13 +3522,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
         if (!telegram || !opencode) return;
         if (this.pollInFlight) return;
-        const batchTimeoutMs = optionalPositiveInt(process.env.RADAR_POLL_BATCH_TIMEOUT_MS, SESSION_TICK_BATCH_TIMEOUT_MS);
+        const batchTimeoutMs = optionalPositiveInt(process.env.DUREVCODE_POLL_BATCH_TIMEOUT_MS, SESSION_TICK_BATCH_TIMEOUT_MS);
         this.pollInFlight = true;
         try {
             await this.checkServerHealth(telegram, opencode);
             await this.probeWatchedTopics(telegram);
             await this.syncSessions();
-            const fanout = Math.max(1, Math.floor(this.config.radar.pollFanout ?? 3));
+            const fanout = Math.max(1, Math.floor(this.config.durevcode.pollFanout ?? 3));
             const states = [...this.watched.values()];
             let staggered = false;
             for (let i = 0; i < states.length; i += fanout) {
@@ -3548,7 +3548,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     const winner = await Promise.race([batch.then(() => 'done' as const), timeout]);
                     if (winner === 'timeout') {
                         console.warn(
-                            `Radar poll batch exceeded ${batchTimeoutMs}ms, moving on (sessions=${states.slice(i, i + fanout).map((s) => s.session.id).join(',')}).`,
+                            `Durevcode poll batch exceeded ${batchTimeoutMs}ms, moving on (sessions=${states.slice(i, i + fanout).map((s) => s.session.id).join(',')}).`,
                         );
                         await Promise.race([batch, new Promise<void>((resolve) => {
                             const t = setTimeout(resolve, 2000);
@@ -3598,11 +3598,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             await this.pollQuestions(telegram, opencode, state);
             if (!state.modeSynced) await this.syncSessionMode(telegram, state);
         } catch (error) {
-            console.error(`Radar update failed for session ${state.session.id}:`, error);
+            console.error(`Durevcode update failed for session ${state.session.id}:`, error);
         }
         const tickMs = Date.now() - tickMark;
         if (tickMs > SLOW_TICK_MS) {
-            console.warn(`Radar slow session tick ${tickMs}ms (session=${state.session.id}).`);
+            console.warn(`Durevcode slow session tick ${tickMs}ms (session=${state.session.id}).`);
         }
     }
 
@@ -3614,7 +3614,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             await opencode.health();
         } catch {
             if (this.serverOutageNoticed) return;
-            console.warn(`Radar opencode server unreachable, retrying (source=${this.config.opencode.baseUrl}).`);
+            console.warn(`Durevcode opencode server unreachable, retrying (source=${this.config.opencode.baseUrl}).`);
             this.logServiceNotice(
                 `${icon('warn')} opencode server unreachable, prompts are queued. Start it with: opencode serve --port 4096`,
             );
@@ -3629,7 +3629,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (storeErr) {
             if (!this.storeOutageNoticed) {
                 this.storeOutageNoticed = true;
-                console.warn(`Radar opencode database unavailable: ${storeErr}`);
+                console.warn(`Durevcode opencode database unavailable: ${storeErr}`);
                 this.logServiceNotice(`${icon('warn')} opencode database unavailable (${escapeHtml(storeErr)}). Streaming is degraded.`);
             }
         } else if (this.storeOutageNoticed) {
@@ -3639,7 +3639,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     }
 
     private logServiceNotice(text: string): boolean {
-        console.warn(`Radar service notice: ${text.replace(/<[^>]+>/g, '')}`);
+        console.warn(`Durevcode service notice: ${text.replace(/<[^>]+>/g, '')}`);
         return true;
     }
 
@@ -3656,7 +3656,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             renamed = await opencode.renameSession(state.session.id, title);
         } catch (error) {
-            console.debug('Radar topic rename failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode topic rename failed:', error instanceof Error ? error.message : error);
             return;
         }
         if (!renamed) return;
@@ -3674,13 +3674,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (name === state.appliedTopicName) return;
         try {
             await telegram.editForumTopic({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_thread_id: state.threadId,
                 name,
             });
             state.appliedTopicName = name;
             this.savePersisted();
-            console.log(`Radar topic renamed (session=${state.session.id} thread=${state.threadId}): ${name.slice(0, 80)}`);
+            console.log(`Durevcode topic renamed (session=${state.session.id} thread=${state.threadId}): ${name.slice(0, 80)}`);
         } catch (error) {
             if (isTopicNotModifiedError(error)) {
                 state.appliedTopicName = name;
@@ -3693,10 +3693,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar topic rename rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode topic rename rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
-            console.debug('Radar topic rename failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode topic rename failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -3711,12 +3711,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             landed = await opencode.hasMessage(state.session.id, pending.messageId);
         } catch (error) {
-            console.debug('Radar prompt confirm failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode prompt confirm failed:', error instanceof Error ? error.message : error);
             return;
         }
         if (landed) {
             state.confirming = null;
-            console.log(`Radar prompt landed (session=${state.session.id} message=${pending.messageId}).`);
+            console.log(`Durevcode prompt landed (session=${state.session.id} message=${pending.messageId}).`);
             return;
         }
         if (Date.now() - pending.since < CONFIRM_TIMEOUT_MS) return;
@@ -3725,12 +3725,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             try {
                 if (await this.startCliRun(telegram, opencode, state, pending.text, true, Math.round((Date.now() - pending.since) / 1000))) return;
             } catch (error) {
-                console.debug('Radar CLI fallback failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode CLI fallback failed:', error instanceof Error ? error.message : error);
             }
         }
         state.promptQueue.unshift(pending.text);
         console.error(
-            `Radar prompt stalled: server accepted but is not processing it ` +
+            `Durevcode prompt stalled: server accepted but is not processing it ` +
                 `(session=${state.session.id} message=${pending.messageId}). ` +
                 `Check the opencode serve log for "Failed to drain Session".`,
         );
@@ -3752,14 +3752,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             fresh = await opencode.getSession(state.session.id);
         } catch (error) {
-            console.debug('Radar session read failed:', error);
+            console.debug('Durevcode session read failed:', error);
             return;
         }
         if (!fresh) {
             state.missingReads += 1;
             if (state.missingReads >= 3) {
                 console.warn(
-                    `Radar session ${state.session.id} is gone in opencode ` +
+                    `Durevcode session ${state.session.id} is gone in opencode ` +
                         `(thread=${state.threadId}), unwatching after ${state.missingReads} empty reads.`,
                 );
                 try {
@@ -3769,7 +3769,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                         `${icon('warn')} Session is gone in opencode, it was unwatched. Write again in this topic to start a fresh session.`,
                     );
                 } catch (error) {
-                    console.debug('Radar gone-session notice failed:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode gone-session notice failed:', error instanceof Error ? error.message : error);
                 }
                 this.watched.delete(state.session.id);
                 delete this.persisted[state.session.id];
@@ -3787,7 +3787,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             pairs = await opencode.readEvents(state.session.id);
         } catch (error) {
-            console.debug('Radar parts read failed:', error);
+            console.debug('Durevcode parts read failed:', error);
             return;
         }
 
@@ -3869,7 +3869,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 state.pendingTodos = true;
             }
         } catch (error) {
-            console.debug('Radar todos read failed:', error);
+            console.debug('Durevcode todos read failed:', error);
         }
 
         await this.flushEvents(telegram, state);
@@ -3881,7 +3881,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const idleFor = Date.now() - state.lastEventAt;
         const hasWork = state.toolCalls > 0 || state.lastText !== '';
         const autoMs = this.autoContinueMs();
-        const maxNudges = this.config.radar.autoContinueMax ?? AUTO_CONTINUE_DEFAULT_MAX;
+        const maxNudges = this.config.durevcode.autoContinueMax ?? AUTO_CONTINUE_DEFAULT_MAX;
         const quietFor = Date.now() - Math.max(state.lastEventAt, state.lastNudgeAt);
         const canNudge = autoMs > 0 && hasWork && !state.turnComplete && state.autoNudges < maxNudges;
 
@@ -3891,7 +3891,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (Date.now() >= this.rateLimitedUntil && (await this.autoContinue(telegram, opencode, state))) return;
         }
 
-        if (!state.finalized && !canNudge && idleFor >= this.config.radar.idleSec * 1000 && hasWork && state.promptQueue.length === 0) {
+        if (!state.finalized && !canNudge && idleFor >= this.config.durevcode.idleSec * 1000 && hasWork && state.promptQueue.length === 0) {
             if (Date.now() < this.rateLimitedUntil) return;
             await this.finalizeSession(telegram, state);
             return;
@@ -3912,7 +3912,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             this.topicProbedAt.set(sessionId, now);
             try {
                 await telegram.sendChatAction({
-                    chat_id: this.config.radar.chatId,
+                    chat_id: this.config.durevcode.chatId,
                     message_thread_id: state.threadId,
                     action: 'typing',
                 });
@@ -3930,7 +3930,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     return;
                 }
                 console.debug(
-                    `Radar topic probe failed (session=${sessionId}):`,
+                    `Durevcode topic probe failed (session=${sessionId}):`,
                     error instanceof Error ? error.message : error,
                 );
             }
@@ -3967,14 +3967,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         telegram: TelegramBotPlugin,
         state: WatchedSession,
     ): Promise<void> {
-        if (this.config.radar.typingEnabled === false) return;
+        if (this.config.durevcode.typingEnabled === false) return;
         if (this.threadsEnabled && state.threadId === null) return;
         if (!this.isSessionActive(state)) return;
         if (Date.now() < this.rateLimitedUntil) return;
         if (Date.now() - state.lastTypingAt < TYPING_COOLDOWN_MS) return;
         try {
             await telegram.sendChatAction({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_thread_id: state.threadId ?? undefined,
                 action: 'typing',
             });
@@ -3986,14 +3986,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar typing rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode typing rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
             if (state.threadId !== null && isThreadGoneError(error)) {
                 await this.onTopicGone(telegram, state);
                 return;
             }
-            console.debug('Radar typing failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode typing failed:', error instanceof Error ? error.message : error);
         }
     }
 
@@ -4006,7 +4006,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             state.contextLimit = await opencode.getModelLimit(displayModel(state.session.model));
         } catch (error) {
-            console.debug('Radar context limit failed:', error);
+            console.debug('Durevcode context limit failed:', error);
             state.contextLimit = null;
         }
     }
@@ -4018,7 +4018,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             state.snapshot = await opencode.readContextSnapshot(state.session.id);
         } catch (error) {
-            console.debug('Radar context snapshot failed:', error);
+            console.debug('Durevcode context snapshot failed:', error);
             state.snapshot = null;
         }
     }
@@ -4034,7 +4034,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 await this.sendFreshPin(telegram, state);
             } else {
                 await telegram.editMessageText({
-                    chat_id: this.config.radar.chatId,
+                    chat_id: this.config.durevcode.chatId,
                     message_id: state.contextMessageId,
                     text: wellFormed(text),
                     parse_mode: 'HTML',
@@ -4060,21 +4060,21 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar context rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode context rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
             if (isUpstreamServerError(error)) {
                 state.lastContextEditAt = Date.now();
                 this.logger.debug(
-                    `Radar context edit hit a transport error, keeping the pinned message ` +
+                    `Durevcode context edit hit a transport error, keeping the pinned message ` +
                         `(session=${state.session.id}): ${error instanceof Error ? error.message : error}`,
                 );
                 return;
             }
             if (isMessageGoneError(error)) {
                 console.warn(
-                    `Radar context message gone, starting fresh ` +
-                        `(chat=${this.config.radar.chatId} thread=${state.threadId} ` +
+                    `Durevcode context message gone, starting fresh ` +
+                        `(chat=${this.config.durevcode.chatId} thread=${state.threadId} ` +
                         `message=${state.contextMessageId} session=${state.session.id}).`,
                 );
                 state.contextMessageId = null;
@@ -4090,8 +4090,8 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             state.consecutiveFailures += 1;
             if (state.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                 console.warn(
-                    `Radar context message unreachable, starting fresh ` +
-                        `(chat=${this.config.radar.chatId} thread=${state.threadId} ` +
+                    `Durevcode context message unreachable, starting fresh ` +
+                        `(chat=${this.config.durevcode.chatId} thread=${state.threadId} ` +
                         `message=${state.contextMessageId} session=${state.session.id}). ` +
                         `Check that the chat/topic exists and the bot can post there.`,
                 );
@@ -4099,7 +4099,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 state.consecutiveFailures = 0;
                 this.savePersisted();
             } else {
-                console.debug('Radar context update failed:', error);
+                console.debug('Durevcode context update failed:', error);
             }
         }
     }
@@ -4155,7 +4155,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             state.pendingKeys.set(live.key, state.pending.length);
             state.pending.push(live.event);
         }
-        console.debug(`Radar live tool abandoned, event requeued (session=${state.session.id}).`);
+        console.debug(`Durevcode live tool abandoned, event requeued (session=${state.session.id}).`);
     }
 
     private async syncLiveTool(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
@@ -4187,14 +4187,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             } catch (error) {
                 live.lastEditAt = Date.now();
                 live.failCount += 1;
-                console.debug('Radar live tool post failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode live tool post failed:', error instanceof Error ? error.message : error);
                 if (live.failCount >= MAX_LIVE_FAILURES) this.abandonLiveTool(state);
             }
             return;
         }
         try {
             await telegram.editMessageText({
-                chat_id: this.config.radar.chatId,
+                chat_id: this.config.durevcode.chatId,
                 message_id: live.messageId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
@@ -4217,17 +4217,17 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar live tool rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode live tool rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
             if (isMessageGoneError(error)) {
                 live.messageId = null;
                 live.failCount = 0;
-                console.debug('Radar live tool message gone, will repost.');
+                console.debug('Durevcode live tool message gone, will repost.');
                 return;
             }
             live.failCount += 1;
-            console.debug('Radar live tool edit failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode live tool edit failed:', error instanceof Error ? error.message : error);
             if (live.failCount >= MAX_LIVE_FAILURES) this.abandonLiveTool(state);
         }
     }
@@ -4256,7 +4256,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const now = Date.now();
         state.recentDelivered = state.recentDelivered.filter((entry) => now - entry.at < DELIVERY_DEDUP_MS);
         if (state.recentDelivered.some((entry) => entry.sig === deliverySignature(text))) {
-            console.warn(`Radar duplicate batch suppressed (session=${state.session.id}).`);
+            console.warn(`Durevcode duplicate batch suppressed (session=${state.session.id}).`);
             state.pending = [];
             state.pendingKeys.clear();
             state.pendingTodos = false;
@@ -4283,7 +4283,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 await this.stopSession(telegram, opencode ?? {}, state);
             }
             console.log(
-                `Radar events delivered (session=${state.session.id} count=${flushedCount} in ${Date.now() - flushMark}ms).`,
+                `Durevcode events delivered (session=${state.session.id} count=${flushedCount} in ${Date.now() - flushMark}ms).`,
             );
             state.pending = [];
             state.pendingKeys.clear();
@@ -4303,24 +4303,24 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Radar events rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                console.warn(`Durevcode events rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
             } else {
                 if (isUpstreamServerError(error)) {
                     this.upstreamFailures += 1;
                     const backoffMs = Math.min(UPSTREAM_BACKOFF_MAX_MS, 1000 * 2 ** Math.min(this.upstreamFailures, 6));
                     this.upstreamBackoffUntil = Math.max(this.upstreamBackoffUntil, Date.now() + backoffMs);
                     console.warn(
-                        `Radar telegram upstream failed (${this.upstreamFailures} in a row), backing off ${backoffMs}ms (session=${state.session.id}): ${error instanceof Error ? error.message : error}`,
+                        `Durevcode telegram upstream failed (${this.upstreamFailures} in a row), backing off ${backoffMs}ms (session=${state.session.id}): ${error instanceof Error ? error.message : error}`,
                     );
                     return;
                 }
-                console.debug('Radar events send failed:', error);
+                console.debug('Durevcode events send failed:', error);
             }
         }
     }
 
     private autoContinueMs(): number {
-        const raw = this.config.radar.autoContinueSec;
+        const raw = this.config.durevcode.autoContinueSec;
         if (raw === undefined) return 0;
         const parsed = Math.floor(raw * 1000);
         if (!Number.isFinite(parsed) || parsed <= 0) return 0;
@@ -4354,7 +4354,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state.lastNudgeAt = Date.now();
         state.turnComplete = false;
         this.logger.info(
-            `Radar auto-continue #${state.autoNudges} after quiet stretch (session=${state.session.id} thread=${state.threadId}).`,
+            `Durevcode auto-continue #${state.autoNudges} after quiet stretch (session=${state.session.id} thread=${state.threadId}).`,
         );
         this.enqueuePrompt(state, AUTO_CONTINUE_TEXT);
         await this.pumpPrompts(telegram, opencode, state);
@@ -4362,7 +4362,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     }
 
     private async autoFinishIfDone(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {
-        if (this.config.radar.autoFinish === false) return false;
+        if (this.config.durevcode.autoFinish === false) return false;
         if (!state.turnComplete) return false;
         if (state.lastText === '') return false;
         if (state.finalized || state.stopping) return false;
@@ -4370,7 +4370,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (state.pending.length > 0 || state.pendingTodos || state.liveTool) return false;
         if (Date.now() - state.stoppedAt < STOP_QUIET_MS) return false;
         if (Date.now() < this.rateLimitedUntil) return false;
-        this.logger.info(`Radar finished a turn on its own (session=${state.session.id} thread=${state.threadId}).`);
+        this.logger.info(`Durevcode finished a turn on its own (session=${state.session.id} thread=${state.threadId}).`);
         await this.finalizeSession(telegram, state);
         if (Date.now() - state.lastStopMsgAt >= STOP_DEDUP_MS) {
             state.lastStopMsgAt = Date.now();
@@ -4392,7 +4392,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state.promptBusyNotified = false;
         state.promptBusySince = 0;
         state.promptErrorText = null;
-        console.log(`Radar finalized session ${state.session.id}`);
+        console.log(`Durevcode finalized session ${state.session.id}`);
         state.lastContextEditAt = 0;
         await this.clearThinkingMessage(telegram, state);
         await this.updateContext(telegram, state);
