@@ -294,6 +294,48 @@ describe('the session limit is hard (3 by default)', () => {
             'the user is about to send the next prompt — the session stays watched');
     });
 
+    test('a session in a long tool call is not evicted mid-run', () => {
+        const agent = makeAgent();
+        const watched = internals(agent).watched;
+        for (const [id, state] of Object.entries({
+            ses_tool: {
+                ...baseState('ses_tool', 1),
+                lastPromptAt: now - 400_000,
+                lastEventAt: now - 90_000,
+                liveTool: { key: 'k', messageId: 1, event: {}, done: false, lastText: '', lastEditAt: now, startedAt: now - 60_000 },
+            },
+            ses_b: { ...baseState('ses_b', 2), lastEventAt: now - 220_000, lastPromptAt: 0 },
+            ses_c: { ...baseState('ses_c', 3), lastEventAt: now - 210_000, lastPromptAt: 0 },
+            ses_d: { ...baseState('ses_d', 4), lastEventAt: now - 205_000, lastPromptAt: 0 },
+        })) {
+            watched.set(id, state);
+        }
+        internals(agent).evictWatchedOverflow(new Set());
+        assert.equal(watched.has('ses_tool'), true,
+            'an unfinished tool call keeps the watch slot past the prompt window');
+    });
+
+    test('a finished tool call no longer blocks the trim', () => {
+        const agent = makeAgent();
+        const watched = internals(agent).watched;
+        for (const [id, state] of Object.entries({
+            ses_tool: {
+                ...baseState('ses_tool', 1),
+                lastPromptAt: now - 400_000,
+                lastEventAt: now - 230_000,
+                liveTool: { key: 'k', messageId: 1, event: {}, done: true, lastText: '', lastEditAt: now, startedAt: now - 60_000 },
+            },
+            ses_b: { ...baseState('ses_b', 2), lastEventAt: now - 220_000, lastPromptAt: 0 },
+            ses_c: { ...baseState('ses_c', 3), lastEventAt: now - 210_000, lastPromptAt: 0 },
+            ses_d: { ...baseState('ses_d', 4), lastEventAt: now - 205_000, lastPromptAt: 0 },
+        })) {
+            watched.set(id, state);
+        }
+        internals(agent).evictWatchedOverflow(new Set());
+        assert.equal(watched.has('ses_tool'), false,
+            'once the tool finishes, the stalest quiet session is evictable again');
+    });
+
     test('user-activity windows: recent prompts and freshly finalized turns', () => {
         assert.equal(isUserActiveWatch({ finalizedAt: 0, lastPromptAt: 0 }, now), false);
         assert.equal(isUserActiveWatch({ finalizedAt: 0, lastPromptAt: now - 90_000 }, now), true,

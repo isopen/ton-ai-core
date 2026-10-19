@@ -1594,6 +1594,8 @@ export class DurevcodeAgent extends BaseAgent {
             state.knownPerms.length > 0 ||
             state.knownQuestions.length > 0 ||
             (state.lastEventAt !== 0 && now - state.lastEventAt < WORKING_RECENCY_MS) ||
+            hasUnfinishedLiveTool(state, now) ||
+            state.pending.length > 0 ||
             isUserActiveWatch(state, now) ||
             (state.lastEventAt === 0 && state.lastPromptAt === 0 && now - state.startedAt < PROMPT_LAND_GRACE_MS);
         const rank = (state: WatchedSession): number[] => [
