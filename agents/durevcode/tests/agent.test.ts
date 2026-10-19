@@ -1,8 +1,8 @@
 import { strict as assert } from 'assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { Message } from '@ton-ai/telegram-bot-api';
+import { Message, CallbackQuery } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
-import { DurevcodeAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, serverEventError, DUREVCODE_THREAD_TIMINGS } from '../agent';
+import { DurevcodeAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, serverEventError, DUREVCODE_THREAD_TIMINGS, instantResolveQuestion, questionDoneRow, questionPicksComplete } from '../agent';
 import { EMOJI, formatThinking, splitTelegramHtml, truncate, wellFormed } from '../formatter';
 
 const NOT_MODIFIED =
@@ -6394,5 +6394,117 @@ describe('durevcode duplicate topic binding', () => {
 
         assert.equal(first, second, 'both callers must receive the same attach result');
         assert.equal(calls.filter((c) => c.op === 'create').length, 1, 'only one topic may be created');
+    });
+});
+
+describe('durevcode question taps', () => {
+    interface QuestCtx {
+        sessionId: string;
+        reqId: string;
+        questions: Array<{ question: string; header?: string; multiple?: boolean; options: Array<{ label: string; description?: string }> }>;
+        picks: string[][];
+        msgId: number;
+        token: string;
+    }
+
+    const TWO_QUESTIONS: QuestCtx = {
+        sessionId: 'ses_test01',
+        reqId: 'frm_1',
+        questions: [
+            { question: 'Что именно реализуем на C?', header: 'Что такое Crypton', options: [{ label: 'Блок-шифр' }, { label: 'Порт плагина' }] },
+            { question: 'Нужны ли KAT?', header: 'Верификация', options: [{ label: 'Да, с KAT' }, { label: 'Только код' }] },
+        ],
+        picks: [[], []],
+        msgId: 501,
+        token: '1',
+    };
+
+    function query(over: Record<string, unknown>): CallbackQuery {
+        return {
+            id: `cb-${Math.random()}`,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            chat_instance: 'ci',
+            message: { message_id: 501, chat: { id: 1, type: 'supergroup' }, message_thread_id: 8 },
+            ...over,
+        } as unknown as CallbackQuery;
+    }
+
+    function questAgent() {
+        const agent = makeAgent() as unknown as Record<string, unknown> & {
+            attachSession: (telegram: unknown, session: typeof SESSION) => Promise<unknown>;
+            handleCallback: (telegram: unknown, opencode: unknown, query: CallbackQuery) => Promise<void>;
+            questKeyboard: (ctx: QuestCtx) => { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+        };
+        const answers: Array<{ sessionId: string; reqId: string; answers: string[][] }> = [];
+        return { agent, answers };
+    }
+
+    async function withState(agent: Record<string, unknown>) {
+        const stub = stubTelegram();
+        const state = await (agent.attachSession as (t: unknown, s: typeof SESSION) => Promise<Record<string, unknown>>)(stub.telegram, SESSION);
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set(SESSION.id as string, state);
+        (agent as unknown as { questPicks: Map<string, QuestCtx> }).questPicks.set('1', { ...TWO_QUESTIONS, picks: [[], []] });
+        return stub;
+    }
+
+    test('multi-question single-choice taps never auto-complete the whole form', async () => {
+        assert.equal(instantResolveQuestion(TWO_QUESTIONS.questions), false);
+        assert.equal(questionDoneRow(TWO_QUESTIONS.questions), true);
+        assert.equal(questionPicksComplete([['a'], ['b']]), true);
+        assert.equal(questionPicksComplete([['a'], []]), false);
+    });
+
+    test('first tap selects a radio answer instead of answering the whole form', async () => {
+        const { agent, answers } = questAgent();
+        const opencode = {
+            replyQuestion: async (sessionId: string, reqId: string, picked: string[][]) => {
+                answers.push({ sessionId, reqId, answers: picked });
+                return true;
+            },
+        };
+        const stub = await withState(agent);
+        await agent.handleCallback(stub.telegram, opencode, query({ id: 'cb-tap-q1', data: 'q1:0:1' }));
+        await agent.handleCallback(stub.telegram, opencode, query({ id: 'cb-tap-done-early', data: 'q1:done' }));
+        assert.deepEqual(answers, [], 'no reply may be sent until every question is answered');
+
+        await agent.handleCallback(stub.telegram, opencode, query({ id: 'cb-tap-q2', data: 'q1:1:0' }));
+        await agent.handleCallback(stub.telegram, opencode, query({ id: 'cb-tap-done', data: 'q1:done' }));
+        assert.deepEqual(answers.map((entry) => entry.answers), [[['Порт плагина'], ['Да, с KAT']]]);
+        const picks = (agent as unknown as { questPicks: Map<string, QuestCtx> }).questPicks;
+        assert.equal(picks.has('1'), false, 'pick state is dropped after resolve');
+    });
+
+    test('keyboard shows Done with progress for multi-question forms', async () => {
+        const { agent } = questAgent();
+        const stub = await withState(agent);
+        const keyboard = agent.questKeyboard((agent as unknown as { questPicks: Map<string, QuestCtx> }).questPicks.get('1') as QuestCtx);
+        const done = keyboard.inline_keyboard[keyboard.inline_keyboard.length - 1][0];
+        assert.equal(done.callback_data, 'q1:done');
+        assert.equal(done.text, 'Done 0/2');
+    });
+
+    test('single-question single-choice keeps the immediate resolve', async () => {
+        const { agent, answers } = questAgent();
+        const opencode = {
+            replyQuestion: async (sessionId: string, reqId: string, picked: string[][]) => {
+                answers.push({ sessionId, reqId, answers: picked });
+                return true;
+            },
+        };
+        const single: QuestCtx = {
+            sessionId: 'ses_test01',
+            reqId: 'frm_2',
+            questions: [{ question: 'Первый ответ пришёл пустым. Что делаем?', header: 'Уточнение', options: [{ label: 'Блок-шифр Crypton на C (Recommended)' }, { label: 'Порт plugins/crypton на C' }] }],
+            picks: [[]],
+            msgId: 502,
+            token: '2',
+        };
+        const agentTyped = agent as unknown as { attachSession: (t: unknown, s: typeof SESSION) => Promise<unknown>; handleCallback: (t: unknown, o: unknown, q: CallbackQuery) => Promise<void>; watched: Map<string, unknown>; questPicks: Map<string, QuestCtx> };
+        const stub = stubTelegram();
+        const state = await agentTyped.attachSession(stub.telegram, SESSION);
+        agentTyped.watched.set(SESSION.id as string, state);
+        agentTyped.questPicks.set('2', single);
+        await agentTyped.handleCallback(stub.telegram, opencode, query({ id: 'cb-tap-single', data: 'q2:0:0' }));
+        assert.deepEqual(answers.map((entry) => entry.answers), [[['Блок-шифр Crypton на C (Recommended)']]]);
     });
 });

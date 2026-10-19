@@ -86,6 +86,18 @@ export function isStaleEmptyWatch(
     return now - state.startedAt >= EMPTY_SESSION_GRACE_MS;
 }
 
+export function instantResolveQuestion(questions: QuestionRequest['questions']): boolean {
+    return questions.length === 1 && !questions[0].multiple;
+}
+
+export function questionDoneRow(questions: QuestionRequest['questions']): boolean {
+    return questions.some((item) => item.multiple) || questions.length > 1;
+}
+
+export function questionPicksComplete(picks: string[][]): boolean {
+    return picks.every((picked) => picked.length > 0);
+}
+
 const EVENT_THROTTLE_MS = 3000;
 const LIVE_EDIT_THROTTLE_MS = 1000;
 const MAX_LIVE_FAILURES = 3;
@@ -3004,8 +3016,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 rows.push([{ text: `${picked ? `${EMOJI.check} ` : ''}${truncate(option.label, 60)}`, callback_data: `q${ctx.token}:${qIdx}:${oIdx}` }]);
             });
         });
-        if (ctx.questions.some((item) => item.multiple)) {
-            rows.push([{ text: 'Done', callback_data: `q${ctx.token}:done` }]);
+        if (questionDoneRow(ctx.questions)) {
+            const answered = ctx.picks.filter((picked) => picked.length > 0).length;
+            rows.push([{
+                text: ctx.questions.length > 1 ? `Done ${answered}/${ctx.questions.length}` : 'Done',
+                callback_data: `q${ctx.token}:done`,
+            }]);
         }
         return { inline_keyboard: rows };
     }
@@ -3442,9 +3458,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             return;
         }
         if (match[2] === 'done') {
-            const filled = ctx.picks.some((picked) => picked.length > 0);
-            if (!filled) {
-                await dismiss('Select at least one option.');
+            const complete = questionPicksComplete(ctx.questions.map((_item, i) => ctx.picks[i] ?? []));
+            if (!complete) {
+                await dismiss('Answer every question first.');
                 return;
             }
             await dismiss();
@@ -3460,7 +3476,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             await dismiss();
             return;
         }
-        if (!item.multiple) {
+        if (instantResolveQuestion(ctx.questions)) {
             await dismiss();
             await this.resolveQuestion(
                 telegram,
@@ -3471,8 +3487,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             );
             return;
         }
-        const picked = ctx.picks[qIdx] || [];
-        ctx.picks[qIdx] = picked.includes(option.label) ? picked.filter((l) => l !== option.label) : [...picked, option.label];
+        if (!item.multiple) {
+            ctx.picks[qIdx] = [option.label];
+        } else {
+            const picked = ctx.picks[qIdx] || [];
+            ctx.picks[qIdx] = picked.includes(option.label) ? picked.filter((l) => l !== option.label) : [...picked, option.label];
+        }
         await dismiss();
         if (Date.now() < this.rateLimitedUntil) return;
         try {
