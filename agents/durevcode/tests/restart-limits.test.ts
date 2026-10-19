@@ -207,6 +207,20 @@ describe('restart keeps deleted sessions skipped (persistent tombstones)', () =>
     });
 });
 
+describe('state persistence survives a kill mid-write', () => {
+    test('the save is atomic: no temp file left, the json always parses whole', () => {
+        const agent = makeAgent();
+        internals(agent).persisted['ses_core'] = { threadId: 902, contextMessageId: null, pinnedThreadId: null, lastSeen: now };
+        internals(agent).savePersisted();
+        const path = internals(agent).config.durevcode.statePath;
+        const body = JSON.parse(readFileSync(path, 'utf8'));
+        assert.ok(body.sessions['ses_core'], 'the rewritten state parses and keeps its bindings');
+        assert.ok(body.topics !== undefined, 'the tag map section is present');
+        const leftovers = readdirSync(dirname(path)).filter((f) => f.includes('.tmp'));
+        assert.equal(leftovers.length, 0, 'an atomic save leaves no temporary file behind');
+    });
+});
+
 describe('the session limit is hard (3 by default)', () => {
     test('watched set above the limit is evicted down to the limit, oldest activity first', () => {
         const agent = makeAgent();

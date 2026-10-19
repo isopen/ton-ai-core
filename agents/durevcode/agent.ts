@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton } from '@ton-ai/telegram-bot-api';
@@ -248,6 +248,12 @@ function deliverySignature(text: string): string {
         hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
     }
     return `${text.length}:${hash}`;
+}
+
+function writeAtomic(path: string, data: string | Buffer): void {
+    const tmp = `${path}.tmp${process.pid}`;
+    writeFileSync(tmp, data);
+    renameSync(tmp, path);
 }
 
 function optionalPositiveInt(raw: string | undefined, fallback: number): number {
@@ -962,7 +968,7 @@ export class DurevcodeAgent extends BaseAgent {
                 this.topicTags.delete(oldest[0]);
             }
             mkdirSync(dirname(this.config.durevcode.statePath), { recursive: true });
-            writeFileSync(this.config.durevcode.statePath, JSON.stringify({
+            writeAtomic(this.config.durevcode.statePath, JSON.stringify({
                 version: 1,
                 sessions,
                 seenInbound: [...this.seenInbound].slice(-MAX_SEEN_INBOUND),
@@ -2285,7 +2291,7 @@ export class DurevcodeAgent extends BaseAgent {
         const stored = `${state.session.id.slice(0, 12)}_${Date.now()}_${name}`;
         const rel = `${INBOX_DIR}/${stored}`;
         try {
-            writeFileSync(join(dir, stored), buffer);
+            writeAtomic(join(dir, stored), buffer);
         } catch (error) {
             console.debug('Durevcode inbox write failed:', error instanceof Error ? error.message : error);
             await this.safeReply(telegram, state, `${icon('fail')} Could not store the file.`);
