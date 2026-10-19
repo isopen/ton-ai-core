@@ -53,8 +53,7 @@ export class SharedWorkerClient {
                 return;
             }
             if (msg.type === 'streamLog') {
-                log.warn('[stream-worker]', msg.text);
-                try { console.warn('[stream-worker]', msg.text); } catch {}
+                log.info('[stream-worker]', msg.text);
                 return;
             }
             if (msg.type === 'response') {

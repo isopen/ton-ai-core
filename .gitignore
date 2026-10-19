@@ -55,3 +55,8 @@ libtdjson.*
 .tgcloud/
 
 *.o
+
+# Track C wasm JS glue (source), ignore generated wasm binaries
+!plugins/crypton/src/c/wasm/
+!plugins/crypton/src/c/wasm/*
+*.wasm

@@ -4,17 +4,41 @@ import { getLogger } from '@ton-ai/gram-debug';
 
 const log = getLogger('gram-browser');
 
-initWasmCrypton()
-    .then(() => {
-        log.debug('[worker] crypton-rs WASM ' + (isCryptonWasmActive() ? 'ACTIVE' : 'NOT active'));
-        (self as any).__CRYPTON_RS__ = {
-            ...(self as any).__CRYPTON_RS__,
-            stats: getWasmCallStats,
-        };
-    })
-    .catch((e: any) => {
-        log.warn('[worker] crypton-rs WASM init FAILED:', e);
-    });
+const impl = (((process.env as any)?.CRYPTON_IMPL) || 'rust').toLowerCase();
+
+if (impl === 'ts') {
+  log.info('[worker] crypton backend = TypeScript (pure JS) — Telegram crypto via TS');
+} else if (impl === 'c') {
+  log.info('[worker] crypton backend = C (WASM) — Telegram crypto routed through C');
+  initWasmCrypton({ implementation: 'c' })
+      .then(() => {
+          log.info('[worker] C WASM ' + (isCryptonWasmActive() ? 'ACTIVE' : 'NOT active'));
+          (self as any).__CRYPTON_C__ = {
+              ...(self as any).__CRYPTON_C__,
+              stats: getWasmCallStats,
+          };
+          (self as any).__CRYPTON_BACKEND__ = 'c';
+          (self as any).__CRYPTON_WASM__ = { backend: 'c', stats: getWasmCallStats };
+      })
+      .catch((e: any) => {
+          log.warn('[worker] C WASM init FAILED:', e);
+      });
+} else {
+  log.info('[worker] crypton backend = Rust (WASM) — Telegram crypto routed through Rust');
+  initWasmCrypton({ implementation: 'rust' })
+      .then(() => {
+          log.info('[worker] Rust WASM ' + (isCryptonWasmActive() ? 'ACTIVE' : 'NOT active'));
+          (self as any).__CRYPTON_RS__ = {
+              ...(self as any).__CRYPTON_RS__,
+              stats: getWasmCallStats,
+          };
+          (self as any).__CRYPTON_BACKEND__ = 'rust';
+          (self as any).__CRYPTON_WASM__ = { backend: 'rust', stats: getWasmCallStats };
+      })
+      .catch((e: any) => {
+          log.warn('[worker] Rust WASM init FAILED:', e);
+      });
+}
 
 interface PortLike {
     postMessage(msg: any, transfer?: ArrayBuffer[]): void;

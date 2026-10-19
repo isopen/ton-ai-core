@@ -30,9 +30,22 @@ function initApp() {
     });
   } catch {}
 
-  const wasmReady = initWasmCrypton().catch((e: any) => {
-    log.error('[crypton] init failed:', e);
-  });
+  const impl = (((process.env as any)?.CRYPTON_IMPL) || 'rust').toLowerCase();
+
+  let wasmReady: Promise<void> = Promise.resolve();
+  if (impl === 'ts') {
+    log.info('[crypton] backend = TypeScript (pure JS) — Telegram crypto via TS');
+  } else if (impl === 'c') {
+    log.info('[crypton] backend = C (WASM) — Telegram crypto routed through C');
+    wasmReady = initWasmCrypton({ implementation: 'c' }).catch((e: any) => {
+      log.error('[crypton] C WASM init failed:', e);
+    });
+  } else {
+    log.info('[crypton] backend = Rust (WASM) — Telegram crypto routed through Rust');
+    wasmReady = initWasmCrypton({ implementation: 'rust' }).catch((e: any) => {
+      log.error('[crypton] Rust WASM init failed:', e);
+    });
+  }
 
   startFpsLogging();
   (window as any).__wasmReady = wasmReady;

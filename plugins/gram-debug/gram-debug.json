@@ -14,7 +14,7 @@
       "level": "info"
     },
     "telegram": {
-      "enabled": false,
+      "enabled": true,
       "level": "info"
     },
     "tgs": {
@@ -30,8 +30,8 @@
       "level": "debug"
     },
     "gram-browser": {
-      "enabled": false,
-      "level": "debug"
+      "enabled": true,
+      "level": "info"
     },
     "gram-ui": {
       "enabled": false,
@@ -106,8 +106,8 @@
       "level": "info"
     },
     "crypton": {
-      "enabled": false,
-      "level": "debug"
+      "enabled": true,
+      "level": "info"
     },
     "gram-ui:tmd": {
       "enabled": true,
