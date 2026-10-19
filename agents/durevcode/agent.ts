@@ -389,6 +389,7 @@ export interface PersistedSession {
     pinnedThreadId: number | null;
     lastSeen: number;
     appliedTopicName?: string;
+    userNamed?: boolean;
     buildMode?: boolean;
     knownParts?: Record<string, number>;
     knownEventSig?: Record<string, string>;
@@ -429,6 +430,7 @@ interface WatchedSession {
     pinnedThreadId: number | null;
     threadId: number | null;
     appliedTopicName: string | null;
+    userNamed: boolean;
     buildMode: boolean;
     knownParts: Map<string, number>;
     seenPartKeys: Set<string>;
@@ -798,6 +800,7 @@ export class DurevcodeAgent extends BaseAgent {
                     ...(typeof record.appliedTopicName === 'string' && record.appliedTopicName.length > 0
                         ? { appliedTopicName: record.appliedTopicName.slice(0, 200) }
                         : {}),
+                    ...(record.userNamed === true ? { userNamed: true } : {}),
                     ...(cursor ? { knownParts: cursor } : {}),
                     ...(sigs ? { knownEventSig: sigs } : {}),
                     ...(Array.isArray(record.knownPerms)
@@ -844,6 +847,7 @@ export class DurevcodeAgent extends BaseAgent {
                     pinnedThreadId: state.pinnedThreadId,
                     lastSeen: Date.now(),
                     ...(state.appliedTopicName ? { appliedTopicName: state.appliedTopicName } : {}),
+                    ...(state.userNamed ? { userNamed: true } : {}),
                     ...(state.buildMode ? {} : { buildMode: false }),
                     ...(cursor.length > 0 ? { knownParts: Object.fromEntries(cursor) } : {}),
                     ...(sigCursor.length > 0 ? { knownEventSig: Object.fromEntries(sigCursor) } : {}),
@@ -976,7 +980,7 @@ export class DurevcodeAgent extends BaseAgent {
         return null;
     }
 
-    private persistThreadBinding(sessionId: string, threadId: number): void {
+    private persistThreadBinding(sessionId: string, threadId: number, userNamed?: boolean): void {
         const existing = this.persisted[sessionId];
         this.persisted[sessionId] = {
             threadId,
@@ -984,6 +988,7 @@ export class DurevcodeAgent extends BaseAgent {
             pinnedThreadId: existing?.pinnedThreadId ?? null,
             lastSeen: Date.now(),
             ...(existing?.appliedTopicName !== undefined ? { appliedTopicName: existing.appliedTopicName } : {}),
+            ...(userNamed !== undefined ? { userNamed } : existing?.userNamed === true ? { userNamed: true } : {}),
             ...(existing?.buildMode !== undefined ? { buildMode: existing.buildMode } : {}),
             ...(existing?.knownParts !== undefined ? { knownParts: existing.knownParts } : {}),
             ...(existing?.knownEventSig !== undefined ? { knownEventSig: existing.knownEventSig } : {}),
@@ -1174,6 +1179,7 @@ export class DurevcodeAgent extends BaseAgent {
             pinnedThreadId: stored?.pinnedThreadId ?? null,
             threadId: this.threadsEnabled ? (stored?.threadId ?? null) : null,
             appliedTopicName: null,
+            userNamed: stored?.userNamed ?? false,
             buildMode: stored?.buildMode ?? true,
             knownParts: new Map(),
             seenPartKeys: new Set(),
@@ -1260,10 +1266,16 @@ export class DurevcodeAgent extends BaseAgent {
             const reused = hadThread && stored?.threadId === state.threadId ? stored?.appliedTopicName : undefined;
             if (typeof reused === 'string' && reused.length > 0) {
                 state.appliedTopicName = reused;
-            } else if (hadThread) {
+                state.userNamed = stored?.userNamed ?? false;
+            } else if (hadThread && stored?.threadId === state.threadId) {
                 state.appliedTopicName = null;
+                state.userNamed = stored?.userNamed ?? false;
+            } else if (existingThreadId !== undefined) {
+                state.appliedTopicName = null;
+                state.userNamed = true;
             } else {
                 state.appliedTopicName = formatTopicName(state.session.title, state.session.id);
+                state.userNamed = false;
             }
         }
         if (state.contextMessageId === null || state.pinnedThreadId !== state.threadId) {
@@ -1299,6 +1311,8 @@ export class DurevcodeAgent extends BaseAgent {
             contextMessageId: state.contextMessageId,
             pinnedThreadId: state.pinnedThreadId,
             lastSeen: Date.now(),
+            ...(state.appliedTopicName ? { appliedTopicName: state.appliedTopicName } : {}),
+            ...(state.userNamed ? { userNamed: true } : {}),
             ...(state.knownParts.size > 0
                 ? { knownParts: Object.fromEntries([...state.knownParts.entries()].slice(-PERSISTED_CURSOR_CAP)) }
                 : {}),
@@ -1780,7 +1794,8 @@ export class DurevcodeAgent extends BaseAgent {
                             console.log(`Durevcode rebinds watched session ${existing.id} from topic ${state.threadId} to ${threadId}`);
                         }
                         state.threadId = threadId;
-                        this.persistThreadBinding(existing.id, threadId);
+                        state.userNamed = true;
+                        this.persistThreadBinding(existing.id, threadId, true);
                         this.prunePersistedThreadRivals(existing.id, threadId);
                         this.savePersisted();
                         console.log(`Durevcode restored topic ${threadId} for watched session ${existing.id}`);
@@ -1802,7 +1817,9 @@ export class DurevcodeAgent extends BaseAgent {
             }
             const session = await opencode.createSession(this.config.durevcode.directory);
             const state = await this.attachSession(telegram, session, threadId);
+            state.userNamed = true;
             this.watched.set(session.id, state);
+            this.persistThreadBinding(session.id, threadId, true);
             this.prunePersistedThreadRivals(session.id, threadId);
             this.savePersisted();
             console.log(`Durevcode created session ${session.id} for new topic ${threadId}`);
@@ -3672,22 +3689,26 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const name = (rawName || '').replace(/\s+/g, ' ').trim();
         if (!name) return;
         if (name === state.appliedTopicName) return;
+        state.userNamed = true;
         const title = parseTopicTitle(name, state.session.id);
         let renamed = false;
         try {
             renamed = await opencode.renameSession(state.session.id, title);
         } catch (error) {
             console.debug('Durevcode topic rename failed:', error instanceof Error ? error.message : error);
+            this.savePersisted();
             return;
         }
-        if (!renamed) return;
-        state.session = { ...state.session, title };
-        state.appliedTopicName = formatTopicName(title, state.session.id);
+        if (renamed) {
+            state.session = { ...state.session, title };
+            state.appliedTopicName = name;
+        }
         this.savePersisted();
     }
 
     private async syncTopicName(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         if (!this.threadsEnabled || state.threadId === null) return;
+        if (state.userNamed) return;
         if (Date.now() < this.rateLimitedUntil) return;
         const edit = (telegram as unknown as { editForumTopic?: unknown }).editForumTopic;
         if (typeof edit !== 'function') return;

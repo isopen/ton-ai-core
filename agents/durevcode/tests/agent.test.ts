@@ -910,6 +910,100 @@ describe('durevcode forum control', () => {
         assert.equal((state as unknown as { session: typeof SESSION }).session.title, 'Demo');
     });
 
+    test('manual topic rename pins the name against automated renames', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const edits: Array<Record<string, unknown>> = [];
+        (telegram as unknown as Record<string, unknown>).editForumTopic = async (params: Record<string, unknown>) => {
+            edits.push(params);
+            return true;
+        };
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram) as unknown as { session: typeof SESSION; threadId: number | null };
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 715, text: '', forum_topic_edited: { name: 'Моя тема' } }, now),
+        );
+        assert.deepEqual(fake.renames, [{ sessionId: 'ses_test01', title: 'Моя тема' }]);
+        assert.deepEqual(edits, [], 'the user rename itself must not trigger a topic rewrite');
+        assert.equal((state as unknown as { userNamed: boolean }).userNamed, true);
+        state.session = { ...SESSION, title: 'Auto retitle by opencode' };
+        const live = {
+            getSession: async () => state.session,
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => live;
+        await agent.updateSession(telegram, state);
+        assert.deepEqual(edits, [], 'a user-owned topic name must not be stomped by tick renames');
+        assert.equal((state as unknown as { session: { title: string } }).session.title, 'Auto retitle by opencode');
+    });
+
+    test('failed topic rename still pins the user-owned name', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const edits: Array<Record<string, unknown>> = [];
+        (telegram as unknown as Record<string, unknown>).editForumTopic = async (params: Record<string, unknown>) => {
+            edits.push(params);
+            return true;
+        };
+        const fake = stubOpencode();
+        fake.setRenameImpl(async () => false);
+        const state = await attachWatched(agent, telegram) as unknown as { session: typeof SESSION };
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 716, text: '', forum_topic_edited: { name: 'Lost rename' } }, now),
+        );
+        assert.equal((state as unknown as { userNamed: boolean }).userNamed, true);
+        assert.equal((state as unknown as { session: { title: string } }).session.title, 'Demo');
+        state.session = { ...SESSION, title: 'Automated title' };
+        const live = {
+            getSession: async () => state.session,
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => live;
+        await agent.updateSession(telegram, state);
+        assert.deepEqual(edits, [], 'the pinned topic name must survive even if the session rename failed');
+    });
+
+    test('fresh session in a hand-made topic keeps the user name', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const edits: Array<Record<string, unknown>> = [];
+        (telegram as unknown as Record<string, unknown>).editForumTopic = async (params: Record<string, unknown>) => {
+            edits.push(params);
+            return true;
+        };
+        const fake = stubOpencode();
+        fake.setCreateImpl(async () => ({ ...SESSION, id: 'ses_handmade', title: 'New session - 2026' }));
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 720, message_thread_id: 555, text: 'do it' }, now),
+        );
+        const handState = (agent as unknown as { watched: Map<string, { userNamed: boolean; session: typeof SESSION }> }).watched.get('ses_handmade');
+        assert.equal(handState?.userNamed, true);
+        assert.deepEqual(edits, [], 'an adopted hand-made topic must not be renamed at attach');
+        handState.session = { ...SESSION, id: 'ses_handmade', title: 'First prompt retitled me' };
+        const live = {
+            getSession: async () => handState.session,
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = () => live;
+        await agent.updateSession(telegram, handState as unknown as never);
+        assert.deepEqual(edits, [], 'the hand-made topic name must survive ticks');
+    });
+
     test('pump sends queued prompt silently', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
