@@ -3,7 +3,7 @@ import { AES256ECB } from './aes-256-ecb';
 import { isWasmAvailable, wasmAes256CtrProcess } from '../../wasm-adapter';
 
 function must<T>(v: T | null, what: string): T {
-  if (v === null || v === undefined) throw new Error(`crypton-rs ${what} unavailable`);
+  if (v === null || v === undefined) throw new Error(`crypton ${what} unavailable`);
   return v;
 }
 

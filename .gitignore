@@ -53,3 +53,5 @@ libtdjson.*
 
 # tgcloud CLI state (access tokens)
 .tgcloud/
+
+*.o

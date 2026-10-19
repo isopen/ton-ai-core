@@ -36,12 +36,17 @@ export class MTProtoCryptoPlugin extends BasePlugin<MTCryptoConfig> {
     protected async onInit() {
         this.logger.info('Initializing MTProto Crypto plugin...');
         const { initWasmCrypton, isCryptonWasmActive } = await import('@ton-ai/crypton');
-        if (process.env.CRYPTON_WASM === '0') {
-            this.logger.info('crypton-rs WASM disabled by CRYPTON_WASM=0 — using pure JS crypto');
+        const impl = (process.env.CRYPTON_IMPL || (process.env.CRYPTON_WASM === '0' ? 'ts' : 'rust')).toLowerCase();
+        if (impl === 'ts') {
+            this.logger.info('crypton backend = TypeScript (pure JS) — MTProto crypto via TS');
+        } else if (impl === 'c') {
+            this.logger.info('crypton backend = C (WASM) — MTProto crypto routed through C');
+            await initWasmCrypton({ implementation: 'c' });
         } else {
-            await initWasmCrypton();
+            this.logger.info('crypton backend = Rust (WASM) — MTProto crypto routed through Rust');
+            await initWasmCrypton({ implementation: 'rust' });
         }
-        this.logger.info(`crypton-rs WASM ${isCryptonWasmActive() ? 'active — MTProto crypto routed through Rust' : 'NOT active — falling back to JS crypto'}`);
+        this.logger.info(`crypton ${isCryptonWasmActive() ? 'WASM ACTIVE' : 'WASM NOT active — falling back to JS crypto'} (backend=${impl})`);
         if (this.config.publicKeyPems && this.config.publicKeyPems.length > 0) {
             this.publicRsaKey = new DefaultPublicRsaKey(this.config.publicKeyPems);
             this.logger.info(`Loaded ${this.config.publicKeyPems.length} RSA public keys`);

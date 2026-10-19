@@ -2,7 +2,7 @@ import { Buffer } from 'buffer';
 import { isWasmAvailable, wasmAes256EcbEncrypt, wasmAes256EcbDecrypt } from '../../wasm-adapter';
 
 function must<T>(v: T | null, what: string): T {
-  if (v === null || v === undefined) throw new Error(`crypton-rs ${what} unavailable`);
+  if (v === null || v === undefined) throw new Error(`crypton ${what} unavailable`);
   return v;
 }
 

@@ -111,7 +111,7 @@ const INJECTED_IMPLS: ImplSlot[] = [
 let injectedOriginals: unknown[] | null = null;
 
 function must<T>(v: T | null, what: string): T {
-  if (v === null || v === undefined) throw new Error(`crypton-rs ${what} unavailable`);
+  if (v === null || v === undefined) throw new Error(`crypton ${what} unavailable`);
   return v;
 }
 
@@ -155,6 +155,7 @@ function restoreInjectedOriginals(): void {
 export interface InitWasmOptions {
   legacySha1?: boolean;
   wasmBinary?: Uint8Array;
+  implementation?: 'rust' | 'c';
 }
 
 export function initWasmCrypton(options?: InitWasmOptions): Promise<void> {
@@ -168,7 +169,7 @@ export function initWasmCrypton(options?: InitWasmOptions): Promise<void> {
     }
   }
   if (_wasmInitPromise) return _wasmInitPromise;
-  const promise = initWasm(wasmBinary).then(ok => {
+  const promise = initWasm(wasmBinary, options?.implementation ?? 'rust').then(ok => {
     if (!ok) {
       if (_wasmInitPromise === promise) _wasmInitPromise = null;
       return;
@@ -177,13 +178,13 @@ export function initWasmCrypton(options?: InitWasmOptions): Promise<void> {
     _wasmReady = true;
     _wasmLegacySha1 = legacySha1;
     captureInjectedOriginals();
-    applyWasmRouting(legacySha1);
+    applyWasmRouting(legacySha1, options?.implementation ?? 'rust');
   });
   _wasmInitPromise = promise;
   return promise;
 }
 
-function applyWasmRouting(legacySha1: boolean): void {
+function applyWasmRouting(legacySha1: boolean, implementation: 'rust' | 'c' = 'rust'): void {
   const sha1Disabled = !legacySha1;
   const sha1Err = () => new Error('SHA-1 disabled: initWasmCrypton({ legacySha1: false })');
   setRandomBytesImplementation((n: number) => must(wasmGetRandomBytes(n), 'get_random_bytes'));
@@ -193,7 +194,7 @@ function applyWasmRouting(legacySha1: boolean): void {
     must(wasmHmacSha512(key, Buffer.from(data)), 'hmac_sha512'));
   setKdfSha256Implementation(async (data: Buffer) => {
     const out = wasmSha256(data);
-    if (!out) throw new Error('crypton-rs sha256 unavailable');
+    if (!out) throw new Error('crypton sha256 unavailable');
     return Buffer.from(out);
   });
   setKdfSha1Implementation(sha1Disabled
@@ -209,24 +210,26 @@ function applyWasmRouting(legacySha1: boolean): void {
   });
   setIsProbablyPrimeImplementation((n: bigint, k: number): boolean => {
     const r = wasmIsProbablyPrime(n.toString(16), k);
-    if (r === null) throw new Error('crypton-rs is_probably_prime unavailable');
+    if (r === null) throw new Error('crypton is_probably_prime unavailable');
     return r;
   });
 
   if (isWasmLoggingEnabled()) {
-    console.log('[crypton-rs] WASM active — Telegram crypto routed through Rust:', OVERRIDDEN_OPS.join(', '));
+    const backend = implementation === 'c' ? 'C' : 'Rust';
+    console.log(`[crypton-${implementation}] WASM active — Telegram crypto routed through ${backend}:`, OVERRIDDEN_OPS.join(', '));
   } else {
-    console.info('[crypton-rs] WASM active (per-op logs off). Enable: enableWasmLogging(true)');
+    const backend = implementation === 'c' ? 'C' : 'Rust';
+    console.info(`[crypton-${implementation}] WASM active (per-op logs off). Enable: enableWasmLogging(true)`);
   }
 
   const g = globalThis as any;
-  g.__CRYPTON_RS__ = {
-    active: () => _wasmReady,
-    enableLogging: enableWasmLogging,
-    stats: () => getWasmCallStats(),
-    resetStats: resetWasmCallStats,
-    ops: OVERRIDDEN_OPS,
-  };
+  if (implementation === 'c') {
+    g.__CRYPTON_C__ = { active: () => _wasmReady, enableLogging: enableWasmLogging, stats: () => getWasmCallStats(), resetStats: resetWasmCallStats, ops: OVERRIDDEN_OPS };
+  } else {
+    g.__CRYPTON_RS__ = { active: () => _wasmReady, enableLogging: enableWasmLogging, stats: () => getWasmCallStats(), resetStats: resetWasmCallStats, ops: OVERRIDDEN_OPS };
+  }
+  g.__CRYPTON_BACKEND__ = implementation;
+  g.__CRYPTON_WASM__ = { backend: implementation, active: () => _wasmReady, enableLogging: enableWasmLogging, stats: () => getWasmCallStats(), resetStats: resetWasmCallStats, ops: OVERRIDDEN_OPS };
 }
 
 export function deinitWasmCrypton(): void {
@@ -238,6 +241,9 @@ export function deinitWasmCrypton(): void {
   deinitWasm();
   const g = globalThis as any;
   if (g.__CRYPTON_RS__) delete g.__CRYPTON_RS__;
+  if (g.__CRYPTON_C__) delete g.__CRYPTON_C__;
+  if (g.__CRYPTON_BACKEND__) delete g.__CRYPTON_BACKEND__;
+  if (g.__CRYPTON_WASM__) delete g.__CRYPTON_WASM__;
 }
 
 export function isCryptonWasmActive(): boolean {

@@ -5,8 +5,8 @@ export function enableWasmLogging(v: boolean) { wlogEnabled = v; }
 export function isWasmLoggingEnabled() { return wlogEnabled; }
 function log(op: string, detail?: string) {
   if (!wlogEnabled) return;
-  if (detail) console.log(`[crypton-rs] ${op} | ${detail}`);
-  else console.log(`[crypton-rs] ${op}`);
+  if (detail) console.log(`[crypton] ${op} | ${detail}`);
+  else console.log(`[crypton] ${op}`);
 }
 
 const wasmCallCounts = new Map<string, number>();
@@ -25,20 +25,22 @@ export function deinitWasm(): void {
   initPromise = null;
 }
 
-let wasmInstance: typeof import('./wasm/crypton_wasm') | null = null;
+let wasmInstance: any = null;
 let initPromise: Promise<boolean> | null = null;
 
 export function isWasmAvailable(): boolean {
   return wasmInstance !== null;
 }
 
-export async function initWasm(wasmBinary?: Uint8Array): Promise<boolean> {
+export async function initWasm(wasmBinary?: Uint8Array, implementation: 'rust' | 'c' = 'rust'): Promise<boolean> {
   if (wasmInstance) return true;
   if (initPromise) return initPromise;
   const gen = generation;
   initPromise = (async () => {
     try {
-      const mod: any = await import('./wasm/crypton_wasm.js');
+      const mod: any = implementation === 'c'
+        ? await import('./c/wasm/crypton_wasm.js')
+        : await import('./rust/wasm/crypton_wasm.js');
       const initFn: any =
         (typeof mod.default === 'function' && mod.default) ||
         (typeof mod.__wbg_init === 'function' && mod.__wbg_init) ||
@@ -58,9 +60,9 @@ export async function initWasm(wasmBinary?: Uint8Array): Promise<boolean> {
       log('init', 'wasm module loaded');
       return true;
     } catch (e) {
-      console.warn('[crypton-rs] init failed:', e);
-      console.warn('[crypton-rs] falling back to the pure-JS backend. WASM artifacts are built by '
-        + '`bash plugins/crypton/src/rust/build.sh` and can be provided to the host via '
+      console.warn('[crypton] init failed:', e);
+      console.warn('[crypton] falling back to the pure-JS backend. WASM artifacts are built by '
+        + '`bash plugins/crypton/src/rust/build.sh` and `bash plugins/crypton/src/c/build.sh` and can be provided to the host via '
         + '`initWasmCrypton({ wasmBinary })`.');
       initPromise = null;
       return false;
@@ -69,7 +71,7 @@ export async function initWasm(wasmBinary?: Uint8Array): Promise<boolean> {
   return initPromise;
 }
 
-function w(): typeof import('./wasm/crypton_wasm') {
+function w(): typeof import('./rust/wasm/crypton_wasm') {
   if (!wasmInstance) throw new Error('crypton WASM not initialized');
   return wasmInstance;
 }

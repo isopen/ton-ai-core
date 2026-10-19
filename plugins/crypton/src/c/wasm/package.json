@@ -1,0 +1,15 @@
+{
+  "name": "crypton-wasm",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "crypton_wasm_bg.wasm",
+    "crypton_wasm.js",
+    "crypton_wasm.d.ts"
+  ],
+  "main": "crypton_wasm.js",
+  "types": "crypton_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
