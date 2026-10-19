@@ -2,7 +2,7 @@ import { strict as assert } from 'assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Message, CallbackQuery } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
-import { DurevcodeAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, serverEventError, DUREVCODE_THREAD_TIMINGS, instantResolveQuestion, questionDoneRow, questionPicksComplete } from '../agent';
+import { DurevcodeAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isThreadClosedError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, serverEventError, DUREVCODE_THREAD_TIMINGS, instantResolveQuestion, questionDoneRow, questionPicksComplete } from '../agent';
 import { EMOJI, formatThinking, splitTelegramHtml, truncate, wellFormed } from '../formatter';
 
 const NOT_MODIFIED =
@@ -251,10 +251,21 @@ describe('durevcode console feed', () => {
 
     test('isThreadGoneError detects missing-thread errors only', () => {
         assert.equal(isThreadGoneError(new Error('Bad Request: message thread not found')), true);
-        assert.equal(isThreadGoneError(new Error('Bad Request: message thread is closed')), true);
+        assert.equal(isThreadGoneError(new Error('Bad Request: TOPIC_DELETED')), true);
+        assert.equal(isThreadGoneError(new Error('Bad Request: TOPIC_CLOSED')), false,
+            'a closed topic still exists; it must not be treated as deleted');
+        assert.equal(isThreadGoneError(new Error('Bad Request: message thread is closed')), false,
+            'a closed topic still exists; it must not be treated as deleted');
         assert.equal(isThreadGoneError(new Error(NOT_MODIFIED)), false);
         assert.equal(isThreadGoneError(new Error('network down')), false);
         assert.equal(isThreadGoneError(null), false);
+    });
+
+    test('isThreadClosedError detects closed-topic errors', () => {
+        assert.equal(isThreadClosedError(new Error('Bad Request: TOPIC_CLOSED')), true);
+        assert.equal(isThreadClosedError(new Error('Bad Request: message thread is closed')), true);
+        assert.equal(isThreadClosedError(new Error('Bad Request: message thread not found')), false);
+        assert.equal(isThreadClosedError(null), false);
     });
 
     test('rate limit helpers detect flood errors', () => {
@@ -571,6 +582,7 @@ describe('durevcode console feed', () => {
         (state as unknown as { promptQueue: string[] }).promptQueue = ['run it'];
         setSendImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
         state.pending = [{ kind: 'text', text: 'after delete', time: now }];
+        (agent as unknown as { goneStrikes: Map<string, number> }).goneStrikes.set(SESSION.id, 1);
         await agent.flushEvents(telegram, state);
         const ops = calls.map((c) => c.op);
         assert.deepEqual(ops, ['create', 'send', 'pin', 'send'], 'a deleted topic must not be recreated');
@@ -1853,6 +1865,7 @@ describe('durevcode typing progress', () => {
         assert.equal(state.threadId, 8);
         (state as unknown as { promptQueue: string[] }).promptQueue = ['run it'];
         setTypingImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
+        (agent as unknown as { goneStrikes: Map<string, number> }).goneStrikes.set(SESSION.id, 1);
         await agent.sendProgressTyping(telegram, state);
         assert.equal(state.threadId, null, 'a deleted topic is not recreated on typing');
         assert.equal(state.lastTypingAt, 0, 'no typing is sent to a deleted topic');
@@ -1888,6 +1901,7 @@ describe('durevcode typing progress', () => {
             };
             agent.watched.set(SESSION.id, state);
             calls.length = 0;
+            (agent as unknown as { goneStrikes: Map<string, number> }).goneStrikes.set(SESSION.id, 1);
             state.contextMessageId = 42;
             (state as unknown as { promptQueue: string[] }).promptQueue = ['run it'];
             state.lastContextEditAt = 0;
@@ -2113,6 +2127,25 @@ describe('durevcode thread binding survival', () => {
         assert.ok(!calls.some((c) => c.op === 'create'));
     });
 
+    test('a transient opencode failure keeps the topic binding and creates nothing', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setGetSessionImpl(async () => {
+            throw new Error('fetch failed');
+        });
+        (agent as unknown as { persisted: Record<string, unknown> }).persisted = {
+            ses_old: { threadId: 999, contextMessageId: 55, pinnedThreadId: 999, lastSeen: now },
+        };
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, text: 'continue' }, now));
+        assert.deepEqual(fake.created, [], 'a transient failure must not create a replacement session');
+        assert.deepEqual(fake.prompts, [], 'the prompt is skipped this round and retried on the next message');
+        const persisted = (agent as unknown as { persisted: Record<string, { threadId: number }> }).persisted;
+        assert.equal(persisted.ses_old?.threadId, 999, 'the binding survives a transient read failure');
+        assert.ok(calls.some((c) => c.op === 'send' && String(c.params.text).includes('Could not create')),
+            'the owner still gets the failure notice in the topic');
+    });
+
     test('command in a rebound topic is dispatched instead of sent as a prompt', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -2139,9 +2172,10 @@ describe('durevcode thread binding survival', () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram } = stubTelegram();
         const fake = stubOpencode();
-        (agent as unknown as { persisted: Record<string, unknown> }).persisted = {
+        (agent as unknown as { persisted: Record<string, unknown>; deadStrikes: Map<string, number> }).persisted = {
             ses_gone: { threadId: 999, contextMessageId: 55, pinnedThreadId: 999, lastSeen: now },
         };
+        (agent as unknown as { deadStrikes: Map<string, number> }).deadStrikes.set('ses_gone', 1);
         await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_thread_id: 999, text: 'build it' }, now));
         assert.deepEqual(fake.created, [{ directory: '/repo' }]);
         const watched = (agent as unknown as { watched: Map<string, { threadId: number | null }> }).watched;
@@ -2703,7 +2737,7 @@ describe('durevcode thread binding survival', () => {
         assert.ok(!calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('ancient')));
     });
 
-    test('session gone in opencode is unwatched with a visible notice after 3 empty reads', async () => {
+    test('session gone in opencode is skipped quietly after 3 empty reads', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
         const state = (await agent.attachSession(telegram, SESSION)) as unknown as { threadId: number | null };
@@ -2724,7 +2758,7 @@ describe('durevcode thread binding survival', () => {
         const notice = calls.find(
             (c) => c.op === 'send' && String((c.params as Record<string, unknown>).text ?? '').includes('gone in opencode'),
         );
-        assert.ok(notice);
+        assert.ok(!notice, 'a deleted session must be skipped without a Telegram notice');
     });
 
     test('topic is renamed when the session title arrives', async () => {
@@ -3043,6 +3077,8 @@ describe('durevcode poll fanout', () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
             getPlugin: (name: string) => unknown;
         };
+        (agent as unknown as { config: { durevcode: { sessionIds?: string[] } } }).config.durevcode.sessionIds =
+            ['ses_lim1', 'ses_lim2', 'ses_lim3', 'ses_lim4'];
         const { telegram } = stubTelegram();
         await attachMany(agent, telegram, ['ses_lim1', 'ses_lim2', 'ses_lim3', 'ses_lim4']);
         let active = 0;
@@ -5538,6 +5574,7 @@ describe('durevcode topic probe', () => {
                 };
         setTypingImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
         now += 10 * 60 * 1000;
+        (agent as unknown as { goneStrikes: Map<string, number> }).goneStrikes.set('ses_probe', 1);
         await agent.pollTick(telegram);
         assert.deepEqual(deleted, ['ses_probe'], 'the poll loop must detect the deleted topic by itself');
         assert.equal(agent.watched.has('ses_probe'), false);
@@ -5563,6 +5600,7 @@ describe('durevcode topic probe', () => {
             return Promise.reject(new Error('Bad Request: message thread not found'));
         });
         now += 10 * 60 * 1000;
+        (agent as unknown as { goneStrikes: Map<string, number> }).goneStrikes.set(SESSION.id, 1);
         await agent.probeWatchedTopics(telegram);
         assert.equal(probes, 1, 'an idle session must still be probed');
         assert.deepEqual(deleted, [SESSION.id], 'a vanished topic deletes the session in real time');
@@ -6263,6 +6301,7 @@ describe('durevcode general isolation', () => {
         calls.length = 0;
         setSendImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
         state.pending = [{ kind: 'text', text: 'after delete', time: now }];
+        (agent as unknown as { goneStrikes: Map<string, number> }).goneStrikes.set('ses_a01', 1);
         await agent.flushEvents(telegram, state as never);
         assert.equal(state.threadId, null);
         assert.deepEqual(deleted, ['ses_a01'], 'the opencode session must be deleted');
@@ -6294,6 +6333,7 @@ describe('durevcode general isolation', () => {
         calls.length = 0;
         setSendImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
         state.pending = [{ kind: 'text', text: 'after delete', time: now }];
+        (agent as unknown as { goneStrikes: Map<string, number> }).goneStrikes.set('ses_a01', 1);
         await agent.flushEvents(telegram, agent.watched.get('ses_a01') as never);
         assert.deepEqual(deleted, ['ses_a01']);
         assert.equal(agent.watched.has('ses_a01'), false);
@@ -6324,6 +6364,7 @@ describe('durevcode general isolation', () => {
         await agent.syncSessions();
         setSendImpl(() => Promise.reject(new Error('Bad Request: message thread not found')));
         const state = agent.watched.get('ses_a01') as { pending: Array<unknown> };
+        (agent as unknown as { goneStrikes: Map<string, number> }).goneStrikes.set('ses_a01', 1);
         state.pending = [{ kind: 'text', text: 'after delete', time: now }];
         await agent.flushEvents(telegram, agent.watched.get('ses_a01') as never);
         assert.deepEqual(deleted, ['ses_a01']);
@@ -6405,6 +6446,10 @@ describe('durevcode general isolation', () => {
             ses_gone: { threadId: 77, contextMessageId: 78, pinnedThreadId: 77, lastSeen: now },
             ses_gone2: { threadId: 79, contextMessageId: 80, pinnedThreadId: 79, lastSeen: now },
         };
+        await agent.syncSessions();
+        assert.equal(agent.persisted.ses_a01 !== undefined, true, 'a live session keeps its binding');
+        assert.ok(agent.persisted.ses_gone, 'a single missed read is not proof: the first sync keeps bindings of vanished sessions');
+        assert.ok(agent.persisted.ses_gone2, 'a single missed read is not proof (second binding)');
         await agent.syncSessions();
         assert.equal(agent.persisted.ses_a01 !== undefined, true, 'a live session keeps its binding');
         assert.equal(agent.persisted.ses_gone, undefined, 'a binding of a vanished session must be pruned');

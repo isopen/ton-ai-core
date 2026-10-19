@@ -68,6 +68,18 @@ export function isSubagentSession(session: SessionRow): boolean {
     return typeof session.parent_id === 'string' && session.parent_id.length > 0;
 }
 
+export function sessionTagOf(sessionId: string): string {
+    return sessionId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'session';
+}
+
+export function tagFromTopicName(name: string): string | null {
+    const cleaned = (name || '').replace(/\s+/g, ' ').trim();
+    const idx = cleaned.lastIndexOf(' · ');
+    if (idx < 0) return null;
+    const tag = cleaned.slice(idx + 3).trim();
+    return /^[A-Za-z0-9]{4,12}$/.test(tag) ? tag : null;
+}
+
 export function rankSessionIds(sessions: SessionRow[], maxSessions: number): string[] {
     return sessions
         .filter((session) => !isSubagentSession(session))
@@ -105,11 +117,13 @@ const THINKING_EDIT_MS = 4000;
 const SLOW_TICK_MS = 3000;
 const SESSION_TICK_BATCH_TIMEOUT_MS = 15000;
 const WORKING_RECENCY_MS = 15000;
+const PROMPT_LAND_GRACE_MS = 90000;
 const STOP_QUIET_MS = 10000;
 const STOP_DEDUP_MS = 10000;
 const CONTEXT_THROTTLE_MS = 15000;
 const TYPING_COOLDOWN_MS = 4000;
 const TYPING_TICK_MS = 4000;
+const TYPING_BUDGET_PER_MIN = 14;
 const LIVE_TOOL_ACTIVE_MS = 5 * 60 * 1000;
 const UPSTREAM_BACKOFF_MAX_MS = 60000;
 const DELIVERY_DEDUP_MS = 45000;
@@ -161,7 +175,11 @@ export const DUREVCODE_THREAD_TIMINGS = {
 };
 const TOMBSTONE_CAP = 200;
 const DEAD_PRUNE_PER_TICK = 3;
+const DEAD_STRIKES = 2;
+const TOPIC_TAG_CAP = 500;
 const TOPIC_PROBE_MS = 5 * 60 * 1000;
+const TOPIC_CLOSED_WARN_MS = 30 * 60 * 1000;
+const TOPIC_GONE_STRIKES = 2;
 const DOC_MAX_BYTES = 512 * 1024;
 const DOC_MAX_CHARS = 20000;
 const MEDIA_MAX_BYTES = 20 * 1024 * 1024;
@@ -192,9 +210,15 @@ export function isMessageNotModifiedError(error: unknown): boolean {
     return error instanceof Error && error.message.includes('message is not modified');
 }
 
+export function isThreadClosedError(error: unknown): boolean {
+    return error instanceof Error && /TOPIC_CLOSED|topic closed|thread is closed/i.test(error.message);
+}
+
 export function isThreadGoneError(error: unknown): boolean {
+    if (isThreadClosedError(error)) return false;
     return (
-        error instanceof Error && /message thread (not found|does not exist|is closed|deleted|invalid)/i.test(error.message)
+        error instanceof Error &&
+        /message thread (not found|does not exist|deleted|invalid)|TOPIC_DELETED|TOPIC_ID_INVALID|thread deleted/i.test(error.message)
     );
 }
 
@@ -394,6 +418,7 @@ export interface PersistedSession {
     knownParts?: Record<string, number>;
     knownEventSig?: Record<string, string>;
     knownPerms?: string[];
+    stopMessageId?: number;
 }
 
 const PERSISTED_TTL_MS = 30 * 24 * 3600 * 1000;
@@ -443,6 +468,7 @@ interface WatchedSession {
     files: string[];
     startedAt: number;
     lastEventAt: number;
+    lastPromptAt: number;
     lastContextRendered: string;
     lastContextEditAt: number;
     lastEventMessageAt: number;
@@ -540,12 +566,17 @@ export class DurevcodeAgent extends BaseAgent {
 
     private watched = new Map<string, WatchedSession>();
     private persisted: Record<string, PersistedSession> = {};
+    private topicTags = new Map<string, { sessionId: string; threadId: number; at: number }>();
     private tombstonedSessions = new Map<string, number>();
+    private deadStrikes = new Map<string, number>();
+    private closedWarnedAt = new Map<number, number>();
+    private goneStrikes = new Map<string, number>();
     private topicProbedAt = new Map<string, number>();
     private lastSessionAgents = new Map<string, string>();
     private pollTimer: NodeJS.Timeout | null = null;
     private typingTimer: NodeJS.Timeout | null = null;
     private typingTickBusy: boolean = false;
+    private typingStamps: number[] = [];
     private upstreamFailures: number = 0;
     private upstreamBackoffUntil: number = 0;
     private threadsEnabled: boolean = true;
@@ -555,6 +586,7 @@ export class DurevcodeAgent extends BaseAgent {
     private pollInFlight: boolean = false;
     private inboundSub: string | null = null;
     private callbackSub: string | null = null;
+    private inboundChain: Promise<void> = Promise.resolve();
     private eventUnsub: (() => void) | null = null;
     private sessionTicks = new Set<string>();
     private permReplies = new Map<number, PermissionReply>();
@@ -615,7 +647,9 @@ export class DurevcodeAgent extends BaseAgent {
         this.inboundSub = telegram.onMessage((message) => {
             const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
             if (!opencode) return;
-            void this.handleInbound(telegram, opencode, message).catch((error) => console.error('Durevcode inbound failed:', error));
+            this.inboundChain = this.inboundChain
+                .then(() => this.handleInbound(telegram, opencode, message))
+                .catch((error) => console.error('Durevcode inbound failed:', error));
         });
         this.callbackSub = telegram.onCallbackQuery((query) => {
             const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
@@ -645,9 +679,8 @@ export class DurevcodeAgent extends BaseAgent {
         await this.pollTick();
 
         const maxSessions = this.config.durevcode.maxSessions;
-        const extra = Math.max(0, this.watched.size - maxSessions);
         console.log(
-            `Durevcode watching ${this.watched.size} session(s) (auto-pick ${maxSessions}${extra > 0 ? `, ${extra} kept active/rebound above the pick limit` : ''})`,
+            `Durevcode watching ${this.watched.size} session(s) (limit ${maxSessions}; deleted sessions are skipped).`,
         );
     }
 
@@ -810,7 +843,49 @@ export class DurevcodeAgent extends BaseAgent {
                                 .slice(-PERSISTED_CURSOR_CAP),
                         }
                         : {}),
+                    ...(typeof record.stopMessageId === 'number' && Number.isFinite(record.stopMessageId)
+                        ? { stopMessageId: record.stopMessageId }
+                        : {}),
                 };
+                if (threadId !== null && !this.tombstonedSessions.has(id)) {
+                    this.topicTags.set(sessionTagOf(id), { sessionId: id, threadId, at: typeof record.lastSeen === 'number' ? record.lastSeen : 0 });
+                }
+            }
+            const rawTombstones = (parsed as Record<string, unknown>).tombstones;
+            if (rawTombstones && typeof rawTombstones === 'object' && !Array.isArray(rawTombstones)) {
+                for (const [id, markedAt] of Object.entries(rawTombstones as Record<string, unknown>)) {
+                    if (typeof markedAt !== 'number' || !Number.isFinite(markedAt)) continue;
+                    this.tombstonedSessions.set(id, markedAt);
+                }
+                while (this.tombstonedSessions.size > TOMBSTONE_CAP) {
+                    const oldest = this.tombstonedSessions.keys().next();
+                    if (oldest.done === true) break;
+                    this.tombstonedSessions.delete(oldest.value);
+                }
+            }
+            const rawTopics = (parsed as Record<string, unknown>).topics;
+            if (rawTopics && typeof rawTopics === 'object' && !Array.isArray(rawTopics)) {
+                for (const [tag, entry] of Object.entries(rawTopics as Record<string, unknown>)) {
+                    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+                    const record = entry as Record<string, unknown>;
+                    if (
+                        typeof record.sessionId !== 'string' || record.sessionId.length === 0 ||
+                        typeof record.threadId !== 'number' || !Number.isFinite(record.threadId)
+                    ) continue;
+                    this.topicTags.set(tag, {
+                        sessionId: record.sessionId,
+                        threadId: record.threadId,
+                        at: typeof record.at === 'number' && Number.isFinite(record.at) ? record.at : 0,
+                    });
+                }
+                while (this.topicTags.size > TOPIC_TAG_CAP) {
+                    const oldest = [...this.topicTags.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+                    if (!oldest) break;
+                    this.topicTags.delete(oldest[0]);
+                }
+            }
+            for (const [tag, entry] of [...this.topicTags]) {
+                if (this.tombstonedSessions.has(entry.sessionId)) this.topicTags.delete(tag);
             }
             const winnerByThread = new Map<number, string>();
             for (const [id, entry] of Object.entries(this.persisted)) {
@@ -824,6 +899,10 @@ export class DurevcodeAgent extends BaseAgent {
                 } else {
                     delete this.persisted[id];
                 }
+            }
+            for (const [tag, entry] of [...this.topicTags]) {
+                const owner = winnerByThread.get(entry.threadId);
+                if (owner !== undefined && owner !== entry.sessionId) this.topicTags.delete(tag);
             }
         } catch (error) {
             console.debug('Durevcode state load failed, starting fresh:', error);
@@ -852,7 +931,21 @@ export class DurevcodeAgent extends BaseAgent {
                     ...(cursor.length > 0 ? { knownParts: Object.fromEntries(cursor) } : {}),
                     ...(sigCursor.length > 0 ? { knownEventSig: Object.fromEntries(sigCursor) } : {}),
                     ...(state.knownPerms.length > 0 ? { knownPerms: state.knownPerms } : {}),
+                    ...(state.stopMessageId !== null ? { stopMessageId: state.stopMessageId } : {}),
                 };
+            }
+            const now = Date.now();
+            for (const [id, entry] of Object.entries(sessions)) {
+                if (entry.threadId === null) continue;
+                const tag = sessionTagOf(id);
+                const existing = this.topicTags.get(tag);
+                if (existing?.sessionId === id && existing.threadId === entry.threadId) continue;
+                this.topicTags.set(tag, { sessionId: id, threadId: entry.threadId, at: now });
+            }
+            while (this.topicTags.size > TOPIC_TAG_CAP) {
+                const oldest = [...this.topicTags.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+                if (!oldest) break;
+                this.topicTags.delete(oldest[0]);
             }
             mkdirSync(dirname(this.config.durevcode.statePath), { recursive: true });
             writeFileSync(this.config.durevcode.statePath, JSON.stringify({
@@ -860,6 +953,8 @@ export class DurevcodeAgent extends BaseAgent {
                 sessions,
                 seenInbound: [...this.seenInbound].slice(-MAX_SEEN_INBOUND),
                 seenCallbacks: [...this.seenCallbacks].slice(-MAX_SEEN_INBOUND),
+                tombstones: Object.fromEntries([...this.tombstonedSessions.entries()].slice(-TOMBSTONE_CAP)),
+                topics: Object.fromEntries([...this.topicTags.entries()]),
             }));
         } catch (error) {
             console.debug('Durevcode state save failed:', error);
@@ -878,7 +973,10 @@ export class DurevcodeAgent extends BaseAgent {
         const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
         if (!opencode) return [];
         const explicit = this.explicitSessionIds();
-        if (explicit.length > 0) return explicit.filter((id) => !this.tombstonedSessions.has(id));
+        if (explicit.length > 0) {
+            this.reapTombstones(explicit);
+            return explicit.filter((id) => !this.tombstonedSessions.has(id));
+        }
         const window = Math.max(AUTO_PICK_WINDOW_MIN, this.config.durevcode.maxSessions * AUTO_PICK_WINDOW_MULT);
         const latest = await opencode.listSessions(this.config.durevcode.directory, window);
         this.reapTombstones(latest.map((entry) => entry.id));
@@ -917,7 +1015,16 @@ export class DurevcodeAgent extends BaseAgent {
         for (const [id] of candidates.slice(0, DEAD_PRUNE_PER_TICK)) {
             try {
                 const session = await opencode.getSession(id);
-                if (session) continue;
+                if (session) {
+                    this.deadStrikes.delete(id);
+                    continue;
+                }
+                const strikes = (this.deadStrikes.get(id) ?? 0) + 1;
+                if (strikes < DEAD_STRIKES) {
+                    this.deadStrikes.set(id, strikes);
+                    continue;
+                }
+                this.deadStrikes.delete(id);
                 delete this.persisted[id];
                 this.dropSessionRefs(id);
                 pruned += 1;
@@ -941,6 +1048,17 @@ export class DurevcodeAgent extends BaseAgent {
         if (state.threadId !== null) return state.threadId;
         if (!this.threadsEnabled) return null;
         if (Date.now() < (this.threadRetryAt.get(state.session.id) ?? 0)) return null;
+        const tag = sessionTagOf(state.session.id);
+        const known = this.topicTags.get(tag);
+        if (known && known.sessionId === state.session.id && !this.tombstonedSessions.has(state.session.id)) {
+            state.threadId = known.threadId;
+            this.persistThreadBinding(state.session.id, known.threadId);
+            console.log(
+                `Durevcode reused existing topic ${known.threadId} for session ${state.session.id} ` +
+                    `(binding was lost, tag ${tag}).`,
+            );
+            return state.threadId;
+        }
         const attempted: Array<{ icon: boolean; error: unknown }> = [];
         for (const withIcon of [true, false]) {
             try {
@@ -981,6 +1099,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private persistThreadBinding(sessionId: string, threadId: number, userNamed?: boolean): void {
+        this.deadStrikes.delete(sessionId);
         const existing = this.persisted[sessionId];
         this.persisted[sessionId] = {
             threadId,
@@ -993,6 +1112,7 @@ export class DurevcodeAgent extends BaseAgent {
             ...(existing?.knownParts !== undefined ? { knownParts: existing.knownParts } : {}),
             ...(existing?.knownEventSig !== undefined ? { knownEventSig: existing.knownEventSig } : {}),
             ...(existing?.knownPerms !== undefined ? { knownPerms: existing.knownPerms } : {}),
+            ...(existing?.stopMessageId !== undefined ? { stopMessageId: existing.stopMessageId } : {}),
         };
         this.savePersisted();
     }
@@ -1031,6 +1151,7 @@ export class DurevcodeAgent extends BaseAgent {
                     parse_mode: 'HTML',
                     ...(withMarkup && markup ? { reply_markup: markup } : {}),
                 });
+                this.goneStrikes.delete(state.session.id);
                 return message.message_id;
             } catch (error) {
                 if (isRateLimitError(error)) {
@@ -1040,9 +1161,19 @@ export class DurevcodeAgent extends BaseAgent {
                         Date.now() + waitSec * 1000 + 1000,
                     );
                 }
+                if (isThreadClosedError(error)) {
+                    const thread = state.threadId ?? 0;
+                    const last = this.closedWarnedAt.get(thread) ?? 0;
+                    if (Date.now() - last > TOPIC_CLOSED_WARN_MS) {
+                        this.closedWarnedAt.set(thread, Date.now());
+                        console.warn(
+                            `Durevcode topic ${thread} is closed; session ${state.session.id} kept. ` +
+                                `Reopen the topic to resume.`,
+                        );
+                    }
+                }
                 if (state.threadId !== null && isThreadGoneError(error)) {
-                    await this.onTopicGone(telegram, state);
-                    throw new Error('Durevcode topic gone, session deleted');
+                    await this.markTopicGoneSuspect(telegram, state);
                 }
                 throw error;
             }
@@ -1192,6 +1323,7 @@ export class DurevcodeAgent extends BaseAgent {
             files: [],
             startedAt: Date.now(),
             lastEventAt: 0,
+            lastPromptAt: 0,
             lastContextRendered: '',
             lastContextEditAt: 0,
             lastEventMessageAt: 0,
@@ -1214,7 +1346,7 @@ export class DurevcodeAgent extends BaseAgent {
             promptPumping: false,
             cliRun: null,
             stopButtonOn: false,
-            stopMessageId: null,
+            stopMessageId: stored?.stopMessageId ?? null,
             stopControlSending: false,
             pinSending: false,
             stopControlText: null,
@@ -1250,6 +1382,7 @@ export class DurevcodeAgent extends BaseAgent {
             state.threadId = this.threadsEnabled ? existingThreadId : null;
         }
         await this.ensureThreadId(telegram, state);
+        if (state.threadId !== null) this.topicProbedAt.set(session.id, Date.now());
         const storedCursor = stored?.knownParts;
         if (storedCursor) {
             for (const [key, time] of Object.entries(storedCursor)) state.knownParts.set(key, time);
@@ -1319,6 +1452,7 @@ export class DurevcodeAgent extends BaseAgent {
             ...(state.knownEventSig.size > 0
                 ? { knownEventSig: Object.fromEntries([...state.knownEventSig.entries()].slice(-PERSISTED_CURSOR_CAP)) }
                 : {}),
+            ...(state.stopMessageId !== null ? { stopMessageId: state.stopMessageId } : {}),
         };
         this.savePersisted();
         console.log(`Durevcode attached session ${session.id} (${session.title.slice(0, 60)})`);
@@ -1427,22 +1561,55 @@ export class DurevcodeAgent extends BaseAgent {
             this.dropSessionRefs(id);
             console.log(`Durevcode detached session ${id} (out of auto-pick window)`);
         }
-        const cap = Math.max(10, this.config.durevcode.maxSessions * 2);
-        if (this.watched.size > cap) {
-            const byAge = [...this.watched.entries()].sort((a, b) => {
-                const aThreadless = a[1].threadId === null ? 0 : 1;
-                const bThreadless = b[1].threadId === null ? 0 : 1;
-                if (aThreadless !== bThreadless) return aThreadless - bThreadless;
-                if (a[1].finalized !== b[1].finalized) return a[1].finalized ? -1 : 1;
-                return a[1].lastEventAt - b[1].lastEventAt;
+        this.evictWatchedOverflow(seen);
+    }
+
+    private evictWatchedOverflow(seen: Set<string>): void {
+        const limit = Math.max(0, this.config.durevcode.maxSessions);
+        if (limit === 0 || this.watched.size <= limit) return;
+        if (this.explicitSessionIds().length > 0) return;
+        const now = Date.now();
+        const busyInteractive = (state: WatchedSession): boolean =>
+            state.promptQueue.length > 0 ||
+            state.cliRun !== null ||
+            state.confirming !== null ||
+            state.stopping ||
+            state.knownPerms.length > 0 ||
+            state.knownQuestions.length > 0 ||
+            (state.lastEventAt !== 0 && now - state.lastEventAt < WORKING_RECENCY_MS) ||
+            (state.lastPromptAt !== 0 && now - state.lastPromptAt < PROMPT_LAND_GRACE_MS) ||
+            (state.lastEventAt === 0 && state.lastPromptAt === 0 && now - state.startedAt < PROMPT_LAND_GRACE_MS);
+        const rank = (state: WatchedSession): number[] => [
+            state.finalized ? 0 : 1,
+            isStaleEmptyWatch(state, now) ? 0 : 1,
+            state.threadId === null ? 0 : 1,
+            state.lastEventAt || state.startedAt,
+        ];
+        const over = this.watched.size - limit;
+        const candidates = [...this.watched.entries()]
+            .filter(([id, state]) => !seen.has(id) && !this.sessionTicks.has(id) && !busyInteractive(state))
+            .sort((a, b) => {
+                const ra = rank(a[1]);
+                const rb = rank(b[1]);
+                for (let i = 0; i < ra.length; i += 1) {
+                    if (ra[i] !== rb[i]) return ra[i] - rb[i];
+                }
+                return a[0].localeCompare(b[0]);
             });
-            for (const [id] of byAge.slice(0, this.watched.size - cap)) {
-                if (this.sessionTicks.has(id)) continue;
-                this.watched.delete(id);
-                this.dropSessionRefs(id);
-                console.warn(`Durevcode evicted session ${id} (watched cap ${cap} exceeded)`);
-            }
+        let evicted = 0;
+        for (const [id] of candidates) {
+            if (over - evicted <= 0) break;
+            this.watched.delete(id);
+            this.dropSessionRefs(id);
+            evicted += 1;
+            console.log(`Durevcode evicted session ${id} (watch limit ${limit})`);
+        }
+        if (evicted > 0) {
             this.savePersisted();
+            console.warn(
+                `Durevcode evicted ${evicted} watched session(s) above the limit ` +
+                    `(${this.watched.size}/${limit} watched now).`,
+            );
         }
     }
 
@@ -1504,6 +1671,17 @@ export class DurevcodeAgent extends BaseAgent {
         return null;
     }
 
+    private findRecoveredSessionIdByThread(threadId: number): string | null {
+        for (const entry of this.topicTags.values()) {
+            if (entry.threadId !== threadId) continue;
+            if (this.tombstonedSessions.has(entry.sessionId)) continue;
+            const bound = this.persisted[entry.sessionId]?.threadId ?? null;
+            if (bound !== null && bound !== threadId) continue;
+            return entry.sessionId;
+        }
+        return null;
+    }
+
     private dropSessionRefs(sessionId: string): void {
         for (const [messageId, ref] of this.permReplies) {
             if (ref.sessionId === sessionId) this.permReplies.delete(messageId);
@@ -1538,6 +1716,24 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
+    private async markTopicGoneSuspect(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+    ): Promise<void> {
+        const key = state.session.id;
+        const strikes = (this.goneStrikes.get(key) ?? 0) + 1;
+        if (strikes < TOPIC_GONE_STRIKES) {
+            this.goneStrikes.set(key, strikes);
+            console.warn(
+                `Durevcode topic ${state.threadId} looks gone for session ${key} ` +
+                    `(strike ${strikes}/${TOPIC_GONE_STRIKES}); waiting for another signal.`,
+            );
+            return;
+        }
+        this.goneStrikes.delete(key);
+        await this.onTopicGone(telegram, state);
+    }
+
     private async onTopicGone(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         const sessionId = state.session.id;
         const threadId = state.threadId;
@@ -1552,11 +1748,26 @@ export class DurevcodeAgent extends BaseAgent {
         state.pendingKeys.clear();
         state.pendingTodos = false;
         const outcome = await this.dropSessionEverywhere(state);
+        if (threadId !== null) {
+            this.closedWarnedAt.delete(threadId);
+            for (const [tag, entry] of [...this.topicTags]) {
+                if (entry.threadId === threadId || entry.sessionId === sessionId) this.topicTags.delete(tag);
+            }
+        }
+        if (outcome === 'failed' || outcome === 'no-deleteSession') {
+            this.tombstonedSessions.delete(sessionId);
+            if (threadId !== null) {
+                this.persistThreadBinding(sessionId, threadId);
+                const tag = sessionTagOf(sessionId);
+                this.topicTags.set(tag, { sessionId, threadId, at: Date.now() });
+            }
+        }
         this.savePersisted();
         console.warn(
             `Durevcode topic gone (chat=${this.config.durevcode.chatId} thread=${threadId} session=${sessionId}): ` +
-                `opencode session ${outcome}; no notice was sent because the topic is gone ` +
-                `and posting into General is not allowed. Write in a fresh topic to start a new session.`,
+                `opencode session ${outcome}${outcome === 'failed' ? '; binding and topic link kept for reuse' : ''}. ` +
+                `No notice was sent because the topic is gone and posting into General is not allowed. ` +
+                `Write in a fresh topic to start a new session.`,
         );
     }
 
@@ -1584,6 +1795,9 @@ export class DurevcodeAgent extends BaseAgent {
         this.dropSessionRefs(loserId);
         const loserEntry = this.persisted[loserId];
         if (loserEntry) loserEntry.threadId = null;
+        const loserTag = sessionTagOf(loserId);
+        const loserTagEntry = this.topicTags.get(loserTag);
+        if (loserTagEntry?.sessionId === loserId) this.topicTags.delete(loserTag);
         this.savePersisted();
         console.warn(
             `Durevcode resolved duplicate binding for topic ${state.threadId}: ` +
@@ -1763,9 +1977,24 @@ export class DurevcodeAgent extends BaseAgent {
                     existing = await opencode.getSession(reboundId);
                 } catch (error) {
                     console.debug('Durevcode rebind read failed:', error instanceof Error ? error.message : error);
+                    throw error;
                 }
                 if (!existing) {
+                    const strikes = (this.deadStrikes.get(reboundId) ?? 0) + 1;
+                    if (strikes < DEAD_STRIKES) {
+                        this.deadStrikes.set(reboundId, strikes);
+                        console.warn(
+                            `Durevcode session ${reboundId} unreadable for topic ${threadId} ` +
+                                `(strike ${strikes}/${DEAD_STRIKES}); keeping the binding, retry on the next message.`,
+                        );
+                        return;
+                    }
+                    this.deadStrikes.delete(reboundId);
                     delete this.persisted[reboundId];
+                    this.markTombstoned(reboundId);
+                    for (const [tag, entry] of [...this.topicTags]) {
+                        if (entry.sessionId === reboundId) this.topicTags.delete(tag);
+                    }
                     this.savePersisted();
                     console.warn(`Durevcode dropped stale topic binding: session ${reboundId} is gone, thread ${threadId} will get a fresh one`);
                 } else if (!this.watched.has(existing.id)) {
@@ -1800,6 +2029,37 @@ export class DurevcodeAgent extends BaseAgent {
                         this.savePersisted();
                         console.log(`Durevcode restored topic ${threadId} for watched session ${existing.id}`);
                     }
+                    const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
+                    for (const queuedMessage of queued) {
+                        const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
+                        if (hasMediaMessage(queuedMessage)) {
+                            await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
+                        } else if (queuedText) {
+                            const queuedReplyTo = queuedMessage.reply_to_message?.message_id;
+                            if (await this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo)) continue;
+                            this.enqueuePrompt(state, queuedText);
+                        }
+                    }
+                    await this.pumpPrompts(telegram, opencode, state);
+                    return;
+                }
+            }
+            const recoveredId = this.findRecoveredSessionIdByThread(threadId);
+            if (recoveredId) {
+                let recovered: SessionRow | null = null;
+                try {
+                    recovered = await opencode.getSession(recoveredId);
+                } catch (error) {
+                    console.debug('Durevcode topic recovery read failed:', error instanceof Error ? error.message : error);
+                    return;
+                }
+                if (recovered) {
+                    const state = await this.attachSession(telegram, recovered, threadId);
+                    state.userNamed = true;
+                    this.watched.set(recovered.id, state);
+                    this.prunePersistedThreadRivals(recovered.id, threadId);
+                    this.savePersisted();
+                    console.log(`Durevcode recovered session ${recovered.id} for topic ${threadId} (tag map)`);
                     const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
                     for (const queuedMessage of queued) {
                         const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
@@ -2088,6 +2348,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (typeof opencode.spawnRun !== 'function') return false;
         const child = opencode.spawnRun(state.session.id, text);
         state.cliRun = child;
+        state.lastPromptAt = Date.now();
         child.on('exit', (code: unknown) => {
             if (state.cliRun === child) state.cliRun = null;
             if (typeof code === 'number' && code !== 0) {
@@ -2171,6 +2432,7 @@ export class DurevcodeAgent extends BaseAgent {
                 receipt.messageId !== undefined
                     ? { messageId: receipt.messageId, text: head, since: Date.now(), notified: false }
                     : null;
+            state.lastPromptAt = Date.now();
             console.log(`Durevcode prompt sent (session=${state.session.id} thread=${state.threadId}) in ${Date.now() - pumpMark}ms.`);
             await this.ensureStopControl(telegram, state);
             return;
@@ -2889,6 +3151,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             state.lastText = '';
             state.toolCalls = 0;
             state.lastEventAt = 0;
+            state.lastPromptAt = 0;
             await this.disarmSessionQuestions(telegram, state);
             await this.clearThinkingMessage(telegram, state);
             await this.syncStopKeyboard(telegram, state);
@@ -3802,17 +4065,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (state.missingReads >= 3) {
                 console.warn(
                     `Durevcode session ${state.session.id} is gone in opencode ` +
-                        `(thread=${state.threadId}), unwatching after ${state.missingReads} empty reads.`,
+                        `(thread=${state.threadId}), skipping it after ${state.missingReads} empty reads.`,
                 );
-                try {
-                    await this.deliverMessage(
-                        telegram,
-                        state,
-                        `${icon('warn')} Session is gone in opencode, it was unwatched. Write again in this topic to start a fresh session.`,
-                    );
-                } catch (error) {
-                    console.debug('Durevcode gone-session notice failed:', error instanceof Error ? error.message : error);
-                }
+                this.markTombstoned(state.session.id);
                 this.watched.delete(state.session.id);
                 delete this.persisted[state.session.id];
                 this.dropSessionRefs(state.session.id);
@@ -3952,15 +4207,17 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (state.threadId === null) continue;
             if (now - (this.topicProbedAt.get(sessionId) ?? 0) < TOPIC_PROBE_MS) continue;
             this.topicProbedAt.set(sessionId, now);
+            if (!this.consumeTypingBudget()) return;
             try {
                 await telegram.sendChatAction({
                     chat_id: this.config.durevcode.chatId,
                     message_thread_id: state.threadId,
                     action: 'typing',
                 });
+                this.goneStrikes.delete(state.session.id);
             } catch (error) {
                 if (isThreadGoneError(error)) {
-                    await this.onTopicGone(telegram, state);
+                    await this.markTopicGoneSuspect(telegram, state);
                     continue;
                 }
                 if (isRateLimitError(error)) {
@@ -4005,6 +4262,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         return false;
     }
 
+    private consumeTypingBudget(): boolean {
+        const now = Date.now();
+        this.typingStamps = this.typingStamps.filter((at) => now - at < 60_000);
+        if (this.typingStamps.length >= TYPING_BUDGET_PER_MIN) return false;
+        this.typingStamps.push(now);
+        return true;
+    }
+
     private async sendProgressTyping(
         telegram: TelegramBotPlugin,
         state: WatchedSession,
@@ -4014,6 +4279,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (!this.isSessionActive(state)) return;
         if (Date.now() < this.rateLimitedUntil) return;
         if (Date.now() - state.lastTypingAt < TYPING_COOLDOWN_MS) return;
+        if (!this.consumeTypingBudget()) return;
         try {
             await telegram.sendChatAction({
                 chat_id: this.config.durevcode.chatId,
@@ -4021,6 +4287,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 action: 'typing',
             });
             state.lastTypingAt = Date.now();
+            this.goneStrikes.delete(state.session.id);
         } catch (error) {
             if (isRateLimitError(error)) {
                 const waitSec = getRetryAfterSec(error) ?? 10;
@@ -4032,7 +4299,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return;
             }
             if (state.threadId !== null && isThreadGoneError(error)) {
-                await this.onTopicGone(telegram, state);
+                await this.markTopicGoneSuspect(telegram, state);
                 return;
             }
             console.debug('Durevcode typing failed:', error instanceof Error ? error.message : error);
@@ -4126,7 +4393,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return;
             }
             if (state.threadId !== null && isThreadGoneError(error)) {
-                await this.onTopicGone(telegram, state);
+                await this.markTopicGoneSuspect(telegram, state);
                 return;
             }
             state.consecutiveFailures += 1;
