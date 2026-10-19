@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { DurevcodeAgent, isThreadClosedError, isThreadGoneError, sessionTagOf, tagFromTopicName } from '../agent';
+import { DurevcodeAgent, isThreadClosedError, isThreadGoneError, isUserActiveWatch, sessionTagOf, tagFromTopicName } from '../agent';
 
 const SESSION = {
     id: 'ses_test01',
@@ -143,6 +143,7 @@ function baseState(sessionId: string, threadId: number): Record<string, unknown>
         lastEventAt: now,
         startedAt: now,
         lastPromptAt: 0,
+        finalizedAt: 0,
         lastTypingAt: 0,
         promptQueue: [],
         cliRun: null,
@@ -231,7 +232,7 @@ describe('the session limit is hard (3 by default)', () => {
     test('finalized sessions unload first and user-facing sessions are never evicted', () => {
         const agent = makeAgent();
         const watched = internals(agent).watched;
-        const finalized = { ...baseState('ses_finished', 1), finalized: true, lastEventAt: now - 100_000 };
+        const finalized = { ...baseState('ses_finished', 1), finalized: true, finalizedAt: now - 130_000, lastEventAt: now - 100_000 };
         const oldestActive = { ...baseState('ses_active', 2), lastEventAt: now - 90_000 };
         const waitingOnUser = { ...baseState('ses_wait', 3), lastEventAt: now - 80_000, knownPerms: ['perm-1'] };
         const queuedPrompt = { ...baseState('ses_fourth', 4), lastEventAt: now - 70_000, promptQueue: ['finish'] };
@@ -252,6 +253,57 @@ describe('the session limit is hard (3 by default)', () => {
         assert.equal(watched.has('ses_wait'), true, 'a session blocked on a permission is never evicted');
         assert.equal(watched.has('ses_fourth'), true, 'a session with queued prompts is never evicted');
         assert.equal(watched.has('ses_keep'), true);
+    });
+
+    test('a just-finalized conversation keeps its slot (the user reads the answer next)', () => {
+        const agent = makeAgent();
+        const watched = internals(agent).watched;
+        for (const [id, state] of Object.entries({
+            ses_talk: {
+                ...baseState('ses_talk', 1),
+                finalized: true,
+                finalizedAt: now - 30_000,
+                lastPromptAt: 0,
+                lastEventAt: now - 31_000,
+            },
+            ses_b: { ...baseState('ses_b', 2), lastEventAt: now - 200_000, lastPromptAt: 0 },
+            ses_c: { ...baseState('ses_c', 3), lastEventAt: now - 190_000, lastPromptAt: 0 },
+            ses_d: { ...baseState('ses_d', 4), lastEventAt: now - 180_000, lastPromptAt: 0 },
+        })) {
+            watched.set(id, state);
+        }
+        internals(agent).evictWatchedOverflow(new Set());
+        assert.equal(watched.has('ses_talk'), true,
+            'a turn that finalized moments ago is not the first eviction victim');
+        assert.equal(watched.has('ses_b'), false, 'the stalest quiet session goes instead');
+    });
+
+    test('a session with a recent user prompt survives long thinking silences', () => {
+        const agent = makeAgent();
+        const watched = internals(agent).watched;
+        for (const [id, state] of Object.entries({
+            ses_chat: { ...baseState('ses_chat', 1), lastPromptAt: now - 200_000, lastEventAt: now - 120_000 },
+            ses_b: { ...baseState('ses_b', 2), lastEventAt: now - 220_000, lastPromptAt: 0 },
+            ses_c: { ...baseState('ses_c', 3), lastEventAt: now - 210_000, lastPromptAt: 0 },
+            ses_d: { ...baseState('ses_d', 4), lastEventAt: now - 205_000, lastPromptAt: 0 },
+        })) {
+            watched.set(id, state);
+        }
+        internals(agent).evictWatchedOverflow(new Set());
+        assert.equal(watched.has('ses_chat'), true,
+            'the user is about to send the next prompt — the session stays watched');
+    });
+
+    test('user-activity windows: recent prompts and freshly finalized turns', () => {
+        assert.equal(isUserActiveWatch({ finalizedAt: 0, lastPromptAt: 0 }, now), false);
+        assert.equal(isUserActiveWatch({ finalizedAt: 0, lastPromptAt: now - 90_000 }, now), true,
+            'beyond the old 90s prompt-land window the session still counts as in use');
+        assert.equal(isUserActiveWatch({ finalizedAt: now - 30_000, lastPromptAt: 0 }, now), true,
+            'a just-finalized turn keeps a grace window');
+        assert.equal(isUserActiveWatch({ finalizedAt: now - 121_000, lastPromptAt: 0 }, now), false,
+            'the finalization grace expires');
+        assert.equal(isUserActiveWatch({ finalizedAt: 0, lastPromptAt: now - 301_000 }, now), false,
+            'the user-activity window expires');
     });
 
     test('explicit session lists are not subject to the auto-pick trim', () => {

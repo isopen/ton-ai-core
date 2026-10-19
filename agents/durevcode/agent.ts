@@ -98,6 +98,15 @@ export function isStaleEmptyWatch(
     return now - state.startedAt >= EMPTY_SESSION_GRACE_MS;
 }
 
+export function isUserActiveWatch(
+    state: Pick<WatchedSession, 'finalizedAt' | 'lastPromptAt'>,
+    now: number,
+): boolean {
+    if (state.finalizedAt !== 0 && now - state.finalizedAt < FINALIZED_GRACE_MS) return true;
+    if (state.lastPromptAt !== 0 && now - state.lastPromptAt < USER_ACTIVE_MS) return true;
+    return false;
+}
+
 export function instantResolveQuestion(questions: QuestionRequest['questions']): boolean {
     return questions.length === 1 && !questions[0].multiple;
 }
@@ -118,6 +127,8 @@ const SLOW_TICK_MS = 3000;
 const SESSION_TICK_BATCH_TIMEOUT_MS = 15000;
 const WORKING_RECENCY_MS = 15000;
 const PROMPT_LAND_GRACE_MS = 90000;
+const USER_ACTIVE_MS = 300000;
+const FINALIZED_GRACE_MS = 120000;
 const STOP_QUIET_MS = 10000;
 const STOP_DEDUP_MS = 10000;
 const CONTEXT_THROTTLE_MS = 15000;
@@ -419,6 +430,7 @@ export interface PersistedSession {
     knownEventSig?: Record<string, string>;
     knownPerms?: string[];
     stopMessageId?: number;
+    promptAt?: number;
 }
 
 const PERSISTED_TTL_MS = 30 * 24 * 3600 * 1000;
@@ -469,6 +481,7 @@ interface WatchedSession {
     startedAt: number;
     lastEventAt: number;
     lastPromptAt: number;
+    finalizedAt: number;
     lastContextRendered: string;
     lastContextEditAt: number;
     lastEventMessageAt: number;
@@ -932,6 +945,7 @@ export class DurevcodeAgent extends BaseAgent {
                     ...(sigCursor.length > 0 ? { knownEventSig: Object.fromEntries(sigCursor) } : {}),
                     ...(state.knownPerms.length > 0 ? { knownPerms: state.knownPerms } : {}),
                     ...(state.stopMessageId !== null ? { stopMessageId: state.stopMessageId } : {}),
+                    ...(state.lastPromptAt > 0 ? { promptAt: state.lastPromptAt } : {}),
                 };
             }
             const now = Date.now();
@@ -1323,7 +1337,8 @@ export class DurevcodeAgent extends BaseAgent {
             files: [],
             startedAt: Date.now(),
             lastEventAt: 0,
-            lastPromptAt: 0,
+            lastPromptAt: stored?.promptAt ?? 0,
+            finalizedAt: 0,
             lastContextRendered: '',
             lastContextEditAt: 0,
             lastEventMessageAt: 0,
@@ -1553,10 +1568,12 @@ export class DurevcodeAgent extends BaseAgent {
                 console.error(`Durevcode attach failed for session ${id}:`, error);
             }
         }
+        const now = Date.now();
         for (const [id, state] of this.watched) {
             if (seen.has(id)) continue;
             if (this.sessionTicks.has(id)) continue;
-            if (!state.finalized && !isStaleEmptyWatch(state, Date.now())) continue;
+            if (isUserActiveWatch(state, now)) continue;
+            if (!state.finalized && !isStaleEmptyWatch(state, now)) continue;
             this.watched.delete(id);
             this.dropSessionRefs(id);
             console.log(`Durevcode detached session ${id} (out of auto-pick window)`);
@@ -1577,7 +1594,7 @@ export class DurevcodeAgent extends BaseAgent {
             state.knownPerms.length > 0 ||
             state.knownQuestions.length > 0 ||
             (state.lastEventAt !== 0 && now - state.lastEventAt < WORKING_RECENCY_MS) ||
-            (state.lastPromptAt !== 0 && now - state.lastPromptAt < PROMPT_LAND_GRACE_MS) ||
+            isUserActiveWatch(state, now) ||
             (state.lastEventAt === 0 && state.lastPromptAt === 0 && now - state.startedAt < PROMPT_LAND_GRACE_MS);
         const rank = (state: WatchedSession): number[] => [
             state.finalized ? 0 : 1,
@@ -1620,6 +1637,7 @@ export class DurevcodeAgent extends BaseAgent {
         state.lastNudgeAt = 0;
         if (state.finalized) {
             state.finalized = false;
+            state.finalizedAt = 0;
         }
         switch (event.kind) {
             case 'text':
@@ -3151,7 +3169,8 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             state.lastText = '';
             state.toolCalls = 0;
             state.lastEventAt = 0;
-            state.lastPromptAt = 0;
+            state.lastPromptAt = Date.now();
+            state.finalizedAt = 0;
             await this.disarmSessionQuestions(telegram, state);
             await this.clearThinkingMessage(telegram, state);
             await this.syncStopKeyboard(telegram, state);
@@ -4694,6 +4713,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         announce: boolean = true,
     ): Promise<void> {
         state.finalized = true;
+        state.finalizedAt = Date.now();
         state.pending = [];
         state.pendingKeys.clear();
         state.liveTool = null;
