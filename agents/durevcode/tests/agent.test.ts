@@ -3581,7 +3581,6 @@ describe('durevcode utf8 safety', () => {
         assert.ok(!rendered.includes('�'));
     });
 });
-});
 
 describe('durevcode prompt confirm', () => {
     let now = 7000000;
