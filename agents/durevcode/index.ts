@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
-import { DurevcodeAgent, DurevcodeConfig } from './agent';
+import { DurevcodeAgent, DurevcodeConfig, WHIP_EMOJI_DEFAULT } from './agent';
 import { acquireDurevcodeLock, lockPathFor, releaseDurevcodeLock, sharedChatLockPath, DurevcodeLock } from './lock';
 import { AGENT_EVENTS, PLUGIN_EVENTS } from '@ton-ai/core';
 
@@ -110,6 +110,8 @@ const config: DurevcodeConfig = {
         idleSec: optionalInt('DUREVCODE_IDLE_SEC', 90),
         autoContinueSec: optionalInt('DUREVCODE_AUTO_CONTINUE_SEC', 60),
         autoContinueMax: optionalInt('DUREVCODE_AUTO_CONTINUE_MAX', 10),
+        whipEmojiId: process.env.DUREVCODE_WHIP_EMOJI !== undefined ? process.env.DUREVCODE_WHIP_EMOJI : WHIP_EMOJI_DEFAULT,
+        whipSticker: process.env.DUREVCODE_WHIP_STICKER,
         autoFinish: optionalFlag('DUREVCODE_AUTO_FINISH', true),
     },
 };

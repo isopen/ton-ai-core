@@ -143,6 +143,9 @@ const PROMPT_BUSY_BACKOFF_MS = 8000;
 const AUTO_CONTINUE_TEXT = 'Continue';
 const AUTO_CONTINUE_MIN_MS = 60000;
 const AUTO_CONTINUE_DEFAULT_MAX = 10;
+const WHIP_ARMED_TTL_MS = 10 * 60 * 1000;
+export const WHIP_STICKER_DEFAULT = 'CAACAgIAAxkBAAEv4sFq1j7P0cKrm_4pwHfaOUJHEx2DWwAC4jQAAjnuWEhsEZKLSyNswj0E';
+export const WHIP_EMOJI_DEFAULT = '4985740531326779949';
 const PROMPT_TRANSIENT_BACKOFF_MS = 5000;
 const AUTO_PICK_WINDOW_MIN = 20;
 const AUTO_PICK_WINDOW_MULT = 5;
@@ -451,6 +454,8 @@ export interface DurevcodeWatchConfig {
     maxSessions: number;
     useThreads: boolean;
     typingEnabled?: boolean;
+    whipSticker?: string;
+    whipEmojiId?: string;
     newTopics?: boolean;
     statePath: string;
     pollMs: number;
@@ -537,6 +542,7 @@ interface WatchedSession {
     finalized: boolean;
     autoNudges: number;
     lastNudgeAt: number;
+    whipArmedAt: number;
     turnComplete: boolean;
     stoppedByUser: boolean;
     sessionAgent: string;
@@ -596,6 +602,7 @@ export class DurevcodeAgent extends BaseAgent {
     private typingTimer: NodeJS.Timeout | null = null;
     private typingTickBusy: boolean = false;
     private typingStamps: number[] = [];
+    private whipDebugAt = new Map<string, number>();
     private upstreamFailures: number = 0;
     private upstreamBackoffUntil: number = 0;
     private threadsEnabled: boolean = true;
@@ -1394,6 +1401,7 @@ export class DurevcodeAgent extends BaseAgent {
             finalized: false,
             autoNudges: 0,
             lastNudgeAt: 0,
+            whipArmedAt: 0,
             turnComplete: false,
             stoppedByUser: false,
             sessionAgent: '',
@@ -1643,6 +1651,7 @@ export class DurevcodeAgent extends BaseAgent {
         state.lastEventAt = Date.now();
         state.autoNudges = 0;
         state.lastNudgeAt = 0;
+        state.whipArmedAt = 0;
         if (state.finalized) {
             state.finalized = false;
             state.finalizedAt = 0;
@@ -4209,10 +4218,17 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const quietFor = Date.now() - Math.max(state.lastEventAt, state.lastNudgeAt);
         const canNudge = autoMs > 0 && hasWork && !state.turnComplete && state.autoNudges < maxNudges;
 
+        if (process.env.DUREVCODE_WHIP_DEBUG === '1' && Date.now() - (this.whipDebugAt.get(state.session.id) ?? 0) > 5000) {
+            this.whipDebugAt.set(state.session.id, Date.now());
+            console.log(
+                `Durevcode whip debug (session=${state.session.id}): quiet=${Date.now() - Math.max(state.lastEventAt, state.lastNudgeAt)}ms hasWork=${hasWork} turnComplete=${state.turnComplete} finalized=${state.finalized} nudges=${state.autoNudges} armed=${Date.now() - state.whipArmedAt < WHIP_ARMED_TTL_MS} liveTool=${state.liveTool ? (state.liveTool.event.kind === 'tool' ? state.liveTool.event.tool : state.liveTool.event.kind) : 'null'} thinking=${state.thinkingActive} pending=${state.pending.length} todos=${state.pendingTodos} perms=${state.knownPerms.length} questions=${state.knownQuestions.length} stopping=${state.stopping} stoppedByUser=${state.stoppedByUser} stoppedAtAge=${Date.now() - state.stoppedAt} confirming=${state.confirming === null ? 'null' : state.confirming.text} cliRun=${state.cliRun === null ? 'null' : 'run'} queue=${state.promptQueue.length} rateLimit=${Date.now() < this.rateLimitedUntil}`,
+            );
+        }
+
         if (await this.autoFinishIfDone(telegram, state)) return;
 
         if (!state.finalized && canNudge && quietFor >= autoMs) {
-            if (Date.now() >= this.rateLimitedUntil && (await this.autoContinue(telegram, opencode, state))) return;
+            if (await this.autoContinue(telegram, opencode, state)) return;
         }
 
         if (!state.finalized && !canNudge && idleFor >= this.config.durevcode.idleSec * 1000 && hasWork && state.promptQueue.length === 0) {
@@ -4673,10 +4689,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (Date.now() - state.stoppedAt < STOP_QUIET_MS) return true;
         if (state.pending.length > 0 || state.pendingTodos) return true;
         if (hasUnfinishedLiveTool(state, Date.now())) return true;
-        if (state.thinkingActive) return true;
+        if (state.thinkingActive && Date.now() - state.lastEventAt < this.autoContinueMs()) return true;
         if (state.knownPerms.length > 0) return true;
         if (state.knownQuestions.length > 0) return true;
-        if (Date.now() < this.rateLimitedUntil) return true;
         return false;
     }
 
@@ -4686,15 +4701,57 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state: WatchedSession,
     ): Promise<boolean> {
         if (this.autoContinueBlocked(state)) return false;
+        const armed = Date.now() - state.whipArmedAt < WHIP_ARMED_TTL_MS;
         state.autoNudges += 1;
         state.lastNudgeAt = Date.now();
         state.turnComplete = false;
+        if (!armed) {
+            state.whipArmedAt = Date.now();
+            this.enqueuePrompt(state, AUTO_CONTINUE_TEXT);
+        }
         this.logger.info(
             `Durevcode auto-continue #${state.autoNudges} after quiet stretch (session=${state.session.id} thread=${state.threadId}).`,
         );
-        this.enqueuePrompt(state, AUTO_CONTINUE_TEXT);
         await this.pumpPrompts(telegram, opencode, state);
+        await this.sendWhipSticker(telegram, state);
         return true;
+    }
+
+    private async sendWhipSticker(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+    ): Promise<void> {
+        const sticker = this.config.durevcode.whipSticker ?? WHIP_STICKER_DEFAULT;
+        const emojiId = this.config.durevcode.whipEmojiId ?? WHIP_EMOJI_DEFAULT;
+        if (Date.now() < this.rateLimitedUntil) return;
+        try {
+            if (emojiId) {
+                await telegram.sendMessage({
+                    chat_id: this.config.durevcode.chatId,
+                    message_thread_id: state.threadId ?? undefined,
+                    text: '🤨',
+                    entities: [{ offset: 0, length: 2, type: 'custom_emoji', custom_emoji_id: emojiId }],
+                });
+            } else {
+                await telegram.sendSticker({
+                    chat_id: this.config.durevcode.chatId,
+                    message_thread_id: state.threadId ?? undefined,
+                    sticker,
+                });
+            }
+        } catch (error) {
+            if (isRateLimitError(error)) {
+                const waitSec = getRetryAfterSec(error) ?? 10;
+                this.rateLimitedUntil = Math.max(this.rateLimitedUntil, Date.now() + waitSec * 1000 + 1000);
+                console.warn(`Durevcode whip sticker rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                return;
+            }
+            if (state.threadId !== null && isThreadGoneError(error)) {
+                await this.markTopicGoneSuspect(telegram, state);
+                return;
+            }
+            console.debug('Durevcode whip sticker failed:', error instanceof Error ? error.message : error);
+        }
     }
 
     private async autoFinishIfDone(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {

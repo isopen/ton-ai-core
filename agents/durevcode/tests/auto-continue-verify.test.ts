@@ -182,6 +182,7 @@ describe('auto-continue verification', () => {
         for (let i = 1; i <= 3; i += 1) {
             state.promptQueue.length = 0;
             state.confirming = null;
+            state.whipArmedAt = 0;
             state.lastEventAt = Date.now() - 61_000;
             state.lastNudgeAt = Date.now() - 61_000;
             await tick();
@@ -233,6 +234,7 @@ describe('auto-continue verification', () => {
         for (const minute of [1, 2, 3, 4, 5]) {
             state.promptQueue.length = 0;
             state.confirming = null;
+            state.whipArmedAt = 0;
             state.lastEventAt = Date.now() - minute * 60_000 - 1_000;
             state.lastNudgeAt = Date.now() - minute * 60_000 - 1_000;
             await tick();

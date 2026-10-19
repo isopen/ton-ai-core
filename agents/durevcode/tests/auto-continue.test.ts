@@ -1,5 +1,5 @@
 import { strict as assert } from 'assert';
-import { DurevcodeAgent } from '../agent';
+import { DurevcodeAgent, WHIP_EMOJI_DEFAULT } from '../agent';
 
 const SESSION = {
     id: 'ses_auto01',
@@ -115,11 +115,19 @@ describe('durevcode auto-continue', () => {
         const agent = makeAgent();
         (agent as unknown as { __sent: string[] }).__sent = [];
         const telegram = stubTelegram();
+        const stickers: { text: string; entities?: Array<{ type: string; custom_emoji_id?: string }> }[] = [];
+        telegram.sendMessage = async (params: { text: string; entities?: Array<{ type: string; custom_emoji_id?: string }> }) => {
+            if (params.entities) stickers.push(params);
+            return { message_id: 1 };
+        };
         const state = await attach(agent, telegram);
         prime(state, 61_000);
         await tick(agent, telegram, state);
         assert.deepEqual((agent as unknown as { __sent: string[] }).__sent, ['Continue']);
         assert.equal(state.autoNudges, 1);
+        assert.equal(stickers.length, 1);
+        assert.equal(stickers[0].text, '🤨');
+        assert.deepEqual(stickers[0].entities, [{ offset: 0, length: 2, type: 'custom_emoji', custom_emoji_id: WHIP_EMOJI_DEFAULT }]);
     });
 
     test('stays quiet one millisecond before the window', async () => {
@@ -162,11 +170,13 @@ describe('durevcode auto-continue', () => {
         await tick(agent, telegram, state);
         state.promptQueue.length = 0;
         state.confirming = null;
+        state.whipArmedAt = 0;
         state.lastEventAt = Date.now() - 61_000;
         state.lastNudgeAt = Date.now() - 61_000;
         await tick(agent, telegram, state);
         state.promptQueue.length = 0;
         state.confirming = null;
+        state.whipArmedAt = 0;
         state.lastEventAt = Date.now() - 61_000;
         state.lastNudgeAt = Date.now() - 61_000;
         await tick(agent, telegram, state);
@@ -179,11 +189,68 @@ describe('durevcode auto-continue', () => {
         (agent as unknown as { __sent: string[] }).__sent = [];
         const telegram = stubTelegram();
         const state = await attach(agent, telegram);
-        prime(state, 61_000);
+        prime(state, 1_000);
         state.thinkingActive = true;
         await tick(agent, telegram, state);
         assert.deepEqual((agent as unknown as { __sent: string[] }).__sent, []);
         assert.equal(state.autoNudges, 0);
+    });
+
+    test('nudges a reasoning stream silent past the window', async () => {
+        const agent = makeAgent();
+        (agent as unknown as { __sent: string[] }).__sent = [];
+        const telegram = stubTelegram();
+        const stickers: { text: string; entities?: Array<{ type: string; custom_emoji_id?: string }> }[] = [];
+        telegram.sendMessage = async (params: { text: string; entities?: Array<{ type: string; custom_emoji_id?: string }> }) => {
+            if (params.entities) stickers.push(params);
+            return { message_id: 1 };
+        };
+        const state = await attach(agent, telegram);
+        prime(state, 61_000);
+        state.thinkingActive = true;
+        state.thinkingSince = Date.now() - 90_000;
+        await tick(agent, telegram, state);
+        assert.deepEqual((agent as unknown as { __sent: string[] }).__sent, ['Continue']);
+        assert.equal(state.autoNudges, 1);
+        assert.equal(stickers.length, 1);
+        assert.equal(stickers[0].text, '🤨');
+    });
+
+    test('keeps a single recovery prompt while the whip is armed', async () => {
+        const agent = makeAgent();
+        (agent as unknown as { __sent: string[] }).__sent = [];
+        const telegram = stubTelegram();
+        const stickers: { text: string; entities?: Array<{ type: string; custom_emoji_id?: string }> }[] = [];
+        telegram.sendMessage = async (params: { text: string; entities?: Array<{ type: string; custom_emoji_id?: string }> }) => {
+            if (params.entities) stickers.push(params);
+            return { message_id: 1 };
+        };
+        const state = await attach(agent, telegram);
+        prime(state, 61_000);
+        state.whipArmedAt = Date.now();
+        await tick(agent, telegram, state);
+        assert.deepEqual(state.promptQueue, []);
+        assert.equal(state.autoNudges, 1);
+        assert.equal(stickers.length, 1);
+        assert.equal(stickers[0].text, '🤨');
+    });
+
+    test('fires through a telegram rate limit and skips only the signal', async () => {
+        const agent = makeAgent();
+        (agent as unknown as { __sent: string[] }).__sent = [];
+        const telegram = stubTelegram();
+        const stickers: { text: string; entities?: Array<{ type: string; custom_emoji_id?: string }> }[] = [];
+        telegram.sendMessage = async (params: { text: string; entities?: Array<{ type: string; custom_emoji_id?: string }> }) => {
+            if (params.entities) stickers.push(params);
+            return { message_id: 1 };
+        };
+        const state = await attach(agent, telegram);
+        (agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil = Date.now() + 30_000;
+        prime(state, 61_000);
+        await tick(agent, telegram, state);
+        assert.deepEqual((agent as unknown as { __sent: string[] }).__sent, ['Continue']);
+        assert.equal(state.autoNudges, 1);
+        assert.equal(stickers.length, 0);
     });
 
 test('does not nudge while a live tool is still running', async () => {
