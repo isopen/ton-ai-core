@@ -711,6 +711,7 @@ done:
 crypton_status crypton_mod_pow_auto(const crypton_limb *base, size_t bn, const crypton_limb *exp, size_t en, const crypton_limb *mod, size_t mn, crypton_limbs *out)
 {
     if (crypton_bigint_is_zero(mod, mn)) return CRYPTON_MODULUS_IS_ZERO;
+    if (mn > (size_t)CRYPTON_MAX_MODPOW_LIMBS) return CRYPTON_OPERAND_TOO_LARGE;
     if (mn == 1 && mod[0] == 1) {
         crypton_status st = crypton_limbs_resize(out, 1, 0);
         if (st != CRYPTON_OK) return st;

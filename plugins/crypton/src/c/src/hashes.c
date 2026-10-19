@@ -2,11 +2,13 @@
 
 static uint32_t rotr32(uint32_t x, uint32_t n)
 {
+    if (n == 0) return x;
     return (x >> n) | (x << (32 - n));
 }
 
 static uint64_t rotr64(uint64_t x, uint32_t n)
 {
+    if (n == 0) return x;
     return (x >> n) | (x << (64 - n));
 }
 

@@ -1,4 +1,4 @@
-#include "../crypton.h"
+#include "../src/crypton.h"
 #ifndef __wasm__
 #include <stdio.h>
 #include <string.h>

@@ -50,10 +50,11 @@ void cr_memcpy(void *dst, const void *src, size_t len)
 {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
-    if ((uintptr_t)d >= (uintptr_t)s && (uintptr_t)d < (uintptr_t)s + len) {
-        while (len--) d[len] = s[len];
-    } else {
+    if (d == s || len == 0) return;
+    if (d < s || (uintptr_t)d >= (uintptr_t)s + len) {
         for (size_t i = 0; i < len; i++) d[i] = s[i];
+    } else {
+        for (size_t i = len; i > 0; i--) d[i - 1] = s[i - 1];
     }
 }
 
@@ -79,8 +80,12 @@ void crypton_buf_init(crypton_buf *buf)
 crypton_status crypton_buf_reserve(crypton_buf *buf, size_t need)
 {
     if (need <= buf->cap) return CRYPTON_OK;
+    if (need > (size_t)1 << 30) return CRYPTON_OPERAND_TOO_LARGE;
     size_t want = buf->cap ? buf->cap * 2 : 16;
-    while (want < need) want *= 2;
+    while (want < need) {
+        if (want > (size_t)1 << 30) { want = need; break; }
+        want *= 2;
+    }
     uint8_t *p = cr_realloc(buf->data, buf->cap, want);
     buf->data = p;
     buf->cap = want;
@@ -120,8 +125,12 @@ void crypton_limbs_init(crypton_limbs *v)
 crypton_status crypton_limbs_reserve(crypton_limbs *v, size_t need)
 {
     if (need <= v->cap) return CRYPTON_OK;
+    if (need > (size_t)1 << 28) return CRYPTON_OPERAND_TOO_LARGE;
     size_t want = v->cap ? v->cap * 2 : 4;
-    while (want < need) want *= 2;
+    while (want < need) {
+        if (want > (size_t)1 << 28) { want = need; break; }
+        want *= 2;
+    }
     crypton_limb *p = cr_realloc(v->v, v->cap * sizeof(crypton_limb), want * sizeof(crypton_limb));
     v->v = p;
     v->cap = want;
@@ -204,6 +213,7 @@ void js_get_random_values(uint8_t *dst, uint32_t n);
 crypton_status crypton_random_fill(uint8_t *dst, size_t n)
 {
     if (n == 0) return CRYPTON_OK;
+    if (n > (size_t)0xffffffffu) return CRYPTON_RANDOM_TOO_LARGE;
     js_get_random_values(dst, (uint32_t)n);
     return CRYPTON_OK;
 }

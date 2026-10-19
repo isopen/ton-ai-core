@@ -1,4 +1,4 @@
-#include "../crypton.h"
+#include "../src/crypton.h"
 #include <stdio.h>
 
 int main(void)
