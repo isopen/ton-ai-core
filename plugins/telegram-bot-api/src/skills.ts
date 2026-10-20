@@ -350,14 +350,15 @@ export class TelegramBotSkills {
         method: string,
         params?: Record<string, any>,
         timeoutMs: number = this.requestTimeoutMs,
-        migrated: boolean = false
+        migrated: boolean = false,
+        ignoreGate: boolean = false
     ): Promise<T> {
         const url = this.getApiUrl(method);
 
         let body: string | FormData;
         let headers: Record<string, string> = {};
 
-        const hasFile = params && Object.values(params).some(v => 
+        const hasFile = params && Object.values(params).some(v =>
             v && typeof v === 'object' && 'source' in v
         );
 
@@ -379,7 +380,7 @@ export class TelegramBotSkills {
         }
 
         for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-            const gateWait = this.floodWaitUntil - Date.now();
+            const gateWait = ignoreGate ? 0 : this.floodWaitUntil - Date.now();
             if (gateWait > 0) {
                 await sleep(gateWait);
             }
@@ -1566,7 +1567,7 @@ export class TelegramBotSkills {
     }
 
     async answerCallbackQuery(params: AnswerCallbackQueryParams): Promise<boolean> {
-        const result = await this.request<boolean>('answerCallbackQuery', params);
+        const result = await this.request<boolean>('answerCallbackQuery', params, this.requestTimeoutMs, false, true);
         return result;
     }
 
