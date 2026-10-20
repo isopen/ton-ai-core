@@ -845,7 +845,8 @@ async listAgents(): Promise<SessionAgentInfo[]> {
                     signal: AbortSignal.timeout(this.timeoutMs),
                 });
             } catch (error) {
-                if (!retriable || attempt === this.maxRetries) {
+                const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+                if (!retriable || timedOut || attempt === this.maxRetries) {
                     throw new OpencodeApiError(`${label} failed: ${error instanceof Error ? error.message : String(error)}`);
                 }
                 await sleep(1000 * (attempt + 1));
