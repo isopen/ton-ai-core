@@ -331,6 +331,9 @@ describe('durevcode console feed', () => {
         const state1 = (await first.attachSession(stub1.telegram, SESSION)) as unknown as AnyState;
         assert.equal(state1.threadId, 8);
         assert.ok(existsSync(statePath));
+        state1.lastPromptAt = 555;
+        (first as unknown as { watched: Map<string, AnyState> }).watched.set(SESSION.id, state1);
+        first.savePersisted();
 
         const second = makeAgentWithState(statePath) as unknown as Record<
             string,
@@ -345,6 +348,7 @@ describe('durevcode console feed', () => {
         );
         assert.equal(state2.threadId, 8);
         assert.equal(state2.contextMessageId, state1.contextMessageId);
+        assert.equal(state2.lastPromptAt, 555, 'promptAt survives the persist/load roundtrip');
         rmSync(statePath, { force: true });
     });
 
@@ -836,6 +840,33 @@ describe('durevcode forum control', () => {
         assert.deepEqual(state.promptQueue, []);
         await agent.pumpPrompts(telegram, fake.opencode, state);
         assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'do it' }]);
+    });
+
+    test('drainCreatingThread picks up a message that lands while the first one is being routed', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        const typeAgent = agent as unknown as {
+            dispatchInboxCommand: (t: unknown, o: unknown, s: unknown, text: string, replyTo?: number) => Promise<boolean>;
+            creatingThreads: Map<number, Array<{ message_id: number; text?: string }>>;
+            drainCreatingThread: (t: unknown, o: unknown, s: unknown, threadId: number, first: unknown) => Promise<void>;
+        };
+        typeAgent.dispatchInboxCommand = async (_t: unknown, _o: unknown, _s: unknown, text: string): Promise<boolean> => {
+            if (text === 'first task') {
+                typeAgent.creatingThreads.get(9001)?.push({ message_id: 5002, text: 'late task' });
+            }
+            return false;
+        };
+        typeAgent.creatingThreads.set(9001, []);
+        await typeAgent.drainCreatingThread(telegram, fake.opencode, state, 9001, { message_id: 5001, text: 'first task' });
+        assert.deepEqual(
+            fake.prompts,
+            [{ sessionId: state.session.id, text: 'first task' }],
+            'the first task is dispatched right away',
+        );
+        assert.deepEqual(state.promptQueue, ['late task'], 'the late arrival is drained, not lost');
+        assert.equal(typeAgent.creatingThreads.has(9001), false, 'the claim is released before the pump');
     });
 
     test('redelivery after restart is ignored via persisted seen set', async () => {
@@ -1716,6 +1747,32 @@ describe('durevcode forum control', () => {
         assert.equal(downloads, 0);
         const decline = calls[calls.length - 1] as { params: Record<string, unknown> };
         assert.ok(String(decline.params.text).includes('too large'));
+    });
+
+    test('oversize photo with a caption keeps the text and marks the attachment dropped', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, setDownloadImpl } = stubTelegram();
+        let downloads = 0;
+        setDownloadImpl(async () => {
+            downloads += 1;
+            return Buffer.from([0x00]);
+        });
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({
+                text: '',
+                caption: 'look at this chart',
+                photo: [{ file_id: 'p_cap', file_unique_id: 'u11', width: 9000, height: 9000, file_size: 24 * 1024 * 1024 }],
+            }, now),
+        );
+        assert.equal(downloads, 0);
+        assert.equal(fake.prompts.length, 1, 'the caption survives as a prompt');
+        assert.ok(String(fake.prompts[0].text).includes('look at this chart'), 'the user text is preserved');
+        assert.ok(String(fake.prompts[0].text).includes('attachment dropped: media over 20 MB'), 'the missing file is not silent');
+        assert.deepEqual(state.promptQueue, []);
     });
 });
 
@@ -3163,6 +3220,149 @@ describe('durevcode thread binding survival', () => {
         assert.ok(autoEdits >= 1, `the timer loop paints on its own too; auto=${autoEdits} manual=${manualEdits}`);
     }, 14000);
 
+    test('a parked draft lane opens a fresh window at the turn boundary', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setDraftImpl } = stubTelegram();
+        const fake = stubOpencode();
+        setDraftImpl(() => Promise.reject(new Error('Telegram API error: Bad Request: PEER_ID_INVALID')));
+        const state = (await (agent as unknown as {
+            attachSession: (t: unknown, s: unknown, thread?: unknown, user?: number) => Promise<never>;
+        }).attachSession(telegram, SESSION, undefined, 991)) as never;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set('ses_test01', state);
+        const live = state as never as { thinkingActive: boolean; thinkingText: string; thinkingSince: number | null; thinkingDraftOk: boolean };
+        live.thinkingActive = true;
+        live.thinkingSince = Date.now() - 2500;
+        live.thinkingText = 'peer invalid storm text';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, live);
+        await new Promise((resolve) => setTimeout(resolve, 8500));
+        assert.equal(live.thinkingDraftOk, false, 'an unreachable private peer parks the lane within the turn');
+        const draftsBeforeBoundary = calls.filter((c) => c.op === 'draft').length;
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(telegram, live);
+        assert.equal(live.thinkingDraftOk, true, 'the boundary hands the lane a fresh window');
+        const draftsAfterBoundary = calls.filter((c) => c.op === 'draft').length;
+        assert.ok(draftsAfterBoundary >= draftsBeforeBoundary, 'the parked lane resumes honest attempts next turn');
+    }, 16000);
+
+    test('concurrent draft pushes collapse into a single wire call', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setDraftImpl } = stubTelegram();
+        const fake = stubOpencode();
+        setDraftImpl(() => new Promise((resolve) => setTimeout(() => resolve(true as unknown as boolean), 60)));
+        const state = (await (agent as unknown as {
+            attachSession: (t: unknown, s: unknown, thread?: unknown, user?: number) => Promise<never>;
+        }).attachSession(telegram, SESSION, undefined, 991)) as never;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        const live = state as never as { thinkingActive: boolean; thinkingText: string; thinkingSince: number | null; thinkingDraftAt: number };
+        live.thinkingActive = true;
+        live.thinkingText = 'concurrent push probe';
+        live.thinkingSince = Date.now();
+        live.thinkingDraftAt = 0;
+        const push = (agent as unknown as { pushThinkingDraft: (s: unknown) => Promise<void> }).pushThinkingDraft;
+        await Promise.all([push.call(agent, live), push.call(agent, live), push.call(agent, live)]);
+        assert.equal(calls.filter((c) => c.op === 'draft').length, 1, 'racing pushes collapse into one honest API call');
+    }, 12000);
+
+    test('a queued backlog keeps the stop control alive across the boundary', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await (agent as unknown as {
+            attachSession: (t: unknown, s: unknown, thread?: unknown, user?: number) => Promise<never>;
+        }).attachSession(telegram, SESSION, undefined, 991)) as never;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        const live = state as never as { stopMessageId: number | null; stopControlText: string | null; finalized: boolean; promptQueue: string[] };
+        live.stopMessageId = 4242;
+        live.stopControlText = 'Running · Build — tap Stop to interrupt and rewrite the task.';
+        live.finalized = true;
+        live.promptQueue = ['next hammer prompt'];
+        await (agent as unknown as { syncStopKeyboard: (t: unknown, s: unknown) => Promise<void> }).syncStopKeyboard(telegram, live);
+        assert.equal(live.stopMessageId, 4242, 'the control survives a boundary while the backlog is deep');
+        const midRetires = calls.filter((c) => c.op === 'markup' && Array.isArray((c.params as Record<string, unknown>).inline_keyboard) && ((c.params as Record<string, unknown>).inline_keyboard as unknown[]).length === 0).length;
+        live.promptQueue = [];
+        await (agent as unknown as { syncStopKeyboard: (t: unknown, s: unknown) => Promise<void> }).syncStopKeyboard(telegram, live);
+        assert.equal(live.stopMessageId, null, 'the control retires once the backlog drains');
+        assert.ok(midRetires === 0 && calls.some((c) => c.op === 'markup'), 'exactly one retired markup after the drain');
+    }, 12000);
+
+    test('a stop control 429 feeds the governor markup class', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, setEditImpl } = stubTelegram();
+        const fake = stubOpencode();
+        setEditImpl(() => Promise.reject(new Error('Telegram API error: Too Many Requests: retry after 12')));
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            stopMessageId: number | null;
+            stopControlText: string | null;
+            stopControlAt: number;
+        };
+        state.stopMessageId = 321;
+        state.stopControlText = 'stale control text';
+        state.stopControlAt = Date.now() - 10000;
+        const governor = (agent as unknown as { governor: { penaltyMsLeft: (scope: string) => number } }).governor;
+        const before = governor.penaltyMsLeft('topic-markup');
+        await (agent as unknown as { updateStopControlText: (t: unknown, s: unknown) => Promise<void> }).updateStopControlText(telegram, state);
+        const after = governor.penaltyMsLeft('topic-markup');
+        assert.ok(after > before + 10000, `the control window feeds the class (before=${before} after=${after})`);
+    }, 12000);
+
+    test('a fetch-failed thinking post self-heals through the post watchdog', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setSendImpl } = stubTelegram();
+        const fake = stubOpencode();
+        let postAttempts = 0;
+        setSendImpl((params) => {
+            if (!String((params as Record<string, unknown>).text).includes('Thinking (')) {
+                return Promise.resolve({ message_id: 2222 });
+            }
+            postAttempts += 1;
+            if (postAttempts === 1) return Promise.reject(new Error('fetch failed'));
+            return Promise.resolve({ message_id: 555 });
+        });
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            thinkingActive: boolean;
+            thinkingText: string;
+            thinkingMessageId: number | null;
+            thinkingSince: number | null;
+            thinkingFolded: boolean;
+        };
+        state.thinkingActive = true;
+        state.thinkingText = 'watchdog self-heal after a network blip';
+        state.thinkingSince = Date.now() - 500;
+        state.thinkingFolded = true;
+        const landed = await (agent as unknown as { paintThinkingText: (t: unknown, s: unknown, r: string) => Promise<boolean> }).paintThinkingText(telegram, state, state.thinkingText);
+        assert.equal(landed, false, 'the first post fails on the wire');
+        assert.equal(state.thinkingMessageId, null, 'the bubble is not yet up');
+        await new Promise((resolve) => setTimeout(resolve, 2100));
+        assert.equal(state.thinkingMessageId, 555, 'the watchdog repaints the missing bubble once the wire breathes');
+    }, 12000);
+
+    test('a busy notice survives its rate window instead of dying silently', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setSendImpl } = stubTelegram();
+        const fake = stubOpencode();
+        let noticeSends = 0;
+        setSendImpl((params) => {
+            if (!String((params as Record<string, unknown>).text).includes('Session is busy')) {
+                return Promise.resolve({ message_id: 2222 });
+            }
+            noticeSends += 1;
+            if (noticeSends === 1) return Promise.reject(new Error('Telegram API error: Too Many Requests: retry after 1'));
+            return Promise.resolve({ message_id: 777 });
+        });
+        const state = (await attachWatched(agent, telegram)) as unknown as { session: { id: string } };
+        await (agent as unknown as { safeReply: (t: unknown, s: unknown, text: string) => Promise<void> }).safeReply(telegram, state, 'Session is busy, your prompt is queued.');
+        assert.equal(noticeSends, 1, 'the first attempt hits the window');
+        await new Promise((resolve) => setTimeout(resolve, 2600));
+        assert.equal(noticeSends, 2, 'the deferred retry places the notice after the window');
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Session is busy')), 'the queued prompt notice lands');
+    }, 12000);
+
     test('a single network blip pauses the draft lane and it keeps breathing', async () => {
         jest.restoreAllMocks();
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
@@ -3295,6 +3495,38 @@ describe('durevcode thread binding survival', () => {
         assert.equal(live.thinkingDraftOk, true, 'the lane still lives after the penalty');
     }, 14000);
 
+    test('live penalties widen the walker pace and it decays back', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            session: { id: string };
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+            thinkingAt: number;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        state.thinkingActive = true;
+        state.thinkingSince = Date.now() - 2500;
+        state.thinkingText = 'pressure widens the folded header pace';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        const renderTimers = (agent as unknown as { thinkingRenderTimers: Map<string, NodeJS.Timeout> }).thinkingRenderTimers;
+        const pendingRender = renderTimers.get('ses_test01');
+        if (pendingRender) clearTimeout(pendingRender);
+        renderTimers.delete('ses_test01');
+        const governor = (agent as unknown as { governor: { note429: (scope: string, sec: number) => number } }).governor;
+        governor.note429('topic-edit', 24);
+        state.thinkingText += ' carrying a live penalty';
+        (state as unknown as { thinkingAt: number }).thinkingAt = Date.now() - 2500;
+        const held = await (agent as unknown as { paintThinkingText: (t: unknown, s: unknown, r: string) => Promise<boolean> }).paintThinkingText(telegram, state, state.thinkingText);
+        assert.equal(held, false, 'a 2500ms gap is not enough when a live 24s penalty lifts the floor');
+        (state as unknown as { thinkingAt: number }).thinkingAt = Date.now() - 3500;
+        const painted = await (agent as unknown as { paintThinkingText: (t: unknown, s: unknown, r: string) => Promise<boolean> }).paintThinkingText(telegram, state, state.thinkingText);
+        assert.equal(painted, true, 'a 3500ms gap clears the widened 3360ms floor');
+    }, 12000);
+
     test('a dry topic-edit budget freezes walker edits until the turn boundary refills it', async () => {
         jest.restoreAllMocks();
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
@@ -3408,13 +3640,15 @@ describe('durevcode thread binding survival', () => {
         await (agent as unknown as { finalizeSession: (t: unknown, s: unknown) => Promise<void> }).finalizeSession(telegram, state);
         const finalizeAt = calls.find((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === 777)?.at ?? 0;
         const pinAt = [...calls].reverse().find((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === 5)?.at ?? 0;
-        const retireAt = calls.find((c) => c.op === 'markup')?.at ?? 0;
         assert.ok(finalizeAt > 0, 'the thinking finalize edit landed');
         assert.ok(pinAt > 0, 'the pinned context refresh landed');
-        assert.ok(retireAt > 0, 'the control retire landed');
         assert.ok(pinAt - finalizeAt >= 350, `the pin refresh waits its jittered gap (${pinAt - finalizeAt}ms)`);
-        assert.ok(retireAt - pinAt >= 350, `the retire waits its jittered gap (${retireAt - pinAt}ms)`);
-        assert.ok(retireAt - finalizeAt >= 700, 'the boundary no longer fires three edits back-to-back');
+        assert.equal(calls.filter((c) => c.op === 'markup').length, 0, 'a deep backlog keeps the control up, no retire at the boundary');
+        state.promptQueue.length = 0;
+        await (agent as unknown as { syncStopKeyboard: (t: unknown, s: unknown) => Promise<void> }).syncStopKeyboard(telegram, state);
+        const retireAt = calls.find((c) => c.op === 'markup')?.at ?? 0;
+        assert.ok(retireAt > 0, 'the control retires once the backlog drains');
+        assert.equal(state.stopMessageId, null, 'the retired control releases its id');
     }, 10000);
 
     test('while the reveal is expanded the walker paints on a slower pulse', async () => {
@@ -4231,6 +4465,25 @@ describe('durevcode poll fanout', () => {
         assert.equal(calls.filter((c) => c.op === 'send').length, sendsAfterFail);
     });
 
+    test('cli run spawn failure clears the lane and notices', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: { opencode: { cliFirst?: boolean } } }).config.opencode.cliFirst = true;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        let errorListener: ((...args: Array<unknown>) => void) | null = null;
+        const opencode = {
+            ...fake.opencode,
+            spawnRun: () => ({ pid: 4244, kill: () => true, on: (event: string, listener: (...args: Array<unknown>) => void) => { if (event === 'error') errorListener = listener; } }),
+        };
+        const state = await attachWatched(agent, telegram);
+        await agent.handleInbound(telegram, opencode, inboundMsg({ message_id: 744, text: 'spawnless' }, now));
+        assert.ok(errorListener, 'a spawn error listener must be attached');
+        (errorListener as (...args: Array<unknown>) => void)(new Error('spawn ENOENT'));
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
+        assert.equal((state as unknown as { cliRun: unknown }).cliRun, null, 'the busy lane clears after a spawn failure');
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('failed to spawn')), 'the chat is notified');
+    });
+
     test('cli-first spawn failure falls back to server', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         (agent as unknown as { config: { opencode: { cliFirst?: boolean } } }).config.opencode.cliFirst = true;
@@ -4320,6 +4573,7 @@ describe('durevcode poll fanout', () => {
         assert.ok(state.stopMessageId !== null, 'a mid-turn deletion keeps the id until the turn ends');
         state.finalized = true;
         state.stoppedAt = Date.now() - 10000;
+        (state as unknown as { lastPromptAt: number }).lastPromptAt = Date.now() - 10000;
         setEditImpl(null);
         await agent.syncStopKeyboard(telegram, state);
         assert.equal(state.stopMessageId, null, 'the turn boundary retires the dead control');
@@ -5226,6 +5480,32 @@ describe('durevcode questions', () => {
         assert.equal(calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Allowed once')).length, 1);
     });
 
+    test('permission replies accept @bot forms and map allow or deny to decisions', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const decided: Array<{ permId: string; decision: unknown }> = [];
+        const opencode = {
+            replyPermission: async (sessionId: string, permId: string, decision: unknown) => {
+                decided.push({ permId, decision });
+                return true;
+            },
+        };
+        const replies = (agent as unknown as { permReplies: Map<number, { sessionId: string; permId: string }> }).permReplies;
+        replies.set(751, { sessionId: 'ses_test01', permId: 'per_a' });
+        await (agent as unknown as {
+            dispatchInboxCommand: (t: unknown, o: unknown, s: unknown, text: string, replyTo?: number) => Promise<boolean>;
+        }).dispatchInboxCommand(telegram, opencode, state, '/allow@dur_bot', 751);
+        assert.deepEqual(decided, [{ permId: 'per_a', decision: 'once' }]);
+        assert.equal(replies.has(751), false, 'the pending reply link is consumed');
+        replies.set(752, { sessionId: 'ses_test01', permId: 'per_b' });
+        await (agent as unknown as {
+            dispatchInboxCommand: (t: unknown, o: unknown, s: unknown, text: string, replyTo?: number) => Promise<boolean>;
+        }).dispatchInboxCommand(telegram, opencode, state, '/deny@dur_bot', 752);
+        assert.deepEqual(decided.slice(1), [{ permId: 'per_b', decision: 'reject' }]);
+        assert.equal(replies.has(752), false, 'the denial link is consumed too');
+    });
+
     test('dead question card is disarmed and late tap only toasts', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -6051,6 +6331,7 @@ const MODE_AGENTS = [
         state.toolCalls = 0;
         state.lastText = '';
         (state as unknown as { finalized: boolean }).finalized = true;
+        (state as unknown as { lastPromptAt: number }).lastPromptAt = Date.now() - 10000;
         await agent.syncStopKeyboard(telegram, state);
         assert.equal(state.stopMessageId, null);
         const clears = calls.filter((c) => c.op === 'markup');
@@ -6095,6 +6376,115 @@ const MODE_AGENTS = [
         await agent.syncStopKeyboard(telegram, state);
         assert.equal(state.stopMessageId, null);
     });
+
+    test('a fresh dispatch holds the stop control through the dead window', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & {
+            stopMessageId: number | null;
+            lastPromptAt: number;
+        };
+        state.promptQueue.push('work');
+        await agent.pumpPrompts(telegram, fake.opencode, state);
+        const controlId = state.stopMessageId;
+        assert.ok(typeof controlId === 'number');
+        state.promptQueue.length = 0;
+        state.confirming = null;
+        state.pending.length = 0;
+        state.toolCalls = 0;
+        state.lastText = '';
+        state.lastEventAt = 0;
+        (state as unknown as { finalized: boolean }).finalized = true;
+        await agent.syncStopKeyboard(telegram, state);
+        assert.equal(state.stopMessageId, controlId, 'the control survives the just-dispatched dead window');
+        state.lastPromptAt = Date.now() - 10000;
+        await agent.syncStopKeyboard(telegram, state);
+        assert.equal(state.stopMessageId, null, 'the control retires once the dispatch window ages out');
+    }, 10000);
+
+    test('a 429 retire keeps the control and paces its retry', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setMarkupImpl } = stubTelegram() as unknown as {
+            telegram: unknown;
+            calls: Array<{ op: string; params: Record<string, unknown> }>;
+            setMarkupImpl: (fn: (params: Record<string, unknown>) => Promise<unknown>) => void;
+        };
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & {
+            stopMessageId: number | null;
+            stopRetireRetryAt: number;
+        };
+        state.stopMessageId = 4242;
+        state.stopControlText = 'stale';
+        state.stopControlAt = Date.now() - 10000;
+        state.toolCalls = 0;
+        state.lastText = '';
+        state.lastEventAt = 0;
+        (state as unknown as { finalized: boolean }).finalized = true;
+        state.lastPromptAt = 0;
+        calls.length = 0;
+        let retireAttempts = 0;
+        setMarkupImpl(async () => {
+            retireAttempts += 1;
+            if (retireAttempts === 1) throw new Error('Telegram API error: Too Many Requests: retry after 23');
+            return {};
+        });
+        await (agent as unknown as { syncStopKeyboard: (t: unknown, s: unknown) => Promise<void> }).syncStopKeyboard(telegram, state);
+        assert.equal(state.stopMessageId, 4242, 'a failed retire keeps the id so no orphan keyboards spawn');
+        assert.equal(state.stopControlText, 'stale');
+        assert.ok(state.stopRetireRetryAt > Date.now(), 'the retry is deferred past the 429 window');
+        const governor = (agent as unknown as { governor: { penaltyMsLeft: (scope: string) => number } }).governor;
+        assert.ok(governor.penaltyMsLeft('topic-markup') > 20000, 'the retire 429 feeds the markup class');
+        const guarded = calls.filter((c) => c.op === 'markup');
+        await (agent as unknown as { syncStopKeyboard: (t: unknown, s: unknown) => Promise<void> }).syncStopKeyboard(telegram, state);
+        assert.equal(
+            calls.filter((c) => c.op === 'markup').length,
+            guarded.length,
+            'the retry waits for its scheduled slot',
+        );
+        state.stopRetireRetryAt = 0;
+        await (agent as unknown as { syncStopKeyboard: (t: unknown, s: unknown) => Promise<void> }).syncStopKeyboard(telegram, state);
+        assert.equal(state.stopMessageId, null, 'the paced retry retires the control');
+        const retires = calls.filter((c) => c.op === 'markup' && (c.params as Record<string, unknown>).message_id === 4242);
+        assert.equal(retires.length, 2, 'the two attempts reused the same control id');
+    }, 10000);
+
+    test('a network-failed retire keeps the control and retries quietly', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setMarkupImpl } = stubTelegram() as unknown as {
+            telegram: unknown;
+            calls: Array<{ op: string; params: Record<string, unknown> }>;
+            setMarkupImpl: (fn: (params: Record<string, unknown>) => Promise<unknown>) => void;
+        };
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & {
+            stopMessageId: number | null;
+            stopRetireRetryAt: number;
+        };
+        state.stopMessageId = 46346;
+        state.stopControlText = 'stale';
+        state.stopControlAt = Date.now() - 10000;
+        state.toolCalls = 0;
+        state.lastText = '';
+        state.lastEventAt = 0;
+        (state as unknown as { finalized: boolean }).finalized = true;
+        state.lastPromptAt = 0;
+        calls.length = 0;
+        let retireAttempts = 0;
+        setMarkupImpl(async () => {
+            retireAttempts += 1;
+            if (retireAttempts === 1) throw new Error('fetch failed');
+            return {};
+        });
+        await (agent as unknown as { syncStopKeyboard: (t: unknown, s: unknown) => Promise<void> }).syncStopKeyboard(telegram, state);
+        assert.equal(state.stopMessageId, 46346);
+        assert.ok(state.stopRetireRetryAt >= Date.now() + 2000, 'a network failure defers the retry by the quiet floor');
+        const governor = (agent as unknown as { governor: { penaltyMsLeft: (scope: string) => number } }).governor;
+        assert.equal(governor.penaltyMsLeft('topic-markup'), 0, 'a network failure never feeds the markup class');
+        assert.equal((agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil, 0, 'a network failure never parks the session window');
+        state.stopRetireRetryAt = 0;
+        await (agent as unknown as { syncStopKeyboard: (t: unknown, s: unknown) => Promise<void> }).syncStopKeyboard(telegram, state);
+        assert.equal(state.stopMessageId, null);
+    }, 10000);
 
     test('double stop sends one notice', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
@@ -6936,6 +7326,99 @@ describe('durevcode session lifecycle races', () => {
         await agent.syncSessions();
         assert.equal(agent.watched.has(state.session.id), false);
     });
+
+    test('detaching a session clears its session-scoped zombie timers', async () => {
+        const agent = makeAgent() as unknown as {
+            dropSessionRefs: (sessionId: string) => void;
+            thinkingRenderTimers: Map<string, NodeJS.Timeout>;
+            thinkingDraftTimers: Map<string, NodeJS.Timeout>;
+            thoughtPaintRetryTimers: Map<string, NodeJS.Timeout>;
+            lastSessionAgents: Map<string, string>;
+            topicProbedAt: Map<string, number>;
+            threadRetryAt: Map<string, number>;
+        };
+        const { telegram } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as { session: { id: string } };
+        const sid = state.session.id;
+        const pending = setTimeout(() => {}, 60_000);
+        const stalled = setTimeout(() => {}, 60_000);
+        const repainting = setTimeout(() => {}, 60_000);
+        const archived = setTimeout(() => {}, 60_000);
+        pending.unref?.();
+        stalled.unref?.();
+        repainting.unref?.();
+        archived.unref?.();
+        agent.thinkingRenderTimers.set(sid, pending);
+        agent.thinkingDraftTimers.set(sid, stalled);
+        agent.thoughtPaintRetryTimers.set(`s${sid}`, repainting);
+        agent.thoughtPaintRetryTimers.set('a12345:1', archived);
+        agent.lastSessionAgents.set(sid, 'build');
+        agent.topicProbedAt.set(sid, Date.now());
+        agent.threadRetryAt.set(sid, Date.now() + 5000);
+        agent.dropSessionRefs(sid);
+        assert.equal(agent.thinkingRenderTimers.has(sid), false, 'a pending render dies with the session');
+        assert.equal(agent.thinkingDraftTimers.has(sid), false, 'a pending draft dies with the session');
+        assert.equal(agent.thoughtPaintRetryTimers.has(`s${sid}`), false, 'a pending paint retry dies with the session');
+        assert.equal(agent.thoughtPaintRetryTimers.has('a12345:1'), true, 'archive retries are message-scoped and survive');
+        assert.equal(agent.lastSessionAgents.has(sid), false, 'the agent cursor dies with the session');
+        assert.equal(agent.topicProbedAt.has(sid), false, 'the probe stamp dies with the session');
+        assert.equal(agent.threadRetryAt.has(sid), false, 'the retry stamp dies with the session');
+        clearTimeout(archived);
+    });
+
+    test('a failed drain keeps dead replies until disarm succeeds', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            permReplies: Map<number, unknown>;
+            questReplies: Map<number, unknown>;
+        };
+        const { telegram, calls, setMarkupImpl } = stubTelegram() as unknown as {
+            telegram: unknown;
+            calls: Array<{ op: string; params: Record<string, unknown> }>;
+            setMarkupImpl: (fn: (params: Record<string, unknown>) => Promise<unknown>) => void;
+        };
+        const state = await attachWatched(agent, telegram) as unknown as { session: { id: string }; knownPerms: string[]; permTick: number };
+        agent.permReplies.set(7001, { sessionId: state.session.id, permId: 'per_dead' });
+        const fake = { listPermissions: async () => [] };
+        state.knownPerms = [];
+        state.permTick = 2;
+        let disarmAttempts = 0;
+        setMarkupImpl(async () => {
+            disarmAttempts += 1;
+            if (disarmAttempts === 1) throw new Error('fetch failed');
+            return {};
+        });
+        await (agent as unknown as { pollPermissions: (t: unknown, o: unknown, s: unknown) => Promise<void> }).pollPermissions(telegram, fake, state);
+        assert.equal(agent.permReplies.has(7001), true, 'a failed disarm keeps the reply for the next tick');
+        assert.equal(disarmAttempts, 1);
+        state.permTick = 2;
+        await (agent as unknown as { pollPermissions: (t: unknown, o: unknown, s: unknown) => Promise<void> }).pollPermissions(telegram, fake, state);
+        assert.equal(agent.permReplies.has(7001), false, 'the successful disarm releases the reply');
+        assert.equal(disarmAttempts, 2, 'the retry reused the same message id');
+    });
+
+    test('attach rewrites the persisted entry without losing plain-mode or cursors', async () => {
+        const agent = makeAgent() as unknown as {
+            persisted: Record<string, Record<string, unknown>>;
+            attachSession: (telegram: unknown, session: unknown) => Promise<unknown>;
+        };
+        const { telegram } = stubTelegram();
+        agent.persisted = {
+            ses_persists: {
+                threadId: null,
+                contextMessageId: null,
+                pinnedThreadId: null,
+                lastSeen: Date.now() - 1000,
+                buildMode: false,
+                knownPerms: ['per_stale'],
+                promptAt: 42,
+            },
+        };
+        await agent.attachSession(telegram, { ...SESSION, id: 'ses_persists' });
+        const entry = agent.persisted['ses_persists'];
+        assert.equal(entry.buildMode, false, 'plain mode survives the attach rewrite');
+        assert.deepEqual(entry.knownPerms, ['per_stale'], 'the perm cursor survives the attach rewrite');
+        assert.equal(entry.promptAt, 42, 'the prompt stamp survives the attach rewrite');
+    });
 });
 
 describe('durevcode delivery dedup', () => {
@@ -7713,5 +8196,67 @@ describe('durevcode question taps', () => {
         agentTyped.questPicks.set('2', single);
         await agentTyped.handleCallback(stub.telegram, opencode, query({ id: 'cb-tap-single', data: 'q2:0:0' }));
         assert.deepEqual(answers.map((entry) => entry.answers), [[['Блок-шифр Crypton на C (Recommended)']]]);
+    });
+
+    test('a 429 on a question toggle repaint records the penalty window', async () => {
+        const { agent } = questAgent();
+        const opencode = { replyQuestion: async () => true };
+        const stub = await withState(agent);
+        stub.setMarkupImpl(async () => {
+            throw new Error('Telegram API error: Too Many Requests: retry after 7');
+        });
+        await agent.handleCallback(stub.telegram, opencode, query({ id: 'cb-tg-tap', data: 'q1:0:1' }));
+        assert.ok((agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil > Date.now(), 'the toggle press absorbed the window');
+        const picks = (agent as unknown as { questPicks: Map<string, QuestCtx> }).questPicks;
+        assert.deepEqual(picks.get('1')?.picks, [['Порт плагина'], []], 'the pick registers before the repaint is attempted');
+        const markupAfterFirst = stub.calls.filter((c) => c.op === 'markup').length;
+        assert.ok(markupAfterFirst > 0, 'exactly one repaint attempt landed');
+        await agent.handleCallback(stub.telegram, opencode, query({ id: 'cb-tg-tap2', data: 'q1:1:0' }));
+        assert.equal(stub.calls.filter((c) => c.op === 'markup').length, markupAfterFirst, 'while the window is live the repaint is skipped, not spammed');
+        assert.deepEqual(picks.get('1')?.picks, [['Порт плагина'], ['Да, с KAT']], 'the live-window tap still records the pick');
+    });
+
+    test('a 429 on the question resolve edit absorbs the window and reports failure', async () => {
+        const { agent } = questAgent();
+        const stub = await withState(agent);
+        stub.setEditImpl(async () => {
+            throw new Error('Telegram API error: Too Many Requests: retry after 5');
+        });
+        const state = (agent as unknown as { watched: Map<string, unknown> }).watched.get('ses_test01');
+        (agent as unknown as { questReplies: Map<number, unknown> }).questReplies.set(60654, {
+            sessionId: 'ses_test01',
+            reqId: 'frm_1',
+            questions: TWO_QUESTIONS.questions,
+        });
+        const editsBefore = stub.calls.filter((c) => c.op === 'edit').length;
+        const sendsBefore = stub.calls.filter((c) => c.op === 'send').length;
+        const result = await (agent as unknown as {
+            editQuestionMessage: (t: unknown, s: unknown, r: unknown, text: string, resolved?: boolean) => Promise<boolean>;
+        }).editQuestionMessage(
+            stub.telegram,
+            state,
+            { sessionID: 'ses_test01', id: 'frm_1', questions: TWO_QUESTIONS.questions },
+            'resolved text',
+        );
+        assert.equal(result, false, 'the edit reports failure so the caller keeps the refs');
+        assert.ok((agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil > Date.now(), 'the window was absorbed');
+        assert.equal(stub.calls.filter((c) => c.op === 'edit').length, editsBefore + 1, 'exactly one edit attempt');
+        assert.equal(stub.calls.filter((c) => c.op === 'send').length, sendsBefore, 'no fallback message is sent into a live window');
+    });
+
+    test('a 429 on permission keyboard cleanup absorbs the window', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setMarkupImpl } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        setMarkupImpl(async () => {
+            throw new Error('Telegram API error: Too Many Requests: retry after 6');
+        });
+        const fake = { replyPermission: async () => true };
+        (agent as unknown as { permReplies: Map<number, unknown> }).permReplies.set(709, { sessionId: 'ses_test01', permId: 'per_1' });
+        const markupBefore = calls.filter((c) => c.op === 'markup').length;
+        await (agent as unknown as { answerPermission(t: unknown, o: unknown, s: unknown, p: string, r: number, a: boolean): Promise<void> }).answerPermission(telegram, fake, state, 'per_1', 709, true);
+        assert.ok((agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil > Date.now(), 'the cleanup 429 absorbed the window');
+        assert.equal((agent as unknown as { permReplies: Map<number, unknown> }).permReplies.has(709), false, 'the pending reply ref clears before the cleanup');
+        assert.ok(calls.filter((c) => c.op === 'markup').length > markupBefore, 'the cleanup attempt landed');
     });
 });

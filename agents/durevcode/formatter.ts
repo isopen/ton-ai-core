@@ -8,19 +8,24 @@ export const TOOL_DURATION_MIN_SEC = 1;
 export function formatLiveTool(event: RadarEvent, elapsedSec?: number): string {
     if (event.kind !== 'tool') return formatConsoleBatch([event], null);
     const span = elapsedSec ?? event.durationSec;
+    const output = event.output ?? '';
+    const tail = output.length > LIVE_OUTPUT_MAX ? `…${output.slice(-LIVE_OUTPUT_MAX)}` : output;
+    return toolBlockLines(event.status, event.summary, tail, span).join('\n');
+}
+
+function toolBlockLines(status: string, summary: string, output: string, span: number | undefined): string[] {
     const age = span !== undefined && span >= TOOL_DURATION_MIN_SEC ? ` · ${span}s` : '';
-    const lines = [`${toolStateIcon(event.status)} ${escapeHtml(event.summary)}${age}`];
-    if (event.output) {
-        const tail = event.output.length > LIVE_OUTPUT_MAX ? `…${event.output.slice(-LIVE_OUTPUT_MAX)}` : event.output;
-        if (tail.includes('```')) {
-            lines.push(markdownToTelegramHtml(tail));
-        } else if (tail.includes('\n')) {
-            lines.push(preBlock(tail, langFromPath(event.summary)));
+    const lines = [`${toolStateIcon(status)} ${escapeHtml(summary)}${age}`];
+    if (output) {
+        if (output.includes('```')) {
+            lines.push(markdownToTelegramHtml(output));
+        } else if (output.includes('\n')) {
+            lines.push(preBlock(output, langFromPath(summary)));
         } else {
-            lines.push(codeNote(tail));
+            lines.push(codeNote(output));
         }
     }
-    return lines.join('\n');
+    return lines;
 }
 
 const STOP_COMMAND_LINE = /^\/stop(?:@[A-Za-z0-9_]+)?$/;
@@ -131,9 +136,13 @@ const CODE_NOTE_CHARS = 240;
 import type { ModelApiInfo, ModelVariantInfo, QuestionRequest, RadarEvent } from '@ton-ai/opencode';
 import { parseTmdEntities, safeHref, codeLangClass, TmdEntity } from '@ton-ai/tmd';
 
-export function parseTopicTitle(name: string, sessionId: string): string {
+function topicTagSuffix(sessionId: string): string {
     const tag = sessionId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'session';
-    const suffix = ` · ${tag}`;
+    return ` · ${tag}`;
+}
+
+export function parseTopicTitle(name: string, sessionId: string): string {
+    const suffix = topicTagSuffix(sessionId);
     let title = name.replace(/\s+/g, ' ').trim();
     const legacyPrefix = `${icon('gram')} `;
     if (title.startsWith(legacyPrefix)) title = title.slice(legacyPrefix.length).trim();
@@ -147,8 +156,7 @@ export const TOPIC_ICON_CUSTOM_EMOJI_ID = '5384090987024892581';
 
 export function formatTopicName(title: string, sessionId: string): string {
     const prefix = `${EMOJI.gram} `;
-    const tag = sessionId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'session';
-    const suffix = ` · ${tag}`;
+    const suffix = topicTagSuffix(sessionId);
     const cleanTitle = title.replace(/\s+/g, ' ').trim() || 'Untitled session';
     const budget = FORUM_TOPIC_NAME_LIMIT - prefix.length - suffix.length - 8;
     const head = cleanTitle.length > budget ? `${cleanTitle.slice(0, Math.max(0, budget))}…` : cleanTitle;
@@ -291,7 +299,7 @@ export function markdownToTelegramHtml(text: string): string {
 export function splitTelegramHtml(text: string, limit: number = TELEGRAM_TEXT_LIMIT): string[] {
     const max = Math.max(64, Math.floor(limit));
     if (text.length <= max) return [text];
-    const known = new Set(['b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'tg-emoji', 'blockquote', 'em', 'strong', 'ins', 'strike', 'del']);
+    const known = new Set([...HTML_BALANCED_TAGS, 'tg-emoji']);
     const stack: Array<{ name: string; open: string }> = [];
     const scanInto = (s: string, target: Array<{ name: string; open: string }>): void => {
         const re = /<\/?[a-zA-Z][^<>]*>/g;
@@ -349,12 +357,7 @@ export function splitTelegramHtml(text: string, limit: number = TELEGRAM_TEXT_LI
                 break;
             }
         }
-        while (cut > 1 && cut < rest.length) {
-            const prev = rest.charCodeAt(cut - 1);
-            const cur = rest.charCodeAt(cut);
-            if (prev < 0xd800 || prev > 0xdbff || cur < 0xdc00 || cur > 0xdfff) break;
-            cut -= 1;
-        }
+        while (cut > 1 && cut < rest.length && splitsSurrogatePair(rest, cut)) cut -= 1;
         const body = rest.slice(0, cut);
         scanInto(body, stack);
         const closing = stack
@@ -373,16 +376,18 @@ export function splitTelegramHtml(text: string, limit: number = TELEGRAM_TEXT_LI
     return parts;
 }
 
+function splitsSurrogatePair(text: string, index: number): boolean {
+    if (index < 1 || index >= text.length) return false;
+    const prev = text.charCodeAt(index - 1);
+    const cur = text.charCodeAt(index);
+    return prev >= 0xd800 && prev <= 0xdbff && cur >= 0xdc00 && cur <= 0xdfff;
+}
+
 export function truncate(text: string, max: number): string {
     if (text.length <= max) return text;
     if (max <= 1) return '…';
     let end = max - 1;
-    while (end > 0 && end < text.length) {
-        const prev = text.charCodeAt(end - 1);
-        const cur = text.charCodeAt(end);
-        if (prev < 0xd800 || prev > 0xdbff || cur < 0xdc00 || cur > 0xdfff) break;
-        end -= 1;
-    }
+    while (end > 0 && end < text.length && splitsSurrogatePair(text, end)) end -= 1;
     return `${text.slice(0, end)}…`;
 }
 
@@ -675,13 +680,14 @@ export function formatProgress(state: ProgressState): string {
 }
 
 export function toolStateIcon(state: string): string {
-    if (state === 'fail' || state === 'error' || state === 'failed') return toolIcon('fail');
-    if (state === 'ok' || state === 'completed') return toolIcon('ok');
-    return toolIcon('running');
+    if (state === 'ok') return toolIcon('ok');
+    return toolIcon(toToolState(state));
 }
 
 export interface ContextState {
-    total: number;
+    occupancy: number;
+    cumulative: number;
+    cumulativeOnly: boolean;
     input: number;
     output: number;
     reasoning: number;
@@ -694,18 +700,20 @@ export interface ContextState {
 
 export function formatContextPin(state: ContextState): string {
     const modeSuffix = state.mode ? ` · ${state.mode}` : '';
-    const head =
-        state.limit && state.limit > 0
-            ? `Context (${Math.floor((state.total / state.limit) * 100)}%)${modeSuffix}:\n${icon('coin')} <code>${state.total}/${state.limit}</code>`
-            : `Context${modeSuffix}:\n${icon('coin')} <code>${state.total}</code> tokens`;
-    return (
-        `${head}\n` +
+    const lifetime = state.cumulative.toLocaleString('en-US');
+    const head = state.cumulativeOnly
+        ? `Context${modeSuffix}:\n${icon('coin')} <code>${lifetime} lifetime</code>`
+        : state.limit && state.limit > 0
+            ? `Context (${Math.floor((state.occupancy / state.limit) * 100)}%)${modeSuffix}:\n${icon('coin')} <code>${state.occupancy.toLocaleString('en-US')}/${state.limit.toLocaleString('en-US')}</code>`
+            : `Context${modeSuffix}:\n${icon('coin')} <code>${state.occupancy.toLocaleString('en-US')} tokens</code>`;
+    const rows =
         `${icon('inbox')} <code>${state.input.toLocaleString('en-US')} in</code>  ` +
         `${icon('outbox')} <code>${state.output.toLocaleString('en-US')} out</code>\n` +
         `${icon('brain')} <code>${state.reasoning.toLocaleString('en-US')} reasoning</code>\n` +
         `${icon('cache')} <code>${state.cacheRead.toLocaleString('en-US')} cache</code>\n` +
-        `${icon('money')} <code>$${state.cost.toFixed(4)}</code>`
-    );
+        `${icon('money')} <code>$${state.cost.toFixed(4)}</code>`;
+    const tail = state.cumulativeOnly ? '' : `\n${icon('timer')} <code>${lifetime} lifetime</code>`;
+    return `${head}\n${rows}${tail}`;
 }
 
 export function formatQuestion(request: QuestionRequest): string {
@@ -739,11 +747,7 @@ const THOUGHT_ARCHIVE_CAP = 3600;
 function reasoningTail(text: string, cap: number): string | null {
     const cut = text.length > cap;
     let tail = cut ? text.slice(-cap) : text;
-    if (cut && tail.length > 0) {
-        const prev = text.charCodeAt(text.length - tail.length - 1);
-        const cur = tail.charCodeAt(0);
-        if (prev >= 0xd800 && prev <= 0xdbff && cur >= 0xdc00 && cur <= 0xdfff) tail = tail.slice(1);
-    }
+    if (cut && tail.length > 0 && splitsSurrogatePair(text, text.length - tail.length)) tail = tail.slice(1);
     if (!tail) return null;
     return escapeHtml(cut ? `…${tail}` : tail);
 }
@@ -795,20 +799,7 @@ export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | nul
                 chunks.push([`${icon('chat')} <i>${escapeHtml(truncate(event.text, 500))}</i>`]);
                 break;
             case 'tool': {
-                const span = event.durationSec;
-                const age = span !== undefined && span >= TOOL_DURATION_MIN_SEC ? ` · ${span}s` : '';
-                const lines = [`${toolStateIcon(event.status)} ${escapeHtml(event.summary)}${age}`];
-                if (event.output) {
-                    const clipped = truncate(event.output, TOOL_OUTPUT_CAP);
-                    if (clipped.includes('```')) {
-                        lines.push(markdownToTelegramHtml(clipped));
-                    } else if (clipped.includes('\n')) {
-                        lines.push(preBlock(clipped, langFromPath(event.summary)));
-                    } else {
-                        lines.push(codeNote(clipped));
-                    }
-                }
-                chunks.push(lines);
+                chunks.push(toolBlockLines(event.status, event.summary, truncate(event.output ?? '', TOOL_OUTPUT_CAP), event.durationSec));
                 break;
             }
             case 'files':

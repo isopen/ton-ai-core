@@ -148,27 +148,29 @@ describe('formatter', () => {
         assert.ok(text.length <= 3900);
     });
 
-    test('formatContextPin shows usage percent when limit is known', () => {
-        const pin = formatContextPin({ total: 500000, input: 90000, output: 8000, reasoning: 2000, cacheRead: 390000, cacheWrite: 10000, limit: 1000000, cost: 0.0234 });
-        assert.ok(pin.includes('Context (50%):'));
-        assert.ok(pin.includes('500000/1000000</code>'));
-        assert.ok(pin.includes('<code>90,000 in</code>'));
-        assert.ok(pin.includes('<code>8,000 out</code>'));
-        assert.ok(pin.includes('<code>2,000 reasoning</code>'));
-        assert.ok(pin.includes('<code>390,000 cache</code>'));
-        assert.ok(pin.includes('<code>$0.0234</code>'));
+    test('formatContextPin shows window occupancy and a lifetime line', () => {
+        const pin = formatContextPin({ occupancy: 51364, cumulative: 10147944, cumulativeOnly: false, input: 654, output: 70, reasoning: 0, cacheRead: 47872, cacheWrite: 0, limit: 200000, cost: 0 });
+        assert.ok(pin.includes('Context (25%):'));
+        assert.ok(pin.includes('51,364/200,000</code>'));
+        assert.ok(pin.includes('<code>654 in</code>'));
+        assert.ok(pin.includes('<code>70 out</code>'));
+        assert.ok(pin.includes('<code>47,872 cache</code>'));
+        assert.ok(pin.includes('<code>$0.0000</code>'));
+        assert.ok(pin.includes('<code>10,147,944 lifetime</code>'));
     });
 
-    test('formatContextPin works without limit', () => {
-        const pin = formatContextPin({ total: 15, input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, limit: null, cost: 0 });
-        assert.ok(pin.includes('<code>15</code> tokens'));
+    test('formatContextPin hides window math when the last call is unknown', () => {
+        const pin = formatContextPin({ occupancy: 0, cumulative: 10016250, cumulativeOnly: true, input: 8736497, output: 446876, reasoning: 832877, cacheRead: 0, cacheWrite: 0, limit: 200000, cost: 0 });
+        assert.ok(pin.includes('Context:\n'));
         assert.ok(!pin.includes('%'));
+        const lifetimeRows = pin.split(' lifetime</code>').length - 1;
+        assert.ok(lifetimeRows === 1, `the fallback shows the lifetime exactly once (rows=${lifetimeRows})`);
     });
 
     test('formatContextPin appends render mode when set', () => {
-        const base = { total: 500000, input: 90000, output: 8000, reasoning: 2000, cacheRead: 390000, cacheWrite: 10000, limit: 1000000, cost: 0.0234 };
+        const base = { occupancy: 51364, cumulative: 10147944, cumulativeOnly: false, input: 654, output: 70, reasoning: 0, cacheRead: 47872, cacheWrite: 0, limit: 200000, cost: 0 };
         assert.ok(!formatContextPin(base).includes('Build'));
-        assert.ok(formatContextPin({ ...base, mode: 'Build' }).includes('Context (50%) · Build:'));
+        assert.ok(formatContextPin({ ...base, mode: 'Build' }).includes('Context (25%) · Build:'));
         assert.ok(formatContextPin({ ...base, limit: null, mode: 'Plain' }).includes('Context · Plain:'));
     });
 

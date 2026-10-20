@@ -11,7 +11,6 @@ export const GOVERNOR_CLASS_DEFAULTS: Record<string, GovernorClassConfig> = {
     'topic-edit': { cost: 1, capacity: 40, failLimit: 4, failBaseMs: 2400, failFactor: 1.5, failCapMs: 8000 },
     'topic-send': { cost: 1, capacity: 24, failLimit: 4, failBaseMs: 1000, failFactor: 2, failCapMs: 20000 },
     'topic-markup': { cost: 1, capacity: 8, failLimit: 4, failBaseMs: 3000, failFactor: 1.6, failCapMs: 30000 },
-    'topic-document': { cost: 2, capacity: 2, failLimit: 2, failBaseMs: 4000, failFactor: 2, failCapMs: 30000 },
     draft: { cost: 1, capacity: 60, failLimit: 4, failBaseMs: 2000, failFactor: 1, failCapMs: 2000 },
 };
 
@@ -68,6 +67,15 @@ export class TelegramRateGovernor {
         const until = this.penaltyUntil.get(scope) ?? 0;
         const left = until - this.now();
         return left > 0 ? left : 0;
+    }
+
+    pressure(): number {
+        let max = 0;
+        for (const until of this.penaltyUntil.values()) {
+            max = Math.max(max, until - this.now());
+        }
+        if (max <= 0) return 0;
+        return Math.min(1, max / 60000);
     }
 
     registerFail(scope: string): FailOutcome {

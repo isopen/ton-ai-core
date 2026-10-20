@@ -22,16 +22,20 @@ describe('durevcode rate governor', () => {
 
     test('class budget drains on spend and refills per turn', () => {
         const t = clock();
-        const gov = new TelegramRateGovernor(t.now, Math.random);
-        assert.equal(gov.capacity('topic-document'), 2);
-        assert.ok(gov.canSpend('topic-document'));
-        gov.spend('topic-document');
-        gov.spend('topic-document');
-        assert.equal(gov.budget('topic-document'), 0, 'the two-document budget is drained');
-        assert.ok(!gov.canSpend('topic-document'), 'a third document is refused by budget');
+        const cfgs = {
+            ...GOVERNOR_CLASS_DEFAULTS,
+            probe: { cost: 2, capacity: 2, failLimit: 2, failBaseMs: 4000, failFactor: 2, failCapMs: 30000 },
+        };
+        const gov = new TelegramRateGovernor(t.now, Math.random, cfgs);
+        assert.equal(gov.capacity('probe'), 2);
+        assert.ok(gov.canSpend('probe'));
+        gov.spend('probe');
+        gov.spend('probe');
+        assert.equal(gov.budget('probe'), 0, 'the two-shot budget is drained');
+        assert.ok(!gov.canSpend('probe'), 'a third spend is refused by budget');
         assert.ok(gov.canSpend('topic-edit'), 'other classes still spend freely');
-        gov.refill('topic-document');
-        assert.ok(gov.canSpend('topic-document'), 'the turn boundary restores the budget');
+        gov.refill('probe');
+        assert.ok(gov.canSpend('probe'), 'the turn boundary restores the budget');
     });
 
     test('draft failures pause flat and park after the fail limit', () => {
@@ -84,9 +88,24 @@ describe('durevcode rate governor', () => {
         assert.equal(GOVERNOR_CLASS_DEFAULTS['topic-edit'].capacity, 40);
         assert.equal(GOVERNOR_CLASS_DEFAULTS['topic-send'].capacity, 24);
         assert.equal(GOVERNOR_CLASS_DEFAULTS['topic-markup'].capacity, 8);
-        assert.equal(GOVERNOR_CLASS_DEFAULTS['topic-document'].capacity, 2);
         assert.equal(GOVERNOR_CLASS_DEFAULTS.draft.failBaseMs, 2000, 'draft pauses stay exactly as the resilient lane promises');
         assert.equal(GOVERNOR_CLASS_DEFAULTS.draft.failLimit, 4, 'parking arrives on the 5th failure');
+    });
+
+    test('pressure grades the whole system by the worst live penalty', () => {
+        const t = clock();
+        const gov = new TelegramRateGovernor(t.now, Math.random);
+        assert.equal(gov.pressure(), 0, 'a quiet chat sits at zero pressure');
+        gov.note429('draft', 30);
+        const thirty = gov.pressure();
+        assert.ok(thirty > 0.5 && thirty < 0.55, 'a 30s penalty grades around half, got ' + thirty);
+        gov.note429('topic-edit', 120);
+        assert.equal(gov.pressure(), 1, 'the worst live penalty caps the grade');
+        t.tick(62_000);
+        const decayed = gov.pressure();
+        assert.ok(decayed > 0.9 && decayed < 1, 'the grade decays as the long penalty burns down, got ' + decayed);
+        t.tick(59_000);
+        assert.equal(gov.pressure(), 0, 'the grade returns to zero when windows pass');
     });
 
     test('unknown scopes fall back to gentle defaults instead of throwing', () => {

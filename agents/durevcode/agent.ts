@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'node:path';
 import { TelegramRateGovernor } from './governor';
 import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton } from '@ton-ai/telegram-bot-api';
-import { ContextSnapshot, ModelApiInfo, OpencodeConfig, OpencodePlugin, OpencodeServerError, OpencodeServerEvent, PermissionDecision, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionPermissionRule, SessionRow, pickModeAgents, snapshotTotal, SpawnedProcess } from '@ton-ai/opencode';
+import { ContextSnapshot, ModelApiInfo, OpencodeConfig, OpencodePlugin, OpencodeServerError, OpencodeServerEvent, PermissionDecision, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionPermissionRule, SessionRow, pickModeAgents, SpawnedProcess } from '@ton-ai/opencode';
 import {
     EMOJI,
     checkIcon,
@@ -146,6 +146,9 @@ const USER_ACTIVE_MS = 300000;
 const FINALIZED_GRACE_MS = 120000;
 const STOP_QUIET_MS = 10000;
 const STOP_DEDUP_MS = 10000;
+const STOP_DISPATCH_RECENCY_MS = 4000;
+const STOP_RETIRE_FAIL_RETRY_MS = 2500;
+const CLOSED_WARN_CAP = 64;
 const CONTEXT_THROTTLE_MS = 15000;
 const TYPING_COOLDOWN_MS = 4000;
 const TYPING_TICK_MS = 4000;
@@ -242,6 +245,15 @@ function sanitizeInboxName(raw: string, fallback: string): string {
 
 export function isMessageNotModifiedError(error: unknown): boolean {
     return error instanceof Error && error.message.includes('message is not modified');
+}
+
+export function errorText(error: unknown): unknown {
+    if (error instanceof Error) return error.message;
+    return error;
+}
+
+export function withCaption(caption: string, body: string): string {
+    return caption ? `${caption}\n\n${body}` : body;
 }
 
 export function isDraftTooLong(error: unknown): boolean {
@@ -573,6 +585,7 @@ interface WatchedSession {
     pinSending: boolean;
     stopControlText: string | null;
     stopControlAt: number;
+    stopRetireRetryAt: number;
     thinkingMessageId: number | null;
     modelCardMessageId: number | null;
     thinkingText: string;
@@ -696,6 +709,7 @@ export class DurevcodeAgent extends BaseAgent {
     private thoughtArchives = new Map<number, ThoughtArchiveEntry>();
     private thoughtPaintRetryTimers = new Map<string, NodeJS.Timeout>();
     private thinkingDraftTimers = new Map<string, NodeJS.Timeout>();
+    private thinkingDraftInFlight = new Set<string>();
     private thoughtFoldEditAt = 0;
     private thoughtDocBusy = new Set<number>();
     private resolvingQuestions = new Set<string>();
@@ -946,6 +960,9 @@ export class DurevcodeAgent extends BaseAgent {
                     ...(typeof record.stopMessageId === 'number' && Number.isFinite(record.stopMessageId)
                         ? { stopMessageId: record.stopMessageId }
                         : {}),
+                    ...(typeof record.promptAt === 'number' && Number.isFinite(record.promptAt) && record.promptAt > 0
+                        ? { promptAt: record.promptAt }
+                        : {}),
                 };
                 if (threadId !== null && !this.tombstonedSessions.has(id)) {
                     this.topicTags.set(sessionTagOf(id), { sessionId: id, threadId, at: typeof record.lastSeen === 'number' ? record.lastSeen : 0 });
@@ -957,11 +974,7 @@ export class DurevcodeAgent extends BaseAgent {
                     if (typeof markedAt !== 'number' || !Number.isFinite(markedAt)) continue;
                     this.tombstonedSessions.set(id, markedAt);
                 }
-                while (this.tombstonedSessions.size > TOMBSTONE_CAP) {
-                    const oldest = this.tombstonedSessions.keys().next();
-                    if (oldest.done === true) break;
-                    this.tombstonedSessions.delete(oldest.value);
-                }
+                this.evictOldestEntries(this.tombstonedSessions, TOMBSTONE_CAP);
             }
             const rawTopics = (parsed as Record<string, unknown>).topics;
             if (rawTopics && typeof rawTopics === 'object' && !Array.isArray(rawTopics)) {
@@ -978,11 +991,7 @@ export class DurevcodeAgent extends BaseAgent {
                         at: typeof record.at === 'number' && Number.isFinite(record.at) ? record.at : 0,
                     });
                 }
-                while (this.topicTags.size > TOPIC_TAG_CAP) {
-                    const oldest = [...this.topicTags.entries()].sort((a, b) => a[1].at - b[1].at)[0];
-                    if (!oldest) break;
-                    this.topicTags.delete(oldest[0]);
-                }
+                this.evictOldestByAt(this.topicTags, TOPIC_TAG_CAP, (entry) => entry.at);
             }
             for (const [tag, entry] of [...this.topicTags]) {
                 if (this.tombstonedSessions.has(entry.sessionId)) this.topicTags.delete(tag);
@@ -1043,11 +1052,7 @@ export class DurevcodeAgent extends BaseAgent {
                 if (existing?.sessionId === id && existing.threadId === entry.threadId) continue;
                 this.topicTags.set(tag, { sessionId: id, threadId: entry.threadId, at: now });
             }
-            while (this.topicTags.size > TOPIC_TAG_CAP) {
-                const oldest = [...this.topicTags.entries()].sort((a, b) => a[1].at - b[1].at)[0];
-                if (!oldest) break;
-                this.topicTags.delete(oldest[0]);
-            }
+            this.evictOldestByAt(this.topicTags, TOPIC_TAG_CAP, (entry) => entry.at);
             mkdirSync(dirname(this.config.durevcode.statePath), { recursive: true });
             writeAtomic(this.config.durevcode.statePath, JSON.stringify({
                 version: 1,
@@ -1058,7 +1063,7 @@ export class DurevcodeAgent extends BaseAgent {
                 topics: Object.fromEntries([...this.topicTags.entries()]),
             }));
         } catch (error) {
-            console.debug('Durevcode state save failed:', error);
+            console.debug('Durevcode state save failed:', errorText(error));
         }
     }
 
@@ -1089,11 +1094,7 @@ export class DurevcodeAgent extends BaseAgent {
     private markTombstoned(sessionId: string): void {
         this.tombstonedSessions.delete(sessionId);
         this.tombstonedSessions.set(sessionId, Date.now());
-        while (this.tombstonedSessions.size > TOMBSTONE_CAP) {
-            const oldest = this.tombstonedSessions.keys().next();
-            if (oldest.done === true) break;
-            this.tombstonedSessions.delete(oldest.value);
-        }
+        this.evictOldestEntries(this.tombstonedSessions, TOMBSTONE_CAP);
     }
 
     private reapTombstones(liveIds: string[]): void {
@@ -1130,7 +1131,7 @@ export class DurevcodeAgent extends BaseAgent {
                 this.dropSessionRefs(id);
                 pruned += 1;
             } catch (error) {
-                console.debug('Durevcode dead binding check failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode dead binding check failed:', errorText(error));
                 return;
             }
         }
@@ -1164,7 +1165,7 @@ export class DurevcodeAgent extends BaseAgent {
         for (const withIcon of [true, false]) {
             try {
                 const topic = await telegram.createForumTopic({
-                    chat_id: this.config.durevcode.chatId,
+                    chat_id: this.chatId(),
                     name: formatTopicName(state.session.title, state.session.id),
                     ...(withIcon ? { icon_custom_emoji_id: TOPIC_ICON_CUSTOM_EMOJI_ID } : {}),
                 });
@@ -1213,6 +1214,7 @@ export class DurevcodeAgent extends BaseAgent {
             ...(existing?.knownParts !== undefined ? { knownParts: existing.knownParts } : {}),
             ...(existing?.knownEventSig !== undefined ? { knownEventSig: existing.knownEventSig } : {}),
             ...(existing?.knownPerms !== undefined ? { knownPerms: existing.knownPerms } : {}),
+            ...(existing?.promptAt !== undefined ? { promptAt: existing.promptAt } : {}),
             ...(existing?.stopMessageId !== undefined ? { stopMessageId: existing.stopMessageId } : {}),
         };
         this.savePersisted();
@@ -1268,6 +1270,7 @@ export class DurevcodeAgent extends BaseAgent {
                     const last = this.closedWarnedAt.get(thread) ?? 0;
                     if (Date.now() - last > TOPIC_CLOSED_WARN_MS) {
                         this.closedWarnedAt.set(thread, Date.now());
+                        this.evictOldestByAt(this.closedWarnedAt, CLOSED_WARN_CAP, (at) => at);
                         console.warn(
                             `Durevcode topic ${thread} is closed; session ${state.session.id} kept. ` +
                                 `Reopen the topic to resume.`,
@@ -1296,8 +1299,11 @@ export class DurevcodeAgent extends BaseAgent {
 
     private renderContextText(state: WatchedSession): string {
         const snapshot = state.snapshot;
+        const cumulative = state.session.tokens_input + state.session.tokens_output + state.session.tokens_reasoning;
         return formatContextPin({
-            total: snapshot ? snapshotTotal(snapshot) : state.session.tokens_input + state.session.tokens_output + state.session.tokens_reasoning,
+            cumulative,
+            cumulativeOnly: snapshot === null,
+            occupancy: snapshot ? snapshot.input + snapshot.cacheRead + snapshot.cacheWrite : cumulative,
             input: snapshot ? snapshot.input : state.session.tokens_input,
             output: snapshot ? snapshot.output : state.session.tokens_output,
             reasoning: snapshot ? snapshot.reasoning : state.session.tokens_reasoning,
@@ -1313,7 +1319,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (state.contextMessageId === null) return 'failed';
         try {
             await telegram.pinChatMessage({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_id: state.contextMessageId,
                 disable_notification: true,
             });
@@ -1331,12 +1337,12 @@ export class DurevcodeAgent extends BaseAgent {
                     `Durevcode context pin failed ` +
                         `(chat=${this.config.durevcode.chatId} thread=${state.threadId} ` +
                         `message=${state.contextMessageId} session=${state.session.id}): ` +
-                        `${error instanceof Error ? error.message : error}. ` +
+                        `${errorText(error)}. ` +
                         `Give the bot the Pin Messages (can_pin_messages) admin right.`,
                 );
                 return 'rights';
             }
-            console.debug('Durevcode context pin failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode context pin failed:', errorText(error));
             return 'failed';
         }
     }
@@ -1388,7 +1394,7 @@ export class DurevcodeAgent extends BaseAgent {
             const ok = await opencode.setSessionPermissions(sessionId, DUREVCODE_GATED_PERMISSIONS);
             if (!ok) console.warn(`Durevcode permissions not applied, session gone (${sessionId}).`);
         } catch (error) {
-            console.warn('Durevcode permissions failed:', error instanceof Error ? error.message : error);
+            console.warn('Durevcode permissions failed:', errorText(error));
         }
     }
 
@@ -1470,6 +1476,7 @@ export class DurevcodeAgent extends BaseAgent {
             pinSending: false,
             stopControlText: null,
             stopControlAt: 0,
+            stopRetireRetryAt: 0,
             thinkingMessageId: null,
             modelCardMessageId: null,
             thinkingText: '',
@@ -1558,14 +1565,14 @@ export class DurevcodeAgent extends BaseAgent {
                 if (reusedPin !== null) {
                     try {
                         await telegram.editMessageReplyMarkup({
-                            chat_id: this.config.durevcode.chatId,
+                            chat_id: this.chatId(),
                             message_id: reusedPin,
                             reply_markup: { inline_keyboard: [] },
                         });
                         state.stopButtonOn = false;
                     } catch (error) {
                         if (!isMessageNotModifiedError(error) && !isMessageGoneError(error)) {
-                            console.debug('Durevcode stop button reset failed:', error instanceof Error ? error.message : error);
+                            console.debug('Durevcode stop button reset failed:', errorText(error));
                         } else {
                             state.stopButtonOn = false;
                         }
@@ -1580,13 +1587,16 @@ export class DurevcodeAgent extends BaseAgent {
             lastSeen: Date.now(),
             ...(state.appliedTopicName ? { appliedTopicName: state.appliedTopicName } : {}),
             ...(state.userNamed ? { userNamed: true } : {}),
+            ...(state.buildMode ? {} : { buildMode: false }),
             ...(state.knownParts.size > 0
                 ? { knownParts: Object.fromEntries([...state.knownParts.entries()].slice(-PERSISTED_CURSOR_CAP)) }
                 : {}),
             ...(state.knownEventSig.size > 0
                 ? { knownEventSig: Object.fromEntries([...state.knownEventSig.entries()].slice(-PERSISTED_CURSOR_CAP)) }
                 : {}),
+            ...(state.knownPerms.length > 0 ? { knownPerms: state.knownPerms } : {}),
             ...(state.stopMessageId !== null ? { stopMessageId: state.stopMessageId } : {}),
+            ...(state.lastPromptAt > 0 ? { promptAt: state.lastPromptAt } : {}),
         };
         this.savePersisted();
         console.log(`Durevcode attached session ${session.id} (${session.title.slice(0, 60)})`);
@@ -1604,7 +1614,7 @@ export class DurevcodeAgent extends BaseAgent {
             if (list.length === 0) return;
             agents = pickModeAgents(list);
         } catch (error) {
-            console.debug('Durevcode agent list failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode agent list failed:', errorText(error));
             return;
         }
         const wanted = state.buildMode ? agents.build : agents.plan;
@@ -1618,7 +1628,7 @@ export class DurevcodeAgent extends BaseAgent {
         try {
             switched = await opencode.setAgent(state.session.id, wanted);
         } catch (error) {
-            console.debug('Durevcode mode sync failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode mode sync failed:', errorText(error));
             return;
         }
         if (!switched) return;
@@ -1648,7 +1658,7 @@ export class DurevcodeAgent extends BaseAgent {
         try {
             ids = await this.resolveSessionIds();
         } catch (error) {
-            console.debug('Durevcode session list failed:', error);
+            console.debug('Durevcode session list failed:', errorText(error));
             return;
         }
         if (ids.length === 0 && this.watched.size === 0) {
@@ -1664,7 +1674,7 @@ export class DurevcodeAgent extends BaseAgent {
             try {
                 session = await opencode.getSession(id);
             } catch (error) {
-                console.debug('Durevcode session read failed:', error);
+                console.debug('Durevcode session read failed:', errorText(error));
                 continue;
             }
             if (!session) continue;
@@ -1824,6 +1834,26 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private dropSessionRefs(sessionId: string): void {
+        const renderTimer = this.thinkingRenderTimers.get(sessionId);
+        if (renderTimer) {
+            clearTimeout(renderTimer);
+            this.thinkingRenderTimers.delete(sessionId);
+        }
+        const draftTimer = this.thinkingDraftTimers.get(sessionId);
+        if (draftTimer) {
+            clearTimeout(draftTimer);
+            this.thinkingDraftTimers.delete(sessionId);
+        }
+        for (const key of [`s${sessionId}`, `p${sessionId}`]) {
+            const retryTimer = this.thoughtPaintRetryTimers.get(key);
+            if (retryTimer) {
+                clearTimeout(retryTimer);
+                this.thoughtPaintRetryTimers.delete(key);
+            }
+        }
+        this.lastSessionAgents.delete(sessionId);
+        this.topicProbedAt.delete(sessionId);
+        this.threadRetryAt.delete(sessionId);
         for (const [messageId, ref] of this.permReplies) {
             if (ref.sessionId === sessionId) this.permReplies.delete(messageId);
         }
@@ -1946,12 +1976,76 @@ export class DurevcodeAgent extends BaseAgent {
         );
     }
 
-    private async safeReply(telegram: TelegramBotPlugin, state: WatchedSession, text: string): Promise<void> {
+    private async safeReply(telegram: TelegramBotPlugin, state: WatchedSession, text: string, depth = 0): Promise<void> {
         try {
             await this.deliverMessage(telegram, state, text);
         } catch (error) {
-            console.debug('Durevcode reply failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode reply failed:', errorText(error));
+            if (depth > 0) return;
+            const retryMs = isRateLimitError(error)
+                ? this.delayAfterRateLimit(getRetryAfterSec(error) ?? 5, 300)
+                : this.quietRetryDelay(2400, 400);
+            if (isRateLimitError(error)) this.governor.note429('topic-send', getRetryAfterSec(error) ?? 5);
+            const timer = setTimeout(() => void this.safeReply(telegram, state, text, 1), retryMs);
+            timer.unref?.();
         }
+    }
+
+    private absorbRateLimit(scope: string, error: unknown, label: string, sessionId: string): number {
+        const waitSec = getRetryAfterSec(error) ?? 10;
+        this.rateLimitedUntil = Math.max(this.rateLimitedUntil, Date.now() + waitSec * 1000 + 1000);
+        this.governor.note429(scope, waitSec);
+        console.warn(`Durevcode ${label} rate limited, retry after ${waitSec}s (session=${sessionId}).`);
+        return waitSec;
+    }
+
+    private evictOldestEntries<K>(collection: { size: number; keys(): IterableIterator<K>; delete(key: K): boolean }, cap: number): void {
+        while (collection.size > cap) {
+            const oldest = collection.keys().next();
+            if (oldest.done === true) break;
+            collection.delete(oldest.value);
+        }
+    }
+
+    private evictOldestByAt<K, V>(map: Map<K, V>, cap: number, keyAt: (value: V) => number): void {
+        while (map.size > cap) {
+            let oldestKey: K | null = null;
+            let oldestAt = Number.POSITIVE_INFINITY;
+            for (const [key, value] of map) {
+                const at = keyAt(value);
+                if (at < oldestAt) {
+                    oldestAt = at;
+                    oldestKey = key;
+                }
+            }
+            if (oldestKey === null) break;
+            map.delete(oldestKey);
+        }
+    }
+
+    private delayAfterRateLimit(waitSec: number, jitterMs: number): number {
+        return (waitSec + 1) * 1000 + this.governor.uniform(jitterMs);
+    }
+
+    private quietRetryDelay(baseMs: number, jitterMs: number): number {
+        return baseMs + this.governor.uniform(jitterMs);
+    }
+
+    private draftRetryAfter(state: WatchedSession, waitSec: number, error: unknown): void {
+        state.thinkingDraftAt = Date.now() + waitSec * 1000 + this.governor.uniform(300);
+        this.governor.note429('draft', waitSec);
+        console.debug(`Durevcode thinking draft paused ${waitSec}s: ${errorText(error)}`);
+    }
+
+    private rememberDelivery(state: WatchedSession, sig: string): void {
+        state.recentDelivered.push({ sig, at: Date.now() });
+        if (state.recentDelivered.length > DELIVERY_DEDUP_KEEP) {
+            state.recentDelivered.splice(0, state.recentDelivered.length - DELIVERY_DEDUP_KEEP);
+        }
+    }
+
+    private slowThinking(state: WatchedSession): void {
+        state.thinkingTypeMs = Math.min(THINKING_TYPE_PACE_MAX_MS, Math.max(THINKING_TYPE_PACE_MS, Math.round(state.thinkingTypeMs * 1.3)));
     }
 
     private async handleInbound(
@@ -1976,10 +2070,7 @@ export class DurevcodeAgent extends BaseAgent {
             const seenKey = `${message.chat.id}:${message.message_id}`;
             if (this.seenInbound.has(seenKey)) return;
             this.seenInbound.add(seenKey);
-            if (this.seenInbound.size > MAX_SEEN_INBOUND) {
-                const oldest = this.seenInbound.values().next().value;
-                if (oldest !== undefined) this.seenInbound.delete(oldest);
-            }
+            this.evictOldestEntries(this.seenInbound, MAX_SEEN_INBOUND);
         }
         const state = this.findSessionByThread(threadId);
         if (!state) {
@@ -2055,9 +2146,8 @@ export class DurevcodeAgent extends BaseAgent {
         }
         if (replyTo !== undefined) {
             const pendingPerm = this.permReplies.get(replyTo);
-            const replyCommand = text.split(/\s+/)[0]?.toLowerCase();
-            if (pendingPerm && pendingPerm.sessionId === state.session.id && (replyCommand === '/allow' || replyCommand === '/deny')) {
-                await this.answerPermission(telegram, opencode, state, pendingPerm.permId, replyTo, replyCommand === '/allow' ? 'once' : 'reject');
+            if (pendingPerm && pendingPerm.sessionId === state.session.id && (command === '/allow' || command === '/deny')) {
+                await this.answerPermission(telegram, opencode, state, pendingPerm.permId, replyTo, command === '/allow' ? 'once' : 'reject');
                 return true;
             }
             const pendingQuest = this.questReplies.get(replyTo);
@@ -2117,7 +2207,7 @@ export class DurevcodeAgent extends BaseAgent {
                 try {
                     existing = await opencode.getSession(reboundId);
                 } catch (error) {
-                    console.debug('Durevcode rebind read failed:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode rebind read failed:', errorText(error));
                     throw error;
                 }
                 if (!existing) {
@@ -2144,18 +2234,7 @@ export class DurevcodeAgent extends BaseAgent {
                     this.prunePersistedThreadRivals(existing.id, threadId);
                     this.savePersisted();
                     console.log(`Durevcode rebound session ${existing.id} to topic ${threadId}`);
-                    const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
-                    for (const queuedMessage of queued) {
-                        const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
-                        if (hasMediaMessage(queuedMessage)) {
-                            await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
-                        } else if (queuedText) {
-                            const queuedReplyTo = queuedMessage.reply_to_message?.message_id;
-                            if (await this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo)) continue;
-                            this.enqueuePrompt(state, queuedText);
-                        }
-                    }
-                    await this.pumpPrompts(telegram, opencode, state);
+                    await this.drainCreatingThread(telegram, opencode, state, threadId, message);
                     return;
                 } else {
                     const state = this.watched.get(existing.id)!;
@@ -2170,18 +2249,7 @@ export class DurevcodeAgent extends BaseAgent {
                         this.savePersisted();
                         console.log(`Durevcode restored topic ${threadId} for watched session ${existing.id}`);
                     }
-                    const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
-                    for (const queuedMessage of queued) {
-                        const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
-                        if (hasMediaMessage(queuedMessage)) {
-                            await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
-                        } else if (queuedText) {
-                            const queuedReplyTo = queuedMessage.reply_to_message?.message_id;
-                            if (await this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo)) continue;
-                            this.enqueuePrompt(state, queuedText);
-                        }
-                    }
-                    await this.pumpPrompts(telegram, opencode, state);
+                    await this.drainCreatingThread(telegram, opencode, state, threadId, message);
                     return;
                 }
             }
@@ -2191,7 +2259,15 @@ export class DurevcodeAgent extends BaseAgent {
                 try {
                     recovered = await opencode.getSession(recoveredId);
                 } catch (error) {
-                    console.debug('Durevcode topic recovery read failed:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode topic recovery read failed:', errorText(error));
+                    try {
+                        await telegram.sendMessage({
+                            chat_id: this.chatId(),
+                            message_thread_id: threadId,
+                            text: `${icon('fail')} Could not restore the session for this topic, try again.`,
+                        });
+                    } catch {
+                    }
                     return;
                 }
                 if (recovered) {
@@ -2201,18 +2277,7 @@ export class DurevcodeAgent extends BaseAgent {
                     this.prunePersistedThreadRivals(recovered.id, threadId);
                     this.savePersisted();
                     console.log(`Durevcode recovered session ${recovered.id} for topic ${threadId} (tag map)`);
-                    const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
-                    for (const queuedMessage of queued) {
-                        const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
-                        if (hasMediaMessage(queuedMessage)) {
-                            await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
-                        } else if (queuedText) {
-                            const queuedReplyTo = queuedMessage.reply_to_message?.message_id;
-                            if (await this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo)) continue;
-                            this.enqueuePrompt(state, queuedText);
-                        }
-                    }
-                    await this.pumpPrompts(telegram, opencode, state);
+                    await this.drainCreatingThread(telegram, opencode, state, threadId, message);
                     return;
                 }
             }
@@ -2224,8 +2289,32 @@ export class DurevcodeAgent extends BaseAgent {
             this.prunePersistedThreadRivals(session.id, threadId);
             this.savePersisted();
             console.log(`Durevcode created session ${session.id} for new topic ${threadId}`);
-            const queued = [message, ...(this.creatingThreads.get(threadId) ?? [])];
-            for (const queuedMessage of queued) {
+            await this.drainCreatingThread(telegram, opencode, state, threadId, message);
+        } catch (error) {
+            console.error(`Durevcode new-topic session create failed (thread=${threadId}):`, error);
+            try {
+                await telegram.sendMessage({
+                    chat_id: this.chatId(),
+                    message_thread_id: threadId,
+                    text: `${icon('fail')} Could not create a session for this topic, try again.`,
+                });
+            } catch {
+            }
+        } finally {
+            this.creatingThreads.delete(threadId);
+        }
+    }
+
+    private async drainCreatingThread(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion' | 'createSession' | 'sendPrompt' | 'getSession' | 'renameSession' | 'listModels'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'listAgents' | 'setAgent'>>,
+        state: WatchedSession,
+        threadId: number,
+        first: Message,
+    ): Promise<void> {
+        let batch = [first];
+        while (true) {
+            for (const queuedMessage of batch) {
                 const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
                 if (hasMediaMessage(queuedMessage)) {
                     await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
@@ -2235,20 +2324,12 @@ export class DurevcodeAgent extends BaseAgent {
                     this.enqueuePrompt(state, queuedText);
                 }
             }
-            await this.pumpPrompts(telegram, opencode, state);
-        } catch (error) {
-            console.error(`Durevcode new-topic session create failed (thread=${threadId}):`, error);
-            try {
-                await telegram.sendMessage({
-                    chat_id: this.config.durevcode.chatId,
-                    message_thread_id: threadId,
-                    text: `${icon('fail')} Could not create a session for this topic, try again.`,
-                });
-            } catch {
-            }
-        } finally {
-            this.creatingThreads.delete(threadId);
+            const late = this.creatingThreads.get(threadId);
+            if (!late || late.length === 0) break;
+            batch = late.splice(0);
         }
+        this.creatingThreads.delete(threadId);
+        await this.pumpPrompts(telegram, opencode, state);
     }
 
     private enqueuePrompt(state: WatchedSession, text: string): void {
@@ -2358,6 +2439,34 @@ export class DurevcodeAgent extends BaseAgent {
         );
     }
 
+    private async rejectOversizedMedia(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        caption: string,
+    ): Promise<void> {
+        if (caption.trim()) {
+            this.enqueuePrompt(state, `${caption}\n\n[attachment dropped: media over 20 MB]`);
+            return;
+        }
+        await this.safeReply(telegram, state, `${icon('denied')} Media is too large (max 20 MB), send it as text.`);
+    }
+
+    private async downloadToBuffer(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        fileId: string,
+        label: string,
+    ): Promise<Buffer | null> {
+        try {
+            const data = await telegram.downloadFile(fileId);
+            return Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+        } catch (error) {
+            console.debug(`Durevcode ${label} download failed:`, errorText(error));
+            await this.safeReply(telegram, state, `${icon('fail')} Could not download the file.`);
+            return null;
+        }
+    }
+
     private async inboundMedia(
         telegram: TelegramBotPlugin,
         state: WatchedSession,
@@ -2368,29 +2477,14 @@ export class DurevcodeAgent extends BaseAgent {
         kind: string,
     ): Promise<void> {
         if (fileSize !== undefined && fileSize > MEDIA_MAX_BYTES) {
-            if (caption.trim()) {
-                this.enqueuePrompt(state, caption);
-                return;
-            }
-            await this.safeReply(telegram, state, `${icon('denied')} Media is too large (max 20 MB), send it as text.`);
+            await this.rejectOversizedMedia(telegram, state, caption);
             return;
         }
-        let data: string | Buffer;
-        try {
-            data = await telegram.downloadFile(fileId);
-        } catch (error) {
-            console.debug('Durevcode media download failed:', error instanceof Error ? error.message : error);
-            await this.safeReply(telegram, state, `${icon('fail')} Could not download the file.`);
-            return;
-        }
-        const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+        const buffer = await this.downloadToBuffer(telegram, state, fileId, 'media');
+        if (!buffer) return;
         if (buffer.length > MEDIA_MAX_BYTES) {
             buffer.fill(0);
-            if (caption.trim()) {
-                this.enqueuePrompt(state, caption);
-                return;
-            }
-            await this.safeReply(telegram, state, `${icon('denied')} Media is too large (max 20 MB), send it as text.`);
+            await this.rejectOversizedMedia(telegram, state, caption);
             return;
         }
         const name = sanitizeInboxName(rawName, `${kind}_file.bin`);
@@ -2398,7 +2492,7 @@ export class DurevcodeAgent extends BaseAgent {
         try {
             mkdirSync(dir, { recursive: true });
         } catch (error) {
-            console.debug('Durevcode inbox mkdir failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode inbox mkdir failed:', errorText(error));
             await this.safeReply(telegram, state, `${icon('fail')} Could not store the file.`);
             return;
         }
@@ -2408,16 +2502,16 @@ export class DurevcodeAgent extends BaseAgent {
         try {
             writeAtomic(join(dir, stored), buffer);
         } catch (error) {
-            console.debug('Durevcode inbox write failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode inbox write failed:', errorText(error));
             await this.safeReply(telegram, state, `${icon('fail')} Could not store the file.`);
             return;
         } finally {
             buffer.fill(0);
         }
-        const promptText = caption
-            ? `${caption}\n\n[file ${name}] saved to ${rel}. Read it with the read tool and analyse it.`
-            : `[file ${name}] saved to ${rel}. Read it with the read tool and analyse it.`;
-        this.enqueuePrompt(state, promptText);
+        this.enqueuePrompt(
+            state,
+            withCaption(caption, `[file ${name}] saved to ${rel}. Read it with the read tool and analyse it.`),
+        );
     }
 
     private async inboundDocument(
@@ -2456,15 +2550,8 @@ export class DurevcodeAgent extends BaseAgent {
             await this.safeReply(telegram, state, `${icon('denied')} File is too large, send it as text.`);
             return;
         }
-        let data: string | Buffer;
-        try {
-            data = await telegram.downloadFile(document.file_id);
-        } catch (error) {
-            console.debug('Durevcode document download failed:', error instanceof Error ? error.message : error);
-            await this.safeReply(telegram, state, `${icon('fail')} Could not download the file.`);
-            return;
-        }
-        const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+        const buffer = await this.downloadToBuffer(telegram, state, document.file_id, 'document');
+        if (!buffer) return;
         if (buffer.length > DOC_MAX_BYTES || buffer.includes(0)) {
             await this.safeReply(telegram, state, `${icon('denied')} Only text files are accepted.`);
             return;
@@ -2474,8 +2561,7 @@ export class DurevcodeAgent extends BaseAgent {
             content = `${content.slice(0, DOC_MAX_CHARS)}\n… (truncated, first ${DOC_MAX_CHARS} chars)`;
         }
         const name = document.file_name || 'file';
-        const promptText = caption ? `${caption}\n\n[file ${name}]\n${content}` : `[file ${name}]\n${content}`;
-        this.enqueuePrompt(state, promptText);
+        this.enqueuePrompt(state, withCaption(caption, `[file ${name}]\n${content}`));
     }
 
     private async startCliRun(
@@ -2494,6 +2580,13 @@ export class DurevcodeAgent extends BaseAgent {
             if (state.cliRun === child) state.cliRun = null;
             if (typeof code === 'number' && code !== 0) {
                 void this.safeReply(telegram, state, `${icon('fail')} CLI run failed (exit ${code}).`);
+            }
+        });
+        child.on('error', (cause: unknown) => {
+            console.warn(`Durevcode CLI run failed to spawn (session=${state.session.id}): ${errorText(cause)}.`);
+            if (state.cliRun === child) {
+                state.cliRun = null;
+                void this.safeReply(telegram, state, `${icon('fail')} CLI run failed to spawn, will retry.`);
             }
         });
         console.log(
@@ -2546,7 +2639,7 @@ export class DurevcodeAgent extends BaseAgent {
                     return;
                 }
             } catch (error) {
-                console.debug('Durevcode CLI-first spawn failed, trying server:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode CLI-first spawn failed, trying server:', errorText(error));
             } finally {
                 state.promptPumping = false;
             }
@@ -2578,6 +2671,7 @@ export class DurevcodeAgent extends BaseAgent {
             await this.ensureStopControl(telegram, state);
             return;
         } catch (error) {
+            const errText = error instanceof Error ? error.message.slice(0, 200) : 'unknown error';
             if (isRateLimitError(error)) {
                 const waitSec = getRetryAfterSec(error) ?? 10;
                 if (state.promptErrorText !== 'ratelimit') {
@@ -2605,12 +2699,11 @@ export class DurevcodeAgent extends BaseAgent {
                 await this.safeReply(
                     telegram,
                     state,
-                    `${icon('fail')} Prompt failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`,
+                    `${icon('fail')} Prompt failed: ${errText}`,
                 );
                 return;
             }
             state.promptNextAttemptAt = Date.now() + PROMPT_TRANSIENT_BACKOFF_MS;
-            const errText = error instanceof Error ? error.message.slice(0, 200) : 'unknown error';
             if (state.promptErrorText !== errText) {
                 state.promptErrorText = errText;
                 await this.safeReply(
@@ -2625,7 +2718,7 @@ export class DurevcodeAgent extends BaseAgent {
             }
             console.warn(
                 `Durevcode prompt transient failure, keeping it queued (session=${state.session.id}):`,
-                error instanceof Error ? error.message : error,
+                errorText(error),
             );
         }
     }
@@ -2702,7 +2795,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             models = await opencode.listModels();
         } catch (error) {
-            console.debug('Durevcode model list failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model list failed:', errorText(error));
             await this.safeReply(telegram, state, 'Could not load models, try again.');
             return;
         }
@@ -2720,7 +2813,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 this.modelCardMarkup(models, currentId, currentVariant),
             );
         } catch (error) {
-            console.debug('Durevcode model card failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model card failed:', errorText(error));
         }
     }
 
@@ -2738,7 +2831,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (target !== null) {
             try {
                 await telegram.editMessageText({
-                    chat_id: this.config.durevcode.chatId,
+                    chat_id: this.chatId(),
                     message_id: target,
                     text: wellFormed(text),
                     parse_mode: 'HTML',
@@ -2752,13 +2845,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     return;
                 }
                 if (isMessageGoneError(error)) state.modelCardMessageId = null;
-                console.debug('Durevcode model card edit failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode model card edit failed:', errorText(error));
             }
         }
         try {
             state.modelCardMessageId = await this.deliverMessage(telegram, state, text, markup);
         } catch (error) {
-            console.debug('Durevcode model card resend failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model card resend failed:', errorText(error));
         }
     }
 
@@ -2772,7 +2865,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             await this.deliverMessage(telegram, state, text, this.modeMarkup(state.buildMode));
         } catch (error) {
-            console.debug('Durevcode mode card failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode mode card failed:', errorText(error));
         }
     }
 
@@ -2794,7 +2887,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (agents.length === 0) return null;
             return pickModeAgents(agents);
         } catch (error) {
-            console.debug('Durevcode agent list failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode agent list failed:', errorText(error));
             return null;
         }
     }
@@ -2815,7 +2908,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             await telegram.answerCallbackQuery({ callback_query_id: query.id });
         } catch (error) {
-            console.debug('Durevcode mode ack failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode mode ack failed:', errorText(error));
         }
         if (state.buildMode === build) return;
         const target = await this.loadModeAgents(opencode);
@@ -2828,7 +2921,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             switched = await opencode.setAgent(state.session.id, agentId);
         } catch (error) {
-            console.debug('Durevcode mode switch failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode mode switch failed:', errorText(error));
             await this.safeReply(telegram, state, `${icon('fail')} Could not switch mode, try again.`);
             return;
         }
@@ -2867,7 +2960,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const text = this.modeCardText(state, agents);
         try {
             await telegram.editMessageText({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_id: cardId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
@@ -2878,101 +2971,31 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 try {
                     await this.deliverMessage(telegram, state, text, this.modeMarkup(state.buildMode));
                 } catch (resendError) {
-                    console.debug('Durevcode mode card resend failed:', resendError instanceof Error ? resendError.message : resendError);
+                    console.debug('Durevcode mode card resend failed:', errorText(resendError));
                 }
                 return;
             }
-            console.debug('Durevcode mode card edit failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode mode card edit failed:', errorText(error));
         }
     }
 
-    private async applySessionModel(
+    private async applyModelSelection(
         telegram: TelegramBotPlugin,
         opencode: Pick<OpencodePlugin, 'setModel' | 'listModels'> & Partial<Pick<OpencodePlugin, 'getModelLimit'>>,
         query: CallbackQuery,
         state: WatchedSession,
-        modelId: string,
-    ): Promise<void> {
-        const dismiss = async (text?: string): Promise<void> => {
-            try {
-                await telegram.answerCallbackQuery({ callback_query_id: query.id, ...(text ? { text } : {}) });
-            } catch (error) {
-                console.debug('Durevcode model ack failed:', error instanceof Error ? error.message : error);
-            }
-        };
-        let models: ModelApiInfo[];
-        try {
-            models = await opencode.listModels();
-        } catch (error) {
-            console.debug('Durevcode model list failed:', error instanceof Error ? error.message : error);
-            await dismiss();
-            await this.safeReply(telegram, state, 'Could not load models, try again.');
-            return;
-        }
-        const currentVariant = modelVariant(state.session.model);
-        const picked = models.find((m) => m.id === modelId);
-        if (!picked || !picked.providerID) {
-            await dismiss('Outdated, ask again.');
-            return;
-        }
-        const variant = variantForModel(picked, currentVariant);
-        await dismiss();
-        if (displayModel(state.session.model) === picked.id && currentVariant === variant) return;
-        let switched = false;
-        try {
-            switched = await opencode.setModel(
-                state.session.id,
-                { id: picked.id, providerID: picked.providerID, ...(variant ? { variant } : {}) },
-            );
-        } catch (error) {
-            if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                console.warn(`Durevcode model switch rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
-                return;
-            }
-            console.debug('Durevcode model switch failed:', error instanceof Error ? error.message : error);
-            await this.safeReply(telegram, state, 'Could not switch model, try again.');
-            return;
-        }
-        if (!switched) {
-            await dismiss('Outdated, ask again.');
-            return;
-        }
-        const nextModel: { id: string; providerID: string; variant?: string } = { id: picked.id, providerID: picked.providerID };
-        if (variant) nextModel.variant = variant;
-        state.session = { ...state.session, model: JSON.stringify(nextModel) };
-        state.limitChecked = false;
-        const getLimit = opencode.getModelLimit;
-        if (typeof getLimit === 'function') {
-            await this.refreshContextLimit({ getModelLimit: (id: string) => getLimit.call(opencode, id) }, state);
-        }
-        await this.editModelCard(telegram, state, models, query.message?.message_id ?? null);
-        if (state.contextMessageId !== null) {
-            state.lastContextEditAt = 0;
-            await this.updateContext(telegram, state);
-        }
-    }
-
-    private async applySessionVariant(
-        telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'setModel' | 'listModels'> & Partial<Pick<OpencodePlugin, 'getModelLimit'>>,
-        query: CallbackQuery,
-        state: WatchedSession,
+        modelId: string | null,
         variant: string,
     ): Promise<void> {
         const dismiss = async (text?: string): Promise<void> => {
             try {
                 await telegram.answerCallbackQuery({ callback_query_id: query.id, ...(text ? { text } : {}) });
             } catch (error) {
-                console.debug('Durevcode model ack failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode model ack failed:', errorText(error));
             }
         };
         const currentRef = modelRef(state.session.model);
-        if (!currentRef.id) {
+        if (modelId === null && !currentRef.id) {
             await dismiss('No model yet, pick one above.');
             return;
         }
@@ -2980,30 +3003,35 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             models = await opencode.listModels();
         } catch (error) {
-            console.debug('Durevcode model list failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model list failed:', errorText(error));
             await dismiss();
             await this.safeReply(telegram, state, 'Could not load models, try again.');
             return;
         }
-        const current = models.find((m) => m.id === currentRef.id);
-        if (!current || !current.providerID) {
+        const picked = models.find((m) => m.id === (modelId ?? currentRef.id));
+        if (!picked || !picked.providerID) {
             await dismiss('Outdated, ask again.');
             return;
         }
-        if (!modelVariantIds(current).includes(variant)) {
-            await dismiss('That effort is not offered for this model.');
-            return;
+        const currentVariant = modelVariant(state.session.model);
+        if (modelId === null) {
+            if (!modelVariantIds(picked).includes(variant)) {
+                await dismiss('That effort is not offered for this model.');
+                return;
+            }
+            if (currentRef.variant === variant) {
+                await dismiss('Already set.');
+                return;
+            }
         }
-        if (currentRef.variant === variant) {
-            await dismiss('Already set.');
-            return;
-        }
+        const nextVariant = modelId === null ? variant : variantForModel(picked, currentVariant);
         await dismiss();
+        if (currentRef.id === picked.id && currentVariant === nextVariant) return;
         let switched = false;
         try {
             switched = await opencode.setModel(
                 state.session.id,
-                { id: current.id, providerID: current.providerID, ...(variant ? { variant } : {}) },
+                { id: picked.id, providerID: picked.providerID, ...(nextVariant ? { variant: nextVariant } : {}) },
             );
         } catch (error) {
             if (isRateLimitError(error)) {
@@ -3012,7 +3040,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 console.warn(`Durevcode model switch rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
-            console.debug('Durevcode model switch failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode model switch failed:', errorText(error));
             await this.safeReply(telegram, state, 'Could not switch model, try again.');
             return;
         }
@@ -3022,14 +3050,27 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         state.session = {
             ...state.session,
-            model: JSON.stringify({ id: current.id, providerID: current.providerID, ...(variant ? { variant } : {}) }),
+            model: JSON.stringify({ id: picked.id, providerID: picked.providerID, ...(nextVariant ? { variant: nextVariant } : {}) }),
         };
+        if (modelId !== null) {
+            state.limitChecked = false;
+            const getLimit = opencode.getModelLimit;
+            if (typeof getLimit === 'function') {
+                await this.refreshContextLimit({ getModelLimit: (id: string) => getLimit.call(opencode, id) }, state);
+            }
+        }
         await this.editModelCard(telegram, state, models, query.message?.message_id ?? null);
         if (state.contextMessageId !== null) {
             state.lastContextEditAt = 0;
             await this.updateContext(telegram, state);
         }
-        await this.safeReply(telegram, state, `Effort: <b>${escapeHtml(variant)}</b> for <b>${escapeHtml(current.id)}</b>.`);
+        if (modelId === null) {
+            await this.safeReply(telegram, state, `Effort: <b>${escapeHtml(variant)}</b> for <b>${escapeHtml(picked.id)}</b>.`);
+        }
+    }
+
+    private chatId(): number {
+        return this.config.durevcode.chatId;
     }
 
     private async ensureStopControl(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
@@ -3048,7 +3089,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             state.stopControlAt = Date.now();
             console.log(`Durevcode stop control posted (session=${state.session.id} msg=${state.stopMessageId}).`);
         } catch (error) {
-            console.debug('Durevcode stop control failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode stop control failed:', errorText(error));
         } finally {
             state.stopControlSending = false;
         }
@@ -3067,7 +3108,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (text === state.stopControlText) return;
         try {
             await telegram.editMessageText({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_id: state.stopMessageId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
@@ -3082,21 +3123,15 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return;
             }
             if (isMessageGoneError(error)) {
-                state.stopMessageId = null;
-                state.stopControlText = null;
+                this.clearStopControlState(state);
                 console.log(`Durevcode stop control gone, will repost (session=${state.session.id}).`);
                 return;
             }
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                console.warn(`Durevcode stop control rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.absorbRateLimit('topic-markup', error, 'stop control', state.session.id);
                 return;
             }
-            console.debug('Durevcode stop control update failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode stop control update failed:', errorText(error));
         }
     }
 
@@ -3115,7 +3150,6 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const id = state.thinkingMessageId;
         const since = state.thinkingSince ?? Date.now();
         const text = state.thinkingText;
-        const userExpanded = !state.thinkingFolded;
         state.thinkingMessageId = null;
         state.thinkingText = '';
         state.thinkingRendered = '';
@@ -3141,16 +3175,15 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         this.clearThinkingDraft(state);
         state.thinkingDraftSent = false;
+        state.thinkingDraftOk = true;
         this.governor.refill('topic-edit');
         this.governor.refill('draft');
         this.governor.refill('topic-markup');
-        this.governor.refill('topic-send');
         if (id === null) return;
-        await this.sendThought(telegram, state.session.id, id, since, text, userExpanded, 0);
+        await this.sendThought(telegram, state.session.id, id, since, text, 0);
     }
 
-    private thoughtFoldMarkup(messageId: number, compact: boolean): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
-        void compact;
+    private thoughtFoldMarkup(messageId: number): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
         return {
             inline_keyboard: [
                 [{
@@ -3163,9 +3196,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
 
     private boundaryGap(minMs: number, jitterMs: number): Promise<void> {
         return new Promise((resolve) => {
-            const timer = setTimeout(resolve, Math.round(minMs + this.governor.uniform(jitterMs)));
+            const minimum = Math.round(minMs * (1 + this.governor.pressure()));
+            const timer = setTimeout(resolve, minimum + this.governor.uniform(jitterMs));
             timer.unref?.();
         });
+    }
+
+    private pressurePaced(ms: number): number {
+        return Math.round(ms * (1 + this.governor.pressure()));
     }
 
     private async waitForIdlePainter(state: WatchedSession | null, timeoutMs = 2000): Promise<void> {
@@ -3188,13 +3226,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             1200,
             floorDelay,
             this.rateLimitedUntil - Date.now() + 800,
-        ) + this.governor.fullJitter(300, 0, 300);
+        ) + this.governor.uniform(300);
         const timer = setTimeout(() => {
             this.thoughtPaintRetryTimers.delete(key);
             if (attempts <= 0) return;
             void this.waitForIdlePainter(state).then(async () => {
                 const ok = await apply();
-                if (!ok && Date.now() < this.rateLimitedUntil && attempts > 1) {
+                if (!ok && attempts > 1) {
                     this.scheduleThoughtPaintRetry(key, state, attempts - 1, apply);
                 }
             });
@@ -3230,12 +3268,33 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     }
 
     private async pushThinkingDraft(state: WatchedSession): Promise<void> {
+        const key = state.session.id;
+        if (this.thinkingDraftInFlight.has(key)) return;
+        this.thinkingDraftInFlight.add(key);
+        try {
+            await this.pushThinkingDraftOnce(state);
+        } finally {
+            this.thinkingDraftInFlight.delete(key);
+        }
+    }
+
+    private async pushThinkingDraftOnce(state: WatchedSession): Promise<void> {
         if (!this.thinkingDraftActive(state)) return;
         const peer = state.userId;
         if (peer === null) return;
         if (Date.now() < state.thinkingDraftAt + THINKING_DRAFT_PACE_MS) return;
         const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
         if (!telegram) return;
+        const parkDraft = (error: unknown, tag: string): void => {
+            const fail = this.governor.registerFail('draft');
+            if (!fail.parked) {
+                state.thinkingDraftAt = Date.now() + Math.round(fail.waitMs * (1 + this.governor.pressure() * 0.5)) - THINKING_DRAFT_PACE_MS;
+                console.debug(`Durevcode thinking draft paused ${tag} (fail ${fail.attempt}): ${errorText(error)}`);
+                return;
+            }
+            state.thinkingDraftOk = false;
+            console.debug(`Durevcode thinking draft lane off ${tag}: ${errorText(error)}`);
+        };
         state.thinkingDraftAt = Date.now();
         try {
             await telegram.sendMessageDraft({
@@ -3248,9 +3307,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         } catch (error) {
             if (isRateLimitError(error)) {
                 const waitSec = getRetryAfterSec(error) ?? 4;
-                state.thinkingDraftAt = Date.now() + waitSec * 1000 + this.governor.fullJitter(300, 0, 300);
-                this.governor.note429('draft', waitSec);
-                console.debug(`Durevcode thinking draft paused ${waitSec}s: ${error instanceof Error ? error.message : error}`);
+                this.draftRetryAfter(state, waitSec, error);
                 return;
             }
             if (isDraftTooLong(error) && state.thinkingDraftTail > THINKING_DRAFT_TAIL_MIN_CHARS) {
@@ -3267,30 +3324,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 } catch (retryError) {
                     if (isRateLimitError(retryError)) {
                         const waitSec = getRetryAfterSec(retryError) ?? 4;
-                        state.thinkingDraftAt = Date.now() + waitSec * 1000 + this.governor.fullJitter(300, 0, 300);
-                        this.governor.note429('draft', waitSec);
-                        console.debug(`Durevcode thinking draft paused ${waitSec}s: ${retryError instanceof Error ? retryError.message : retryError}`);
+                        this.draftRetryAfter(state, waitSec, retryError);
                         return;
                     }
-                    const fail = this.governor.registerFail('draft');
-                    if (!fail.parked) {
-                        state.thinkingDraftAt = Date.now() + fail.waitMs - THINKING_DRAFT_PACE_MS;
-                        console.debug(`Durevcode thinking draft paused after shrink fail ${fail.attempt}: ${retryError instanceof Error ? retryError.message : retryError}`);
-                        return;
-                    }
-                    state.thinkingDraftOk = false;
-                    console.debug('Durevcode thinking draft lane off after shrink:', retryError instanceof Error ? retryError.message : retryError);
+                    parkDraft(retryError, 'after shrink');
                     return;
                 }
             }
-            const fail = this.governor.registerFail('draft');
-            if (!fail.parked) {
-                state.thinkingDraftAt = Date.now() + fail.waitMs - THINKING_DRAFT_PACE_MS;
-                console.debug(`Durevcode thinking draft paused (fail ${fail.attempt}): ${error instanceof Error ? error.message : error}`);
-                return;
-            }
-            state.thinkingDraftOk = false;
-            console.debug('Durevcode thinking draft lane off:', error instanceof Error ? error.message : error);
+            parkDraft(error, 'idle');
         }
     }
 
@@ -3310,18 +3351,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             draft_id: THINKING_DRAFT_ID,
             text: '',
         }).catch((error) => {
-            console.debug('Durevcode thinking draft clear failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode thinking draft clear failed:', errorText(error));
         });
     }
 
     private registerThoughtArchive(sessionId: string, messageId: number, fullHtml: string, compactHtml: string, fullText: string, compact: boolean): void {
         this.thoughtArchives.delete(messageId);
         this.thoughtArchives.set(messageId, { sessionId, fullHtml, compactHtml, fullText, compact });
-        while (this.thoughtArchives.size > MAX_THOUGHT_ARCHIVES) {
-            const oldest = this.thoughtArchives.keys().next().value;
-            if (oldest === undefined) break;
-            this.thoughtArchives.delete(oldest);
-        }
+        this.evictOldestEntries(this.thoughtArchives, MAX_THOUGHT_ARCHIVES);
     }
 
     private async sendThought(
@@ -3330,16 +3367,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         messageId: number,
         since: number,
         text: string,
-        userExpanded: boolean,
         attempt: number,
     ): Promise<void> {
         const fullHtml = wellFormed(formatThoughtArchive(Date.now() - since, text));
         const compactHtml = fullHtml;
-        const markup = this.thoughtFoldMarkup(messageId, true);
-        void userExpanded;
+        const markup = this.thoughtFoldMarkup(messageId);
         try {
             await telegram.editMessageText({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_id: messageId,
                 text: fullHtml,
                 parse_mode: 'HTML',
@@ -3350,27 +3385,21 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         } catch (error) {
             if (isMessageNotModifiedError(error)) {
                 this.registerThoughtArchive(sessionId, messageId, fullHtml, compactHtml, text, true);
-                console.log(`Durevcode thought finalized (session=${sessionId} folded=${!userExpanded}).`);
+                console.log(`Durevcode thought finalized already (session=${sessionId} folded=true).`);
                 return;
             }
             if (isMessageGoneError(error)) return;
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                this.governor.note429('topic-edit', waitSec);
-                console.warn(`Durevcode thought rate limited, retry after ${waitSec}s (session=${sessionId}).`);
+                const waitSec = this.absorbRateLimit('topic-edit', error, 'thought', sessionId);
                 if (attempt < 4) {
                     const timer = setTimeout(() => {
-                        void this.sendThought(telegram, sessionId, messageId, since, text, userExpanded, attempt + 1);
+                        void this.sendThought(telegram, sessionId, messageId, since, text, attempt + 1);
                     }, waitSec * 1000 + 600 + this.governor.fullJitter(400, attempt, 1600));
                     timer.unref?.();
                 }
                 return;
             }
-            console.debug('Durevcode thought finalize failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode thought finalize failed:', errorText(error));
         }
     }
 
@@ -3379,11 +3408,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (!alive || alive.compact === toCompact) return true;
         try {
             await telegram.editMessageText({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_id: messageId,
                 text: toCompact ? alive.compactHtml : alive.fullHtml,
                 parse_mode: 'HTML',
-                reply_markup: this.thoughtFoldMarkup(messageId, toCompact),
+                reply_markup: this.thoughtFoldMarkup(messageId),
             });
             alive.compact = toCompact;
             this.thoughtFoldEditAt = Date.now();
@@ -3394,12 +3423,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return true;
             }
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                this.governor.note429('topic-edit', waitSec);
+                this.absorbRateLimit('topic-edit', error, 'thought archive', alive.sessionId);
                 return false;
             }
             return true;
@@ -3514,7 +3538,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             const threadId = query.message?.message_thread_id ?? (live || (entry ? this.watched.get(entry.sessionId) : null))?.threadId ?? null;
             try {
                 await telegram.sendDocument({
-                    chat_id: this.config.durevcode.chatId,
+                    chat_id: this.chatId(),
                     ...(threadId !== null && threadId !== undefined ? { message_thread_id: threadId } : {}),
                     document: {
                         filename: `durevcode-thought-${entry ? messageId : live?.session.id ?? 'live'}-${Date.now()}.txt`,
@@ -3532,7 +3556,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     await dismiss(`Rate limited, try again in ${waitSec}s.`);
                     return;
                 }
-                console.debug('Durevcode thought document failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode thought document failed:', errorText(error));
                 await dismiss();
             }
         } finally {
@@ -3540,25 +3564,43 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
     }
 
+    private clearStopControlState(state: WatchedSession): void {
+        state.stopMessageId = null;
+        state.stopControlText = null;
+        state.stopRetireRetryAt = 0;
+    }
+
     private async discardStopControl(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         if (state.stopMessageId === null) {
-            state.stopControlText = null;
+            this.clearStopControlState(state);
             return;
         }
         const controlId = state.stopMessageId;
-        state.stopMessageId = null;
-        state.stopControlText = null;
         try {
             await telegram.editMessageReplyMarkup({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_id: controlId,
                 reply_markup: { inline_keyboard: [] },
             });
+            this.clearStopControlState(state);
             console.log(`Durevcode stop control retired (session=${state.session.id} control=${controlId}).`);
         } catch (error) {
-            if (!isMessageNotModifiedError(error)) {
-                console.debug('Durevcode stop control retire failed:', error instanceof Error ? error.message : error);
+            if (isMessageNotModifiedError(error)) {
+                this.clearStopControlState(state);
+                console.log(`Durevcode stop control retired (session=${state.session.id} control=${controlId}).`);
+                return;
             }
+            if (isRateLimitError(error)) {
+                const waitSec = this.absorbRateLimit('topic-markup', error, 'stop control retire', state.session.id);
+                state.stopRetireRetryAt = Date.now() + this.delayAfterRateLimit(waitSec, 300);
+                return;
+            }
+            console.debug('Durevcode stop control retire failed:', errorText(error));
+            const retryMs = this.quietRetryDelay(STOP_RETIRE_FAIL_RETRY_MS, 400);
+            state.stopRetireRetryAt = Date.now() + retryMs;
+            console.debug(
+                `Durevcode stop control retire deferred (session=${state.session.id} control=${controlId} retryMs=${retryMs}).`,
+            );
         }
     }
 
@@ -3568,6 +3610,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             await this.ensureStopControl(telegram, state);
             await this.updateStopControlText(telegram, state);
         } else if (state.stopMessageId !== null) {
+            if (state.promptQueue.length > 0) return;
+            if (Date.now() - state.lastPromptAt < STOP_DISPATCH_RECENCY_MS) {
+                return;
+            }
+            if (state.stopRetireRetryAt > Date.now()) return;
             if (!state.finalized && Date.now() - state.stoppedAt >= STOP_QUIET_MS) return;
             await this.discardStopControl(telegram, state);
         }
@@ -3577,7 +3624,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (!this.governor.canSpend('topic-markup')) return;
         try {
             await telegram.editMessageReplyMarkup({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_id: state.contextMessageId,
                 reply_markup: want ? this.stopMarkup(state) : { inline_keyboard: [] },
             });
@@ -3591,16 +3638,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return;
             }
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                this.governor.note429('topic-markup', waitSec);
-                console.warn(`Durevcode stop button rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.absorbRateLimit('topic-markup', error, 'stop button', state.session.id);
                 return;
             }
-            console.debug('Durevcode stop button sync failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode stop button sync failed:', errorText(error));
         }
     }
 
@@ -3626,7 +3667,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                         console.log(`Durevcode stopped session ${sessionId} (interrupt=${interrupted}).`);
                     },
                     (error) => {
-                        console.debug('Durevcode interrupt failed:', error instanceof Error ? error.message : error);
+                        console.debug('Durevcode interrupt failed:', errorText(error));
                     },
                 );
             }
@@ -3634,7 +3675,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 try {
                     cliRun.kill('SIGTERM');
                 } catch (error) {
-                    console.debug('Durevcode CLI stop failed:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode CLI stop failed:', errorText(error));
                 }
                 if (state.cliRun === cliRun) state.cliRun = null;
             }
@@ -3668,6 +3709,31 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
     }
 
+    private async disarmReplyKeyboards(
+        telegram: TelegramBotPlugin,
+        messageIds: number[],
+        label: string,
+    ): Promise<boolean> {
+        if (messageIds.length === 0) return true;
+        if (Date.now() < this.rateLimitedUntil) return false;
+        let settled = true;
+        for (const messageId of messageIds) {
+            try {
+                await telegram.editMessageReplyMarkup({
+                    chat_id: this.chatId(),
+                    message_id: messageId,
+                    reply_markup: { inline_keyboard: [] },
+                });
+            } catch (error) {
+                if (!isMessageNotModifiedError(error) && !isMessageGoneError(error)) {
+                    settled = false;
+                    console.debug(`Durevcode ${label} failed:`, errorText(error));
+                }
+            }
+        }
+        return settled;
+    }
+
     private async pollPermissions(
         telegram: TelegramBotPlugin,
         opencode: Pick<OpencodePlugin, 'listPermissions' | 'replyPermission'>,
@@ -3679,7 +3745,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             current = await opencode.listPermissions(state.session.id);
         } catch (error) {
-            console.debug('Durevcode permissions read failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode permissions read failed:', errorText(error));
             return;
         }
         const alive = new Set<string>();
@@ -3691,7 +3757,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     await opencode.replyPermission(state.session.id, request.id, 'reject');
                     state.knownPerms.push(request.id);
                 } catch (error) {
-                    console.debug('Durevcode plain-mode deny failed, will retry:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode plain-mode deny failed, will retry:', errorText(error));
                 }
                 continue;
             }
@@ -3712,25 +3778,16 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 state.knownPerms.push(request.id);
                 this.permReplies.set(sentId, { sessionId: state.session.id, permId: request.id });
             } catch (error) {
-                console.debug('Durevcode permission notice failed, will retry:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode permission notice failed, will retry:', errorText(error));
             }
         }
         state.knownPerms = state.knownPerms.filter((id) => alive.has(id));
+        const deadPermMsgIds: number[] = [];
         for (const [messageId, ref] of this.permReplies) {
-            if (ref.sessionId === state.session.id && !alive.has(ref.permId)) {
-                this.permReplies.delete(messageId);
-                if (Date.now() >= this.rateLimitedUntil) {
-                    try {
-                        await telegram.editMessageReplyMarkup({
-                            chat_id: this.config.durevcode.chatId,
-                            message_id: messageId,
-                            reply_markup: { inline_keyboard: [] },
-                        });
-                    } catch (error) {
-                        console.debug('Durevcode permission keyboard cleanup failed:', error instanceof Error ? error.message : error);
-                    }
-                }
-            }
+            if (ref.sessionId === state.session.id && !alive.has(ref.permId)) deadPermMsgIds.push(messageId);
+        }
+        if (await this.disarmReplyKeyboards(telegram, deadPermMsgIds, 'permission disarm')) {
+            for (const messageId of deadPermMsgIds) this.permReplies.delete(messageId);
         }
     }
 
@@ -3762,27 +3819,26 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 if (Date.now() >= this.rateLimitedUntil) {
                     try {
                         await telegram.editMessageReplyMarkup({
-                            chat_id: this.config.durevcode.chatId,
+                            chat_id: this.chatId(),
                             message_id: replyTo,
                             reply_markup: { inline_keyboard: [] },
                         });
                     } catch (error) {
-                        console.debug('Durevcode permission keyboard cleanup failed:', error instanceof Error ? error.message : error);
+                        if (isRateLimitError(error)) {
+                            this.absorbRateLimit('topic-markup', error, 'permission cleanup', state.session.id);
+                        } else {
+                            console.debug('Durevcode permission keyboard cleanup failed:', errorText(error));
+                        }
                     }
                 }
                 state.knownPerms = state.knownPerms.filter((id) => id !== permId);
                 await this.safeReply(telegram, state, resolved ? permissionDecisionText(decision) : `${icon('warn')} Already resolved.`);
             } catch (error) {
                 if (isRateLimitError(error)) {
-                    const waitSec = getRetryAfterSec(error) ?? 10;
-                    this.rateLimitedUntil = Math.max(
-                        this.rateLimitedUntil,
-                        Date.now() + waitSec * 1000 + 1000,
-                    );
-                    console.warn(`Durevcode permission rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                    this.absorbRateLimit('topic-send', error, 'permission', state.session.id);
                     return;
                 }
-                console.warn('Durevcode permission reply failed:', error instanceof Error ? error.message : error);
+                console.warn('Durevcode permission reply failed:', errorText(error));
                 await this.safeReply(telegram, state, `${icon('fail')} Could not send the decision, try again.`);
             }
         } finally {
@@ -3819,7 +3875,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             current = await opencode.listQuestions(state.session.id);
         } catch (error) {
-            console.debug('Durevcode questions read failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode questions read failed:', errorText(error));
             return;
         }
         const alive = new Set<string>();
@@ -3843,28 +3899,21 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 this.questPicks.set(token, ctx);
                 this.questReplies.set(sentId, { sessionId: state.session.id, reqId: request.id, questions: request.questions });
             } catch (error) {
-                console.debug('Durevcode question notice failed, will retry:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode question notice failed, will retry:', errorText(error));
             }
         }
         state.knownQuestions = state.knownQuestions.filter((id) => alive.has(id));
+        const deadQuestionMsgIds: number[] = [];
+        const deadReqIds = new Set<string>();
         for (const [messageId, ref] of this.questReplies) {
             if (ref.sessionId === state.session.id && !alive.has(ref.reqId)) {
-                this.questReplies.delete(messageId);
-                this.dropQuestionRefs(state.session.id, ref.reqId);
-                if (Date.now() >= this.rateLimitedUntil) {
-                    try {
-                        await telegram.editMessageReplyMarkup({
-                            chat_id: this.config.durevcode.chatId,
-                            message_id: messageId,
-                            reply_markup: { inline_keyboard: [] },
-                        });
-                    } catch (error) {
-                        if (!isMessageNotModifiedError(error) && !isMessageGoneError(error)) {
-                            console.debug('Durevcode dead question disarm failed:', error instanceof Error ? error.message : error);
-                        }
-                    }
-                }
+                deadQuestionMsgIds.push(messageId);
+                deadReqIds.add(ref.reqId);
             }
+        }
+        if (await this.disarmReplyKeyboards(telegram, deadQuestionMsgIds, 'question disarm')) {
+            for (const messageId of deadQuestionMsgIds) this.questReplies.delete(messageId);
+            for (const reqId of deadReqIds) this.dropQuestionRefs(state.session.id, reqId);
         }
     }
 
@@ -3884,21 +3933,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (ref.sessionId === sessionId) msgIds.push(messageId);
         }
         if (msgIds.length === 0 && state.knownQuestions.length === 0 && this.questPicks.size === 0) return;
-        this.dropSessionQuestionRefs(sessionId);
         state.knownQuestions = [];
-        if (Date.now() < this.rateLimitedUntil) return;
-        for (const messageId of msgIds) {
-            try {
-                await telegram.editMessageReplyMarkup({
-                    chat_id: this.config.durevcode.chatId,
-                    message_id: messageId,
-                    reply_markup: { inline_keyboard: [] },
-                });
-            } catch (error) {
-                if (!isMessageNotModifiedError(error) && !isMessageGoneError(error)) {
-                    console.debug('Durevcode stop disarm failed:', error instanceof Error ? error.message : error);
-                }
-            }
+        if (await this.disarmReplyKeyboards(telegram, msgIds, 'question disarm')) {
+            this.dropSessionQuestionRefs(sessionId);
         }
     }
 
@@ -3925,16 +3962,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             resolved = await opencode.replyQuestion(state.session.id, ref.reqId, answers);
         } catch (error) {
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                console.warn(`Durevcode question rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.absorbRateLimit('topic-send', error, 'question', state.session.id);
                 this.resolvingQuestions.delete(ref.reqId);
                 return;
             }
-            console.debug('Durevcode question reply failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode question reply failed:', errorText(error));
             await this.safeReply(telegram, state, `${icon('fail')} Could not send the answer, try again.`);
             this.resolvingQuestions.delete(ref.reqId);
             return;
@@ -3943,39 +3975,20 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const request: QuestionRequest = { id: ref.reqId, sessionID: state.session.id, questions: ref.questions };
         if (!resolved) {
             console.debug(`Durevcode question gone on server (session=${state.session.id} req=${ref.reqId}).`);
-            await this.disarmQuestionCard(telegram, request);
-            this.dropQuestionRefs(state.session.id, ref.reqId);
+            const deadMsgIds: number[] = [];
+            for (const [messageId, live] of this.questReplies) {
+                if (live.sessionId === state.session.id && live.reqId === ref.reqId) deadMsgIds.push(messageId);
+            }
+            if (await this.disarmReplyKeyboards(telegram, deadMsgIds, 'question disarm')) {
+                this.dropQuestionRefs(state.session.id, ref.reqId);
+            }
             this.resolvingQuestions.delete(ref.reqId);
             return;
         }
         const text = formatQuestionResolved(request, answers);
-        await this.editQuestionMessage(telegram, state, request, text, true);
-        this.dropQuestionRefs(state.session.id, ref.reqId);
+        const settled = await this.editQuestionMessage(telegram, state, request, text, true);
+        if (settled) this.dropQuestionRefs(state.session.id, ref.reqId);
         this.resolvingQuestions.delete(ref.reqId);
-    }
-
-    private async disarmQuestionCard(
-        telegram: TelegramBotPlugin,
-        request: QuestionRequest,
-    ): Promise<void> {
-        let msgId: number | null = null;
-        for (const [messageId, ref] of this.questReplies) {
-            if (ref.sessionId === request.sessionID && ref.reqId === request.id) {
-                msgId = messageId;
-                break;
-            }
-        }
-        if (msgId === null) return;
-        if (Date.now() < this.rateLimitedUntil) return;
-        try {
-            await telegram.editMessageReplyMarkup({
-                chat_id: this.config.durevcode.chatId,
-                message_id: msgId,
-                reply_markup: { inline_keyboard: [] },
-            });
-        } catch (error) {
-            console.debug('Durevcode question disarm failed:', error instanceof Error ? error.message : error);
-        }
     }
 
     private async editQuestionMessage(
@@ -3984,7 +3997,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         request: QuestionRequest,
         text: string,
         resolved = true,
-    ): Promise<void> {
+    ): Promise<boolean> {
         let msgId: number | null = null;
         for (const [messageId, ref] of this.questReplies) {
             if (ref.sessionId === request.sessionID && ref.reqId === request.id) {
@@ -3993,23 +4006,30 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             }
         }
         if (msgId === null) {
-            if (!resolved) return;
+            if (!resolved) return true;
             await this.safeReply(telegram, state, text);
-            return;
+            return true;
         }
-        if (Date.now() < this.rateLimitedUntil) return;
+        if (Date.now() < this.rateLimitedUntil) return false;
         try {
             await telegram.editMessageText({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_id: msgId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
                 reply_markup: { inline_keyboard: [] },
             });
+            return true;
         } catch (error) {
-            console.debug('Durevcode question resolve edit failed:', error instanceof Error ? error.message : error);
-            if (!resolved) return;
+            if (isMessageNotModifiedError(error) || isMessageGoneError(error)) return true;
+            if (isRateLimitError(error)) {
+                this.absorbRateLimit('topic-edit', error, 'question resolve', request.sessionID);
+                return false;
+            }
+            console.debug('Durevcode question resolve edit failed:', errorText(error));
+            if (!resolved) return true;
             await this.safeReply(telegram, state, text);
+            return false;
         }
     }
 
@@ -4034,7 +4054,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 `${icon('warn')} opencode stopped the turn: ${escapeHtml(reason)}\n\nWrite again to continue.`,
             );
         } catch (error) {
-            console.debug('Durevcode step failure notice failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode step failure notice failed:', errorText(error));
         }
         await this.finalizeSession(telegram, state, false);
     }
@@ -4219,16 +4239,26 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     if (isRateLimitError(error)) {
                         this.governor.note429('topic-send', getRetryAfterSec(error) ?? 10);
                     }
-                    state.thinkingTypeMs = Math.min(THINKING_TYPE_PACE_MAX_MS, Math.max(THINKING_TYPE_PACE_MS, Math.round(state.thinkingTypeMs * 1.3)));
-                    console.debug('Durevcode thinking post failed:', error instanceof Error ? error.message : error);
+                    this.slowThinking(state);
+                    console.debug('Durevcode thinking post failed:', errorText(error));
+                    this.scheduleThoughtPaintRetry(
+                        `p${state.session.id}`,
+                        state,
+                        4,
+                        () => {
+                            if (!state.thinkingActive || state.thinkingText.length === 0) return Promise.resolve(true);
+                            return this.paintThinkingText(telegram, state, state.thinkingText, true);
+                        },
+                        isRateLimitError(error) ? (getRetryAfterSec(error) ?? 10) * 1000 + 600 : 0,
+                    );
                     return false;
                 }
             }
             if (text === state.thinkingRendered) return true;
-            if (!force && Date.now() - state.thinkingAt < (state.thinkingFolded ? THINKING_TOPIC_FOLDED_PACE_MS : THINKING_EXPANDED_PACE_MS)) return false;
+            if (!force && Date.now() - state.thinkingAt < this.pressurePaced(state.thinkingFolded ? THINKING_TOPIC_FOLDED_PACE_MS : THINKING_EXPANDED_PACE_MS)) return false;
             try {
                 await telegram.editMessageText({
-                    chat_id: this.config.durevcode.chatId,
+                    chat_id: this.chatId(),
                     message_id: state.thinkingMessageId,
                     text: wellFormed(text),
                     parse_mode: 'HTML',
@@ -4258,18 +4288,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     return false;
                 }
                 if (isRateLimitError(error)) {
-                    const waitSec = getRetryAfterSec(error) ?? 10;
-                    this.rateLimitedUntil = Math.max(
-                        this.rateLimitedUntil,
-                        Date.now() + waitSec * 1000 + 1000,
-                    );
-                    this.governor.note429('topic-edit', waitSec);
+                    const waitSec = this.absorbRateLimit('topic-edit', error, 'thinking post', state.session.id);
                     state.thinkingTypeMs = Math.min(THINKING_TYPE_PACE_MAX_MS, Math.max(THINKING_TYPE_PACE_MS, waitSec * 1000));
-                    console.warn(`Durevcode thinking 429 retry after ${waitSec}s, typing pace ${state.thinkingTypeMs}ms (session=${state.session.id}).`);
                     return false;
                 }
-                state.thinkingTypeMs = Math.min(THINKING_TYPE_PACE_MAX_MS, Math.max(THINKING_TYPE_PACE_MS, Math.round(state.thinkingTypeMs * 1.3)));
-                console.debug('Durevcode thinking update failed:', error instanceof Error ? error.message : error);
+                this.slowThinking(state);
+                console.debug('Durevcode thinking update failed:', errorText(error));
                 return false;
             }
         } finally {
@@ -4306,6 +4330,27 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         await this.finalizeSession(telegram, state, false);
     }
 
+    private callbackGate(query: CallbackQuery, what: string, detail = ''): 'ok' | 'silent' | 'deny' {
+        const from = query.from;
+        if (!from || from.is_bot) return 'silent';
+        if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return 'silent';
+        const allowed = this.config.durevcode.allowedUsers;
+        if (allowed.length > 0 && !allowed.includes(from.id)) {
+            console.warn(`Durevcode ${what} denied for user ${from.id}${detail}.`);
+            return 'deny';
+        }
+        return 'ok';
+    }
+
+    private callbackTarget(query: CallbackQuery, fallbackFirst = false): WatchedSession | null {
+        const threadId = query.message?.message_thread_id ?? null;
+        if (threadId === null) {
+            if (!fallbackFirst) return null;
+            return [...this.watched.values()][0] ?? null;
+        }
+        return this.findSessionByThread(threadId);
+    }
+
     private async handleCallback(
         telegram: TelegramBotPlugin,
         opencode: Pick<OpencodePlugin, 'replyQuestion' | 'setModel' | 'listModels' | 'replyPermission' | 'listPermissions'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'getModelLimit' | 'listAgents' | 'setAgent'>>,
@@ -4315,7 +4360,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             try {
                 await telegram.answerCallbackQuery({ callback_query_id: query.id, ...(text ? { text } : {}) });
             } catch (error) {
-                console.debug('Durevcode callback ack failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode callback ack failed:', errorText(error));
             }
         };
         if (this.seenCallbacks.has(query.id)) {
@@ -4323,19 +4368,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             return;
         }
         this.seenCallbacks.add(query.id);
-        if (this.seenCallbacks.size > MAX_SEEN_INBOUND) {
-            const oldest = this.seenCallbacks.values().next().value;
-            if (oldest !== undefined) this.seenCallbacks.delete(oldest);
-        }
+        this.evictOldestEntries(this.seenCallbacks, MAX_SEEN_INBOUND);
         const data = query.data || '';
         const stopMatch = data.match(/^stop:(.+)$/);
         if (stopMatch) {
-            const from = query.from;
-            if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
-            const allowed = this.config.durevcode.allowedUsers;
-            if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Durevcode stop denied for user ${from.id} (session=${stopMatch[1]}).`);
+            const gate = this.callbackGate(query, 'stop', ` (session=${stopMatch[1]})`);
+            if (gate === 'silent') return;
+            if (gate === 'deny') {
                 await dismiss();
                 return;
             }
@@ -4350,12 +4389,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const foldMatch = data.match(/^thinkfold:(\d{1,10}):([01])$/);
         if (foldMatch) {
-            const from = query.from;
-            if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
-            const allowed = this.config.durevcode.allowedUsers;
-            if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Durevcode thought fold denied for user ${from.id}.`);
+            const gate = this.callbackGate(query, 'thought fold');
+            if (gate === 'silent') return;
+            if (gate === 'deny') {
                 await dismiss();
                 return;
             }
@@ -4364,12 +4400,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const liveFoldMatch = data.match(/^thinkfolds:([01])$/);
         if (liveFoldMatch) {
-            const from = query.from;
-            if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
-            const allowed = this.config.durevcode.allowedUsers;
-            if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Durevcode thought fold denied for user ${from.id}.`);
+            const gate = this.callbackGate(query, 'thought fold');
+            if (gate === 'silent') return;
+            if (gate === 'deny') {
                 await dismiss();
                 return;
             }
@@ -4378,12 +4411,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const docMatch = data.match(/^thinkdoc:(\d{1,10})$/);
         if (docMatch) {
-            const from = query.from;
-            if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
-            const allowed = this.config.durevcode.allowedUsers;
-            if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Durevcode thought doc denied for user ${from.id}.`);
+            const gate = this.callbackGate(query, 'thought doc');
+            if (gate === 'silent') return;
+            if (gate === 'deny') {
                 await dismiss();
                 return;
             }
@@ -4392,12 +4422,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const liveDocMatch = data.match(/^thinkdocs:[01]$/);
         if (liveDocMatch) {
-            const from = query.from;
-            if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
-            const allowed = this.config.durevcode.allowedUsers;
-            if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Durevcode thought doc denied for user ${from.id}.`);
+            const gate = this.callbackGate(query, 'thought doc');
+            if (gate === 'silent') return;
+            if (gate === 'deny') {
                 await dismiss();
                 return;
             }
@@ -4406,19 +4433,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const modeMatch = data.match(/^mode:(plan|plain|build)$/);
         if (modeMatch) {
-            const from = query.from;
-            if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
-            const allowed = this.config.durevcode.allowedUsers;
-            if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Durevcode mode denied for user ${from.id}.`);
+            const gate = this.callbackGate(query, 'mode');
+            if (gate === 'silent') return;
+            if (gate === 'deny') {
                 await dismiss();
                 return;
             }
-            const threadId = query.message?.message_thread_id;
-            const target = threadId !== undefined && threadId !== null
-                ? this.findSessionByThread(threadId)
-                : [...this.watched.values()][0] ?? null;
+            const target = this.callbackTarget(query, true);
             if (!target) {
                 await dismiss('Outdated, ask again.');
                 return;
@@ -4428,64 +4449,46 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const modelMatch = data.match(/^model:([A-Za-z0-9._-]{1,50})$/);
         if (modelMatch) {
-            const from = query.from;
-            if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
-            const allowed = this.config.durevcode.allowedUsers;
-            if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Durevcode model denied for user ${from.id}.`);
+            const gate = this.callbackGate(query, 'model');
+            if (gate === 'silent') return;
+            if (gate === 'deny') {
                 await dismiss();
                 return;
             }
-            const threadId = query.message?.message_thread_id;
-            const target = threadId !== undefined && threadId !== null
-                ? this.findSessionByThread(threadId)
-                : [...this.watched.values()][0] ?? null;
+            const target = this.callbackTarget(query, true);
             if (!target) {
                 await dismiss('Outdated, ask again.');
                 return;
             }
-            await this.applySessionModel(telegram, opencode, query, target, modelMatch[1]);
+            await this.applyModelSelection(telegram, opencode, query, target, modelMatch[1], '');
             return;
         }
         const variantMatch = data.match(/^modelvariant:([A-Za-z0-9._-]{1,50})$/);
         if (variantMatch) {
-            const from = query.from;
-            if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
-            const allowed = this.config.durevcode.allowedUsers;
-            if (allowed.length > 0 && !allowed.includes(from.id)) {
-                console.warn(`Durevcode model denied for user ${from.id}.`);
+            const gate = this.callbackGate(query, 'model');
+            if (gate === 'silent') return;
+            if (gate === 'deny') {
                 await dismiss();
                 return;
             }
-            const threadId = query.message?.message_thread_id;
-            const target = threadId !== undefined && threadId !== null
-                ? this.findSessionByThread(threadId)
-                : [...this.watched.values()][0] ?? null;
+            const target = this.callbackTarget(query, true);
             if (!target) {
                 await dismiss('Outdated, ask again.');
                 return;
             }
-            await this.applySessionVariant(telegram, opencode, query, target, variantMatch[1]);
+            await this.applyModelSelection(telegram, opencode, query, target, null, variantMatch[1]);
             return;
         }
         const permMatch = data.match(/^p(per_[A-Za-z0-9_-]{1,56}):(always|once|reject)$/);
         if (permMatch) {
-            const from = query.from;
-            if (!from || from.is_bot) return;
-            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
-            const permAllowed = this.config.durevcode.allowedUsers;
-            if (permAllowed.length > 0 && !permAllowed.includes(from.id)) {
-                console.warn(`Durevcode permission denied for user ${from.id}.`);
+            const gate = this.callbackGate(query, 'permission');
+            if (gate === 'silent') return;
+            if (gate === 'deny') {
                 await dismiss();
                 return;
             }
             const permId = permMatch[1];
-            const threadId = query.message?.message_thread_id;
-            const permState = threadId !== undefined && threadId !== null
-                ? this.findSessionByThread(threadId)
-                : null;
+            const permState = this.callbackTarget(query);
             if (!permState) {
                 await dismiss('Outdated, ask again.');
                 return;
@@ -4494,7 +4497,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             try {
                 pending = await opencode.listPermissions(permState.session.id);
             } catch (error) {
-                console.debug('Durevcode permission recheck failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode permission recheck failed:', errorText(error));
                 await dismiss();
                 return;
             }
@@ -4523,12 +4526,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             await dismiss('Outdated, ask again.');
             return;
         }
-        const from = query.from;
-        if (!from || from.is_bot) return;
-        if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
-        const allowed = this.config.durevcode.allowedUsers;
-        if (allowed.length > 0 && !allowed.includes(from.id)) {
-            console.warn(`Durevcode question denied for user ${from.id} (session=${ctx.sessionId}).`);
+        const gate = this.callbackGate(query, 'question', ` (session=${ctx.sessionId})`);
+        if (gate === 'silent') return;
+        if (gate === 'deny') {
             await dismiss();
             return;
         }
@@ -4578,12 +4578,16 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (Date.now() < this.rateLimitedUntil) return;
         try {
             await telegram.editMessageReplyMarkup({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_id: ctx.msgId,
                 reply_markup: this.questKeyboard(ctx),
             });
         } catch (error) {
-            console.debug('Durevcode question toggle failed:', error instanceof Error ? error.message : error);
+            if (isRateLimitError(error)) {
+                this.absorbRateLimit('topic-markup', error, 'question toggle', ctx.sessionId);
+                return;
+            }
+            console.debug('Durevcode question toggle failed:', errorText(error));
         }
     }
 
@@ -4611,7 +4615,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 try {
                     await this.sendProgressTyping(telegram, state);
                 } catch (error) {
-                    console.debug('Durevcode typing tick failed:', error instanceof Error ? error.message : error);
+                    console.debug('Durevcode typing tick failed:', errorText(error));
                 }
             }
         } finally {
@@ -4759,7 +4763,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             renamed = await opencode.renameSession(state.session.id, title);
         } catch (error) {
-            console.debug('Durevcode topic rename failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode topic rename failed:', errorText(error));
             this.savePersisted();
             return;
         }
@@ -4780,7 +4784,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (name === state.appliedTopicName) return;
         try {
             await telegram.editForumTopic({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_thread_id: state.threadId,
                 name,
             });
@@ -4802,7 +4806,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 console.warn(`Durevcode topic rename rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
-            console.debug('Durevcode topic rename failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode topic rename failed:', errorText(error));
         }
     }
 
@@ -4817,7 +4821,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             landed = await opencode.hasMessage(state.session.id, pending.messageId);
         } catch (error) {
-            console.debug('Durevcode prompt confirm failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode prompt confirm failed:', errorText(error));
             return;
         }
         if (landed) {
@@ -4831,7 +4835,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             try {
                 if (await this.startCliRun(telegram, opencode, state, pending.text, true, Math.round((Date.now() - pending.since) / 1000))) return;
             } catch (error) {
-                console.debug('Durevcode CLI fallback failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode CLI fallback failed:', errorText(error));
             }
         }
         state.promptQueue.unshift(pending.text);
@@ -4858,7 +4862,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             fresh = await opencode.getSession(state.session.id);
         } catch (error) {
-            console.debug('Durevcode session read failed:', error);
+            console.debug('Durevcode session read failed:', errorText(error));
             return;
         }
         if (!fresh) {
@@ -4885,7 +4889,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             pairs = await opencode.readEvents(state.session.id);
         } catch (error) {
-            console.debug('Durevcode parts read failed:', error);
+            console.debug('Durevcode parts read failed:', errorText(error));
             return;
         }
 
@@ -4969,7 +4973,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 state.pendingTodos = true;
             }
         } catch (error) {
-            console.debug('Durevcode todos read failed:', error);
+            console.debug('Durevcode todos read failed:', errorText(error));
         }
 
         await this.flushEvents(telegram, state);
@@ -5020,7 +5024,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (!this.consumeTypingBudget()) return;
             try {
                 await telegram.sendChatAction({
-                    chat_id: this.config.durevcode.chatId,
+                    chat_id: this.chatId(),
                     message_thread_id: state.threadId,
                     action: 'typing',
                 });
@@ -5031,16 +5035,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     continue;
                 }
                 if (isRateLimitError(error)) {
-                    const waitSec = getRetryAfterSec(error) ?? 10;
-                    this.rateLimitedUntil = Math.max(
-                        this.rateLimitedUntil,
-                        Date.now() + waitSec * 1000 + 1000,
-                    );
+                    this.absorbRateLimit('topic-send', error, 'topic probe', sessionId);
                     return;
                 }
                 console.debug(
                     `Durevcode topic probe failed (session=${sessionId}):`,
-                    error instanceof Error ? error.message : error,
+                    errorText(error),
                 );
             }
         }
@@ -5092,7 +5092,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (!this.consumeTypingBudget()) return;
         try {
             await telegram.sendChatAction({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_thread_id: state.threadId ?? undefined,
                 action: 'typing',
             });
@@ -5112,7 +5112,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 await this.markTopicGoneSuspect(telegram, state);
                 return;
             }
-            console.debug('Durevcode typing failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode typing failed:', errorText(error));
         }
     }
 
@@ -5125,7 +5125,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             state.contextLimit = await opencode.getModelLimit(displayModel(state.session.model));
         } catch (error) {
-            console.debug('Durevcode context limit failed:', error);
+            console.debug('Durevcode context limit failed:', errorText(error));
             state.contextLimit = null;
         }
     }
@@ -5137,7 +5137,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             state.snapshot = await opencode.readContextSnapshot(state.session.id);
         } catch (error) {
-            console.debug('Durevcode context snapshot failed:', error);
+            console.debug('Durevcode context snapshot failed:', errorText(error));
             state.snapshot = null;
         }
     }
@@ -5153,7 +5153,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 await this.sendFreshPin(telegram, state);
             } else {
                 await telegram.editMessageText({
-                    chat_id: this.config.durevcode.chatId,
+                    chat_id: this.chatId(),
                     message_id: state.contextMessageId,
                     text: wellFormed(text),
                     parse_mode: 'HTML',
@@ -5174,20 +5174,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return;
             }
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                console.warn(`Durevcode context rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
-                this.governor.note429('topic-edit', waitSec);
+                this.absorbRateLimit('topic-edit', error, 'context', state.session.id);
                 return;
             }
             if (isUpstreamServerError(error)) {
                 state.lastContextEditAt = Date.now();
                 this.logger.debug(
                     `Durevcode context edit hit a transport error, keeping the pinned message ` +
-                        `(session=${state.session.id}): ${error instanceof Error ? error.message : error}`,
+                        `(session=${state.session.id}): ${errorText(error)}`,
                 );
                 return;
             }
@@ -5235,13 +5229,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         if (!done && !live && !firstSeen) {
             if (!state.buildMode) {
-                const queuedIdx = state.pendingKeys.get(key);
-                if (queuedIdx !== undefined && queuedIdx < state.pending.length) {
-                    state.pending[queuedIdx] = event;
-                } else {
-                    state.pendingKeys.set(key, state.pending.length);
-                    state.pending.push(event);
-                }
+                this.requeueToolEvent(state, key, event);
                 return;
             }
             const pendingIdx = state.pendingKeys.get(key);
@@ -5255,6 +5243,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             state.liveTool = { key, messageId: null, event, done: false, lastText: '', lastEditAt: 0, startedAt: Date.now(), failCount: 0 };
             return;
         }
+        this.requeueToolEvent(state, key, event);
+    }
+
+    private requeueToolEvent(state: WatchedSession, key: string, event: RadarEvent): void {
         const queuedIdx = state.pendingKeys.get(key);
         if (queuedIdx !== undefined && queuedIdx < state.pending.length) {
             state.pending[queuedIdx] = event;
@@ -5268,13 +5260,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const live = state.liveTool;
         if (!live) return;
         state.liveTool = null;
-        const queuedIdx = state.pendingKeys.get(live.key);
-        if (queuedIdx !== undefined && queuedIdx < state.pending.length) {
-            state.pending[queuedIdx] = live.event;
-        } else {
-            state.pendingKeys.set(live.key, state.pending.length);
-            state.pending.push(live.event);
-        }
+        this.requeueToolEvent(state, live.key, live.event);
         console.debug(`Durevcode live tool abandoned, event requeued (session=${state.session.id}).`);
     }
 
@@ -5307,14 +5293,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             } catch (error) {
                 live.lastEditAt = Date.now();
                 live.failCount += 1;
-                console.debug('Durevcode live tool post failed:', error instanceof Error ? error.message : error);
+                console.debug('Durevcode live tool post failed:', errorText(error));
                 if (live.failCount >= MAX_LIVE_FAILURES) this.abandonLiveTool(state);
             }
             return;
         }
         try {
             await telegram.editMessageText({
-                chat_id: this.config.durevcode.chatId,
+                chat_id: this.chatId(),
                 message_id: live.messageId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
@@ -5332,13 +5318,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return;
             }
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                console.warn(`Durevcode live tool rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
-                this.governor.note429('topic-edit', waitSec);
+                this.absorbRateLimit('topic-edit', error, 'live tool', state.session.id);
                 return;
             }
             if (isMessageGoneError(error)) {
@@ -5348,7 +5328,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return;
             }
             live.failCount += 1;
-            console.debug('Durevcode live tool edit failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode live tool edit failed:', errorText(error));
             if (live.failCount >= MAX_LIVE_FAILURES) this.abandonLiveTool(state);
         }
     }
@@ -5383,7 +5363,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             state.pendingTodos = false;
             return;
         }
-        if (Date.now() - state.lastEventMessageAt < EVENT_THROTTLE_MS) return;
+        if (Date.now() - state.lastEventMessageAt < this.pressurePaced(EVENT_THROTTLE_MS)) return;
         try {
             const flushMark = Date.now();
             const flushedCount = state.pending.length + (state.pendingTodos ? 1 : 0);
@@ -5393,10 +5373,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             const { text: answer, command: stopCommand } = takeStopCommand(text);
             if (answer) {
                 await this.deliverMessage(telegram, state, answer);
-                state.recentDelivered.push({ sig: deliverySignature(answer), at: Date.now() });
-                if (state.recentDelivered.length > DELIVERY_DEDUP_KEEP) {
-                    state.recentDelivered.splice(0, state.recentDelivered.length - DELIVERY_DEDUP_KEEP);
-                }
+                this.rememberDelivery(state, deliverySignature(answer));
             }
             if (stopCommand) {
                 await this.deliverMessage(telegram, state, stopCommand);
@@ -5411,32 +5388,23 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             state.pendingTodos = false;
             state.lastEventMessageAt = Date.now();
             this.upstreamFailures = 0;
-            state.recentDelivered.push({ sig: deliverySignature(text), at: Date.now() });
-            if (state.recentDelivered.length > DELIVERY_DEDUP_KEEP) {
-                state.recentDelivered.splice(0, state.recentDelivered.length - DELIVERY_DEDUP_KEEP);
-            }
+            this.rememberDelivery(state, deliverySignature(text));
             this.savePersisted();
             if (substantive) await this.clearThinkingMessage(telegram, state);
         } catch (error) {
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                this.governor.note429('topic-send', waitSec);
-                console.warn(`Durevcode events rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.absorbRateLimit('topic-send', error, 'events', state.session.id);
             } else {
                 if (isUpstreamServerError(error)) {
                     this.upstreamFailures += 1;
                     const backoffMs = Math.min(UPSTREAM_BACKOFF_MAX_MS, 1000 * 2 ** Math.min(this.upstreamFailures, 6));
                     this.upstreamBackoffUntil = Math.max(this.upstreamBackoffUntil, Date.now() + backoffMs);
                     console.warn(
-                        `Durevcode telegram upstream failed (${this.upstreamFailures} in a row), backing off ${backoffMs}ms (session=${state.session.id}): ${error instanceof Error ? error.message : error}`,
+                        `Durevcode telegram upstream failed (${this.upstreamFailures} in a row), backing off ${backoffMs}ms (session=${state.session.id}): ${errorText(error)}`,
                     );
                     return;
                 }
-                console.debug('Durevcode events send failed:', error);
+                console.debug('Durevcode events send failed:', errorText(error));
             }
         }
     }
@@ -5497,14 +5465,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         try {
             if (emojiId) {
                 await telegram.sendMessage({
-                    chat_id: this.config.durevcode.chatId,
+                    chat_id: this.chatId(),
                     message_thread_id: state.threadId ?? undefined,
                     text: '🤨',
                     entities: [{ offset: 0, length: 2, type: 'custom_emoji', custom_emoji_id: emojiId }],
                 });
             } else {
                 await telegram.sendSticker({
-                    chat_id: this.config.durevcode.chatId,
+                    chat_id: this.chatId(),
                     message_thread_id: state.threadId ?? undefined,
                     sticker,
                 });
@@ -5520,7 +5488,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 await this.markTopicGoneSuspect(telegram, state);
                 return;
             }
-            console.debug('Durevcode whip sticker failed:', error instanceof Error ? error.message : error);
+            console.debug('Durevcode whip sticker failed:', errorText(error));
         }
     }
 
