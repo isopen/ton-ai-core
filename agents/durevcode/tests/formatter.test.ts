@@ -23,6 +23,7 @@ import {
     toTodoState,
     toToolState,
     formatThinking,
+    formatThoughtArchive,
     TOOL_OUTPUT_CAP,
     FORUM_TOPIC_NAME_LIMIT,
     TELEGRAM_TEXT_LIMIT,
@@ -498,6 +499,24 @@ describe('formatter code blocks', () => {
         assert.ok(!formatThinking('plain reasoning text').includes('tg-spoiler'));
         assert.ok(!formatThinking('x'.repeat(TOOL_OUTPUT_CAP + 50)).includes('tg-spoiler'));
         assert.ok(formatThinking('plain reasoning text').includes('plain reasoning text'));
+    });
+
+    test('thinking stays in a plain always-open quote', () => {
+        const rendered = formatThinking('step by step');
+        assert.ok(rendered.includes('\n<blockquote>step by step</blockquote>'));
+        assert.ok(!rendered.includes('expandable'));
+        assert.ok(formatThinking('x'.repeat(TOOL_OUTPUT_CAP + 50)).includes('<blockquote>…'));
+        assert.ok(!formatThinking('').includes('<blockquote'));
+    });
+
+    test('finished thought collapses into a native expandable quote', () => {
+        const kept = formatThoughtArchive(1234, 'step one, then step two');
+        assert.ok(kept.includes('Thought (1.2s)'));
+        assert.ok(kept.includes('\n<blockquote expandable>step one, then step two</blockquote>'));
+        const big = formatThoughtArchive(60000, 'y'.repeat(4000));
+        assert.ok(big.includes('<blockquote expandable>…'));
+        assert.ok(big.length < 4096, 'a kept reasoning tail fits a single Telegram message');
+        assert.ok(!formatThoughtArchive(5000, '').includes('<blockquote'), 'a header-only thought carries no quote');
     });
 });
 

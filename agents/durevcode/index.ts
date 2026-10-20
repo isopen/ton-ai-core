@@ -1,3 +1,4 @@
+import './console-stamp';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
@@ -67,7 +68,7 @@ function sessionIdList(): string[] {
     return multiple;
 }
 
-const maxSessionsDefault = optionalInt('DUREVCODE_MAX_SESSIONS', 3);
+const maxSessionsDefault = optionalInt('DUREVCODE_MAX_SESSIONS', 5);
 
 const config: DurevcodeConfig = {
     name: 'durevcode',

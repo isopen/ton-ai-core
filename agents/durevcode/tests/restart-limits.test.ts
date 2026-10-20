@@ -142,6 +142,7 @@ function baseState(sessionId: string, threadId: number): Record<string, unknown>
         lastText: 'running',
         lastEventAt: now,
         startedAt: now,
+        turnComplete: true,
         lastPromptAt: 0,
         finalizedAt: 0,
         lastTypingAt: 0,
@@ -246,8 +247,7 @@ describe('the session limit is hard (3 by default)', () => {
     test('finalized sessions unload first and user-facing sessions are never evicted', () => {
         const agent = makeAgent();
         const watched = internals(agent).watched;
-        const finalized = { ...baseState('ses_finished', 1), finalized: true, finalizedAt: now - 130_000, lastEventAt: now - 100_000 };
-        const oldestActive = { ...baseState('ses_active', 2), lastEventAt: now - 90_000 };
+        const finalized = { ...baseState('ses_finished', 1), finalized: true, finalizedAt: now - 130_000, lastEventAt: now - 100_000 };        const oldestActive = { ...baseState('ses_active', 2), lastEventAt: now - 90_000 };
         const waitingOnUser = { ...baseState('ses_wait', 3), lastEventAt: now - 80_000, knownPerms: ['perm-1'] };
         const queuedPrompt = { ...baseState('ses_fourth', 4), lastEventAt: now - 70_000, promptQueue: ['finish'] };
         const freshActive = { ...baseState('ses_keep', 5) };
@@ -267,6 +267,29 @@ describe('the session limit is hard (3 by default)', () => {
         assert.equal(watched.has('ses_wait'), true, 'a session blocked on a permission is never evicted');
         assert.equal(watched.has('ses_fourth'), true, 'a session with queued prompts is never evicted');
         assert.equal(watched.has('ses_keep'), true);
+    });
+
+    test('a turn still in flight keeps the watch slot even when nothing else protects it', () => {
+        const agent = makeAgent();
+        const watched = internals(agent).watched;
+        for (const [id, state] of Object.entries({
+            ses_hang: {
+                ...baseState('ses_hang', 1),
+                turnComplete: false,
+                lastEventAt: now - 300_000,
+                lastPromptAt: 0,
+                liveTool: null,
+            },
+            ses_b: { ...baseState('ses_b', 2), lastEventAt: now - 250_000, lastPromptAt: 0 },
+            ses_c: { ...baseState('ses_c', 3), lastEventAt: now - 240_000, lastPromptAt: 0 },
+            ses_d: { ...baseState('ses_d', 4), lastEventAt: now - 230_000, lastPromptAt: 0 },
+        })) {
+            watched.set(id, state);
+        }
+        internals(agent).evictWatchedOverflow(new Set());
+        assert.equal(watched.has('ses_hang'), true, 'a silently hung turn is exactly what the whip exists for');
+        assert.equal(watched.size, 3);
+        assert.equal(watched.has('ses_b'), false);
     });
 
     test('a just-finalized conversation keeps its slot (the user reads the answer next)', () => {

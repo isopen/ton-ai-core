@@ -2,8 +2,8 @@ import { strict as assert } from 'assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Message, CallbackQuery } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
-import { DurevcodeAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isThreadClosedError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, serverEventError, DUREVCODE_THREAD_TIMINGS, instantResolveQuestion, questionDoneRow, questionPicksComplete } from '../agent';
-import { EMOJI, formatThinking, splitTelegramHtml, truncate, wellFormed } from '../formatter';
+import { DurevcodeAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isThreadClosedError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, unwrapServerPartEvent, serverEventError, DUREVCODE_THREAD_TIMINGS, instantResolveQuestion, questionDoneRow, questionPicksComplete } from '../agent';
+import { EMOJI, formatThinking, formatThinkingFolded, formatThoughtArchive, splitTelegramHtml, truncate, wellFormed } from '../formatter';
 
 const NOT_MODIFIED =
     'Telegram API error: Bad Request: message is not modified: ' +
@@ -11,7 +11,8 @@ const NOT_MODIFIED =
     'as a current content and reply markup of the message';
 
 function stubTelegram() {
-    const calls: Array<{ op: string; params: Record<string, unknown> }> = [];
+    const calls: Array<{ op: string; params: Record<string, unknown>; at: number }> = [];
+    const stamp = (): number => Date.now();
     let editImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
     let sendImpl: ((params: Record<string, unknown>) => Promise<{ message_id: number }>) | null = null;
     let pinImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
@@ -21,52 +22,63 @@ function stubTelegram() {
     let nextThreadId = 7;
     let sentId = 100;
     let downloadImpl: (() => Promise<Buffer>) | null = null;
+    let draftImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
     const telegram = {
         sendMessage: async (params: Record<string, unknown>) => {
-            calls.push({ op: 'send', params });
+            calls.push({ op: 'send', params, at: stamp() });
             if (sendImpl) return sendImpl(params);
             sentId += 1;
             return { message_id: sentId };
         },
         editMessageText: async (params: Record<string, unknown>) => {
-            calls.push({ op: 'edit', params });
+            calls.push({ op: 'edit', params, at: stamp() });
             if (editImpl) return editImpl(params);
             return true;
         },
         pinChatMessage: async (params: Record<string, unknown>) => {
-            calls.push({ op: 'pin', params });
+            calls.push({ op: 'pin', params, at: stamp() });
             if (pinImpl) return pinImpl(params);
             return true;
         },
         createForumTopic: async (params: Record<string, unknown>) => {
-            calls.push({ op: 'create', params });
+            calls.push({ op: 'create', params, at: stamp() });
             nextThreadId += 1;
             return { message_thread_id: nextThreadId, name: params.name, icon_color: 0 };
         },
         closeForumTopic: async (params: Record<string, unknown>) => {
-            calls.push({ op: 'close', params });
+            calls.push({ op: 'close', params, at: stamp() });
             return true;
         },
         reopenForumTopic: async (params: Record<string, unknown>) => {
-            calls.push({ op: 'reopen', params });
+            calls.push({ op: 'reopen', params, at: stamp() });
             return true;
         },
         sendChatAction: async (params: Record<string, unknown>) => {
-            calls.push({ op: 'typing', params });
+            calls.push({ op: 'typing', params, at: stamp() });
             if (typingImpl) return typingImpl(params);
             return true;
         },
         editMessageReplyMarkup: async (params: Record<string, unknown>) => {
-            calls.push({ op: 'markup', params });
+            calls.push({ op: 'markup', params, at: stamp() });
             if (markupImpl) return markupImpl(params);
             return true;
         },
         deleteMessage: async (params: Record<string, unknown>) => {
-            calls.push({ op: 'delete', params });
+            calls.push({ op: 'delete', params, at: stamp() });
+            return true;
+        },
+        sendDocument: async (params: Record<string, unknown>) => {
+            calls.push({ op: 'doc', params, at: stamp() });
+            sentId += 1;
+            return { message_id: sentId };
+        },
+        sendMessageDraft: async (params: Record<string, unknown>) => {
+            calls.push({ op: 'draft', params, at: stamp() });
+            if (draftImpl) return draftImpl(params);
             return true;
         },
         answerCallbackQuery: async (params: Record<string, unknown>) => {
-            calls.push({ op: 'ack', params });
+            calls.push({ op: 'ack', params, at: stamp() });
             if (ackImpl) return ackImpl(params);
             return true;
         },
@@ -85,6 +97,7 @@ function stubTelegram() {
         setTypingImpl: (fn: typeof typingImpl) => { typingImpl = fn; },
         setMarkupImpl: (fn: typeof markupImpl) => { markupImpl = fn; },
         setDownloadImpl: (fn: typeof downloadImpl) => { downloadImpl = fn; },
+        setDraftImpl: (fn: typeof draftImpl) => { draftImpl = fn; },
     };
 }
 
@@ -2633,6 +2646,1049 @@ describe('durevcode thread binding survival', () => {
         assert.equal(thinkingSends().length, 2);
     });
 
+    test('thinking stays silent under a global rate limit and posts as soon as it clears', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            pending: Array<{ kind: string; time: number }>;
+            lastEventMessageAt: number;
+            thinkingActive: boolean;
+            thinkingText: string;
+            thinkingMessageId: number | null;
+            thinkingRendered: string;
+            thinkingAt: number;
+            thinkingSince: number | null;
+        };
+        state.lastEventMessageAt = now;
+        const reasonFor = (text: string, time: number) => ({
+            getSession: async () => SESSION,
+            readEvents: async () => [{ key: 'db:rsn9', event: { kind: 'reasoning', text, time } }],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        (agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil = Date.now() + 60_000;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : reasonFor('Hmm', now);
+        await agent.updateSession(telegram, state);
+        assert.equal(state.thinkingActive, true, 'reasoning is still buffered during the penalty');
+        const thinkingSends = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Thinking'));
+        assert.equal(thinkingSends().length, 0, 'the thinking bubble waits out a real penalty instead of colliding');
+        state.thinkingText = 'Hmm deeper';
+        await new Promise((resolve) => setTimeout(resolve, 1300));
+        assert.ok(!calls.some((c) => c.op === 'edit'), 'the walker types nothing while the penalty is on');
+        (agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil = 0;
+        (state as unknown as { thinkingFolded: boolean }).thinkingFolded = false;
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(
+            telegram,
+            state,
+        );
+        assert.equal(thinkingSends().length, 1, 'the bubble posts the moment the penalty clears');
+        assert.ok(
+            String((thinkingSends()[0].params as Record<string, unknown>).text).includes('Hmm deeper'),
+            'the buffered reasoning arrives in full at the first paint',
+        );
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(
+            telegram,
+            state,
+        );
+        assert.ok(calls.some((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('Thought (')),
+            'the thought finalizes even under a global rate limit');
+        assert.equal(state.thinkingMessageId, null);
+        assert.equal(state.thinkingActive, false);
+    });
+
+    test('live reasoning from the server stream grows the thinking bubble', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingSince: number | null;
+            thinkingMessageId: number | null;
+            lastEventAt: number;
+        };
+        (state as unknown as { thinkingFolded: boolean }).thinkingFolded = false;
+        const serverEvent = {
+            type: 'message.part.updated',
+            properties: { sessionID: SESSION.id, part: { id: 'p1', type: 'reasoning', text: ' live draft ', time: { start: 1 } } },
+        };
+        await (agent as unknown as { handleServerEvent: (t: unknown, e: unknown) => Promise<void> }).handleServerEvent(
+            telegram,
+            serverEvent,
+        );
+        assert.equal(state.thinkingText, 'live draft');
+        assert.equal(state.thinkingActive, true);
+        assert.ok(state.thinkingSince !== null);
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(
+            telegram,
+            state,
+        );
+        assert.ok(
+            calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('live draft')),
+            'the bubble posts the live reasoning text without waiting for a step boundary',
+        );
+        const first = state.thinkingMessageId;
+        await (agent as unknown as { handleServerEvent: (t: unknown, e: unknown) => Promise<void> }).handleServerEvent(
+            telegram,
+            { type: 'message.part.updated', properties: { sessionID: 'ses_elsewhere', part: { id: 'p2', type: 'reasoning', text: 'other' } } },
+        );
+        assert.equal(state.thinkingText, 'live draft', 'another session stream cannot touch this state');
+        await (agent as unknown as { handleServerEvent: (t: unknown, e: unknown) => Promise<void> }).handleServerEvent(
+            telegram,
+            { type: 'message.part.updated', properties: { sessionID: SESSION.id, part: { id: 'p3', type: 'reasoning', text: 'live draft' } } },
+        );
+        assert.equal(state.thinkingText, 'live draft', 'identical text is a no-op');
+        await (agent as unknown as { handleServerEvent: (t: unknown, e: unknown) => Promise<void> }).handleServerEvent(
+            telegram,
+            { type: 'message.part.updated', properties: { sessionID: SESSION.id, part: { id: 'p4', type: 'text', text: 'not reasoning' } } },
+        );
+        assert.equal(state.thinkingText, 'live draft', 'non-reasoning parts are ignored');
+        assert.equal(first, state.thinkingMessageId);
+        await (agent as unknown as { handleServerEvent: (t: unknown, e: unknown) => Promise<void> }).handleServerEvent(
+            telegram,
+            {
+                type: 'sync',
+                syncEvent: {
+                    type: 'message.part.updated.1',
+                    id: 'se1',
+                    seq: 7,
+                    aggregateID: SESSION.id,
+                    data: { sessionID: SESSION.id, part: { id: 'p5', type: 'reasoning', text: 'sync channel text' }, time: 9 },
+                },
+            },
+        );
+        assert.equal(state.thinkingText, 'sync channel text', 'the versioned sync envelope parses too');
+        await (agent as unknown as { handleServerEvent: (t: unknown, e: unknown) => Promise<void> }).handleServerEvent(
+            telegram,
+            { type: 'sync', syncEvent: { type: 'message.added.1', id: 'se2', seq: 8, aggregateID: SESSION.id, data: {} } },
+        );
+        assert.equal(state.thinkingText, 'sync channel text', 'other sync events do not touch reasoning');
+        assert.equal(unwrapServerPartEvent({ type: 'message.part.updated', properties: { sessionID: SESSION.id } }), null,
+            'missing part yields null');
+        assert.equal(unwrapServerPartEvent(null), null);
+    });
+
+    test('reasoning deltas from the server stream append live', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingSince: number | null;
+            thinkingMessageId: number | null;
+            thinkingOrdinal: number;
+            thinkingStreamMessageId: string | null;
+            lastEventAt: number;
+        };
+        (state as unknown as { thinkingFolded: boolean }).thinkingFolded = false;
+        const fire = (event: unknown) =>
+            (agent as unknown as { handleServerEvent: (t: unknown, e: unknown) => Promise<void> }).handleServerEvent(telegram, event);
+        await fire({ type: 'session.reasoning.started', data: { sessionID: SESSION.id, assistantMessageID: 'msg_15580001' } });
+        assert.equal(state.thinkingActive, true);
+        assert.ok(state.thinkingSince !== null);
+        await fire({ type: 'session.reasoning.delta', data: { sessionID: SESSION.id, assistantMessageID: 'msg_15580001', ordinal: 0, delta: 'first ' } });
+        await fire({ type: 'session.reasoning.delta', data: { sessionID: SESSION.id, assistantMessageID: 'msg_15580001', ordinal: 0, delta: 'chunk' } });
+        assert.equal(state.thinkingText, 'first chunk');
+        assert.equal(state.thinkingOrdinal, 0);
+        assert.equal(state.thinkingStreamMessageId, 'msg_15580001');
+        await fire({ type: 'session.reasoning.delta', data: { sessionID: 'ses_elsewhere', assistantMessageID: 'msg_15580002', ordinal: 0, delta: 'no' } });
+        assert.equal(state.thinkingText, 'first chunk', 'another session cannot append');
+        await fire({ type: 'session.reasoning.delta', data: { sessionID: SESSION.id, assistantMessageID: 'msg_15570001', ordinal: 0, delta: 'stale' } });
+        assert.equal(state.thinkingText, 'first chunk', 'a stale step replay cannot append');
+        await fire({ type: 'session.reasoning.delta', data: { sessionID: SESSION.id, assistantMessageID: 'msg_15590001', ordinal: 0, delta: 'next step' } });
+        assert.equal(state.thinkingText, 'next step', 'a newer step message resets the accumulator');
+        assert.equal(state.thinkingStreamMessageId, 'msg_15590001');
+        await fire({ type: 'session.reasoning.delta', data: { sessionID: SESSION.id, assistantMessageID: 'msg_15590001', ordinal: 0, delta: '' } });
+        assert.equal(state.thinkingText, 'next step', 'empty deltas are no-ops');
+        await fire({ type: 'session.reasoning.delta', data: { sessionID: SESSION.id, delta: 'x' } });
+        assert.equal(state.thinkingText, 'next step', 'deltas without a message id are ignored');
+        await fire({ type: 'session.reasoning.delta', data: { sessionID: SESSION.id, assistantMessageID: 'msg_15590001', ordinal: 0 } });
+        assert.equal(state.thinkingText, 'next step', 'deltas without a text chunk are ignored');
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        assert.ok(
+            calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('next step')),
+            'accumulated deltas reach the bubble',
+        );
+    });
+
+    test('thinking renders itself from the live stream without waiting for a tick', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (state as unknown as { thinkingFolded: boolean }).thinkingFolded = false;
+        await (agent as unknown as { handleServerEvent: (t: unknown, e: unknown) => Promise<void> }).handleServerEvent(
+            telegram,
+            { type: 'session.reasoning.delta', data: { sessionID: SESSION.id, assistantMessageID: 'msg_156a1001', ordinal: 0, delta: 'self render' } },
+        );
+        assert.equal(state.thinkingText, 'self render');
+        const sends = () => calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('self render'));
+        assert.equal(sends().length, 0, 'the render is debounced, not immediate');
+        await new Promise((resolve) => setTimeout(resolve, 2900));
+        assert.ok(sends().length >= 1, 'a delta schedules its own bubble render');
+        const timers = (agent as unknown as { thinkingRenderTimers: Map<string, unknown> }).thinkingRenderTimers;
+        assert.equal(timers.size, 1, 'the typewriter walker stays alive while thinking is fresh');
+    }, 10000);
+
+    test('the live bubble posts knob-free and old presses still flip it', async () => {
+        const live = formatThinking('alpha and beta and gamma');
+        assert.ok(live.includes('<blockquote>alpha'), 'the expanded bubble uses a plain always-open quote');
+        assert.ok(!live.includes('expandable'), 'the expanded bubble must not fold by itself');
+        const folded = formatThinkingFolded(4000, 1234);
+        assert.ok(folded.includes('Thinking ('), 'the folded bubble shows a progress header');
+        assert.ok(folded.includes('1234'), 'the folded header carries the char count');
+        assert.ok(!folded.includes('<blockquote'), 'the folded bubble hides the quote');
+
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            session: { id: string };
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+            thinkingTypedLen: number;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        state.thinkingActive = true;
+        state.thinkingText = 'flow A';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        const first = calls.filter((c) => c.op === 'send').map((c) => c.params as Record<string, unknown>).find((p) => String(p.text).includes('Thinking')) as Record<string, unknown> | undefined;
+        assert.ok(first, 'the folded bubble posts');
+        const shown = String(first.text);
+        assert.ok(shown.includes('Thinking ('), 'the default bubble is the folded progress header');
+        assert.ok(!shown.includes('flow A'), 'the reasoning text stays hidden behind the knob by default');
+        const liveMid = state.thinkingMessageId;
+        assert.ok(typeof liveMid === 'number');
+        const firstMarkup = first.reply_markup as { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } | undefined;
+        assert.equal(firstMarkup, undefined, 'the folded bubble posts without any knob: nothing rides next to the thinking header');
+
+        state.thinkingText = 'flow A and B';
+        (state as unknown as { thinkingAt: number }).thinkingAt = Date.now() - 10000;
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_live_fold_1',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: liveMid, chat: { id: 1, type: 'supergroup' } },
+            data: 'thinkfolds:0',
+        });
+        const expand = [...calls].reverse().find((c) => c.op === 'edit')?.params as Record<string, unknown> | undefined;
+        assert.ok(expand, 'the expand press edits the bubble');
+        assert.ok(String(expand.text).includes('flow A and B'), 'the expand press reveals the full buffer');
+        assert.equal(expand.reply_markup, undefined, 'the press works knob-free for pre-update bubbles');
+        (state as unknown as { thinkingAt: number }).thinkingAt = Date.now() - 10000;
+
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_live_fold_2',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: liveMid, chat: { id: 1, type: 'supergroup' } },
+            data: 'thinkfolds:1',
+        });
+        const back = [...calls].reverse().find((c) => c.op === 'edit')?.params as Record<string, unknown> | undefined;
+        assert.ok(back, 'the fold press edits the bubble');
+        assert.ok(String(back.text).includes('Thinking ('), 'the fold press returns the compact header');
+        assert.ok(!String(back.text).includes('<blockquote>'), 'the folded form hides the quote again');
+        assert.equal(state.thinkingTypedLen, 12, 'the expanded reveal keeps the typed buffer numbered');
+
+        (state as unknown as { thinkingAt: number }).thinkingAt = Date.now() - 10000;
+        (state as unknown as { thinkingSince: number | null }).thinkingSince = Date.now() - 15000;
+        await (agent as unknown as { paintThinkingText: (t: unknown, s: unknown, r: string) => Promise<boolean> }).paintThinkingText(telegram, state, state.thinkingText);
+        const pacing = [...calls].reverse().find((c) => c.op === 'edit')?.params as Record<string, unknown> | undefined;
+        assert.ok(pacing && String(pacing.text).includes('Thinking ('), 'the walker repaints the folded header');
+        assert.equal(pacing?.reply_markup, undefined, 'walker edits carry no knobs at all');
+
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_live_fold_3',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 999999, chat: { id: 1, type: 'supergroup' } },
+            data: 'thinkfolds:0',
+        });
+        assert.ok(!calls.some((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === 999999), 'a stale live knob never touches strangers');
+        const markup = (agent as unknown as { stopMarkup: (s: unknown) => { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } }).stopMarkup(state);
+        assert.equal(markup.inline_keyboard[0].length, 1, 'the stop control is the only button');
+
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(telegram, state);
+        const archive = [...calls].reverse().find((c) => c.op === 'edit')?.params as Record<string, unknown> | undefined;
+        assert.ok(archive, 'finalize rewrites the bubble');
+        assert.ok(String(archive.text).includes('Thought'), 'finalize rewrites the header to Thought');
+        assert.ok(String(archive.text).includes('<blockquote expandable>flow A and B'), 'the archive carries the native collapsible quote');
+        const archiveMarkup = archive.reply_markup as { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+        assert.equal(archiveMarkup.inline_keyboard.length, 1, 'a single row rides on the archive');
+        assert.equal(archiveMarkup.inline_keyboard[0][0].callback_data, `thinkdoc:${liveMid}`, 'the full text knob is the only button');
+
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_arch_doc',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: liveMid, chat: { id: 1, type: 'supergroup' } },
+            data: `thinkdoc:${liveMid}`,
+        });
+        const doc = calls.find((c) => c.op === 'doc')?.params as Record<string, unknown> | undefined;
+        assert.ok(doc, 'the archived doc press sends a document');
+        const docFile = doc.document as { filename: string; source: Buffer };
+        assert.ok(String(docFile.source).includes('flow A and B'), 'the document carries the uncut reasoning');
+        const archivedThread = (state as unknown as { threadId: number | null }).threadId;
+        assert.equal(doc.message_thread_id, archivedThread, 'the document lands in the session topic');
+
+        state.thinkingMessageId = liveMid;
+        state.thinkingText = 'flow A and B';
+        (state as unknown as { thinkingFolded: boolean }).thinkingFolded = false;
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(telegram, state);
+        const expandedArchive = [...calls].reverse().find((c) => c.op === 'edit')?.params as Record<string, unknown> | undefined;
+        assert.ok(expandedArchive, 'finalize edits the bubble again');
+        assert.ok(String(expandedArchive.text).includes('<blockquote expandable>flow A and B'), 'the archive always settles into the native collapsed quote');
+    }, 8000);
+
+    test('an expand press waits out an in-flight paint and still lands', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            session: { id: string };
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+            thinkingPainting: boolean;
+            thinkingFolded: boolean;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        state.thinkingActive = true;
+        state.thinkingText = 'mutex flow';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        const liveMid = state.thinkingMessageId;
+        assert.ok(typeof liveMid === 'number');
+        state.thinkingPainting = true;
+        setTimeout(() => { state.thinkingPainting = false; }, 200);
+        (state as unknown as { thinkingAt: number }).thinkingAt = Date.now() - 10000;
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_mutex_1',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: liveMid, chat: { id: 1, type: 'supergroup' } },
+            data: 'thinkfolds:0',
+        });
+        const expand = [...calls].reverse().find((c) => c.op === 'edit')?.params as Record<string, unknown> | undefined;
+        assert.ok(expand, 'the press survives a busy painter instead of being dropped');
+        assert.ok(String(expand.text).includes('mutex flow'), 'the full buffer lands after the wait');
+        assert.equal(state.thinkingFolded, false, 'the expanded wish is kept');
+    }, 6000);
+
+    test('an expand press under a live penalty opens by itself when the chat frees', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            session: { id: string };
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+            thinkingFolded: boolean;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        state.thinkingActive = true;
+        state.thinkingText = 'penalty flow';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        const liveMid = state.thinkingMessageId;
+        assert.ok(typeof liveMid === 'number');
+        jest.restoreAllMocks();
+        (agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil = Date.now() + 400;
+        const editsBefore = calls.filter((c) => c.op === 'edit').length;
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_penalty_1',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: liveMid, chat: { id: 1, type: 'supergroup' } },
+            data: 'thinkfolds:0',
+        });
+        assert.equal(calls.filter((c) => c.op === 'edit').length, editsBefore, 'the press holds during the penalty');
+        assert.equal(state.thinkingFolded, false, 'the wish is remembered');
+        await new Promise((resolve) => setTimeout(resolve, 2800));
+        const expand = [...calls].reverse().find((c) => c.op === 'edit')?.params as Record<string, unknown> | undefined;
+        assert.ok(expand, 'the scheduled retry lands once the chat frees');
+        assert.ok(String(expand.text).includes('penalty flow'), 'the full buffer arrives without a second tap');
+        assert.equal(expand.reply_markup, undefined, 'the retry lands knob-free');
+    }, 9000);
+
+    test('a rapid second toggle queues a single spaced paint instead of burning the budget', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            session: { id: string };
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+            thinkingFolded: boolean;
+            thinkingSince: number | null;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        state.thinkingActive = true;
+        state.thinkingSince = Date.now() - 2500;
+        state.thinkingText = 'double tap flow';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        const liveMid = state.thinkingMessageId;
+        assert.ok(typeof liveMid === 'number');
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_tap_1',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: liveMid, chat: { id: 1, type: 'supergroup' } },
+            data: 'thinkfolds:0',
+        });
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_tap_2',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: liveMid, chat: { id: 1, type: 'supergroup' } },
+            data: 'thinkfolds:1',
+        });
+        const bubbleEdits = () => calls.filter((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === liveMid);
+        assert.equal(state.thinkingFolded, true, 'the last wish wins');
+        assert.equal(bubbleEdits().length, 0, 'nothing burns inside the spacing window');
+        const renderTimers = (agent as unknown as { thinkingRenderTimers: Map<string, NodeJS.Timeout> }).thinkingRenderTimers;
+        const pendingRender = renderTimers.get('ses_test01');
+        if (pendingRender) clearTimeout(pendingRender);
+        renderTimers.delete('ses_test01');
+        await new Promise((resolve) => setTimeout(resolve, 3200));
+        assert.equal(bubbleEdits().length, 1, 'a single spaced paint lands');
+        const landed = [...calls].reverse().find((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === liveMid)?.params as Record<string, unknown> | undefined;
+        assert.ok(landed && String(landed.text).includes('Thinking ('), 'the folded header returns for the last wish');
+        assert.equal(landed?.reply_markup, undefined, 'the mounted state stays knob-free');
+    }, 12000);
+
+    test('a fold press on the archive retries by itself when rate limited', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setEditImpl } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            session: { id: string };
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        state.thinkingActive = true;
+        state.thinkingText = 'archive retry flow';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        const liveMid = state.thinkingMessageId;
+        assert.ok(typeof liveMid === 'number');
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(telegram, state);
+        let attempts = 0;
+        setEditImpl(async () => {
+            attempts += 1;
+            if (attempts === 1) throw new Error('Telegram API error: Too Many Requests: retry after 1');
+            return undefined as unknown as void;
+        });
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_arch_retry_1',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: liveMid, chat: { id: 1, type: 'supergroup' } },
+            data: `thinkfold:${liveMid}:0`,
+        });
+        const penalty = (agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil;
+        assert.ok(penalty > Date.now(), 'the press recorded the penalty window');
+        await new Promise((resolve) => setTimeout(resolve, 3400));
+        const expandArchive = [...calls].reverse().find((c) => c.op === 'edit')?.params as Record<string, unknown> | undefined;
+        assert.ok(expandArchive, 'the scheduled retry expands the archive');
+        assert.ok(String(expandArchive.text).includes('<blockquote expandable>archive retry flow'), 'the archive opens without a second tap');
+        const archiveKnob = expandArchive.reply_markup as { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+        assert.equal(archiveKnob.inline_keyboard[0][0].callback_data, `thinkdoc:${liveMid}`, 'the doc knob rides along with the native quote');
+    }, 12000);
+
+    test('the draft lane streams reasoning into the private chat and relaxes the topic pace', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await (agent as unknown as {
+            attachSession: (t: unknown, s: unknown, thread?: unknown, user?: number) => Promise<{
+                thinkingActive: boolean;
+                thinkingText: string;
+                thinkingFolded: boolean;
+                userId: number | null;
+                thinkingDraftOk: boolean;
+                thinkingMessageId: number | null;
+            }>;
+        }).attachSession(telegram, SESSION, undefined, 991)) as never;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set('ses_test01', state);
+        const live = state as never as { thinkingActive: boolean; thinkingText: string; thinkingSince: number | null };
+        live.thinkingActive = true;
+        live.thinkingSince = Date.now() - 2500;
+        live.thinkingText = 'x'.repeat(120);
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, live);
+        await new Promise((resolve) => setTimeout(resolve, 1300));
+        const drafts = calls.filter((c) => c.op === 'draft');
+        assert.ok(drafts.length >= 2, 'the drafts stream continuously while thinking');
+        assert.equal((drafts[0].params as Record<string, unknown>).chat_id, 991, 'the drafts go to the private chat');
+        assert.equal((drafts[0].params as Record<string, unknown>).draft_id, 1);
+        assert.equal(calls.filter((c) => c.op === 'edit').length, 0, 'the topic bubble stays quiet while the lane streams');
+        live.thinkingText += 'y'.repeat(60);
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        const fresh = calls.filter((c) => c.op === 'draft');
+        const last = String((fresh[fresh.length - 1].params as Record<string, unknown>).text ?? '');
+        assert.equal(last.length, 180, 'the draft carries the full live buffer');
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(telegram, live);
+        const clearDraft = calls.filter((c) => c.op === 'draft').pop()?.params as Record<string, unknown> | undefined;
+        assert.ok(clearDraft && String(clearDraft.text ?? '') === '' && clearDraft.chat_id === 991, 'finalize clears the private draft');
+    }, 16000);
+
+    test('a persistently failing draft lane parks itself only after repeated failures', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setDraftImpl } = stubTelegram();
+        const fake = stubOpencode();
+        setDraftImpl(() => Promise.reject(new Error('Telegram API error: Bad Request: draft rejected')));
+        const state = (await (agent as unknown as {
+            attachSession: (t: unknown, s: unknown, thread?: unknown, user?: number) => Promise<never>;
+        }).attachSession(telegram, SESSION, undefined, 991)) as never;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set('ses_test01', state);
+        const live = state as never as { thinkingActive: boolean; thinkingText: string; thinkingSince: number | null; thinkingDraftOk: boolean; thinkingTypeMs: number };
+        live.thinkingActive = true;
+        live.thinkingSince = Date.now() - 2500;
+        live.thinkingText = 'fallback flow text for the reveal';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, live);
+        await new Promise((resolve) => setTimeout(resolve, 2200));
+        assert.equal(live.thinkingDraftOk, true, 'an early failure only pauses the lane');
+        assert.ok(calls.filter((c) => c.op === 'draft').length >= 2, 'the lane keeps trying through the pause');
+        await new Promise((resolve) => setTimeout(resolve, 6500));
+        assert.equal(live.thinkingDraftOk, false, 'a persistently failing lane parks itself after the fail limit');
+        assert.ok(calls.filter((c) => c.op === 'draft').length >= 5, 'the lane earned its parking after several honest attempts');
+        const autoEditsBeforeManual = calls.filter((c) => c.op === 'edit').length;
+        await (agent as unknown as { typeThinkingStep: (s: unknown) => Promise<void> }).typeThinkingStep(live);
+        const manualEdits = calls.filter((c) => c.op === 'edit').length;
+        assert.ok(manualEdits >= 1, `a manual walker step paints; auto=${autoEditsBeforeManual} manual=${manualEdits} ms=${live.thinkingTypeMs}`);
+        await new Promise((resolve) => setTimeout(resolve, 1400));
+        const autoEdits = calls.filter((c) => c.op === 'edit').length;
+        assert.ok(autoEdits >= 1, `the timer loop paints on its own too; auto=${autoEdits} manual=${manualEdits}`);
+    }, 14000);
+
+    test('a single network blip pauses the draft lane and it keeps breathing', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setDraftImpl } = stubTelegram();
+        const fake = stubOpencode();
+        let draftCalls = 0;
+        setDraftImpl(() => {
+            draftCalls += 1;
+            if (draftCalls === 1) return Promise.reject(new Error('fetch failed'));
+            return Promise.resolve(true as unknown as boolean);
+        });
+        const state = (await (agent as unknown as {
+            attachSession: (t: unknown, s: unknown, thread?: unknown, user?: number) => Promise<never>;
+        }).attachSession(telegram, SESSION, undefined, 991)) as never;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set('ses_test01', state);
+        const live = state as never as { thinkingActive: boolean; thinkingText: string; thinkingSince: number | null; thinkingDraftOk: boolean };
+        live.thinkingActive = true;
+        live.thinkingSince = Date.now() - 2500;
+        live.thinkingText = 'lane survives a network blip';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, live);
+        await new Promise((resolve) => setTimeout(resolve, 4000));
+        assert.equal(live.thinkingDraftOk, true, 'the lane lives through a fetch failure');
+        assert.ok(calls.filter((c) => c.op === 'draft').length >= 3, 'pushes resumed after the blip');
+    }, 10000);
+
+    test('the draft lane trims huge buffers to the tail and stays alive', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await (agent as unknown as {
+            attachSession: (t: unknown, s: unknown, thread?: unknown, user?: number) => Promise<never>;
+        }).attachSession(telegram, SESSION, undefined, 991)) as never;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set('ses_test01', state);
+        const live = state as never as { thinkingActive: boolean; thinkingText: string; thinkingSince: number | null; thinkingDraftOk: boolean; thinkingDraftTail: number };
+        live.thinkingActive = true;
+        live.thinkingSince = Date.now() - 2500;
+        live.thinkingText = 'a'.repeat(5200);
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, live);
+        const drafts = calls.filter((c) => c.op === 'draft');
+        assert.ok(drafts.length >= 1, 'the trimmed draft stream keeps Flowing');
+        assert.equal(String((drafts[0].params as Record<string, unknown>).text ?? '').length, 3500, 'the draft carries only the requested tail');
+        assert.equal(live.thinkingDraftOk, true, 'a huge buffer does not kill the');
+        assert.equal(live.thinkingDraftTail, 3500, 'the tail cap stays put once things fit');
+    }, 8000);
+
+    test('a too long draft shrinks its tail and keeps the lane alive', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setDraftImpl } = stubTelegram();
+        const fake = stubOpencode();
+        let draftsTried = 0;
+        setDraftImpl(() => {
+            draftsTried += 1;
+            if (draftsTried === 1) return Promise.reject(new Error('Telegram API error: Bad Request: MESSAGE_TOO_LONG'));
+            return Promise.resolve(true);
+        });
+        const state = (await (agent as unknown as {
+            attachSession: (t: unknown, s: unknown, thread?: unknown, user?: number) => Promise<never>;
+        }).attachSession(telegram, SESSION, undefined, 991)) as never;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set('ses_test01', state);
+        const live = state as never as { thinkingActive: boolean; thinkingText: string; thinkingSince: number | null; thinkingDraftOk: boolean; thinkingDraftTail: number; thinkingTypeMs: number };
+        live.thinkingActive = true;
+        live.thinkingSince = Date.now() - 2500;
+        live.thinkingText = 'b'.repeat(5200);
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, live);
+        const drafts = calls.filter((c) => c.op === 'draft');
+        assert.equal(drafts.length, 2, 'the shrunk retry fires within the same step');
+        assert.equal(String((drafts[0].params as Record<string, unknown>).text ?? '').length, 3500, 'the first press tries the full tail');
+        assert.equal(String((drafts[1].params as Record<string, unknown>).text ?? '').length, 1750, 'the retry carries the halved tail');
+        assert.equal(live.thinkingDraftOk, true, 'the lane survives a too long buffer');
+        assert.equal(live.thinkingDraftTail, 1750, 'the ladder remembers the new cap');
+        assert.ok(live.thinkingTypeMs >= 2300 && live.thinkingTypeMs <= 2400, 'the calm pace stands even for huge buffers');
+    }, 8000);
+
+    test('a dead draft lane never asks for an extra clear', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setDraftImpl } = stubTelegram();
+        const fake = stubOpencode();
+        setDraftImpl(() => Promise.reject(new Error('Telegram API error: Bad Request: PEER_ID_INVALID')));
+        const state = (await (agent as unknown as {
+            attachSession: (t: unknown, s: unknown, thread?: unknown, user?: number) => Promise<never>;
+        }).attachSession(telegram, SESSION, undefined, 991)) as never;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set('ses_test01', state);
+        const live = state as never as { thinkingActive: boolean; thinkingText: string; thinkingSince: number | null; thinkingDraftOk: boolean };
+        live.thinkingActive = true;
+        live.thinkingSince = Date.now() - 2500;
+        live.thinkingText = 'lane dead while streaming';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, live);
+        await new Promise((resolve) => setTimeout(resolve, 2200));
+        assert.ok(calls.filter((c) => c.op === 'draft').every((c) => String((c.params as Record<string, unknown>).text ?? '') !== ''), 'the outage only pauses pushes, no clear sneaks in mid-run');
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(telegram, live);
+        assert.ok(!calls.some((c) => c.op === 'draft' && (c.params as Record<string, unknown>).text === ''), 'no clear is sent for a lane that never delivered');
+    }, 12000);
+
+    test('a 429 pauses the draft lane instead of killing it', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setDraftImpl } = stubTelegram();
+        const fake = stubOpencode();
+        let draftCalls = 0;
+        setDraftImpl(() => {
+            draftCalls += 1;
+            if (draftCalls === 1) return Promise.reject(new Error('Telegram API error: Too Many Requests: retry after 4'));
+            return Promise.resolve(true as unknown as boolean);
+        });
+        const state = (await (agent as unknown as {
+            attachSession: (t: unknown, s: unknown, thread?: unknown, user?: number) => Promise<never>;
+        }).attachSession(telegram, SESSION, undefined, 991)) as never;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set('ses_test01', state);
+        const live = state as never as { thinkingActive: boolean; thinkingText: string; thinkingSince: number | null; thinkingDraftOk: boolean; thinkingDraftAt: number };
+        live.thinkingActive = true;
+        live.thinkingSince = Date.now() - 2500;
+        live.thinkingText = 'lane keeps breathing through penalties';
+        (live as unknown as { thinkingDraftAt: number }).thinkingDraftAt = 0;
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, live);
+        const pausedAt = (live as unknown as { thinkingDraftAt: number }).thinkingDraftAt;
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        assert.equal(live.thinkingDraftOk, true, 'the penalty pauses the lane, it never parks it');
+        assert.ok(String((calls.filter((c) => c.op === 'draft')[0].params as Record<string, unknown>).text ?? '').length > 0, 'the first push attempted the draft');
+        assert.ok(pausedAt >= Date.now() - 1000, 'the pace guard blocks pushes across the penalty window');
+        await new Promise((resolve) => setTimeout(resolve, 5200));
+        assert.equal(calls.filter((c) => c.op === 'draft').length >= 2, true, 'the lane resumes pushing after the penalty ends');
+        assert.equal(live.thinkingDraftOk, true, 'the lane still lives after the penalty');
+    }, 14000);
+
+    test('a dry topic-edit budget freezes walker edits until the turn boundary refills it', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            session: { id: string };
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+            thinkingSince: number | null;
+            thinkingAt: number;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        const governor = (agent as unknown as { governor: { spend: (scope: string) => void; budget: (scope: string) => number } }).governor;
+        state.thinkingActive = true;
+        state.thinkingSince = Date.now() - 2500;
+        state.thinkingText = 'budget flows through the header';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        assert.ok(typeof state.thinkingMessageId === 'number', 'the bubble posts before the budget drains');
+        const renderTimers = (agent as unknown as { thinkingRenderTimers: Map<string, NodeJS.Timeout> }).thinkingRenderTimers;
+        const pendingRender = renderTimers.get('ses_test01');
+        if (pendingRender) clearTimeout(pendingRender);
+        renderTimers.delete('ses_test01');
+        const editsSoFar = calls.filter((c) => c.op === 'edit').length;
+        for (let i = 0; i < 60 && governor.budget('topic-edit') > 0; i++) governor.spend('topic-edit');
+        assert.equal(governor.budget('topic-edit'), 0, 'the edit budget is drained');
+        (state as unknown as { thinkingAt: number }).thinkingAt = Date.now() - 10000;
+        state.thinkingText += ' plus a fresh tail';
+        const held = await (agent as unknown as { paintThinkingText: (t: unknown, s: unknown, r: string) => Promise<boolean> }).paintThinkingText(telegram, state, state.thinkingText);
+        assert.equal(held, false, 'the walker holds still when the budget is dry');
+        assert.equal(calls.filter((c) => c.op === 'edit').length, editsSoFar, 'no edit leaves the chat while the budget stays dry');
+        (state as unknown as { thinkingAt: number }).thinkingAt = Date.now() - 10000;
+        state.thinkingText += ' and one more';
+        const forced = await (agent as unknown as { paintThinkingText: (t: unknown, s: unknown, r: string, force?: boolean) => Promise<boolean> }).paintThinkingText(telegram, state, state.thinkingText, true);
+        assert.equal(forced, true, 'a user-driven repaint bypasses the dry budget');
+        assert.ok(calls.filter((c) => c.op === 'edit').length > editsSoFar, 'the forced repaint lands');
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(telegram, state);
+        assert.equal(governor.budget('topic-edit'), 40, 'the turn boundary refills the budget');
+        const boundaryEdits = calls.filter((c) => c.op === 'edit').length;
+        state.thinkingActive = true;
+        state.thinkingSince = Date.now() - 2500;
+        state.thinkingText = 'second turn paints again';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        const pendingSecond = renderTimers.get('ses_test01');
+        if (pendingSecond) clearTimeout(pendingSecond);
+        renderTimers.delete('ses_test01');
+        (state as unknown as { thinkingAt: number }).thinkingAt = Date.now() - 10000;
+        state.thinkingText += ' with a walker pulse';
+        const restored = await (agent as unknown as { paintThinkingText: (t: unknown, s: unknown, r: string) => Promise<boolean> }).paintThinkingText(telegram, state, state.thinkingText);
+        assert.equal(restored, true, 'walker edits resume after the refill');
+        assert.ok(calls.filter((c) => c.op === 'edit').length > boundaryEdits, 'the next edit lands with the fresh budget');
+    }, 15000);
+
+    test('a dry markup budget parks the autonomous toggle until the turn boundary', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            contextMessageId: number | null;
+            stopButtonOn: boolean;
+            lastText: string;
+            turnComplete: boolean;
+            stoppedAt: number;
+        };
+        state.contextMessageId = 5;
+        state.lastText = 'The task is done.';
+        state.turnComplete = true;
+        state.stoppedAt = 0;
+        const governor = (agent as unknown as { governor: { spend: (scope: string) => void; budget: (scope: string) => number } }).governor;
+        for (let i = 0; i < 10 && governor.budget('topic-markup') > 0; i++) governor.spend('topic-markup');
+        await agent.syncStopKeyboard(telegram, state);
+        assert.equal(state.stopButtonOn, false, 'the dry budget holds the toggle');
+        assert.equal(calls.filter((c) => c.op === 'markup').length, 0, 'no markup call leaves a drained window');
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(telegram, state);
+        assert.equal(governor.budget('topic-markup'), 8, 'the turn boundary restores the markup budget');
+        await agent.syncStopKeyboard(telegram, state);
+        assert.equal(state.stopButtonOn, true, 'the toggle lands with the fresh window');
+        assert.equal(calls.filter((c) => c.op === 'markup').length, 1);
+    });
+
+    test('the end-of-turn burst is staggered instead of stacked', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            promptQueue: string[];
+            session: typeof SESSION;
+            lastText: string;
+            turnComplete: boolean;
+            stoppedAt: number;
+            contextMessageId: number | null;
+            stopMessageId: number | null;
+            thinkingMessageId: number | null;
+            thinkingText: string;
+            thinkingSince: number | null;
+            finalizing: boolean;
+        };
+        state.promptQueue.push('work');
+        state.session = { ...SESSION, tokens_input: 500 };
+        state.lastText = 'The task is done.';
+        state.turnComplete = true;
+        state.stoppedAt = Date.now() - 10000;
+        state.contextMessageId = 5;
+        state.stopMessageId = 990;
+        state.thinkingMessageId = 777;
+        state.thinkingText = 'staggered finish thoughts';
+        state.thinkingSince = Date.now() - 1000;
+        (state as unknown as { lastContextRendered: string }).lastContextRendered = '';
+        await (agent as unknown as { finalizeSession: (t: unknown, s: unknown) => Promise<void> }).finalizeSession(telegram, state);
+        const finalizeAt = calls.find((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === 777)?.at ?? 0;
+        const pinAt = [...calls].reverse().find((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === 5)?.at ?? 0;
+        const retireAt = calls.find((c) => c.op === 'markup')?.at ?? 0;
+        assert.ok(finalizeAt > 0, 'the thinking finalize edit landed');
+        assert.ok(pinAt > 0, 'the pinned context refresh landed');
+        assert.ok(retireAt > 0, 'the control retire landed');
+        assert.ok(pinAt - finalizeAt >= 350, `the pin refresh waits its jittered gap (${pinAt - finalizeAt}ms)`);
+        assert.ok(retireAt - pinAt >= 350, `the retire waits its jittered gap (${retireAt - pinAt}ms)`);
+        assert.ok(retireAt - finalizeAt >= 700, 'the boundary no longer fires three edits back-to-back');
+    }, 10000);
+
+    test('while the reveal is expanded the walker paints on a slower pulse', async () => {
+        jest.restoreAllMocks();
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            session: { id: string };
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+            thinkingFolded: boolean;
+            thinkingSince: number | null;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        state.thinkingActive = true;
+        state.thinkingSince = Date.now() - 2500;
+        state.thinkingText = 'expanded pulse text for the open view';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        const liveMid = state.thinkingMessageId;
+        assert.ok(typeof liveMid === 'number');
+        const bubbleEdits = () => calls.filter((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === liveMid);
+        state.thinkingFolded = false;
+        const waitForPulses = async (count: number, limitMs: number): Promise<void> => {
+            const deadline = Date.now() + limitMs;
+            while (Date.now() < deadline && bubbleEdits().length < count) {
+                await new Promise((resolve) => setTimeout(resolve, 120));
+            }
+        };
+        await waitForPulses(1, 6000);
+        assert.equal(bubbleEdits().length, 1, 'the first expanded pulse arrived on the slower floor');
+        state.thinkingText += ' fresh tail words after the first pulse';
+        await waitForPulses(2, 9000);
+        const pulses = bubbleEdits();
+        assert.equal(pulses.length, 2, 'each pulse carries fresh text: the walker does not loop identical renders');
+        const gap = ((pulses[1].at ?? 0) - (pulses[0].at ?? 0));
+        assert.ok(gap >= 3000, `the expanded pulse gap leans on the 3200 floor; gap=${gap}`);
+        state.thinkingText += ' extra tail after the pulse';
+        const forced = await (agent as unknown as { paintThinkingText: (t: unknown, s: unknown, x: string, force: boolean) => Promise<boolean> }).paintThinkingText(telegram, state, state.thinkingText, true);
+        assert.equal(forced, true, 'a force paint is still allowed');
+        assert.equal(bubbleEdits().length, 3, 'the expand press itself is the third paint in the window');
+    }, 18000);
+
+    test('typing reveals reasoning in smooth steps and speeds up on success', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+            thinkingTypedLen: number;
+            thinkingTypeMs: number;
+            thinkingDeltaAt: number;
+            session: { id: string };
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (state as unknown as { thinkingFolded: boolean }).thinkingFolded = false;
+        jest.restoreAllMocks();
+        state.thinkingActive = true;
+        state.thinkingText = 'first';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('first')));
+        assert.equal(state.thinkingTypedLen, 5);
+        assert.ok(state.thinkingTypeMs >= 2300 && state.thinkingTypeMs <= 2400, 'a successful paint settles at the calm live floor');
+        state.thinkingText += ' second chunk grows here';
+        const deadline = Date.now() + 9000;
+        while (Date.now() < deadline
+            && !calls.some((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('second chunk'))) {
+            await new Promise((resolve) => setTimeout(resolve, 120));
+        }
+        const edits = calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('second chunk'));
+        assert.ok(edits.length >= 1, 'the walker types newly streamed text');
+        assert.ok(state.thinkingTypedLen >= 25, 'the cursor advances toward the fresh tail');
+    }, 14000);
+
+    test('a large backlog is revealed at once after a long pause', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+            thinkingTypedLen: number;
+            thinkingRendered: string;
+            thinkingAt: number;
+            session: { id: string };
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (state as unknown as { thinkingFolded: boolean }).thinkingFolded = false;
+        state.thinkingActive = true;
+        state.thinkingText = 'seed';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        const longText = 'seed' + 'x'.repeat(900);
+        state.thinkingText = longText;
+        state.thinkingAt = Date.now() - 60_000;
+        await (agent as unknown as { typeThinkingStep: (s: unknown) => Promise<void> }).typeThinkingStep(state);
+        const finalEdit = [...calls].reverse().find((c) => c.op === 'edit');
+        assert.ok(finalEdit, 'the catch-up paints the backlog');
+        assert.ok(
+            String((finalEdit.params as Record<string, unknown>).text).includes('xxxxxxxxxx'),
+            'the backlog reveal contains the tail of the fresh text',
+        );
+        assert.equal(state.thinkingTypedLen, longText.length, 'the cursor lands on the full tail');
+    }, 8000);
+
+    test('the reveal pace matches the streaming arrival rate without catch-up jumps', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            thinkingText: string;
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+            thinkingTypedLen: number;
+            thinkingRateCps: number;
+            session: { id: string };
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (state as unknown as { thinkingFolded: boolean }).thinkingFolded = false;
+        jest.restoreAllMocks();
+        state.thinkingActive = true;
+        state.thinkingText = 'the quick fox';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        state.thinkingRateCps = 40;
+        const streamed = 'the quick fox' + ' and more words'.repeat(20);
+        state.thinkingText = streamed;
+        state.thinkingAt = Date.now() - 60_000;
+        const step = (agent as unknown as { typeThinkingStep: (s: unknown) => Promise<void> }).typeThinkingStep.bind(agent);
+        await step(state);
+        const afterFirst = state.thinkingTypedLen;
+        assert.ok(afterFirst > 20 && afterFirst < streamed.length, 'the first bite follows the stream instead of jumping to the tail');
+        state.thinkingAt = Date.now() - 60_000;
+        await step(state);
+        assert.ok(state.thinkingTypedLen > afterFirst, 'the second bite advances again');
+        assert.ok(state.thinkingTypedLen < streamed.length, 'the reveal stays incremental');
+        const editCalls = calls.filter((c) => c.op === 'edit');
+        assert.ok(editCalls.length >= 2, 'both bites paint');
+    }, 8000);
+
+    test('a real 429 widens the pace to the cap and success decays it back to one second', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setEditImpl } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            thinkingText: string;
+            thinkingRendered: string;
+            thinkingMessageId: number | null;
+            thinkingTypedLen: number;
+            thinkingAt: number;
+            thinkingTypeMs: number;
+            thinkingActive: boolean;
+            session: { id: string };
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        (state as unknown as { thinkingFolded: boolean }).thinkingFolded = false;
+        state.thinkingActive = true;
+        state.thinkingText = 'base';
+        await (agent as unknown as { syncThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).syncThinkingMessage(telegram, state);
+        state.thinkingText = 'base plus one fresh burst of words';
+        state.thinkingAt = Date.now() - 60_000;
+        setEditImpl(async () => {
+            throw new Error('Too Many Requests: retry after 3');
+        });
+        await (agent as unknown as { typeThinkingStep: (s: unknown) => Promise<void> }).typeThinkingStep(state);
+        assert.equal(state.thinkingTypeMs, 3000, 'the 429 pushes the pace to the cap');
+        assert.ok((agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil > Date.now(), 'the global limiter respects the retry window');
+        state.thinkingText += ' more tail words arrive';
+        state.thinkingAt = Date.now() - 60_000;
+        const editsBeforeSilence = calls.filter((c) => c.op === 'edit').length;
+        await (agent as unknown as { typeThinkingStep: (s: unknown) => Promise<void> }).typeThinkingStep(state);
+        assert.equal(calls.filter((c) => c.op === 'edit').length, editsBeforeSilence, 'the walker stays silent while a real penalty is active');
+        assert.equal(state.thinkingTypeMs, 3000, 'a skipped step does not touch the pace');
+        (agent as unknown as { rateLimitedUntil: number }).rateLimitedUntil = 0;
+        setEditImpl(null);
+        await (agent as unknown as { typeThinkingStep: (s: unknown) => Promise<void> }).typeThinkingStep(state);
+        const afterFirstSuccess = state.thinkingTypeMs;
+        state.thinkingText += ' more tail words arrive';
+        state.thinkingAt = Date.now() - 60_000;
+        await (agent as unknown as { typeThinkingStep: (s: unknown) => Promise<void> }).typeThinkingStep(state);
+        assert.ok(afterFirstSuccess < 3000, 'a success decays the pace from the cap');
+        assert.ok(state.thinkingTypeMs < afterFirstSuccess, 'the decay is monotonic toward the calm floor');
+        assert.ok(state.thinkingTypeMs >= 2400, 'the pace never drops below the calm floor');
+    }, 8000);
+
+    test('finalize lands a native collapsible quote with only the doc knob', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            thinkingActive: boolean;
+            thinkingMessageId: number | null;
+            thinkingSince: number | null;
+            thinkingText: string;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        state.thinkingActive = true;
+        state.thinkingMessageId = 44260;
+        state.thinkingSince = Date.now() - 5000;
+        state.thinkingText = 'alpha beta gamma';
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(telegram, state);
+        const foldEdit = calls.find((c) => c.op === 'edit');
+        assert.ok(foldEdit, 'the folded archive lands on the existing bubble');
+        const foldParams = foldEdit.params as Record<string, unknown>;
+        assert.ok(String(foldParams.text).includes('Thought'), 'the folded form keeps the Thought header');
+        assert.ok(String(foldParams.text).includes('<blockquote expandable>alpha beta gamma'), 'the whole quote rides native: Telegram collapses it by default');
+        const foldMarkup = foldParams.reply_markup as { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+        assert.equal(foldMarkup.inline_keyboard.length, 1, 'one row only');
+        assert.equal(foldMarkup.inline_keyboard[0][0].callback_data, 'thinkdoc:44260', 'the doc knob is the only button');
+
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_fold_1',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 44260, chat: { id: 1, type: 'supergroup' } },
+            data: 'thinkfold:44260:0',
+        });
+        const expandEdit = calls.filter((c) => c.op === 'edit').pop();
+        assert.ok(expandEdit && expandEdit !== foldEdit, 'an old expand press repaints the same native quote');
+        const expandParams = expandEdit.params as Record<string, unknown>;
+        assert.ok(String(expandParams.text).includes('<blockquote expandable>alpha beta gamma'), 'the retro press never re-introduces always-open quotes');
+        const expandKnob = expandParams.reply_markup as { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+        assert.equal(expandKnob.inline_keyboard[0][0].callback_data, 'thinkdoc:44260', 'the doc knob stays mounted');
+        (agent as unknown as { thoughtFoldEditAt: number }).thoughtFoldEditAt = 0;
+
+        const editsBeforeFold = calls.filter((c) => c.op === 'edit').length;
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_fold_2',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 44260, chat: { id: 1, type: 'supergroup' } },
+            data: 'thinkfold:44260:1',
+        });
+        const compactEdit = calls.filter((c) => c.op === 'edit').pop();
+        assert.ok(compactEdit && compactEdit !== expandEdit, 'a fold press repaints once more');
+        const compactParams = compactEdit.params as Record<string, unknown>;
+        assert.ok(String(compactParams.text).includes('<blockquote expandable>alpha beta gamma'), 'the fold press keeps the native quote: no content regression');
+        assert.ok(compactParams.reply_markup !== undefined, 'the doc knob stays mounted for retro presses');
+        (agent as unknown as { thoughtFoldEditAt: number }).thoughtFoldEditAt = 0;
+        void editsBeforeFold;
+
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_fold_3',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 44260, chat: { id: 1, type: 'supergroup' } },
+            data: 'thinkfold:999:1',
+        });
+        assert.ok(!calls.some((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === 999), 'unknown archives never touch messages');
+        assert.ok(calls.some((c) => c.op === 'ack' && (c.params as Record<string, unknown>).callback_query_id === 'cb_fold_3'), 'the unknown archive press is acknowledged');
+    }, 8000);
+
+    test('finalize survives a rate limited chat and archives later', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setEditImpl } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            thinkingMessageId: number | null;
+            thinkingSince: number | null;
+            thinkingText: string;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        state.thinkingMessageId = 45000;
+        state.thinkingSince = Date.now() - 8000;
+        state.thinkingText = 'penalty survives the archive';
+        setEditImpl(async () => {
+            throw new Error('Too Many Requests: retry after 1');
+        });
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(telegram, state);
+        const archives = (agent as unknown as { thoughtArchives: Map<number, { compact: boolean }> }).thoughtArchives;
+        assert.equal(archives.has(45000), false, 'the fold button is not attached while the chat is penalized');
+        setEditImpl(null);
+        await new Promise((resolve) => setTimeout(resolve, 3400));
+        const retryEdit = calls.filter((c) => c.op === 'edit').pop();
+        assert.ok(retryEdit, 'the archive retry lands after the penalty');
+        assert.ok(String((retryEdit.params as Record<string, unknown>).text).includes('Thought'), 'the retry keeps the folded header');
+        assert.ok(archives.get(45000)?.compact === true, 'the retry lands the folded default with its expand knob');
+        assert.ok(String((retryEdit.params as Record<string, unknown>).text).includes('Thought'), 'the retry keeps the folded header');
+    }, 9000);
+
     test('running tool heartbeat with identical content does not queue again', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -2684,7 +3740,9 @@ describe('durevcode thread binding survival', () => {
             (c) => c.op === 'send' && String((c.params as Record<string, unknown>).text ?? '').includes('Running'),
         );
         assert.equal(cards.length, 1);
-        assert.ok(String((cards[0].params as Record<string, unknown>).text).includes('rebuild-gram-browser-wasm'));
+        const posted = String((cards[0].params as Record<string, unknown>).text);
+        assert.ok(posted.includes('Running ·'), 'the control states its mode');
+        assert.ok(!posted.includes('rebuild-gram-browser-wasm'), 'the control carries no per-tool noise');
     });
 
     test('tui prompt is mirrored to chat with sender mark', async () => {
@@ -3209,7 +4267,7 @@ describe('durevcode poll fanout', () => {
         assert.deepEqual(state.promptQueue, []);
     });
 
-    test('stop control text follows tool activity without extra edits', async () => {
+    test('stop control stands still while tools churn', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
         const fake = stubOpencode();
@@ -3223,26 +4281,25 @@ describe('durevcode poll fanout', () => {
         state.promptQueue.push('work');
         await agent.pumpPrompts(telegram, fake.opencode, state);
         const card = calls.find(
-            (c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('step 2'),
+            (c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Running ·'),
         );
         assert.ok(card);
-        assert.ok(String((card.params as Record<string, unknown>).text).includes('bash make build'));
+        const posted = String((card.params as Record<string, unknown>).text);
+        assert.ok(!posted.includes('step'), 'the shown text carries no per-tool noise');
         const edits = () => calls.filter((c) => c.op === 'edit').length;
         await agent.syncStopKeyboard(telegram, state);
-        assert.equal(edits(), 0);
+        assert.equal(edits(), 0, 'the same text never triggers an edit');
         state.toolCalls = 3;
         state.recentTools.push({ text: 'edit file.ts', state: 'running' });
         await agent.syncStopKeyboard(telegram, state);
-        assert.equal(edits(), 1);
-        const edit = calls[calls.length - 1] as { params: Record<string, unknown> };
-        assert.ok(String(edit.params.text).includes('step 3'));
-        assert.ok(String(edit.params.text).includes('edit file.ts'));
-        assert.ok(String(edit.params.text).includes('5348324105701574477'));
+        assert.equal(edits(), 0, 'tool churn never touches the shown control: it lives to the end of the task');
+        state.toolCalls = 8;
+        state.recentTools.push({ text: 'grep todos', state: 'running' });
         await agent.syncStopKeyboard(telegram, state);
-        assert.equal(edits(), 1);
+        assert.equal(edits(), 0, 'not even a churning backlog rewrites the quiet control');
     });
 
-    test('deleted stop control reposts with fresh text', async () => {
+    test('a deleted stop control self-corrects at the turn boundary', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, setEditImpl } = stubTelegram();
         const fake = stubOpencode();
@@ -3252,16 +4309,24 @@ describe('durevcode poll fanout', () => {
             recentTools: Array<{ text: string; state: string }>;
             stopMessageId: number | null;
             stopControlText: string | null;
+            finalized: boolean;
+            stoppedAt: number;
         };
         state.promptQueue.push('work');
         await agent.pumpPrompts(telegram, fake.opencode, state);
         assert.ok(typeof state.stopMessageId === 'number');
-        state.toolCalls = 1;
-        state.recentTools = [{ text: 'bash make build', state: 'running' }];
         setEditImpl(() => Promise.reject(new Error('Bad Request: message to edit not found')));
         await agent.syncStopKeyboard(telegram, state);
-        assert.equal(state.stopMessageId, null);
-        assert.equal(state.stopControlText, null);
+        assert.ok(state.stopMessageId !== null, 'a mid-turn deletion keeps the id until the turn ends');
+        state.finalized = true;
+        state.stoppedAt = Date.now() - 10000;
+        setEditImpl(null);
+        await agent.syncStopKeyboard(telegram, state);
+        assert.equal(state.stopMessageId, null, 'the turn boundary retires the dead control');
+        state.finalized = false;
+        state.promptQueue.push('more');
+        await agent.pumpPrompts(telegram, fake.opencode, state);
+        assert.ok(typeof state.stopMessageId === 'number' && typeof state.stopControlText === 'string', 'the next turn shows a fresh control');
     });
 
     test('notices render real emoji without template leftovers', async () => {
@@ -3329,7 +4394,8 @@ describe('durevcode thinking feed', () => {
         };
         const { telegram, calls } = stubTelegram();
         const state = await attachWatched(agent, telegram);
-        agent.getPlugin = (name: string) =>
+        (state as unknown as { thinkingFolded: boolean }).thinkingFolded = false;
+agent.getPlugin = (name: string) =>
             name === 'telegram-bot-api'
                 ? telegram
                 : liveWithEvents([{ key: 'db:r1', event: { kind: 'reasoning', text: 'Weighing options', time: now } }]);
@@ -3362,6 +4428,7 @@ describe('durevcode thinking feed', () => {
         const { telegram, calls } = stubTelegram();
         const state = await attachWatched(agent, telegram);
         let text = 'First thought';
+        (state as unknown as { thinkingFolded: boolean }).thinkingFolded = false;
         agent.getPlugin = (name: string) =>
             name === 'telegram-bot-api'
                 ? telegram
@@ -3375,6 +4442,7 @@ describe('durevcode thinking feed', () => {
         assert.equal(edits(), 0);
         now += 4000;
         await agent.updateSession(telegram, state);
+        await new Promise((resolve) => setTimeout(resolve, 1200));
         assert.equal(edits(), 1);
         const edit = calls.find(
             (c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes('Second thought here'),
@@ -4640,6 +5708,7 @@ const MODE_AGENTS = [
         state.promptQueue.push('work');
         await agent.syncStopKeyboard(telegram, state);
         assert.ok(typeof state.stopMessageId === 'number');
+        (state as unknown as { stopControlAt: number }).stopControlAt = Date.now() - 10000;
         const queryFor = (id: string, data: string) => ({
             id,
             from: { id: 42, is_bot: false, first_name: 'Owner' },
@@ -6518,7 +7587,7 @@ describe('durevcode duplicate topic binding', () => {
         (telegram as unknown as { createForumTopic: (params: Record<string, unknown>) => Promise<unknown> }).createForumTopic =
             async (params: Record<string, unknown>) => {
                 await new Promise<void>((resolve) => { release = resolve; });
-                calls.push({ op: 'create', params });
+                calls.push({ op: 'create', params, at: Date.now() });
                 return { message_thread_id: 555, name: params.name, icon_color: 0 };
             };
 
@@ -6532,7 +7601,7 @@ describe('durevcode duplicate topic binding', () => {
 
         assert.equal(first, second, 'both callers must receive the same attach result');
         assert.equal(calls.filter((c) => c.op === 'create').length, 1, 'only one topic may be created');
-    });
+    }, 9000);
 });
 
 describe('durevcode question taps', () => {

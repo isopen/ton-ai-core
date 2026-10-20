@@ -734,17 +734,29 @@ export function formatQuestionResolved(request: QuestionRequest, answers: string
     return lines.join('\n');
 }
 
-export function formatThinking(text: string): string {
-    const head = `${icon('soon')} Thinking`;
-    const cut = text.length > TOOL_OUTPUT_CAP;
-    let tail = cut ? text.slice(-TOOL_OUTPUT_CAP) : text;
+const THOUGHT_ARCHIVE_CAP = 3600;
+
+function reasoningTail(text: string, cap: number): string | null {
+    const cut = text.length > cap;
+    let tail = cut ? text.slice(-cap) : text;
     if (cut && tail.length > 0) {
         const prev = text.charCodeAt(text.length - tail.length - 1);
         const cur = tail.charCodeAt(0);
         if (prev >= 0xd800 && prev <= 0xdbff && cur >= 0xdc00 && cur <= 0xdfff) tail = tail.slice(1);
     }
+    if (!tail) return null;
+    return escapeHtml(cut ? `…${tail}` : tail);
+}
+
+export function formatThinking(text: string): string {
+    const head = `${icon('soon')} Thinking`;
+    const tail = reasoningTail(text, TOOL_OUTPUT_CAP);
     if (!tail) return head;
-    return `${head}\n${escapeHtml(cut ? `…${tail}` : tail)}`;
+    return `${head}\n<blockquote>${tail}</blockquote>`;
+}
+
+export function formatThinkingFolded(ms: number, chars: number): string {
+    return `${icon('soon')} Thinking (${formatThinkingTime(ms)} · ${Math.max(0, Math.round(chars))} chars)`;
 }
 
 export function formatThinkingTime(ms: number): string {
@@ -755,6 +767,13 @@ export function formatThinkingTime(ms: number): string {
 
 export function formatThought(ms: number): string {
     return `${icon('thinking')} Thought (${formatThinkingTime(ms)})`;
+}
+
+export function formatThoughtArchive(ms: number, text: string): string {
+    const head = formatThought(ms);
+    const tail = reasoningTail(text, THOUGHT_ARCHIVE_CAP);
+    if (!tail) return head;
+    return `${head}\n<blockquote expandable>${tail}</blockquote>`;
 }
 
 export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | null): string {

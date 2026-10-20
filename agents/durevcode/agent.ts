@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { TelegramRateGovernor } from './governor';
 import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton } from '@ton-ai/telegram-bot-api';
 import { ContextSnapshot, ModelApiInfo, OpencodeConfig, OpencodePlugin, OpencodeServerError, OpencodeServerEvent, PermissionDecision, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionPermissionRule, SessionRow, pickModeAgents, snapshotTotal, SpawnedProcess } from '@ton-ai/opencode';
@@ -19,7 +20,9 @@ import {
     formatQuestion,
     formatQuestionResolved,
     formatThinking,
+    formatThinkingFolded,
     formatThought,
+    formatThoughtArchive,
     hourglassIcon,
     icon,
     rocketIcon,
@@ -122,7 +125,19 @@ export function questionPicksComplete(picks: string[][]): boolean {
 const EVENT_THROTTLE_MS = 3000;
 const LIVE_EDIT_THROTTLE_MS = 1000;
 const MAX_LIVE_FAILURES = 3;
-const THINKING_EDIT_MS = 4000;
+const THINKING_TYPE_PACE_MS = 1000;
+const THINKING_TOPIC_FOLDED_PACE_MS = 2400;
+const THINKING_EXPANDED_PACE_MS = 3200;
+const STOP_CONTROL_PACE_MS = 3000;
+const THINKING_DRAFT_ID = 1;
+const THINKING_DRAFT_PACE_MS = 700;
+const THINKING_DRAFT_TAIL_CHARS = 3500;
+const THINKING_DRAFT_TAIL_MIN_CHARS = 800;
+const THINKING_TYPE_PACE_MAX_MS = 3000;
+const THINKING_TYPE_IDLE_MS = 5000;
+const THINKING_TYPE_SPEED_CPS = 16;
+const THINKING_TYPE_STEP_HEADROOM = 1.15;
+const THINKING_CATCHUP_CHARS = 800;
 const SLOW_TICK_MS = 3000;
 const SESSION_TICK_BATCH_TIMEOUT_MS = 15000;
 const WORKING_RECENCY_MS = 15000;
@@ -163,8 +178,13 @@ const SERVER_ERROR_EVENTS = new Set([
     SERVER_STEP_FAILED_EVENT_V2,
     SERVER_EXECUTION_FAILED_EVENT_V2,
 ]);
+const SERVER_PART_UPDATED_EVENT = 'message.part.updated';
+const SERVER_PART_UPDATED_SYNC_EVENT = 'message.part.updated.1';
+const SERVER_REASONING_DELTA_EVENT = 'session.reasoning.delta';
+const SERVER_REASONING_STARTED_EVENT = 'session.reasoning.started';
 const MAX_QUEUED_PROMPTS = 5;
 const MAX_SEEN_INBOUND = 500;
+const MAX_THOUGHT_ARCHIVES = 12;
 const MAX_SUBMITTED_PROMPTS = 100;
 const SUBMITTED_WINDOW_MS = 120000;
 
@@ -222,6 +242,10 @@ function sanitizeInboxName(raw: string, fallback: string): string {
 
 export function isMessageNotModifiedError(error: unknown): boolean {
     return error instanceof Error && error.message.includes('message is not modified');
+}
+
+export function isDraftTooLong(error: unknown): boolean {
+    return error instanceof Error && /MESSAGE_TOO_LONG|message is too long/i.test(error.message);
 }
 
 export function isThreadClosedError(error: unknown): boolean {
@@ -343,6 +367,26 @@ export function isAbortedServerError(error: unknown): boolean {
     if (!error || typeof error !== 'object' || Array.isArray(error)) return false;
     const record = error as Record<string, unknown>;
     return record.name === 'MessageAbortedError' || record.type === 'aborted';
+}
+
+export function unwrapServerPartEvent(event: OpencodeServerEvent): { sessionID: string; part: unknown } | null {
+    if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
+    const record = event as unknown as Record<string, unknown>;
+    if (record.type === 'sync') {
+        const sync = record.syncEvent as Record<string, unknown> | undefined;
+        if (!sync || sync.type !== SERVER_PART_UPDATED_SYNC_EVENT) return null;
+        const data = sync.data as Record<string, unknown> | undefined;
+        const sessionID = data?.sessionID;
+        const part = data?.part;
+        if (typeof sessionID !== 'string' || !part || typeof part !== 'object' || Array.isArray(part)) return null;
+        return { sessionID, part };
+    }
+    if (record.type !== SERVER_PART_UPDATED_EVENT) return null;
+    const properties = record.properties as Record<string, unknown> | undefined;
+    const sessionID = properties?.sessionID;
+    const part = properties?.part;
+    if (typeof sessionID !== 'string' || !part || typeof part !== 'object' || Array.isArray(part)) return null;
+    return { sessionID, part };
 }
 
 export function serverEventSessionId(event: OpencodeServerEvent): string | null {
@@ -472,11 +516,20 @@ export interface DurevcodeConfig extends AgentConfig {
     durevcode: DurevcodeWatchConfig;
 }
 
+interface ThoughtArchiveEntry {
+    sessionId: string;
+    fullHtml: string;
+    compactHtml: string;
+    fullText: string;
+    compact: boolean;
+}
+
 interface WatchedSession {
     session: SessionRow;
     contextMessageId: number | null;
     pinnedThreadId: number | null;
     threadId: number | null;
+    userId: number | null;
     appliedTopicName: string | null;
     userNamed: boolean;
     buildMode: boolean;
@@ -519,6 +572,7 @@ interface WatchedSession {
     stopControlSending: boolean;
     pinSending: boolean;
     stopControlText: string | null;
+    stopControlAt: number;
     thinkingMessageId: number | null;
     modelCardMessageId: number | null;
     thinkingText: string;
@@ -526,6 +580,19 @@ interface WatchedSession {
     thinkingAt: number;
     thinkingActive: boolean;
     thinkingSince: number | null;
+    thinkingOrdinal: number;
+    thinkingStreamMessageId: string | null;
+    thinkingTypedLen: number;
+    thinkingTypeMs: number;
+    thinkingDeltaAt: number;
+    thinkingRateCps: number;
+    thinkingRateChars: number;
+    thinkingPainting: boolean;
+    thinkingFolded: boolean;
+    thinkingDraftOk: boolean;
+    thinkingDraftAt: number;
+    thinkingDraftTail: number;
+    thinkingDraftSent: boolean;
     serverErrorText: string | null;
     serverErrorAt: number;
     stoppedAt: number;
@@ -607,6 +674,7 @@ export class DurevcodeAgent extends BaseAgent {
     private upstreamBackoffUntil: number = 0;
     private threadsEnabled: boolean = true;
     private rateLimitedUntil: number = 0;
+    private readonly governor = new TelegramRateGovernor();
     private serverOutageNoticed: boolean = false;
     private storeOutageNoticed: boolean = false;
     private pollInFlight: boolean = false;
@@ -624,6 +692,12 @@ export class DurevcodeAgent extends BaseAgent {
     private threadNoticeAt = 0;
     private seenInbound = new Set<string>();
     private seenCallbacks = new Set<string>();
+    private thinkingRenderTimers = new Map<string, NodeJS.Timeout>();
+    private thoughtArchives = new Map<number, ThoughtArchiveEntry>();
+    private thoughtPaintRetryTimers = new Map<string, NodeJS.Timeout>();
+    private thinkingDraftTimers = new Map<string, NodeJS.Timeout>();
+    private thoughtFoldEditAt = 0;
+    private thoughtDocBusy = new Set<number>();
     private resolvingQuestions = new Set<string>();
     private submittedPrompts: Array<{ session: string; text: string; at: number }> = [];
     private partialSends = new Map<string, { firstId: number; delivered: number; total: number; at: number }>();
@@ -1149,12 +1223,13 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
         text: string,
         markup?: InlineKeyboardMarkup,
+        opts?: { force?: boolean },
     ): Promise<number> {
         const chatId = this.config.durevcode.chatId;
         if (this.threadsEnabled && state.threadId === null) {
             throw new Error('Durevcode topic missing: refusing to post into General');
         }
-        if (Date.now() < this.rateLimitedUntil) {
+        if (!opts?.force && Date.now() < this.rateLimitedUntil) {
             throw new Error('Too Many Requests: durevcode backoff active');
         }
         if (Date.now() < this.upstreamBackoffUntil) {
@@ -1206,7 +1281,7 @@ export class DurevcodeAgent extends BaseAgent {
             }
         };
         for (let i = start; i < parts.length; i += 1) {
-            if (Date.now() < this.rateLimitedUntil) {
+            if (!opts?.force && Date.now() < this.rateLimitedUntil) {
                 throw new Error('Too Many Requests: durevcode backoff active');
             }
             const id = await sendOne(parts[i], i === 0);
@@ -1234,7 +1309,7 @@ export class DurevcodeAgent extends BaseAgent {
         });
     }
 
-    private async pinContextMessage(telegram: TelegramBotPlugin, state: WatchedSession): Promise<'ok' | 'gone' | 'failed'> {
+    private async pinContextMessage(telegram: TelegramBotPlugin, state: WatchedSession): Promise<'ok' | 'gone' | 'rights' | 'failed'> {
         if (state.contextMessageId === null) return 'failed';
         try {
             await telegram.pinChatMessage({
@@ -1259,11 +1334,24 @@ export class DurevcodeAgent extends BaseAgent {
                         `${error instanceof Error ? error.message : error}. ` +
                         `Give the bot the Pin Messages (can_pin_messages) admin right.`,
                 );
-                return 'failed';
+                return 'rights';
             }
             console.debug('Durevcode context pin failed:', error instanceof Error ? error.message : error);
             return 'failed';
         }
+    }
+
+    private schedulePinRetry(telegram: TelegramBotPlugin, state: WatchedSession, attempt: number): void {
+        if (attempt > 2) return;
+        const delay = Math.max(4000, this.rateLimitedUntil - Date.now() + 1000);
+        const timer = setTimeout(() => {
+            if (state.pinSending) return;
+            if (!this.watched.has(state.session.id) || state.contextMessageId === null) return;
+            void this.pinContextMessage(telegram, state).then((pinned) => {
+                if (pinned === 'failed') this.schedulePinRetry(telegram, state, attempt + 1);
+            });
+        }, delay);
+        timer.unref();
     }
 
     private async sendFreshPin(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
@@ -1310,12 +1398,13 @@ export class DurevcodeAgent extends BaseAgent {
         telegram: TelegramBotPlugin,
         session: SessionRow,
         existingThreadId?: number,
+        userId?: number | null,
     ): Promise<WatchedSession> {
         const inFlight = this.attaching.get(session.id);
         if (inFlight) return inFlight;
         const tracked = this.watched.get(session.id);
         if (tracked) return tracked;
-        const run = this.doAttachSession(telegram, session, existingThreadId);
+        const run = this.doAttachSession(telegram, session, existingThreadId, userId);
         run.then(() => undefined, () => undefined);
         this.attaching.set(session.id, run);
         try {
@@ -1329,10 +1418,12 @@ export class DurevcodeAgent extends BaseAgent {
         telegram: TelegramBotPlugin,
         session: SessionRow,
         existingThreadId?: number,
+        userId?: number | null,
     ): Promise<WatchedSession> {
         const stored = this.persisted[session.id];
         const state: WatchedSession = {
             session,
+            userId: userId ?? null,
             contextMessageId: stored?.contextMessageId ?? null,
             pinnedThreadId: stored?.pinnedThreadId ?? null,
             threadId: this.threadsEnabled ? (stored?.threadId ?? null) : null,
@@ -1378,6 +1469,7 @@ export class DurevcodeAgent extends BaseAgent {
             stopControlSending: false,
             pinSending: false,
             stopControlText: null,
+            stopControlAt: 0,
             thinkingMessageId: null,
             modelCardMessageId: null,
             thinkingText: '',
@@ -1385,6 +1477,19 @@ export class DurevcodeAgent extends BaseAgent {
             thinkingAt: 0,
             thinkingActive: false,
             thinkingSince: null,
+            thinkingOrdinal: -1,
+            thinkingStreamMessageId: null,
+            thinkingTypedLen: 0,
+            thinkingTypeMs: THINKING_TYPE_PACE_MS,
+            thinkingDeltaAt: 0,
+            thinkingRateCps: THINKING_TYPE_SPEED_CPS,
+            thinkingRateChars: 0,
+            thinkingPainting: false,
+            thinkingFolded: true,
+            thinkingDraftOk: true,
+            thinkingDraftAt: 0,
+            thinkingDraftTail: THINKING_DRAFT_TAIL_CHARS,
+            thinkingDraftSent: false,
             serverErrorText: null,
             serverErrorAt: 0,
             stoppedAt: 0,
@@ -1601,6 +1706,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (this.explicitSessionIds().length > 0) return;
         const now = Date.now();
         const busyInteractive = (state: WatchedSession): boolean =>
+            !state.turnComplete ||
             state.promptQueue.length > 0 ||
             state.cliRun !== null ||
             state.confirming !== null ||
@@ -2033,7 +2139,7 @@ export class DurevcodeAgent extends BaseAgent {
                     this.savePersisted();
                     console.warn(`Durevcode dropped stale topic binding: session ${reboundId} is gone, thread ${threadId} will get a fresh one`);
                 } else if (!this.watched.has(existing.id)) {
-                    const state = await this.attachSession(telegram, existing, threadId);
+                    const state = await this.attachSession(telegram, existing, threadId, from.id);
                     this.watched.set(existing.id, state);
                     this.prunePersistedThreadRivals(existing.id, threadId);
                     this.savePersisted();
@@ -2089,7 +2195,7 @@ export class DurevcodeAgent extends BaseAgent {
                     return;
                 }
                 if (recovered) {
-                    const state = await this.attachSession(telegram, recovered, threadId);
+                    const state = await this.attachSession(telegram, recovered, threadId, from.id);
                     state.userNamed = true;
                     this.watched.set(recovered.id, state);
                     this.prunePersistedThreadRivals(recovered.id, threadId);
@@ -2111,7 +2217,7 @@ export class DurevcodeAgent extends BaseAgent {
                 }
             }
             const session = await opencode.createSession(this.config.durevcode.directory);
-            const state = await this.attachSession(telegram, session, threadId);
+            const state = await this.attachSession(telegram, session, threadId, from.id);
             state.userNamed = true;
             this.watched.set(session.id, state);
             this.persistThreadBinding(session.id, threadId, true);
@@ -2525,7 +2631,9 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private stopMarkup(state: WatchedSession): InlineKeyboardMarkup {
-        return { inline_keyboard: [[{ text: `${EMOJI.coffee} Stop`, callback_data: `stop:${state.session.id}` }]] };
+        return { inline_keyboard: [[
+            { text: `${EMOJI.coffee} Stop`, callback_data: `stop:${state.session.id}` },
+        ]] };
     }
 
     private modeMarkup(build: boolean): InlineKeyboardMarkup {
@@ -2937,6 +3045,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 this.stopMarkup(state),
             );
             state.stopControlText = text;
+            state.stopControlAt = Date.now();
             console.log(`Durevcode stop control posted (session=${state.session.id} msg=${state.stopMessageId}).`);
         } catch (error) {
             console.debug('Durevcode stop control failed:', error instanceof Error ? error.message : error);
@@ -2947,17 +3056,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
 
     private renderStopControlText(state: WatchedSession): string {
         const mode = state.buildMode ? 'Build' : 'Plan';
-        const base = `${rocketIcon()} Running · ${mode} — tap Stop to interrupt and rewrite the task.`;
-        if (state.toolCalls <= 0) return base;
-        const last = state.recentTools[state.recentTools.length - 1];
-        const summary = last ? truncate(last.text, 60) : '';
-        if (!summary) return base;
-        return `${rocketIcon()} Running · ${mode} · step ${state.toolCalls}, ${escapeHtml(summary)} — tap Stop to interrupt.`;
+        return `${rocketIcon()} Running · ${mode} — tap Stop to interrupt and rewrite the task.`;
     }
 
     private async updateStopControlText(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         if (state.stopMessageId === null) return;
         if (Date.now() < this.rateLimitedUntil) return;
+        if (Date.now() < state.stopControlAt + STOP_CONTROL_PACE_MS) return;
         const text = this.renderStopControlText(state);
         if (text === state.stopControlText) return;
         try {
@@ -2969,6 +3074,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 reply_markup: this.stopMarkup(state),
             });
             state.stopControlText = text;
+            state.stopControlAt = Date.now();
             console.log(`Durevcode stop control updated (session=${state.session.id}).`);
         } catch (error) {
             if (isMessageNotModifiedError(error)) {
@@ -2997,74 +3103,256 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     private async syncThinkingMessage(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         if (state.liveTool) return;
         if (!state.thinkingActive && state.thinkingMessageId === null) return;
-        if (Date.now() < this.rateLimitedUntil) return;
-        const text = formatThinking(state.thinkingText);
         if (state.thinkingMessageId === null) {
-            try {
-                state.thinkingMessageId = await this.deliverMessage(telegram, state, text);
-                state.thinkingRendered = text;
-                state.thinkingAt = Date.now();
-                console.log(`Durevcode thinking posted (session=${state.session.id}).`);
-            } catch (error) {
-                console.debug('Durevcode thinking post failed:', error instanceof Error ? error.message : error);
-            }
+            await this.paintThinkingText(telegram, state, state.thinkingText);
+            this.armThinkingType(state);
             return;
         }
-        if (text === state.thinkingRendered) return;
-        if (Date.now() - state.thinkingAt < THINKING_EDIT_MS) return;
-        try {
-            await telegram.editMessageText({
-                chat_id: this.config.durevcode.chatId,
-                message_id: state.thinkingMessageId,
-                text: wellFormed(text),
-                parse_mode: 'HTML',
-            });
-            state.thinkingRendered = text;
-            state.thinkingAt = Date.now();
-        } catch (error) {
-            if (isMessageNotModifiedError(error)) {
-                state.thinkingRendered = text;
-                state.thinkingAt = Date.now();
-                return;
-            }
-            if (isMessageGoneError(error)) {
-                state.thinkingMessageId = null;
-                state.thinkingRendered = '';
-                return;
-            }
-            if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                console.warn(`Durevcode thinking rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
-                return;
-            }
-            console.debug('Durevcode thinking update failed:', error instanceof Error ? error.message : error);
-        }
+        this.armThinkingType(state);
     }
 
     private async clearThinkingMessage(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         const id = state.thinkingMessageId;
         const since = state.thinkingSince ?? Date.now();
+        const text = state.thinkingText;
+        const userExpanded = !state.thinkingFolded;
         state.thinkingMessageId = null;
         state.thinkingText = '';
         state.thinkingRendered = '';
         state.thinkingActive = false;
         state.thinkingSince = null;
+        state.thinkingOrdinal = -1;
+        state.thinkingStreamMessageId = null;
+        state.thinkingTypedLen = 0;
+        state.thinkingDeltaAt = 0;
+        state.thinkingTypeMs = THINKING_TYPE_PACE_MS;
+        state.thinkingRateCps = THINKING_TYPE_SPEED_CPS;
+        state.thinkingRateChars = 0;
+        state.thinkingFolded = true;
+        const pendingRender = this.thinkingRenderTimers.get(state.session.id);
+        if (pendingRender) {
+            clearTimeout(pendingRender);
+            this.thinkingRenderTimers.delete(state.session.id);
+        }
+        const pendingFoldRetry = this.thoughtPaintRetryTimers.get(`s${state.session.id}`);
+        if (pendingFoldRetry) {
+            clearTimeout(pendingFoldRetry);
+            this.thoughtPaintRetryTimers.delete(`s${state.session.id}`);
+        }
+        this.clearThinkingDraft(state);
+        state.thinkingDraftSent = false;
+        this.governor.refill('topic-edit');
+        this.governor.refill('draft');
+        this.governor.refill('topic-markup');
+        this.governor.refill('topic-send');
         if (id === null) return;
-        if (Date.now() < this.rateLimitedUntil) return;
+        await this.sendThought(telegram, state.session.id, id, since, text, userExpanded, 0);
+    }
+
+    private thoughtFoldMarkup(messageId: number, compact: boolean): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+        void compact;
+        return {
+            inline_keyboard: [
+                [{
+                    text: '📄 Full text',
+                    callback_data: `thinkdoc:${messageId}`,
+                }],
+            ],
+        };
+    }
+
+    private boundaryGap(minMs: number, jitterMs: number): Promise<void> {
+        return new Promise((resolve) => {
+            const timer = setTimeout(resolve, Math.round(minMs + this.governor.uniform(jitterMs)));
+            timer.unref?.();
+        });
+    }
+
+    private async waitForIdlePainter(state: WatchedSession | null, timeoutMs = 2000): Promise<void> {
+        const deadline = Date.now() + timeoutMs;
+        for (let i = 0; state && state.thinkingPainting && i < 80 && Date.now() < deadline; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+    }
+
+    private scheduleThoughtPaintRetry(
+        key: string,
+        state: WatchedSession | null,
+        attempts: number,
+        apply: () => Promise<boolean>,
+        floorDelay = 0,
+    ): void {
+        const existing = this.thoughtPaintRetryTimers.get(key);
+        if (existing) clearTimeout(existing);
+        const delay = Math.max(
+            1200,
+            floorDelay,
+            this.rateLimitedUntil - Date.now() + 800,
+        ) + this.governor.fullJitter(300, 0, 300);
+        const timer = setTimeout(() => {
+            this.thoughtPaintRetryTimers.delete(key);
+            if (attempts <= 0) return;
+            void this.waitForIdlePainter(state).then(async () => {
+                const ok = await apply();
+                if (!ok && Date.now() < this.rateLimitedUntil && attempts > 1) {
+                    this.scheduleThoughtPaintRetry(key, state, attempts - 1, apply);
+                }
+            });
+        }, delay);
+        timer.unref?.();
+        this.thoughtPaintRetryTimers.set(key, timer);
+    }
+
+    private thinkingDraftActive(state: WatchedSession): boolean {
+        return state.thinkingDraftOk && state.userId !== null && state.thinkingActive && state.thinkingText.length > 0;
+    }
+
+    private armThinkingDraft(state: WatchedSession): void {
+        if (!state.thinkingActive) return;
+        if (this.thinkingDraftTimers.has(state.session.id)) return;
+        if (!this.watched.get(state.session.id)) return;
+        if (!this.thinkingDraftActive(state)) return;
+        const timer = setTimeout(() => {
+            this.thinkingDraftTimers.delete(state.session.id);
+            void (async () => {
+                await this.pushThinkingDraft(state);
+                if (this.thinkingDraftActive(state)) this.armThinkingDraft(state);
+            })();
+        }, THINKING_DRAFT_PACE_MS);
+        timer.unref?.();
+        this.thinkingDraftTimers.set(state.session.id, timer);
+    }
+
+    private draftTailText(state: WatchedSession): string {
+        const text = state.thinkingText;
+        if (text.length <= state.thinkingDraftTail) return text;
+        return text.slice(-state.thinkingDraftTail);
+    }
+
+    private async pushThinkingDraft(state: WatchedSession): Promise<void> {
+        if (!this.thinkingDraftActive(state)) return;
+        const peer = state.userId;
+        if (peer === null) return;
+        if (Date.now() < state.thinkingDraftAt + THINKING_DRAFT_PACE_MS) return;
+        const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
+        if (!telegram) return;
+        state.thinkingDraftAt = Date.now();
+        try {
+            await telegram.sendMessageDraft({
+                chat_id: peer,
+                draft_id: THINKING_DRAFT_ID,
+                text: this.draftTailText(state),
+            });
+            state.thinkingDraftSent = true;
+            this.governor.resetFails('draft');
+        } catch (error) {
+            if (isRateLimitError(error)) {
+                const waitSec = getRetryAfterSec(error) ?? 4;
+                state.thinkingDraftAt = Date.now() + waitSec * 1000 + this.governor.fullJitter(300, 0, 300);
+                this.governor.note429('draft', waitSec);
+                console.debug(`Durevcode thinking draft paused ${waitSec}s: ${error instanceof Error ? error.message : error}`);
+                return;
+            }
+            if (isDraftTooLong(error) && state.thinkingDraftTail > THINKING_DRAFT_TAIL_MIN_CHARS) {
+                state.thinkingDraftTail = Math.max(THINKING_DRAFT_TAIL_MIN_CHARS, Math.round(state.thinkingDraftTail / 2));
+                try {
+                    await telegram.sendMessageDraft({
+                        chat_id: peer,
+                        draft_id: THINKING_DRAFT_ID,
+                        text: this.draftTailText(state),
+                    });
+                    state.thinkingDraftSent = true;
+                    this.governor.resetFails('draft');
+                    return;
+                } catch (retryError) {
+                    if (isRateLimitError(retryError)) {
+                        const waitSec = getRetryAfterSec(retryError) ?? 4;
+                        state.thinkingDraftAt = Date.now() + waitSec * 1000 + this.governor.fullJitter(300, 0, 300);
+                        this.governor.note429('draft', waitSec);
+                        console.debug(`Durevcode thinking draft paused ${waitSec}s: ${retryError instanceof Error ? retryError.message : retryError}`);
+                        return;
+                    }
+                    const fail = this.governor.registerFail('draft');
+                    if (!fail.parked) {
+                        state.thinkingDraftAt = Date.now() + fail.waitMs - THINKING_DRAFT_PACE_MS;
+                        console.debug(`Durevcode thinking draft paused after shrink fail ${fail.attempt}: ${retryError instanceof Error ? retryError.message : retryError}`);
+                        return;
+                    }
+                    state.thinkingDraftOk = false;
+                    console.debug('Durevcode thinking draft lane off after shrink:', retryError instanceof Error ? retryError.message : retryError);
+                    return;
+                }
+            }
+            const fail = this.governor.registerFail('draft');
+            if (!fail.parked) {
+                state.thinkingDraftAt = Date.now() + fail.waitMs - THINKING_DRAFT_PACE_MS;
+                console.debug(`Durevcode thinking draft paused (fail ${fail.attempt}): ${error instanceof Error ? error.message : error}`);
+                return;
+            }
+            state.thinkingDraftOk = false;
+            console.debug('Durevcode thinking draft lane off:', error instanceof Error ? error.message : error);
+        }
+    }
+
+    private clearThinkingDraft(state: WatchedSession): void {
+        const pending = this.thinkingDraftTimers.get(state.session.id);
+        if (pending) {
+            clearTimeout(pending);
+            this.thinkingDraftTimers.delete(state.session.id);
+        }
+        const peer = state.userId;
+        if (peer === null) return;
+        if (!state.thinkingDraftSent) return;
+        const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
+        if (!telegram) return;
+        void telegram.sendMessageDraft({
+            chat_id: peer,
+            draft_id: THINKING_DRAFT_ID,
+            text: '',
+        }).catch((error) => {
+            console.debug('Durevcode thinking draft clear failed:', error instanceof Error ? error.message : error);
+        });
+    }
+
+    private registerThoughtArchive(sessionId: string, messageId: number, fullHtml: string, compactHtml: string, fullText: string, compact: boolean): void {
+        this.thoughtArchives.delete(messageId);
+        this.thoughtArchives.set(messageId, { sessionId, fullHtml, compactHtml, fullText, compact });
+        while (this.thoughtArchives.size > MAX_THOUGHT_ARCHIVES) {
+            const oldest = this.thoughtArchives.keys().next().value;
+            if (oldest === undefined) break;
+            this.thoughtArchives.delete(oldest);
+        }
+    }
+
+    private async sendThought(
+        telegram: TelegramBotPlugin,
+        sessionId: string,
+        messageId: number,
+        since: number,
+        text: string,
+        userExpanded: boolean,
+        attempt: number,
+    ): Promise<void> {
+        const fullHtml = wellFormed(formatThoughtArchive(Date.now() - since, text));
+        const compactHtml = fullHtml;
+        const markup = this.thoughtFoldMarkup(messageId, true);
+        void userExpanded;
         try {
             await telegram.editMessageText({
                 chat_id: this.config.durevcode.chatId,
-                message_id: id,
-                text: wellFormed(formatThought(Date.now() - since)),
+                message_id: messageId,
+                text: fullHtml,
                 parse_mode: 'HTML',
+                reply_markup: markup,
             });
-            console.log(`Durevcode thought finalized (session=${state.session.id}).`);
+            this.registerThoughtArchive(sessionId, messageId, fullHtml, compactHtml, text, true);
+            console.log(`Durevcode thought finalized (session=${sessionId} folded=true).`);
         } catch (error) {
-            if (isMessageNotModifiedError(error)) return;
+            if (isMessageNotModifiedError(error)) {
+                this.registerThoughtArchive(sessionId, messageId, fullHtml, compactHtml, text, true);
+                console.log(`Durevcode thought finalized (session=${sessionId} folded=${!userExpanded}).`);
+                return;
+            }
             if (isMessageGoneError(error)) return;
             if (isRateLimitError(error)) {
                 const waitSec = getRetryAfterSec(error) ?? 10;
@@ -3072,10 +3360,183 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
-                console.warn(`Durevcode thought rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.governor.note429('topic-edit', waitSec);
+                console.warn(`Durevcode thought rate limited, retry after ${waitSec}s (session=${sessionId}).`);
+                if (attempt < 4) {
+                    const timer = setTimeout(() => {
+                        void this.sendThought(telegram, sessionId, messageId, since, text, userExpanded, attempt + 1);
+                    }, waitSec * 1000 + 600 + this.governor.fullJitter(400, attempt, 1600));
+                    timer.unref?.();
+                }
                 return;
             }
             console.debug('Durevcode thought finalize failed:', error instanceof Error ? error.message : error);
+        }
+    }
+
+    private async archiveFoldRepaint(telegram: TelegramBotPlugin, messageId: number, toCompact: boolean): Promise<boolean> {
+        const alive = this.thoughtArchives.get(messageId);
+        if (!alive || alive.compact === toCompact) return true;
+        try {
+            await telegram.editMessageText({
+                chat_id: this.config.durevcode.chatId,
+                message_id: messageId,
+                text: toCompact ? alive.compactHtml : alive.fullHtml,
+                parse_mode: 'HTML',
+                reply_markup: this.thoughtFoldMarkup(messageId, toCompact),
+            });
+            alive.compact = toCompact;
+            this.thoughtFoldEditAt = Date.now();
+            return true;
+        } catch (error) {
+            if (isMessageGoneError(error)) {
+                this.thoughtArchives.delete(messageId);
+                return true;
+            }
+            if (isRateLimitError(error)) {
+                const waitSec = getRetryAfterSec(error) ?? 10;
+                this.rateLimitedUntil = Math.max(
+                    this.rateLimitedUntil,
+                    Date.now() + waitSec * 1000 + 1000,
+                );
+                this.governor.note429('topic-edit', waitSec);
+                return false;
+            }
+            return true;
+        }
+    }
+
+    private async applyThoughtFold(
+        telegram: TelegramBotPlugin,
+        query: CallbackQuery,
+        messageId: number,
+        toCompact: boolean,
+        dismiss: (text?: string) => Promise<void>,
+    ): Promise<void> {
+        const entry = this.thoughtArchives.get(messageId);
+        if (!entry || entry.compact === toCompact) {
+            await dismiss('Outdated, ask again.');
+            return;
+        }
+        const elapsedFold = Date.now() - this.thoughtFoldEditAt;
+        if (elapsedFold < 1200) {
+            await dismiss('It toggles on its own in a moment.');
+            this.scheduleThoughtPaintRetry(`a${messageId}:${toCompact ? 1 : 0}`, null, 2, async () => {
+                return await this.archiveFoldRepaint(telegram, messageId, toCompact);
+            }, 1200 - elapsedFold + 150);
+            return;
+        }
+        const applied = await this.archiveFoldRepaint(telegram, messageId, toCompact);
+        if (!applied && Date.now() < this.rateLimitedUntil) {
+            await dismiss('Rate limited — it opens on its own in a moment.');
+            this.scheduleThoughtPaintRetry(`a${messageId}:${toCompact ? 1 : 0}`, null, 2, () => this.archiveFoldRepaint(telegram, messageId, toCompact));
+            return;
+        }
+        if (!applied) {
+            await dismiss('Try again in a moment.');
+            return;
+        }
+        await dismiss();
+    }
+
+    private async applyLiveThoughtFold(
+        telegram: TelegramBotPlugin,
+        query: CallbackQuery,
+        toFold: boolean,
+        dismiss: (text?: string) => Promise<void>,
+    ): Promise<void> {
+        const mid = query.message?.message_id;
+        const live = mid !== undefined
+            ? [...this.watched.values()].find((s) => s.thinkingMessageId === mid) ?? null
+            : null;
+        if (!live || live.thinkingMessageId === null) {
+            await dismiss('Outdated, ask again.');
+            return;
+        }
+        await this.waitForIdlePainter(live);
+        if (toFold === live.thinkingFolded) {
+            await dismiss();
+            return;
+        }
+        live.thinkingFolded = toFold;
+        const floorLeft = THINKING_TOPIC_FOLDED_PACE_MS - (Date.now() - live.thinkingAt);
+        if (floorLeft > 0) {
+            await dismiss('It toggles on its own in a moment.');
+            this.scheduleThoughtPaintRetry(`s${live.session.id}`, live, 2, async () => {
+                if (!this.watched.has(live.session.id) || live.thinkingMessageId === null) return true;
+                return await this.paintThinkingText(telegram, live, live.thinkingText, true);
+            }, floorLeft + 150);
+            return;
+        }
+        const painted = await this.paintThinkingText(telegram, live, live.thinkingText, true);
+        if (!painted && Date.now() < this.rateLimitedUntil) {
+            await dismiss('Rate limited — it opens on its own in a moment.');
+            this.scheduleThoughtPaintRetry(`s${live.session.id}`, live, 2, async () => {
+                if (!this.watched.has(live.session.id) || live.thinkingMessageId === null) return true;
+                return await this.paintThinkingText(telegram, live, live.thinkingText, true);
+            });
+            return;
+        }
+        if (!painted) {
+            await dismiss('Try again in a moment.');
+            return;
+        }
+        await dismiss();
+    }
+
+    private async applyThoughtDoc(
+        telegram: TelegramBotPlugin,
+        query: CallbackQuery,
+        messageId: number,
+        dismiss: (text?: string) => Promise<void>,
+    ): Promise<void> {
+        const entry = messageId > 0 ? this.thoughtArchives.get(messageId) : undefined;
+        const mid = query.message?.message_id;
+        const live = entry ? null : mid !== undefined
+            ? [...this.watched.values()].find((s) => s.thinkingMessageId === mid) ?? null
+            : null;
+        const fullText = entry ? entry.fullText : live ? live.thinkingText : '';
+        if (!fullText) {
+            await dismiss('Outdated, ask again.');
+            return;
+        }
+        if (Date.now() < this.rateLimitedUntil) {
+            await dismiss('Rate limited, try again in a moment.');
+            return;
+        }
+        const docKey = entry ? messageId : mid ?? 0;
+        if (this.thoughtDocBusy.has(docKey)) {
+            await dismiss('On its way.');
+            return;
+        }
+        this.thoughtDocBusy.add(docKey);
+        try {
+            const threadId = query.message?.message_thread_id ?? (live || (entry ? this.watched.get(entry.sessionId) : null))?.threadId ?? null;
+            try {
+                await telegram.sendDocument({
+                    chat_id: this.config.durevcode.chatId,
+                    ...(threadId !== null && threadId !== undefined ? { message_thread_id: threadId } : {}),
+                    document: {
+                        filename: `durevcode-thought-${entry ? messageId : live?.session.id ?? 'live'}-${Date.now()}.txt`,
+                        source: Buffer.from(fullText, 'utf8'),
+                    },
+                });
+                await dismiss();
+            } catch (error) {
+                if (isRateLimitError(error)) {
+                    const waitSec = getRetryAfterSec(error) ?? 10;
+                    this.rateLimitedUntil = Math.max(
+                        this.rateLimitedUntil,
+                        Date.now() + waitSec * 1000 + 1000,
+                    );
+                    await dismiss(`Rate limited, try again in ${waitSec}s.`);
+                    return;
+                }
+                console.debug('Durevcode thought document failed:', error instanceof Error ? error.message : error);
+                await dismiss();
+            }
+        } finally {
+            this.thoughtDocBusy.delete(docKey);
         }
     }
 
@@ -3113,6 +3574,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (state.contextMessageId === null) return;
         if (Date.now() < this.rateLimitedUntil) return;
         if (want === state.stopButtonOn) return;
+        if (!this.governor.canSpend('topic-markup')) return;
         try {
             await telegram.editMessageReplyMarkup({
                 chat_id: this.config.durevcode.chatId,
@@ -3120,10 +3582,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 reply_markup: want ? this.stopMarkup(state) : { inline_keyboard: [] },
             });
             state.stopButtonOn = want;
+            this.governor.spend('topic-markup');
             console.log(`Durevcode stop button ${want ? 'shown' : 'hidden'} (session=${state.session.id}).`);
         } catch (error) {
             if (isMessageNotModifiedError(error)) {
                 state.stopButtonOn = want;
+                this.governor.spend('topic-markup');
                 return;
             }
             if (isRateLimitError(error)) {
@@ -3132,6 +3596,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
+                this.governor.note429('topic-markup', waitSec);
                 console.warn(`Durevcode stop button rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
                 return;
             }
@@ -3190,6 +3655,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             state.finalizedAt = 0;
             await this.disarmSessionQuestions(telegram, state);
             await this.clearThinkingMessage(telegram, state);
+            await this.boundaryGap(400, 500);
             await this.syncStopKeyboard(telegram, state);
             if (now - state.lastStopMsgAt < STOP_DEDUP_MS) {
                 return true;
@@ -3573,8 +4039,251 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         await this.finalizeSession(telegram, state, false);
     }
 
+    private syncLiveReasoning(event: OpencodeServerEvent): void {
+        if (!event || typeof event !== 'object') return;
+        const record = event as unknown as Record<string, unknown>;
+        if (record.type === 'sync' || record.type === SERVER_PART_UPDATED_EVENT || record.type === SERVER_PART_UPDATED_SYNC_EVENT) {
+            this.applyServerReasoningPart(event);
+            return;
+        }
+        if (record.type === SERVER_REASONING_STARTED_EVENT) {
+            this.applyReasoningStreamStart(record);
+            return;
+        }
+        if (record.type === SERVER_REASONING_DELTA_EVENT) {
+            this.applyReasoningStreamDelta(record);
+        }
+    }
+
+    private applyServerReasoningPart(event: OpencodeServerEvent): void {
+        const payload = unwrapServerPartEvent(event);
+        if (!payload) return;
+        const state = this.watched.get(payload.sessionID);
+        if (!state) return;
+        const part = payload.part;
+        if (!part || typeof part !== 'object' || Array.isArray(part)) return;
+        const record = part as Record<string, unknown>;
+        if (record.type !== 'reasoning') return;
+        const text = typeof record.text === 'string' ? record.text.trim() : '';
+        if (!text) return;
+        if (state.liveTool) return;
+        if (text === state.thinkingText) return;
+        state.thinkingText = text;
+        state.thinkingActive = true;
+        if (state.thinkingSince === null) state.thinkingSince = Date.now();
+        state.thinkingDeltaAt = Date.now();
+        state.lastEventAt = Date.now();
+        this.scheduleThinkingRender(state);
+    }
+
+    private applyReasoningStreamStart(record: Record<string, unknown>): void {
+        const data = record.data as Record<string, unknown> | undefined;
+        const sessionId = data && typeof data.sessionID === 'string' ? data.sessionID : null;
+        if (!sessionId) return;
+        const state = this.watched.get(sessionId);
+        if (!state || state.liveTool) return;
+        state.thinkingActive = true;
+        if (state.thinkingSince === null) state.thinkingSince = Date.now();
+        state.thinkingDeltaAt = Date.now();
+        state.thinkingRateCps = THINKING_TYPE_SPEED_CPS;
+        state.thinkingRateChars = 0;
+        state.lastEventAt = Date.now();
+        this.scheduleThinkingRender(state);
+    }
+
+    private applyReasoningStreamDelta(record: Record<string, unknown>): void {
+        const data = record.data as Record<string, unknown> | undefined;
+        const sessionId = data && typeof data.sessionID === 'string' ? data.sessionID : null;
+        if (!sessionId) return;
+        const state = this.watched.get(sessionId);
+        if (!state || state.liveTool) return;
+        const delta = data && typeof data.delta === 'string' ? data.delta : '';
+        if (!delta) return;
+        const messageId = data && typeof data.assistantMessageID === 'string' ? data.assistantMessageID : '';
+        if (!messageId) return;
+        const ordinal = data && typeof data.ordinal === 'number' ? data.ordinal : 0;
+        if (state.thinkingStreamMessageId !== null && messageId < state.thinkingStreamMessageId) return;
+        if (state.thinkingStreamMessageId !== messageId) {
+            state.thinkingStreamMessageId = messageId;
+            state.thinkingOrdinal = -1;
+            state.thinkingText = '';
+        }
+        if (ordinal < state.thinkingOrdinal) return;
+        state.thinkingOrdinal = ordinal;
+        state.thinkingText += delta;
+        state.thinkingActive = true;
+        if (state.thinkingSince === null) state.thinkingSince = Date.now();
+        const streamNow = Date.now();
+        state.thinkingRateChars += delta.length;
+        if (state.thinkingDeltaAt > 0) {
+            const streamGap = streamNow - state.thinkingDeltaAt;
+            if (streamGap > THINKING_TYPE_IDLE_MS) {
+                state.thinkingRateChars = 0;
+            } else if (streamGap >= 1000) {
+                const instantCps = (state.thinkingRateChars * 1000) / streamGap;
+                state.thinkingRateCps = Math.max(4, Math.min(80, state.thinkingRateCps * 0.5 + instantCps * 0.5));
+                state.thinkingRateChars = 0;
+            }
+        }
+        state.thinkingDeltaAt = streamNow;
+        state.lastEventAt = Date.now();
+        this.scheduleThinkingRender(state);
+    }
+
+    private scheduleThinkingRender(state: WatchedSession): void {
+        this.armThinkingType(state);
+    }
+
+    private armThinkingType(state: WatchedSession): void {
+        this.armThinkingDraft(state);
+        if (this.thinkingRenderTimers.has(state.session.id)) return;
+        if (!this.watched.get(state.session.id)) return;
+        if (!state.thinkingActive && state.thinkingMessageId === null) return;
+        const pendingBubble = state.thinkingMessageId !== null;
+        const paceFloor = !pendingBubble ? 0 : (state.thinkingFolded ? THINKING_TOPIC_FOLDED_PACE_MS : THINKING_EXPANDED_PACE_MS);
+        const timer = setTimeout(() => {
+            this.thinkingRenderTimers.delete(state.session.id);
+            void this.typeThinkingStep(state);
+        }, Math.max(state.thinkingTypeMs, paceFloor));
+        timer.unref?.();
+        this.thinkingRenderTimers.set(state.session.id, timer);
+    }
+
+    private thinkingTypeAlive(state: WatchedSession): boolean {
+        if (!state.thinkingActive && state.thinkingMessageId === null) return false;
+        if (state.thinkingText.length > state.thinkingTypedLen) return true;
+        return Date.now() - state.thinkingDeltaAt < THINKING_TYPE_IDLE_MS;
+    }
+
+    private async typeThinkingStep(state: WatchedSession): Promise<void> {
+        if (!this.thinkingTypeAlive(state)) return;
+        const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
+        if (!telegram || !this.watched.get(state.session.id)) return;
+        this.armThinkingType(state);
+        if (state.liveTool) return;
+        const text = state.thinkingText;
+        if (!text) return;
+        if (state.thinkingFolded) {
+            await this.paintThinkingText(telegram, state, text);
+            return;
+        }
+        if (state.thinkingTypedLen > text.length) state.thinkingTypedLen = text.length;
+        let targetLen: number;
+        if (state.thinkingTypedLen === 0) {
+            targetLen = text.length;
+        } else {
+            const backlog = text.length - state.thinkingTypedLen;
+            if (backlog === 0) return;
+            if (backlog >= THINKING_CATCHUP_CHARS) {
+                targetLen = text.length;
+            } else {
+                const step = Math.min(
+                    backlog,
+                    Math.max(2, Math.round((state.thinkingRateCps * THINKING_TYPE_STEP_HEADROOM * state.thinkingTypeMs) / 1000)),
+                );
+                targetLen = state.thinkingTypedLen + step;
+                if (targetLen < text.length) {
+                    const snapCap = Math.min(text.length, targetLen + Math.round(step * 0.6));
+                    const snap = text.lastIndexOf(' ', snapCap);
+                    if (snap > state.thinkingTypedLen + 2 && snap >= targetLen) targetLen = snap;
+                }
+            }
+        }
+        await this.paintThinkingText(telegram, state, text.slice(0, Math.min(text.length, targetLen)));
+    }
+
+    private async paintThinkingText(telegram: TelegramBotPlugin, state: WatchedSession, rawText: string, force = false): Promise<boolean> {
+        if (state.thinkingPainting) return false;
+        if (Date.now() < this.rateLimitedUntil) return false;
+        if (!force && !this.governor.canSpend('topic-edit')) return false;
+        state.thinkingPainting = true;
+        const folded = state.thinkingFolded;
+        const text = folded
+            ? formatThinkingFolded(Date.now() - (state.thinkingSince ?? Date.now()), state.thinkingText.length)
+            : formatThinking(rawText);
+        try {
+            if (state.thinkingMessageId === null) {
+                try {
+                    state.thinkingMessageId = await this.deliverMessage(telegram, state, text, undefined, { force: true });
+                    state.thinkingRendered = text;
+                    if (!folded) state.thinkingTypedLen = rawText.length;
+                    state.thinkingAt = Date.now();
+                    await this.pushThinkingDraft(state);
+                    state.thinkingTypeMs = Math.max(
+                        THINKING_TOPIC_FOLDED_PACE_MS,
+                        Math.round(state.thinkingTypeMs * 0.92),
+                    );
+                    console.log(`Durevcode thinking posted (session=${state.session.id}).`);
+                    return true;
+                } catch (error) {
+                    if (isRateLimitError(error)) {
+                        this.governor.note429('topic-send', getRetryAfterSec(error) ?? 10);
+                    }
+                    state.thinkingTypeMs = Math.min(THINKING_TYPE_PACE_MAX_MS, Math.max(THINKING_TYPE_PACE_MS, Math.round(state.thinkingTypeMs * 1.3)));
+                    console.debug('Durevcode thinking post failed:', error instanceof Error ? error.message : error);
+                    return false;
+                }
+            }
+            if (text === state.thinkingRendered) return true;
+            if (!force && Date.now() - state.thinkingAt < (state.thinkingFolded ? THINKING_TOPIC_FOLDED_PACE_MS : THINKING_EXPANDED_PACE_MS)) return false;
+            try {
+                await telegram.editMessageText({
+                    chat_id: this.config.durevcode.chatId,
+                    message_id: state.thinkingMessageId,
+                    text: wellFormed(text),
+                    parse_mode: 'HTML',
+                });
+                state.thinkingRendered = text;
+                if (!folded) state.thinkingTypedLen = rawText.length;
+                state.thinkingAt = Date.now();
+                this.governor.spend('topic-edit');
+                await this.pushThinkingDraft(state);
+                state.thinkingTypeMs = Math.max(
+                    THINKING_TOPIC_FOLDED_PACE_MS,
+                    Math.round(state.thinkingTypeMs * 0.92),
+                );
+                return true;
+            } catch (error) {
+                if (isMessageNotModifiedError(error)) {
+                    state.thinkingRendered = text;
+                    if (!folded) state.thinkingTypedLen = rawText.length;
+                    state.thinkingAt = Date.now();
+                    this.governor.spend('topic-edit');
+                    return true;
+                }
+                if (isMessageGoneError(error)) {
+                    state.thinkingMessageId = null;
+                    state.thinkingRendered = '';
+                    state.thinkingTypedLen = 0;
+                    return false;
+                }
+                if (isRateLimitError(error)) {
+                    const waitSec = getRetryAfterSec(error) ?? 10;
+                    this.rateLimitedUntil = Math.max(
+                        this.rateLimitedUntil,
+                        Date.now() + waitSec * 1000 + 1000,
+                    );
+                    this.governor.note429('topic-edit', waitSec);
+                    state.thinkingTypeMs = Math.min(THINKING_TYPE_PACE_MAX_MS, Math.max(THINKING_TYPE_PACE_MS, waitSec * 1000));
+                    console.warn(`Durevcode thinking 429 retry after ${waitSec}s, typing pace ${state.thinkingTypeMs}ms (session=${state.session.id}).`);
+                    return false;
+                }
+                state.thinkingTypeMs = Math.min(THINKING_TYPE_PACE_MAX_MS, Math.max(THINKING_TYPE_PACE_MS, Math.round(state.thinkingTypeMs * 1.3)));
+                console.debug('Durevcode thinking update failed:', error instanceof Error ? error.message : error);
+                return false;
+            }
+        } finally {
+            state.thinkingPainting = false;
+        }
+    }
+
     private async handleServerEvent(telegram: TelegramBotPlugin, event: OpencodeServerEvent): Promise<void> {
-        if (!event || !SERVER_ERROR_EVENTS.has(event.type)) return;
+        if (!event) return;
+        if (event.type === SERVER_PART_UPDATED_EVENT || event.type === SERVER_PART_UPDATED_SYNC_EVENT || event.type === 'sync' || event.type === SERVER_REASONING_DELTA_EVENT || event.type === SERVER_REASONING_STARTED_EVENT) {
+            this.syncLiveReasoning(event);
+            return;
+        }
+        if (!SERVER_ERROR_EVENTS.has(event.type)) return;
         const sessionId = serverEventSessionId(event);
         if (!sessionId) return;
         const state = this.watched.get(sessionId);
@@ -3637,6 +4346,62 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             }
             await dismiss();
             await this.stopSession(telegram, opencode, state);
+            return;
+        }
+        const foldMatch = data.match(/^thinkfold:(\d{1,10}):([01])$/);
+        if (foldMatch) {
+            const from = query.from;
+            if (!from || from.is_bot) return;
+            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
+            const allowed = this.config.durevcode.allowedUsers;
+            if (allowed.length > 0 && !allowed.includes(from.id)) {
+                console.warn(`Durevcode thought fold denied for user ${from.id}.`);
+                await dismiss();
+                return;
+            }
+            await this.applyThoughtFold(telegram, query, Number(foldMatch[1]), foldMatch[2] === '1', dismiss);
+            return;
+        }
+        const liveFoldMatch = data.match(/^thinkfolds:([01])$/);
+        if (liveFoldMatch) {
+            const from = query.from;
+            if (!from || from.is_bot) return;
+            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
+            const allowed = this.config.durevcode.allowedUsers;
+            if (allowed.length > 0 && !allowed.includes(from.id)) {
+                console.warn(`Durevcode thought fold denied for user ${from.id}.`);
+                await dismiss();
+                return;
+            }
+            await this.applyLiveThoughtFold(telegram, query, liveFoldMatch[1] === '1', dismiss);
+            return;
+        }
+        const docMatch = data.match(/^thinkdoc:(\d{1,10})$/);
+        if (docMatch) {
+            const from = query.from;
+            if (!from || from.is_bot) return;
+            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
+            const allowed = this.config.durevcode.allowedUsers;
+            if (allowed.length > 0 && !allowed.includes(from.id)) {
+                console.warn(`Durevcode thought doc denied for user ${from.id}.`);
+                await dismiss();
+                return;
+            }
+            await this.applyThoughtDoc(telegram, query, Number(docMatch[1]), dismiss);
+            return;
+        }
+        const liveDocMatch = data.match(/^thinkdocs:[01]$/);
+        if (liveDocMatch) {
+            const from = query.from;
+            if (!from || from.is_bot) return;
+            if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return;
+            const allowed = this.config.durevcode.allowedUsers;
+            if (allowed.length > 0 && !allowed.includes(from.id)) {
+                console.warn(`Durevcode thought doc denied for user ${from.id}.`);
+                await dismiss();
+                return;
+            }
+            await this.applyThoughtDoc(telegram, query, 0, dismiss);
             return;
         }
         const modeMatch = data.match(/^mode:(plan|plain|build)$/);
@@ -4156,6 +4921,8 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 state.thinkingActive = true;
                 if (state.thinkingSince === null) state.thinkingSince = Date.now();
                 if (event.text || !state.thinkingText) state.thinkingText = event.text;
+                state.thinkingDeltaAt = Date.now();
+                this.scheduleThinkingRender(state);
                 continue;
             }
             if (event.kind === 'tool') {
@@ -4413,6 +5180,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     Date.now() + waitSec * 1000 + 1000,
                 );
                 console.warn(`Durevcode context rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.governor.note429('topic-edit', waitSec);
                 return;
             }
             if (isUpstreamServerError(error)) {
@@ -4570,6 +5338,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     Date.now() + waitSec * 1000 + 1000,
                 );
                 console.warn(`Durevcode live tool rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.governor.note429('topic-edit', waitSec);
                 return;
             }
             if (isMessageGoneError(error)) {
@@ -4655,6 +5424,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     this.rateLimitedUntil,
                     Date.now() + waitSec * 1000 + 1000,
                 );
+                this.governor.note429('topic-send', waitSec);
                 console.warn(`Durevcode events rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
             } else {
                 if (isUpstreamServerError(error)) {
@@ -4789,7 +5559,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         console.log(`Durevcode finalized session ${state.session.id}`);
         state.lastContextEditAt = 0;
         await this.clearThinkingMessage(telegram, state);
+        await this.boundaryGap(400, 500);
         await this.updateContext(telegram, state);
+        await this.boundaryGap(400, 500);
         await this.syncStopKeyboard(telegram, state);
         this.savePersisted();
     }
