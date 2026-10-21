@@ -13,7 +13,7 @@ import { CryptoClient } from '../src/components';
 import type { AuthKey } from '../src/types';
 
 const wasmBinary = new Uint8Array(readFileSync(
-  join(dirname(require.resolve('@ton-ai/crypton')), 'wasm', 'crypton_wasm_bg.wasm'),
+  join(dirname(require.resolve('@ton-ai/crypton')), 'rust', 'wasm', 'crypton_wasm_bg.wasm'),
 ));
 
 function createTestContext() {
