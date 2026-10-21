@@ -22,6 +22,7 @@ import {
     displayModel,
     toTodoState,
     toToolState,
+    todoLines,
     formatThinking,
     formatThoughtArchive,
     TOOL_OUTPUT_CAP,
@@ -561,5 +562,43 @@ describe('formatter stop command split', () => {
         assert.deepEqual(takeStopCommand('/stop'), { text: '', command: '/stop' });
         assert.deepEqual(takeStopCommand(''), { text: '', command: null });
         assert.deepEqual(takeStopCommand('   \n  '), { text: '', command: null });
+    });
+});
+
+describe('formatter todo plan block', () => {
+    const todos = [
+        { content: 'first <b>job</b>', state: 'done' as const },
+        { content: 'second', state: 'active' as const },
+    ];
+
+    test('todoLines builds the plan head and rows', () => {
+        const lines = todoLines(todos);
+        assert.equal(lines.length, 3);
+        assert.ok(lines[0].includes('Plan 1/2'));
+        assert.ok(lines[1].includes(escapeHtml('first <b>job</b>')));
+        assert.ok(lines[2].includes(escapeHtml('second')));
+    });
+
+    test('formatProgress and formatConsoleBatch render the same plan chunk', () => {
+        const chunk = todoLines(todos).join('\n');
+        const progress = formatProgress({
+            title: 'Test session',
+            directory: '/repo',
+            model: '{"id":"model-1"}',
+            todos,
+            tools: [],
+            result: null,
+            lastText: '',
+            toolCalls: 0,
+            tokensIn: 0,
+            tokensOut: 0,
+            cost: 0,
+            files: [],
+            startedAt: 0,
+            updatedAt: 1000,
+        });
+        assert.ok(progress.includes(chunk), 'formatProgress reuses the plan chunk');
+        const batch = formatConsoleBatch([], todos);
+        assert.ok(batch.includes(chunk), 'formatConsoleBatch reuses the plan chunk');
     });
 });

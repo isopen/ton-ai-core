@@ -306,12 +306,7 @@ export function splitTelegramHtml(text: string, limit: number = TELEGRAM_TEXT_LI
         let m: RegExpExecArray | null;
         while ((m = re.exec(s)) !== null) {
             const tag = m[0];
-            const close = tag.startsWith('</');
-            const self = tag.endsWith('/>');
-            const name = tag
-                .replace(/^<\/?/, '')
-                .replace(/[\s/>].*$/, '')
-                .toLowerCase();
+            const { name, close, self } = parseHtmlTag(tag);
             if (!known.has(name) || self) continue;
             if (close) {
                 for (let i = target.length - 1; i >= 0; i -= 1) {
@@ -360,11 +355,7 @@ export function splitTelegramHtml(text: string, limit: number = TELEGRAM_TEXT_LI
         while (cut > 1 && cut < rest.length && splitsSurrogatePair(rest, cut)) cut -= 1;
         const body = rest.slice(0, cut);
         scanInto(body, stack);
-        const closing = stack
-            .slice()
-            .reverse()
-            .map((e) => `</${e.name}>`)
-            .join('');
+        const closing = closingTags(stack);
         parts.push(head + body + closing);
         rest = rest.slice(cut);
         if (rest.startsWith('\n')) rest = rest.slice(1);
@@ -492,6 +483,15 @@ export function todoIcon(state: TodoState): string {
     return icon('queued');
 }
 
+export function todoLines(todos: TodoItem[]): string[] {
+    const done = todos.filter((t) => t.state === 'done').length;
+    const lines = [`${icon('plan')} Plan ${done}/${todos.length}`];
+    for (const todo of todos) {
+        lines.push(`${todoIcon(todo.state)} ${escapeHtml(truncate(todo.content, 120))}`);
+    }
+    return lines;
+}
+
 export type ToolState = 'ok' | 'fail' | 'running';
 
 export interface ToolItem {
@@ -561,6 +561,14 @@ function parseHtmlTag(token: string): { name: string; close: boolean; self: bool
     return { name, close, self };
 }
 
+function closingTags(stack: ReadonlyArray<{ name: string }>): string {
+    return stack
+        .slice()
+        .reverse()
+        .map((e) => `</${e.name}>`)
+        .join('');
+}
+
 export function truncateHtml(html: string, max: number): string {
     if (html.length <= max) return html;
     if (max <= 1) return '…';
@@ -613,12 +621,7 @@ export function truncateHtml(html: string, max: number): string {
     }
     const prefixLen: number[] = [0];
     for (const t of tokens) prefixLen.push(prefixLen[prefixLen.length - 1] + t.length);
-    const closingFor = (k: number): string =>
-        stacks[k]
-            .slice()
-            .reverse()
-            .map((e) => `</${e.name}>`)
-            .join('');
+    const closingFor = (k: number): string => closingTags(stacks[k]);
     for (let k = tokens.length - 1; k >= 0; k -= 1) {
         const total = prefixLen[k] + 1 + closingFor(k).length;
         if (total <= max) {
@@ -635,11 +638,7 @@ export function formatProgress(state: ProgressState): string {
     lines.push(`${icon('folder')} <code>${escapeHtml(truncate(state.directory, 60))}</code>${model ? ` · ${icon('bot')} ${escapeHtml(truncate(model, 40))}` : ''}`);
     const todos = state.todos.slice(0, 8);
     if (todos.length > 0) {
-        const done = todos.filter((t) => t.state === 'done').length;
-        lines.push(`${icon('plan')} Plan ${done}/${todos.length}`);
-        for (const todo of todos) {
-            lines.push(`${todoIcon(todo.state)} ${escapeHtml(truncate(todo.content, 120))}`);
-        }
+        lines.push(...todoLines(todos));
     }
     for (const tool of state.tools.slice(-4)) {
         lines.push(`${toolIcon(tool.state)} ${escapeHtml(truncate(tool.text, 140))}`);
@@ -744,6 +743,8 @@ export function formatQuestionResolved(request: QuestionRequest, answers: string
 
 const THOUGHT_ARCHIVE_CAP = 3600;
 
+export const THINKING_HEAD = `${icon('soon')} Thinking`;
+
 function reasoningTail(text: string, cap: number): string | null {
     const cut = text.length > cap;
     let tail = cut ? text.slice(-cap) : text;
@@ -753,14 +754,13 @@ function reasoningTail(text: string, cap: number): string | null {
 }
 
 export function formatThinking(text: string): string {
-    const head = `${icon('soon')} Thinking`;
     const tail = reasoningTail(text, TOOL_OUTPUT_CAP);
-    if (!tail) return head;
-    return `${head}\n<blockquote>${tail}</blockquote>`;
+    if (!tail) return THINKING_HEAD;
+    return `${THINKING_HEAD}\n<blockquote>${tail}</blockquote>`;
 }
 
 export function formatThinkingFolded(ms: number, chars: number): string {
-    return `${icon('soon')} Thinking (${formatThinkingTime(ms)} · ${Math.max(0, Math.round(chars))} chars)`;
+    return `${THINKING_HEAD} (${formatThinkingTime(ms)} · ${Math.max(0, Math.round(chars))} chars)`;
 }
 
 export function formatThinkingTime(ms: number): string {
@@ -783,12 +783,7 @@ export function formatThoughtArchive(ms: number, text: string): string {
 export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | null): string {
     const chunks: string[][] = [];
     if (todos && todos.length > 0) {
-        const done = todos.filter((t) => t.state === 'done').length;
-        const head: string[] = [`${icon('plan')} Plan ${done}/${todos.length}`];
-        for (const todo of todos) {
-            head.push(`${todoIcon(todo.state)} ${escapeHtml(truncate(todo.content, 120))}`);
-        }
-        chunks.push(head);
+        chunks.push(todoLines(todos));
     }
     for (const event of events) {
         switch (event.kind) {
