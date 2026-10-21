@@ -30,6 +30,7 @@ import {
     parseTopicTitle,
     splitTelegramHtml,
     takeStopCommand,
+    THINKING_HEAD,
     TOPIC_ICON_CUSTOM_EMOJI_ID,
     toTodoState,
     toToolState,
@@ -126,14 +127,13 @@ const EVENT_THROTTLE_MS = 3000;
 const LIVE_EDIT_THROTTLE_MS = 1000;
 const MAX_LIVE_FAILURES = 3;
 const THINKING_TYPE_PACE_MS = 1000;
-const THINKING_TOPIC_FOLDED_PACE_MS = 2400;
-const THINKING_EXPANDED_PACE_MS = 3200;
+const THINKING_TOPIC_FOLDED_PACE_MS = 3600;
+const THINKING_EXPANDED_PACE_MS = 4800;
 const STOP_CONTROL_PACE_MS = 3000;
-const THINKING_DRAFT_ID = 1;
-const THINKING_DRAFT_PACE_MS = 700;
-const THINKING_DRAFT_TAIL_CHARS = 3500;
-const THINKING_DRAFT_TAIL_MIN_CHARS = 800;
-const THINKING_TYPE_PACE_MAX_MS = 3000;
+const STOP_CONTROL_REPOST_MS = 4500;
+const MAX_PRIORITY_REPLIES = 8;
+const EMPTY_INLINE_MARKUP: InlineKeyboardMarkup = { inline_keyboard: [] };
+const THINKING_TYPE_PACE_MAX_MS = 6000;
 const THINKING_TYPE_IDLE_MS = 5000;
 const THINKING_TYPE_SPEED_CPS = 16;
 const THINKING_TYPE_STEP_HEADROOM = 1.15;
@@ -306,7 +306,7 @@ export function isUpstreamServerError(error: unknown): boolean {
     const code = (error as { errorCode?: unknown }).errorCode;
     if (typeof code === 'number' && code >= 500) return true;
     const message = error instanceof Error ? error.message : String(error);
-    return /bad gateway|gateway timeout|service unavailable|internal server error|bad gateway|socket hang up|fetch failed|econnreset/i.test(message);
+    return /bad gateway|gateway timeout|service unavailable|internal server error|socket hang up|fetch failed|econnreset/i.test(message);
 }
 
 export function isTopicNotModifiedError(error: unknown): boolean {
@@ -459,9 +459,8 @@ export function isAbnormalStepFinish(finish: string): boolean {
 }
 
 export function stepFinishText(finish: string): string {
-    if (finish === 'length') return 'output limit reached';
+    if (finish === 'length' || finish === 'max_tokens') return 'output limit reached';
     if (finish === 'refusal') return 'model refused';
-    if (finish === 'max_tokens') return 'output limit reached';
     if (finish === 'error') return 'model error';
     return `stop reason: ${truncate(finish, 40)}`;
 }
@@ -510,6 +509,8 @@ export interface DurevcodeWatchConfig {
     maxSessions: number;
     useThreads: boolean;
     typingEnabled?: boolean;
+    reasoningStream?: boolean;
+    reasoningRepaint?: boolean;
     whipSticker?: string;
     whipEmojiId?: string;
     newTopics?: boolean;
@@ -582,6 +583,7 @@ interface WatchedSession {
     stopButtonOn: boolean;
     stopMessageId: number | null;
     stopControlSending: boolean;
+    stopControlAttemptAt: number;
     pinSending: boolean;
     stopControlText: string | null;
     stopControlAt: number;
@@ -602,15 +604,12 @@ interface WatchedSession {
     thinkingRateChars: number;
     thinkingPainting: boolean;
     thinkingFolded: boolean;
-    thinkingDraftOk: boolean;
-    thinkingDraftAt: number;
-    thinkingDraftTail: number;
-    thinkingDraftSent: boolean;
     serverErrorText: string | null;
     serverErrorAt: number;
     stoppedAt: number;
     stopping: boolean;
     lastStopMsgAt: number;
+    priorityReplies: Array<{ text: string; markup: InlineKeyboardMarkup | null }>;
     confirming: { messageId: string; text: string; since: number; notified: boolean } | null;
     promptNextAttemptAt: number;
     knownPerms: string[];
@@ -708,8 +707,6 @@ export class DurevcodeAgent extends BaseAgent {
     private thinkingRenderTimers = new Map<string, NodeJS.Timeout>();
     private thoughtArchives = new Map<number, ThoughtArchiveEntry>();
     private thoughtPaintRetryTimers = new Map<string, NodeJS.Timeout>();
-    private thinkingDraftTimers = new Map<string, NodeJS.Timeout>();
-    private thinkingDraftInFlight = new Set<string>();
     private thoughtFoldEditAt = 0;
     private thoughtDocBusy = new Set<number>();
     private resolvingQuestions = new Set<string>();
@@ -814,6 +811,11 @@ export class DurevcodeAgent extends BaseAgent {
         this.questPicks.clear();
         this.creatingThreads.clear();
         this.resolvingQuestions.clear();
+        for (const renderTimer of this.thinkingRenderTimers.values()) clearTimeout(renderTimer);
+        this.thinkingRenderTimers.clear();
+        for (const retryTimer of this.thoughtPaintRetryTimers.values()) clearTimeout(retryTimer);
+        this.thoughtPaintRetryTimers.clear();
+        this.sessionTicks.clear();
         if (this.inboundSub) {
             const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
             if (telegram) telegram.offUpdate(this.inboundSub);
@@ -1019,6 +1021,25 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
+    private persistedFromState(state: WatchedSession): PersistedSession {
+        const cursor = [...state.knownParts.entries()].slice(-PERSISTED_CURSOR_CAP);
+        const sigCursor = [...state.knownEventSig.entries()].slice(-PERSISTED_CURSOR_CAP);
+        return {
+            threadId: state.threadId ?? this.persisted[state.session.id]?.threadId ?? null,
+            contextMessageId: state.contextMessageId,
+            pinnedThreadId: state.pinnedThreadId,
+            lastSeen: Date.now(),
+            ...(state.appliedTopicName ? { appliedTopicName: state.appliedTopicName } : {}),
+            ...(state.userNamed ? { userNamed: true } : {}),
+            ...(state.buildMode ? {} : { buildMode: false }),
+            ...(cursor.length > 0 ? { knownParts: Object.fromEntries(cursor) } : {}),
+            ...(sigCursor.length > 0 ? { knownEventSig: Object.fromEntries(sigCursor) } : {}),
+            ...(state.knownPerms.length > 0 ? { knownPerms: state.knownPerms } : {}),
+            ...(state.stopMessageId !== null ? { stopMessageId: state.stopMessageId } : {}),
+            ...(state.lastPromptAt > 0 ? { promptAt: state.lastPromptAt } : {}),
+        };
+    }
+
     private savePersisted(): void {
         try {
             const cutoff = Date.now() - PERSISTED_TTL_MS;
@@ -1027,22 +1048,7 @@ export class DurevcodeAgent extends BaseAgent {
                 if (entry.lastSeen >= cutoff) sessions[id] = entry;
             }
             for (const [id, state] of this.watched) {
-                const cursor = [...state.knownParts.entries()].slice(-PERSISTED_CURSOR_CAP);
-                const sigCursor = [...state.knownEventSig.entries()].slice(-PERSISTED_CURSOR_CAP);
-                sessions[id] = {
-                    threadId: state.threadId ?? this.persisted[id]?.threadId ?? null,
-                    contextMessageId: state.contextMessageId,
-                    pinnedThreadId: state.pinnedThreadId,
-                    lastSeen: Date.now(),
-                    ...(state.appliedTopicName ? { appliedTopicName: state.appliedTopicName } : {}),
-                    ...(state.userNamed ? { userNamed: true } : {}),
-                    ...(state.buildMode ? {} : { buildMode: false }),
-                    ...(cursor.length > 0 ? { knownParts: Object.fromEntries(cursor) } : {}),
-                    ...(sigCursor.length > 0 ? { knownEventSig: Object.fromEntries(sigCursor) } : {}),
-                    ...(state.knownPerms.length > 0 ? { knownPerms: state.knownPerms } : {}),
-                    ...(state.stopMessageId !== null ? { stopMessageId: state.stopMessageId } : {}),
-                    ...(state.lastPromptAt > 0 ? { promptAt: state.lastPromptAt } : {}),
-                };
+                sessions[id] = this.persistedFromState(state);
             }
             const now = Date.now();
             for (const [id, entry] of Object.entries(sessions)) {
@@ -1238,7 +1244,7 @@ export class DurevcodeAgent extends BaseAgent {
             throw new Error('Telegram upstream backoff active');
         }
         const parts = splitTelegramHtml(text);
-        const sig = deliverySignature(text);
+        const sig = `${state.threadId ?? 'dm'}:${deliverySignature(text)}`;
         for (const [key, pending] of this.partialSends) {
             if (Date.now() - pending.at > DELIVERY_DEDUP_MS) this.partialSends.delete(key);
         }
@@ -1473,6 +1479,7 @@ export class DurevcodeAgent extends BaseAgent {
             stopButtonOn: false,
             stopMessageId: stored?.stopMessageId ?? null,
             stopControlSending: false,
+            stopControlAttemptAt: 0,
             pinSending: false,
             stopControlText: null,
             stopControlAt: 0,
@@ -1493,15 +1500,12 @@ export class DurevcodeAgent extends BaseAgent {
             thinkingRateChars: 0,
             thinkingPainting: false,
             thinkingFolded: true,
-            thinkingDraftOk: true,
-            thinkingDraftAt: 0,
-            thinkingDraftTail: THINKING_DRAFT_TAIL_CHARS,
-            thinkingDraftSent: false,
             serverErrorText: null,
             serverErrorAt: 0,
             stoppedAt: 0,
             stopping: false,
             lastStopMsgAt: 0,
+            priorityReplies: [],
             confirming: null,
             promptNextAttemptAt: 0,
             knownPerms: [],
@@ -1567,7 +1571,7 @@ export class DurevcodeAgent extends BaseAgent {
                         await telegram.editMessageReplyMarkup({
                             chat_id: this.chatId(),
                             message_id: reusedPin,
-                            reply_markup: { inline_keyboard: [] },
+                            reply_markup: EMPTY_INLINE_MARKUP,
                         });
                         state.stopButtonOn = false;
                     } catch (error) {
@@ -1580,24 +1584,7 @@ export class DurevcodeAgent extends BaseAgent {
                 }
             }
         }
-        this.persisted[session.id] = {
-            threadId: state.threadId ?? this.persisted[session.id]?.threadId ?? null,
-            contextMessageId: state.contextMessageId,
-            pinnedThreadId: state.pinnedThreadId,
-            lastSeen: Date.now(),
-            ...(state.appliedTopicName ? { appliedTopicName: state.appliedTopicName } : {}),
-            ...(state.userNamed ? { userNamed: true } : {}),
-            ...(state.buildMode ? {} : { buildMode: false }),
-            ...(state.knownParts.size > 0
-                ? { knownParts: Object.fromEntries([...state.knownParts.entries()].slice(-PERSISTED_CURSOR_CAP)) }
-                : {}),
-            ...(state.knownEventSig.size > 0
-                ? { knownEventSig: Object.fromEntries([...state.knownEventSig.entries()].slice(-PERSISTED_CURSOR_CAP)) }
-                : {}),
-            ...(state.knownPerms.length > 0 ? { knownPerms: state.knownPerms } : {}),
-            ...(state.stopMessageId !== null ? { stopMessageId: state.stopMessageId } : {}),
-            ...(state.lastPromptAt > 0 ? { promptAt: state.lastPromptAt } : {}),
-        };
+        this.persisted[session.id] = this.persistedFromState(state);
         this.savePersisted();
         console.log(`Durevcode attached session ${session.id} (${session.title.slice(0, 60)})`);
         void this.syncSessionMode(telegram, state);
@@ -1638,10 +1625,7 @@ export class DurevcodeAgent extends BaseAgent {
         console.log(
             `Durevcode session ${state.session.id} mode ${state.buildMode ? 'Build' : 'Plan'} applied (agent=${wanted}).`,
         );
-        if (state.contextMessageId !== null) {
-            state.lastContextEditAt = 0;
-            await this.updateContext(telegram, state);
-        }
+        if (state.contextMessageId !== null) await this.refreshContext(telegram, state);
     }
 
     private sessionAgentOf(state: WatchedSession): string {
@@ -1717,9 +1701,7 @@ export class DurevcodeAgent extends BaseAgent {
         const now = Date.now();
         const busyInteractive = (state: WatchedSession): boolean =>
             !state.turnComplete ||
-            state.promptQueue.length > 0 ||
-            state.cliRun !== null ||
-            state.confirming !== null ||
+            this.hasActiveDispatch(state) ||
             state.stopping ||
             state.knownPerms.length > 0 ||
             state.knownQuestions.length > 0 ||
@@ -1839,11 +1821,6 @@ export class DurevcodeAgent extends BaseAgent {
             clearTimeout(renderTimer);
             this.thinkingRenderTimers.delete(sessionId);
         }
-        const draftTimer = this.thinkingDraftTimers.get(sessionId);
-        if (draftTimer) {
-            clearTimeout(draftTimer);
-            this.thinkingDraftTimers.delete(sessionId);
-        }
         for (const key of [`s${sessionId}`, `p${sessionId}`]) {
             const retryTimer = this.thoughtPaintRetryTimers.get(key);
             if (retryTimer) {
@@ -1854,15 +1831,13 @@ export class DurevcodeAgent extends BaseAgent {
         this.lastSessionAgents.delete(sessionId);
         this.topicProbedAt.delete(sessionId);
         this.threadRetryAt.delete(sessionId);
+        this.goneStrikes.delete(sessionId);
+        this.deadStrikes.delete(sessionId);
+        this.whipDebugAt.delete(sessionId);
         for (const [messageId, ref] of this.permReplies) {
             if (ref.sessionId === sessionId) this.permReplies.delete(messageId);
         }
-        for (const [messageId, ref] of this.questReplies) {
-            if (ref.sessionId === sessionId) this.questReplies.delete(messageId);
-        }
-        for (const [token, ctx] of this.questPicks) {
-            if (ctx.sessionId === sessionId) this.questPicks.delete(token);
-        }
+        this.dropSessionQuestionRefs(sessionId);
     }
 
     private async dropSessionEverywhere(state: WatchedSession): Promise<string> {
@@ -2031,17 +2006,75 @@ export class DurevcodeAgent extends BaseAgent {
         return baseMs + this.governor.uniform(jitterMs);
     }
 
-    private draftRetryAfter(state: WatchedSession, waitSec: number, error: unknown): void {
-        state.thinkingDraftAt = Date.now() + waitSec * 1000 + this.governor.uniform(300);
-        this.governor.note429('draft', waitSec);
-        console.debug(`Durevcode thinking draft paused ${waitSec}s: ${errorText(error)}`);
-    }
-
     private rememberDelivery(state: WatchedSession, sig: string): void {
         state.recentDelivered.push({ sig, at: Date.now() });
         if (state.recentDelivered.length > DELIVERY_DEDUP_KEEP) {
             state.recentDelivered.splice(0, state.recentDelivered.length - DELIVERY_DEDUP_KEEP);
         }
+    }
+
+    private async deliverFreshPart(telegram: TelegramBotPlugin, state: WatchedSession, part: string): Promise<void> {
+        const sig = deliverySignature(part);
+        if (state.recentDelivered.some((entry) => entry.sig === sig)) return;
+        await this.deliverMessage(telegram, state, part);
+        this.rememberDelivery(state, sig);
+    }
+
+    private queuePriorityReply(state: WatchedSession, text: string, markup: InlineKeyboardMarkup | null = null): void {
+        if (state.priorityReplies.length >= MAX_PRIORITY_REPLIES) {
+            state.priorityReplies.shift();
+            console.warn(`Durevcode priority reply queue overflow, dropping oldest (session=${state.session.id}).`);
+        }
+        state.priorityReplies.push({ text, markup });
+    }
+
+    private async safePriorityReply(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        text: string,
+        markup: InlineKeyboardMarkup | null = null,
+    ): Promise<void> {
+        try {
+            await this.deliverMessage(telegram, state, text, markup ?? undefined, { force: true });
+            return;
+        } catch (error) {
+            if (isRateLimitError(error) || isUpstreamServerError(error)) {
+                this.queuePriorityReply(state, text, markup);
+                return;
+            }
+            console.debug('Durevcode priority reply failed:', errorText(error));
+        }
+    }
+
+    private async flushPriorityReplies(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        while (state.priorityReplies.length > 0) {
+            if (Date.now() < this.rateLimitedUntil || Date.now() < this.upstreamBackoffUntil) return;
+            const part = state.priorityReplies.shift() as { text: string; markup: InlineKeyboardMarkup | null };
+            try {
+                await this.deliverMessage(telegram, state, part.text, part.markup ?? undefined);
+            } catch (error) {
+                if (isRateLimitError(error)) {
+                    this.absorbRateLimit('topic-send', error, 'priority reply', state.session.id);
+                    state.priorityReplies.unshift(part);
+                    return;
+                }
+                if (isUpstreamServerError(error)) {
+                    state.priorityReplies.unshift(part);
+                    return;
+                }
+                console.debug('Durevcode priority reply dropped:', errorText(error));
+            }
+        }
+    }
+
+    private async stoppedNotice(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        now = Date.now(),
+    ): Promise<void> {
+        if (now - state.lastStopMsgAt < STOP_DEDUP_MS) return;
+        state.lastStopMsgAt = now;
+        await this.safePriorityReply(telegram, state, `${icon('stop')} Stopped, send the task again.`);
     }
 
     private slowThinking(state: WatchedSession): void {
@@ -2325,10 +2358,15 @@ export class DurevcodeAgent extends BaseAgent {
                 }
             }
             const late = this.creatingThreads.get(threadId);
-            if (!late || late.length === 0) break;
+            if (!late) break;
             batch = late.splice(0);
+            if (batch.length === 0) {
+                this.creatingThreads.delete(threadId);
+                if (late.length === 0) break;
+                this.creatingThreads.set(threadId, late);
+                continue;
+            }
         }
-        this.creatingThreads.delete(threadId);
         await this.pumpPrompts(telegram, opencode, state);
     }
 
@@ -2614,6 +2652,13 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
+    private resetPromptLane(state: WatchedSession): void {
+        state.promptBusyNotified = false;
+        state.promptBusySince = 0;
+        state.promptErrorText = null;
+        state.promptNextAttemptAt = 0;
+    }
+
     private async pumpPrompts(
         telegram: TelegramBotPlugin,
         opencode: Pick<OpencodePlugin, 'sendPrompt'> & Partial<Pick<OpencodePlugin, 'ensureServer' | 'spawnRun'>>,
@@ -2632,10 +2677,7 @@ export class DurevcodeAgent extends BaseAgent {
             try {
                 if (await this.startCliRun(telegram, opencode, state, head, false, null)) {
                     state.promptQueue.shift();
-                    state.promptBusyNotified = false;
-                    state.promptBusySince = 0;
-                    state.promptErrorText = null;
-                    state.promptNextAttemptAt = 0;
+                    this.resetPromptLane(state);
                     return;
                 }
             } catch (error) {
@@ -2658,10 +2700,7 @@ export class DurevcodeAgent extends BaseAgent {
                 return;
             }
             state.promptQueue.shift();
-            state.promptBusyNotified = false;
-            state.promptBusySince = 0;
-            state.promptErrorText = null;
-            state.promptNextAttemptAt = 0;
+            this.resetPromptLane(state);
             state.confirming =
                 receipt.messageId !== undefined
                     ? { messageId: receipt.messageId, text: head, since: Date.now(), notified: false }
@@ -2682,20 +2721,12 @@ export class DurevcodeAgent extends BaseAgent {
                         `${hourglassIcon()} Rate limited, retry in ~${waitSec}s — your prompt stays queued.`,
                     );
                 }
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                console.warn(`Durevcode prompt rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.absorbRateLimit('prompt-send', error, 'prompt', state.session.id);
                 return;
             }
             if (isPermanentPromptError(error)) {
                 state.promptQueue.shift();
-                if (state.promptQueue.length === 0) {
-                    state.promptNextAttemptAt = 0;
-                    state.promptBusyNotified = false;
-                    state.promptBusySince = 0;
-                }
+                this.resetPromptLane(state);
                 await this.safeReply(
                     telegram,
                     state,
@@ -2850,9 +2881,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         try {
             state.modelCardMessageId = await this.deliverMessage(telegram, state, text, markup);
-        } catch (error) {
-            console.debug('Durevcode model card resend failed:', errorText(error));
+            return;
+        } catch {
         }
+        await this.safePriorityReply(telegram, state, text, markup);
     }
 
     private async sendModeCard(
@@ -2862,11 +2894,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     ): Promise<void> {
         const agents = await this.loadModeAgents(opencode);
         const text = this.modeCardText(state, agents);
-        try {
-            await this.deliverMessage(telegram, state, text, this.modeMarkup(state.buildMode));
-        } catch (error) {
-            console.debug('Durevcode mode card failed:', errorText(error));
-        }
+        await this.safePriorityReply(telegram, state, text, this.modeMarkup(state.buildMode));
     }
 
     private modeCardText(state: WatchedSession, agents: { build: string; plan: string } | null): string {
@@ -2905,16 +2933,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state: WatchedSession,
         build: boolean,
     ): Promise<void> {
-        try {
-            await telegram.answerCallbackQuery({ callback_query_id: query.id });
-        } catch (error) {
-            console.debug('Durevcode mode ack failed:', errorText(error));
-        }
+        await this.ackCallback(telegram, query, 'mode');
         if (state.buildMode === build) return;
         const target = await this.loadModeAgents(opencode);
         const agentId = build ? target?.build : target?.plan;
         if (!opencode || typeof opencode.setAgent !== 'function' || !agentId) {
-            await this.safeReply(telegram, state, `${icon('fail')} Cannot switch mode: agent control is unavailable.`);
+            await this.safePriorityReply(telegram, state, `${icon('fail')} Cannot switch mode: agent control is unavailable.`);
             return;
         }
         let switched = false;
@@ -2922,11 +2946,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             switched = await opencode.setAgent(state.session.id, agentId);
         } catch (error) {
             console.debug('Durevcode mode switch failed:', errorText(error));
-            await this.safeReply(telegram, state, `${icon('fail')} Could not switch mode, try again.`);
+            await this.safePriorityReply(telegram, state, `${icon('fail')} Could not switch mode, try again.`);
             return;
         }
         if (!switched) {
-            await this.safeReply(telegram, state, `${icon('fail')} Could not switch mode, session is gone.`);
+            await this.safePriorityReply(telegram, state, `${icon('fail')} Could not switch mode, session is gone.`);
             return;
         }
         state.buildMode = build;
@@ -2934,17 +2958,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state.modeSynced = true;
         this.savePersisted();
         await this.refreshModeCard(telegram, opencode, query, state);
-        await this.safeReply(
+        await this.safePriorityReply(
             telegram,
             state,
             `Mode: <b>${build ? 'Build' : 'Plan'}</b> — the model now runs as <b>${escapeHtml(agentId)}</b> and ` +
                 `${build ? 'may edit files' : 'will not edit anything'}.`,
         );
         if (!build) this.abandonLiveTool(state);
-        if (state.contextMessageId !== null) {
-            state.lastContextEditAt = 0;
-            await this.updateContext(telegram, state);
-        }
+        if (state.contextMessageId !== null) await this.refreshContext(telegram, state);
         await this.syncStopKeyboard(telegram, state);
     }
 
@@ -2987,13 +3008,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         modelId: string | null,
         variant: string,
     ): Promise<void> {
-        const dismiss = async (text?: string): Promise<void> => {
-            try {
-                await telegram.answerCallbackQuery({ callback_query_id: query.id, ...(text ? { text } : {}) });
-            } catch (error) {
-                console.debug('Durevcode model ack failed:', errorText(error));
-            }
-        };
+        const dismiss = (text?: string): Promise<void> => this.ackCallback(telegram, query, 'model', text);
         const currentRef = modelRef(state.session.model);
         if (modelId === null && !currentRef.id) {
             await dismiss('No model yet, pick one above.');
@@ -3005,7 +3020,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         } catch (error) {
             console.debug('Durevcode model list failed:', errorText(error));
             await dismiss();
-            await this.safeReply(telegram, state, 'Could not load models, try again.');
+            await this.safePriorityReply(telegram, state, 'Could not load models, try again.');
             return;
         }
         const picked = models.find((m) => m.id === (modelId ?? currentRef.id));
@@ -3025,33 +3040,26 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             }
         }
         const nextVariant = modelId === null ? variant : variantForModel(picked, currentVariant);
+        const nextModel = { id: picked.id, providerID: picked.providerID, ...(nextVariant ? { variant: nextVariant } : {}) };
         await dismiss();
         if (currentRef.id === picked.id && currentVariant === nextVariant) return;
         let switched = false;
         try {
-            switched = await opencode.setModel(
-                state.session.id,
-                { id: picked.id, providerID: picked.providerID, ...(nextVariant ? { variant: nextVariant } : {}) },
-            );
+            switched = await opencode.setModel(state.session.id, nextModel);
         } catch (error) {
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(this.rateLimitedUntil, Date.now() + waitSec * 1000 + 1000);
-                console.warn(`Durevcode model switch rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.absorbRateLimit('model-switch', error, 'model switch', state.session.id);
                 return;
             }
             console.debug('Durevcode model switch failed:', errorText(error));
-            await this.safeReply(telegram, state, 'Could not switch model, try again.');
+            await this.safePriorityReply(telegram, state, 'Could not switch model, try again.');
             return;
         }
         if (!switched) {
             await dismiss('Outdated, ask again.');
             return;
         }
-        state.session = {
-            ...state.session,
-            model: JSON.stringify({ id: picked.id, providerID: picked.providerID, ...(nextVariant ? { variant: nextVariant } : {}) }),
-        };
+        state.session = { ...state.session, model: JSON.stringify(nextModel) };
         if (modelId !== null) {
             state.limitChecked = false;
             const getLimit = opencode.getModelLimit;
@@ -3060,12 +3068,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             }
         }
         await this.editModelCard(telegram, state, models, query.message?.message_id ?? null);
-        if (state.contextMessageId !== null) {
-            state.lastContextEditAt = 0;
-            await this.updateContext(telegram, state);
-        }
+        if (state.contextMessageId !== null) await this.refreshContext(telegram, state);
         if (modelId === null) {
-            await this.safeReply(telegram, state, `Effort: <b>${escapeHtml(variant)}</b> for <b>${escapeHtml(picked.id)}</b>.`);
+            await this.safePriorityReply(telegram, state, `Effort: <b>${escapeHtml(variant)}</b> for <b>${escapeHtml(picked.id)}</b>.`);
         }
     }
 
@@ -3075,7 +3080,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
 
     private async ensureStopControl(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         if (state.stopMessageId !== null || state.stopControlSending) return;
+        if (Date.now() - state.stopControlAttemptAt < STOP_CONTROL_REPOST_MS) return;
         if (Date.now() < this.rateLimitedUntil) return;
+        state.stopControlAttemptAt = Date.now();
         state.stopControlSending = true;
         try {
             const text = this.renderStopControlText(state);
@@ -3173,11 +3180,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             clearTimeout(pendingFoldRetry);
             this.thoughtPaintRetryTimers.delete(`s${state.session.id}`);
         }
-        this.clearThinkingDraft(state);
-        state.thinkingDraftSent = false;
-        state.thinkingDraftOk = true;
         this.governor.refill('topic-edit');
-        this.governor.refill('draft');
         this.governor.refill('topic-markup');
         if (id === null) return;
         await this.sendThought(telegram, state.session.id, id, since, text, 0);
@@ -3196,8 +3199,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
 
     private boundaryGap(minMs: number, jitterMs: number): Promise<void> {
         return new Promise((resolve) => {
-            const minimum = Math.round(minMs * (1 + this.governor.pressure()));
-            const timer = setTimeout(resolve, minimum + this.governor.uniform(jitterMs));
+            const timer = setTimeout(resolve, this.pressurePaced(minMs) + this.governor.uniform(jitterMs));
             timer.unref?.();
         });
     }
@@ -3239,120 +3241,6 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }, delay);
         timer.unref?.();
         this.thoughtPaintRetryTimers.set(key, timer);
-    }
-
-    private thinkingDraftActive(state: WatchedSession): boolean {
-        return state.thinkingDraftOk && state.userId !== null && state.thinkingActive && state.thinkingText.length > 0;
-    }
-
-    private armThinkingDraft(state: WatchedSession): void {
-        if (!state.thinkingActive) return;
-        if (this.thinkingDraftTimers.has(state.session.id)) return;
-        if (!this.watched.get(state.session.id)) return;
-        if (!this.thinkingDraftActive(state)) return;
-        const timer = setTimeout(() => {
-            this.thinkingDraftTimers.delete(state.session.id);
-            void (async () => {
-                await this.pushThinkingDraft(state);
-                if (this.thinkingDraftActive(state)) this.armThinkingDraft(state);
-            })();
-        }, THINKING_DRAFT_PACE_MS);
-        timer.unref?.();
-        this.thinkingDraftTimers.set(state.session.id, timer);
-    }
-
-    private draftTailText(state: WatchedSession): string {
-        const text = state.thinkingText;
-        if (text.length <= state.thinkingDraftTail) return text;
-        return text.slice(-state.thinkingDraftTail);
-    }
-
-    private async pushThinkingDraft(state: WatchedSession): Promise<void> {
-        const key = state.session.id;
-        if (this.thinkingDraftInFlight.has(key)) return;
-        this.thinkingDraftInFlight.add(key);
-        try {
-            await this.pushThinkingDraftOnce(state);
-        } finally {
-            this.thinkingDraftInFlight.delete(key);
-        }
-    }
-
-    private async pushThinkingDraftOnce(state: WatchedSession): Promise<void> {
-        if (!this.thinkingDraftActive(state)) return;
-        const peer = state.userId;
-        if (peer === null) return;
-        if (Date.now() < state.thinkingDraftAt + THINKING_DRAFT_PACE_MS) return;
-        const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
-        if (!telegram) return;
-        const parkDraft = (error: unknown, tag: string): void => {
-            const fail = this.governor.registerFail('draft');
-            if (!fail.parked) {
-                state.thinkingDraftAt = Date.now() + Math.round(fail.waitMs * (1 + this.governor.pressure() * 0.5)) - THINKING_DRAFT_PACE_MS;
-                console.debug(`Durevcode thinking draft paused ${tag} (fail ${fail.attempt}): ${errorText(error)}`);
-                return;
-            }
-            state.thinkingDraftOk = false;
-            console.debug(`Durevcode thinking draft lane off ${tag}: ${errorText(error)}`);
-        };
-        state.thinkingDraftAt = Date.now();
-        try {
-            await telegram.sendMessageDraft({
-                chat_id: peer,
-                draft_id: THINKING_DRAFT_ID,
-                text: this.draftTailText(state),
-            });
-            state.thinkingDraftSent = true;
-            this.governor.resetFails('draft');
-        } catch (error) {
-            if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 4;
-                this.draftRetryAfter(state, waitSec, error);
-                return;
-            }
-            if (isDraftTooLong(error) && state.thinkingDraftTail > THINKING_DRAFT_TAIL_MIN_CHARS) {
-                state.thinkingDraftTail = Math.max(THINKING_DRAFT_TAIL_MIN_CHARS, Math.round(state.thinkingDraftTail / 2));
-                try {
-                    await telegram.sendMessageDraft({
-                        chat_id: peer,
-                        draft_id: THINKING_DRAFT_ID,
-                        text: this.draftTailText(state),
-                    });
-                    state.thinkingDraftSent = true;
-                    this.governor.resetFails('draft');
-                    return;
-                } catch (retryError) {
-                    if (isRateLimitError(retryError)) {
-                        const waitSec = getRetryAfterSec(retryError) ?? 4;
-                        this.draftRetryAfter(state, waitSec, retryError);
-                        return;
-                    }
-                    parkDraft(retryError, 'after shrink');
-                    return;
-                }
-            }
-            parkDraft(error, 'idle');
-        }
-    }
-
-    private clearThinkingDraft(state: WatchedSession): void {
-        const pending = this.thinkingDraftTimers.get(state.session.id);
-        if (pending) {
-            clearTimeout(pending);
-            this.thinkingDraftTimers.delete(state.session.id);
-        }
-        const peer = state.userId;
-        if (peer === null) return;
-        if (!state.thinkingDraftSent) return;
-        const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
-        if (!telegram) return;
-        void telegram.sendMessageDraft({
-            chat_id: peer,
-            draft_id: THINKING_DRAFT_ID,
-            text: '',
-        }).catch((error) => {
-            console.debug('Durevcode thinking draft clear failed:', errorText(error));
-        });
     }
 
     private registerThoughtArchive(sessionId: string, messageId: number, fullHtml: string, compactHtml: string, fullText: string, compact: boolean): void {
@@ -3400,6 +3288,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return;
             }
             console.debug('Durevcode thought finalize failed:', errorText(error));
+            if (attempt < 4) {
+                const timer = setTimeout(() => {
+                    void this.sendThought(telegram, sessionId, messageId, since, text, attempt + 1);
+                }, Math.max(1800, this.rateLimitedUntil - Date.now() + 800) + this.governor.fullJitter(600, attempt, 1800));
+                timer.unref?.();
+            }
         }
     }
 
@@ -3548,10 +3442,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 await dismiss();
             } catch (error) {
                 if (isRateLimitError(error)) {
-                    const waitSec = getRetryAfterSec(error) ?? 10;
-                    this.rateLimitedUntil = Math.max(
-                        this.rateLimitedUntil,
-                        Date.now() + waitSec * 1000 + 1000,
+                    const waitSec = this.absorbRateLimit(
+                        'thought-doc',
+                        error,
+                        'thought document',
+                        entry?.sessionId ?? live?.session.id ?? 'unknown',
                     );
                     await dismiss(`Rate limited, try again in ${waitSec}s.`);
                     return;
@@ -3568,6 +3463,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state.stopMessageId = null;
         state.stopControlText = null;
         state.stopRetireRetryAt = 0;
+        state.stopControlAttemptAt = 0;
     }
 
     private async discardStopControl(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
@@ -3580,7 +3476,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             await telegram.editMessageReplyMarkup({
                 chat_id: this.chatId(),
                 message_id: controlId,
-                reply_markup: { inline_keyboard: [] },
+                reply_markup: EMPTY_INLINE_MARKUP,
             });
             this.clearStopControlState(state);
             console.log(`Durevcode stop control retired (session=${state.session.id} control=${controlId}).`);
@@ -3615,7 +3511,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return;
             }
             if (state.stopRetireRetryAt > Date.now()) return;
-            if (!state.finalized && Date.now() - state.stoppedAt >= STOP_QUIET_MS) return;
+            if (!state.finalized && !this.stopQuiet(state)) return;
             await this.discardStopControl(telegram, state);
         }
         if (state.contextMessageId === null) return;
@@ -3626,7 +3522,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             await telegram.editMessageReplyMarkup({
                 chat_id: this.chatId(),
                 message_id: state.contextMessageId,
-                reply_markup: want ? this.stopMarkup(state) : { inline_keyboard: [] },
+                reply_markup: want ? this.stopMarkup(state) : EMPTY_INLINE_MARKUP,
             });
             state.stopButtonOn = want;
             this.governor.spend('topic-markup');
@@ -3685,10 +3581,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             state.pendingKeys.clear();
             state.liveTool = null;
             state.pendingTodos = false;
-            state.promptBusyNotified = false;
-            state.promptBusySince = 0;
-            state.promptErrorText = null;
-            state.promptNextAttemptAt = 0;
+            this.resetPromptLane(state);
             state.lastText = '';
             state.toolCalls = 0;
             state.lastEventAt = 0;
@@ -3698,11 +3591,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             await this.clearThinkingMessage(telegram, state);
             await this.boundaryGap(400, 500);
             await this.syncStopKeyboard(telegram, state);
-            if (now - state.lastStopMsgAt < STOP_DEDUP_MS) {
-                return true;
-            }
-            state.lastStopMsgAt = now;
-            await this.safeReply(telegram, state, `${icon('stop')} Stopped, send the task again.`);
+            await this.stoppedNotice(telegram, state, now);
             return true;
         } finally {
             state.stopping = false;
@@ -3713,6 +3602,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         telegram: TelegramBotPlugin,
         messageIds: number[],
         label: string,
+        sessionId: string,
     ): Promise<boolean> {
         if (messageIds.length === 0) return true;
         if (Date.now() < this.rateLimitedUntil) return false;
@@ -3722,9 +3612,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 await telegram.editMessageReplyMarkup({
                     chat_id: this.chatId(),
                     message_id: messageId,
-                    reply_markup: { inline_keyboard: [] },
+                    reply_markup: EMPTY_INLINE_MARKUP,
                 });
             } catch (error) {
+                if (isRateLimitError(error)) {
+                    this.absorbRateLimit('topic-markup', error, label, sessionId);
+                    return false;
+                }
                 if (!isMessageNotModifiedError(error) && !isMessageGoneError(error)) {
                     settled = false;
                     console.debug(`Durevcode ${label} failed:`, errorText(error));
@@ -3786,7 +3680,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         for (const [messageId, ref] of this.permReplies) {
             if (ref.sessionId === state.session.id && !alive.has(ref.permId)) deadPermMsgIds.push(messageId);
         }
-        if (await this.disarmReplyKeyboards(telegram, deadPermMsgIds, 'permission disarm')) {
+        if (await this.disarmReplyKeyboards(telegram, deadPermMsgIds, 'permission disarm', state.session.id)) {
             for (const messageId of deadPermMsgIds) this.permReplies.delete(messageId);
         }
     }
@@ -3821,7 +3715,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                         await telegram.editMessageReplyMarkup({
                             chat_id: this.chatId(),
                             message_id: replyTo,
-                            reply_markup: { inline_keyboard: [] },
+                            reply_markup: EMPTY_INLINE_MARKUP,
                         });
                     } catch (error) {
                         if (isRateLimitError(error)) {
@@ -3911,7 +3805,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 deadReqIds.add(ref.reqId);
             }
         }
-        if (await this.disarmReplyKeyboards(telegram, deadQuestionMsgIds, 'question disarm')) {
+        if (await this.disarmReplyKeyboards(telegram, deadQuestionMsgIds, 'question disarm', state.session.id)) {
             for (const messageId of deadQuestionMsgIds) this.questReplies.delete(messageId);
             for (const reqId of deadReqIds) this.dropQuestionRefs(state.session.id, reqId);
         }
@@ -3934,7 +3828,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         if (msgIds.length === 0 && state.knownQuestions.length === 0 && this.questPicks.size === 0) return;
         state.knownQuestions = [];
-        if (await this.disarmReplyKeyboards(telegram, msgIds, 'question disarm')) {
+        if (await this.disarmReplyKeyboards(telegram, msgIds, 'question disarm', state.session.id)) {
             this.dropSessionQuestionRefs(sessionId);
         }
     }
@@ -3957,19 +3851,32 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     ): Promise<void> {
         if (this.resolvingQuestions.has(ref.reqId)) return;
         this.resolvingQuestions.add(ref.reqId);
-        let resolved = false;
+        const reply = (): Promise<boolean> => opencode.replyQuestion(state.session.id, ref.reqId, answers);
+        const failOut = async (error: unknown): Promise<void> => {
+            console.debug('Durevcode question reply failed:', errorText(error));
+            await this.safeReply(telegram, state, `${icon('fail')} Could not send the answer, try again.`);
+            this.resolvingQuestions.delete(ref.reqId);
+        };
+        let resolved: boolean;
         try {
-            resolved = await opencode.replyQuestion(state.session.id, ref.reqId, answers);
+            resolved = await reply();
         } catch (error) {
             if (isRateLimitError(error)) {
                 this.absorbRateLimit('topic-send', error, 'question', state.session.id);
                 this.resolvingQuestions.delete(ref.reqId);
                 return;
             }
-            console.debug('Durevcode question reply failed:', errorText(error));
-            await this.safeReply(telegram, state, `${icon('fail')} Could not send the answer, try again.`);
-            this.resolvingQuestions.delete(ref.reqId);
-            return;
+            if (!isUpstreamServerError(error)) {
+                await failOut(error);
+                return;
+            }
+            await this.boundaryGap(400, 500);
+            try {
+                resolved = await reply();
+            } catch (retryError) {
+                await failOut(retryError);
+                return;
+            }
         }
         state.knownQuestions = state.knownQuestions.filter((id) => id !== ref.reqId);
         const request: QuestionRequest = { id: ref.reqId, sessionID: state.session.id, questions: ref.questions };
@@ -3979,7 +3886,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             for (const [messageId, live] of this.questReplies) {
                 if (live.sessionId === state.session.id && live.reqId === ref.reqId) deadMsgIds.push(messageId);
             }
-            if (await this.disarmReplyKeyboards(telegram, deadMsgIds, 'question disarm')) {
+            if (await this.disarmReplyKeyboards(telegram, deadMsgIds, 'question disarm', state.session.id)) {
                 this.dropQuestionRefs(state.session.id, ref.reqId);
             }
             this.resolvingQuestions.delete(ref.reqId);
@@ -4017,7 +3924,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 message_id: msgId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
-                reply_markup: { inline_keyboard: [] },
+                reply_markup: EMPTY_INLINE_MARKUP,
             });
             return true;
         } catch (error) {
@@ -4056,7 +3963,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         } catch (error) {
             console.debug('Durevcode step failure notice failed:', errorText(error));
         }
-        await this.finalizeSession(telegram, state, false);
+        await this.finalizeSession(telegram, state);
     }
 
     private syncLiveReasoning(event: OpencodeServerEvent): void {
@@ -4093,7 +4000,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (state.thinkingSince === null) state.thinkingSince = Date.now();
         state.thinkingDeltaAt = Date.now();
         state.lastEventAt = Date.now();
-        this.scheduleThinkingRender(state);
+        this.armThinkingType(state);
     }
 
     private applyReasoningStreamStart(record: Record<string, unknown>): void {
@@ -4108,7 +4015,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state.thinkingRateCps = THINKING_TYPE_SPEED_CPS;
         state.thinkingRateChars = 0;
         state.lastEventAt = Date.now();
-        this.scheduleThinkingRender(state);
+        this.armThinkingType(state);
     }
 
     private applyReasoningStreamDelta(record: Record<string, unknown>): void {
@@ -4147,24 +4054,20 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         state.thinkingDeltaAt = streamNow;
         state.lastEventAt = Date.now();
-        this.scheduleThinkingRender(state);
-    }
-
-    private scheduleThinkingRender(state: WatchedSession): void {
         this.armThinkingType(state);
     }
 
     private armThinkingType(state: WatchedSession): void {
-        this.armThinkingDraft(state);
         if (this.thinkingRenderTimers.has(state.session.id)) return;
         if (!this.watched.get(state.session.id)) return;
         if (!state.thinkingActive && state.thinkingMessageId === null) return;
         const pendingBubble = state.thinkingMessageId !== null;
         const paceFloor = !pendingBubble ? 0 : (state.thinkingFolded ? THINKING_TOPIC_FOLDED_PACE_MS : THINKING_EXPANDED_PACE_MS);
+        const base = Math.max(state.thinkingTypeMs, paceFloor);
         const timer = setTimeout(() => {
             this.thinkingRenderTimers.delete(state.session.id);
             void this.typeThinkingStep(state);
-        }, Math.max(state.thinkingTypeMs, paceFloor));
+        }, base + this.governor.uniform(Math.round(base * 0.3)));
         timer.unref?.();
         this.thinkingRenderTimers.set(state.session.id, timer);
     }
@@ -4212,27 +4115,56 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         await this.paintThinkingText(telegram, state, text.slice(0, Math.min(text.length, targetLen)));
     }
 
+    private async settleThinkingPaint(
+        state: WatchedSession,
+        text: string,
+        rawText: string,
+        folded: boolean,
+        spend: boolean,
+        gain: boolean,
+    ): Promise<void> {
+        state.thinkingRendered = text;
+        if (!folded) state.thinkingTypedLen = rawText.length;
+        state.thinkingAt = Date.now();
+        if (spend) this.governor.spend('topic-edit');
+        if (gain) {
+            state.thinkingTypeMs = Math.max(THINKING_TOPIC_FOLDED_PACE_MS, Math.round(state.thinkingTypeMs * 0.92));
+        }
+    }
+
+    private thinkingPaceMs(state: WatchedSession): number {
+        const floor = state.thinkingFolded ? THINKING_TOPIC_FOLDED_PACE_MS : THINKING_EXPANDED_PACE_MS;
+        let paceMs = this.pressurePaced(floor);
+        if (this.governor.budget('topic-edit') * 3 < this.governor.capacity('topic-edit')) paceMs *= 2;
+        return paceMs;
+    }
+
+    private reasoningStreamOn(): boolean {
+        return this.config.durevcode.reasoningStream !== false;
+    }
+
+    private reasoningRepaintOn(): boolean {
+        return this.config.durevcode.reasoningRepaint !== false;
+    }
+
     private async paintThinkingText(telegram: TelegramBotPlugin, state: WatchedSession, rawText: string, force = false): Promise<boolean> {
         if (state.thinkingPainting) return false;
         if (Date.now() < this.rateLimitedUntil) return false;
         if (!force && !this.governor.canSpend('topic-edit')) return false;
+        if (!force && !this.reasoningStreamOn()) return false;
+        if (!force && state.thinkingMessageId !== null && !this.reasoningRepaintOn()) return false;
         state.thinkingPainting = true;
         const folded = state.thinkingFolded;
         const text = folded
-            ? formatThinkingFolded(Date.now() - (state.thinkingSince ?? Date.now()), state.thinkingText.length)
+            ? (this.reasoningRepaintOn()
+                ? formatThinkingFolded(Date.now() - (state.thinkingSince ?? Date.now()), state.thinkingText.length)
+                : THINKING_HEAD)
             : formatThinking(rawText);
         try {
             if (state.thinkingMessageId === null) {
                 try {
                     state.thinkingMessageId = await this.deliverMessage(telegram, state, text, undefined, { force: true });
-                    state.thinkingRendered = text;
-                    if (!folded) state.thinkingTypedLen = rawText.length;
-                    state.thinkingAt = Date.now();
-                    await this.pushThinkingDraft(state);
-                    state.thinkingTypeMs = Math.max(
-                        THINKING_TOPIC_FOLDED_PACE_MS,
-                        Math.round(state.thinkingTypeMs * 0.92),
-                    );
+                    await this.settleThinkingPaint(state, text, rawText, folded, false, true);
                     console.log(`Durevcode thinking posted (session=${state.session.id}).`);
                     return true;
                 } catch (error) {
@@ -4255,7 +4187,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 }
             }
             if (text === state.thinkingRendered) return true;
-            if (!force && Date.now() - state.thinkingAt < this.pressurePaced(state.thinkingFolded ? THINKING_TOPIC_FOLDED_PACE_MS : THINKING_EXPANDED_PACE_MS)) return false;
+            if (!force && Date.now() - state.thinkingAt < this.thinkingPaceMs(state)) return false;
             try {
                 await telegram.editMessageText({
                     chat_id: this.chatId(),
@@ -4263,22 +4195,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     text: wellFormed(text),
                     parse_mode: 'HTML',
                 });
-                state.thinkingRendered = text;
-                if (!folded) state.thinkingTypedLen = rawText.length;
-                state.thinkingAt = Date.now();
-                this.governor.spend('topic-edit');
-                await this.pushThinkingDraft(state);
-                state.thinkingTypeMs = Math.max(
-                    THINKING_TOPIC_FOLDED_PACE_MS,
-                    Math.round(state.thinkingTypeMs * 0.92),
-                );
+                await this.settleThinkingPaint(state, text, rawText, folded, true, true);
                 return true;
             } catch (error) {
                 if (isMessageNotModifiedError(error)) {
-                    state.thinkingRendered = text;
-                    if (!folded) state.thinkingTypedLen = rawText.length;
-                    state.thinkingAt = Date.now();
-                    this.governor.spend('topic-edit');
+                    await this.settleThinkingPaint(state, text, rawText, folded, true, false);
                     return true;
                 }
                 if (isMessageGoneError(error)) {
@@ -4327,7 +4248,46 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             state,
             `${icon('warn')} opencode error: ${escapeHtml(modelErrorNotice(text))}`,
         );
-        await this.finalizeSession(telegram, state, false);
+        await this.finalizeSession(telegram, state);
+    }
+
+    private async ackCallback(
+        telegram: TelegramBotPlugin,
+        query: CallbackQuery,
+        label: string,
+        text?: string,
+    ): Promise<void> {
+        const answer = (): Promise<unknown> => telegram.answerCallbackQuery({ callback_query_id: query.id, ...(text ? { text } : {}) });
+        try {
+            await answer();
+            return;
+        } catch (error) {
+            if (!isUpstreamServerError(error)) {
+                console.debug(`Durevcode ${label} ack failed:`, errorText(error));
+                return;
+            }
+        }
+        await this.boundaryGap(400, 500);
+        try {
+            await answer();
+        } catch (error) {
+            console.debug(`Durevcode ${label} ack retry failed:`, errorText(error));
+        }
+    }
+
+    private async gateCallback(
+        query: CallbackQuery,
+        what: string,
+        dismiss: (text?: string) => Promise<void>,
+        detail = '',
+    ): Promise<boolean> {
+        const gate = this.callbackGate(query, what, detail);
+        if (gate === 'silent') return false;
+        if (gate === 'deny') {
+            await dismiss();
+            return false;
+        }
+        return true;
     }
 
     private callbackGate(query: CallbackQuery, what: string, detail = ''): 'ok' | 'silent' | 'deny' {
@@ -4356,13 +4316,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         opencode: Pick<OpencodePlugin, 'replyQuestion' | 'setModel' | 'listModels' | 'replyPermission' | 'listPermissions'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'getModelLimit' | 'listAgents' | 'setAgent'>>,
         query: CallbackQuery,
     ): Promise<void> {
-        const dismiss = async (text?: string): Promise<void> => {
-            try {
-                await telegram.answerCallbackQuery({ callback_query_id: query.id, ...(text ? { text } : {}) });
-            } catch (error) {
-                console.debug('Durevcode callback ack failed:', errorText(error));
-            }
-        };
+        const dismiss = (text?: string): Promise<void> => this.ackCallback(telegram, query, 'callback', text);
         if (this.seenCallbacks.has(query.id)) {
             await dismiss();
             return;
@@ -4372,12 +4326,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const data = query.data || '';
         const stopMatch = data.match(/^stop:(.+)$/);
         if (stopMatch) {
-            const gate = this.callbackGate(query, 'stop', ` (session=${stopMatch[1]})`);
-            if (gate === 'silent') return;
-            if (gate === 'deny') {
-                await dismiss();
-                return;
-            }
+            if (!(await this.gateCallback(query, 'stop', dismiss, ` (session=${stopMatch[1]})`))) return;
             const state = this.watched.get(stopMatch[1]);
             if (!state) {
                 await dismiss('Outdated, ask again.');
@@ -4389,56 +4338,31 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const foldMatch = data.match(/^thinkfold:(\d{1,10}):([01])$/);
         if (foldMatch) {
-            const gate = this.callbackGate(query, 'thought fold');
-            if (gate === 'silent') return;
-            if (gate === 'deny') {
-                await dismiss();
-                return;
-            }
+            if (!(await this.gateCallback(query, 'thought fold', dismiss))) return;
             await this.applyThoughtFold(telegram, query, Number(foldMatch[1]), foldMatch[2] === '1', dismiss);
             return;
         }
         const liveFoldMatch = data.match(/^thinkfolds:([01])$/);
         if (liveFoldMatch) {
-            const gate = this.callbackGate(query, 'thought fold');
-            if (gate === 'silent') return;
-            if (gate === 'deny') {
-                await dismiss();
-                return;
-            }
+            if (!(await this.gateCallback(query, 'thought fold', dismiss))) return;
             await this.applyLiveThoughtFold(telegram, query, liveFoldMatch[1] === '1', dismiss);
             return;
         }
         const docMatch = data.match(/^thinkdoc:(\d{1,10})$/);
         if (docMatch) {
-            const gate = this.callbackGate(query, 'thought doc');
-            if (gate === 'silent') return;
-            if (gate === 'deny') {
-                await dismiss();
-                return;
-            }
+            if (!(await this.gateCallback(query, 'thought doc', dismiss))) return;
             await this.applyThoughtDoc(telegram, query, Number(docMatch[1]), dismiss);
             return;
         }
         const liveDocMatch = data.match(/^thinkdocs:[01]$/);
         if (liveDocMatch) {
-            const gate = this.callbackGate(query, 'thought doc');
-            if (gate === 'silent') return;
-            if (gate === 'deny') {
-                await dismiss();
-                return;
-            }
+            if (!(await this.gateCallback(query, 'thought doc', dismiss))) return;
             await this.applyThoughtDoc(telegram, query, 0, dismiss);
             return;
         }
         const modeMatch = data.match(/^mode:(plan|plain|build)$/);
         if (modeMatch) {
-            const gate = this.callbackGate(query, 'mode');
-            if (gate === 'silent') return;
-            if (gate === 'deny') {
-                await dismiss();
-                return;
-            }
+            if (!(await this.gateCallback(query, 'mode', dismiss))) return;
             const target = this.callbackTarget(query, true);
             if (!target) {
                 await dismiss('Outdated, ask again.');
@@ -4449,12 +4373,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const modelMatch = data.match(/^model:([A-Za-z0-9._-]{1,50})$/);
         if (modelMatch) {
-            const gate = this.callbackGate(query, 'model');
-            if (gate === 'silent') return;
-            if (gate === 'deny') {
-                await dismiss();
-                return;
-            }
+            if (!(await this.gateCallback(query, 'model', dismiss))) return;
             const target = this.callbackTarget(query, true);
             if (!target) {
                 await dismiss('Outdated, ask again.');
@@ -4465,12 +4384,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const variantMatch = data.match(/^modelvariant:([A-Za-z0-9._-]{1,50})$/);
         if (variantMatch) {
-            const gate = this.callbackGate(query, 'model');
-            if (gate === 'silent') return;
-            if (gate === 'deny') {
-                await dismiss();
-                return;
-            }
+            if (!(await this.gateCallback(query, 'model', dismiss))) return;
             const target = this.callbackTarget(query, true);
             if (!target) {
                 await dismiss('Outdated, ask again.');
@@ -4481,12 +4395,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const permMatch = data.match(/^p(per_[A-Za-z0-9_-]{1,56}):(always|once|reject)$/);
         if (permMatch) {
-            const gate = this.callbackGate(query, 'permission');
-            if (gate === 'silent') return;
-            if (gate === 'deny') {
-                await dismiss();
-                return;
-            }
+            if (!(await this.gateCallback(query, 'permission', dismiss))) return;
             const permId = permMatch[1];
             const permState = this.callbackTarget(query);
             if (!permState) {
@@ -4526,12 +4435,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             await dismiss('Outdated, ask again.');
             return;
         }
-        const gate = this.callbackGate(query, 'question', ` (session=${ctx.sessionId})`);
-        if (gate === 'silent') return;
-        if (gate === 'deny') {
-            await dismiss();
-            return;
-        }
+            if (!(await this.gateCallback(query, 'question', dismiss, ` (session=${ctx.sessionId})`))) return;
         const state = this.watched.get(ctx.sessionId);
         if (!state) {
             this.questPicks.delete(match[1]);
@@ -4631,7 +4535,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const batchTimeoutMs = optionalPositiveInt(process.env.DUREVCODE_POLL_BATCH_TIMEOUT_MS, SESSION_TICK_BATCH_TIMEOUT_MS);
         this.pollInFlight = true;
         try {
-            await this.checkServerHealth(telegram, opencode);
+            await this.checkServerHealth(opencode);
             await this.probeWatchedTopics(telegram);
             await this.syncSessions();
             const fanout = Math.max(1, Math.floor(this.config.durevcode.pollFanout ?? 3));
@@ -4713,7 +4617,6 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     }
 
     private async checkServerHealth(
-        telegram: TelegramBotPlugin,
         opencode: Pick<OpencodePlugin, 'health' | 'storeError'>,
     ): Promise<void> {
         try {
@@ -4798,12 +4701,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return;
             }
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                console.warn(`Durevcode topic rename rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.absorbRateLimit('topic-rename', error, 'topic rename', state.session.id);
                 return;
             }
             console.debug('Durevcode topic rename failed:', errorText(error));
@@ -4908,7 +4806,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     state.knownEventSig.delete(stale);
                 }
             }
-            if (Date.now() - state.stoppedAt < STOP_QUIET_MS) continue;
+            if (this.stopQuiet(state)) continue;
             if (state.needsEventBaseline && event.time < state.startedAt) {
                 state.knownEventSig.set(key, eventSignature(event));
                 continue;
@@ -4926,7 +4824,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 if (state.thinkingSince === null) state.thinkingSince = Date.now();
                 if (event.text || !state.thinkingText) state.thinkingText = event.text;
                 state.thinkingDeltaAt = Date.now();
-                this.scheduleThinkingRender(state);
+                this.armThinkingType(state);
                 continue;
             }
             if (event.kind === 'tool') {
@@ -4961,7 +4859,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             const todos = (await opencode.readTodos(state.session.id))
                 .slice(0, 12)
                 .map((t) => ({ content: t.content, state: toTodoState(t.status) }));
-            if (Date.now() - state.stoppedAt < STOP_QUIET_MS) {
+            if (this.stopQuiet(state)) {
                 state.todos = todos;
                 state.needsTodoBaseline = false;
                 state.pendingTodos = false;
@@ -5046,26 +4944,30 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
     }
 
+    private hasActiveDispatch(state: WatchedSession): boolean {
+        return state.promptQueue.length > 0 || state.cliRun !== null || state.confirming !== null;
+    }
+
+    private stopQuiet(state: WatchedSession): boolean {
+        return Date.now() - state.stoppedAt < STOP_QUIET_MS;
+    }
+
     private isSessionActive(state: WatchedSession): boolean {
         if (state.finalized) return false;
         if (state.stopping) return false;
-        if (state.promptQueue.length > 0) return true;
-        if (state.cliRun) return true;
-        if (state.confirming) return true;
-        if (Date.now() - state.stoppedAt < STOP_QUIET_MS) return false;
+        if (this.hasActiveDispatch(state)) return true;
+        if (this.stopQuiet(state)) return false;
         if (state.knownPerms.length > 0) return false;
         if (state.knownQuestions.length > 0) return false;
         if (state.pending.length > 0 || state.pendingTodos) return true;
         if (hasUnfinishedLiveTool(state, Date.now())) return true;
-        return state.toolCalls > 0 || state.lastText !== '';
+        return Date.now() - state.lastEventAt < WORKING_RECENCY_MS;
     }
 
     private wantStopButton(state: WatchedSession): boolean {
         if (state.finalized) return false;
-        if (state.promptQueue.length > 0) return true;
-        if (state.cliRun) return true;
-        if (state.confirming) return true;
-        if (Date.now() - state.stoppedAt < STOP_QUIET_MS) return false;
+        if (this.hasActiveDispatch(state)) return true;
+        if (this.stopQuiet(state)) return false;
         if (state.pending.length > 0 || state.pendingTodos) return true;
         if (Date.now() - state.lastEventAt < WORKING_RECENCY_MS) return true;
         if (state.toolCalls > 0 || state.lastText !== '') return true;
@@ -5100,12 +5002,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             this.goneStrikes.delete(state.session.id);
         } catch (error) {
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(
-                    this.rateLimitedUntil,
-                    Date.now() + waitSec * 1000 + 1000,
-                );
-                console.warn(`Durevcode typing rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.absorbRateLimit('typing', error, 'typing', state.session.id);
                 return;
             }
             if (state.threadId !== null && isThreadGoneError(error)) {
@@ -5142,6 +5039,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
     }
 
+    private async refreshContext(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        state.lastContextEditAt = 0;
+        await this.updateContext(telegram, state);
+    }
+
     private async updateContext(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         if (this.threadsEnabled && state.threadId === null) return;
         if (Date.now() < this.rateLimitedUntil) return;
@@ -5157,7 +5059,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                     message_id: state.contextMessageId,
                     text: wellFormed(text),
                     parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: [] },
+                    reply_markup: EMPTY_INLINE_MARKUP,
                 });
                 state.stopButtonOn = false;
             }
@@ -5344,6 +5246,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     }
 
     private async runFlushEvents(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        await this.flushPriorityReplies(telegram, state);
         if (Date.now() < this.rateLimitedUntil) return;
         if (state.pending.length === 0 && !state.pendingTodos) return;
         const todos = state.pendingTodos ? state.todos : null;
@@ -5371,12 +5274,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 (event) => event.kind === 'text' || event.kind === 'files' || (event.kind === 'tool' && event.output !== ''),
             );
             const { text: answer, command: stopCommand } = takeStopCommand(text);
-            if (answer) {
-                await this.deliverMessage(telegram, state, answer);
-                this.rememberDelivery(state, deliverySignature(answer));
-            }
+            if (answer) await this.deliverFreshPart(telegram, state, answer);
             if (stopCommand) {
-                await this.deliverMessage(telegram, state, stopCommand);
+                await this.deliverFreshPart(telegram, state, stopCommand);
                 const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
                 await this.stopSession(telegram, opencode ?? {}, state);
             }
@@ -5424,7 +5324,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (state.confirming) return true;
         if (state.stopping) return true;
         if (state.stoppedByUser) return true;
-        if (Date.now() - state.stoppedAt < STOP_QUIET_MS) return true;
+        if (this.stopQuiet(state)) return true;
         if (state.pending.length > 0 || state.pendingTodos) return true;
         if (hasUnfinishedLiveTool(state, Date.now())) return true;
         if (state.thinkingActive && Date.now() - state.lastEventAt < this.autoContinueMs()) return true;
@@ -5479,9 +5379,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             }
         } catch (error) {
             if (isRateLimitError(error)) {
-                const waitSec = getRetryAfterSec(error) ?? 10;
-                this.rateLimitedUntil = Math.max(this.rateLimitedUntil, Date.now() + waitSec * 1000 + 1000);
-                console.warn(`Durevcode whip sticker rate limited, retry after ${waitSec}s (session=${state.session.id}).`);
+                this.absorbRateLimit('whip', error, 'whip sticker', state.session.id);
                 return;
             }
             if (state.threadId !== null && isThreadGoneError(error)) {
@@ -5499,21 +5397,17 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (state.finalized || state.stopping) return false;
         if (state.promptQueue.length > 0 || state.confirming || state.cliRun) return false;
         if (state.pending.length > 0 || state.pendingTodos || state.liveTool) return false;
-        if (Date.now() - state.stoppedAt < STOP_QUIET_MS) return false;
+        if (this.stopQuiet(state)) return false;
         if (Date.now() < this.rateLimitedUntil) return false;
         this.logger.info(`Durevcode finished a turn on its own (session=${state.session.id} thread=${state.threadId}).`);
         await this.finalizeSession(telegram, state);
-        if (Date.now() - state.lastStopMsgAt >= STOP_DEDUP_MS) {
-            state.lastStopMsgAt = Date.now();
-            await this.safeReply(telegram, state, `${icon('stop')} Stopped, send the task again.`);
-        }
+        await this.stoppedNotice(telegram, state);
         return true;
     }
 
     private async finalizeSession(
         telegram: TelegramBotPlugin,
         state: WatchedSession,
-        announce: boolean = true,
     ): Promise<void> {
         state.finalized = true;
         state.finalizedAt = Date.now();
@@ -5521,14 +5415,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state.pendingKeys.clear();
         state.liveTool = null;
         state.pendingTodos = false;
-        state.promptBusyNotified = false;
-        state.promptBusySince = 0;
-        state.promptErrorText = null;
+        this.resetPromptLane(state);
         console.log(`Durevcode finalized session ${state.session.id}`);
-        state.lastContextEditAt = 0;
         await this.clearThinkingMessage(telegram, state);
         await this.boundaryGap(400, 500);
-        await this.updateContext(telegram, state);
+        await this.refreshContext(telegram, state);
         await this.boundaryGap(400, 500);
         await this.syncStopKeyboard(telegram, state);
         this.savePersisted();

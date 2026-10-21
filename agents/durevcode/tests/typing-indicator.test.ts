@@ -113,7 +113,7 @@ async function primeWorking(state: State, idleMs: number): Promise<void> {
 }
 
 describe('typing indicator stays on while the task runs', () => {
-    test('keeps typing during a long silent stretch with no live tool', async () => {
+    test('typed work signals survive silences, stale traces do not', async () => {
         const agent = makeAgent();
         const calls: Array<{ op: string }> = [];
         const telegram = telegramStub(calls);
@@ -123,14 +123,19 @@ describe('typing indicator stays on while the task runs', () => {
         await primeWorking(state, 120_000);
         state.lastTypingAt = Date.now() - 60_000;
         await typingCalls(agent);
-        assert.equal(calls.length, 1, 'typing must fire after 2 minutes of silence');
+        assert.equal(calls.length, 0, 'stale tool traces alone must not look busy');
+
+        state.promptQueue = ['run it'];
+        state.lastTypingAt = Date.now() - 60_000;
+        await typingCalls(agent);
+        assert.equal(calls.length, 1, 'a queued prompt keeps the indicator alive through silence');
 
         state.lastTypingAt = Date.now() - 10_000;
         await typingCalls(agent);
-        assert.equal(calls.length, 2, 'typing must refresh past the cooldown');
+        assert.equal(calls.length, 2, 'the indicator refreshes past the cooldown while work is queued');
     });
 
-    test('survives the 15s recency window that used to kill it', async () => {
+    test('typing ends past the recency window unless live work keeps running', async () => {
         const agent = makeAgent();
         const calls: Array<{ op: string }> = [];
         const telegram = telegramStub(calls);
@@ -142,7 +147,12 @@ describe('typing indicator stays on while the task runs', () => {
             state.lastTypingAt = 0;
             await typingCalls(agent);
         }
-        assert.equal(calls.length, 4, 'every silence length must keep typing');
+        assert.equal(calls.length, 0, 'silence without live work must not paint typing');
+
+        state.cliRun = { id: 'run1' };
+        state.lastTypingAt = 0;
+        await typingCalls(agent);
+        assert.equal(calls.length, 1, 'a live run keeps the indicator alive past every silence');
     });
 
     test('stops when the session is finalized', async () => {
