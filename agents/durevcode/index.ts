@@ -102,6 +102,8 @@ const config: DurevcodeConfig = {
         maxSessions: maxSessionsDefault,
         useThreads: optionalFlag('DUREVCODE_USE_THREADS', true),
         typingEnabled: optionalFlag('DUREVCODE_TYPING', true),
+        reasoningStream: optionalFlag('DUREVCODE_REASONING_STREAM', true),
+        reasoningRepaint: optionalFlag('DUREVCODE_REASONING_REPAINT', true),
         newTopics: optionalFlag('DUREVCODE_NEW_TOPICS', true),
         statePath:
             process.env.DUREVCODE_STATE_PATH ||
