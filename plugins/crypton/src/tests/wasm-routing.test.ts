@@ -3,24 +3,24 @@ import { Buffer } from 'buffer';
 import { readWasmBinary } from './wasm-binary';
 
 describe('crypton WASM routing', () => {
-    let crypton: typeof import('../../index').crypton;
-    let initWasmCrypton: typeof import('../../index').initWasmCrypton;
-    let getWasmCallStats: typeof import('../../index').getWasmCallStats;
-    let resetWasmCallStats: typeof import('../../index').resetWasmCallStats;
-    let AES256ECB: typeof import('../src/aes-256-ecb').AES256ECB;
-    let AES256CTR: typeof import('../src/aes-256-ctr').AES256CTR;
-    let AesCtrCipher: typeof import('../src/aes-256-ctr').AesCtrCipher;
-    let AES256IGE: typeof import('../src/aes-256-ige').AES256IGE;
-    let AES256CBC: typeof import('../src/aes-256-cbc').AES256CBC;
-    let AES256CBC_ETM: typeof import('../src/aes-256-cbc-etm').AES256CBC_ETM;
+    let crypton: typeof import('../index').crypton;
+    let initWasmCrypton: typeof import('../index').initWasmCrypton;
+    let getWasmCallStats: typeof import('../index').getWasmCallStats;
+    let resetWasmCallStats: typeof import('../index').resetWasmCallStats;
+    let AES256ECB: typeof import('../typescript/src/aes-256-ecb').AES256ECB;
+    let AES256CTR: typeof import('../typescript/src/aes-256-ctr').AES256CTR;
+    let AesCtrCipher: typeof import('../typescript/src/aes-256-ctr').AesCtrCipher;
+    let AES256IGE: typeof import('../typescript/src/aes-256-ige').AES256IGE;
+    let AES256CBC: typeof import('../typescript/src/aes-256-cbc').AES256CBC;
+    let AES256CBC_ETM: typeof import('../typescript/src/aes-256-cbc-etm').AES256CBC_ETM;
 
     beforeAll(async () => {
-        ({ crypton, initWasmCrypton, getWasmCallStats, resetWasmCallStats } = await import('../../index'));
-        ({ AES256ECB } = await import('../src/aes-256-ecb'));
-        ({ AES256CTR, AesCtrCipher } = await import('../src/aes-256-ctr'));
-        ({ AES256IGE } = await import('../src/aes-256-ige'));
-        ({ AES256CBC } = await import('../src/aes-256-cbc'));
-        ({ AES256CBC_ETM } = await import('../src/aes-256-cbc-etm'));
+        ({ crypton, initWasmCrypton, getWasmCallStats, resetWasmCallStats } = await import('../index'));
+        ({ AES256ECB } = await import('../typescript/src/aes-256-ecb'));
+        ({ AES256CTR, AesCtrCipher } = await import('../typescript/src/aes-256-ctr'));
+        ({ AES256IGE } = await import('../typescript/src/aes-256-ige'));
+        ({ AES256CBC } = await import('../typescript/src/aes-256-cbc'));
+        ({ AES256CBC_ETM } = await import('../typescript/src/aes-256-cbc-etm'));
         await initWasmCrypton({ wasmBinary: readWasmBinary() });
     }, 60000);
 

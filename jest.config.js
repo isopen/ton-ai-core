@@ -52,6 +52,7 @@ module.exports = {
     '<rootDir>/mcp/ton/tests',
     '<rootDir>/agents/mrtr-demo/tests',
     '<rootDir>/plugins/crypton/src/typescript/tests',
+    '<rootDir>/plugins/crypton/src/tests',
     '<rootDir>/plugins/tl-language/tests',
     '<rootDir>/plugins/agent-transport/tests',
     '<rootDir>/plugins/telegram/tests',
@@ -78,7 +79,7 @@ module.exports = {
     '^.+\\.tsx$': ['ts-jest', tsOpts],
     '^.+\\.ts$': ['ts-jest', tsOpts],
     'gram-ui/dist/.+\\.js$': '<rootDir>/scripts/jest.esm-transformer.cjs',
-    'plugins/crypton/src/wasm/.+\\.js$': '<rootDir>/scripts/jest.esm-transformer.cjs',
+    'plugins/crypton/src/(rust|c)/wasm/.+\\.js$': '<rootDir>/scripts/jest.esm-transformer.cjs',
   },
   transformIgnorePatterns: ['/node_modules/(?!(@ton-ai)/)'],
   moduleNameMapper: {

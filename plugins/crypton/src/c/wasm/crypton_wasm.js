@@ -17,6 +17,7 @@ const ERRORS = {
   16: 'secure entropy source is unavailable',
   17: 'Miller-Rabin round count must be greater than zero',
   18: 'internal bignum arithmetic invariant violated',
+  19: 'output length exceeds 1 MiB limit',
 };
 
 let block = 0;
@@ -78,8 +79,25 @@ async function loadBytes(url) {
 export async function init(input) {
   if ($) return $;
   let source = null;
+  const imports = {
+    env: {
+      js_get_random_values: (ptr, n) => {
+        let off = 0;
+        while (n > 0) {
+          const chunk = Math.min(n, 65536);
+          crypto.getRandomValues(new Uint8Array(memory.buffer, ptr + off, chunk));
+          off += chunk;
+          n -= chunk;
+        }
+      },
+    },
+  };
   if (typeof WebAssembly.Module === 'function' && input instanceof WebAssembly.Module) {
-    throw new TypeError('crypton-wasm: precompiled modules are not supported');
+    const inst = new WebAssembly.Instance(input, imports);
+    memory = inst.exports.memory;
+    $ = inst.exports;
+    block = $.crw_result_ptr();
+    return $;
   }
   if (input && typeof input === 'object' && 'module_or_path' in input) {
     const v = input.module_or_path;
@@ -88,24 +106,13 @@ export async function init(input) {
     } else {
       source = await loadBytes(v);
     }
+  } else if (input instanceof Uint8Array || input instanceof ArrayBuffer) {
+    source = input instanceof ArrayBuffer ? input : input.slice().buffer;
   } else if (typeof input === 'string' || input instanceof URL) {
     source = await loadBytes(input);
   } else {
     source = await loadBytes(new URL('crypton_wasm_bg.wasm', import.meta.url));
   }
-  const imports = {
-    env: {
-      js_get_random_values: (ptr, n) => {
-        const dst = new Uint8Array(memory.buffer, ptr, n);
-        while (n > 0) {
-          const chunk = Math.min(n, 65536);
-          crypto.getRandomValues(dst.subarray(0, chunk));
-          ptr += chunk;
-          n -= chunk;
-        }
-      },
-    },
-  };
   const inst = (await WebAssembly.instantiate(source, imports)).instance;
   memory = inst.exports.memory;
   $ = inst.exports;

@@ -400,7 +400,7 @@ static void test_hkdf_deterministic(void)
 {
     uint8_t ikm[22];
     cr_memset(ikm, 0x0b, 22);
-    uint8_t salt[12], info[10];
+    uint8_t salt[13], info[10];
     kat_hex_bytes("000102030405060708090a0b0c", salt);
     kat_hex_bytes("f0f1f2f3f4f5f6f7f8f9", info);
     crypton_buf prk1, prk2, okm1, okm2;
@@ -408,9 +408,9 @@ static void test_hkdf_deterministic(void)
     crypton_buf_init(&prk2);
     crypton_buf_init(&okm1);
     crypton_buf_init(&okm2);
-    crypton_status st = crypton_hkdf_sha512_extract(salt, 12, ikm, 22, &prk1);
+    crypton_status st = crypton_hkdf_sha512_extract(salt, 13, ikm, 22, &prk1);
     bool ok = st == CRYPTON_OK;
-    st = crypton_hkdf_sha512_extract(salt, 12, ikm, 22, &prk2);
+    st = crypton_hkdf_sha512_extract(salt, 13, ikm, 22, &prk2);
     ok = ok && st == CRYPTON_OK && crypton_ct_eq(prk1.data, prk1.len, prk2.data, prk2.len);
     st = crypton_hkdf_sha512_expand(prk1.data, prk1.len, info, 10, 42, &okm1);
     ok = ok && st == CRYPTON_OK;
@@ -427,12 +427,12 @@ static void test_hkdf_max_length_ok(void)
 {
     uint8_t ikm[22];
     cr_memset(ikm, 0x0b, 22);
-    uint8_t salt[12];
+    uint8_t salt[13];
     kat_hex_bytes("000102030405060708090a0b0c", salt);
     crypton_buf prk, okm;
     crypton_buf_init(&prk);
     crypton_buf_init(&okm);
-    crypton_status st = crypton_hkdf_sha512_extract(salt, 12, ikm, 22, &prk);
+    crypton_status st = crypton_hkdf_sha512_extract(salt, 13, ikm, 22, &prk);
     bool ok = st == CRYPTON_OK;
     st = crypton_hkdf_sha512_expand(prk.data, prk.len, NULL, 0, 255 * 64, &okm);
     ok = ok && st == CRYPTON_OK && okm.len == 255 * 64;
@@ -1516,7 +1516,7 @@ static void test_differential_hmac_sha512_vs_ref(void)
 {
     kat_rng rng;
     rng.s = 0x94D049BB133111EBull;
-    uint8_t kbuf[131], dbuf[300];
+    uint8_t kbuf[200], dbuf[300];
     for (uint32_t acase = 0; acase < 50; acase++) {
         size_t klen = (acase * 5) % 200;
         size_t dlen = (acase * 13) % 300;

@@ -9,6 +9,7 @@ static uint8_t cr_block[12 + CR_DATA_CAP];
 static void cr_store(crypton_status st, const uint8_t *src, size_t len)
 {
     uint32_t flen = (uint32_t)len;
+    if (st == CRYPTON_OK && flen > CR_DATA_CAP) st = CRYPTON_OUTPUT_TOO_LARGE;
     cr_block[0] = (uint8_t)(st & 0xffu);
     cr_block[1] = 0;
     cr_block[2] = 0;
@@ -21,7 +22,7 @@ static void cr_store(crypton_status st, const uint8_t *src, size_t len)
     cr_block[9] = (uint8_t)((CR_DATA_CAP >> 8) & 0xffu);
     cr_block[10] = (uint8_t)((CR_DATA_CAP >> 16) & 0xffu);
     cr_block[11] = (uint8_t)((CR_DATA_CAP >> 24) & 0xffu);
-    if (st == CRYPTON_OK && flen <= CR_DATA_CAP) {
+    if (st == CRYPTON_OK) {
         cr_memcpy(cr_block + 12, src, len);
         return;
     }
