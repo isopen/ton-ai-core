@@ -107,6 +107,7 @@ const config: DurevcodeConfig = {
         typingEnabled: optionalFlag('DUREVCODE_TYPING', true),
         reasoningStream: optionalFlag('DUREVCODE_REASONING_STREAM', true),
         reasoningRepaint: optionalFlag('DUREVCODE_REASONING_REPAINT', true),
+        leadMention: optionalFlag('DUREVCODE_LEAD_MENTION', false),
         newTopics: optionalFlag('DUREVCODE_NEW_TOPICS', true),
         statePath:
             process.env.DUREVCODE_STATE_PATH ||

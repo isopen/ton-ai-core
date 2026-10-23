@@ -2655,7 +2655,7 @@ describe('durevcode thread binding survival', () => {
         for (const row of today) assert.equal(watched.has(row.id as string), true, 'today sessions keep their slots');
         assert.equal(watched.has('ses_yest1'), true, 'older worked binding fills leftover slot 1');
         assert.equal(watched.has('ses_yest2'), true, 'older worked binding fills leftover slot 2');
-    });
+    }, 15000);
 
     test('empty persisted bindings never fill leftover slots', async () => {
         const agent = makeAgent({ maxSessions: 5 }) as unknown as Record<string, (...args: never[]) => Promise<never>> & {

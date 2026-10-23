@@ -163,10 +163,9 @@ const AUTO_CONTINUE_TEXT = 'Continue';
 const AUTO_CONTINUE_MIN_MS = 60000;
 const AUTO_CONTINUE_DEFAULT_MAX = 10;
 const WHIP_ARMED_TTL_MS = 10 * 60 * 1000;
-export const WHIP_STICKER_DEFAULT = 'CAACAgIAAxkBAAEv4sFq1j7P0cKrm_4pwHfaOUJHEx2DWwAC4jQAAjnuWEhsEZKLSyNswj0E';
+export const WHIP_STICKER_DEFAULT = 'CAACAgIAAxkBAAEv9vtq2t-rBc-eZEgtx8QmfnuewtosmwAC4jQAAjnuWEhsEZKLSyNswj0E';
 export const WHIP_EMOJI_DEFAULT = '4985740531326779949';
 const PROMPT_TRANSIENT_BACKOFF_MS = 5000;
-const ANSWER_SILENT = true;
 const AUTO_PICK_WINDOW_MIN = 20;
 const AUTO_PICK_WINDOW_MULT = 5;
 const BOUND_REVIEW_MULT = 3;
@@ -556,6 +555,7 @@ export interface DurevcodeWatchConfig {
     typingEnabled?: boolean;
     reasoningStream?: boolean;
     reasoningRepaint?: boolean;
+    leadMention?: boolean;
     whipSticker?: string;
     whipEmojiId?: string;
     newTopics?: boolean;
@@ -584,6 +584,7 @@ interface ThoughtArchiveEntry {
 interface PromptAttribution {
     replyTo: number | null;
     mention: string;
+    uid?: number;
 }
 
 interface TrackedPrompt {
@@ -689,8 +690,10 @@ interface WatchedSession {
     modeSynced: boolean;
     turnReplyTo: number | null;
     turnMention: string;
+    turnUserId: number;
     laneReplyTo: number | null;
     laneMention: string;
+    laneUserId: number;
 }
 
 interface PermissionReply {
@@ -1481,7 +1484,7 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
         text: string,
         markup?: InlineKeyboardMarkup,
-        opts?: { force?: boolean; replyTo?: number; silent?: boolean },
+        opts?: { force?: boolean; replyTo?: number },
     ): Promise<number> {
         const chatId = this.config.durevcode.chatId;
         if (this.threadsEnabled && state.threadId === null) {
@@ -1510,7 +1513,7 @@ export class DurevcodeAgent extends BaseAgent {
                     text: wellFormed(part),
                     parse_mode: 'HTML',
                     ...(withMarkup && markup ? { reply_markup: markup } : {}),
-                    ...(opts?.silent ? { disable_notification: true } : {}),
+                    disable_notification: true,
                     ...(replyToId !== undefined ? { reply_parameters: { message_id: replyToId } } : {}),
                 });
                 this.goneStrikes.delete(state.session.id);
@@ -1810,8 +1813,10 @@ export class DurevcodeAgent extends BaseAgent {
             lastStepNoticeAt: 0,
             turnReplyTo: null,
             turnMention: '',
+            turnUserId: 0,
             laneReplyTo: null,
             laneMention: '',
+            laneUserId: 0,
         };
         if (existingThreadId !== undefined) {
             state.threadId = this.threadsEnabled ? existingThreadId : null;
@@ -2249,8 +2254,10 @@ export class DurevcodeAgent extends BaseAgent {
         this.promptTracking.delete(sessionId);
         state.turnReplyTo = null;
         state.turnMention = '';
+        state.turnUserId = 0;
         state.laneReplyTo = null;
         state.laneMention = '';
+        state.laneUserId = 0;
         state.confirming = null;
         state.liveTool = null;
         state.pending = [];
@@ -2385,7 +2392,7 @@ export class DurevcodeAgent extends BaseAgent {
     private async deliverFreshPart(telegram: TelegramBotPlugin, state: WatchedSession, part: string, replyTo?: number): Promise<void> {
         const sig = deliverySignature(part);
         if (state.recentDelivered.some((entry) => entry.sig === sig)) return;
-        const sendOpts: { replyTo?: number; silent?: boolean } = { silent: ANSWER_SILENT };
+        const sendOpts: { replyTo?: number } = {};
         if (replyTo !== undefined) sendOpts.replyTo = replyTo;
         await this.deliverMessage(telegram, state, part, undefined, sendOpts);
         this.rememberDelivery(state, sig);
@@ -2492,6 +2499,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (eventTime > matched.at) matched.at = eventTime;
         state.turnReplyTo = matched.attribution.replyTo;
         state.turnMention = matched.attribution.mention;
+        state.turnUserId = matched.attribution.uid ?? 0;
         return true;
     }
 
@@ -2533,6 +2541,7 @@ export class DurevcodeAgent extends BaseAgent {
         this.trackExternalPart(state, event.time);
         state.turnReplyTo = null;
         state.turnMention = '';
+        state.turnUserId = 0;
         return false;
     }
 
@@ -2595,6 +2604,7 @@ export class DurevcodeAgent extends BaseAgent {
         const replyTo = message.reply_to_message?.message_id;
         state.laneReplyTo = typeof message.message_id === 'number' ? message.message_id : null;
         state.laneMention = this.replyMentionOf(message);
+        state.laneUserId = message.from && typeof message.from.id === 'number' ? message.from.id : 0;
         if (await this.dispatchInboxCommand(telegram, opencode, state, text, replyTo)) return;
         if (hasMediaMessage(message)) {
             const before = state.promptQueue.length;
@@ -2770,6 +2780,7 @@ export class DurevcodeAgent extends BaseAgent {
                             chat_id: this.chatId(),
                             message_thread_id: threadId,
                             text: `${icon('fail')} Could not restore the session for this topic, try again.`,
+                            disable_notification: true,
                         });
                     } catch {
                     }
@@ -2806,6 +2817,7 @@ export class DurevcodeAgent extends BaseAgent {
                     chat_id: this.chatId(),
                     message_thread_id: threadId,
                     text: `${icon('fail')} Could not create a session for this topic, try again.`,
+                    disable_notification: true,
                 });
             } catch {
             }
@@ -2826,6 +2838,7 @@ export class DurevcodeAgent extends BaseAgent {
             for (const queuedMessage of batch) {
                 state.laneReplyTo = typeof queuedMessage.message_id === 'number' ? queuedMessage.message_id : null;
                 state.laneMention = this.replyMentionOf(queuedMessage);
+                state.laneUserId = queuedMessage.from && typeof queuedMessage.from.id === 'number' ? queuedMessage.from.id : 0;
                 const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
                 if (hasMediaMessage(queuedMessage)) {
                     await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
@@ -2853,10 +2866,11 @@ export class DurevcodeAgent extends BaseAgent {
             console.warn(`Durevcode prompt queue full, dropping oldest prompt (session=${state.session.id}).`);
         }
         const attribution: PromptAttribution = state.laneReplyTo !== null || state.laneMention !== ''
-            ? { replyTo: state.laneReplyTo, mention: state.laneMention }
+            ? { replyTo: state.laneReplyTo, mention: state.laneMention, uid: state.laneUserId }
             : { replyTo: null, mention: '' };
         state.laneReplyTo = null;
         state.laneMention = '';
+        state.laneUserId = 0;
         const lane = this.promptLane.get(state.session.id);
         if (lane) lane.push(attribution);
         else this.promptLane.set(state.session.id, [attribution]);
@@ -3168,6 +3182,7 @@ export class DurevcodeAgent extends BaseAgent {
                     const attached = this.consumeLaneHead(state);
                     state.turnReplyTo = attached.replyTo;
                     state.turnMention = attached.mention;
+                    state.turnUserId = attached.uid ?? 0;
                     this.trackPrompt(state, head, attached, cliPostedAt);
                     this.resetPromptLane(state);
                     return;
@@ -3194,6 +3209,7 @@ export class DurevcodeAgent extends BaseAgent {
             const attached = this.consumeLaneHead(state);
             state.turnReplyTo = attached.replyTo;
             state.turnMention = attached.mention;
+            state.turnUserId = attached.uid ?? 0;
             this.trackPrompt(state, head, attached, postedAt);
             this.resetPromptLane(state);
             state.confirming =
@@ -3825,6 +3841,7 @@ export class DurevcodeAgent extends BaseAgent {
                 await telegram.sendDocument({
                     chat_id: this.chatId(),
                     ...(threadId !== null && threadId !== undefined ? { message_thread_id: threadId } : {}),
+                    disable_notification: true,
                     document: {
                         filename: `durevcode-thought-${entry ? messageId : live?.session.id ?? 'live'}-${Date.now()}.txt`,
                         source: Buffer.from(fullText, 'utf8'),
@@ -5757,7 +5774,13 @@ export class DurevcodeAgent extends BaseAgent {
             const { text: answer, command: stopCommand } = takeStopCommand(text);
             if (answer) {
                 const lead = this.leadAttribution(flushed);
-                const answerText = lead.mention ? `<b>${escapeHtml(lead.mention)}</b> ${answer}` : answer;
+                let answerText = answer;
+                if (this.config.durevcode.leadMention === true && lead.mention) {
+                    const leadText = lead.uid !== undefined && lead.uid > 0
+                        ? `<a href="tg://user?id=${lead.uid}">${escapeHtml(lead.mention)}</a>`
+                        : `<b>${escapeHtml(lead.mention)}</b>`;
+                    answerText = `${leadText} ${answer}`;
+                }
                 await this.deliverFreshPart(telegram, state, answerText, lead.replyTo ?? undefined);
             }
             if (stopCommand) {
@@ -5873,12 +5896,14 @@ export class DurevcodeAgent extends BaseAgent {
                     message_thread_id: state.threadId ?? undefined,
                     text: '🤨',
                     entities: [{ offset: 0, length: 2, type: 'custom_emoji', custom_emoji_id: emojiId }],
+                    disable_notification: true,
                 });
             } else {
                 await telegram.sendSticker({
                     chat_id: this.chatId(),
                     message_thread_id: state.threadId ?? undefined,
                     sticker,
+                    disable_notification: true,
                 });
             }
         } catch (error) {
