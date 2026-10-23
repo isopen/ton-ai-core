@@ -145,7 +145,8 @@ const PROMPT_LAND_GRACE_MS = 90000;
 const USER_ACTIVE_MS = 300000;
 const FINALIZED_GRACE_MS = 120000;
 const STOP_QUIET_MS = 10000;
-const STOP_DEDUP_MS = 10000;
+const STOP_DEDUP_MS = 30 * 60_000;
+const STEP_FAILURE_NOTICE_DEDUP_MS = 30 * 60_000;
 const STOP_DISPATCH_RECENCY_MS = 4000;
 const STOP_RETIRE_FAIL_RETRY_MS = 2500;
 const CLOSED_WARN_CAP = 64;
@@ -165,8 +166,12 @@ const WHIP_ARMED_TTL_MS = 10 * 60 * 1000;
 export const WHIP_STICKER_DEFAULT = 'CAACAgIAAxkBAAEv4sFq1j7P0cKrm_4pwHfaOUJHEx2DWwAC4jQAAjnuWEhsEZKLSyNswj0E';
 export const WHIP_EMOJI_DEFAULT = '4985740531326779949';
 const PROMPT_TRANSIENT_BACKOFF_MS = 5000;
+const ANSWER_SILENT = true;
 const AUTO_PICK_WINDOW_MIN = 20;
 const AUTO_PICK_WINDOW_MULT = 5;
+const BOUND_REVIEW_MULT = 3;
+const BOUND_VERIFY_TTL_MS = 10 * 60 * 1000;
+const BOUND_VERIFY_CACHE_CAP = 64;
 const EMPTY_SESSION_GRACE_MS = 10 * 60 * 1000;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const CONFIRM_TIMEOUT_MS = 20000;
@@ -190,6 +195,8 @@ const MAX_SEEN_INBOUND = 500;
 const MAX_THOUGHT_ARCHIVES = 12;
 const MAX_SUBMITTED_PROMPTS = 100;
 const SUBMITTED_WINDOW_MS = 120000;
+const PROMPT_TRACK_TTL_MS = 30 * 60_000;
+const PERSISTED_SAVE_COALESCE_MS = 1500;
 
 const FILE_MODIFYING_PERMISSIONS = new Set(['edit']);
 
@@ -217,6 +224,9 @@ const TOPIC_TAG_CAP = 500;
 const TOPIC_PROBE_MS = 5 * 60 * 1000;
 const TOPIC_CLOSED_WARN_MS = 30 * 60 * 1000;
 const TOPIC_GONE_STRIKES = 2;
+const DIRECTORY_NOTICE_MS = 30 * 60 * 1000;
+const EVENT_READ_LIMIT = 500;
+const CONTEXT_LIMIT_RETRY_MS = 5 * 60 * 1000;
 const DOC_MAX_BYTES = 512 * 1024;
 const DOC_MAX_CHARS = 20000;
 const MEDIA_MAX_BYTES = 20 * 1024 * 1024;
@@ -306,7 +316,17 @@ export function isUpstreamServerError(error: unknown): boolean {
     const code = (error as { errorCode?: unknown }).errorCode;
     if (typeof code === 'number' && code >= 500) return true;
     const message = error instanceof Error ? error.message : String(error);
-    return /bad gateway|gateway timeout|service unavailable|internal server error|socket hang up|fetch failed|econnreset/i.test(message);
+    return /bad gateway|gateway timeout|service unavailable|internal server error|socket hang up|fetch failed|econnreset|upstream backoff active/i.test(message);
+}
+
+export function backoffGateError(message: string): Error & { gate?: boolean } {
+    const error: Error & { gate?: boolean } = new Error(message);
+    error.gate = true;
+    return error;
+}
+
+export function isBackoffGateSignal(error: unknown): boolean {
+    return error instanceof Error && (error as { gate?: boolean }).gate === true;
 }
 
 export function isTopicNotModifiedError(error: unknown): boolean {
@@ -482,6 +502,19 @@ export function eventSignature(event: RadarEvent): string {
     }
 }
 
+export interface StoredPendingPart {
+    key: string;
+    event: RadarEvent;
+}
+
+export interface StoredPartialSend {
+    sig: string;
+    firstId: number;
+    delivered: number;
+    total: number;
+    at: number;
+}
+
 export interface PersistedSession {
     threadId: number | null;
     contextMessageId: number | null;
@@ -495,10 +528,22 @@ export interface PersistedSession {
     knownPerms?: string[];
     stopMessageId?: number;
     promptAt?: number;
+    pending?: StoredPendingPart[];
+    partials?: StoredPartialSend[];
+    questMsgs?: Array<{ msgId: number; reqId: string; questions?: string[] }>;
 }
 
 const PERSISTED_TTL_MS = 30 * 24 * 3600 * 1000;
 const PERSISTED_CURSOR_CAP = 200;
+const PENDING_PERSIST_CAP = 100;
+const PENDING_RESTORE_TTL_MS = 30 * 60 * 1000;
+const PARTIALS_PERSIST_CAP = 4;
+const PERSISTED_SIG_CAP_CHARS = 2000;
+const PERSISTED_QUESTION_TEXT_CAP = 200;
+const LIVE_ABANDON_COOLDOWN_MS = 20_000;
+const BOUND_VERIFY_CONCURRENCY = 4;
+const QUESTION_DISARM_RETRY_MS = 2500;
+const QUESTION_DISARM_RETRIES = 4;
 
 export interface DurevcodeWatchConfig {
     chatId: number;
@@ -521,6 +566,7 @@ export interface DurevcodeWatchConfig {
     autoContinueSec?: number;
     autoContinueMax?: number;
     autoFinish?: boolean;
+    deleteOnTopicGone?: boolean;
 }
 
 export interface DurevcodeConfig extends AgentConfig {
@@ -532,9 +578,20 @@ export interface DurevcodeConfig extends AgentConfig {
 interface ThoughtArchiveEntry {
     sessionId: string;
     fullHtml: string;
-    compactHtml: string;
     fullText: string;
-    compact: boolean;
+}
+
+interface PromptAttribution {
+    replyTo: number | null;
+    mention: string;
+}
+
+interface TrackedPrompt {
+    text: string;
+    attribution: PromptAttribution;
+    at: number;
+    consumed?: boolean;
+    pending?: boolean;
 }
 
 interface WatchedSession {
@@ -554,8 +611,8 @@ interface WatchedSession {
     lastResult: ResultSnippet | null;
     lastText: string;
     toolCalls: number;
-    files: string[];
     startedAt: number;
+    baselineAt: number;
     lastEventAt: number;
     lastPromptAt: number;
     finalizedAt: number;
@@ -566,6 +623,7 @@ interface WatchedSession {
     contextLimit: number | null;
     snapshot: ContextSnapshot | null;
     limitChecked: boolean;
+    limitRetryAt: number;
     pending: RadarEvent[];
     pendingKeys: Map<string, number>;
     liveTool: { key: string; messageId: number | null; event: RadarEvent; done: boolean; lastText: string; lastEditAt: number; startedAt: number; failCount: number } | null;
@@ -603,6 +661,7 @@ interface WatchedSession {
     thinkingRateCps: number;
     thinkingRateChars: number;
     thinkingPainting: boolean;
+    thinkingPaintEpoch: number;
     thinkingFolded: boolean;
     serverErrorText: string | null;
     serverErrorAt: number;
@@ -623,9 +682,15 @@ interface WatchedSession {
     lastNudgeAt: number;
     whipArmedAt: number;
     turnComplete: boolean;
+    lastStepErrorAt: number;
+    lastStepNoticeAt: number;
     stoppedByUser: boolean;
     sessionAgent: string;
     modeSynced: boolean;
+    turnReplyTo: number | null;
+    turnMention: string;
+    laneReplyTo: number | null;
+    laneMention: string;
 }
 
 interface PermissionReply {
@@ -677,6 +742,9 @@ export class DurevcodeAgent extends BaseAgent {
     private goneStrikes = new Map<string, number>();
     private topicProbedAt = new Map<string, number>();
     private lastSessionAgents = new Map<string, string>();
+    private boundVerifyCache = new Map<string, { row: SessionRow | null; at: number }>();
+
+    private abandonedTools = new Map<string, number>();
     private pollTimer: NodeJS.Timeout | null = null;
     private typingTimer: NodeJS.Timeout | null = null;
     private typingTickBusy: boolean = false;
@@ -695,23 +763,30 @@ export class DurevcodeAgent extends BaseAgent {
     private inboundChain: Promise<void> = Promise.resolve();
     private eventUnsub: (() => void) | null = null;
     private sessionTicks = new Set<string>();
+    private promptLane = new Map<string, PromptAttribution[]>();
+    private promptTracking = new Map<string, TrackedPrompt[]>();
+    private echoDeliveries = new Map<string, Array<{ text: string; time: number }>>();
+    private eventAttribution = new WeakMap<object, PromptAttribution>();
     private permReplies = new Map<number, PermissionReply>();
     private questReplies = new Map<number, QuestionReply>();
     private questPicks = new Map<string, QuestionPick>();
-    private questSeq: number = 0;
+    private questSeq: number = Date.now() % 1_000_000_000;
     private creatingThreads = new Map<number, Message[]>();
     private threadRetryAt = new Map<string, number>();
     private threadNoticeAt = 0;
+    private directoryNoticeAt = 0;
     private seenInbound = new Set<string>();
     private seenCallbacks = new Set<string>();
     private thinkingRenderTimers = new Map<string, NodeJS.Timeout>();
+    private thinkingEpoch = new Map<string, number>();
     private thoughtArchives = new Map<number, ThoughtArchiveEntry>();
     private thoughtPaintRetryTimers = new Map<string, NodeJS.Timeout>();
-    private thoughtFoldEditAt = 0;
     private thoughtDocBusy = new Set<number>();
     private resolvingQuestions = new Set<string>();
     private submittedPrompts: Array<{ session: string; text: string; at: number }> = [];
     private partialSends = new Map<string, { firstId: number; delivered: number; total: number; at: number }>();
+    private lastPersistedSave = 0;
+    private persistedSaveTimer: NodeJS.Timeout | null = null;
 
     private isSelfSubmitted(sessionId: string, text: string, now: number): boolean {
         const fresh = this.submittedPrompts.filter((entry) => now - entry.at < SUBMITTED_WINDOW_MS);
@@ -797,6 +872,11 @@ export class DurevcodeAgent extends BaseAgent {
 
     protected async onStop(): Promise<void> {
         console.log('Stopping durevcode agent...');
+        if (this.persistedSaveTimer !== null) {
+            clearTimeout(this.persistedSaveTimer);
+            this.persistedSaveTimer = null;
+        }
+        this.savePersisted();
         if (this.typingTimer) {
             clearInterval(this.typingTimer);
             this.typingTimer = null;
@@ -940,6 +1020,54 @@ export class DurevcodeAgent extends BaseAgent {
                     );
                     if (valid.length > 0) sigs = Object.fromEntries(valid.slice(-PERSISTED_CURSOR_CAP));
                 }
+                const rawPending = record.pending;
+                let pending: StoredPendingPart[] | undefined;
+                if (Array.isArray(rawPending)) {
+                    const valid: StoredPendingPart[] = [];
+                    for (const pair of (rawPending as unknown[]).slice(-PENDING_PERSIST_CAP)) {
+                        if (!pair || typeof pair !== 'object') continue;
+                        const rec = pair as Record<string, unknown>;
+                        if (typeof rec.key !== 'string' || rec.key.length === 0) continue;
+                        const event = rec.event as RadarEvent | undefined;
+                        if (!event || typeof event !== 'object' || typeof event.kind !== 'string') continue;
+                        valid.push({ key: rec.key, event });
+                    }
+                    if (valid.length > 0) pending = valid;
+                }
+                const rawPartials = record.partials;
+                let partials: StoredPartialSend[] | undefined;
+                if (Array.isArray(rawPartials)) {
+                    const validPartials: StoredPartialSend[] = [];
+                    for (const entry of (rawPartials as unknown[]).slice(-PARTIALS_PERSIST_CAP)) {
+                        if (!entry || typeof entry !== 'object') continue;
+                        const rec = entry as Record<string, unknown>;
+                        if (typeof rec.sig !== 'string' || rec.sig.length === 0) continue;
+                        if (
+                            typeof rec.firstId !== 'number' || !Number.isFinite(rec.firstId) ||
+                            typeof rec.delivered !== 'number' || !Number.isFinite(rec.delivered) ||
+                            typeof rec.total !== 'number' || !Number.isFinite(rec.total) ||
+                            typeof rec.at !== 'number' || !Number.isFinite(rec.at)
+                        ) continue;
+                        validPartials.push({ sig: rec.sig, firstId: rec.firstId, delivered: rec.delivered, total: rec.total, at: rec.at });
+                    }
+                    if (validPartials.length > 0) partials = validPartials;
+                }
+                const rawQuestMsgs = record.questMsgs;
+                let questRefs: Array<{ msgId: number; reqId: string; questions?: string[] }> | undefined;
+                if (Array.isArray(rawQuestMsgs)) {
+                    const validQuests: Array<{ msgId: number; reqId: string; questions?: string[] }> = [];
+                    for (const entry of (rawQuestMsgs as unknown[]).slice(-8)) {
+                        if (!entry || typeof entry !== 'object') continue;
+                        const rec = entry as Record<string, unknown>;
+                        if (typeof rec.msgId !== 'number' || !Number.isFinite(rec.msgId) || rec.msgId <= 0) continue;
+                        if (typeof rec.reqId !== 'string' || rec.reqId.length === 0) continue;
+                        const questions = Array.isArray(rec.questions)
+                            ? (rec.questions as unknown[]).slice(0, 8).filter((q): q is string => typeof q === 'string').map((q) => q.slice(0, PERSISTED_QUESTION_TEXT_CAP))
+                            : undefined;
+                        validQuests.push({ msgId: rec.msgId, reqId: rec.reqId, ...(questions && questions.length > 0 ? { questions } : {}) });
+                    }
+                    if (validQuests.length > 0) questRefs = validQuests;
+                }
                 this.persisted[id] = {
                     threadId,
                     contextMessageId,
@@ -965,6 +1093,9 @@ export class DurevcodeAgent extends BaseAgent {
                     ...(typeof record.promptAt === 'number' && Number.isFinite(record.promptAt) && record.promptAt > 0
                         ? { promptAt: record.promptAt }
                         : {}),
+                    ...(pending ? { pending } : {}),
+                    ...(partials ? { partials } : {}),
+                    ...(questRefs ? { questMsgs: questRefs } : {}),
                 };
                 if (threadId !== null && !this.tombstonedSessions.has(id)) {
                     this.topicTags.set(sessionTagOf(id), { sessionId: id, threadId, at: typeof record.lastSeen === 'number' ? record.lastSeen : 0 });
@@ -1023,7 +1154,31 @@ export class DurevcodeAgent extends BaseAgent {
 
     private persistedFromState(state: WatchedSession): PersistedSession {
         const cursor = [...state.knownParts.entries()].slice(-PERSISTED_CURSOR_CAP);
-        const sigCursor = [...state.knownEventSig.entries()].slice(-PERSISTED_CURSOR_CAP);
+        const sigCursor = [...state.knownEventSig.entries()]
+            .slice(-PERSISTED_CURSOR_CAP)
+            .map((pair) => [pair[0], pair[1].slice(0, PERSISTED_SIG_CAP_CHARS)] as [string, string]);
+        const idxToKey = new Map<number, string>();
+        for (const [key, idx] of state.pendingKeys ?? new Map<string, number>()) idxToKey.set(idx, key);
+        const pendingPairs: StoredPendingPart[] = [];
+        (state.pending ?? []).forEach((event, idx) => {
+            const key = idxToKey.get(idx);
+            if (key) pendingPairs.push({ key, event });
+        });
+        const partials: StoredPartialSend[] = [...this.partialSends.entries()]
+            .filter(([sig]) => sig.startsWith(`${state.threadId ?? 'dm'}:`))
+            .map(([sig, entry]) => ({ sig, ...entry }))
+            .slice(-PARTIALS_PERSIST_CAP);
+        const questRefs: Array<{ msgId: number; reqId: string; questions?: string[] }> = [];
+        for (const [msgId, ref] of this.questReplies) {
+            if (ref.sessionId === state.session.id) {
+                const questions = ref.questions
+                    .slice(0, 8)
+                    .map((item) => (typeof item.question === 'string' ? item.question : ''))
+                    .filter((question) => question.length > 0)
+                    .map((question) => question.slice(0, PERSISTED_QUESTION_TEXT_CAP));
+                questRefs.push({ msgId, reqId: ref.reqId, ...(questions.length > 0 ? { questions } : {}) });
+            }
+        }
         return {
             threadId: state.threadId ?? this.persisted[state.session.id]?.threadId ?? null,
             contextMessageId: state.contextMessageId,
@@ -1037,10 +1192,18 @@ export class DurevcodeAgent extends BaseAgent {
             ...(state.knownPerms.length > 0 ? { knownPerms: state.knownPerms } : {}),
             ...(state.stopMessageId !== null ? { stopMessageId: state.stopMessageId } : {}),
             ...(state.lastPromptAt > 0 ? { promptAt: state.lastPromptAt } : {}),
+            ...(pendingPairs.length > 0 ? { pending: pendingPairs.slice(-PENDING_PERSIST_CAP) } : {}),
+            ...(partials.length > 0 ? { partials } : {}),
+            ...(questRefs.length > 0 ? { questMsgs: questRefs.slice(-8) } : {}),
         };
     }
 
     private savePersisted(): void {
+        this.lastPersistedSave = Date.now();
+        if (this.persistedSaveTimer !== null) {
+            clearTimeout(this.persistedSaveTimer);
+            this.persistedSaveTimer = null;
+        }
         try {
             const cutoff = Date.now() - PERSISTED_TTL_MS;
             const sessions: Record<string, PersistedSession> = {};
@@ -1073,6 +1236,24 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
+    private savePersistedCoalesced(): void {
+        if (this.persistedSaveTimer !== null) return;
+        if (Date.now() - this.lastPersistedSave >= PERSISTED_SAVE_COALESCE_MS) {
+            this.savePersisted();
+            return;
+        }
+        const timer = setTimeout(() => {
+            this.persistedSaveTimer = null;
+            this.savePersisted();
+        }, PERSISTED_SAVE_COALESCE_MS);
+        this.persistedSaveTimer = timer;
+        timer.unref();
+    }
+
+    private flushCoalescedSave(): void {
+        this.savePersisted();
+    }
+
     private explicitSessionIds(): string[] {
         const explicit = [...(this.config.durevcode.sessionIds ?? [])];
         if (this.config.durevcode.sessionId && !explicit.includes(this.config.durevcode.sessionId)) {
@@ -1094,7 +1275,76 @@ export class DurevcodeAgent extends BaseAgent {
         this.reapTombstones(latest.map((entry) => entry.id));
         const available = latest.filter((entry) => !this.tombstonedSessions.has(entry.id));
         for (const entry of available) this.lastSessionAgents.set(entry.id, entry.agent ?? '');
-        return rankSessionIds(available, this.config.durevcode.maxSessions);
+        const fresh = rankSessionIds(available, this.config.durevcode.maxSessions);
+        const bound = await this.boundSessionIds(opencode, fresh);
+        return [...fresh, ...bound].slice(0, this.config.durevcode.maxSessions);
+    }
+
+    private async boundSessionIds(opencode: Pick<OpencodePlugin, 'getSession'>, fresh: string[]): Promise<string[]> {
+        const max = this.config.durevcode.maxSessions;
+        if (max <= 0) return [];
+        const freshSet = new Set(fresh);
+        const watchedClaims = new Set<number>();
+        for (const live of this.watched.values()) {
+            if (live.threadId !== null) watchedClaims.add(live.threadId);
+        }
+        const candidates = Object.entries(this.persisted)
+            .filter(([id, entry]) => entry.threadId !== null && !freshSet.has(id) && !this.tombstonedSessions.has(id))
+            .filter(([, entry]) => typeof entry.threadId === 'number' && !watchedClaims.has(entry.threadId))
+            .sort((a, b) => b[1].lastSeen - a[1].lastSeen)
+            .slice(0, Math.max(1, max * BOUND_REVIEW_MULT))
+            .map(([id]) => id);
+        if (candidates.length === 0) return [];
+        const rows: Array<SessionRow | null> = [];
+        for (let i = 0; i < candidates.length; i += BOUND_VERIFY_CONCURRENCY) {
+            rows.push(...(await Promise.all(candidates.slice(i, i + BOUND_VERIFY_CONCURRENCY).map((id) => this.verifiedSessionRow(opencode, id)))));
+        }
+        const claimedThreads = new Set(watchedClaims);
+        const active: Array<{ id: string; updated: number }> = [];
+        for (let i = 0; i < candidates.length; i += 1) {
+            const entry = this.persisted[candidates[i]];
+            const row = rows[i];
+            if (!row || !entry) continue;
+            if (entry.threadId === null || claimedThreads.has(entry.threadId)) continue;
+            this.lastSessionAgents.set(candidates[i], row.agent ?? '');
+            if (!hasSessionWork(row)) continue;
+            if (row.time_updated > entry.lastSeen) {
+                claimedThreads.add(entry.threadId);
+                active.push({ id: candidates[i], updated: row.time_updated });
+            }
+        }
+        active.sort((a, b) => b.updated - a.updated);
+        const activeIds = active.map((entry) => entry.id);
+        const activeSet = new Set(activeIds);
+        const resting: string[] = [];
+        for (let i = 0; i < candidates.length && activeIds.length + resting.length < max; i += 1) {
+            const id = candidates[i];
+            if (activeSet.has(id)) continue;
+            const entry = this.persisted[id];
+            const row = rows[i];
+            if (!row || !entry) continue;
+            if (entry.threadId === null || claimedThreads.has(entry.threadId)) continue;
+            if (!hasSessionWork(row)) continue;
+            claimedThreads.add(entry.threadId);
+            resting.push(id);
+        }
+        return [...activeIds, ...resting];
+    }
+
+    private async verifiedSessionRow(opencode: Pick<OpencodePlugin, 'getSession'>, id: string): Promise<SessionRow | null> {
+        const cached = this.boundVerifyCache.get(id);
+        const now = Date.now();
+        if (cached && now - cached.at < BOUND_VERIFY_TTL_MS) return cached.row;
+        let row: SessionRow | null = null;
+        try {
+            row = await opencode.getSession(id);
+        } catch (error) {
+            console.debug('Durevcode bound session check failed:', errorText(error));
+            return null;
+        }
+        this.boundVerifyCache.set(id, { row, at: now });
+        this.evictOldestEntries(this.boundVerifyCache, BOUND_VERIFY_CACHE_CAP);
+        return row;
     }
 
     private markTombstoned(sessionId: string): void {
@@ -1231,17 +1481,17 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
         text: string,
         markup?: InlineKeyboardMarkup,
-        opts?: { force?: boolean },
+        opts?: { force?: boolean; replyTo?: number; silent?: boolean },
     ): Promise<number> {
         const chatId = this.config.durevcode.chatId;
         if (this.threadsEnabled && state.threadId === null) {
             throw new Error('Durevcode topic missing: refusing to post into General');
         }
         if (!opts?.force && Date.now() < this.rateLimitedUntil) {
-            throw new Error('Too Many Requests: durevcode backoff active');
+            throw backoffGateError('Too Many Requests: durevcode backoff active');
         }
         if (Date.now() < this.upstreamBackoffUntil) {
-            throw new Error('Telegram upstream backoff active');
+            throw backoffGateError('Telegram upstream backoff active');
         }
         const parts = splitTelegramHtml(text);
         const sig = `${state.threadId ?? 'dm'}:${deliverySignature(text)}`;
@@ -1252,7 +1502,7 @@ export class DurevcodeAgent extends BaseAgent {
         const resumable = prior !== undefined && prior.total === parts.length && prior.delivered > 0;
         let firstId: number | null = resumable ? prior.firstId : null;
         const start = resumable ? Math.min(prior.delivered, parts.length) : 0;
-        const sendOne = async (part: string, withMarkup: boolean): Promise<number> => {
+        const sendOne = async (part: string, withMarkup: boolean, replyToId?: number): Promise<number> => {
             try {
                 const message = await telegram.sendMessage({
                     chat_id: chatId,
@@ -1260,6 +1510,8 @@ export class DurevcodeAgent extends BaseAgent {
                     text: wellFormed(part),
                     parse_mode: 'HTML',
                     ...(withMarkup && markup ? { reply_markup: markup } : {}),
+                    ...(opts?.silent ? { disable_notification: true } : {}),
+                    ...(replyToId !== undefined ? { reply_parameters: { message_id: replyToId } } : {}),
                 });
                 this.goneStrikes.delete(state.session.id);
                 return message.message_id;
@@ -1291,16 +1543,39 @@ export class DurevcodeAgent extends BaseAgent {
         };
         for (let i = start; i < parts.length; i += 1) {
             if (!opts?.force && Date.now() < this.rateLimitedUntil) {
-                throw new Error('Too Many Requests: durevcode backoff active');
+                throw backoffGateError('Too Many Requests: durevcode backoff active');
             }
-            const id = await sendOne(parts[i], i === 0);
+            const replyOnly = opts?.replyTo !== undefined && i === start && !resumable;
+            const id = await sendOne(parts[i], i === 0, replyOnly ? opts.replyTo : undefined);
             if (i === 0) firstId = id;
             if (i + 1 < parts.length && firstId !== null) {
                 this.partialSends.set(sig, { firstId, delivered: i + 1, total: parts.length, at: Date.now() });
+                this.persistPartialSend(state, sig);
             }
         }
-        this.partialSends.delete(sig);
+        this.forgetPartialSend(state, sig);
         return firstId!;
+    }
+
+    private persistPartialSend(state: WatchedSession, sig: string): void {
+        const progress = this.partialSends.get(sig);
+        if (!progress) return;
+        const entry = this.persisted[state.session.id];
+        if (!entry) return;
+        const list = (entry.partials ?? []).filter((p) => p.sig !== sig);
+        list.push({ sig, ...progress });
+        entry.partials = list.slice(-PARTIALS_PERSIST_CAP);
+        this.savePersisted();
+    }
+
+    private forgetPartialSend(state: WatchedSession, sig: string): void {
+        this.partialSends.delete(sig);
+        const entry = this.persisted[state.session.id];
+        if (!entry?.partials || !entry.partials.some((p) => p.sig === sig)) return;
+        const rest = entry.partials.filter((p) => p.sig !== sig);
+        if (rest.length > 0) entry.partials = rest;
+        else delete entry.partials;
+        this.savePersisted();
     }
 
     private renderContextText(state: WatchedSession): string {
@@ -1366,27 +1641,34 @@ export class DurevcodeAgent extends BaseAgent {
         timer.unref();
     }
 
-    private async sendFreshPin(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+    private async sendFreshPin(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {
         if (this.threadsEnabled && state.threadId === null) {
             console.debug(
                 `Durevcode context card deferred, no topic yet (session=${state.session.id} thread=${state.threadId}).`,
             );
-            return;
+            return false;
         }
-        if (state.pinSending) return;
+        if (state.pinSending) return false;
         state.pinSending = true;
         try {
             const pinText = this.renderContextText(state);
-            state.contextMessageId = await this.deliverMessage(telegram, state, pinText);
+            const want = this.wantStopButton(state);
+            state.contextMessageId = await this.deliverMessage(
+                telegram,
+                state,
+                pinText,
+                want ? this.stopMarkup(state) : undefined,
+            );
             state.lastContextRendered = pinText;
             state.lastContextEditAt = Date.now();
             state.pinnedThreadId = state.threadId;
             state.consecutiveFailures = 0;
-            state.stopButtonOn = false;
+            state.stopButtonOn = want;
             await this.discardStopControl(telegram, state);
             this.savePersisted();
             await this.pinContextMessage(telegram, state);
             await this.syncStopKeyboard(telegram, state);
+            return true;
         } finally {
             state.pinSending = false;
         }
@@ -1450,8 +1732,8 @@ export class DurevcodeAgent extends BaseAgent {
             lastResult: null,
             lastText: '',
             toolCalls: 0,
-            files: [],
             startedAt: Date.now(),
+            baselineAt: Math.max(session.time_updated, session.time_created),
             lastEventAt: 0,
             lastPromptAt: stored?.promptAt ?? 0,
             finalizedAt: 0,
@@ -1462,6 +1744,7 @@ export class DurevcodeAgent extends BaseAgent {
             contextLimit: null,
             snapshot: null,
             limitChecked: false,
+            limitRetryAt: 0,
             pending: [],
             pendingKeys: new Map(),
             liveTool: null,
@@ -1499,6 +1782,7 @@ export class DurevcodeAgent extends BaseAgent {
             thinkingRateCps: THINKING_TYPE_SPEED_CPS,
             thinkingRateChars: 0,
             thinkingPainting: false,
+            thinkingPaintEpoch: 0,
             thinkingFolded: true,
             serverErrorText: null,
             serverErrorAt: 0,
@@ -1522,6 +1806,12 @@ export class DurevcodeAgent extends BaseAgent {
             stoppedByUser: false,
             sessionAgent: '',
             modeSynced: false,
+            lastStepErrorAt: 0,
+            lastStepNoticeAt: 0,
+            turnReplyTo: null,
+            turnMention: '',
+            laneReplyTo: null,
+            laneMention: '',
         };
         if (existingThreadId !== undefined) {
             state.threadId = this.threadsEnabled ? existingThreadId : null;
@@ -1537,6 +1827,40 @@ export class DurevcodeAgent extends BaseAgent {
             for (const [key, sig] of Object.entries(storedSigs)) state.knownEventSig.set(key, sig);
         }
         state.knownPerms = [...new Set(stored?.knownPerms ?? [])].slice(-PERSISTED_CURSOR_CAP);
+        const storedPending = stored?.pending;
+        if (Array.isArray(storedPending) && Date.now() - (stored?.lastSeen ?? 0) < PENDING_RESTORE_TTL_MS) {
+            for (const pair of storedPending) {
+                const event = pair?.event;
+                if (typeof pair?.key !== 'string' || pair.key.length === 0) continue;
+                if (!event || typeof event.kind !== 'string') continue;
+                if (state.pendingKeys.has(pair.key)) continue;
+                state.pendingKeys.set(pair.key, state.pending.length);
+                state.pending.push(event);
+                if (!state.knownParts.has(pair.key)) {
+                    state.knownParts.set(pair.key, typeof event.time === 'number' && event.time > 0 ? event.time : Date.now());
+                }
+            }
+        }
+        const storedPartials = stored?.partials;
+        if (Array.isArray(storedPartials)) {
+            for (const partial of storedPartials) {
+                if (typeof partial?.sig !== 'string' || partial.sig.length === 0) continue;
+                if (Date.now() - partial.at >= DELIVERY_DEDUP_MS) continue;
+                this.partialSends.set(partial.sig, { firstId: partial.firstId, delivered: partial.delivered, total: partial.total, at: partial.at });
+            }
+        }
+        const storedQuestMsgs = stored?.questMsgs;
+        if (Array.isArray(storedQuestMsgs)) {
+            for (const refRecord of storedQuestMsgs) {
+                if (typeof refRecord?.msgId !== 'number' || refRecord.msgId <= 0) continue;
+                if (typeof refRecord?.reqId !== 'string' || refRecord.reqId.length === 0) continue;
+                const savedStrings = Array.isArray(refRecord?.questions)
+                    ? refRecord.questions.slice(0, 8).filter((q): q is string => typeof q === 'string').map((q) => q.slice(0, PERSISTED_QUESTION_TEXT_CAP))
+                    : [];
+                const questions: QuestionRequest['questions'] = savedStrings.map((question) => ({ question, options: [], multiple: false }));
+                this.questReplies.set(refRecord.msgId, { sessionId: session.id, reqId: refRecord.reqId, questions });
+            }
+        }
         state.needsTodoBaseline = state.knownParts.size > 0;
         await this.applyGatedPermissions(session.id);
         if (state.threadId !== null) {
@@ -1567,18 +1891,22 @@ export class DurevcodeAgent extends BaseAgent {
             } else {
                 const reusedPin = state.contextMessageId;
                 if (reusedPin !== null) {
+                    const want = this.wantStopButton(state);
                     try {
                         await telegram.editMessageReplyMarkup({
                             chat_id: this.chatId(),
                             message_id: reusedPin,
-                            reply_markup: EMPTY_INLINE_MARKUP,
+                            reply_markup: want ? this.stopMarkup(state) : EMPTY_INLINE_MARKUP,
                         });
-                        state.stopButtonOn = false;
+                        state.stopButtonOn = want;
                     } catch (error) {
-                        if (!isMessageNotModifiedError(error) && !isMessageGoneError(error)) {
-                            console.debug('Durevcode stop button reset failed:', errorText(error));
+                        if (isMessageNotModifiedError(error)) {
+                            state.stopButtonOn = want;
                         } else {
                             state.stopButtonOn = false;
+                            if (!isMessageGoneError(error)) {
+                                console.debug('Durevcode stop button reset failed:', errorText(error));
+                            }
                         }
                     }
                 }
@@ -1647,9 +1975,21 @@ export class DurevcodeAgent extends BaseAgent {
         }
         if (ids.length === 0 && this.watched.size === 0) {
             console.debug(`Durevcode: no sessions yet for directory: ${this.config.durevcode.directory}`);
+            if (Date.now() - this.directoryNoticeAt >= DIRECTORY_NOTICE_MS) {
+                this.directoryNoticeAt = Date.now();
+                console.warn(
+                    `Durevcode: 0 opencode sessions for directory "${this.config.durevcode.directory}". ` +
+                        `If your sessions live elsewhere, set DUREVCODE_DIR (defaults to process.cwd()).`,
+                );
+            }
         }
         await this.pruneDeadBindings(opencode, new Set(ids));
+        const boundSnapshot = new Set(ids.filter((id) => {
+            const entry = this.persisted[id];
+            return entry !== undefined && entry.threadId !== null;
+        }));
         const seen = new Set<string>();
+        let attachedThisPass = 0;
         for (const id of ids) {
             seen.add(id);
             if (this.watched.has(id)) continue;
@@ -1662,9 +2002,18 @@ export class DurevcodeAgent extends BaseAgent {
                 continue;
             }
             if (!session) continue;
+            if (boundSnapshot.has(id)) {
+                const pre = this.persisted[id];
+                if (!pre || pre.threadId === null) {
+                    console.debug(`Durevcode attach skipped for session ${id}: its topic binding was dropped during this pass.`);
+                    continue;
+                }
+            }
+            if (attachedThisPass > 0) await this.boundaryGap(900, 400);
             try {
                 const state = await this.attachSession(telegram, session);
                 this.watched.set(id, state);
+                attachedThisPass += 1;
                 if (state.threadId !== null) {
                     this.resolveThreadRival(state);
                     this.prunePersistedThreadRivals(id, state.threadId);
@@ -1676,6 +2025,10 @@ export class DurevcodeAgent extends BaseAgent {
                         `Durevcode attach stopped for session ${id}: its topic was deleted, ` +
                             `the session was dropped on purpose (not an error).`,
                     );
+                    continue;
+                }
+                if (isThreadGoneError(error) || isThreadClosedError(error)) {
+                    console.debug(`Durevcode attach failed for session ${id} (topic gone or closed): ${errorText(error)}`);
                     continue;
                 }
                 console.error(`Durevcode attach failed for session ${id}:`, error);
@@ -1772,7 +2125,10 @@ export class DurevcodeAgent extends BaseAgent {
                 break;
             }
             case 'step':
-                if (event.finish.trim().toLowerCase() === 'stop') state.turnComplete = true;
+                if (event.finish.trim().toLowerCase() === 'stop') {
+                    state.turnComplete = true;
+                    state.lastStepErrorAt = 0;
+                }
                 break;
             case 'reasoning':
                 state.turnComplete = false;
@@ -1781,11 +2137,7 @@ export class DurevcodeAgent extends BaseAgent {
                 state.turnComplete = false;
 
                 state.stoppedByUser = false;
-                break;
-            case 'files':
-                for (const file of event.files) {
-                    if (!state.files.includes(file)) state.files.push(file);
-                }
+                state.lastStepErrorAt = 0;
                 break;
         }
     }
@@ -1821,16 +2173,20 @@ export class DurevcodeAgent extends BaseAgent {
             clearTimeout(renderTimer);
             this.thinkingRenderTimers.delete(sessionId);
         }
-        for (const key of [`s${sessionId}`, `p${sessionId}`]) {
-            const retryTimer = this.thoughtPaintRetryTimers.get(key);
-            if (retryTimer) {
-                clearTimeout(retryTimer);
-                this.thoughtPaintRetryTimers.delete(key);
-            }
+        const paintRetry = this.thoughtPaintRetryTimers.get(`p${sessionId}`);
+        if (paintRetry) {
+            clearTimeout(paintRetry);
+            this.thoughtPaintRetryTimers.delete(`p${sessionId}`);
         }
         this.lastSessionAgents.delete(sessionId);
         this.topicProbedAt.delete(sessionId);
+        this.promptLane.delete(sessionId);
+        this.promptTracking.delete(sessionId);
         this.threadRetryAt.delete(sessionId);
+        this.thinkingEpoch.delete(sessionId);
+        for (const token of [...this.abandonedTools.keys()]) {
+            if (token.startsWith(`${sessionId}|`)) this.abandonedTools.delete(token);
+        }
         this.goneStrikes.delete(sessionId);
         this.deadStrikes.delete(sessionId);
         this.whipDebugAt.delete(sessionId);
@@ -1840,13 +2196,14 @@ export class DurevcodeAgent extends BaseAgent {
         this.dropSessionQuestionRefs(sessionId);
     }
 
-    private async dropSessionEverywhere(state: WatchedSession): Promise<string> {
+    private async dropSessionEverywhere(state: WatchedSession, deleteRemote: boolean): Promise<string> {
         const sessionId = state.session.id;
-        const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
         this.watched.delete(sessionId);
         delete this.persisted[sessionId];
         this.dropSessionRefs(sessionId);
         this.markTombstoned(sessionId);
+        if (!deleteRemote) return 'kept';
+        const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
         if (typeof opencode?.deleteSession !== 'function') {
             return 'no-deleteSession';
         }
@@ -1888,12 +2245,18 @@ export class DurevcodeAgent extends BaseAgent {
         state.pinnedThreadId = null;
         state.consecutiveFailures = 0;
         state.promptQueue = [];
+        this.promptLane.delete(sessionId);
+        this.promptTracking.delete(sessionId);
+        state.turnReplyTo = null;
+        state.turnMention = '';
+        state.laneReplyTo = null;
+        state.laneMention = '';
         state.confirming = null;
         state.liveTool = null;
         state.pending = [];
         state.pendingKeys.clear();
         state.pendingTodos = false;
-        const outcome = await this.dropSessionEverywhere(state);
+        const outcome = await this.dropSessionEverywhere(state, this.config.durevcode.deleteOnTopicGone === true);
         if (threadId !== null) {
             this.closedWarnedAt.delete(threadId);
             for (const [tag, entry] of [...this.topicTags]) {
@@ -1911,7 +2274,9 @@ export class DurevcodeAgent extends BaseAgent {
         this.savePersisted();
         console.warn(
             `Durevcode topic gone (chat=${this.config.durevcode.chatId} thread=${threadId} session=${sessionId}): ` +
-                `opencode session ${outcome}${outcome === 'failed' ? '; binding and topic link kept for reuse' : ''}. ` +
+                `opencode session ${outcome}` +
+                `${outcome === 'failed' ? '; binding and topic link kept for reuse' : ''}` +
+                `${outcome === 'kept' ? '; data kept on the opencode server (set DUREVCODE_DELETE_ON_TOPIC_GONE=1 to enable deletion)' : ''}. ` +
                 `No notice was sent because the topic is gone and posting into General is not allowed. ` +
                 `Write in a fresh topic to start a new session.`,
         );
@@ -1961,12 +2326,16 @@ export class DurevcodeAgent extends BaseAgent {
                 ? this.delayAfterRateLimit(getRetryAfterSec(error) ?? 5, 300)
                 : this.quietRetryDelay(2400, 400);
             if (isRateLimitError(error)) this.governor.note429('topic-send', getRetryAfterSec(error) ?? 5);
-            const timer = setTimeout(() => void this.safeReply(telegram, state, text, 1), retryMs);
+            const timer = setTimeout(() => {
+                if (this.watched.get(state.session.id) !== state) return;
+                void this.safeReply(telegram, state, text, 1);
+            }, retryMs);
             timer.unref?.();
         }
     }
 
     private absorbRateLimit(scope: string, error: unknown, label: string, sessionId: string): number {
+        if (isBackoffGateSignal(error)) return 0;
         const waitSec = getRetryAfterSec(error) ?? 10;
         this.rateLimitedUntil = Math.max(this.rateLimitedUntil, Date.now() + waitSec * 1000 + 1000);
         this.governor.note429(scope, waitSec);
@@ -2013,10 +2382,12 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
-    private async deliverFreshPart(telegram: TelegramBotPlugin, state: WatchedSession, part: string): Promise<void> {
+    private async deliverFreshPart(telegram: TelegramBotPlugin, state: WatchedSession, part: string, replyTo?: number): Promise<void> {
         const sig = deliverySignature(part);
         if (state.recentDelivered.some((entry) => entry.sig === sig)) return;
-        await this.deliverMessage(telegram, state, part);
+        const sendOpts: { replyTo?: number; silent?: boolean } = { silent: ANSWER_SILENT };
+        if (replyTo !== undefined) sendOpts.replyTo = replyTo;
+        await this.deliverMessage(telegram, state, part, undefined, sendOpts);
         this.rememberDelivery(state, sig);
     }
 
@@ -2081,6 +2452,105 @@ export class DurevcodeAgent extends BaseAgent {
         state.thinkingTypeMs = Math.min(THINKING_TYPE_PACE_MAX_MS, Math.max(THINKING_TYPE_PACE_MS, Math.round(state.thinkingTypeMs * 1.3)));
     }
 
+    private consumeLaneHead(state: WatchedSession): PromptAttribution {
+        const lane = this.promptLane.get(state.session.id);
+        const head = lane?.shift();
+        if (lane && lane.length === 0) this.promptLane.delete(state.session.id);
+        return head ?? { replyTo: null, mention: '' };
+    }
+
+    private trackPrompt(state: WatchedSession, text: string, attribution: PromptAttribution, at = Date.now()): void {
+        const now = Date.now();
+        let pending = true;
+        const deliveries = this.echoDeliveries.get(state.session.id);
+        if (deliveries) {
+            for (let i = deliveries.length - 1; i >= 0; i -= 1) {
+                const delivery = deliveries[i];
+                if (delivery.text !== text || delivery.time < at - 2000) continue;
+                at = delivery.time;
+                pending = false;
+                deliveries.splice(i, 1);
+                if (deliveries.length === 0) this.echoDeliveries.delete(state.session.id);
+                break;
+            }
+        }
+        const tracked = (this.promptTracking.get(state.session.id) ?? []).filter(
+            (entry) => now - entry.at < PROMPT_TRACK_TTL_MS,
+        );
+        tracked.push({ text, attribution, at, pending });
+        this.promptTracking.set(state.session.id, tracked);
+    }
+
+    private acceptEchoAttribution(state: WatchedSession, text: string, eventTime = Date.now()): boolean {
+        const tracked = this.promptTracking.get(state.session.id);
+        if (!tracked || tracked.length === 0) return false;
+        const probe = text.slice(0, 200);
+        const matched = tracked.find((entry) => !entry.consumed && (entry.text === text || entry.text.slice(0, 200) === probe));
+        if (!matched) return false;
+        matched.consumed = true;
+        matched.pending = false;
+        if (eventTime > matched.at) matched.at = eventTime;
+        state.turnReplyTo = matched.attribution.replyTo;
+        state.turnMention = matched.attribution.mention;
+        return true;
+    }
+
+    private recordEchoDelivery(state: WatchedSession, text: string, time: number): void {
+        const list = this.echoDeliveries.get(state.session.id) ?? [];
+        list.push({ text, time });
+        if (list.length > 8) list.shift();
+        this.echoDeliveries.set(state.session.id, list);
+    }
+
+    private trackExternalPart(state: WatchedSession, at: number): void {
+        const now = Date.now();
+        const tracked = (this.promptTracking.get(state.session.id) ?? []).filter(
+            (entry) => now - entry.at < PROMPT_TRACK_TTL_MS,
+        );
+        tracked.push({ text: '', attribution: { replyTo: null, mention: '' }, at, consumed: true });
+        this.promptTracking.set(state.session.id, tracked);
+    }
+
+    private timelineAttribution(state: WatchedSession, eventTime: number): PromptAttribution {
+        const tracked = this.promptTracking.get(state.session.id);
+        if (!tracked || tracked.length === 0) return { replyTo: state.turnReplyTo, mention: state.turnMention };
+        let matched: TrackedPrompt | null = null;
+        for (const entry of tracked) {
+            if (entry.pending) continue;
+            if (entry.at > eventTime) break;
+            matched = entry;
+        }
+        if (!matched) return { replyTo: state.turnReplyTo, mention: state.turnMention };
+        return matched.attribution;
+    }
+
+    private handleUserEvent(state: WatchedSession, event: Extract<RadarEvent, { kind: 'user' }>): boolean {
+        if (this.acceptEchoAttribution(state, event.text, event.time)) return true;
+        if (this.isSelfSubmitted(state.session.id, event.text, Date.now())) {
+            this.recordEchoDelivery(state, event.text, event.time);
+            return true;
+        }
+        this.trackExternalPart(state, event.time);
+        state.turnReplyTo = null;
+        state.turnMention = '';
+        return false;
+    }
+
+    private leadAttribution(events: RadarEvent[]): PromptAttribution {
+        for (const event of events) {
+            const attached = this.eventAttribution.get(event);
+            if (attached && (attached.replyTo !== null || attached.mention !== '')) return attached;
+        }
+        return { replyTo: null, mention: '' };
+    }
+
+    private replyMentionOf(message: Message): string {
+        const from = message.from;
+        if (!from) return '';
+        if (typeof from.username === 'string' && from.username.length > 0) return `@${from.username}`;
+        return [from.first_name, from.last_name].filter((part) => typeof part === 'string').join(' ').trim();
+    }
+
     private async handleInbound(
         telegram: TelegramBotPlugin,
         opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion' | 'createSession' | 'sendPrompt' | 'getSession' | 'renameSession' | 'listModels'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'listAgents' | 'setAgent'>>,
@@ -2123,6 +2593,8 @@ export class DurevcodeAgent extends BaseAgent {
         }
         const text = (message.text || message.caption || '').trim();
         const replyTo = message.reply_to_message?.message_id;
+        state.laneReplyTo = typeof message.message_id === 'number' ? message.message_id : null;
+        state.laneMention = this.replyMentionOf(message);
         if (await this.dispatchInboxCommand(telegram, opencode, state, text, replyTo)) return;
         if (hasMediaMessage(message)) {
             const before = state.promptQueue.length;
@@ -2173,7 +2645,7 @@ export class DurevcodeAgent extends BaseAgent {
             await this.sendModeCard(telegram, opencode, state);
             return true;
         }
-        if (command === '/model') {
+        if (command === '/models') {
             await this.sendModelCard(telegram, opencode, state);
             return true;
         }
@@ -2324,6 +2796,10 @@ export class DurevcodeAgent extends BaseAgent {
             console.log(`Durevcode created session ${session.id} for new topic ${threadId}`);
             await this.drainCreatingThread(telegram, opencode, state, threadId, message);
         } catch (error) {
+            if (isThreadGoneError(error) || isThreadClosedError(error)) {
+                console.debug(`Durevcode new topic unusable (thread=${threadId}): ${errorText(error)}`);
+                return;
+            }
             console.error(`Durevcode new-topic session create failed (thread=${threadId}):`, error);
             try {
                 await telegram.sendMessage({
@@ -2348,6 +2824,8 @@ export class DurevcodeAgent extends BaseAgent {
         let batch = [first];
         while (true) {
             for (const queuedMessage of batch) {
+                state.laneReplyTo = typeof queuedMessage.message_id === 'number' ? queuedMessage.message_id : null;
+                state.laneMention = this.replyMentionOf(queuedMessage);
                 const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
                 if (hasMediaMessage(queuedMessage)) {
                     await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
@@ -2362,9 +2840,7 @@ export class DurevcodeAgent extends BaseAgent {
             batch = late.splice(0);
             if (batch.length === 0) {
                 this.creatingThreads.delete(threadId);
-                if (late.length === 0) break;
-                this.creatingThreads.set(threadId, late);
-                continue;
+                break;
             }
         }
         await this.pumpPrompts(telegram, opencode, state);
@@ -2373,11 +2849,21 @@ export class DurevcodeAgent extends BaseAgent {
     private enqueuePrompt(state: WatchedSession, text: string): void {
         if (state.promptQueue.length >= MAX_QUEUED_PROMPTS) {
             state.promptQueue.shift();
+            this.consumeLaneHead(state);
             console.warn(`Durevcode prompt queue full, dropping oldest prompt (session=${state.session.id}).`);
         }
+        const attribution: PromptAttribution = state.laneReplyTo !== null || state.laneMention !== ''
+            ? { replyTo: state.laneReplyTo, mention: state.laneMention }
+            : { replyTo: null, mention: '' };
+        state.laneReplyTo = null;
+        state.laneMention = '';
+        const lane = this.promptLane.get(state.session.id);
+        if (lane) lane.push(attribution);
+        else this.promptLane.set(state.session.id, [attribution]);
         const wasEmpty = state.promptQueue.length === 0;
         state.promptQueue.push(text);
         state.stoppedAt = 0;
+        state.stoppedByUser = false;
         this.submittedPrompts.push({ session: state.session.id, text, at: Date.now() });
         if (this.submittedPrompts.length > MAX_SUBMITTED_PROMPTS) {
             this.submittedPrompts.splice(0, this.submittedPrompts.length - MAX_SUBMITTED_PROMPTS);
@@ -2672,11 +3158,17 @@ export class DurevcodeAgent extends BaseAgent {
             return;
         }
         const head = state.promptQueue[0];
+        const stopStamp = state.stoppedAt;
         if (this.config.opencode.cliFirst === true && !state.promptPumping) {
+            const cliPostedAt = Date.now();
             state.promptPumping = true;
             try {
                 if (await this.startCliRun(telegram, opencode, state, head, false, null)) {
-                    state.promptQueue.shift();
+                    if (state.promptQueue[0] === head) state.promptQueue.shift();
+                    const attached = this.consumeLaneHead(state);
+                    state.turnReplyTo = attached.replyTo;
+                    state.turnMention = attached.mention;
+                    this.trackPrompt(state, head, attached, cliPostedAt);
                     this.resetPromptLane(state);
                     return;
                 }
@@ -2689,20 +3181,23 @@ export class DurevcodeAgent extends BaseAgent {
         if (state.promptPumping) return;
         state.promptPumping = true;
         try {
-            let receipt: Awaited<ReturnType<OpencodePlugin['sendPrompt']>>;
-            try {
-                receipt = await opencode.sendPrompt(state.session.id, head);
-            } finally {
-                state.promptPumping = false;
-            }
+            const postedAt = Date.now();
+            const receipt: Awaited<ReturnType<OpencodePlugin['sendPrompt']>> = await opencode.sendPrompt(
+                state.session.id,
+                head,
+            );
             if (receipt.busy) {
                 await this.notePromptBusy(telegram, state);
                 return;
             }
-            state.promptQueue.shift();
+            if (state.promptQueue[0] === head) state.promptQueue.shift();
+            const attached = this.consumeLaneHead(state);
+            state.turnReplyTo = attached.replyTo;
+            state.turnMention = attached.mention;
+            this.trackPrompt(state, head, attached, postedAt);
             this.resetPromptLane(state);
             state.confirming =
-                receipt.messageId !== undefined
+                state.stoppedAt === stopStamp && receipt.messageId !== undefined
                     ? { messageId: receipt.messageId, text: head, since: Date.now(), notified: false }
                     : null;
             state.lastPromptAt = Date.now();
@@ -2722,10 +3217,12 @@ export class DurevcodeAgent extends BaseAgent {
                     );
                 }
                 this.absorbRateLimit('prompt-send', error, 'prompt', state.session.id);
+                state.promptNextAttemptAt = Date.now() + this.delayAfterRateLimit(waitSec, 400);
                 return;
             }
             if (isPermanentPromptError(error)) {
-                state.promptQueue.shift();
+                if (state.promptQueue[0] === head) state.promptQueue.shift();
+                this.consumeLaneHead(state);
                 this.resetPromptLane(state);
                 await this.safeReply(
                     telegram,
@@ -2751,6 +3248,8 @@ export class DurevcodeAgent extends BaseAgent {
                 `Durevcode prompt transient failure, keeping it queued (session=${state.session.id}):`,
                 errorText(error),
             );
+        } finally {
+            state.promptPumping = false;
         }
     }
 
@@ -2797,12 +3296,12 @@ export class DurevcodeAgent extends BaseAgent {
             const base = truncate(m.name || m.id, context ? 28 : 40);
             return context ? `${prefix}${base} · ${context}` : `${prefix}${base}`;
         };
-        const cappedModels = models.slice(0, 20);
-if (currentId && !cappedModels.some((m) => m.id === currentId)) {
-    const currentModel = models.find((m) => m.id === currentId);
-    if (currentModel && cappedModels.length > 0) cappedModels[cappedModels.length - 1] = currentModel;
-}
-const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
+        const cappedModels = models.slice(0, 19);
+        if (currentId && !cappedModels.some((m) => m.id === currentId)) {
+            const currentModel = models.find((m) => m.id === currentId);
+            if (currentModel) cappedModels.push(currentModel);
+        }
+        const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             text: label(m),
             callback_data: `model:${m.id}`,
         }]);
@@ -3062,6 +3561,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state.session = { ...state.session, model: JSON.stringify(nextModel) };
         if (modelId !== null) {
             state.limitChecked = false;
+            state.limitRetryAt = 0;
             const getLimit = opencode.getModelLimit;
             if (typeof getLimit === 'function') {
                 await this.refreshContextLimit({ getModelLimit: (id: string) => getLimit.call(opencode, id) }, state);
@@ -3080,6 +3580,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
 
     private async ensureStopControl(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         if (state.stopMessageId !== null || state.stopControlSending) return;
+        if (state.finalized) return;
         if (Date.now() - state.stopControlAttemptAt < STOP_CONTROL_REPOST_MS) return;
         if (Date.now() < this.rateLimitedUntil) return;
         state.stopControlAttemptAt = Date.now();
@@ -3175,11 +3676,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             clearTimeout(pendingRender);
             this.thinkingRenderTimers.delete(state.session.id);
         }
-        const pendingFoldRetry = this.thoughtPaintRetryTimers.get(`s${state.session.id}`);
-        if (pendingFoldRetry) {
-            clearTimeout(pendingFoldRetry);
-            this.thoughtPaintRetryTimers.delete(`s${state.session.id}`);
-        }
+        this.thinkingEpoch.set(state.session.id, (this.thinkingEpoch.get(state.session.id) ?? 0) + 1);
         this.governor.refill('topic-edit');
         this.governor.refill('topic-markup');
         if (id === null) return;
@@ -3243,9 +3740,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         this.thoughtPaintRetryTimers.set(key, timer);
     }
 
-    private registerThoughtArchive(sessionId: string, messageId: number, fullHtml: string, compactHtml: string, fullText: string, compact: boolean): void {
+    private registerThoughtArchive(sessionId: string, messageId: number, fullHtml: string, fullText: string): void {
         this.thoughtArchives.delete(messageId);
-        this.thoughtArchives.set(messageId, { sessionId, fullHtml, compactHtml, fullText, compact });
+        this.thoughtArchives.set(messageId, { sessionId, fullHtml, fullText });
         this.evictOldestEntries(this.thoughtArchives, MAX_THOUGHT_ARCHIVES);
     }
 
@@ -3258,7 +3755,6 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         attempt: number,
     ): Promise<void> {
         const fullHtml = wellFormed(formatThoughtArchive(Date.now() - since, text));
-        const compactHtml = fullHtml;
         const markup = this.thoughtFoldMarkup(messageId);
         try {
             await telegram.editMessageText({
@@ -3268,11 +3764,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 parse_mode: 'HTML',
                 reply_markup: markup,
             });
-            this.registerThoughtArchive(sessionId, messageId, fullHtml, compactHtml, text, true);
+            this.registerThoughtArchive(sessionId, messageId, fullHtml, text);
             console.log(`Durevcode thought finalized (session=${sessionId} folded=true).`);
         } catch (error) {
             if (isMessageNotModifiedError(error)) {
-                this.registerThoughtArchive(sessionId, messageId, fullHtml, compactHtml, text, true);
+                this.registerThoughtArchive(sessionId, messageId, fullHtml, text);
                 console.log(`Durevcode thought finalized already (session=${sessionId} folded=true).`);
                 return;
             }
@@ -3295,111 +3791,6 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 timer.unref?.();
             }
         }
-    }
-
-    private async archiveFoldRepaint(telegram: TelegramBotPlugin, messageId: number, toCompact: boolean): Promise<boolean> {
-        const alive = this.thoughtArchives.get(messageId);
-        if (!alive || alive.compact === toCompact) return true;
-        try {
-            await telegram.editMessageText({
-                chat_id: this.chatId(),
-                message_id: messageId,
-                text: toCompact ? alive.compactHtml : alive.fullHtml,
-                parse_mode: 'HTML',
-                reply_markup: this.thoughtFoldMarkup(messageId),
-            });
-            alive.compact = toCompact;
-            this.thoughtFoldEditAt = Date.now();
-            return true;
-        } catch (error) {
-            if (isMessageGoneError(error)) {
-                this.thoughtArchives.delete(messageId);
-                return true;
-            }
-            if (isRateLimitError(error)) {
-                this.absorbRateLimit('topic-edit', error, 'thought archive', alive.sessionId);
-                return false;
-            }
-            return true;
-        }
-    }
-
-    private async applyThoughtFold(
-        telegram: TelegramBotPlugin,
-        query: CallbackQuery,
-        messageId: number,
-        toCompact: boolean,
-        dismiss: (text?: string) => Promise<void>,
-    ): Promise<void> {
-        const entry = this.thoughtArchives.get(messageId);
-        if (!entry || entry.compact === toCompact) {
-            await dismiss('Outdated, ask again.');
-            return;
-        }
-        const elapsedFold = Date.now() - this.thoughtFoldEditAt;
-        if (elapsedFold < 1200) {
-            await dismiss('It toggles on its own in a moment.');
-            this.scheduleThoughtPaintRetry(`a${messageId}:${toCompact ? 1 : 0}`, null, 2, async () => {
-                return await this.archiveFoldRepaint(telegram, messageId, toCompact);
-            }, 1200 - elapsedFold + 150);
-            return;
-        }
-        const applied = await this.archiveFoldRepaint(telegram, messageId, toCompact);
-        if (!applied && Date.now() < this.rateLimitedUntil) {
-            await dismiss('Rate limited — it opens on its own in a moment.');
-            this.scheduleThoughtPaintRetry(`a${messageId}:${toCompact ? 1 : 0}`, null, 2, () => this.archiveFoldRepaint(telegram, messageId, toCompact));
-            return;
-        }
-        if (!applied) {
-            await dismiss('Try again in a moment.');
-            return;
-        }
-        await dismiss();
-    }
-
-    private async applyLiveThoughtFold(
-        telegram: TelegramBotPlugin,
-        query: CallbackQuery,
-        toFold: boolean,
-        dismiss: (text?: string) => Promise<void>,
-    ): Promise<void> {
-        const mid = query.message?.message_id;
-        const live = mid !== undefined
-            ? [...this.watched.values()].find((s) => s.thinkingMessageId === mid) ?? null
-            : null;
-        if (!live || live.thinkingMessageId === null) {
-            await dismiss('Outdated, ask again.');
-            return;
-        }
-        await this.waitForIdlePainter(live);
-        if (toFold === live.thinkingFolded) {
-            await dismiss();
-            return;
-        }
-        live.thinkingFolded = toFold;
-        const floorLeft = THINKING_TOPIC_FOLDED_PACE_MS - (Date.now() - live.thinkingAt);
-        if (floorLeft > 0) {
-            await dismiss('It toggles on its own in a moment.');
-            this.scheduleThoughtPaintRetry(`s${live.session.id}`, live, 2, async () => {
-                if (!this.watched.has(live.session.id) || live.thinkingMessageId === null) return true;
-                return await this.paintThinkingText(telegram, live, live.thinkingText, true);
-            }, floorLeft + 150);
-            return;
-        }
-        const painted = await this.paintThinkingText(telegram, live, live.thinkingText, true);
-        if (!painted && Date.now() < this.rateLimitedUntil) {
-            await dismiss('Rate limited — it opens on its own in a moment.');
-            this.scheduleThoughtPaintRetry(`s${live.session.id}`, live, 2, async () => {
-                if (!this.watched.has(live.session.id) || live.thinkingMessageId === null) return true;
-                return await this.paintThinkingText(telegram, live, live.thinkingText, true);
-            });
-            return;
-        }
-        if (!painted) {
-            await dismiss('Try again in a moment.');
-            return;
-        }
-        await dismiss();
     }
 
     private async applyThoughtDoc(
@@ -3489,6 +3880,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             if (isRateLimitError(error)) {
                 const waitSec = this.absorbRateLimit('topic-markup', error, 'stop control retire', state.session.id);
                 state.stopRetireRetryAt = Date.now() + this.delayAfterRateLimit(waitSec, 300);
+                return;
+            }
+            if (isMessageGoneError(error)) {
+                this.clearStopControlState(state);
+                console.debug(`Durevcode stop control retired on gone message (session=${state.session.id} control=${controlId}).`);
                 return;
             }
             console.debug('Durevcode stop control retire failed:', errorText(error));
@@ -3792,6 +4188,22 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 ctx.msgId = sentId;
                 this.questPicks.set(token, ctx);
                 this.questReplies.set(sentId, { sessionId: state.session.id, reqId: request.id, questions: request.questions });
+                const staleQuestionIds: number[] = [];
+                for (const [msgId, ref] of this.questReplies) {
+                    if (ref.sessionId === state.session.id && ref.reqId === request.id && msgId !== sentId) staleQuestionIds.push(msgId);
+                }
+                for (const msgId of staleQuestionIds) {
+                    for (const [pickToken, pickCtx] of this.questPicks) {
+                        if (pickCtx.sessionId === state.session.id && pickCtx.reqId === request.id && pickCtx.msgId === msgId) this.questPicks.delete(pickToken);
+                    }
+                }
+                if (staleQuestionIds.length > 0) {
+                    if (await this.disarmReplyKeyboards(telegram, staleQuestionIds, 'stale question replace', state.session.id)) {
+                        for (const msgId of staleQuestionIds) this.questReplies.delete(msgId);
+                    } else {
+                        this.scheduleStaleQuestionDisarm(telegram, state, staleQuestionIds, 0);
+                    }
+                }
             } catch (error) {
                 console.debug('Durevcode question notice failed, will retry:', errorText(error));
             }
@@ -3809,6 +4221,25 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             for (const messageId of deadQuestionMsgIds) this.questReplies.delete(messageId);
             for (const reqId of deadReqIds) this.dropQuestionRefs(state.session.id, reqId);
         }
+    }
+
+    private scheduleStaleQuestionDisarm(telegram: TelegramBotPlugin, state: WatchedSession, messageIds: number[], attempt: number): void {
+        if (messageIds.length === 0 || attempt >= QUESTION_DISARM_RETRIES) return;
+        const timer = setTimeout(() => {
+            void this.settleStaleQuestionDisarm(telegram, state, messageIds, attempt + 1);
+        }, QUESTION_DISARM_RETRY_MS);
+        timer.unref?.();
+    }
+
+    private async settleStaleQuestionDisarm(telegram: TelegramBotPlugin, state: WatchedSession, messageIds: number[], attempt: number): Promise<void> {
+        if (this.watched.get(state.session.id) !== state) return;
+        const freshIds = messageIds.filter((msgId) => this.questReplies.has(msgId));
+        if (freshIds.length === 0) return;
+        if (!(await this.disarmReplyKeyboards(telegram, freshIds, 'stale question replace', state.session.id))) {
+            this.scheduleStaleQuestionDisarm(telegram, state, freshIds, attempt);
+            return;
+        }
+        for (const msgId of freshIds) this.questReplies.delete(msgId);
     }
 
     private dropQuestionRefs(sessionId: string, reqId: string): void {
@@ -3948,6 +4379,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (state.finalized) return;
         const text = stepFinishText(finish);
         console.warn(`Durevcode step failed (session=${state.session.id}): ${text}`);
+        if (Date.now() - state.lastStepNoticeAt < STEP_FAILURE_NOTICE_DEDUP_MS) {
+            await this.finalizeSession(telegram, state);
+            return;
+        }
+        state.lastStepNoticeAt = Date.now();
         await this.flushEvents(telegram, state);
         const fresh = Date.now() - state.serverErrorAt <= MODEL_ERROR_DETAIL_MS
             ? state.serverErrorText
@@ -4148,12 +4584,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     }
 
     private async paintThinkingText(telegram: TelegramBotPlugin, state: WatchedSession, rawText: string, force = false): Promise<boolean> {
-        if (state.thinkingPainting) return false;
+        const paintEpoch = this.thinkingEpoch.get(state.session.id) ?? 0;
+        if (state.thinkingPainting && state.thinkingPaintEpoch === paintEpoch) return false;
         if (Date.now() < this.rateLimitedUntil) return false;
         if (!force && !this.governor.canSpend('topic-edit')) return false;
         if (!force && !this.reasoningStreamOn()) return false;
         if (!force && state.thinkingMessageId !== null && !this.reasoningRepaintOn()) return false;
         state.thinkingPainting = true;
+        state.thinkingPaintEpoch = paintEpoch;
         const folded = state.thinkingFolded;
         const text = folded
             ? (this.reasoningRepaintOn()
@@ -4162,12 +4600,22 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             : formatThinking(rawText);
         try {
             if (state.thinkingMessageId === null) {
+                const epoch = this.thinkingEpoch.get(state.session.id) ?? 0;
+                const sinceAt = state.thinkingSince ?? Date.now();
                 try {
                     state.thinkingMessageId = await this.deliverMessage(telegram, state, text, undefined, { force: true });
+                    if ((this.thinkingEpoch.get(state.session.id) ?? 0) !== epoch) {
+                        const orphanId = state.thinkingMessageId;
+                        state.thinkingMessageId = null;
+                        state.thinkingActive = false;
+                        await this.sendThought(telegram, state.session.id, orphanId, sinceAt, rawText, 0);
+                        return false;
+                    }
                     await this.settleThinkingPaint(state, text, rawText, folded, false, true);
                     console.log(`Durevcode thinking posted (session=${state.session.id}).`);
                     return true;
                 } catch (error) {
+                    if (isBackoffGateSignal(error)) return false;
                     if (isRateLimitError(error)) {
                         this.governor.note429('topic-send', getRetryAfterSec(error) ?? 10);
                     }
@@ -4188,13 +4636,20 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             }
             if (text === state.thinkingRendered) return true;
             if (!force && Date.now() - state.thinkingAt < this.thinkingPaceMs(state)) return false;
+            const editEpoch = this.thinkingEpoch.get(state.session.id) ?? 0;
+            const editingId = state.thinkingMessageId;
+            const editingSince = state.thinkingSince ?? Date.now();
             try {
                 await telegram.editMessageText({
                     chat_id: this.chatId(),
-                    message_id: state.thinkingMessageId,
+                    message_id: editingId,
                     text: wellFormed(text),
                     parse_mode: 'HTML',
                 });
+                if ((this.thinkingEpoch.get(state.session.id) ?? 0) !== editEpoch) {
+                    await this.sendThought(telegram, state.session.id, editingId, editingSince, rawText, 0);
+                    return false;
+                }
                 await this.settleThinkingPaint(state, text, rawText, folded, true, true);
                 return true;
             } catch (error) {
@@ -4218,7 +4673,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 return false;
             }
         } finally {
-            state.thinkingPainting = false;
+            if (state.thinkingPaintEpoch === paintEpoch) state.thinkingPainting = false;
         }
     }
 
@@ -4336,28 +4791,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             await this.stopSession(telegram, opencode, state);
             return;
         }
-        const foldMatch = data.match(/^thinkfold:(\d{1,10}):([01])$/);
-        if (foldMatch) {
-            if (!(await this.gateCallback(query, 'thought fold', dismiss))) return;
-            await this.applyThoughtFold(telegram, query, Number(foldMatch[1]), foldMatch[2] === '1', dismiss);
-            return;
-        }
-        const liveFoldMatch = data.match(/^thinkfolds:([01])$/);
-        if (liveFoldMatch) {
-            if (!(await this.gateCallback(query, 'thought fold', dismiss))) return;
-            await this.applyLiveThoughtFold(telegram, query, liveFoldMatch[1] === '1', dismiss);
-            return;
-        }
         const docMatch = data.match(/^thinkdoc:(\d{1,10})$/);
         if (docMatch) {
             if (!(await this.gateCallback(query, 'thought doc', dismiss))) return;
             await this.applyThoughtDoc(telegram, query, Number(docMatch[1]), dismiss);
-            return;
-        }
-        const liveDocMatch = data.match(/^thinkdocs:[01]$/);
-        if (liveDocMatch) {
-            if (!(await this.gateCallback(query, 'thought doc', dismiss))) return;
-            await this.applyThoughtDoc(telegram, query, 0, dismiss);
             return;
         }
         const modeMatch = data.match(/^mode:(plan|plain|build)$/);
@@ -4502,6 +4939,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         ref: QuestionReply,
         text: string,
     ): Promise<void> {
+        if (ref.questions.length === 0) {
+            await this.safeReply(telegram, state, `${icon('warn')} This question card is outdated — answer on the fresh one.`);
+            return;
+        }
         if (ref.questions.length !== 1) {
             await this.safeReply(telegram, state, `${icon('warn')} Tap an option or Done — free text fits single questions only.`);
             return;
@@ -4729,6 +5170,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         if (Date.now() - pending.since < CONFIRM_TIMEOUT_MS) return;
         state.confirming = null;
+        if (state.stoppedByUser) {
+            console.debug(
+                `Durevcode dropped a stalled prompt cancelled while it was confirming ` +
+                    `(session=${state.session.id} message=${pending.messageId}).`,
+            );
+            return;
+        }
         if (this.config.opencode.cliFallback !== false) {
             try {
                 if (await this.startCliRun(telegram, opencode, state, pending.text, true, Math.round((Date.now() - pending.since) / 1000))) return;
@@ -4785,7 +5233,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
 
         let pairs: SessionEvent[] = [];
         try {
-            pairs = await opencode.readEvents(state.session.id);
+            pairs = await opencode.readEvents(state.session.id, EVENT_READ_LIMIT);
         } catch (error) {
             console.debug('Durevcode parts read failed:', errorText(error));
             return;
@@ -4797,7 +5245,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             const firstSeen = known === undefined;
             const wasEverSeen = state.seenPartKeys.has(key);
             state.seenPartKeys.add(key);
-            if (state.seenPartKeys.size > 5000) state.seenPartKeys.clear();
+            if (state.seenPartKeys.size > 5000) {
+                for (const stale of [...state.seenPartKeys].slice(0, 1000)) state.seenPartKeys.delete(stale);
+            }
             state.knownParts.set(key, event.time);
             if (state.knownParts.size > 2000) {
                 const oldest = [...state.knownParts.keys()].slice(0, 500);
@@ -4807,7 +5257,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 }
             }
             if (this.stopQuiet(state)) continue;
-            if (state.needsEventBaseline && event.time < state.startedAt) {
+            if (state.needsEventBaseline && event.time <= state.baselineAt) {
                 state.knownEventSig.set(key, eventSignature(event));
                 continue;
             }
@@ -4831,7 +5281,9 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 if (firstSeen && !wasEverSeen) state.toolCalls += 1;
                 if (event.tool === 'question') continue;
             }
-            if (event.kind === 'user' && this.isSelfSubmitted(state.session.id, event.text, Date.now())) continue;
+            if (event.kind === 'user') {
+                if (this.handleUserEvent(state, event)) continue;
+            }
             this.applyEvent(state, event);
             if (event.kind === 'step') {
                 if (isAbnormalStepFinish(event.finish)) await this.reportStepFailure(telegram, state, event.finish);
@@ -4841,13 +5293,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 this.routeLiveTool(state, key, event, firstSeen);
                 continue;
             }
-            const queuedIdx = state.pendingKeys.get(key);
-            if (queuedIdx !== undefined && queuedIdx < state.pending.length) {
-                state.pending[queuedIdx] = event;
-            } else {
-                state.pendingKeys.set(key, state.pending.length);
-                state.pending.push(event);
-            }
+            this.requeueToolEvent(state, key, event);
         }
         state.needsEventBaseline = false;
 
@@ -4901,7 +5347,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
 
         if (!state.finalized && !canNudge && idleFor >= this.config.durevcode.idleSec * 1000 && hasWork && state.promptQueue.length === 0) {
-            if (Date.now() < this.rateLimitedUntil) return;
+            if (Date.now() < this.rateLimitedUntil || Date.now() < this.upstreamBackoffUntil) return;
             await this.finalizeSession(telegram, state);
             return;
         }
@@ -4918,8 +5364,8 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         for (const [sessionId, state] of [...this.watched]) {
             if (state.threadId === null) continue;
             if (now - (this.topicProbedAt.get(sessionId) ?? 0) < TOPIC_PROBE_MS) continue;
-            this.topicProbedAt.set(sessionId, now);
             if (!this.consumeTypingBudget()) return;
+            this.topicProbedAt.set(sessionId, now);
             try {
                 await telegram.sendChatAction({
                     chat_id: this.chatId(),
@@ -5018,12 +5464,14 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state: WatchedSession,
     ): Promise<void> {
         if (state.limitChecked) return;
-        state.limitChecked = true;
+        if (Date.now() < state.limitRetryAt) return;
         try {
             state.contextLimit = await opencode.getModelLimit(displayModel(state.session.model));
+            state.limitChecked = true;
         } catch (error) {
             console.debug('Durevcode context limit failed:', errorText(error));
             state.contextLimit = null;
+            state.limitRetryAt = Date.now() + CONTEXT_LIMIT_RETRY_MS;
         }
     }
 
@@ -5050,18 +5498,19 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const text = this.renderContextText(state);
         if (text === state.lastContextRendered) return;
         if (Date.now() - state.lastContextEditAt < CONTEXT_THROTTLE_MS && state.contextMessageId !== null) return;
+        const want = this.wantStopButton(state);
         try {
             if (state.contextMessageId === null) {
-                await this.sendFreshPin(telegram, state);
+                if (!(await this.sendFreshPin(telegram, state))) return;
             } else {
                 await telegram.editMessageText({
                     chat_id: this.chatId(),
                     message_id: state.contextMessageId,
                     text: wellFormed(text),
                     parse_mode: 'HTML',
-                    reply_markup: EMPTY_INLINE_MARKUP,
+                    reply_markup: want ? this.stopMarkup(state) : EMPTY_INLINE_MARKUP,
                 });
-                state.stopButtonOn = false;
+                state.stopButtonOn = want;
             }
             state.lastContextRendered = text;
             state.lastContextEditAt = Date.now();
@@ -5071,8 +5520,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 state.lastContextRendered = text;
                 state.lastContextEditAt = Date.now();
                 state.consecutiveFailures = 0;
-
-                state.stopButtonOn = false;
+                state.stopButtonOn = want;
                 return;
             }
             if (isRateLimitError(error)) {
@@ -5127,12 +5575,22 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         if (live && live.key === key) {
             live.event = event;
             live.done = done;
+            if (done) this.abandonedTools.delete(`${state.session.id}|${key}`);
             return;
         }
         if (!done && !live && !firstSeen) {
             if (!state.buildMode) {
                 this.requeueToolEvent(state, key, event);
                 return;
+            }
+            const abandonToken = `${state.session.id}|${key}`;
+            const abandonAt = this.abandonedTools.get(abandonToken);
+            if (abandonAt !== undefined) {
+                if (Date.now() - abandonAt < LIVE_ABANDON_COOLDOWN_MS) {
+                    this.requeueToolEvent(state, key, event);
+                    return;
+                }
+                this.abandonedTools.delete(abandonToken);
             }
             const pendingIdx = state.pendingKeys.get(key);
             if (pendingIdx !== undefined && pendingIdx < state.pending.length) {
@@ -5151,8 +5609,11 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     private requeueToolEvent(state: WatchedSession, key: string, event: RadarEvent): void {
         const queuedIdx = state.pendingKeys.get(key);
         if (queuedIdx !== undefined && queuedIdx < state.pending.length) {
+            const previous = this.eventAttribution.get(state.pending[queuedIdx]);
+            if (previous) this.eventAttribution.set(event, previous);
             state.pending[queuedIdx] = event;
         } else {
+            this.eventAttribution.set(event, this.timelineAttribution(state, event.time));
             state.pendingKeys.set(key, state.pending.length);
             state.pending.push(event);
         }
@@ -5162,6 +5623,12 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         const live = state.liveTool;
         if (!live) return;
         state.liveTool = null;
+        this.abandonedTools.set(`${state.session.id}|${live.key}`, Date.now());
+        if (this.abandonedTools.size > 512) {
+            for (const [token, at] of this.abandonedTools) {
+                if (Date.now() - at >= LIVE_ABANDON_COOLDOWN_MS) this.abandonedTools.delete(token);
+            }
+        }
         this.requeueToolEvent(state, live.key, live.event);
         console.debug(`Durevcode live tool abandoned, event requeued (session=${state.session.id}).`);
     }
@@ -5185,14 +5652,18 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         if (Date.now() - live.lastEditAt < LIVE_EDIT_THROTTLE_MS && !live.done) return;
         if (live.messageId === null) {
+            const posting = state.liveTool;
             try {
                 await this.clearThinkingMessage(telegram, state);
+                if (state.liveTool !== posting) return;
                 live.messageId = await this.deliverMessage(telegram, state, text);
+                if (state.liveTool !== posting) return;
                 live.lastText = text;
                 live.lastEditAt = Date.now();
                 live.failCount = 0;
                 if (live.done) state.liveTool = null;
             } catch (error) {
+                if (isBackoffGateSignal(error)) return;
                 live.lastEditAt = Date.now();
                 live.failCount += 1;
                 console.debug('Durevcode live tool post failed:', errorText(error));
@@ -5200,6 +5671,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             }
             return;
         }
+        if (!live.done && !this.reasoningRepaintOn()) return;
         try {
             await telegram.editMessageText({
                 chat_id: this.chatId(),
@@ -5207,11 +5679,13 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
                 text: wellFormed(text),
                 parse_mode: 'HTML',
             });
+            if (state.liveTool !== live) return;
             live.lastText = text;
             live.lastEditAt = Date.now();
             live.failCount = 0;
             if (live.done) state.liveTool = null;
         } catch (error) {
+            if (isBackoffGateSignal(error)) return;
             if (isMessageNotModifiedError(error)) {
                 live.lastText = text;
                 live.lastEditAt = Date.now();
@@ -5240,6 +5714,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state.flushing = true;
         try {
             await this.runFlushEvents(telegram, state);
+            if (this.persistedSaveTimer !== null) this.flushCoalescedSave();
         } finally {
             state.flushing = false;
         }
@@ -5259,7 +5734,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         }
         const now = Date.now();
         state.recentDelivered = state.recentDelivered.filter((entry) => now - entry.at < DELIVERY_DEDUP_MS);
-        if (state.recentDelivered.some((entry) => entry.sig === deliverySignature(text))) {
+        const batchSig = deliverySignature(
+            `${[...state.pendingKeys.keys()].sort().join(',')}|${text}${state.pendingTodos ? '|todos' : ''}`,
+        );
+        if (state.recentDelivered.some((entry) => entry.sig === batchSig)) {
             console.warn(`Durevcode duplicate batch suppressed (session=${state.session.id}).`);
             state.pending = [];
             state.pendingKeys.clear();
@@ -5267,14 +5745,21 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             return;
         }
         if (Date.now() - state.lastEventMessageAt < this.pressurePaced(EVENT_THROTTLE_MS)) return;
+        const flushed = state.pending.slice();
+        const flushedTodos = state.pendingTodos;
+        const flushedTodosRef = state.todos;
+        const flushedCount = flushed.length + (flushedTodos ? 1 : 0);
         try {
             const flushMark = Date.now();
-            const flushedCount = state.pending.length + (state.pendingTodos ? 1 : 0);
-            const substantive = state.pending.some(
+            const substantive = flushed.some(
                 (event) => event.kind === 'text' || event.kind === 'files' || (event.kind === 'tool' && event.output !== ''),
             );
             const { text: answer, command: stopCommand } = takeStopCommand(text);
-            if (answer) await this.deliverFreshPart(telegram, state, answer);
+            if (answer) {
+                const lead = this.leadAttribution(flushed);
+                const answerText = lead.mention ? `<b>${escapeHtml(lead.mention)}</b> ${answer}` : answer;
+                await this.deliverFreshPart(telegram, state, answerText, lead.replyTo ?? undefined);
+            }
             if (stopCommand) {
                 await this.deliverFreshPart(telegram, state, stopCommand);
                 const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
@@ -5283,15 +5768,28 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             console.log(
                 `Durevcode events delivered (session=${state.session.id} count=${flushedCount} in ${Date.now() - flushMark}ms).`,
             );
-            state.pending = [];
-            state.pendingKeys.clear();
-            state.pendingTodos = false;
+            const flushedSet = new Set(flushed);
+            const flushedFlags = state.pending.map((entry) => flushedSet.has(entry));
+            const oldIdxToKey = new Map<number, string>();
+            for (const [key, oldIdx] of state.pendingKeys) oldIdxToKey.set(oldIdx, key);
+            const survived: RadarEvent[] = [];
+            const survivedKeys = new Map<string, number>();
+            for (let idx = 0; idx < state.pending.length; idx += 1) {
+                if (flushedFlags[idx]) continue;
+                survived.push(state.pending[idx]);
+                const key = oldIdxToKey.get(idx);
+                if (key !== undefined) survivedKeys.set(key, survived.length - 1);
+            }
+            state.pending = survived;
+            state.pendingKeys = survivedKeys;
+            if (flushedTodos && state.todos === flushedTodosRef) state.pendingTodos = false;
             state.lastEventMessageAt = Date.now();
             this.upstreamFailures = 0;
-            this.rememberDelivery(state, deliverySignature(text));
-            this.savePersisted();
+            this.rememberDelivery(state, batchSig);
+            this.savePersistedCoalesced();
             if (substantive) await this.clearThinkingMessage(telegram, state);
         } catch (error) {
+            if (isBackoffGateSignal(error)) return;
             if (isRateLimitError(error)) {
                 this.absorbRateLimit('topic-send', error, 'events', state.session.id);
             } else {
@@ -5319,6 +5817,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
 
     private autoContinueBlocked(state: WatchedSession): boolean {
         if (state.finalized) return true;
+        if (state.lastStepErrorAt !== 0) return true;
         if (state.promptQueue.length > 0) return true;
         if (state.cliRun) return true;
         if (state.confirming) return true;
@@ -5345,6 +5844,10 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
         state.turnComplete = false;
         if (!armed) {
             state.whipArmedAt = Date.now();
+            state.laneReplyTo = null;
+            state.laneMention = '';
+            state.turnReplyTo = null;
+            state.turnMention = '';
             this.enqueuePrompt(state, AUTO_CONTINUE_TEXT);
         }
         this.logger.info(
@@ -5361,6 +5864,7 @@ const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
     ): Promise<void> {
         const sticker = this.config.durevcode.whipSticker ?? WHIP_STICKER_DEFAULT;
         const emojiId = this.config.durevcode.whipEmojiId ?? WHIP_EMOJI_DEFAULT;
+        if (this.threadsEnabled && state.threadId === null) return;
         if (Date.now() < this.rateLimitedUntil) return;
         try {
             if (emojiId) {
