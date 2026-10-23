@@ -3,14 +3,22 @@ export const RENDER_BUDGET = 3900;
 export const FORUM_TOPIC_NAME_LIMIT = 128;
 export const TOOL_OUTPUT_CAP = 1200;
 export const LIVE_OUTPUT_MAX = 3000;
+export const LIVE_CARD_LIMIT = 3500;
 export const TOOL_DURATION_MIN_SEC = 1;
 
 export function formatLiveTool(event: RadarEvent, elapsedSec?: number): string {
     if (event.kind !== 'tool') return formatConsoleBatch([event], null);
     const span = elapsedSec ?? event.durationSec;
     const output = event.output ?? '';
-    const tail = output.length > LIVE_OUTPUT_MAX ? `…${output.slice(-LIVE_OUTPUT_MAX)}` : output;
-    return toolBlockLines(event.status, event.summary, tail, span).join('\n');
+    let tail = output.length > LIVE_OUTPUT_MAX ? `…${output.slice(-LIVE_OUTPUT_MAX)}` : output;
+    let body = toolBlockLines(event.status, event.summary, tail, span).join('\n');
+    let guard = 0;
+    while (body.length > LIVE_CARD_LIMIT && tail.length > 0 && guard < 12) {
+        tail = `…${tail.slice(-Math.max(64, Math.floor(tail.length / 2)))}`;
+        body = toolBlockLines(event.status, event.summary, tail, span).join('\n');
+        guard += 1;
+    }
+    return body;
 }
 
 function toolBlockLines(status: string, summary: string, output: string, span: number | undefined): string[] {
@@ -53,7 +61,6 @@ export const EMOJI = {
     queued: '🔜',
     plan: '📕',
     folder: '📁',
-    doc: '📄',
     cache: '🗂',
     inbox: '📥',
     outbox: '📤',
@@ -393,14 +400,6 @@ export function repoRelative(filePath: string, directory: string): string {
     return filePath.startsWith(prefix) ? filePath.slice(prefix.length) : filePath;
 }
 
-export function formatDuration(startedAt: number, finishedAt: number): string {
-    const seconds = Math.max(0, Math.round((finishedAt - startedAt) / 1000));
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-    return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
-
 export function displayModel(model: string): string {
     return modelRef(model).id;
 }
@@ -517,23 +516,6 @@ export interface ResultSnippet {
     text: string;
 }
 
-export interface ProgressState {
-    title: string;
-    directory: string;
-    model: string;
-    todos: TodoItem[];
-    tools: ToolItem[];
-    result: ResultSnippet | null;
-    lastText: string;
-    toolCalls: number;
-    tokensIn: number;
-    tokensOut: number;
-    cost: number;
-    files: string[];
-    startedAt: number;
-    updatedAt: number;
-}
-
 const HTML_BALANCED_TAGS = new Set([
     'b',
     'i',
@@ -567,115 +549,6 @@ function closingTags(stack: ReadonlyArray<{ name: string }>): string {
         .reverse()
         .map((e) => `</${e.name}>`)
         .join('');
-}
-
-export function truncateHtml(html: string, max: number): string {
-    if (html.length <= max) return html;
-    if (max <= 1) return '…';
-    const tagRe = /<\/?[a-zA-Z][^<>]*>/y;
-    const entityRe = /&(?:#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);/y;
-    const tokens: string[] = [];
-    const stacks: Array<Array<{ name: string }>> = [[]];
-    let i = 0;
-    while (i < html.length) {
-        const ch = html[i];
-        if (ch === '<') {
-            tagRe.lastIndex = i;
-            const m = tagRe.exec(html);
-            if (m) {
-                const token = m[0];
-                tokens.push(token);
-                const prev = stacks[stacks.length - 1];
-                const next = prev.map((e) => ({ name: e.name }));
-                const { name, close, self } = parseHtmlTag(token);
-                if (HTML_BALANCED_TAGS.has(name) && !self) {
-                    if (close) {
-                        for (let k = next.length - 1; k >= 0; k -= 1) {
-                            if (next[k].name === name) {
-                                next.splice(k, 1);
-                                break;
-                            }
-                        }
-                    } else {
-                        next.push({ name });
-                    }
-                }
-                stacks.push(next);
-                i += token.length;
-                continue;
-            }
-        }
-        if (ch === '&') {
-            entityRe.lastIndex = i;
-            const m = entityRe.exec(html);
-            if (m) {
-                tokens.push(m[0]);
-                stacks.push(stacks[stacks.length - 1]);
-                i += m[0].length;
-                continue;
-            }
-        }
-        tokens.push(ch);
-        stacks.push(stacks[stacks.length - 1]);
-        i += 1;
-    }
-    const prefixLen: number[] = [0];
-    for (const t of tokens) prefixLen.push(prefixLen[prefixLen.length - 1] + t.length);
-    const closingFor = (k: number): string => closingTags(stacks[k]);
-    for (let k = tokens.length - 1; k >= 0; k -= 1) {
-        const total = prefixLen[k] + 1 + closingFor(k).length;
-        if (total <= max) {
-            return tokens.slice(0, k).join('') + '…' + closingFor(k);
-        }
-    }
-    return '…';
-}
-
-export function formatProgress(state: ProgressState): string {
-    const lines: string[] = [];
-    lines.push(`${icon('active')} <b>${escapeHtml(truncate(state.title, 80))}</b>`);
-    const model = displayModel(state.model);
-    lines.push(`${icon('folder')} <code>${escapeHtml(truncate(state.directory, 60))}</code>${model ? ` · ${icon('bot')} ${escapeHtml(truncate(model, 40))}` : ''}`);
-    const todos = state.todos.slice(0, 8);
-    if (todos.length > 0) {
-        lines.push(...todoLines(todos));
-    }
-    for (const tool of state.tools.slice(-4)) {
-        lines.push(`${toolIcon(tool.state)} ${escapeHtml(truncate(tool.text, 140))}`);
-    }
-    if (state.result && state.result.text) {
-        const mark = state.result.ok ? checkIcon() : icon('fail');
-        lines.push(`${EMOJI.doc} ${escapeHtml(truncate(state.result.tool, 40))} ${mark}`);
-        lines.push(
-            codeNote(truncate(state.result.text, 400)),
-        );
-    }
-    const footer =
-        `${icon('toolbox')} ${state.toolCalls} • ${icon('coin')} ${(state.tokensIn + state.tokensOut).toLocaleString('en-US')}` +
-            ` • ${icon('money')} $${state.cost.toFixed(4)} • ${icon('folder')} ${state.files.length}` +
-            ` • ${icon('timer')} ${formatDuration(state.startedAt, state.updatedAt)} in`;
-    if (state.lastText) {
-        const top = lines.join('\n');
-        const room = RENDER_BUDGET - top.length - footer.length - 12;
-        if (room >= 2) {
-            lines.push(`${icon('chat')} <i>${truncateHtml(markdownToTelegramHtml(state.lastText), room)}</i>`);
-        }
-    }
-    lines.push(footer);
-    const text = lines.join('\n');
-    if (text.length <= RENDER_BUDGET) return text;
-    const lastIdx = lines.findIndex((line) => line.startsWith(`${icon('chat')} <i>`));
-    if (lastIdx >= 0) {
-        const overflow = text.length - RENDER_BUDGET;
-        const line = lines[lastIdx];
-        const inner = line.slice(`${icon('chat')} <i>`.length, -'</i>'.length);
-        const shrunk = truncateHtml(inner, Math.max(1, inner.length - overflow - 1));
-        lines[lastIdx] = `${icon('chat')} <i>${shrunk}</i>`;
-        const retry = lines.join('\n');
-        if (retry.length <= RENDER_BUDGET) return retry;
-        return truncateHtml(retry, RENDER_BUDGET);
-    }
-    return truncateHtml(text, RENDER_BUDGET);
 }
 
 export function toolStateIcon(state: string): string {
@@ -764,9 +637,10 @@ export function formatThinkingFolded(ms: number, chars: number): string {
 }
 
 export function formatThinkingTime(ms: number): string {
-    const total = Math.max(0, ms) / 1000;
-    if (total < 60) return `${Math.round(total * 10) / 10}s`;
-    return `${Math.floor(total / 60)}m ${Math.round(total % 60)}s`;
+    const dec = Math.round((Math.max(0, ms) / 1000) * 10) / 10;
+    if (dec < 60) return `${dec}s`;
+    const secs = Math.round(dec);
+    return `${Math.floor(secs / 60)}m ${secs % 60}s`;
 }
 
 export function formatThought(ms: number): string {

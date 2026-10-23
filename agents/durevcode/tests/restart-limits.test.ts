@@ -65,7 +65,7 @@ afterEach(() => {
     }
 });
 
-function makeAgent(maxSessions = 3): DurevcodeAgent {
+function makeAgent(over: Record<string, unknown> = {}, maxSessions = 3): DurevcodeAgent {
     return new DurevcodeAgent({
         name: 'durevcode-restart-test',
         plugins: {},
@@ -80,6 +80,7 @@ function makeAgent(maxSessions = 3): DurevcodeAgent {
             statePath: `/tmp/opencode/durevcode-restart-${process.pid}-${counter}.json`,
             pollMs: 1000,
             idleSec: 90,
+            ...over,
         },
     });
 }
@@ -823,7 +824,7 @@ describe('topic-gone needs two confirmations; failed deletes keep the topic link
     });
 
     test('a failed opencode delete keeps the binding and the topic link', async () => {
-        const agent = makeAgent();
+        const agent = makeAgent({ deleteOnTopicGone: true });
         const { telegram, calls } = stubTelegram();
         internals(agent).getPlugin = (name: string) => (name === 'telegram-bot-api' ? telegram : {
             deleteSession: async () => {

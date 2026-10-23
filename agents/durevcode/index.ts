@@ -38,17 +38,20 @@ function required(name: string): string {
     return value;
 }
 
-function optionalInt(name: string, fallback: number): number {
+function optionalInt(name: string, fallback: number, min?: number, max?: number): number {
     const raw = process.env[name];
     if (!raw) return fallback;
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) ? parsed : fallback;
+    if (!/^-?\d+$/.test(raw.trim())) return fallback;
+    const parsed = Number.parseInt(raw.trim(), 10);
+    if (!Number.isFinite(parsed)) return fallback;
+    const bounded = min !== undefined && parsed < min ? min : parsed;
+    return max !== undefined && bounded > max ? max : bounded;
 }
 
 function optionalFlag(name: string, fallback: boolean): boolean {
     const raw = process.env[name];
-    if (raw === undefined || raw === '') return fallback;
-    return !['0', 'false', 'no', 'off'].includes(raw.toLowerCase());
+    if (raw === undefined || raw.trim() === '') return fallback;
+    return !['0', 'false', 'no', 'off'].includes(raw.trim().toLowerCase());
 }
 
 function userIdList(): number[] {
@@ -68,7 +71,7 @@ function sessionIdList(): string[] {
     return multiple;
 }
 
-const maxSessionsDefault = optionalInt('DUREVCODE_MAX_SESSIONS', 5);
+const maxSessionsDefault = optionalInt('DUREVCODE_MAX_SESSIONS', 5, 0, 128);
 
 const config: DurevcodeConfig = {
     name: 'durevcode',
@@ -79,12 +82,12 @@ const config: DurevcodeConfig = {
         pollingLimit: 100,
         retryOnError: true,
         maxRetries: 0,
-        requestTimeoutMs: optionalInt('TELEGRAM_REQUEST_TIMEOUT_MS', 30000),
+        requestTimeoutMs: optionalInt('TELEGRAM_REQUEST_TIMEOUT_MS', 30000, 1000, 300000),
     },
     opencode: {
         baseUrl: process.env.OPENCODE_SERVER_URL || 'http://127.0.0.1:4096',
-        timeoutMs: optionalInt('OPENCODE_TIMEOUT_MS', 10000),
-        maxRetries: optionalInt('OPENCODE_MAX_RETRIES', 2),
+        timeoutMs: optionalInt('OPENCODE_TIMEOUT_MS', 10000, 1000, 300000),
+        maxRetries: optionalInt('OPENCODE_MAX_RETRIES', 2, 0, 10),
         dbPath: process.env.DUREVCODE_DB_PATH || join(homedir(), '.local', 'share', 'opencode', 'opencode.db'),
         autoServe: optionalFlag('OPENCODE_AUTO_SERVE', true),
         binPath: process.env.OPENCODE_BIN || 'opencode',
@@ -108,14 +111,15 @@ const config: DurevcodeConfig = {
         statePath:
             process.env.DUREVCODE_STATE_PATH ||
             join(homedir(), '.local', 'share', 'durevcode', 'state.json'),
-        pollMs: optionalInt('DUREVCODE_POLL_MS', 1000),
-        pollFanout: optionalInt('DUREVCODE_POLL_FANOUT', 3),
-        idleSec: optionalInt('DUREVCODE_IDLE_SEC', 90),
-        autoContinueSec: optionalInt('DUREVCODE_AUTO_CONTINUE_SEC', 60),
-        autoContinueMax: optionalInt('DUREVCODE_AUTO_CONTINUE_MAX', 10),
+        pollMs: optionalInt('DUREVCODE_POLL_MS', 1000, 100, 3600000),
+        pollFanout: optionalInt('DUREVCODE_POLL_FANOUT', 3, 1, 64),
+        idleSec: optionalInt('DUREVCODE_IDLE_SEC', 90, 1, 86400),
+        autoContinueSec: optionalInt('DUREVCODE_AUTO_CONTINUE_SEC', 60, 0, 86400),
+        autoContinueMax: optionalInt('DUREVCODE_AUTO_CONTINUE_MAX', 10, 0, 64),
         whipEmojiId: process.env.DUREVCODE_WHIP_EMOJI !== undefined ? process.env.DUREVCODE_WHIP_EMOJI : WHIP_EMOJI_DEFAULT,
         whipSticker: process.env.DUREVCODE_WHIP_STICKER,
         autoFinish: optionalFlag('DUREVCODE_AUTO_FINISH', true),
+        deleteOnTopicGone: optionalFlag('DUREVCODE_DELETE_ON_TOPIC_GONE', false),
     },
 };
 
@@ -179,7 +183,12 @@ async function main(): Promise<void> {
         console.log(`Durevcode chat lock acquired: ${(chatLock as DurevcodeLock).path}`);
         await agent.start();
 
+        let shuttingDown = false;
         const shutdown = () => {
+            if (shuttingDown) {
+                process.exit(process.exitCode ?? 0);
+            }
+            shuttingDown = true;
             console.log('\nShutting down...');
             void agent.stop()
                 .catch((error) => {

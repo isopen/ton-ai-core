@@ -4,8 +4,6 @@ import {
     markdownToTelegramHtml,
     truncate,
     repoRelative,
-    formatDuration,
-    formatProgress,
     formatTopicName,
     parseTopicTitle,
     formatContextPin,
@@ -17,18 +15,17 @@ import {
     codeNote,
     langFromPath,
     splitTelegramHtml,
-    truncateHtml,
     takeStopCommand,
     displayModel,
     toTodoState,
     toToolState,
     todoLines,
     formatThinking,
+    formatThinkingTime,
     formatThoughtArchive,
     TOOL_OUTPUT_CAP,
     FORUM_TOPIC_NAME_LIMIT,
     TELEGRAM_TEXT_LIMIT,
-    RENDER_BUDGET,
 } from '../formatter';
 
 describe('formatter', () => {
@@ -46,107 +43,6 @@ describe('formatter', () => {
     test('repoRelative strips directory prefix', () => {
         assert.equal(repoRelative('/repo/src/a.ts', '/repo'), 'src/a.ts');
         assert.equal(repoRelative('/other/a.ts', '/repo'), '/other/a.ts');
-    });
-
-    test('formatDuration renders seconds, minutes, hours', () => {
-        assert.equal(formatDuration(0, 45000), '45s');
-        assert.equal(formatDuration(0, 125000), '2m 5s');
-        assert.equal(formatDuration(0, 3700000), '1h 1m');
-    });
-
-    test('formatProgress shows plan, tools, result and stats in budget', () => {
-        const text = formatProgress({
-            title: 'Test session <x>',
-            directory: '/repo',
-            model: '{"id":"model-1"}',
-            todos: [
-                { content: 'first', state: 'done' },
-                { content: 'second', state: 'active' },
-                { content: 'third', state: 'queued' },
-            ],
-            tools: [
-                { text: 'read /repo/a.ts', state: 'ok' },
-                { text: 'edit /repo/b.ts', state: 'running' },
-            ],
-            result: { tool: 'bash', ok: true, text: 'ok output' },
-            lastText: 'done <soon>',
-            toolCalls: 2,
-            tokensIn: 1000,
-            tokensOut: 200,
-            cost: 0.0123,
-            files: ['/repo/src/a.ts', '/repo/src/b.ts'],
-            startedAt: 0,
-            updatedAt: 60000,
-        });
-        assert.ok(text.includes('Test session &lt;x&gt;'));
-        assert.ok(text.includes('Plan 1/3'));
-        assert.ok(text.includes('5258046117932711905'));
-        assert.ok(text.includes('first'));
-        assert.ok(text.includes('5766933926429854499'));
-        assert.ok(text.includes('second'));
-        assert.ok(text.includes('5264727218734524899'));
-        assert.ok(text.includes('5440621591387980068'));
-        assert.ok(text.includes('third'));
-        assert.ok(text.includes('edit /repo/b.ts'));
-        assert.ok(text.includes('5411634513509885099'));
-        assert.ok(text.includes('model-1'));
-        assert.ok(text.includes('5372981976804366741'));
-        assert.ok(text.includes('<code>ok output</code>'));
-        assert.ok(!text.includes('tg-spoiler'));
-        assert.ok(text.includes('5449428597922079323'));
-        assert.ok(!text.includes('<x>'));
-        assert.ok(!text.includes('<soon>'));
-        assert.ok(text.length <= 3900);
-    });
-
-    test('formatProgress delivers long lastText in full when budget allows', () => {
-        const lastText = `1. ${'abc '.repeat(500)}`;
-        const text = formatProgress({
-            title: 'Long reply',
-            directory: '/repo',
-            model: 'model-1',
-            todos: [],
-            tools: [],
-            result: null,
-            lastText,
-            toolCalls: 1,
-            tokensIn: 100,
-            tokensOut: 200,
-            cost: 0.001,
-            files: [],
-            startedAt: 0,
-            updatedAt: 60000,
-        });
-        assert.ok(text.includes(lastText));
-        assert.ok(text.includes('5449428597922079323'));
-        assert.ok(text.includes('</i>'));
-        assert.ok(text.length <= 3900);
-    });
-
-    test('formatProgress keeps footer and valid tags on overflow', () => {
-        const lastText = `1. ${'abc '.repeat(500)}`;
-        const text = formatProgress({
-            title: 'Overflow',
-            directory: '/repo',
-            model: 'model-1',
-            todos: Array.from({ length: 8 }, (_, i) => ({ content: `todo-${i} ${'x'.repeat(110)}`, state: 'queued' as const })),
-            tools: Array.from({ length: 4 }, (_, i) => ({ text: `tool-${i} ${'y'.repeat(130)}`, state: 'running' as const })),
-            result: { tool: 'bash', ok: true, text: 'z'.repeat(500) },
-            lastText,
-            toolCalls: 9,
-            tokensIn: 100,
-            tokensOut: 200,
-            cost: 0.001,
-            files: [],
-            startedAt: 0,
-            updatedAt: 60000,
-        });
-        assert.ok(!text.includes(lastText));
-        assert.ok(text.includes('5449428597922079323'));
-        assert.ok(text.endsWith(' in'));
-        assert.ok(text.includes('</i>'));
-        assert.ok(text.includes('</code></blockquote>'));
-        assert.ok(text.length <= 3900);
     });
 
     test('formatContextPin shows window occupancy and a lifetime line', () => {
@@ -187,6 +83,14 @@ describe('formatter', () => {
         assert.ok(short.includes('ok'));
         const aged = formatLiveTool({ kind: 'tool', tool: 'bash', status: 'running', summary: 'bash make', output: 'x', time: 3 }, 12);
         assert.ok(aged.includes('· 12s'));
+    });
+
+    test('formatLiveTool clamps heavily escaped output below the telegram limit', () => {
+        const heavy = '<&> '.repeat(600) + 'FULL_MARKER';
+        const text = formatLiveTool({ kind: 'tool', tool: 'bash', status: 'running', summary: 'bash make', output: heavy, time: 1 });
+        assert.ok(text.length <= 3600, `rendered length ${text.length} must stay under the card limit`);
+        assert.ok(text.includes('bash make'));
+        assert.ok(text.includes('FULL_MARKER'));
     });
 
     test('formatConsoleBatch renders console lines in order', () => {
@@ -335,61 +239,6 @@ describe('formatter', () => {
         assert.ok(!batch.includes('x'.repeat(5000)));
     });
 
-    test('truncateHtml never breaks tags or entities', () => {
-        assert.equal(truncateHtml('hello', 10), 'hello');
-        assert.equal(truncateHtml('<b>hello <i>world</i> end</b>', 15), '<b>hello …</b>');
-        const cut = truncateHtml('<i>a&lt;b&lt;c</i>', 8);
-        assert.ok(!/&[a-z]*$/.test(cut.replace(/…<\/i>$/, '')));
-        assert.ok(cut.endsWith('</i>'));
-        assert.ok(cut.length <= 8);
-    });
-
-    test('formatProgress keeps valid HTML and footer when lastText expands on escape', () => {
-        const text = formatProgress({
-            title: 'T',
-            directory: '/repo',
-            model: 'm',
-            todos: [],
-            tools: [],
-            result: null,
-            lastText: '<test> '.repeat(600),
-            toolCalls: 1,
-            tokensIn: 100,
-            tokensOut: 200,
-            cost: 0.001,
-            files: [],
-            startedAt: 0,
-            updatedAt: 60000,
-        });
-        assert.ok(text.length <= RENDER_BUDGET);
-        assert.equal((text.match(/<i>/g) || []).length, (text.match(/<\/i>/g) || []).length);
-        assert.ok(text.endsWith(' in'));
-        assert.ok(text.includes('5449428597922079323'));
-        assert.ok(!/&[a-zA-Z]*…/.test(text));
-    });
-
-    test('formatProgress does not leak raw markdown when lastText is cut mid-token', () => {
-        const text = formatProgress({
-            title: 'T',
-            directory: '/repo',
-            model: 'm',
-            todos: Array.from({ length: 8 }, (_, i) => ({ content: `todo-${i} ${'x'.repeat(110)}`, state: 'queued' as const })),
-            tools: [],
-            result: null,
-            lastText: '**done** and *fast* with a [link](https://example.com/very-long-path-here) plus ' + 'tail '.repeat(600),
-            toolCalls: 1,
-            tokensIn: 100,
-            tokensOut: 200,
-            cost: 0.001,
-            files: [],
-            startedAt: 0,
-            updatedAt: 60000,
-        });
-        assert.ok(text.length <= RENDER_BUDGET);
-        assert.ok(!text.includes('**'));
-        assert.ok(!text.includes('[docs]('));
-        assert.equal((text.match(/<i>/g) || []).length, (text.match(/<\/i>/g) || []).length);
-    });
 });
 
 describe('formatter questions', () => {
@@ -475,14 +324,6 @@ describe('formatter code blocks', () => {
         assert.ok(!inline.includes('blockquote'));
     });
 
-    test('truncation inside an expandable quote keeps it closed', () => {
-        const html = codeNote(Array.from({ length: 40 }, (_, i) => `line-${i}`).join('\n'));
-        const cut = truncateHtml(html, 40);
-        assert.ok(cut.startsWith('<blockquote expandable>'));
-        assert.ok(cut.includes('</blockquote>'));
-        assert.equal((cut.match(/<blockquote/g) || []).length, (cut.match(/<\/blockquote>/g) || []).length);
-    });
-
     test('code notes fold into expandable quotes, never spoilers', () => {
         assert.equal(codeNote('ok'), '<code>ok</code>');
         assert.equal(codeNote('a\nb'), '<code>a\nb</code>');
@@ -520,6 +361,13 @@ describe('formatter code blocks', () => {
         assert.ok(big.includes('<blockquote expandable>…'));
         assert.ok(big.length < 4096, 'a kept reasoning tail fits a single Telegram message');
         assert.ok(!formatThoughtArchive(5000, '').includes('<blockquote'), 'a header-only thought carries no quote');
+    });
+
+    test('thinking time never displays a rounded 60s bucket', () => {
+        assert.equal(formatThinkingTime(1200), '1.2s');
+        assert.equal(formatThinkingTime(59960), '1m 0s');
+        assert.equal(formatThinkingTime(119400), '1m 59s');
+        assert.equal(formatThinkingTime(119600), '2m 0s');
     });
 });
 
@@ -579,26 +427,4 @@ describe('formatter todo plan block', () => {
         assert.ok(lines[2].includes(escapeHtml('second')));
     });
 
-    test('formatProgress and formatConsoleBatch render the same plan chunk', () => {
-        const chunk = todoLines(todos).join('\n');
-        const progress = formatProgress({
-            title: 'Test session',
-            directory: '/repo',
-            model: '{"id":"model-1"}',
-            todos,
-            tools: [],
-            result: null,
-            lastText: '',
-            toolCalls: 0,
-            tokensIn: 0,
-            tokensOut: 0,
-            cost: 0,
-            files: [],
-            startedAt: 0,
-            updatedAt: 1000,
-        });
-        assert.ok(progress.includes(chunk), 'formatProgress reuses the plan chunk');
-        const batch = formatConsoleBatch([], todos);
-        assert.ok(batch.includes(chunk), 'formatConsoleBatch reuses the plan chunk');
-    });
 });
