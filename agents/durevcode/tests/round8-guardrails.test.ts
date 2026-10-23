@@ -347,6 +347,133 @@ describe('round-8 guardrails', () => {
         assert.equal(params.some((p) => (p as { reply_parameters?: unknown }).reply_parameters !== undefined), false, 'flags off strip the quote target');
     });
 
+    test('exact duplicate prompt joins a running twin and mirrors the answer', async () => {
+        const agent = makeAgent({ answerFanout: true });
+        const { stub, sends, params } = telegramStub();
+        const stateA = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_fan_a' });
+        const stateB = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_fan_b' });
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => ({
+            getSession: async () => BASE_SESSION,
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        const enqueueTo = (state: State, text: string) => (agent as unknown as {
+            enqueuePrompt: (s: State, t: string) => void;
+        }).enqueuePrompt.bind(agent)(state, text);
+        const pumpFrom = (state: State) => (agent as unknown as {
+            pumpPrompts: (t: unknown, o: unknown, s: State) => Promise<void>;
+        }).pumpPrompts(stub, {
+            sendPrompt: async () => ({ admitted: true, busy: false, messageId: 'm1' }),
+        }, state);
+        const echoIn = (state: State, text: string) => (agent as unknown as {
+            acceptEchoAttribution: (s: State, t: string) => boolean;
+        }).acceptEchoAttribution.bind(agent)(state, text);
+        const requeueTo = (state: State, key: string, body: string) => (agent as unknown as {
+            requeueToolEvent: (s: State, k: string, e: unknown) => void;
+        }).requeueToolEvent.bind(agent)(state, key, { kind: 'text', time: Date.now(), text: body });
+        const flushFrom = (state: State) => {
+            state.lastEventMessageAt = 0;
+            return (agent as unknown as { runFlushEvents: (t: unknown, s: State) => Promise<void> }).runFlushEvents(stub, state);
+        };
+        stateA.laneReplyTo = 111;
+        stateA.laneMention = '@tvalyh';
+        stateA.laneUserId = 510510510;
+        enqueueTo(stateA, 'How do I reset the cache?');
+        await pumpFrom(stateA);
+        stateB.laneReplyTo = 999;
+        stateB.laneMention = '@testertesterov';
+        stateB.laneUserId = 2124209827;
+        enqueueTo(stateB, 'how do i reset the cache!?');
+        await pumpFrom(stateB);
+        assert.equal((stateB as Record<string, unknown>).promptQueue.length as number, 1, 'follower prompt stays held');
+        const follows = (agent as unknown as { fanoutFollows: Map<string, unknown> }).fanoutFollows;
+        assert.equal(follows.has('ses_fan_b'), true, 'follower registered against the running twin');
+        echoIn(stateA, 'How do I reset the cache?');
+        requeueTo(stateA, 'kF', 'Result Shared');
+        await flushFrom(stateA);
+        const answers = sends.filter((t) => t.includes('Result Shared'));
+        assert.equal(answers.length, 2, 'both topics receive the shared answer');
+        assert.equal(answers.some((t) => t.startsWith('<a href="tg://user?id=510510510">@tvalyh</a>')), true, 'primary keeps its own colored lead');
+        assert.equal(answers.some((t) => t.startsWith('<a href="tg://user?id=2124209827">@testertesterov</a>')), true, 'follower gets its own colored lead');
+        const replyIds = params
+            .filter((p) => (p as { reply_parameters?: { message_id: number } }).reply_parameters !== undefined)
+            .map((p) => (p as { reply_parameters: { message_id: number } }).reply_parameters.message_id);
+        assert.deepEqual(replyIds.sort((a: number, b: number) => a - b), [111, 999], 'each copy quotes its own author');
+    });
+
+    test('a follower prompt of its own dissolves the mirror and sends privately', async () => {
+        const agent = makeAgent({ answerFanout: true });
+        const { stub, params } = telegramStub();
+        const stateA = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_fan_a' });
+        const stateB = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_fan_b' });
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => ({
+            getSession: async () => BASE_SESSION,
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        const prompts: string[] = [];
+        const enqueueTo = (state: State, text: string) => (agent as unknown as {
+            enqueuePrompt: (s: State, t: string) => void;
+        }).enqueuePrompt.bind(agent)(state, text);
+        const pumpFrom = (state: State) => (agent as unknown as {
+            pumpPrompts: (t: unknown, o: unknown, s: State) => Promise<void>;
+        }).pumpPrompts(stub, {
+            sendPrompt: async (sessionId: string, text: string) => {
+                prompts.push(`${sessionId}:${text}`);
+                return { admitted: true, busy: false, messageId: 'm1' };
+            },
+        }, state);
+        stateA.laneReplyTo = 111;
+        stateA.laneMention = '@tvalyh';
+        enqueueTo(stateA, 'How do I reset the cache?');
+        await pumpFrom(stateA);
+        stateB.laneReplyTo = 999;
+        stateB.laneMention = '@testertesterov';
+        enqueueTo(stateB, 'how do i reset the cache!?');
+        await pumpFrom(stateB);
+        enqueueTo(stateB, 'Actually something else');
+        await pumpFrom(stateB);
+        await pumpFrom(stateB);
+        assert.deepEqual(prompts, ['ses_fan_a:How do I reset the cache?', 'ses_fan_b:how do i reset the cache!?', 'ses_fan_b:Actually something else'], 'dissolved follower pumps its held prompt first, then its own fresh prompt');
+        const follows = (agent as unknown as { fanoutFollows: Map<string, unknown> }).fanoutFollows;
+        assert.equal(follows.has('ses_fan_b'), false, 'mirror dissolved on follower activity');
+    });
+
+    test('with fanout disabled every prompt runs its own session delivery', async () => {
+        const agent = makeAgent();
+        const { stub } = telegramStub();
+        const stateA = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_fan_a' });
+        const stateB = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_fan_b' });
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => ({
+            getSession: async () => BASE_SESSION,
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        const prompts: string[] = [];
+        const enqueueTo = (state: State, text: string) => (agent as unknown as {
+            enqueuePrompt: (s: State, t: string) => void;
+        }).enqueuePrompt.bind(agent)(state, text);
+        const pumpFrom = (state: State) => (agent as unknown as {
+            pumpPrompts: (t: unknown, o: unknown, s: State) => Promise<void>;
+        }).pumpPrompts(stub, {
+            sendPrompt: async (_id: string, text: string) => {
+                prompts.push(text);
+                return { admitted: true, busy: false, messageId: 'm1' };
+            },
+        }, state);
+        enqueueTo(stateA, 'How do I reset the cache?');
+        await pumpFrom(stateA);
+        enqueueTo(stateB, 'How do I reset the cache?');
+        await pumpFrom(stateB);
+        assert.deepEqual(prompts, ['How do I reset the cache?', 'How do I reset the cache?'], 'no joining without the flag');
+    });
+
     test('steer prompt posted mid-turn cannot steal the running turn events', async () => {
         const agent = makeAgent();
         const { stub, sends, params } = telegramStub();

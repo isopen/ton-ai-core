@@ -163,6 +163,8 @@ const AUTO_CONTINUE_TEXT = 'Continue';
 const AUTO_CONTINUE_MIN_MS = 60000;
 const AUTO_CONTINUE_DEFAULT_MAX = 10;
 const WHIP_ARMED_TTL_MS = 10 * 60 * 1000;
+const FANOUT_TTL_MS = 10 * 60 * 1000;
+const FANOUT_MAX_FOLLOWERS = 5;
 export const WHIP_STICKER_DEFAULT = 'CAACAgIAAxkBAAEv9vtq2t-rBc-eZEgtx8QmfnuewtosmwAC4jQAAjnuWEhsEZKLSyNswj0E';
 export const WHIP_EMOJI_DEFAULT = '4985740531326779949';
 const PROMPT_TRANSIENT_BACKOFF_MS = 5000;
@@ -557,6 +559,7 @@ export interface DurevcodeWatchConfig {
     reasoningRepaint?: boolean;
     leadMention?: boolean;
     quoteReplies?: boolean;
+    answerFanout?: boolean;
     whipSticker?: string;
     whipEmojiId?: string;
     newTopics?: boolean;
@@ -769,6 +772,9 @@ export class DurevcodeAgent extends BaseAgent {
     private sessionTicks = new Set<string>();
     private promptLane = new Map<string, PromptAttribution[]>();
     private promptTracking = new Map<string, TrackedPrompt[]>();
+    private fanoutGroups = new Map<string, { fingerprint: string; followers: Set<string>; at: number }>();
+    private fanoutFollows = new Map<string, { primary: string; fingerprint: string; attribution: PromptAttribution; at: number }>();
+    private fanoutBounce = new Map<string, string>();
     private echoDeliveries = new Map<string, Array<{ text: string; time: number }>>();
     private eventAttribution = new WeakMap<object, PromptAttribution>();
     private permReplies = new Map<number, PermissionReply>();
@@ -2453,6 +2459,7 @@ export class DurevcodeAgent extends BaseAgent {
     ): Promise<void> {
         if (now - state.lastStopMsgAt < STOP_DEDUP_MS) return;
         state.lastStopMsgAt = now;
+        this.endFanoutGroup(state.session.id);
         await this.safePriorityReply(telegram, state, `${icon('stop')} Stopped, send the task again.`);
     }
 
@@ -2552,6 +2559,119 @@ export class DurevcodeAgent extends BaseAgent {
             if (attached && (attached.replyTo !== null || attached.mention !== '')) return attached;
         }
         return { replyTo: null, mention: '' };
+    }
+
+    private answerLead(lead: PromptAttribution): string {
+        if (this.config.durevcode.leadMention === false || !lead.mention) return '';
+        return lead.uid !== undefined && lead.uid > 0
+            ? `<a href="tg://user?id=${lead.uid}">${escapeHtml(lead.mention)}</a>`
+            : `<b>${escapeHtml(lead.mention)}</b>`;
+    }
+
+    private quotedTarget(lead: PromptAttribution): number | undefined {
+        return this.config.durevcode.quoteReplies === false ? undefined : lead.replyTo ?? undefined;
+    }
+
+    private promptFingerprint(text: string): string {
+        return text.toLowerCase().replace(/[^\p{L}\p{N}@#_]+/gu, ' ').trim().replace(/\s+/g, ' ');
+    }
+
+    private sweepFanout(): void {
+        const now = Date.now();
+        for (const [id, group] of this.fanoutGroups) if (now - group.at > FANOUT_TTL_MS) this.fanoutGroups.delete(id);
+        for (const [id, follow] of this.fanoutFollows) if (now - follow.at > FANOUT_TTL_MS) this.fanoutFollows.delete(id);
+    }
+
+    private beginAnswerFanout(state: WatchedSession, head: string): void {
+        if (this.config.durevcode.answerFanout !== true) return;
+        const fingerprint = this.promptFingerprint(head);
+        const group = this.fanoutGroups.get(state.session.id);
+        if (group) {
+            this.dissolveFanoutFollowSet(group.followers);
+            this.fanoutGroups.delete(state.session.id);
+        }
+        this.fanoutGroups.set(state.session.id, { fingerprint, followers: new Set(), at: Date.now() });
+    }
+
+    private dissolveFanoutFollowSet(followers: Set<string>): void {
+        for (const sessionId of followers) {
+            const follow = this.fanoutFollows.get(sessionId);
+            if (follow === undefined) continue;
+            this.fanoutFollows.delete(sessionId);
+            console.debug(`Durevcode fanout dissolved for follower (session=${sessionId}).`);
+        }
+    }
+
+    private findFanoutPrimary(state: WatchedSession, fingerprint: string): string | null {
+        for (const [primary, group] of this.fanoutGroups) {
+            if (primary === state.session.id) continue;
+            if (group.fingerprint !== fingerprint) continue;
+            if (group.followers.size >= FANOUT_MAX_FOLLOWERS) continue;
+            return primary;
+        }
+        return null;
+    }
+
+    private async joinAnswerFanout(telegram: TelegramBotPlugin, state: WatchedSession, primary: string, fingerprint: string): Promise<void> {
+        const group = this.fanoutGroups.get(primary);
+        if (!group) return;
+        const laneHead = this.promptLane.get(state.session.id)?.[0];
+        const attribution: PromptAttribution = laneHead
+            ? { replyTo: laneHead.replyTo, mention: laneHead.mention, uid: laneHead.uid }
+            : { replyTo: null, mention: '' };
+        this.fanoutFollows.set(state.session.id, { primary, fingerprint, attribution, at: Date.now() });
+        group.followers.add(state.session.id);
+        this.logger.info(`Durevcode fanout joined (follower=${state.session.id} primary=${primary}).`);
+        try {
+            await this.safeReply(
+                telegram,
+                state,
+                `${hourglassIcon()} Same question is already running in another topic — I will copy the answer here too.`,
+            );
+        } catch (error) {
+            console.debug('Durevcode fanout join notice failed:', errorText(error));
+        }
+    }
+
+    private endFanoutGroup(sessionId: string): void {
+        const group = this.fanoutGroups.get(sessionId);
+        if (!group) return;
+        this.fanoutGroups.delete(sessionId);
+        this.dissolveFanoutFollowSet(group.followers);
+    }
+
+    private dissolveFanoutFollow(state: WatchedSession): void {
+        const follow = this.fanoutFollows.get(state.session.id);
+        if (!follow) return;
+        this.fanoutFollows.delete(state.session.id);
+        const group = this.fanoutGroups.get(follow.primary);
+        group?.followers.delete(state.session.id);
+        const heldHead = state.promptQueue[0];
+        if (heldHead) this.fanoutBounce.set(state.session.id, this.promptFingerprint(heldHead));
+        console.debug(`Durevcode fanout dissolved on follower activity (session=${state.session.id}).`);
+    }
+
+    private async mirrorAnswerToFollowers(telegram: TelegramBotPlugin, state: WatchedSession, answer: string): Promise<void> {
+        const group = this.fanoutGroups.get(state.session.id);
+        if (!group || group.followers.size === 0) return;
+        for (const sessionId of [...group.followers]) {
+            const follow = this.fanoutFollows.get(sessionId);
+            const followerState = this.watched.get(sessionId);
+            if (!follow || follow.primary !== state.session.id || !followerState) {
+                this.fanoutFollows.delete(sessionId);
+                group.followers.delete(sessionId);
+                continue;
+            }
+            try {
+                const leadText = this.answerLead(follow.attribution);
+                const text = leadText ? `${leadText} ${answer}` : answer;
+                await this.deliverFreshPart(telegram, followerState, text, this.quotedTarget(follow.attribution));
+            } catch (error) {
+                console.debug('Durevcode fanout mirror failed:', errorText(error));
+                this.fanoutFollows.delete(sessionId);
+                group.followers.delete(sessionId);
+            }
+        }
     }
 
     private replyMentionOf(message: Message): string {
@@ -2861,6 +2981,9 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private enqueuePrompt(state: WatchedSession, text: string): void {
+        if (this.config.durevcode.answerFanout === true && state.promptQueue.length > 0) {
+            this.dissolveFanoutFollow(state);
+        }
         if (state.promptQueue.length >= MAX_QUEUED_PROMPTS) {
             state.promptQueue.shift();
             this.consumeLaneHead(state);
@@ -3174,6 +3297,20 @@ export class DurevcodeAgent extends BaseAgent {
         }
         const head = state.promptQueue[0];
         const stopStamp = state.stoppedAt;
+        if (this.config.durevcode.answerFanout === true) {
+            this.sweepFanout();
+            if (this.fanoutFollows.has(state.session.id)) return;
+            const fingerprint = this.promptFingerprint(head);
+            const bounceHit = this.fanoutBounce.get(state.session.id) === fingerprint;
+            this.fanoutBounce.delete(state.session.id);
+            if (!bounceHit) {
+                const primary = this.findFanoutPrimary(state, fingerprint);
+                if (primary !== null) {
+                    await this.joinAnswerFanout(telegram, state, primary, fingerprint);
+                    return;
+                }
+            }
+        }
         if (this.config.opencode.cliFirst === true && !state.promptPumping) {
             const cliPostedAt = Date.now();
             state.promptPumping = true;
@@ -3186,6 +3323,7 @@ export class DurevcodeAgent extends BaseAgent {
                     state.turnUserId = attached.uid ?? 0;
                     this.trackPrompt(state, head, attached, cliPostedAt);
                     this.resetPromptLane(state);
+                    this.beginAnswerFanout(state, head);
                     return;
                 }
             } catch (error) {
@@ -3213,6 +3351,7 @@ export class DurevcodeAgent extends BaseAgent {
             state.turnUserId = attached.uid ?? 0;
             this.trackPrompt(state, head, attached, postedAt);
             this.resetPromptLane(state);
+            this.beginAnswerFanout(state, head);
             state.confirming =
                 state.stoppedAt === stopStamp && receipt.messageId !== undefined
                     ? { messageId: receipt.messageId, text: head, since: Date.now(), notified: false }
@@ -5775,15 +5914,10 @@ export class DurevcodeAgent extends BaseAgent {
             const { text: answer, command: stopCommand } = takeStopCommand(text);
             if (answer) {
                 const lead = this.leadAttribution(flushed);
-                let answerText = answer;
-                if (this.config.durevcode.leadMention !== false && lead.mention) {
-                    const leadText = lead.uid !== undefined && lead.uid > 0
-                        ? `<a href="tg://user?id=${lead.uid}">${escapeHtml(lead.mention)}</a>`
-                        : `<b>${escapeHtml(lead.mention)}</b>`;
-                    answerText = `${leadText} ${answer}`;
-                }
-                const replyTarget = this.config.durevcode.quoteReplies === false ? undefined : lead.replyTo ?? undefined;
-                await this.deliverFreshPart(telegram, state, answerText, replyTarget);
+                const leadText = this.answerLead(lead);
+                const answerText = leadText ? `${leadText} ${answer}` : answer;
+                await this.deliverFreshPart(telegram, state, answerText, this.quotedTarget(lead));
+                await this.mirrorAnswerToFollowers(telegram, state, answer);
             }
             if (stopCommand) {
                 await this.deliverFreshPart(telegram, state, stopCommand);
@@ -5946,6 +6080,7 @@ export class DurevcodeAgent extends BaseAgent {
         state.pendingKeys.clear();
         state.liveTool = null;
         state.pendingTodos = false;
+        this.endFanoutGroup(state.session.id);
         this.resetPromptLane(state);
         console.log(`Durevcode finalized session ${state.session.id}`);
         await this.clearThinkingMessage(telegram, state);
