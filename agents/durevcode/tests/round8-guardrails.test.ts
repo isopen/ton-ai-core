@@ -248,7 +248,7 @@ describe('round-8 guardrails', () => {
         assert.equal(state.turnMention, '@tvalyh');
         requeue('kA', 'Result A', sentAAt);
         await flush();
-        assert.equal(sends.some((t) => t.includes('@tvalyh')), false, 'answers no longer name the author; the quote shows it');
+        assert.equal(sends.some((t) => t.startsWith('<b>@tvalyh</b>')), true, 'answers lead with the author name by default');
         assert.equal(sends.some((t) => t.includes('Result A')), true);
         const replyIds = () => params
             .filter((p) => (p as { reply_parameters?: { message_id: number } }).reply_parameters !== undefined)
@@ -259,7 +259,7 @@ describe('round-8 guardrails', () => {
         assert.equal(state.turnMention, '@testertesterov');
         requeue('kB', 'Result B');
         await flush();
-        assert.equal(sends.some((t) => t.includes('@testertesterov')), false, 'each answer names nobody; the quote already shows the author');
+        assert.equal(sends.some((t) => t.startsWith('<b>@testertesterov</b>')), true, 'second answer attributed to testertesterov');
         assert.equal(sends.some((t) => t.includes('Result B')), true);
         assert.deepEqual(replyIds(), [111, 222]);
     });
@@ -303,6 +303,48 @@ describe('round-8 guardrails', () => {
         await flush();
         assert.equal(sends.some((t) => t.startsWith('<a href="tg://user?id=510510510">@tvalyh</a>')), true, 'the flag restores a colored protocol mention of the author');
         assert.equal(sends.some((t) => t.includes('Result C')), true);
+    });
+
+    test('flags off leave a plain neutral answer without a quote target', async () => {
+        const agent = makeAgent({ leadMention: false, quoteReplies: false });
+        const { stub, sends, params } = telegramStub();
+        const state = await attach(agent, stub, BASE_SESSION);
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => ({
+            getSession: async () => BASE_SESSION,
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        const enqueue = (text: string) => (agent as unknown as {
+            enqueuePrompt: (s: State, t: string) => void;
+        }).enqueuePrompt.bind(agent)(state, text);
+        const pump = () => (agent as unknown as {
+            pumpPrompts: (t: unknown, o: unknown, s: State) => Promise<void>;
+        }).pumpPrompts(stub, {
+            sendPrompt: async () => ({ admitted: true, busy: false, messageId: 'm1' }),
+        }, state);
+        const echo = (text: string) => (agent as unknown as {
+            acceptEchoAttribution: (s: State, t: string) => boolean;
+        }).acceptEchoAttribution.bind(agent)(state, text);
+        const requeue = (key: string, body: string) => (agent as unknown as {
+            requeueToolEvent: (s: State, k: string, e: unknown) => void;
+        }).requeueToolEvent.bind(agent)(state, key, { kind: 'text', time: Date.now(), text: body });
+        const flush = () => {
+            state.lastEventMessageAt = 0;
+            return (agent as unknown as { runFlushEvents: (t: unknown, s: State) => Promise<void> }).runFlushEvents(stub, state);
+        };
+        state.laneReplyTo = 111;
+        state.laneMention = '@tvalyh';
+        state.laneUserId = 510510510;
+        enqueue('Task D');
+        await pump();
+        assert.equal(echo('Task D'), true, 'echo recognized with both flags off');
+        requeue('kD', 'Result D');
+        await flush();
+        assert.equal(sends.some((t) => t.includes('Result D')), true, 'answer still delivered');
+        assert.equal(sends.some((t) => t.includes('@tvalyh')), false, 'flags off strip the author name');
+        assert.equal(params.some((p) => (p as { reply_parameters?: unknown }).reply_parameters !== undefined), false, 'flags off strip the quote target');
     });
 
     test('steer prompt posted mid-turn cannot steal the running turn events', async () => {
@@ -350,7 +392,8 @@ describe('round-8 guardrails', () => {
         userEvent('Task B', steeredPromptAt + 2);
         requeue('kA', 'Result A', steeredPromptAt + 1);
         await flush();
-        assert.equal(sends.some((t) => t.includes('@tvalyh') || t.includes('@testertesterov')), false, 'answers carry no author name; the quote already shows it');
+        assert.equal(sends.some((t) => t.startsWith('<b>@tvalyh</b>')), true, 'running turn answer keeps the post author');
+        assert.equal(sends.some((t) => t.startsWith('<b>@testertesterov</b>')), false, 'steer track must not steal earlier events');
         const replyTarget = params.find((p) => (p as { reply_parameters?: { message_id: number } }).reply_parameters !== undefined);
         assert.equal((replyTarget as { reply_parameters?: { message_id: number } } | undefined)?.reply_parameters?.message_id, 111);
     });

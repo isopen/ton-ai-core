@@ -556,6 +556,7 @@ export interface DurevcodeWatchConfig {
     reasoningStream?: boolean;
     reasoningRepaint?: boolean;
     leadMention?: boolean;
+    quoteReplies?: boolean;
     whipSticker?: string;
     whipEmojiId?: string;
     newTopics?: boolean;
@@ -5775,13 +5776,14 @@ export class DurevcodeAgent extends BaseAgent {
             if (answer) {
                 const lead = this.leadAttribution(flushed);
                 let answerText = answer;
-                if (this.config.durevcode.leadMention === true && lead.mention) {
+                if (this.config.durevcode.leadMention !== false && lead.mention) {
                     const leadText = lead.uid !== undefined && lead.uid > 0
                         ? `<a href="tg://user?id=${lead.uid}">${escapeHtml(lead.mention)}</a>`
                         : `<b>${escapeHtml(lead.mention)}</b>`;
                     answerText = `${leadText} ${answer}`;
                 }
-                await this.deliverFreshPart(telegram, state, answerText, lead.replyTo ?? undefined);
+                const replyTarget = this.config.durevcode.quoteReplies === false ? undefined : lead.replyTo ?? undefined;
+                await this.deliverFreshPart(telegram, state, answerText, replyTarget);
             }
             if (stopCommand) {
                 await this.deliverFreshPart(telegram, state, stopCommand);
