@@ -56,6 +56,7 @@ module.exports = {
     '<rootDir>/plugins/tl-language/tests',
     '<rootDir>/plugins/agent-transport/tests',
     '<rootDir>/plugins/telegram/tests',
+    '<rootDir>/plugins/whisper/tests',
     '<rootDir>/plugins/gram-db/tests',
     '<rootDir>/plugins/atom/tests',
     '<rootDir>/plugins/tgs/tests',
@@ -109,6 +110,7 @@ module.exports = {
     '^@ton-ai/crypton$': '<rootDir>/plugins/crypton/src/index.ts',
     '^@ton-ai/tgcloud-hello$': '<rootDir>/plugins/tgcloud-hello/src/index.ts',
     '^@ton-ai/telegram-bot-api$': '<rootDir>/plugins/telegram-bot-api/src/index.ts',
+    '^@ton-ai/whisper$': '<rootDir>/plugins/whisper/src/index.ts',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
 };
