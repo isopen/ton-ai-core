@@ -394,13 +394,197 @@ describe('round-8 guardrails', () => {
         requeueTo(stateA, 'kF', 'Result Shared');
         await flushFrom(stateA);
         const answers = sends.filter((t) => t.includes('Result Shared'));
-        assert.equal(answers.length, 2, 'both topics receive the shared answer');
-        assert.equal(answers.some((t) => t.startsWith('<a href="tg://user?id=510510510">@tvalyh</a>')), true, 'primary keeps its own colored lead');
-        assert.equal(answers.some((t) => t.startsWith('<a href="tg://user?id=2124209827">@testertesterov</a>')), true, 'follower gets its own colored lead');
+        assert.equal(answers.length, 1, 'one shared answer for every author');
+        assert.equal(
+            answers[0].startsWith('<a href="tg://user?id=510510510">@tvalyh</a> <a href="tg://user?id=2124209827">@testertesterov</a>'),
+            true,
+            'the shared answer tags primary first, then followers, in their own colors',
+        );
+        const replyIds = params
+            .filter((p) => (p as { reply_parameters?: { message_id: number } }).reply_parameters !== undefined)
+            .map((p) => (p as { reply_parameters: { message_id: number } }).reply_parameters.message_id);
+        assert.deepEqual(replyIds, [111], 'the shared message quotes only the primary prompt');
+    });
+
+    test('same-topic duplicate prompt is held and answered by one shared message', async () => {
+        const agent = makeAgent({ answerFanout: true });
+        const { stub, sends } = telegramStub();
+        const stateA = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_fan_a' });
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => ({
+            getSession: async () => BASE_SESSION,
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        const prompts: string[] = [];
+        const enqueueTo = (state: State, text: string) => (agent as unknown as {
+            enqueuePrompt: (s: State, t: string) => void;
+        }).enqueuePrompt.bind(agent)(state, text);
+        const pumpFrom = (state: State) => (agent as unknown as {
+            pumpPrompts: (t: unknown, o: unknown, s: State) => Promise<void>;
+        }).pumpPrompts(stub, {
+            sendPrompt: async (_id: string, text: string) => {
+                prompts.push(text);
+                return { admitted: true, busy: false, messageId: 'm1' };
+            },
+        }, state);
+        const echoIn = (state: State, text: string) => (agent as unknown as {
+            acceptEchoAttribution: (s: State, t: string) => boolean;
+        }).acceptEchoAttribution.bind(agent)(state, text);
+        const requeueTo = (state: State, key: string, body: string) => (agent as unknown as {
+            requeueToolEvent: (s: State, k: string, e: unknown) => void;
+        }).requeueToolEvent.bind(agent)(state, key, { kind: 'text', time: Date.now(), text: body });
+        const flushFrom = (state: State) => {
+            state.lastEventMessageAt = 0;
+            return (agent as unknown as { runFlushEvents: (t: unknown, s: State) => Promise<void> }).runFlushEvents(stub, state);
+        };
+        stateA.laneReplyTo = 111;
+        stateA.laneMention = '@tvalyh';
+        stateA.laneUserId = 510510510;
+        enqueueTo(stateA, 'How do I reset the cache?');
+        await pumpFrom(stateA);
+        assert.deepEqual(prompts, ['How do I reset the cache?'], 'the first prompt runs');
+        stateA.laneReplyTo = 999;
+        stateA.laneMention = '@testertesterov';
+        stateA.laneUserId = 2124209827;
+        enqueueTo(stateA, 'How do I reset the cache?');
+        await pumpFrom(stateA);
+        await pumpFrom(stateA);
+        assert.deepEqual(prompts, ['How do I reset the cache?'], 'the duplicate prompt stays held in the same topic');
+        assert.equal((stateA as Record<string, unknown>).promptQueue.length as number, 1, 'held duplicate not consumed');
+        echoIn(stateA, 'How do I reset the cache?');
+        requeueTo(stateA, 'kF', 'Result Shared');
+        await flushFrom(stateA);
+        const answers = sends.filter((t) => t.includes('Result Shared'));
+        assert.equal(answers.length, 1, 'one shared answer for both same-topic authors');
+        assert.equal(
+            answers[0].startsWith('<a href="tg://user?id=510510510">@tvalyh</a> <a href="tg://user?id=2124209827">@testertesterov</a>'),
+            true,
+            'the shared answer tags the primary first, then the held duplicate author',
+        );
+        (agent as unknown as { endFanoutGroup: (s: State) => void }).endFanoutGroup.bind(agent)(stateA);
+        assert.equal((stateA as Record<string, unknown>).promptQueue.length as number, 0, 'held duplicate discarded once the shared answer landed');
+        assert.deepEqual(prompts, ['How do I reset the cache?'], 'discarded duplicate never runs its own session');
+    });
+
+    test('without name mentions the shared answer falls apart into per-author copies', async () => {
+        const agent = makeAgent({ answerFanout: true, leadMention: false });
+        const { stub, sends, params } = telegramStub();
+        const stateA = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_fan_a' });
+        const stateB = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_fan_b' });
+        (agent as unknown as { getPlugin: () => unknown }).getPlugin = () => ({
+            getSession: async () => BASE_SESSION,
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        });
+        const enqueueTo = (state: State, text: string) => (agent as unknown as {
+            enqueuePrompt: (s: State, t: string) => void;
+        }).enqueuePrompt.bind(agent)(state, text);
+        const pumpFrom = (state: State) => (agent as unknown as {
+            pumpPrompts: (t: unknown, o: unknown, s: State) => Promise<void>;
+        }).pumpPrompts(stub, {
+            sendPrompt: async () => ({ admitted: true, busy: false, messageId: 'm1' }),
+        }, state);
+        const echoIn = (state: State, text: string) => (agent as unknown as {
+            acceptEchoAttribution: (s: State, t: string) => boolean;
+        }).acceptEchoAttribution.bind(agent)(state, text);
+        const requeueTo = (state: State, key: string, body: string) => (agent as unknown as {
+            requeueToolEvent: (s: State, k: string, e: unknown) => void;
+        }).requeueToolEvent.bind(agent)(state, key, { kind: 'text', time: Date.now(), text: body });
+        const flushFrom = (state: State) => {
+            state.lastEventMessageAt = 0;
+            return (agent as unknown as { runFlushEvents: (t: unknown, s: State) => Promise<void> }).runFlushEvents(stub, state);
+        };
+        stateA.laneReplyTo = 111;
+        stateA.laneMention = '@tvalyh';
+        stateA.laneUserId = 510510510;
+        enqueueTo(stateA, 'How do I reset the cache?');
+        await pumpFrom(stateA);
+        stateB.laneReplyTo = 999;
+        stateB.laneMention = '@testertesterov';
+        stateB.laneUserId = 2124209827;
+        enqueueTo(stateB, 'how do i reset the cache!?');
+        await pumpFrom(stateB);
+        echoIn(stateA, 'How do I reset the cache?');
+        requeueTo(stateA, 'kF', 'Result Shared');
+        await flushFrom(stateA);
+        const answers = sends.filter((t) => t.includes('Result Shared'));
+        assert.equal(answers.length, 2, 'each waiting topic receives its own copy');
         const replyIds = params
             .filter((p) => (p as { reply_parameters?: { message_id: number } }).reply_parameters !== undefined)
             .map((p) => (p as { reply_parameters: { message_id: number } }).reply_parameters.message_id);
         assert.deepEqual(replyIds.sort((a: number, b: number) => a - b), [111, 999], 'each copy quotes its own author');
+    });
+
+    test('voice message is transcribed by whisper, posted and enqueued as a prompt', async () => {
+        const agent = makeAgent({ answerFanout: true });
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true, language: 'ru' };
+        const { stub, sends, params } = telegramStub();
+        const state = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_voice_a' });
+        const fakeWhisper = {
+            transcribeBuffer: async () => ({
+                text: '  What is the capital of France?  ',
+                language: 'ru',
+                audioSec: 3,
+                processingMs: 40,
+                model: 'ggml-test',
+            }),
+            probe: async () => ({ ok: true, binaryOk: true, modelOk: true, modelSizeBytes: 1 }),
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'whisper' ? fakeWhisper : undefined;
+        const message = {
+            message_id: 777,
+            voice: { file_id: 'v123', file_size: 120000, mime_type: 'audio/ogg', duration: 3 },
+        };
+        state.laneReplyTo = 777;
+        state.laneMention = '@tvalyh';
+        state.laneUserId = 510510510;
+        await (agent as unknown as {
+            inboundMediaMessage: (t: unknown, s: State, m: unknown, c: string) => Promise<void>;
+        }).inboundMediaMessage(stub, state, message, '');
+        assert.equal(sends.some((t) => t.includes('Transcribing the voice')), true, 'a transcription note is posted first');
+        assert.equal(sends.some((t) => t.includes('What is the capital of France?')), true, 'the decoded text is posted into the topic');
+        assert.deepEqual((state as Record<string, unknown>).promptQueue as string[], ['What is the capital of France?'], 'the transcript runs as the session prompt');
+        const replyIds = params
+            .filter((p) => (p as { reply_parameters?: { message_id: number } }).reply_parameters !== undefined)
+            .map((p) => (p as { reply_parameters: { message_id: number } }).reply_parameters.message_id);
+        assert.deepEqual(replyIds, [777], 'the transcript message quotes the voice itself');
+    });
+
+    test('voice transcription off keeps a notice and no prompt', async () => {
+        const agent = makeAgent({});
+        const { stub, sends } = telegramStub();
+        const state = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_voice_b' });
+        const message = { message_id: 888, voice: { file_id: 'v124', file_size: 120000, duration: 2 } };
+        await (agent as unknown as {
+            inboundMediaMessage: (t: unknown, s: State, m: unknown, c: string) => Promise<void>;
+        }).inboundMediaMessage(stub, state, message, '');
+        assert.equal(sends.some((t) => t.includes('Voice transcription is off')), true, 'the off notice explains how to enable whisper');
+        assert.deepEqual((state as Record<string, unknown>).promptQueue as string[], [], 'no prompt is queued without whisper');
+    });
+
+    test('failed whisper transcription posts a fail note and keeps the queue clean', async () => {
+        const agent = makeAgent({});
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        const { stub, sends } = telegramStub();
+        const state = await attach(agent, stub, { ...BASE_SESSION, id: 'ses_voice_c' });
+        const fakeWhisper = {
+            transcribeBuffer: async () => {
+                throw new Error('whisper-cli crashed');
+            },
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'whisper' ? fakeWhisper : undefined;
+        const message = { message_id: 889, voice: { file_id: 'v125', file_size: 50000, mime_type: 'audio/ogg', duration: 2 } };
+        await (agent as unknown as {
+            inboundMediaMessage: (t: unknown, s: State, m: unknown, c: string) => Promise<void>;
+        }).inboundMediaMessage(stub, state, message, '');
+        assert.equal(sends.some((t) => t.includes('Voice transcription failed')), true, 'the failure is reported into the topic');
+        assert.deepEqual((state as Record<string, unknown>).promptQueue as string[], [], 'a failed transcription never queues a prompt');
     });
 
     test('a follower prompt of its own dissolves the mirror and sends privately', async () => {

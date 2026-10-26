@@ -902,6 +902,7 @@ function stubOpencode() {
             if (renameImpl) return renameImpl(sessionId, title);
             return true;
         },
+        listModels: async () => [{ id: 'm-a', providerID: 'p', name: 'Model A' }],
     };
     return {
         opencode,
@@ -1904,7 +1905,7 @@ describe('durevcode forum control', () => {
         }
     });
 
-    test('voice is declined without queueing', async () => {
+    test('voice transcription is off by default and declines without queueing', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
         const fake = stubOpencode();
@@ -1916,7 +1917,132 @@ describe('durevcode forum control', () => {
         );
         assert.deepEqual(state.promptQueue, []);
         const decline = calls[calls.length - 1] as { params: Record<string, unknown> };
-        assert.ok(String(decline.params.text).includes("can't be parsed"));
+        assert.ok(String(decline.params.text).includes('Voice transcription is off'));
+    });
+
+    test('plain mode keeps text as chat text without prompting', async () => {
+        const agent = makeAgent({ plainMode: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: 'hello plain world' }, now),
+        );
+        assert.deepEqual(state.promptQueue, []);
+        assert.equal(fake.prompts.length, 0);
+    });
+
+    test('spoken voice transcript routes to the model card instead of prompting', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => ({
+                        text: 'Список моделей.',
+                        language: 'ru',
+                        audioSec: 3,
+                        processingMs: 5,
+                        model: 'ggml-test',
+                    }),
+                };
+            }
+            if (name === 'opencode') {
+                return { listModels: async () => [{ id: 'm-a', providerID: 'p', name: 'Model A' }] };
+            }
+            return undefined;
+        };
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v1', file_unique_id: 'u1', duration: 3, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 701 }, now),
+        );
+        assert.deepEqual(state.promptQueue, []);
+        assert.equal(fake.prompts.length, 0);
+        const card = calls.some((c) => {
+            const markup = (c as { params: { reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> } } }).params.reply_markup;
+            return markup?.inline_keyboard?.flat().some((button) => String(button.callback_data).startsWith('model:')) === true;
+        });
+        assert.ok(card, 'the spoken model phrase renders the model card');
+        const transcript = calls.some((c) => String((c as { params: Record<string, unknown> }).params.text).includes('Список моделей.'));
+        assert.ok(transcript, 'the transcript itself is still posted');
+    });
+
+    test('plain mode transcribes the voice as text without prompting', async () => {
+        const agent = makeAgent({ plainMode: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true, language: 'ru' };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'whisper'
+                ? {
+                      transcribeBuffer: async () => ({
+                          text: 'Plain voice says hello',
+                          language: 'ru',
+                          audioSec: 2,
+                          processingMs: 5,
+                          model: 'ggml-test',
+                      }),
+                  }
+                : undefined;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v9', file_unique_id: 'u9', duration: 2, mime_type: 'audio/ogg', file_size: 1000 } }, now),
+        );
+        const transcript = calls.some((c) => String((c as { params: Record<string, unknown> }).params.text).includes('Plain voice says hello'));
+        assert.ok(transcript, 'the voice still lands as a transcript in plain mode');
+        assert.deepEqual(state.promptQueue, []);
+        assert.equal(fake.prompts.length, 0);
+    });
+
+    test('spoken model and mode phrases open the cards instead of prompting', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: 'Какие модели есть?', message_id: 710 }, now),
+        );
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: 'переключи режим', message_id: 711 }, now),
+        );
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: 'список моделей.', message_id: 712 }, now),
+        );
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: 'какую модельку выбрать…', message_id: 713 }, now),
+        );
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: 'поменяй режим на план', message_id: 714 }, now),
+        );
+        assert.deepEqual(state.promptQueue, []);
+        assert.equal(fake.prompts.length, 0);
+        const cards = calls.filter((c) => String((c as { params: { reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> } } }).params.reply_markup?.inline_keyboard?.flat?.().map?.((b) => b.callback_data).join('|') ?? '').match(/^(mode|model):/));
+        assert.equal(cards.length, 5, 'every spoken variant renders its card as an inline keyboard');
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: 'напиши тест на модельный дом и валидатор' }, now),
+        );
+        assert.equal(fake.prompts.length, 1, 'long sentences stay session prompts');
+        assert.equal(cards.length, 5, 'the long prompt opens no card');
     });
 
     test('oversize photo is declined before download', async () => {

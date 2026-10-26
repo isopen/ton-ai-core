@@ -4,6 +4,7 @@ import { TelegramRateGovernor } from './governor';
 import { BaseAgent, AgentConfig } from '@ton-ai/core';
 import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton } from '@ton-ai/telegram-bot-api';
 import { ContextSnapshot, ModelApiInfo, OpencodeConfig, OpencodePlugin, OpencodeServerError, OpencodeServerEvent, PermissionDecision, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionPermissionRule, SessionRow, pickModeAgents, SpawnedProcess } from '@ton-ai/opencode';
+import { WhisperPlugin } from '@ton-ai/whisper';
 import {
     EMOJI,
     checkIcon,
@@ -44,6 +45,7 @@ import {
 export const PLUGIN_NAMES = {
     TELEGRAM: 'telegram-bot-api',
     OPENCODE: 'opencode',
+    WHISPER: 'whisper',
 } as const;
 
 export function selectSessionIds(
@@ -231,6 +233,8 @@ const CONTEXT_LIMIT_RETRY_MS = 5 * 60 * 1000;
 const DOC_MAX_BYTES = 512 * 1024;
 const DOC_MAX_CHARS = 20000;
 const MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+const MODELS_CARD_ROOTS = ['модел', 'model'];
+const MODE_CARD_ROOTS = ['режим', 'mode'];
 const INBOX_DIR = 'tmp/.durevcode-inbox';
 const INBOX_MAX_FILES = 200;
 
@@ -571,12 +575,29 @@ export interface DurevcodeWatchConfig {
     autoContinueMax?: number;
     autoFinish?: boolean;
     deleteOnTopicGone?: boolean;
+    plainMode?: boolean;
+}
+
+export interface DurevcodeWhisperConfig {
+    enabled: boolean;
+    binaryPath?: string;
+    modelPath?: string;
+    ffmpegPath?: string;
+    language?: string;
+    threads?: number;
+    gpu?: boolean;
+    maxConcurrent?: number;
+    timeoutMs?: number;
+    serverUrl?: string;
+    serverBin?: string;
+    autoServe?: boolean;
 }
 
 export interface DurevcodeConfig extends AgentConfig {
     telegram: TelegramBotConfig;
     opencode: OpencodeConfig;
     durevcode: DurevcodeWatchConfig;
+    whisper?: DurevcodeWhisperConfig;
 }
 
 interface ThoughtArchiveEntry {
@@ -642,6 +663,7 @@ interface WatchedSession {
     promptBusySince: number;
     promptErrorText: string | null;
     promptPumping: boolean;
+    promptHeld: boolean;
     cliRun: SpawnedProcess | null;
     stopButtonOn: boolean;
     stopMessageId: number | null;
@@ -772,7 +794,7 @@ export class DurevcodeAgent extends BaseAgent {
     private sessionTicks = new Set<string>();
     private promptLane = new Map<string, PromptAttribution[]>();
     private promptTracking = new Map<string, TrackedPrompt[]>();
-    private fanoutGroups = new Map<string, { fingerprint: string; followers: Set<string>; at: number }>();
+    private fanoutGroups = new Map<string, { fingerprint: string; followers: Set<string>; holds: PromptAttribution[]; primed: boolean; at: number }>();
     private fanoutFollows = new Map<string, { primary: string; fingerprint: string; attribution: PromptAttribution; at: number }>();
     private fanoutBounce = new Map<string, string>();
     private echoDeliveries = new Map<string, Array<{ text: string; time: number }>>();
@@ -815,6 +837,10 @@ export class DurevcodeAgent extends BaseAgent {
         console.log('opencode plugin registered');
         await this.registerPlugin(new TelegramBotPlugin());
         console.log('Telegram plugin registered');
+        if (this.config.whisper?.enabled === true) {
+            await this.registerPlugin(new WhisperPlugin());
+            console.log('whisper plugin registered');
+        }
     }
 
     protected async onStart(): Promise<void> {
@@ -840,6 +866,11 @@ export class DurevcodeAgent extends BaseAgent {
         await this.waitForTelegram(telegram);
         const me = await telegram.getMe();
         console.log(`Durevcode bot: @${me.username ?? me.id}`);
+
+        if (this.config.whisper?.enabled === true && !this.isPluginActive(PLUGIN_NAMES.WHISPER)) {
+            await this.activatePlugin(PLUGIN_NAMES.WHISPER, this.config.whisper);
+            console.log('Durevcode whisper: voice transcription enabled');
+        }
         this.inboundSub = telegram.onMessage((message) => {
             const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
             if (!opencode) return;
@@ -1768,6 +1799,7 @@ export class DurevcodeAgent extends BaseAgent {
             promptBusySince: 0,
             promptErrorText: null,
             promptPumping: false,
+            promptHeld: false,
             cliRun: null,
             stopButtonOn: false,
             stopMessageId: stored?.stopMessageId ?? null,
@@ -2459,7 +2491,7 @@ export class DurevcodeAgent extends BaseAgent {
     ): Promise<void> {
         if (now - state.lastStopMsgAt < STOP_DEDUP_MS) return;
         state.lastStopMsgAt = now;
-        this.endFanoutGroup(state.session.id);
+        this.endFanoutGroup(state);
         await this.safePriorityReply(telegram, state, `${icon('stop')} Stopped, send the task again.`);
     }
 
@@ -2584,13 +2616,19 @@ export class DurevcodeAgent extends BaseAgent {
 
     private beginAnswerFanout(state: WatchedSession, head: string): void {
         if (this.config.durevcode.answerFanout !== true) return;
+        if (head === AUTO_CONTINUE_TEXT) return;
         const fingerprint = this.promptFingerprint(head);
         const group = this.fanoutGroups.get(state.session.id);
         if (group) {
+            if (group.fingerprint === fingerprint) {
+                group.at = Date.now();
+                group.primed = true;
+                return;
+            }
             this.dissolveFanoutFollowSet(group.followers);
             this.fanoutGroups.delete(state.session.id);
         }
-        this.fanoutGroups.set(state.session.id, { fingerprint, followers: new Set(), at: Date.now() });
+        this.fanoutGroups.set(state.session.id, { fingerprint, followers: new Set(), holds: [], primed: false, at: Date.now() });
     }
 
     private dissolveFanoutFollowSet(followers: Set<string>): void {
@@ -2615,6 +2653,7 @@ export class DurevcodeAgent extends BaseAgent {
     private async joinAnswerFanout(telegram: TelegramBotPlugin, state: WatchedSession, primary: string, fingerprint: string): Promise<void> {
         const group = this.fanoutGroups.get(primary);
         if (!group) return;
+        if (this.fanoutGroups.has(state.session.id)) this.fanoutGroups.delete(state.session.id);
         const laneHead = this.promptLane.get(state.session.id)?.[0];
         const attribution: PromptAttribution = laneHead
             ? { replyTo: laneHead.replyTo, mention: laneHead.mention, uid: laneHead.uid }
@@ -2633,11 +2672,26 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
-    private endFanoutGroup(sessionId: string): void {
-        const group = this.fanoutGroups.get(sessionId);
+    private endFanoutGroup(state: WatchedSession, discardHeld = true): void {
+        state.promptHeld = false;
+        const group = this.fanoutGroups.get(state.session.id);
         if (!group) return;
-        this.fanoutGroups.delete(sessionId);
+        this.fanoutGroups.delete(state.session.id);
         this.dissolveFanoutFollowSet(group.followers);
+        if (!discardHeld) return;
+        for (const sessionId of group.followers) {
+            const followerState = this.watched.get(sessionId);
+            if (!followerState) continue;
+            while (followerState.promptQueue[0] && this.promptFingerprint(followerState.promptQueue[0]) === group.fingerprint) {
+                followerState.promptQueue.shift();
+                this.consumeLaneHead(followerState);
+            }
+        }
+        while (state.promptQueue[0] && this.promptFingerprint(state.promptQueue[0]) === group.fingerprint) {
+            state.promptQueue.shift();
+            this.consumeLaneHead(state);
+        }
+        console.debug(`Durevcode fanout group ended (session=${state.session.id}, held duplicates discarded).`);
     }
 
     private dissolveFanoutFollow(state: WatchedSession): void {
@@ -2721,6 +2775,15 @@ export class DurevcodeAgent extends BaseAgent {
             await this.inboundTopicRename(opencode, state, message.forum_topic_edited.name);
             return;
         }
+        if (this.config.durevcode.plainMode === true) {
+            if (message.voice) {
+                await this.inboundVoice(telegram, state, message);
+                console.debug(`Durevcode plain mode: transcript posted, no prompt (session=${state.session.id} message=${message.message_id}).`);
+                return;
+            }
+            console.debug(`Durevcode plain mode: ignored (session=${state.session.id} thread=${threadId} message=${message.message_id}).`);
+            return;
+        }
         const text = (message.text || message.caption || '').trim();
         const replyTo = message.reply_to_message?.message_id;
         state.laneReplyTo = typeof message.message_id === 'number' ? message.message_id : null;
@@ -2792,7 +2855,25 @@ export class DurevcodeAgent extends BaseAgent {
                 return true;
             }
         }
+        const spoken = this.matchCardCommand(text);
+        if (spoken === 'models') {
+            await this.sendModelCard(telegram, opencode, state);
+            return true;
+        }
+        if (spoken === 'mode') {
+            await this.sendModeCard(telegram, opencode, state);
+            return true;
+        }
         return false;
+    }
+
+    private matchCardCommand(text: string): 'mode' | 'models' | null {
+        const normalized = text.trim().replace(/[?!.…]+$/, '').replace(/\s+/g, ' ').toLowerCase();
+        const tokens = normalized.split(' ').filter((token) => token.length > 0);
+        if (tokens.length === 0 || tokens.length > 5) return null;
+        if (tokens.some((token) => MODELS_CARD_ROOTS.some((root) => token.startsWith(root)))) return 'models';
+        if (tokens.some((token) => MODE_CARD_ROOTS.some((root) => token.startsWith(root)))) return 'mode';
+        return null;
     }
 
     private async handleUnknownThread(
@@ -2811,6 +2892,10 @@ export class DurevcodeAgent extends BaseAgent {
         }
         if (this.config.durevcode.newTopics === false) {
             console.debug(`Durevcode unknown topic ignored: new topics disabled (thread=${threadId}).`);
+            return;
+        }
+        if (this.config.durevcode.plainMode === true) {
+            console.debug(`Durevcode plain mode: new topic session not created (thread=${threadId}).`);
             return;
         }
         const from = message.from;
@@ -3002,6 +3087,7 @@ export class DurevcodeAgent extends BaseAgent {
         state.promptQueue.push(text);
         state.stoppedAt = 0;
         state.stoppedByUser = false;
+        if (wasEmpty) this.beginAnswerFanout(state, text);
         this.submittedPrompts.push({ session: state.session.id, text, at: Date.now() });
         if (this.submittedPrompts.length > MAX_SUBMITTED_PROMPTS) {
             this.submittedPrompts.splice(0, this.submittedPrompts.length - MAX_SUBMITTED_PROMPTS);
@@ -3087,18 +3173,93 @@ export class DurevcodeAgent extends BaseAgent {
             );
             return;
         }
-        const label = message.voice
-            ? 'Voice'
-            : message.video_note
-                ? 'Video notes'
-                : message.audio
-                    ? 'Audio'
-                    : 'Stickers';
+        if (message.voice) {
+            await this.inboundVoice(telegram, state, message);
+            return;
+        }
+        const label = message.video_note ? 'Video notes' : message.audio ? 'Audio' : 'Stickers';
         await this.safeReply(
             telegram,
             state,
             `${icon('warn')} ${label} can't be parsed yet — send a photo, a video, a document, or text.`,
         );
+    }
+
+    private async inboundVoice(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        message: Message,
+    ): Promise<void> {
+        const voice = message.voice;
+        if (!voice) return;
+        const whisper = this.config.whisper?.enabled === true
+            ? this.getPlugin<WhisperPlugin>(PLUGIN_NAMES.WHISPER)
+            : undefined;
+        if (!whisper) {
+            await this.safeReply(
+                telegram,
+                state,
+                `${icon('warn')} Voice transcription is off (set DUREVCODE_WHISPER_ENABLED=1 and DUREVCODE_WHISPER_MODEL) — send text meanwhile.`,
+            );
+            return;
+        }
+        if (voice.file_size !== undefined && voice.file_size > MEDIA_MAX_BYTES) {
+            await this.rejectOversizedMedia(telegram, state, '');
+            return;
+        }
+        const language = this.config.whisper?.language;
+        const options = language && language !== 'auto' ? { language } : undefined;
+        try {
+            await this.safeReply(telegram, state, `${hourglassIcon()} Transcribing the voice...`);
+            const buffer = await this.downloadToBuffer(telegram, state, voice.file_id, 'voice');
+            if (!buffer) return;
+            const result = await whisper.transcribeBuffer(
+                {
+                    buffer,
+                    filename: `voice_${message.message_id}.ogg`,
+                    mime: voice.mime_type || 'audio/ogg',
+                },
+                options,
+            );
+            const text = result.text.trim();
+            if (text === '') {
+                await this.safeReply(telegram, state, `${icon('fail')} Voice transcription came back empty.`);
+                return;
+            }
+            const attribution: PromptAttribution = {
+                replyTo: state.laneReplyTo,
+                mention: state.laneMention,
+                uid: state.laneUserId,
+            };
+            await this.deliverFreshPart(
+                telegram,
+                state,
+                `${icon('chat')} ${escapeHtml(text)}`,
+                this.quotedTarget(attribution),
+            );
+            const spoken = this.matchCardCommand(text);
+            if (spoken !== null) {
+                const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
+                if (opencode) {
+                    if (spoken === 'models') {
+                        console.debug(`Durevcode voice command: model card (session=${state.session.id}).`);
+                        await this.sendModelCard(telegram, opencode, state);
+                    } else {
+                        console.debug(`Durevcode voice command: mode card (session=${state.session.id}).`);
+                        await this.sendModeCard(telegram, opencode, state);
+                    }
+                    return;
+                }
+            }
+            if (this.config.durevcode.plainMode === true) {
+                console.debug(`Durevcode plain mode: transcript posted without prompting (session=${state.session.id}).`);
+                return;
+            }
+            this.enqueuePrompt(state, text);
+        } catch (error) {
+            console.error('Durevcode voice transcription failed:', errorText(error));
+            await this.safeReply(telegram, state, `${icon('fail')} Voice transcription failed — send it as text.`);
+        }
     }
 
     private async rejectOversizedMedia(
@@ -3301,6 +3462,31 @@ export class DurevcodeAgent extends BaseAgent {
             this.sweepFanout();
             if (this.fanoutFollows.has(state.session.id)) return;
             const fingerprint = this.promptFingerprint(head);
+            const ownGroup = this.fanoutGroups.get(state.session.id);
+            if (
+                ownGroup
+                && ownGroup.primed
+                && head !== AUTO_CONTINUE_TEXT
+                && ownGroup.fingerprint === fingerprint
+                && ownGroup.followers.size + ownGroup.holds.length < FANOUT_MAX_FOLLOWERS
+            ) {
+                if (!state.promptHeld) {
+                    const laneHead = this.promptLane.get(state.session.id)?.[0];
+                    ownGroup.holds.push(laneHead
+                        ? { replyTo: laneHead.replyTo, mention: laneHead.mention, uid: laneHead.uid }
+                        : { replyTo: null, mention: '' });
+                    state.promptHeld = true;
+                    const note = this.config.durevcode.leadMention === false
+                        ? `${hourglassIcon()} Same question is already being answered in this topic — the shared answer will appear here.`
+                        : `${hourglassIcon()} Same question is already being answered in this topic — I will tag you in the shared answer.`;
+                    try {
+                        await this.safeReply(telegram, state, note);
+                    } catch (error) {
+                        console.debug('Durevcode fanout hold notice failed:', errorText(error));
+                    }
+                }
+                return;
+            }
             const bounceHit = this.fanoutBounce.get(state.session.id) === fingerprint;
             this.fanoutBounce.delete(state.session.id);
             if (!bounceHit) {
@@ -3318,6 +3504,7 @@ export class DurevcodeAgent extends BaseAgent {
                 if (await this.startCliRun(telegram, opencode, state, head, false, null)) {
                     if (state.promptQueue[0] === head) state.promptQueue.shift();
                     const attached = this.consumeLaneHead(state);
+                    state.promptHeld = false;
                     state.turnReplyTo = attached.replyTo;
                     state.turnMention = attached.mention;
                     state.turnUserId = attached.uid ?? 0;
@@ -3341,11 +3528,13 @@ export class DurevcodeAgent extends BaseAgent {
                 head,
             );
             if (receipt.busy) {
+                this.endFanoutGroup(state, false);
                 await this.notePromptBusy(telegram, state);
                 return;
             }
             if (state.promptQueue[0] === head) state.promptQueue.shift();
             const attached = this.consumeLaneHead(state);
+            state.promptHeld = false;
             state.turnReplyTo = attached.replyTo;
             state.turnMention = attached.mention;
             state.turnUserId = attached.uid ?? 0;
@@ -3380,6 +3569,7 @@ export class DurevcodeAgent extends BaseAgent {
                 if (state.promptQueue[0] === head) state.promptQueue.shift();
                 this.consumeLaneHead(state);
                 this.resetPromptLane(state);
+                this.endFanoutGroup(state);
                 await this.safeReply(
                     telegram,
                     state,
@@ -5914,10 +6104,24 @@ export class DurevcodeAgent extends BaseAgent {
             const { text: answer, command: stopCommand } = takeStopCommand(text);
             if (answer) {
                 const lead = this.leadAttribution(flushed);
-                const leadText = this.answerLead(lead);
+                const group = this.config.durevcode.answerFanout === true ? this.fanoutGroups.get(state.session.id) : undefined;
+                const extraLeads: PromptAttribution[] = [];
+                if (group && this.config.durevcode.leadMention !== false) {
+                    for (const sessionId of [...group.followers]) {
+                        const follow = this.fanoutFollows.get(sessionId);
+                        if (follow && follow.primary === state.session.id) {
+                            extraLeads.push(follow.attribution);
+                        } else {
+                            this.fanoutFollows.delete(sessionId);
+                            group.followers.delete(sessionId);
+                        }
+                    }
+                    for (const hold of group.holds) extraLeads.push(hold);
+                }
+                const leadText = [this.answerLead(lead), ...extraLeads.map((item) => this.answerLead(item))].filter((part) => part !== '').join(' ');
                 const answerText = leadText ? `${leadText} ${answer}` : answer;
                 await this.deliverFreshPart(telegram, state, answerText, this.quotedTarget(lead));
-                await this.mirrorAnswerToFollowers(telegram, state, answer);
+                if (extraLeads.length === 0) await this.mirrorAnswerToFollowers(telegram, state, answer);
             }
             if (stopCommand) {
                 await this.deliverFreshPart(telegram, state, stopCommand);
@@ -6080,7 +6284,7 @@ export class DurevcodeAgent extends BaseAgent {
         state.pendingKeys.clear();
         state.liveTool = null;
         state.pendingTodos = false;
-        this.endFanoutGroup(state.session.id);
+        this.endFanoutGroup(state);
         this.resetPromptLane(state);
         console.log(`Durevcode finalized session ${state.session.id}`);
         await this.clearThinkingMessage(telegram, state);

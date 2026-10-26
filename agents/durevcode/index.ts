@@ -123,6 +123,23 @@ const config: DurevcodeConfig = {
         whipSticker: process.env.DUREVCODE_WHIP_STICKER,
         autoFinish: optionalFlag('DUREVCODE_AUTO_FINISH', true),
         deleteOnTopicGone: optionalFlag('DUREVCODE_DELETE_ON_TOPIC_GONE', false),
+        plainMode: optionalFlag('DUREVCODE_PLAIN_MODE', false),
+    },
+    whisper: {
+        enabled: optionalFlag('DUREVCODE_WHISPER_ENABLED', false),
+        binaryPath: process.env.DUREVCODE_WHISPER_BIN || 'whisper-cli',
+        modelPath:
+            process.env.DUREVCODE_WHISPER_MODEL ||
+            join(homedir(), '.local', 'share', 'durevcode', 'whisper', 'ggml-base.bin'),
+        ffmpegPath: process.env.DUREVCODE_WHISPER_FFMPEG || 'ffmpeg',
+        language: process.env.DUREVCODE_WHISPER_LANGUAGE || 'auto',
+        threads: optionalInt('DUREVCODE_WHISPER_THREADS', 4, 1, 64),
+        gpu: optionalFlag('DUREVCODE_WHISPER_GPU', false),
+        maxConcurrent: optionalInt('DUREVCODE_WHISPER_MAX_CONCURRENT', 1, 1, 4),
+        timeoutMs: optionalInt('DUREVCODE_WHISPER_TIMEOUT_MS', 120000, 1000, 600000),
+        serverUrl: process.env.DUREVCODE_WHISPER_SERVER_URL || undefined,
+        serverBin: process.env.DUREVCODE_WHISPER_SERVER_BIN || undefined,
+        autoServe: process.env.DUREVCODE_WHISPER_AUTO_SERVE !== '0',
     },
 };
 

@@ -13,7 +13,8 @@
     "@ton-ai/core": "*",
     "@ton-ai/opencode": "*",
     "@ton-ai/telegram-bot-api": "*",
-    "@ton-ai/tmd": "*"
+    "@ton-ai/tmd": "*",
+    "@ton-ai/whisper": "*"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",
