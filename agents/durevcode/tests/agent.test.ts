@@ -25,6 +25,7 @@ function stubTelegram() {
     let downloadImpl: (() => Promise<Buffer>) | null = null;
     let draftImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
     let topicNameImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
+    let memberImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
     const telegram = {
         sendMessage: async (params: Record<string, unknown>) => {
             calls.push({ op: 'send', params, at: stamp() });
@@ -94,6 +95,11 @@ function stubTelegram() {
             if (downloadImpl) return downloadImpl();
             return Buffer.from('alpha beta');
         },
+        getChatMember: async (params: Record<string, unknown>) => {
+            calls.push({ op: 'member', params, at: stamp() });
+            if (memberImpl) return memberImpl(params);
+            return { status: 'creator', user: params.user_id };
+        },
     };
     return {
         telegram,
@@ -106,6 +112,7 @@ function stubTelegram() {
         setDownloadImpl: (fn: typeof downloadImpl) => { downloadImpl = fn; },
         setDraftImpl: (fn: typeof draftImpl) => { draftImpl = fn; },
         setTopicNameImpl: (fn: typeof topicNameImpl) => { topicNameImpl = fn; },
+        setMemberImpl: (fn: typeof memberImpl) => { memberImpl = fn; },
     };
 }
 
@@ -1921,7 +1928,7 @@ describe('durevcode forum control', () => {
     });
 
     test('plain mode keeps text as chat text without prompting', async () => {
-        const agent = makeAgent({ plainMode: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const agent = makeAgent({ watchOnly: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram } = stubTelegram();
         const fake = stubOpencode();
         const state = await attachWatched(agent, telegram);
@@ -1932,6 +1939,20 @@ describe('durevcode forum control', () => {
         );
         assert.deepEqual(state.promptQueue, []);
         assert.equal(fake.prompts.length, 0);
+    });
+
+    test('plain mode still renders slash command cards', async () => {
+        const agent = makeAgent({ watchOnly: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        await attachWatched(agent, telegram);
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ text: '/settings' }, now));
+        const card = calls.find((c) => {
+            const markup = (c as { params: { reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> } } }).params.reply_markup;
+            return markup?.inline_keyboard?.flat().some((button) => String(button.callback_data).startsWith('set:')) === true;
+        });
+        assert.ok(card, 'the settings card still renders in plain mode');
+        assert.deepEqual(fake.prompts, []);
     });
 
     test('spoken voice transcript routes to the model card instead of prompting', async () => {
@@ -1974,7 +1995,7 @@ describe('durevcode forum control', () => {
     });
 
     test('plain mode transcribes the voice as text without prompting', async () => {
-        const agent = makeAgent({ plainMode: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const agent = makeAgent({ watchOnly: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
         (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true, language: 'ru' };
         (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
             name === 'whisper'
@@ -2000,6 +2021,893 @@ describe('durevcode forum control', () => {
         assert.ok(transcript, 'the voice still lands as a transcript in plain mode');
         assert.deepEqual(state.promptQueue, []);
         assert.equal(fake.prompts.length, 0);
+    });
+
+    test('voice transcript starting with stop ends the task without prompting', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        const stopped: string[] = [];
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => ({
+                        text: 'Стоп, давай пересобери потом.',
+                        language: 'ru',
+                        audioSec: 3,
+                        processingMs: 5,
+                        model: 'ggml-test',
+                    }),
+                };
+            }
+            if (name === 'opencode') {
+                return {
+                    interruptSession: async (sessionId: string) => {
+                        stopped.push(sessionId);
+                        return true;
+                    },
+                };
+            }
+            return undefined;
+        };
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        state.promptQueue.push('old task');
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v1', file_unique_id: 'u1', duration: 3, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 715 }, now),
+        );
+        assert.deepEqual(stopped, ['ses_test01']);
+        assert.deepEqual(state.promptQueue, []);
+        assert.equal(fake.prompts.length, 0);
+        const transcript = calls.some((c) => String((c as { params: Record<string, unknown> }).params.text).includes('Стоп, давай пересобери потом.'));
+        assert.ok(transcript, 'the transcript itself is still posted');
+        const notice = calls.some((c) => String((c as { params: Record<string, unknown> }).params.text).includes('Stopped'));
+        assert.ok(notice, 'the stop notice is posted');
+    });
+
+    test('repeated spoken stop still ends the task', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        const stopped: string[] = [];
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => ({
+                        text: 'Стоп. Стоп.',
+                        language: 'ru',
+                        audioSec: 2,
+                        processingMs: 5,
+                        model: 'ggml-test',
+                    }),
+                };
+            }
+            if (name === 'opencode') {
+                return {
+                    interruptSession: async (sessionId: string) => {
+                        stopped.push(sessionId);
+                        return false;
+                    },
+                };
+            }
+            return undefined;
+        };
+        const { telegram } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v2', file_unique_id: 'u2', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 716 }, now),
+        );
+        assert.deepEqual(stopped, ['ses_test01']);
+        assert.deepEqual(state.promptQueue, []);
+        assert.equal(fake.prompts.length, 0);
+    });
+
+    test('voice picks the model by number while the model card is open', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        const switched: Array<Record<string, unknown>> = [];
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => ({
+                        text: 'Поставь модель номер два.',
+                        language: 'ru',
+                        audioSec: 3,
+                        processingMs: 5,
+                        model: 'ggml-test',
+                    }),
+                };
+            }
+            if (name === 'opencode') {
+                return {
+                    listModels: async () => [
+                        { id: 'm-a', providerID: 'p', name: 'Model A' },
+                        { id: 'm-b', providerID: 'p', name: 'Model B' },
+                        { id: 'm-c', providerID: 'p', name: 'Model C' },
+                    ],
+                    setModel: async (sessionId: string, model: Record<string, unknown>) => {
+                        switched.push({ sessionId, model });
+                        return true;
+                    },
+                };
+            }
+            return undefined;
+        };
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram) as unknown as { promptQueue: string[]; modelCardMessageId: number | null };
+        state.modelCardMessageId = 555;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v3', file_unique_id: 'u3', duration: 3, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 717 }, now),
+        );
+        assert.deepEqual(switched, [{ sessionId: 'ses_test01', model: { id: 'm-b', providerID: 'p' } }]);
+        assert.deepEqual(state.promptQueue, []);
+        assert.equal(fake.prompts.length, 0);
+        const cardEdit = calls.find((c) => c.op === 'edit');
+        assert.ok(cardEdit, 'the model card is edited with the new pick');
+        assert.equal((cardEdit.params as Record<string, unknown>).message_id, 555);
+        const confirm = calls.some((c) => String((c as { params: Record<string, unknown> }).params.text).includes('Model switched to'));
+        assert.ok(confirm, 'the voice pick is confirmed in chat');
+    });
+
+    test('voice picks the model by bare number or by name anchor', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        const switched: Array<Record<string, unknown>> = [];
+        let attempt = 0;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => {
+                        attempt += 1;
+                        return {
+                            text: attempt === 1 ? 'Номер два' : 'Поставь модель claude',
+                            language: 'ru',
+                            audioSec: 2,
+                            processingMs: 5,
+                            model: 'ggml-test',
+                        };
+                    },
+                };
+            }
+            if (name === 'opencode') {
+                return {
+                    listModels: async () => [
+                        { id: 'm-a', providerID: 'p', name: 'Model A' },
+                        { id: 'm-b', providerID: 'p', name: 'Model B' },
+                        { id: 'm-c', providerID: 'p', name: 'Claude Sonnet 4.5' },
+                    ],
+                    setModel: async (sessionId: string, model: Record<string, unknown>) => {
+                        switched.push({ sessionId, model });
+                        return true;
+                    },
+                };
+            }
+            return undefined;
+        };
+        const { telegram } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram) as unknown as { promptQueue: string[]; modelCardMessageId: number | null };
+        state.modelCardMessageId = 556;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v4', file_unique_id: 'u4', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 718 }, now),
+        );
+        assert.deepEqual(switched, [{ sessionId: 'ses_test01', model: { id: 'm-b', providerID: 'p' } }]);
+        switched.length = 0;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v5', file_unique_id: 'u5', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 719 }, now),
+        );
+        assert.deepEqual(switched, [{ sessionId: 'ses_test01', model: { id: 'm-c', providerID: 'p' } }]);
+        assert.deepEqual(state.promptQueue, []);
+        assert.equal(fake.prompts.length, 0);
+    });
+
+    test('voice ordinal without an open model card still prompts', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        const switched: Array<Record<string, unknown>> = [];
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => ({
+                        text: 'Первый',
+                        language: 'ru',
+                        audioSec: 2,
+                        processingMs: 5,
+                        model: 'ggml-test',
+                    }),
+                };
+            }
+            if (name === 'opencode') {
+                return {
+                    listModels: async () => [{ id: 'm-a', providerID: 'p', name: 'Model A' }],
+                    setModel: async (sessionId: string, model: Record<string, unknown>) => {
+                        switched.push({ sessionId, model });
+                        return true;
+                    },
+                };
+            }
+            return undefined;
+        };
+        const { telegram } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v6', file_unique_id: 'u6', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 720 }, now),
+        );
+        assert.deepEqual(switched, []);
+        assert.deepEqual(state.promptQueue, []);
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'Первый' }]);
+    });
+
+    test('voice ordinal with extra words and an open card does not switch silently', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        const switched: Array<Record<string, unknown>> = [];
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => ({
+                        text: 'Первый пункт задачи проверь отдельно',
+                        language: 'ru',
+                        audioSec: 3,
+                        processingMs: 5,
+                        model: 'ggml-test',
+                    }),
+                };
+            }
+            if (name === 'opencode') {
+                return {
+                    listModels: async () => [{ id: 'm-a', providerID: 'p', name: 'Model A' }],
+                    setModel: async (sessionId: string, model: Record<string, unknown>) => {
+                        switched.push({ sessionId, model });
+                        return true;
+                    },
+                };
+            }
+            return undefined;
+        };
+        const { telegram } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram) as unknown as { promptQueue: string[]; modelCardMessageId: number | null };
+        state.modelCardMessageId = 557;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v7', file_unique_id: 'u7', duration: 3, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 721 }, now),
+        );
+        assert.deepEqual(switched, []);
+        assert.deepEqual(state.promptQueue, []);
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'Первый пункт задачи проверь отдельно' }]);
+    });
+
+    test('typed stop phrase ends the task like the slash command', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as { promptQueue: string[] };
+        state.promptQueue.push('old task');
+        const interrupted: string[] = [];
+        const fake = {
+            interruptSession: async (sessionId: string) => {
+                interrupted.push(sessionId);
+                return true;
+            },
+        };
+        await agent.handleInbound(telegram, fake, inboundMsg({ message_id: 722, text: 'стоп давай потом' }, now));
+        assert.deepEqual(interrupted, ['ses_test01']);
+        assert.deepEqual(state.promptQueue, []);
+        const sends = calls.filter((c) => c.op === 'send');
+        assert.ok(sends.some((c) => String((c.params as Record<string, unknown>).text).includes('Stopped')));
+    });
+
+    test('status command opens the card with a refresh button', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 730, text: '/status' }, now));
+        const card = calls.find((c) => {
+            const markup = (c as { params: { reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> } } }).params.reply_markup;
+            return markup?.inline_keyboard?.flat().some((button) => String(button.callback_data).startsWith('status:')) === true;
+        });
+        assert.ok(card, 'the status card is rendered');
+        assert.ok(String((card.params as Record<string, unknown>).text).includes('Status'), 'the card text is present');
+        assert.ok(String((card.params as Record<string, unknown>).text).includes('Context'), 'the context usage line is present');
+    });
+
+    test('status card refresh callback re-renders in place', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 731, text: '/status' }, now));
+        calls.length = 0;
+        await agent.handleCallback(
+            telegram,
+            fake.opencode,
+            {
+                id: 'cb-status',
+                from: { id: 42, is_bot: false, first_name: 'Owner' },
+                chat_instance: 'ci',
+                message: { message_id: 4242, chat: { id: 1, type: 'supergroup' }, message_thread_id: 8 },
+                data: 'status:ses_test01',
+            } as never,
+        );
+        const edits = calls.filter((c) => c.op === 'edit');
+        assert.equal(edits.length, 1, 'exactly one edit lands');
+        assert.equal((edits[0].params as Record<string, unknown>).message_id, 4242);
+        assert.ok(String((edits[0].params as Record<string, unknown>).text).includes('Status'));
+        assert.ok(calls.some((c) => c.op === 'ack'), 'the refresh is acked');
+    });
+
+    test('the status card shows the window, opencode source and uptime', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram) as unknown as {
+            snapshot: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number } | null;
+            contextLimit: number | null;
+        };
+        const fake = stubOpencode();
+        const bootAt = now - 61 * 60000;
+        (agent as unknown as { bootAt: number }).bootAt = bootAt;
+        state.contextLimit = 200000;
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 750, text: '/status' }, now));
+        const firstCard = calls.find((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Status'));
+        assert.ok(firstCard, 'the status card is posted');
+        const firstText = String((firstCard.params as Record<string, unknown>).text);
+        assert.ok(firstText.includes('OpenCode 127.0.0.1:1'), 'the opencode source line is present');
+        assert.ok(firstText.includes('no turn tokens yet'), 'the missing snapshot is honest, not cumulative');
+        assert.ok(firstText.includes('up 1h 1m'), 'the uptime lands in the running row');
+        state.snapshot = { input: 100000, output: 0, reasoning: 0, cacheRead: 50000, cacheWrite: 10000 };
+        state.contextLimit = 200000;
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 751, text: '/status' }, now));
+        const secondCard = [...calls].reverse().find((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Status'));
+        assert.ok(secondCard, 'the refreshed status card is posted');
+        const secondText = String((secondCard.params as Record<string, unknown>).text);
+        assert.ok(secondText.includes('Context <b>160.0K/200.0K (80%)</b>'), `the window math lands, got: ${secondText.split('\n')[3]}`);
+        assert.ok(!secondText.includes('no turn tokens yet'), 'the placeholder is gone once tokens arrive');
+    });
+
+    test('voice status phrase opens the status card', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => ({
+                        text: 'Статус.',
+                        language: 'ru',
+                        audioSec: 2,
+                        processingMs: 5,
+                        model: 'ggml-test',
+                    }),
+                };
+            }
+            if (name === 'opencode') {
+                return {
+                    listModels: async () => [{ id: 'm-a', providerID: 'p', name: 'Model A' }],
+                };
+            }
+            return undefined;
+        };
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v8', file_unique_id: 'u8', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 732 }, now),
+        );
+        assert.deepEqual(state.promptQueue, []);
+        assert.equal(fake.prompts.length, 0);
+        const card = calls.some((c) => {
+            const markup = (c as { params: { reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> } } }).params.reply_markup;
+            return markup?.inline_keyboard?.flat().some((button) => String(button.callback_data).startsWith('status:')) === true;
+        });
+        assert.ok(card, 'the voice status phrase renders the status card');
+    });
+
+    test('settings command opens the card with toggle buttons', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 740, text: '/settings' }, now));
+        const card = calls.find((c) => {
+            const markup = (c as { params: { reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> } } }).params.reply_markup;
+            return markup?.inline_keyboard?.flat().some((button) => String(button.callback_data).startsWith('set:')) === true;
+        });
+        assert.ok(card, 'the settings card is rendered');
+        const text = String((card.params as Record<string, unknown>).text);
+        assert.ok(text.includes('Settings'), 'the card title is present');
+        assert.ok(text.includes('Watch only'), 'the plain mode row is listed');
+        const markup = (card.params as { reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> } }).reply_markup;
+        const keys = markup?.inline_keyboard?.flat().map((button) => String(button.callback_data)) ?? [];
+        assert.ok(keys.includes('set:watchOnly'), 'plain mode toggle button exists');
+        assert.ok(keys.includes('set:voiceThreads'), 'threads toggle button exists');
+        assert.ok(keys.includes('set:reset'), 'reset button exists');
+    });
+
+    test('settings toggle callback flips watchOnly and edits the card', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 741, text: '/settings' }, now));
+        calls.length = 0;
+        await agent.handleCallback(
+            telegram,
+            fake.opencode,
+            {
+                id: 'cb-set-plain',
+                from: { id: 42, is_bot: false, first_name: 'Owner' },
+                chat_instance: 'ci',
+                message: { message_id: 4250, chat: { id: 1, type: 'supergroup' }, message_thread_id: 8 },
+                data: 'set:watchOnly',
+            } as never,
+        );
+        const config = (agent as unknown as { config: { durevcode: { watchOnly?: boolean } } }).config;
+        assert.equal(config.durevcode.watchOnly, true, 'watchOnly flipped on');
+        const edits = calls.filter((c) => c.op === 'edit');
+        assert.equal(edits.length, 1, 'the settings card is edited in place');
+        assert.equal((edits[0].params as Record<string, unknown>).message_id, 4250);
+        assert.ok(String((edits[0].params as Record<string, unknown>).text).includes('on'), 'the card shows the new value');
+        const acks = calls.filter((c) => c.op === 'ack');
+        assert.ok(acks.length > 0, 'the toggle is acked');
+        assert.ok(String((acks[0].params as Record<string, unknown>).text ?? '').includes('Watch only: on'));
+    });
+
+    test('watch-only cards are admin-only for typed commands', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setMemberImpl } = stubTelegram();
+        setMemberImpl(async () => ({ status: 'member', user: 55 }));
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ from: { id: 55, is_bot: false, first_name: 'Guest' }, message_id: 745, text: '/settings' }, now));
+        const cards = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Settings'));
+        assert.equal(cards.length, 0, 'no settings card for a non-admin');
+        const notice = calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Only forum admins can change this.'));
+        assert.ok(notice, 'the admin gate notice lands');
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ from: { id: 55, is_bot: false, first_name: 'Guest' }, message_id: 746, text: '/mode' }, now));
+        const modeCards = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Mode:'));
+        assert.equal(modeCards.length, 0, 'no mode card for a non-admin');
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ from: { id: 55, is_bot: false, first_name: 'Guest' }, message_id: 747, text: '/models' }, now));
+        const modelCards = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Model'));
+        assert.equal(modelCards.length, 0, 'no model card for a non-admin');
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ from: { id: 55, is_bot: false, first_name: 'Guest' }, message_id: 748, text: '/model' }, now));
+        const aliasCards = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Model'));
+        assert.equal(aliasCards.length, 0, 'the model alias is gated too');
+    });
+
+    test('the model alias opens the model card', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 749, text: '/model' }, now));
+        const cards = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Model'));
+        assert.equal(cards.length, 1, 'the model card renders through the alias');
+        const markup = (cards[0].params as { reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> } }).reply_markup;
+        assert.ok(markup?.inline_keyboard?.flat().some((button) => String(button.callback_data).startsWith('model:')), 'model buttons are present');
+    });
+
+    test('non-admin tapping a settings row gets declined', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setMemberImpl } = stubTelegram();
+        setMemberImpl(async () => ({ status: 'member', user: 55 }));
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleCallback(
+            telegram,
+            fake.opencode,
+            {
+                id: 'cb-set-guest',
+                from: { id: 55, is_bot: false, first_name: 'Guest' },
+                chat_instance: 'ci',
+                message: { message_id: 4253, chat: { id: 1, type: 'supergroup' }, message_thread_id: 8 },
+                data: 'set:newTopics',
+            } as never,
+        );
+        const config = (agent as unknown as { config: { durevcode: { newTopics?: boolean } } }).config;
+        assert.notEqual(config.durevcode.newTopics, false, 'the setting is not flipped');
+        const acks = calls.filter((c) => c.op === 'ack');
+        assert.ok(acks.length > 0, 'the tap is acked');
+        assert.ok(String((acks[0].params as Record<string, unknown>).text ?? '').includes('Only forum admins can change settings.'));
+        assert.equal(calls.filter((c) => c.op === 'edit').length, 0, 'the card is not edited');
+    });
+
+    test('voice language toggle feeds the next transcription options', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const seen: Array<{ text: string; options?: { language?: string } }> = [];
+        const patches: Array<Record<string, unknown>> = [];
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true, language: 'auto' };
+        (agent as unknown as { config: Record<string, unknown> }).config.durevcode.watchOnly = true;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async (input: Buffer, options?: { language?: string }) => {
+                        seen.push({ text: 'Проверь сборку.', options });
+                        return { text: 'Проверь сборку.', language: 'ru', audioSec: 2, processingMs: 5, model: 'ggml-test' };
+                    },
+                    applySettings: async (patch: Record<string, unknown>) => {
+                        patches.push(patch);
+                    },
+                };
+            }
+            return undefined;
+        };
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        await agent.handleCallback(
+            telegram,
+            stubOpencode().opencode,
+            {
+                id: 'cb-set-lang',
+                from: { id: 42, is_bot: false, first_name: 'Owner' },
+                chat_instance: 'ci',
+                message: { message_id: 4251, chat: { id: 1, type: 'supergroup' }, message_thread_id: 8 },
+                data: 'set:voiceLang',
+            } as never,
+        );
+        const config = (agent as unknown as { config: { whisper: { language?: string } } }).config;
+        assert.equal(config.whisper.language, 'ru', 'language cycled auto -> ru');
+        assert.deepEqual(patches, [{ language: 'ru' }], 'the whisper plugin received the patch');
+        await agent.handleInbound(
+            telegram,
+            stubOpencode().opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v9', file_unique_id: 'u9', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 742 }, now),
+        );
+        assert.equal(seen.length, 1, 'one transcription happened');
+        assert.deepEqual(seen[0].options, { language: 'ru' }, 'transcription options carry the language');
+        assert.deepEqual(state.promptQueue, []);
+    });
+
+    test('settings overrides persist across agent restarts', async () => {
+        stateCounter += 1;
+        const statePath = `/tmp/opencode/durevcode-settings-persist-${process.pid}-${stateCounter}.json`;
+        const agentA = makeAgentWithState(statePath) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const toggleAgent = agentA as unknown as {
+            applySettingToggle: (key: string) => Promise<string | null>;
+            savePersisted: () => void;
+        };
+        const applied = await toggleAgent.applySettingToggle('voiceThreads');
+        assert.equal(applied, 'Whisper threads: 12');
+        toggleAgent.savePersisted();
+        const agentB = makeAgentWithState(statePath) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const restore = agentB as unknown as { loadPersisted: () => void; applySettingsOverrides: () => void; config: { whisper?: { enabled?: boolean; threads?: number } } };
+        restore.loadPersisted();
+        restore.applySettingsOverrides();
+        assert.equal(restore.config.whisper?.threads, 12, 'restored threads override');
+        assert.equal(restore.config.whisper?.enabled, false, 'voice stays off');
+    });
+
+    test('the persisted plainMode override migrates to watchOnly', async () => {
+        stateCounter += 1;
+        const statePath = `/tmp/opencode/durevcode-settings-migrate-${process.pid}-${stateCounter}.json`;
+        writeFileSync(statePath, JSON.stringify({
+            version: 1,
+            sessions: {},
+            seenInbound: [],
+            seenCallbacks: [],
+            settings: { plainMode: true, voiceThreads: '12' },
+        }));
+        const agent = makeAgentWithState(statePath) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const restore = agent as unknown as {
+            loadPersisted: () => void;
+            applySettingsOverrides: () => void;
+            config: { durevcode: { watchOnly?: boolean }; whisper?: { enabled?: boolean; threads?: number } };
+            settingsOverrides: Record<string, unknown>;
+        };
+        restore.loadPersisted();
+        restore.applySettingsOverrides();
+        assert.equal(restore.config.durevcode.watchOnly, true, 'plainMode renamed to watchOnly');
+        assert.equal(restore.settingsOverrides.watchOnly, true, 'the override is stored under the new key');
+        assert.equal(restore.settingsOverrides.plainMode, undefined, 'the legacy key is dropped');
+        assert.equal(restore.config.whisper?.threads, 12, 'unrelated overrides stay put');
+    });
+
+    test('settings reset restores baseline values', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const toggleAgent = agent as unknown as {
+            applySettingToggle: (key: string) => Promise<string | null>;
+            applySettingsOverrides: () => void;
+        };
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true, language: 'auto', threads: 8 };
+        await toggleAgent.applySettingToggle('watchOnly');
+        await toggleAgent.applySettingToggle('voiceLang');
+        const config = (agent as unknown as { config: { durevcode: { watchOnly?: boolean }; whisper: { language?: string } } }).config;
+        assert.equal(config.durevcode.watchOnly, true);
+        assert.equal(config.whisper.language, 'ru');
+        const applied = await toggleAgent.applySettingToggle('reset');
+        assert.equal(applied, 'Defaults restored.');
+        assert.equal(config.durevcode.watchOnly, false, 'watchOnly back to baseline');
+        assert.equal(config.whisper.language, 'auto', 'language back to baseline');
+    });
+
+    test('voice settings phrase opens the settings card', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => ({
+                        text: 'Настройки.',
+                        language: 'ru',
+                        audioSec: 2,
+                        processingMs: 5,
+                        model: 'ggml-test',
+                    }),
+                };
+            }
+            if (name === 'opencode') {
+                return {
+                    listModels: async () => [{ id: 'm-a', providerID: 'p', name: 'Model A' }],
+                };
+            }
+            return undefined;
+        };
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v10', file_unique_id: 'u10', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 743 }, now),
+        );
+        assert.equal(fake.prompts.length, 0);
+        const card = calls.some((c) => {
+            const markup = (c as { params: { reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> } } }).params.reply_markup;
+            return markup?.inline_keyboard?.flat().some((button) => String(button.callback_data).startsWith('set:')) === true;
+        });
+        assert.ok(card, 'the voice settings phrase renders the settings card');
+    });
+
+    test('voice toggle flips transcription on without a crash', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleCallback(
+            telegram,
+            fake.opencode,
+            {
+                id: 'cb-set-voice',
+                from: { id: 42, is_bot: false, first_name: 'Owner' },
+                chat_instance: 'ci',
+                message: { message_id: 4252, chat: { id: 1, type: 'supergroup' }, message_thread_id: 8 },
+                data: 'set:voice',
+            } as never,
+        );
+        const config = (agent as unknown as { config: { whisper?: { enabled?: boolean } } }).config;
+        assert.equal(config.whisper?.enabled, true, 'voice transcription flipped on');
+        const acks = calls.filter((c) => c.op === 'ack');
+        assert.ok(acks.length > 0, 'the toggle is acked');
+    });
+
+    test('voice yes and no reply to a permission card decides it', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        const decided: Array<{ sessionId: string; permId: string; decision: string }> = [];
+        let permAttempt = 0;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => {
+                        permAttempt += 1;
+                        return {
+                            text: permAttempt === 1 ? 'Да, конечно' : 'Нет, запрети',
+                            language: 'ru',
+                            audioSec: 2,
+                            processingMs: 5,
+                            model: 'ggml-test',
+                        };
+                    },
+                };
+            }
+            if (name === 'opencode') {
+                return {
+                    replyPermission: async (sessionId: string, permId: string, decision: string) => {
+                        decided.push({ sessionId, permId, decision });
+                        return true;
+                    },
+                };
+            }
+            return undefined;
+        };
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        const permReplies = (agent as unknown as { permReplies: Map<number, { sessionId: string; permId: string }> }).permReplies;
+        permReplies.set(709, { sessionId: 'ses_test01', permId: 'per_1' });
+        permReplies.set(710, { sessionId: 'ses_test01', permId: 'per_2' });
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v9', file_unique_id: 'u9', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 733, reply_to_message: { message_id: 709 } }, now),
+        );
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v10', file_unique_id: 'u10', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 734, reply_to_message: { message_id: 710 } }, now),
+        );
+        assert.deepEqual(decided, [
+            { sessionId: 'ses_test01', permId: 'per_1', decision: 'once' },
+            { sessionId: 'ses_test01', permId: 'per_2', decision: 'reject' },
+        ]);
+        assert.ok(calls.filter((c) => c.op === 'markup').length >= 2, 'the permission keyboards are cleaned up');
+        const sends = calls.filter((c) => c.op === 'send');
+        assert.ok(sends.some((c) => String((c.params as Record<string, unknown>).text).includes('Allowed once.')));
+        assert.ok(sends.some((c) => String((c.params as Record<string, unknown>).text).includes('Denied.')));
+        assert.equal(permReplies.has(709), false, 'the pending perm ref clears');
+    });
+
+    test('voice reply to a question card picks the option or falls back to the text', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        const answered: Array<{ sessionId: string; reqId: string; answers: string[][] }> = [];
+        const texts = ['Нет', 'Первый', 'шлю порт 8080'];
+        let questAttempt = 0;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => {
+                        questAttempt += 1;
+                        return {
+                            text: texts[Math.min(questAttempt, texts.length) - 1] ?? texts[0],
+                            language: 'ru',
+                            audioSec: 2,
+                            processingMs: 5,
+                            model: 'ggml-test',
+                        };
+                    },
+                };
+            }
+            if (name === 'opencode') {
+                return {
+                    replyQuestion: async (sessionId: string, reqId: string, answers: string[][]) => {
+                        answered.push({ sessionId, reqId, answers });
+                        return true;
+                    },
+                };
+            }
+            return undefined;
+        };
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram);
+        const questReplies = (agent as unknown as { questReplies: Map<number, { sessionId: string; reqId: string; questions: Array<{ question: string; options: Array<{ label: string }> }> }> }).questReplies;
+        questReplies.set(711, {
+            sessionId: 'ses_test01',
+            reqId: 'frm_v1',
+            questions: [{ question: 'Что делаем?', options: [{ label: 'Да, продолжить' }, { label: 'Нет, стоп' }] }],
+        });
+        questReplies.set(712, {
+            sessionId: 'ses_test01',
+            reqId: 'frm_v2',
+            questions: [{ question: 'Что делаем?', options: [{ label: 'Да, продолжить' }, { label: 'Нет, стоп' }] }],
+        });
+        questReplies.set(713, {
+            sessionId: 'ses_test01',
+            reqId: 'frm_v3',
+            questions: [{ question: 'Что делаем?', options: [{ label: 'Да, продолжить' }, { label: 'Нет, стоп' }] }],
+        });
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v11', file_unique_id: 'u11', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 735, reply_to_message: { message_id: 711 } }, now),
+        );
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v12', file_unique_id: 'u12', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 736, reply_to_message: { message_id: 712 } }, now),
+        );
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v13', file_unique_id: 'u13', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 737, reply_to_message: { message_id: 713 } }, now),
+        );
+        assert.deepEqual(answered, [
+            { sessionId: 'ses_test01', reqId: 'frm_v1', answers: [['Нет, стоп']] },
+            { sessionId: 'ses_test01', reqId: 'frm_v2', answers: [['Да, продолжить']] },
+            { sessionId: 'ses_test01', reqId: 'frm_v3', answers: [['шлю порт 8080']] },
+        ]);
+        assert.deepEqual(state.promptQueue, []);
+        assert.equal(fake.prompts.length, 0);
+    });
+
+    test('voice continue requeues the previous task', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        let attempt = 0;
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => {
+                        attempt += 1;
+                        return {
+                            text: attempt === 1 ? 'Собери релиз заново' : 'Продолжай',
+                            language: 'ru',
+                            audioSec: 2,
+                            processingMs: 5,
+                            model: 'ggml-test',
+                        };
+                    },
+                };
+            }
+            if (name === 'opencode') {
+                return {};
+            }
+            return undefined;
+        };
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram) as unknown as { promptQueue: string[]; turnComplete: boolean };
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v14', file_unique_id: 'u14', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 738 }, now),
+        );
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'Собери релиз заново' }]);
+        state.turnComplete = true;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v15', file_unique_id: 'u15', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 739 }, now),
+        );
+        assert.deepEqual(fake.prompts, [
+            { sessionId: 'ses_test01', text: 'Собери релиз заново' },
+            { sessionId: 'ses_test01', text: 'Собери релиз заново' },
+        ]);
+        const sends = calls.filter((c) => c.op === 'send');
+        assert.ok(sends.some((c) => String((c.params as Record<string, unknown>).text).includes('queued again')));
+    });
+
+    test('voice continue during running work falls through to the prompt', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => ({
+                        text: 'Продолжай',
+                        language: 'ru',
+                        audioSec: 2,
+                        processingMs: 5,
+                        model: 'ggml-test',
+                    }),
+                };
+            }
+            if (name === 'opencode') {
+                return {};
+            }
+            return undefined;
+        };
+        const { telegram } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram) as unknown as { promptQueue: string[] };
+        state.promptQueue.push('running task');
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ text: '', voice: { file_id: 'v16', file_unique_id: 'u16', duration: 2, mime_type: 'audio/ogg', file_size: 1000 }, message_id: 740 }, now),
+        );
+        assert.deepEqual(
+            fake.prompts,
+            [{ sessionId: 'ses_test01', text: 'running task' }],
+        );
+        assert.deepEqual(state.promptQueue, ['Продолжай']);
     });
 
     test('spoken model and mode phrases open the cards instead of prompting', async () => {
@@ -5412,7 +6320,7 @@ describe('durevcode thinking state', () => {
         jest.restoreAllMocks();
     });
 
-    test('text-only idle session finalizes without posting a summary', async () => {
+    test('text-only idle session finalizes with a finish notice', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
         const state = (await agent.attachSession(telegram, SESSION)) as unknown as {
@@ -5435,7 +6343,7 @@ describe('durevcode thinking state', () => {
         (agent as unknown as { watched: Map<string, unknown> }).watched.set(SESSION.id as string, state);
         await agent.updateSession(telegram, state);
         assert.equal(state.finalized, true);
-        assert.ok(!calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text ?? '').startsWith('✅')));
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text ?? '').includes('Stopped, send the task again')));
     });
 
     test('context pin shows stats without status line', async () => {
@@ -5907,10 +6815,54 @@ describe('durevcode stop control', () => {
         const notice = calls
             .filter((c) => c.op === 'send')
             .map((c) => String((c.params as Record<string, unknown>).text));
-        assert.ok(notice.some((text) => text.includes('Stopped, send the task again.')), `the stop notice must be sent, got ${JSON.stringify(notice)}`);
+        assert.ok(notice.some((text) => text.includes('Stopped, send the task again.')), `the finish notice must be sent, got ${JSON.stringify(notice)}`);
 
         await agent.syncStopKeyboard(telegram, state);
         assert.equal(state.stopButtonOn, false, 'the button must stay hidden while the session stays finished');
+    });
+
+    test('finish notices are deduped only within a short window', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const finishNotice = (t: unknown, s: unknown, at: number) => (agent as unknown as {
+            finishNotice: (t: unknown, s: unknown, at: number) => Promise<void>;
+        }).finishNotice(t, s, at);
+        const finishSends = () => calls
+            .filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Stopped, send the task again')).length;
+        await finishNotice(telegram, state, now);
+        await finishNotice(telegram, state, now + 10_000);
+        assert.equal(finishSends(), 1, 'a second notice inside the window is suppressed');
+        await finishNotice(telegram, state, now + 40_000);
+        assert.equal(finishSends(), 2, 'the next completion posts its own notice');
+    });
+
+    test('updateSession finalizes an idle session with a finish notice', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            getPlugin: (name: string) => unknown;
+        };
+        const { telegram, calls } = stubTelegram();
+        const state = (await agent.attachSession(telegram, SESSION)) as unknown as AnyState & { toolCalls: number };
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set(SESSION.id as string, state);
+        state.toolCalls = 1;
+        state.lastText = 'done earlier';
+        state.turnComplete = false;
+        state.autoNudges = Number.MAX_SAFE_INTEGER;
+        state.lastEventAt = now - 30 * 60_000;
+        const live = {
+            getSession: async () => ({ ...SESSION, tokens_input: 500 }),
+            readEvents: async () => [],
+            readTodos: async () => [],
+            getModelLimit: async () => null,
+            readContextSnapshot: async () => null,
+        };
+        agent.getPlugin = (name: string) => (name === 'telegram-bot-api' ? telegram : live);
+        now += 60_000;
+        await agent.updateSession(telegram, state);
+        assert.equal(state.finalized, true, 'an idle session with prior work must be finalized');
+        const finishSends = calls
+            .filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Stopped, send the task again')).length;
+        assert.equal(finishSends, 1, `the idle finalize must notify, got ${JSON.stringify(calls.filter((c) => c.op === 'send'))}`);
     });
 
     test('stop command interrupts the server and clears local work', async () => {
@@ -6124,6 +7076,38 @@ const MODE_AGENTS = [
         assert.deepEqual(switched.map((s) => s.agent), ['plan', 'build']);
         assert.equal(state.buildMode, true);
         assert.equal(state.sessionAgent, 'build');
+    });
+
+    test('the mode card toggles the plain observer', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const switched: Array<{ sessionId: string; agent: string }> = [];
+        const state = (await attachWatched(agent, telegram)) as unknown as StopState & { buildMode: boolean; threadId: number | null };
+        await agent.handleInbound(telegram, modePlugin(switched), inboundMsg({ message_id: 780, text: '/mode' }, now));
+        const card = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Mode:')).pop();
+        assert.ok(card, 'the mode card is posted');
+        const rows = (card.params as { reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } })
+            .reply_markup.inline_keyboard;
+        const plainRow = rows.find((row) => row.some((button) => button.callback_data === 'mode:observer'));
+        assert.ok(plainRow, 'the plain observer row exists');
+        assert.equal(plainRow[0].text, 'Watch only · off');
+        const queryFor = (id: string, data: string) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 901, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data,
+        });
+        calls.length = 0;
+        await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_plain1', 'mode:observer'));
+        const config = (agent as unknown as { config: { durevcode: { watchOnly?: boolean } } }).config;
+        assert.equal(config.durevcode.watchOnly, true, 'plain observer flipped on');
+        assert.deepEqual(switched, [], 'no agent switch happens');
+        const edited = calls.filter((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === 901);
+        assert.equal(edited.length, 1, 'the mode card is edited in place');
+        const editedRow = (edited[0].params as { reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } })
+            .reply_markup.inline_keyboard.find((row) => row.some((button) => button.callback_data === 'mode:observer'));
+        assert.equal(editedRow?.[0].text, 'Watch only · on');
+        assert.ok(calls.filter((c) => c.op === 'ack').length > 0, 'the toggle is acked');
     });
 
     test('the active mode carries a checkmark and the card updates in place', async () => {

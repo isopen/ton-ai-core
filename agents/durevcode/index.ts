@@ -123,7 +123,7 @@ const config: DurevcodeConfig = {
         whipSticker: process.env.DUREVCODE_WHIP_STICKER,
         autoFinish: optionalFlag('DUREVCODE_AUTO_FINISH', true),
         deleteOnTopicGone: optionalFlag('DUREVCODE_DELETE_ON_TOPIC_GONE', false),
-        plainMode: optionalFlag('DUREVCODE_PLAIN_MODE', false),
+        watchOnly: optionalFlag('DUREVCODE_WATCH_ONLY', optionalFlag('DUREVCODE_PLAIN_MODE', false)),
     },
     whisper: {
         enabled: optionalFlag('DUREVCODE_WHISPER_ENABLED', false),

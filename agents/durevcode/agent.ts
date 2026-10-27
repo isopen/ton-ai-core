@@ -78,6 +78,36 @@ export function sessionTagOf(sessionId: string): string {
     return sessionId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'session';
 }
 
+function shortAgo(now: number, at: number): string {
+    if (at === 0) return 'never';
+    const sec = Math.max(1, Math.round((now - at) / 1000));
+    if (sec < 60) return `${sec}s ago`;
+    if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+    if (sec < 172800) return `${Math.round(sec / 3600)}h ago`;
+    return `${Math.round(sec / 86400)}d ago`;
+}
+
+function formatTokenShort(value: number): string {
+    if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
+    if (value >= 1000) return `${(value / 1000).toFixed(1)}K`;
+    return String(value);
+}
+
+function shortUptime(ms: number): string {
+    const minutes = Math.max(0, Math.floor(ms / 60000));
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.floor((minutes % 1440) / 60);
+    const mins = minutes % 60;
+    if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+    if (hours > 0) return minutes % 60 > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    return `${mins}m`;
+}
+
+function opencodeSourceDisplay(baseUrl: string): string {
+    const trimmed = baseUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    return trimmed || 'unknown';
+}
+
 export function tagFromTopicName(name: string): string | null {
     const cleaned = (name || '').replace(/\s+/g, ' ').trim();
     const idx = cleaned.lastIndexOf(' · ');
@@ -148,6 +178,7 @@ const USER_ACTIVE_MS = 300000;
 const FINALIZED_GRACE_MS = 120000;
 const STOP_QUIET_MS = 10000;
 const STOP_DEDUP_MS = 30 * 60_000;
+const FINISH_DEDUP_MS = 15 * 1000;
 const STEP_FAILURE_NOTICE_DEDUP_MS = 30 * 60_000;
 const STOP_DISPATCH_RECENCY_MS = 4000;
 const STOP_RETIRE_FAIL_RETRY_MS = 2500;
@@ -235,6 +266,64 @@ const DOC_MAX_CHARS = 20000;
 const MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 const MODELS_CARD_ROOTS = ['модел', 'model'];
 const MODE_CARD_ROOTS = ['режим', 'mode'];
+const VOICE_STOP_WORDS = ['стоп', 'stop'];
+const MODEL_PICK_ANCHORS = ['модел', 'model', 'выб', 'постав', 'смени', 'переключ'];
+const MODEL_PICK_ORDINALS: Array<[string, number]> = [
+    ['перв', 0], ['одну', 0], ['один', 0],
+    ['втор', 1], ['два', 1], ['две', 1], ['дво', 1], ['дву', 1],
+    ['трет', 2], ['три', 2],
+    ['четвер', 3], ['четвёр', 3], ['четы', 3],
+    ['пят', 4], ['шест', 5], ['седьм', 6], ['сем', 6],
+    ['вось', 7], ['восем', 7],
+    ['девят', 8], ['десят', 9],
+];
+const NUMBER_VOICE_FILLERS = ['номер', 'номера', 'модель', 'модели'];
+const STATUS_CARD_ROOTS = ['статус', 'status', 'состоян'];
+const SETTINGS_CARD_ROOTS = ['настрой', 'settings'];
+const ADMIN_CACHE_TTL_MS = 300000;
+const VOICE_PERM_ALLOW = ['да', 'yes', 'ок', 'окей', 'хорошо', 'давай', 'конечно', 'ага'];
+const VOICE_PERM_DENY = ['нет', 'no', 'запрети', 'отмена', 'отменя'];
+const VOICE_CONTINUE_ROOTS = ['продолж'];
+
+interface SettingDef {
+    key: string;
+    label: string;
+    bool?: boolean;
+    values?: string[];
+}
+
+const SETTINGS_DEFS: SettingDef[] = [
+    { key: 'watchOnly', label: 'Watch only', bool: true },
+    { key: 'leadMention', label: '@mention leads', bool: true },
+    { key: 'quoteReplies', label: 'Reply quotes', bool: true },
+    { key: 'autoFinish', label: 'Finish notices', bool: true },
+    { key: 'answerFanout', label: 'Shared answers', bool: true },
+    { key: 'newTopics', label: 'New topics', bool: true },
+    { key: 'voice', label: 'Voice transcription', bool: true },
+    { key: 'voiceLang', label: 'Voice language', values: ['auto', 'ru', 'en'] },
+    { key: 'voiceServer', label: 'Resident whisper server', bool: true },
+    { key: 'voiceThreads', label: 'Whisper threads', values: ['4', '8', '12', '16'] },
+];
+
+function sanitizeSettings(raw: Record<string, unknown>): Record<string, boolean | number | string> {
+    const merged: Record<string, unknown> = { ...raw };
+    if (merged.watchOnly === undefined && typeof merged.plainMode === 'boolean') {
+        merged.watchOnly = merged.plainMode;
+    }
+    const clean: Record<string, boolean | number | string> = {};
+    for (const def of SETTINGS_DEFS) {
+        const value = merged[def.key];
+        if (def.bool && typeof value === 'boolean') {
+            clean[def.key] = value;
+            continue;
+        }
+        if (def.values) {
+            const text = String(value);
+            if (def.values.includes(text)) clean[def.key] = text;
+        }
+    }
+    return clean;
+}
 const INBOX_DIR = 'tmp/.durevcode-inbox';
 const INBOX_MAX_FILES = 200;
 
@@ -575,7 +664,7 @@ export interface DurevcodeWatchConfig {
     autoContinueMax?: number;
     autoFinish?: boolean;
     deleteOnTopicGone?: boolean;
-    plainMode?: boolean;
+    watchOnly?: boolean;
 }
 
 export interface DurevcodeWhisperConfig {
@@ -695,6 +784,7 @@ interface WatchedSession {
     stoppedAt: number;
     stopping: boolean;
     lastStopMsgAt: number;
+    lastFinishMsgAt: number;
     priorityReplies: Array<{ text: string; markup: InlineKeyboardMarkup | null }>;
     confirming: { messageId: string; text: string; since: number; notified: boolean } | null;
     promptNextAttemptAt: number;
@@ -816,6 +906,13 @@ export class DurevcodeAgent extends BaseAgent {
     private thoughtDocBusy = new Set<number>();
     private resolvingQuestions = new Set<string>();
     private submittedPrompts: Array<{ session: string; text: string; at: number }> = [];
+    private lastTasks = new Map<string, { text: string; at: number }>();
+    private lastVoiceStats = new Map<string, { audioSec: number; processingMs: number; model: string; at: number }>();
+    private settingsOverrides: Record<string, boolean | number | string> = {};
+    private settingsBaseline: Record<string, boolean | number | string> = {};
+    private whisperActivating: Promise<WhisperPlugin | null> | null = null;
+    private adminGrant = new Map<number, { ok: boolean; at: number }>();
+    private bootAt = Date.now();
     private partialSends = new Map<string, { firstId: number; delivered: number; total: number; at: number }>();
     private lastPersistedSave = 0;
     private persistedSaveTimer: NodeJS.Timeout | null = null;
@@ -829,6 +926,9 @@ export class DurevcodeAgent extends BaseAgent {
     constructor(config: DurevcodeConfig) {
         super(config);
         this.config = config;
+        for (const def of SETTINGS_DEFS) {
+            this.settingsBaseline[def.key] = this.settingRawValue(def.key);
+        }
     }
 
     protected async onInitialize(): Promise<void> {
@@ -891,6 +991,7 @@ export class DurevcodeAgent extends BaseAgent {
 
         this.threadsEnabled = this.config.durevcode.useThreads;
         this.loadPersisted();
+        this.applySettingsOverrides();
         await this.syncSessions();
         const demanded = this.explicitSessionIds();
         if (demanded.length > 0 && this.watched.size === 0) {
@@ -1031,6 +1132,10 @@ export class DurevcodeAgent extends BaseAgent {
                 for (const key of rawSeenCallbacks.slice(-MAX_SEEN_INBOUND)) {
                     if (typeof key === 'string' && key.length > 0) this.seenCallbacks.add(key);
                 }
+            }
+            const rawSettings = (parsed as Record<string, unknown>).settings;
+            if (rawSettings && typeof rawSettings === 'object' && !Array.isArray(rawSettings)) {
+                this.settingsOverrides = sanitizeSettings(rawSettings as Record<string, unknown>);
             }
             const sessions = (parsed as Record<string, unknown>).sessions;
             if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) return;
@@ -1271,6 +1376,7 @@ export class DurevcodeAgent extends BaseAgent {
                 seenCallbacks: [...this.seenCallbacks].slice(-MAX_SEEN_INBOUND),
                 tombstones: Object.fromEntries([...this.tombstonedSessions.entries()].slice(-TOMBSTONE_CAP)),
                 topics: Object.fromEntries([...this.topicTags.entries()]),
+                settings: this.settingsOverrides,
             }));
         } catch (error) {
             console.debug('Durevcode state save failed:', errorText(error));
@@ -1831,6 +1937,7 @@ export class DurevcodeAgent extends BaseAgent {
             stoppedAt: 0,
             stopping: false,
             lastStopMsgAt: 0,
+            lastFinishMsgAt: 0,
             priorityReplies: [],
             confirming: null,
             promptNextAttemptAt: 0,
@@ -2495,6 +2602,18 @@ export class DurevcodeAgent extends BaseAgent {
         await this.safePriorityReply(telegram, state, `${icon('stop')} Stopped, send the task again.`);
     }
 
+    private async finishNotice(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        now = Date.now(),
+    ): Promise<void> {
+        if (this.stopQuiet(state)) return;
+        if (now - state.lastFinishMsgAt < FINISH_DEDUP_MS) return;
+        state.lastFinishMsgAt = now;
+        this.endFanoutGroup(state);
+        await this.safePriorityReply(telegram, state, `${icon('stop')} Stopped, send the task again.`);
+    }
+
     private slowThinking(state: WatchedSession): void {
         state.thinkingTypeMs = Math.min(THINKING_TYPE_PACE_MAX_MS, Math.max(THINKING_TYPE_PACE_MS, Math.round(state.thinkingTypeMs * 1.3)));
     }
@@ -2775,7 +2894,13 @@ export class DurevcodeAgent extends BaseAgent {
             await this.inboundTopicRename(opencode, state, message.forum_topic_edited.name);
             return;
         }
-        if (this.config.durevcode.plainMode === true) {
+        const text = (message.text || message.caption || '').trim();
+        const replyTo = message.reply_to_message?.message_id;
+        state.laneReplyTo = typeof message.message_id === 'number' ? message.message_id : null;
+        state.laneMention = this.replyMentionOf(message);
+        state.laneUserId = message.from && typeof message.from.id === 'number' ? message.from.id : 0;
+        if (await this.dispatchInboxCommand(telegram, opencode, state, text, replyTo)) return;
+        if (this.config.durevcode.watchOnly === true) {
             if (message.voice) {
                 await this.inboundVoice(telegram, state, message);
                 console.debug(`Durevcode plain mode: transcript posted, no prompt (session=${state.session.id} message=${message.message_id}).`);
@@ -2784,12 +2909,6 @@ export class DurevcodeAgent extends BaseAgent {
             console.debug(`Durevcode plain mode: ignored (session=${state.session.id} thread=${threadId} message=${message.message_id}).`);
             return;
         }
-        const text = (message.text || message.caption || '').trim();
-        const replyTo = message.reply_to_message?.message_id;
-        state.laneReplyTo = typeof message.message_id === 'number' ? message.message_id : null;
-        state.laneMention = this.replyMentionOf(message);
-        state.laneUserId = message.from && typeof message.from.id === 'number' ? message.from.id : 0;
-        if (await this.dispatchInboxCommand(telegram, opencode, state, text, replyTo)) return;
         if (hasMediaMessage(message)) {
             const before = state.promptQueue.length;
             await this.inboundMediaMessage(telegram, state, message, text);
@@ -2836,11 +2955,22 @@ export class DurevcodeAgent extends BaseAgent {
             return true;
         }
         if (command === '/mode') {
+            if (!(await this.adminCardGate(telegram, state))) return true;
             await this.sendModeCard(telegram, opencode, state);
             return true;
         }
-        if (command === '/models') {
+        if (command === '/models' || command === '/model') {
+            if (!(await this.adminCardGate(telegram, state))) return true;
             await this.sendModelCard(telegram, opencode, state);
+            return true;
+        }
+        if (command === '/status') {
+            await this.sendStatusCard(telegram, state);
+            return true;
+        }
+        if (command === '/settings') {
+            if (!(await this.adminCardGate(telegram, state))) return true;
+            await this.sendSettingsCard(telegram, state);
             return true;
         }
         if (replyTo !== undefined) {
@@ -2855,25 +2985,215 @@ export class DurevcodeAgent extends BaseAgent {
                 return true;
             }
         }
+        if (this.matchVoiceStop(text)) {
+            console.debug(`Durevcode voice command: stop by text (session=${state.session.id}).`);
+            await this.stopSession(telegram, opencode, state);
+            return true;
+        }
         const spoken = this.matchCardCommand(text);
+        if (spoken === 'status') {
+            await this.sendStatusCard(telegram, state);
+            return true;
+        }
+        if (spoken === 'settings') {
+            if (!(await this.adminCardGate(telegram, state))) return true;
+            await this.sendSettingsCard(telegram, state);
+            return true;
+        }
         if (spoken === 'models') {
+            if (!(await this.adminCardGate(telegram, state))) return true;
             await this.sendModelCard(telegram, opencode, state);
             return true;
         }
         if (spoken === 'mode') {
+            if (!(await this.adminCardGate(telegram, state))) return true;
             await this.sendModeCard(telegram, opencode, state);
             return true;
         }
         return false;
     }
 
-    private matchCardCommand(text: string): 'mode' | 'models' | null {
+    private matchCardCommand(text: string): 'mode' | 'models' | 'status' | 'settings' | null {
         const normalized = text.trim().replace(/[?!.…]+$/, '').replace(/\s+/g, ' ').toLowerCase();
         const tokens = normalized.split(' ').filter((token) => token.length > 0);
         if (tokens.length === 0 || tokens.length > 5) return null;
         if (tokens.some((token) => MODELS_CARD_ROOTS.some((root) => token.startsWith(root)))) return 'models';
         if (tokens.some((token) => MODE_CARD_ROOTS.some((root) => token.startsWith(root)))) return 'mode';
+        if (tokens.some((token) => STATUS_CARD_ROOTS.some((root) => token.startsWith(root)))) return 'status';
+        if (tokens.some((token) => SETTINGS_CARD_ROOTS.some((root) => token.startsWith(root)))) return 'settings';
         return null;
+    }
+
+    private cleanVoiceToken(token: string): string {
+        return token.toLowerCase().replace(/^[^a-zа-яё0-9]+|[^a-zа-яё0-9]+$/g, '');
+    }
+
+    private matchVoiceStop(text: string): boolean {
+        const normalized = text.trim().replace(/[?!.…]+$/, '').replace(/\s+/g, ' ').toLowerCase();
+        const tokens = normalized.split(' ').filter((token) => token.length > 0);
+        return tokens.slice(0, 2).some((token) => VOICE_STOP_WORDS.includes(this.cleanVoiceToken(token)));
+    }
+
+    private spokenModelOrdinalIndex(token: string): number | null {
+        const clean = this.cleanVoiceToken(token);
+        if (/^[0-9]+$/.test(clean)) {
+            const index = Number.parseInt(clean, 10) - 1;
+            return index >= 0 && index < 19 ? index : null;
+        }
+        for (const [root, index] of MODEL_PICK_ORDINALS) {
+            if (clean.startsWith(root)) return index;
+        }
+        return null;
+    }
+
+    private modelNameToken(model: ModelApiInfo, token: string): boolean {
+        const clean = token.toLowerCase().replace(/[^a-z0-9]+/g, '');
+        if (clean.length < 4) return false;
+        const name = `${model.name || model.id}`.toLowerCase().replace(/[^a-z0-9]+/g, '');
+        const id = model.id.toLowerCase().replace(/[^a-z0-9]+/g, '');
+        return name.startsWith(clean) || id.startsWith(clean);
+    }
+
+    private spokenModelIndex(text: string, entries: ModelApiInfo[]): number | null {
+        const normalized = text.trim().replace(/[?!.…]+$/, '').replace(/\s+/g, ' ').toLowerCase();
+        const tokens = normalized.split(' ').filter((token) => token.length > 0);
+        if (tokens.length === 0 || tokens.length > 6) return null;
+        const ordinal = tokens.map((token) => this.spokenModelOrdinalIndex(token)).find((index) => index !== null) ?? null;
+        const anchored = tokens.some((token) => MODEL_PICK_ANCHORS.some((root) => token.startsWith(root)));
+        const bareOrdinal =
+            (tokens.length === 1 && ordinal !== null) ||
+            (tokens.length === 2 && ordinal !== null &&
+                tokens.some((token) => NUMBER_VOICE_FILLERS.includes(this.cleanVoiceToken(token))));
+        if (!anchored && !bareOrdinal) return null;
+        if (ordinal !== null) return ordinal < entries.length ? ordinal : null;
+        if (!anchored) return null;
+        const nameIndex = entries.findIndex((model) => tokens.some((token) => this.modelNameToken(model, token)));
+        return nameIndex >= 0 ? nameIndex : null;
+    }
+
+    private async voicePickModel(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'setModel' | 'listModels'> & Partial<Pick<OpencodePlugin, 'getModelLimit'>>,
+        state: WatchedSession,
+        text: string,
+    ): Promise<boolean> {
+        if (state.modelCardMessageId === null) return false;
+        let models: ModelApiInfo[];
+        try {
+            models = await opencode.listModels();
+        } catch (error) {
+            console.debug('Durevcode model voice list failed:', errorText(error));
+            return false;
+        }
+        const entries = this.modelCardEntries(models, displayModel(state.session.model));
+        const index = this.spokenModelIndex(text, entries);
+        const picked = index !== null ? entries[index] : undefined;
+        if (index === null || !picked) return false;
+        console.debug(`Durevcode voice command: model pick #${index + 1} of ${entries.length} (session=${state.session.id}).`);
+        await this.switchSessionModel(telegram, opencode, state, picked.id, '', state.modelCardMessageId, async (noteText?: string) => {
+            await this.safeReply(telegram, state, noteText ?? `${icon('check')} Model switched to <b>${escapeHtml(picked.id)}</b>.`);
+        });
+        return true;
+    }
+
+    private matchVoiceContinue(text: string): boolean {
+        const normalized = text.trim().replace(/[?!.…]+$/, '').replace(/\s+/g, ' ').toLowerCase();
+        const tokens = normalized.split(' ').filter((token) => token.length > 0);
+        return tokens.slice(0, 2).some((token) => VOICE_CONTINUE_ROOTS.some((root) => token.startsWith(root)));
+    }
+
+    private hasRunningWork(state: WatchedSession): boolean {
+        return !state.turnComplete
+            || state.promptQueue.length > 0
+            || state.confirming !== null
+            || state.cliRun !== null
+            || state.pending.length > 0
+            || state.pendingTodos
+            || state.liveTool !== null;
+    }
+
+    private async voiceContinueTask(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'sendPrompt'>,
+        state: WatchedSession,
+    ): Promise<boolean> {
+        const last = this.lastTasks.get(state.session.id);
+        if (!last || last.text.trim() === '') {
+            await this.safeReply(telegram, state, `${icon('warn')} Nothing to continue yet — send a task first.`);
+            return true;
+        }
+        console.debug(`Durevcode voice command: continue (session=${state.session.id}).`);
+        this.enqueuePrompt(state, last.text);
+        await this.safeReply(telegram, state, `${icon('rocket')} Previous task is queued again.`);
+        return true;
+    }
+
+    private voicePermDecision(text: string): 'allow' | 'deny' | null {
+        const normalized = text.trim().replace(/[?!.…]+$/, '').replace(/\s+/g, ' ').toLowerCase();
+        const tokens = normalized.split(' ').filter((token) => token.length > 0);
+        const head = tokens.slice(0, 2).map((token) => this.cleanVoiceToken(token));
+        if (head.some((token) => VOICE_PERM_DENY.includes(token))) return 'deny';
+        if (head.some((token) => VOICE_PERM_ALLOW.includes(token))) return 'allow';
+        return null;
+    }
+
+    private spokenQuestionOption(question: QuestionRequest['questions'][number], text: string): string | null {
+        const options = question?.options ?? [];
+        if (options.length === 0) return null;
+        const ordinal = this.spokenModelOrdinalIndex(text);
+        if (ordinal !== null) return ordinal < options.length ? options[ordinal].label : null;
+        const normalized = text.trim().replace(/[?!.…]+$/, '').replace(/\s+/g, ' ').toLowerCase();
+        const tokens = normalized.split(' ').filter((token) => token.length > 0).map((token) => this.cleanVoiceToken(token));
+        if (tokens.length === 0 || tokens.length > 3) return null;
+        for (const option of options) {
+            const label = option.label.trim().toLowerCase();
+            const firstWord = label.split(/[ ,;]+/)[0] ?? '';
+            const candidates = [this.cleanVoiceToken(label), this.cleanVoiceToken(firstWord)];
+            for (const candidate of candidates) {
+                if (candidate === '') continue;
+                if (tokens.includes(candidate)) return option.label;
+                if (candidate.length >= 3 && tokens.some((token) => token.startsWith(candidate))) return option.label;
+            }
+        }
+        return null;
+    }
+
+    private async voiceAnswerCards(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion'>,
+        state: WatchedSession,
+        replyTo: number | undefined,
+        text: string,
+    ): Promise<boolean> {
+        if (replyTo === undefined) return false;
+        const pendingPerm = this.permReplies.get(replyTo);
+        if (pendingPerm && pendingPerm.sessionId === state.session.id) {
+            const decision = this.voicePermDecision(text);
+            if (decision === 'allow') {
+                await this.answerPermission(telegram, opencode, state, pendingPerm.permId, replyTo, 'once');
+                return true;
+            }
+            if (decision === 'deny') {
+                await this.answerPermission(telegram, opencode, state, pendingPerm.permId, replyTo, 'reject');
+                return true;
+            }
+            await this.safeReply(telegram, state, `${icon('warn')} Say yes or no — or tap the button.`);
+            return true;
+        }
+        const pendingQuest = this.questReplies.get(replyTo);
+        if (pendingQuest && pendingQuest.sessionId === state.session.id) {
+            if (pendingQuest.questions.length === 1) {
+                const label = this.spokenQuestionOption(pendingQuest.questions[0], text);
+                if (label !== null) {
+                    console.debug(`Durevcode voice command: question option (session=${state.session.id}).`);
+                    await this.resolveQuestion(telegram, opencode, state, pendingQuest, [[label]]);
+                    return true;
+                }
+            }
+            await this.answerQuestionText(telegram, opencode, state, pendingQuest, text);
+            return true;
+        }
+        return false;
     }
 
     private async handleUnknownThread(
@@ -2894,7 +3214,7 @@ export class DurevcodeAgent extends BaseAgent {
             console.debug(`Durevcode unknown topic ignored: new topics disabled (thread=${threadId}).`);
             return;
         }
-        if (this.config.durevcode.plainMode === true) {
+        if (this.config.durevcode.watchOnly === true) {
             console.debug(`Durevcode plain mode: new topic session not created (thread=${threadId}).`);
             return;
         }
@@ -3087,6 +3407,7 @@ export class DurevcodeAgent extends BaseAgent {
         state.promptQueue.push(text);
         state.stoppedAt = 0;
         state.stoppedByUser = false;
+        this.lastTasks.set(state.session.id, { text, at: Date.now() });
         if (wasEmpty) this.beginAnswerFanout(state, text);
         this.submittedPrompts.push({ session: state.session.id, text, at: Date.now() });
         if (this.submittedPrompts.length > MAX_SUBMITTED_PROMPTS) {
@@ -3193,7 +3514,7 @@ export class DurevcodeAgent extends BaseAgent {
         const voice = message.voice;
         if (!voice) return;
         const whisper = this.config.whisper?.enabled === true
-            ? this.getPlugin<WhisperPlugin>(PLUGIN_NAMES.WHISPER)
+            ? await this.ensureWhisper()
             : undefined;
         if (!whisper) {
             await this.safeReply(
@@ -3237,22 +3558,45 @@ export class DurevcodeAgent extends BaseAgent {
                 `${icon('chat')} ${escapeHtml(text)}`,
                 this.quotedTarget(attribution),
             );
+            this.lastVoiceStats.set(state.session.id, { audioSec: result.audioSec, processingMs: result.processingMs, model: result.model, at: Date.now() });
+            const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
+            if (opencode && this.matchVoiceStop(text)) {
+                console.debug(`Durevcode voice command: stop (session=${state.session.id}).`);
+                await this.stopSession(telegram, opencode, state);
+                return;
+            }
+            if (opencode && await this.voiceAnswerCards(telegram, opencode, state, message.reply_to_message?.message_id, text)) {
+                return;
+            }
+            if (opencode && await this.voicePickModel(telegram, opencode, state, text)) {
+                return;
+            }
             const spoken = this.matchCardCommand(text);
-            if (spoken !== null) {
-                const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
-                if (opencode) {
-                    if (spoken === 'models') {
-                        console.debug(`Durevcode voice command: model card (session=${state.session.id}).`);
-                        await this.sendModelCard(telegram, opencode, state);
-                    } else {
-                        console.debug(`Durevcode voice command: mode card (session=${state.session.id}).`);
-                        await this.sendModeCard(telegram, opencode, state);
-                    }
+            if (spoken !== null && opencode) {
+                if (spoken !== 'status' && !(await this.adminCardGate(telegram, state))) {
                     return;
                 }
+                if (spoken === 'status') {
+                    console.debug(`Durevcode voice command: status card (session=${state.session.id}).`);
+                    await this.sendStatusCard(telegram, state);
+                } else if (spoken === 'settings') {
+                    console.debug(`Durevcode voice command: settings card (session=${state.session.id}).`);
+                    await this.sendSettingsCard(telegram, state);
+                } else if (spoken === 'models') {
+                    console.debug(`Durevcode voice command: model card (session=${state.session.id}).`);
+                    await this.sendModelCard(telegram, opencode, state);
+                } else {
+                    console.debug(`Durevcode voice command: mode card (session=${state.session.id}).`);
+                    await this.sendModeCard(telegram, opencode, state);
+                }
+                return;
             }
-            if (this.config.durevcode.plainMode === true) {
+            if (this.config.durevcode.watchOnly === true) {
                 console.debug(`Durevcode plain mode: transcript posted without prompting (session=${state.session.id}).`);
+                return;
+            }
+            if (opencode && this.matchVoiceContinue(text) && !this.hasRunningWork(state)) {
+                await this.voiceContinueTask(telegram, opencode, state);
                 return;
             }
             this.enqueuePrompt(state, text);
@@ -3607,11 +3951,17 @@ export class DurevcodeAgent extends BaseAgent {
 
     private modeMarkup(build: boolean): InlineKeyboardMarkup {
         const label = (text: string, active: boolean) => (active ? `${EMOJI.check} ${text}` : text);
+        const plain = this.config.durevcode.watchOnly === true;
         return {
-            inline_keyboard: [[
-                { text: label('Plan', !build), callback_data: 'mode:plan' },
-                { text: label('Build', build), callback_data: 'mode:build' },
-            ]],
+            inline_keyboard: [
+                [
+                    { text: label('Plan', !build), callback_data: 'mode:plan' },
+                    { text: label('Build', build), callback_data: 'mode:build' },
+                ],
+                [
+                    { text: `Watch only · ${plain ? 'on' : 'off'}`, callback_data: 'mode:observer' },
+                ],
+            ],
         };
     }
 
@@ -3631,6 +3981,15 @@ export class DurevcodeAgent extends BaseAgent {
         return lines.join('\n');
     }
 
+    private modelCardEntries(models: ModelApiInfo[], currentId: string): ModelApiInfo[] {
+        const cappedModels = models.slice(0, 19);
+        if (currentId && !cappedModels.some((m) => m.id === currentId)) {
+            const currentModel = models.find((m) => m.id === currentId);
+            if (currentModel) cappedModels.push(currentModel);
+        }
+        return cappedModels;
+    }
+
     private modelCardMarkup(
         models: ModelApiInfo[],
         currentId: string,
@@ -3642,11 +4001,7 @@ export class DurevcodeAgent extends BaseAgent {
             const base = truncate(m.name || m.id, context ? 28 : 40);
             return context ? `${prefix}${base} · ${context}` : `${prefix}${base}`;
         };
-        const cappedModels = models.slice(0, 19);
-        if (currentId && !cappedModels.some((m) => m.id === currentId)) {
-            const currentModel = models.find((m) => m.id === currentId);
-            if (currentModel) cappedModels.push(currentModel);
-        }
+        const cappedModels = this.modelCardEntries(models, currentId);
         const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
             text: label(m),
             callback_data: `model:${m.id}`,
@@ -3732,6 +4087,267 @@ export class DurevcodeAgent extends BaseAgent {
         await this.safePriorityReply(telegram, state, text, markup);
     }
 
+    private statusCardText(state: WatchedSession): string {
+        const now = Date.now();
+        const session = state.session;
+        const snapshot = state.snapshot;
+        const limit = state.contextLimit;
+        const limitText = limit !== null && limit > 0 ? formatTokenShort(limit) : '';
+        let contextLine: string;
+        if (snapshot) {
+            const occupancy = snapshot.input + snapshot.cacheRead + snapshot.cacheWrite;
+            const occupancyText = formatTokenShort(occupancy);
+            const percent = limit !== null && limit > 0 ? Math.min(100, Math.max(0, Math.round((occupancy / limit) * 100))) : null;
+            contextLine = `${icon('inbox')} Context <b>${occupancyText}${limitText ? `/${limitText} (${percent}%)` : ''}</b>`;
+        } else {
+            contextLine = `${icon('inbox')} Context <b>—</b>${limitText ? ` · window ${limitText} (no turn tokens yet)` : ''}`;
+        }
+        const modelRefText = displayModel(session.model);
+        const variantText = modelVariant(session.model);
+        const whisper = this.config.whisper;
+        const whisperLine = whisper?.enabled === true
+            ? whisper.autoServe === false
+                ? 'CLI transcriber'
+                : `resident server ${whisper.serverUrl ?? ''}`
+            : 'off';
+        const voice = this.lastVoiceStats.get(session.id);
+        const title = state.appliedTopicName ?? session.title;
+        const lines = [
+            `${icon('gears')} <b>Status</b> · ${escapeHtml(title)} · <code>${escapeHtml(sessionTagOf(session.id))}</code>`,
+            `${icon('bot')} OpenCode ${escapeHtml(opencodeSourceDisplay(this.config.opencode.baseUrl))}`,
+            `${icon('brain')} Model <b>${escapeHtml(modelRefText)}</b>${variantText ? ` (${escapeHtml(variantText)})` : ''} · ${state.buildMode ? 'Build' : 'Plan'} · ${escapeHtml(state.sessionAgent)}`,
+            contextLine,
+            `${icon('active')} ${state.turnComplete ? 'Idle' : 'Running'} · last event ${shortAgo(now, state.lastEventAt)} · up ${shortUptime(now - this.bootAt)}`,
+        ];
+        if (state.promptQueue.length > 0) lines.push(`${icon('queued')} Queue: ${state.promptQueue.length}`);
+        if (session.cost > 0) lines.push(`${icon('coin')} $${session.cost.toFixed(2)}`);
+        if (Date.now() < this.rateLimitedUntil) {
+            lines.push(`${icon('hourglass')} Rate limit until ${new Date(this.rateLimitedUntil).toLocaleTimeString('en-GB')}`);
+        }
+        lines.push(`${icon('toolbox')} Whisper: ${whisperLine} (${whisper?.threads ?? 0} threads, ${whisper?.language ?? 'auto'})`);
+        if (voice) {
+            lines.push(`${icon('timer')} Last voice ${voice.audioSec.toFixed(0)}s → ${(voice.processingMs / 1000).toFixed(1)}s (${shortAgo(now, voice.at)})`);
+        }
+        return `${lines.join('\n')}\n`;
+    }
+
+    private statusCardMarkup(state: WatchedSession): InlineKeyboardMarkup {
+        return { inline_keyboard: [[{ text: `${EMOJI.active} Refresh`, callback_data: `status:${state.session.id}` }]] };
+    }
+
+    private async sendStatusCard(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+    ): Promise<void> {
+        const text = this.statusCardText(state);
+        const markup = this.statusCardMarkup(state);
+        try {
+            await this.deliverMessage(telegram, state, text, markup);
+        } catch (error) {
+            console.debug('Durevcode status card send failed:', errorText(error));
+        }
+    }
+
+    private async editStatusCard(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        messageId: number | null,
+    ): Promise<void> {
+        if (messageId === null) return;
+        try {
+            await telegram.editMessageText({
+                chat_id: this.chatId(),
+                message_id: messageId,
+                text: wellFormed(this.statusCardText(state)),
+                parse_mode: 'HTML',
+                reply_markup: this.statusCardMarkup(state),
+            });
+        } catch (error) {
+            if (isMessageNotModifiedError(error)) return;
+            if (isRateLimitError(error)) {
+                this.absorbRateLimit('topic-edit', error, 'status card', state.session.id);
+                return;
+            }
+            console.debug('Durevcode status card edit failed:', errorText(error));
+        }
+    }
+
+    private settingRawValue(key: string): boolean | number | string {
+        const voice = this.config.whisper;
+        switch (key) {
+            case 'watchOnly': return this.config.durevcode.watchOnly === true;
+            case 'leadMention': return this.config.durevcode.leadMention !== false;
+            case 'quoteReplies': return this.config.durevcode.quoteReplies !== false;
+            case 'autoFinish': return this.config.durevcode.autoFinish !== false;
+            case 'answerFanout': return this.config.durevcode.answerFanout === true;
+            case 'newTopics': return this.config.durevcode.newTopics !== false;
+            case 'voice': return voice?.enabled === true;
+            case 'voiceLang': return voice?.language ?? 'auto';
+            case 'voiceServer': return voice?.autoServe !== false;
+            case 'voiceThreads': return String(voice?.threads ?? 8);
+            default: return '';
+        }
+    }
+
+    private ensureWhisperConfig(): NonNullable<DurevcodeConfig['whisper']> {
+        if (!this.config.whisper) this.config.whisper = { enabled: false };
+        return this.config.whisper;
+    }
+
+    private patchWhisperPlugin(patch: { language?: string; threads?: number; autoServe?: boolean }): void {
+        const plugin = this.getPlugin<WhisperPlugin>(PLUGIN_NAMES.WHISPER);
+        if (!plugin) return;
+        void plugin.applySettings(patch).catch((error) => console.debug('Durevcode whisper settings patch failed:', errorText(error)));
+    }
+
+    private applySetting(key: string, value: boolean | number | string): void {
+        const opts = this.ensureWhisperConfig();
+        switch (key) {
+            case 'watchOnly':
+                this.config.durevcode.watchOnly = value === true;
+                break;
+            case 'leadMention':
+                this.config.durevcode.leadMention = value !== false;
+                break;
+            case 'quoteReplies':
+                this.config.durevcode.quoteReplies = value !== false;
+                break;
+            case 'autoFinish':
+                this.config.durevcode.autoFinish = value !== false;
+                break;
+            case 'answerFanout':
+                this.config.durevcode.answerFanout = value === true;
+                break;
+            case 'newTopics':
+                this.config.durevcode.newTopics = value !== false;
+                break;
+            case 'voice':
+                opts.enabled = value === true;
+                break;
+            case 'voiceLang':
+                opts.language = String(value);
+                this.patchWhisperPlugin({ language: String(value) });
+                break;
+            case 'voiceServer':
+                opts.autoServe = value !== false;
+                this.patchWhisperPlugin({ autoServe: value !== false });
+                break;
+            case 'voiceThreads': {
+                const threads = Number.parseInt(String(value), 10);
+                if (Number.isFinite(threads) && threads > 0) {
+                    opts.threads = threads;
+                    this.patchWhisperPlugin({ threads });
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    private applySettingsOverrides(): void {
+        for (const [key, value] of Object.entries(this.settingsOverrides)) {
+            this.applySetting(key, value);
+        }
+    }
+
+    private async applySettingToggle(key: string): Promise<string | null> {
+        if (key === 'reset') {
+            this.settingsOverrides = {};
+            for (const def of SETTINGS_DEFS) {
+                this.applySetting(def.key, this.settingsBaseline[def.key]);
+            }
+            this.savePersistedCoalesced();
+            return 'Defaults restored.';
+        }
+        const def = SETTINGS_DEFS.find((item) => item.key === key);
+        if (!def) return null;
+        const current = this.settingRawValue(key);
+        let next: boolean | number | string;
+        if (def.bool) {
+            next = current === true ? false : true;
+        } else if (def.values) {
+            const list = def.values;
+            const idx = list.indexOf(String(current));
+            next = list[(idx + 1) % list.length];
+        } else {
+            return null;
+        }
+        this.settingsOverrides[key] = next;
+        this.applySetting(key, next);
+        this.savePersistedCoalesced();
+        return `${def.label}: ${this.settingDisplay(def)}`;
+    }
+
+    private settingDisplay(def: SettingDef): string {
+        const value = this.settingRawValue(def.key);
+        if (def.bool) return value === true ? 'on' : 'off';
+        return String(value);
+    }
+
+    private settingsCardText(): string {
+        const lines = SETTINGS_DEFS.map((def) => `⚙️ ${escapeHtml(def.label)}: <b>${escapeHtml(this.settingDisplay(def))}</b>`);
+        return `${icon('gears')} <b>Settings</b>\n${lines.join('\n')}\n\nTap a row to switch it. Overrides survive restarts.\n`;
+    }
+
+    private settingsCardMarkup(): InlineKeyboardMarkup {
+        const rows: InlineKeyboardButton[][] = SETTINGS_DEFS.map((def) => [{
+            text: `${def.label} · ${this.settingDisplay(def)}`,
+            callback_data: `set:${def.key}`,
+        }]);
+        rows.push([{ text: `${EMOJI.gears} Reset all`, callback_data: 'set:reset' }]);
+        return { inline_keyboard: rows };
+    }
+
+    private async sendSettingsCard(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        try {
+            await this.deliverMessage(telegram, state, wellFormed(this.settingsCardText()), this.settingsCardMarkup());
+        } catch (error) {
+            console.debug('Durevcode settings card send failed:', errorText(error));
+        }
+    }
+
+    private async editSettingsCard(telegram: TelegramBotPlugin, state: WatchedSession, messageId: number | null): Promise<void> {
+        if (messageId === null) return;
+        try {
+            await telegram.editMessageText({
+                chat_id: this.chatId(),
+                message_id: messageId,
+                text: wellFormed(this.settingsCardText()),
+                parse_mode: 'HTML',
+                reply_markup: this.settingsCardMarkup(),
+            });
+        } catch (error) {
+            if (isMessageNotModifiedError(error)) return;
+            if (isRateLimitError(error)) {
+                this.absorbRateLimit('topic-edit', error, 'settings card', state.session.id);
+                return;
+            }
+            console.debug('Durevcode settings card edit failed:', errorText(error));
+        }
+    }
+
+    private async ensureWhisper(): Promise<WhisperPlugin | null> {
+        const existing = this.getPlugin<WhisperPlugin>(PLUGIN_NAMES.WHISPER);
+        if (existing) return existing;
+        const whisper = this.config.whisper;
+        if (!this.config.whisper?.enabled || !whisper?.modelPath) return null;
+        if (this.whisperActivating) return this.whisperActivating;
+        this.whisperActivating = (async () => {
+            try {
+                await this.registerPlugin(new WhisperPlugin());
+                await this.activatePlugin(PLUGIN_NAMES.WHISPER, whisper);
+                console.log('Durevcode whisper: plugin activated on demand (settings)');
+            } catch (error) {
+                console.debug('Durevcode whisper plugin activation failed:', errorText(error));
+            } finally {
+                this.whisperActivating = null;
+            }
+            return this.getPlugin<WhisperPlugin>(PLUGIN_NAMES.WHISPER) ?? null;
+        })();
+        return this.whisperActivating;
+    }
+
     private async sendModeCard(
         telegram: TelegramBotPlugin,
         opencode: Partial<Pick<OpencodePlugin, 'listAgents'>> | null | undefined,
@@ -3744,11 +4360,15 @@ export class DurevcodeAgent extends BaseAgent {
 
     private modeCardText(state: WatchedSession, agents: { build: string; plan: string } | null): string {
         const current = this.modeAgentName(agents, state.buildMode) || state.sessionAgent;
+        const plain = this.config.durevcode.watchOnly === true;
         return `Mode: <b>${state.buildMode ? 'Build' : 'Plan'}</b>` +
             `${current ? ` (${escapeHtml(current)})` : ''}` +
             ` — tap to switch.\n` +
             `<b>Build</b> — the model may edit files.\n` +
-            `<b>Plan</b> — the model reads and answers only, no edits.`;
+            `<b>Plan</b> — the model reads and answers only, no edits.\n` +
+            (plain
+                ? `Watch only is on — typed prompts are ignored; tap the bottom row to resume prompting.`
+                : `Watch only is off — the bottom row turns the bot into a spectator that submits nothing.`);
     }
 
     private async loadModeAgents(
@@ -3853,10 +4473,22 @@ export class DurevcodeAgent extends BaseAgent {
         modelId: string | null,
         variant: string,
     ): Promise<void> {
-        const dismiss = (text?: string): Promise<void> => this.ackCallback(telegram, query, 'model', text);
+        const note = (text?: string): Promise<void> => this.ackCallback(telegram, query, 'model', text);
+        await this.switchSessionModel(telegram, opencode, state, modelId, variant, query.message?.message_id ?? null, note);
+    }
+
+    private async switchSessionModel(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'setModel' | 'listModels'> & Partial<Pick<OpencodePlugin, 'getModelLimit'>>,
+        state: WatchedSession,
+        modelId: string | null,
+        variant: string,
+        cardMessageId: number | null,
+        note: (text?: string) => Promise<void>,
+    ): Promise<void> {
         const currentRef = modelRef(state.session.model);
         if (modelId === null && !currentRef.id) {
-            await dismiss('No model yet, pick one above.');
+            await note('No model yet, pick one above.');
             return;
         }
         let models: ModelApiInfo[];
@@ -3864,29 +4496,29 @@ export class DurevcodeAgent extends BaseAgent {
             models = await opencode.listModels();
         } catch (error) {
             console.debug('Durevcode model list failed:', errorText(error));
-            await dismiss();
+            await note();
             await this.safePriorityReply(telegram, state, 'Could not load models, try again.');
             return;
         }
         const picked = models.find((m) => m.id === (modelId ?? currentRef.id));
         if (!picked || !picked.providerID) {
-            await dismiss('Outdated, ask again.');
+            await note('Outdated, ask again.');
             return;
         }
         const currentVariant = modelVariant(state.session.model);
         if (modelId === null) {
             if (!modelVariantIds(picked).includes(variant)) {
-                await dismiss('That effort is not offered for this model.');
+                await note('That effort is not offered for this model.');
                 return;
             }
             if (currentRef.variant === variant) {
-                await dismiss('Already set.');
+                await note('Already set.');
                 return;
             }
         }
         const nextVariant = modelId === null ? variant : variantForModel(picked, currentVariant);
         const nextModel = { id: picked.id, providerID: picked.providerID, ...(nextVariant ? { variant: nextVariant } : {}) };
-        await dismiss();
+        await note();
         if (currentRef.id === picked.id && currentVariant === nextVariant) return;
         let switched = false;
         try {
@@ -3901,7 +4533,7 @@ export class DurevcodeAgent extends BaseAgent {
             return;
         }
         if (!switched) {
-            await dismiss('Outdated, ask again.');
+            await note('Outdated, ask again.');
             return;
         }
         state.session = { ...state.session, model: JSON.stringify(nextModel) };
@@ -3913,7 +4545,7 @@ export class DurevcodeAgent extends BaseAgent {
                 await this.refreshContextLimit({ getModelLimit: (id: string) => getLimit.call(opencode, id) }, state);
             }
         }
-        await this.editModelCard(telegram, state, models, query.message?.message_id ?? null);
+        await this.editModelCard(telegram, state, models, cardMessageId);
         if (state.contextMessageId !== null) await this.refreshContext(telegram, state);
         if (modelId === null) {
             await this.safePriorityReply(telegram, state, `Effort: <b>${escapeHtml(variant)}</b> for <b>${escapeHtml(picked.id)}</b>.`);
@@ -5092,6 +5724,39 @@ export class DurevcodeAgent extends BaseAgent {
         return true;
     }
 
+    private async isForumAdmin(telegram: TelegramBotPlugin, userId: number | undefined): Promise<boolean> {
+        if (typeof userId !== 'number' || userId <= 0) return false;
+        const allowed = this.config.durevcode.allowedUsers;
+        if (allowed.length > 0 && allowed.includes(userId)) return true;
+        const cached = this.adminGrant.get(userId);
+        const now = Date.now();
+        if (cached && now - cached.at < ADMIN_CACHE_TTL_MS) return cached.ok;
+        let ok = false;
+        try {
+            const member = await telegram.getChatMember({ chat_id: this.chatId(), user_id: userId });
+            ok = member.status === 'creator' || member.status === 'administrator';
+        } catch (error) {
+            console.debug(`Durevcode admin check failed for ${userId}:`, errorText(error));
+            return false;
+        }
+        this.adminGrant.set(userId, { ok, at: now });
+        for (const [key, entry] of this.adminGrant) {
+            if (now - entry.at < ADMIN_CACHE_TTL_MS) continue;
+            this.adminGrant.delete(key);
+        }
+        return ok;
+    }
+
+    private adminGateText(): string {
+        return `${icon('denied')} Only forum admins can change this.`;
+    }
+
+    private async adminCardGate(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {
+        if (await this.isForumAdmin(telegram, state.laneUserId)) return true;
+        await this.safePriorityReply(telegram, state, this.adminGateText());
+        return false;
+    }
+
     private callbackGate(query: CallbackQuery, what: string, detail = ''): 'ok' | 'silent' | 'deny' {
         const from = query.from;
         if (!from || from.is_bot) return 'silent';
@@ -5144,20 +5809,63 @@ export class DurevcodeAgent extends BaseAgent {
             await this.applyThoughtDoc(telegram, query, Number(docMatch[1]), dismiss);
             return;
         }
-        const modeMatch = data.match(/^mode:(plan|plain|build)$/);
+        const modeMatch = data.match(/^mode:(plan|plain|build|observer)$/);
         if (modeMatch) {
             if (!(await this.gateCallback(query, 'mode', dismiss))) return;
+            if (!(await this.isForumAdmin(telegram, query.from?.id))) {
+                await dismiss('Only forum admins can change modes.');
+                return;
+            }
             const target = this.callbackTarget(query, true);
             if (!target) {
                 await dismiss('Outdated, ask again.');
                 return;
             }
+            if (modeMatch[1] === 'observer') {
+                const applied = await this.applySettingToggle('watchOnly');
+                await dismiss(applied ?? 'Watch only toggle failed.');
+                await this.refreshModeCard(telegram, opencode, query, target);
+                return;
+            }
             await this.applyRenderMode(telegram, opencode, query, target, modeMatch[1] === 'build');
+            return;
+        }
+        const statusMatch = data.match(/^status:([A-Za-z0-9._-]{1,50})$/);
+        if (statusMatch) {
+            if (!(await this.gateCallback(query, 'status', dismiss))) return;
+            const target = this.callbackTarget(query, true);
+            if (!target || target.session.id !== statusMatch[1]) {
+                await dismiss('Outdated, ask again.');
+                return;
+            }
+            await dismiss();
+            await this.editStatusCard(telegram, target, query.message?.message_id ?? null);
+            return;
+        }
+        const setMatch = data.match(/^set:([A-Za-z0-9_]{1,20})$/);
+        if (setMatch) {
+            if (!(await this.gateCallback(query, 'settings', dismiss))) return;
+            if (!(await this.isForumAdmin(telegram, query.from?.id))) {
+                await dismiss('Only forum admins can change settings.');
+                return;
+            }
+            const target = this.callbackTarget(query, true);
+            if (!target) {
+                await dismiss('Outdated, ask again.');
+                return;
+            }
+            const applied = await this.applySettingToggle(setMatch[1]);
+            await dismiss(applied ?? 'Unknown setting.');
+            await this.editSettingsCard(telegram, target, query.message?.message_id ?? null);
             return;
         }
         const modelMatch = data.match(/^model:([A-Za-z0-9._-]{1,50})$/);
         if (modelMatch) {
             if (!(await this.gateCallback(query, 'model', dismiss))) return;
+            if (!(await this.isForumAdmin(telegram, query.from?.id))) {
+                await dismiss('Only forum admins can change models.');
+                return;
+            }
             const target = this.callbackTarget(query, true);
             if (!target) {
                 await dismiss('Outdated, ask again.');
@@ -5169,6 +5877,10 @@ export class DurevcodeAgent extends BaseAgent {
         const variantMatch = data.match(/^modelvariant:([A-Za-z0-9._-]{1,50})$/);
         if (variantMatch) {
             if (!(await this.gateCallback(query, 'model', dismiss))) return;
+            if (!(await this.isForumAdmin(telegram, query.from?.id))) {
+                await dismiss('Only forum admins can change models.');
+                return;
+            }
             const target = this.callbackTarget(query, true);
             if (!target) {
                 await dismiss('Outdated, ask again.');
@@ -5696,6 +6408,9 @@ export class DurevcodeAgent extends BaseAgent {
         if (!state.finalized && !canNudge && idleFor >= this.config.durevcode.idleSec * 1000 && hasWork && state.promptQueue.length === 0) {
             if (Date.now() < this.rateLimitedUntil || Date.now() < this.upstreamBackoffUntil) return;
             await this.finalizeSession(telegram, state);
+            if (state.lastText !== '' && state.knownQuestions.length === 0 && state.knownPerms.length === 0) {
+                await this.finishNotice(telegram, state);
+            }
             return;
         }
 
@@ -6266,11 +6981,12 @@ export class DurevcodeAgent extends BaseAgent {
         if (state.finalized || state.stopping) return false;
         if (state.promptQueue.length > 0 || state.confirming || state.cliRun) return false;
         if (state.pending.length > 0 || state.pendingTodos || state.liveTool) return false;
+        if (state.knownQuestions.length > 0 || state.knownPerms.length > 0) return false;
         if (this.stopQuiet(state)) return false;
         if (Date.now() < this.rateLimitedUntil) return false;
         this.logger.info(`Durevcode finished a turn on its own (session=${state.session.id} thread=${state.threadId}).`);
         await this.finalizeSession(telegram, state);
-        await this.stoppedNotice(telegram, state);
+        await this.finishNotice(telegram, state);
         return true;
     }
 
