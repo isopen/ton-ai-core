@@ -72,6 +72,13 @@ export class WhisperPlugin extends BasePlugin<WhisperConfig> {
         this.events.emit('whisper:config:updated');
     }
 
+    async applySettings(patch: Partial<WhisperConfig>): Promise<void> {
+        this.checkInitialized();
+        this.config = { ...this.config, ...patch };
+        this.skills.updateConfig(this.config);
+        this.events.emit('whisper:config:updated');
+    }
+
     async probe(): Promise<WhisperProbeResult> {
         this.checkInitialized();
         return this.skills.probe();
