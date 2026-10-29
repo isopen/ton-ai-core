@@ -8,13 +8,11 @@ import { WhisperPlugin } from '@ton-ai/whisper';
 import {
     EMOJI,
     checkIcon,
-    describeModelCapabilities,
     displayModel,
     escapeHtml,
     formatConsoleBatch,
     formatContextPin,
     formatLiveTool,
-    formatModelContext,
     modelVariant,
     modelRef,
     modelVariantIds,
@@ -24,9 +22,7 @@ import {
     formatThinkingFolded,
     formatThought,
     formatThoughtArchive,
-    hourglassIcon,
     icon,
-    rocketIcon,
     formatTopicName,
     parseTopicTitle,
     splitTelegramHtml,
@@ -41,6 +37,9 @@ import {
     ToolItem,
     ResultSnippet,
 } from './formatter';
+import * as en from './langs/en';
+
+export { sessionTagOf, explainModelError, modelErrorNotice } from './langs/en';
 
 export const PLUGIN_NAMES = {
     TELEGRAM: 'telegram-bot-api',
@@ -72,40 +71,6 @@ function variantForModel(model: ModelApiInfo, current: string): string {
 
 export function isSubagentSession(session: SessionRow): boolean {
     return typeof session.parent_id === 'string' && session.parent_id.length > 0;
-}
-
-export function sessionTagOf(sessionId: string): string {
-    return sessionId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'session';
-}
-
-function shortAgo(now: number, at: number): string {
-    if (at === 0) return 'never';
-    const sec = Math.max(1, Math.round((now - at) / 1000));
-    if (sec < 60) return `${sec}s ago`;
-    if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
-    if (sec < 172800) return `${Math.round(sec / 3600)}h ago`;
-    return `${Math.round(sec / 86400)}d ago`;
-}
-
-function formatTokenShort(value: number): string {
-    if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
-    if (value >= 1000) return `${(value / 1000).toFixed(1)}K`;
-    return String(value);
-}
-
-function shortUptime(ms: number): string {
-    const minutes = Math.max(0, Math.floor(ms / 60000));
-    const days = Math.floor(minutes / 1440);
-    const hours = Math.floor((minutes % 1440) / 60);
-    const mins = minutes % 60;
-    if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
-    if (hours > 0) return minutes % 60 > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-    return `${mins}m`;
-}
-
-function opencodeSourceDisplay(baseUrl: string): string {
-    const trimmed = baseUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-    return trimmed || 'unknown';
 }
 
 export function tagFromTopicName(name: string): string | null {
@@ -192,7 +157,6 @@ const UPSTREAM_BACKOFF_MAX_MS = 60000;
 const DELIVERY_DEDUP_MS = 45000;
 const DELIVERY_DEDUP_KEEP = 8;
 const PROMPT_BUSY_BACKOFF_MS = 8000;
-const AUTO_CONTINUE_TEXT = 'Continue';
 const AUTO_CONTINUE_MIN_MS = 60000;
 const AUTO_CONTINUE_DEFAULT_MAX = 10;
 const WHIP_ARMED_TTL_MS = 10 * 60 * 1000;
@@ -232,7 +196,6 @@ const MAX_SUBMITTED_PROMPTS = 100;
 const SUBMITTED_WINDOW_MS = 120000;
 const PROMPT_TRACK_TTL_MS = 30 * 60_000;
 
-const DIGEST_PROMPT_PREFIX = 'Background subagent task finished.';
 const PERSISTED_SAVE_COALESCE_MS = 1500;
 
 const FILE_MODIFYING_PERMISSIONS = new Set(['edit']);
@@ -541,41 +504,6 @@ export function serverEventError(event: OpencodeServerEvent): OpencodeServerErro
     return undefined;
 }
 
-export function explainModelError(text: string): string {
-    const raw = text.trim();
-    const has = (pattern: RegExp): boolean => pattern.test(raw);
-    if (has(/FreeTierError|free tier can only be used/i)) {
-        return 'the provider refuses free-tier models for requests that do not come from the OpenCode client itself. '
-            + 'The agent drives a local opencode server, so those models answer with HTTP 403 here. '
-            + 'Pick a model with your own API key, or run the task from the OpenCode app where the free tier is allowed.';
-    }
-    if (has(/VariantUnavailableError|Variant unavailable/i)) {
-        return 'the session is pinned to a model variant the model does not offer, so the turn cannot start. '
-            + 'Switch the model in the topic if it repeats.';
-    }
-    if (has(/429|rate.?limit|too many requests/i)) {
-        return 'the provider is rate limiting this model. The task is kept; write again in a minute.';
-    }
-    if (has(/401|unauthor|forbidden|api key/i)) {
-        return 'the provider rejected the credentials for this model. Fix the API key for the session model.';
-    }
-    if (has(/context length|context_length|maximum context|too many tokens/i)) {
-        return 'the request no longer fits the model context window. Start a fresh session for this topic.';
-    }
-    if (has(/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|socket hang up|network/i)) {
-        return 'the provider endpoint could not be reached. Check the network and the opencode server.';
-    }
-    if (!raw) return 'opencode did not report why the turn stopped.';
-    return 'the model call failed for an unclear reason.';
-}
-
-export function modelErrorNotice(text: string): string {
-    const raw = text.trim();
-    const explanation = explainModelError(raw);
-    if (!raw) return explanation;
-    return `${explanation}\n\nopencode said: ${truncate(raw, 400)}`;
-}
-
 const NORMAL_STEP_FINISHES = new Set(['stop', 'tool-calls']);
 
 export function isAbnormalStepFinish(finish: string): boolean {
@@ -868,23 +796,6 @@ interface QuestionPick {
     picks: string[][];
     msgId: number;
     token: string;
-}
-
-const PERMISSION_DECISION_LABELS: Record<PermissionDecision, string> = {
-    always: 'Always allow',
-    once: 'Allow once',
-    reject: 'Deny',
-};
-
-const PERMISSION_DECISION_ICONS: Record<PermissionDecision, string> = {
-    always: '♾️',
-    once: EMOJI.check,
-    reject: EMOJI.denied,
-};
-
-function permissionDecisionText(decision: PermissionDecision): string {
-    if (decision === 'reject') return `${icon('denied')} Denied.`;
-    return `${checkIcon()} ${decision === 'always' ? 'Allowed always.' : 'Allowed once.'}`;
 }
 
 export class DurevcodeAgent extends BaseAgent {
@@ -1337,7 +1248,7 @@ export class DurevcodeAgent extends BaseAgent {
                     ...(questRefs ? { questMsgs: questRefs } : {}),
                 };
                 if (threadId !== null && !this.tombstonedSessions.has(id)) {
-                    this.topicTags.set(sessionTagOf(id), { sessionId: id, threadId, at: typeof record.lastSeen === 'number' ? record.lastSeen : 0 });
+                    this.topicTags.set(en.sessionTagOf(id), { sessionId: id, threadId, at: typeof record.lastSeen === 'number' ? record.lastSeen : 0 });
                 }
             }
             const rawTombstones = (parsed as Record<string, unknown>).tombstones;
@@ -1455,7 +1366,7 @@ export class DurevcodeAgent extends BaseAgent {
             const now = Date.now();
             for (const [id, entry] of Object.entries(sessions)) {
                 if (entry.threadId === null) continue;
-                const tag = sessionTagOf(id);
+                const tag = en.sessionTagOf(id);
                 const existing = this.topicTags.get(tag);
                 if (existing?.sessionId === id && existing.threadId === entry.threadId) continue;
                 this.topicTags.set(tag, { sessionId: id, threadId: entry.threadId, at: now });
@@ -1655,7 +1566,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (state.threadId !== null) return state.threadId;
         if (!this.isForumLane(state)) return null;
         if (Date.now() < (this.threadRetryAt.get(state.session.id) ?? 0)) return null;
-        const tag = sessionTagOf(state.session.id);
+        const tag = en.sessionTagOf(state.session.id);
         const known = this.topicTags.get(tag);
         if (known && known.sessionId === state.session.id && !this.tombstonedSessions.has(state.session.id)) {
             state.threadId = known.threadId;
@@ -2544,7 +2455,7 @@ export class DurevcodeAgent extends BaseAgent {
             this.tombstonedSessions.delete(sessionId);
             if (threadId !== null) {
                 this.persistThreadBinding(sessionId, threadId);
-                const tag = sessionTagOf(sessionId);
+                const tag = en.sessionTagOf(sessionId);
                 this.topicTags.set(tag, { sessionId, threadId, at: Date.now() });
             }
         }
@@ -2583,7 +2494,7 @@ export class DurevcodeAgent extends BaseAgent {
         this.dropSessionRefs(loserId);
         const loserEntry = this.persisted[loserId];
         if (loserEntry) loserEntry.threadId = null;
-        const loserTag = sessionTagOf(loserId);
+        const loserTag = en.sessionTagOf(loserId);
         const loserTagEntry = this.topicTags.get(loserTag);
         if (loserTagEntry?.sessionId === loserId) this.topicTags.delete(loserTag);
         this.savePersisted();
@@ -2723,7 +2634,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (now - state.lastStopMsgAt < STOP_DEDUP_MS) return;
         state.lastStopMsgAt = now;
         this.endFanoutGroup(state);
-        await this.safePriorityReply(telegram, state, `${icon('stop')} Stopped, send the task again.`);
+        await this.safePriorityReply(telegram, state, en.STOPPED_AGAIN);
     }
 
     private async finishNotice(
@@ -2735,7 +2646,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (now - state.lastFinishMsgAt < FINISH_DEDUP_MS) return;
         state.lastFinishMsgAt = now;
         this.endFanoutGroup(state);
-        await this.safePriorityReply(telegram, state, `${icon('stop')} Stopped, send the task again.`);
+        await this.safePriorityReply(telegram, state, en.STOPPED_AGAIN);
     }
 
     private slowThinking(state: WatchedSession): void {
@@ -2774,7 +2685,7 @@ export class DurevcodeAgent extends BaseAgent {
         const tracked = (this.promptTracking.get(state.session.id) ?? []).filter(
             (entry) => now - entry.at < PROMPT_TRACK_TTL_MS,
         );
-        const digest = text.startsWith(DIGEST_PROMPT_PREFIX);
+        const digest = text.startsWith(en.DIGEST_PROMPT_PREFIX);
         tracked.push({ text, attribution, at, pending, digest });
         this.promptTracking.set(state.session.id, tracked);
         state.digestTurn = digest;
@@ -2849,9 +2760,7 @@ export class DurevcodeAgent extends BaseAgent {
 
     private answerLead(lead: PromptAttribution): string {
         if (this.config.durevcode.leadMention === false || !lead.mention) return '';
-        return lead.uid !== undefined && lead.uid > 0
-            ? `<a href="tg://user?id=${lead.uid}">${escapeHtml(lead.mention)}</a>`
-            : `<b>${escapeHtml(lead.mention)}</b>`;
+        return en.answerLeadHtml(lead.mention, lead.uid);
     }
 
     private quotedTarget(lead: PromptAttribution): number | undefined {
@@ -2870,7 +2779,7 @@ export class DurevcodeAgent extends BaseAgent {
 
     private beginAnswerFanout(state: WatchedSession, head: string): void {
         if (this.config.durevcode.answerFanout !== true) return;
-        if (head === AUTO_CONTINUE_TEXT) return;
+        if (head === en.AUTO_CONTINUE_TEXT) return;
         const fingerprint = this.promptFingerprint(head);
         const group = this.fanoutGroups.get(state.session.id);
         if (group) {
@@ -2919,7 +2828,7 @@ export class DurevcodeAgent extends BaseAgent {
             await this.safeReply(
                 telegram,
                 state,
-                `${hourglassIcon()} Same question is already running in another topic — I will copy the answer here too.`,
+                en.FANOUT_COPIED_ELSEWHERE,
             );
         } catch (error) {
             console.debug('Durevcode fanout join notice failed:', errorText(error));
@@ -3290,7 +3199,7 @@ export class DurevcodeAgent extends BaseAgent {
             console.debug(`Durevcode plain lane switch read failed: ${errorText(error)}`);
         }
         if (!row || isSubagentSession(row)) return;
-        const title = (row.title || '').trim() || sessionTagOf(row.id);
+        const title = (row.title || '').trim() || en.sessionTagOf(row.id);
         try {
             const tracked = this.watched.get(row.id) ?? null;
             const state = tracked ?? await this.attachPlainLaneSession(telegram, opencode, row.id, chatId, userId ?? 0);
@@ -3307,7 +3216,7 @@ export class DurevcodeAgent extends BaseAgent {
             await this.deliverMessage(
                 telegram,
                 state,
-                `${checkIcon()} Switched to <b>${escapeHtml(title)}</b> · ${escapeHtml(sessionTagOf(row.id))}`,
+                en.switchedTo(title, en.sessionTagOf(row.id)),
             );
         } catch (error) {
             console.debug(`Durevcode plain lane switch failed: ${errorText(error)}`);
@@ -3563,13 +3472,13 @@ export class DurevcodeAgent extends BaseAgent {
             console.debug('Durevcode model voice list failed:', errorText(error));
             return false;
         }
-        const entries = this.modelCardEntries(models, displayModel(state.session.model));
+        const entries = en.modelCardEntries(models, displayModel(state.session.model));
         const index = this.spokenModelIndex(text, entries);
         const picked = index !== null ? entries[index] : undefined;
         if (index === null || !picked) return false;
         console.debug(`Durevcode voice command: model pick #${index + 1} of ${entries.length} (session=${state.session.id}).`);
         await this.switchSessionModel(telegram, opencode, state, picked.id, '', state.modelCardMessageId, async (noteText?: string) => {
-            await this.safeReply(telegram, state, noteText ?? `${icon('check')} Model switched to <b>${escapeHtml(picked.id)}</b>.`);
+            await this.safeReply(telegram, state, noteText ?? en.modelSwitched(picked.id));
         });
         return true;
     }
@@ -3597,12 +3506,12 @@ export class DurevcodeAgent extends BaseAgent {
     ): Promise<boolean> {
         const last = this.lastTasks.get(state.session.id);
         if (!last || last.text.trim() === '') {
-            await this.safeReply(telegram, state, `${icon('warn')} Nothing to continue yet — send a task first.`);
+            await this.safeReply(telegram, state, en.CONTINUE_NOTHING);
             return true;
         }
         console.debug(`Durevcode voice command: continue (session=${state.session.id}).`);
         this.enqueuePrompt(state, last.text);
-        await this.safeReply(telegram, state, `${icon('rocket')} Previous task is queued again.`);
+        await this.safeReply(telegram, state, en.CONTINUE_QUEUED);
         return true;
     }
 
@@ -3655,7 +3564,7 @@ export class DurevcodeAgent extends BaseAgent {
                 await this.answerPermission(telegram, opencode, state, pendingPerm.permId, replyTo, 'reject');
                 return true;
             }
-            await this.safeReply(telegram, state, `${icon('warn')} Say yes or no — or tap the button.`);
+            await this.safeReply(telegram, state, en.PERM_DECIDE_HINT);
             return true;
         }
         const pendingQuest = this.questReplies.get(replyTo);
@@ -3783,7 +3692,7 @@ export class DurevcodeAgent extends BaseAgent {
                         await telegram.sendMessage({
                             chat_id: this.chatId(),
                             message_thread_id: threadId,
-                            text: `${icon('fail')} Could not restore the session for this topic, try again.`,
+                            text: en.TOPIC_RESTORE_FAILED,
                             disable_notification: true,
                         });
                     } catch {
@@ -3820,7 +3729,7 @@ export class DurevcodeAgent extends BaseAgent {
                 await telegram.sendMessage({
                     chat_id: this.chatId(),
                     message_thread_id: threadId,
-                    text: `${icon('fail')} Could not create a session for this topic, try again.`,
+                    text: en.TOPIC_SESSION_CREATE_FAILED,
                     disable_notification: true,
                 });
             } catch {
@@ -3983,7 +3892,7 @@ export class DurevcodeAgent extends BaseAgent {
         await this.safeReply(
             telegram,
             state,
-            `${icon('warn')} ${label} can't be parsed yet — send a photo, a video, a document, or text.`,
+            en.mediaUnparsed(label),
         );
     }
 
@@ -4001,7 +3910,7 @@ export class DurevcodeAgent extends BaseAgent {
             await this.safeReply(
                 telegram,
                 state,
-                `${icon('warn')} Voice transcription is off (set DUREVCODE_WHISPER_ENABLED=1 and DUREVCODE_WHISPER_MODEL) — send text meanwhile.`,
+                en.VOICE_OFF_NOTICE,
             );
             return;
         }
@@ -4012,7 +3921,7 @@ export class DurevcodeAgent extends BaseAgent {
         const language = this.config.whisper?.language;
         const options = language && language !== 'auto' ? { language } : undefined;
         try {
-            await this.safeReply(telegram, state, `${hourglassIcon()} Transcribing the voice...`);
+            await this.safeReply(telegram, state, en.VOICE_TRANSCRIBING);
             const buffer = await this.downloadToBuffer(telegram, state, voice.file_id, 'voice');
             if (!buffer) return;
             const result = await whisper.transcribeBuffer(
@@ -4025,7 +3934,7 @@ export class DurevcodeAgent extends BaseAgent {
             );
             const text = result.text.trim();
             if (text === '') {
-                await this.safeReply(telegram, state, `${icon('fail')} Voice transcription came back empty.`);
+                await this.safeReply(telegram, state, en.VOICE_EMPTY);
                 return;
             }
             const attribution: PromptAttribution = {
@@ -4036,7 +3945,7 @@ export class DurevcodeAgent extends BaseAgent {
             await this.deliverFreshPart(
                 telegram,
                 state,
-                `${icon('chat')} ${escapeHtml(text)}`,
+                en.transcriptEcho(text),
                 this.quotedTarget(attribution),
             );
             this.lastVoiceStats.set(state.session.id, { audioSec: result.audioSec, processingMs: result.processingMs, model: result.model, at: Date.now() });
@@ -4083,7 +3992,7 @@ export class DurevcodeAgent extends BaseAgent {
             this.enqueuePrompt(state, text);
         } catch (error) {
             console.error('Durevcode voice transcription failed:', errorText(error));
-            await this.safeReply(telegram, state, `${icon('fail')} Voice transcription failed — send it as text.`);
+            await this.safeReply(telegram, state, en.VOICE_FAILED);
         }
     }
 
@@ -4096,7 +4005,7 @@ export class DurevcodeAgent extends BaseAgent {
             this.enqueuePrompt(state, `${caption}\n\n[attachment dropped: media over 20 MB]`);
             return;
         }
-        await this.safeReply(telegram, state, `${icon('denied')} Media is too large (max 20 MB), send it as text.`);
+        await this.safeReply(telegram, state, en.MEDIA_TOO_LARGE);
     }
 
     private async downloadToBuffer(
@@ -4110,7 +4019,7 @@ export class DurevcodeAgent extends BaseAgent {
             return Buffer.isBuffer(data) ? data : Buffer.from(String(data));
         } catch (error) {
             console.debug(`Durevcode ${label} download failed:`, errorText(error));
-            await this.safeReply(telegram, state, `${icon('fail')} Could not download the file.`);
+            await this.safeReply(telegram, state, en.FILE_DOWNLOAD_FAILED);
             return null;
         }
     }
@@ -4141,7 +4050,7 @@ export class DurevcodeAgent extends BaseAgent {
             mkdirSync(dir, { recursive: true });
         } catch (error) {
             console.debug('Durevcode inbox mkdir failed:', errorText(error));
-            await this.safeReply(telegram, state, `${icon('fail')} Could not store the file.`);
+            await this.safeReply(telegram, state, en.FILE_STORE_FAILED);
             return;
         }
         this.pruneInbox(dir);
@@ -4151,7 +4060,7 @@ export class DurevcodeAgent extends BaseAgent {
             writeAtomic(join(dir, stored), buffer);
         } catch (error) {
             console.debug('Durevcode inbox write failed:', errorText(error));
-            await this.safeReply(telegram, state, `${icon('fail')} Could not store the file.`);
+            await this.safeReply(telegram, state, en.FILE_STORE_FAILED);
             return;
         } finally {
             buffer.fill(0);
@@ -4195,13 +4104,13 @@ export class DurevcodeAgent extends BaseAgent {
             return;
         }
         if (document.file_size !== undefined && document.file_size > DOC_MAX_BYTES) {
-            await this.safeReply(telegram, state, `${icon('denied')} File is too large, send it as text.`);
+            await this.safeReply(telegram, state, en.FILE_TOO_LARGE);
             return;
         }
         const buffer = await this.downloadToBuffer(telegram, state, document.file_id, 'document');
         if (!buffer) return;
         if (buffer.length > DOC_MAX_BYTES || buffer.includes(0)) {
-            await this.safeReply(telegram, state, `${icon('denied')} Only text files are accepted.`);
+            await this.safeReply(telegram, state, en.ONLY_TEXT_FILES);
             return;
         }
         let content = buffer.toString('utf8');
@@ -4227,14 +4136,14 @@ export class DurevcodeAgent extends BaseAgent {
         child.on('exit', (code: unknown) => {
             if (state.cliRun === child) state.cliRun = null;
             if (typeof code === 'number' && code !== 0) {
-                void this.safeReply(telegram, state, `${icon('fail')} CLI run failed (exit ${code}).`);
+                void this.safeReply(telegram, state, en.cliFailed(code));
             }
         });
         child.on('error', (cause: unknown) => {
             console.warn(`Durevcode CLI run failed to spawn (session=${state.session.id}): ${errorText(cause)}.`);
             if (state.cliRun === child) {
                 state.cliRun = null;
-                void this.safeReply(telegram, state, `${icon('fail')} CLI run failed to spawn, will retry.`);
+                void this.safeReply(telegram, state, en.CLI_SPAWN_FAILED);
             }
         });
         console.log(
@@ -4245,7 +4154,7 @@ export class DurevcodeAgent extends BaseAgent {
             await this.safeReply(
                 telegram,
                 state,
-                `${icon('warn')} Server did not take the prompt, running it via CLI fallback.`,
+                en.CLI_FALLBACK_NOTICE,
             );
         }
         await this.ensureStopControl(telegram, state);
@@ -4258,7 +4167,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (!state.promptBusySince) state.promptBusySince = nowMs;
         if (!state.promptBusyNotified && nowMs - state.promptBusySince >= PROMPT_BUSY_BACKOFF_MS) {
             state.promptBusyNotified = true;
-            await this.safeReply(telegram, state, `${hourglassIcon()} Session is busy, your prompt is queued.`);
+            await this.safeReply(telegram, state, en.PROMPT_BUSY);
         }
     }
 
@@ -4305,7 +4214,7 @@ export class DurevcodeAgent extends BaseAgent {
             if (
                 ownGroup
                 && ownGroup.primed
-                && head !== AUTO_CONTINUE_TEXT
+                && head !== en.AUTO_CONTINUE_TEXT
                 && ownGroup.fingerprint === fingerprint
                 && ownGroup.followers.size + ownGroup.holds.length < FANOUT_MAX_FOLLOWERS
             ) {
@@ -4315,9 +4224,7 @@ export class DurevcodeAgent extends BaseAgent {
                         ? { replyTo: laneHead.replyTo, mention: laneHead.mention, uid: laneHead.uid, chatId: laneHead.chatId }
                         : { replyTo: null, mention: '' });
                     state.promptHeld = true;
-                    const note = this.config.durevcode.leadMention === false
-                        ? `${hourglassIcon()} Same question is already being answered in this topic — the shared answer will appear here.`
-                        : `${hourglassIcon()} Same question is already being answered in this topic — I will tag you in the shared answer.`;
+                    const note = this.config.durevcode.leadMention === false ? en.FANOUT_HOLD_QUIET : en.FANOUT_HOLD_TAGGED;
                     try {
                         await this.safeReply(telegram, state, note);
                     } catch (error) {
@@ -4397,7 +4304,7 @@ export class DurevcodeAgent extends BaseAgent {
                     await this.safeReply(
                         telegram,
                         state,
-                        `${hourglassIcon()} Rate limited, retry in ~${waitSec}s — your prompt stays queued.`,
+                        en.rateLimitedRetry(waitSec),
                     );
                 }
                 this.absorbRateLimit('prompt-send', error, 'prompt', state.session.id);
@@ -4412,7 +4319,7 @@ export class DurevcodeAgent extends BaseAgent {
                 await this.safeReply(
                     telegram,
                     state,
-                    `${icon('fail')} Prompt failed: ${errText}`,
+                    en.promptFailed(errText),
                 );
                 return;
             }
@@ -4422,7 +4329,7 @@ export class DurevcodeAgent extends BaseAgent {
                 await this.safeReply(
                     telegram,
                     state,
-                    `${icon('warn')} opencode error: ${escapeHtml(errText)} — retrying, your prompt stays queued.`,
+                    en.opencodeRetry(errText),
                 );
             }
             try {
@@ -4439,50 +4346,15 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private stopMarkup(state: WatchedSession): InlineKeyboardMarkup {
-        return { inline_keyboard: [[
-            { text: `${EMOJI.coffee} Stop`, callback_data: `stop:${state.session.id}` },
-        ]] };
+        return en.stopMarkup(state.session.id);
     }
 
     private modeMarkup(build: boolean): InlineKeyboardMarkup {
-        const label = (text: string, active: boolean) => (active ? `${EMOJI.check} ${text}` : text);
-        const plain = this.config.durevcode.watchOnly === true;
-        return {
-            inline_keyboard: [
-                [
-                    { text: label('Plan', !build), callback_data: 'mode:plan' },
-                    { text: label('Build', build), callback_data: 'mode:build' },
-                ],
-                [
-                    { text: `Watch only · ${plain ? 'on' : 'off'}`, callback_data: 'mode:observer' },
-                ],
-            ],
-        };
+        return en.modeMarkup(build, this.config.durevcode.watchOnly === true);
     }
 
     private modelCardText(currentId: string, currentVariant: string, models?: ModelApiInfo[]): string {
-        const current = (models ?? []).find((m) => m.id === currentId);
-        const context = formatModelContext(current?.limit);
-        const caps = current ? describeModelCapabilities(current) : [];
-        const lines = [`Model: <b>${escapeHtml(currentId || 'default')}</b> — tap to switch.`];
-        if (current) {
-            lines.push(`Context: <b>${escapeHtml(context || '—')}</b>${caps.length > 0 ? ` | ${escapeHtml(caps.join(', '))}` : ''}`);
-        }
-        const variants = current ? modelVariantIds(current) : [];
-        lines.push(
-            `Effort: <b>${escapeHtml(currentVariant || 'default')}</b>` +
-                (variants.length > 0 ? ` — options: ${escapeHtml(variants.join(', '))}` : ' — no variants.'),
-        );
-        return lines.join('\n');
-    }
-
-    private modelCardEntries(models: ModelApiInfo[], currentId: string): ModelApiInfo[] {
-        const cappedModels = models.slice(0, 19);
-        if (currentId && !cappedModels.some((m) => m.id === currentId)) {
-            const currentModel = models.find((m) => m.id === currentId);
-            if (currentModel) cappedModels.push(currentModel);
-        }
-        return cappedModels;
+        return en.modelCardText(currentId, currentVariant, models);
     }
 
     private modelCardMarkup(
@@ -4490,26 +4362,7 @@ export class DurevcodeAgent extends BaseAgent {
         currentId: string,
         currentVariant: string,
     ): InlineKeyboardMarkup {
-        const label = (m: ModelApiInfo) => {
-            const prefix = m.id === currentId ? `${EMOJI.check} ` : '';
-            const context = formatModelContext(m.limit);
-            const base = truncate(m.name || m.id, context ? 28 : 40);
-            return context ? `${prefix}${base} · ${context}` : `${prefix}${base}`;
-        };
-        const cappedModels = this.modelCardEntries(models, currentId);
-        const rows: InlineKeyboardButton[][] = cappedModels.map((m) => [{
-            text: label(m),
-            callback_data: `model:${m.id}`,
-        }]);
-        const current = cappedModels.find((m) => m.id === currentId);
-        const variants = current ? modelVariantIds(current) : [];
-        if (variants.length > 0) {
-            rows.push(variants.map((variant) => ({
-                text: variant === currentVariant ? `${EMOJI.check} ${variant}` : variant,
-                callback_data: `modelvariant:${variant}`,
-            })));
-        }
-        return { inline_keyboard: rows };
+        return en.modelCardMarkup(models, currentId, currentVariant);
     }
 
     private async spawnContendedRun(
@@ -4597,8 +4450,7 @@ export class DurevcodeAgent extends BaseAgent {
         this.contendedRuns.push(run);
         console.log(`Durevcode contended prompt routed to a parallel subagent (session=${state.session.id} subagent=${run.sessionId}).`);
         const parallel = this.contendedRuns.filter((entry) => entry.ownerId === state.session.id && !entry.finished).length;
-        const tail = parallel > 1 ? ` ${parallel} tasks are running in parallel.` : '';
-        await this.subagentSend(telegram, run, `${icon('bot')} The task went to a parallel subagent — the answer will appear here.${tail}`, true);
+        await this.subagentSend(telegram, run, en.subagentDispatched(parallel), true);
         return true;
     }
 
@@ -4692,9 +4544,9 @@ export class DurevcodeAgent extends BaseAgent {
             run.finished = true;
             this.logger.info(`Durevcode subagent finished (owner=${run.ownerId} subagent=${run.sessionId}).`);
             if (this.config.durevcode.autoFinish !== false) {
-                await this.subagentSend(telegram, run, `${checkIcon()} Subagent finished the task.`);
+                await this.subagentSend(telegram, run, en.SUBAGENT_FINISHED);
             }
-            const digest = `${DIGEST_PROMPT_PREFIX} Task: ${run.task.slice(0, 120)}. Result summary: ${(run.lastText || '(no text)').slice(0, 400)}. Note this result in the session context. Do not reply with anything.`;
+            const digest = en.subagentDigestNote(run.task, run.lastText);
             this.enqueuePrompt(state, digest);
             await this.pumpPrompts(telegram, opencode, state);
         }
@@ -4728,7 +4580,7 @@ export class DurevcodeAgent extends BaseAgent {
             }
             run.finished = true;
         }
-        await this.subagentSend(telegram, hits[0], `${icon('stop')} Parallel task stopped.`);
+        await this.subagentSend(telegram, hits[0], en.SUBAGENT_STOPPED);
         return hits.length;
     }
 
@@ -4752,11 +4604,11 @@ export class DurevcodeAgent extends BaseAgent {
             models = await opencode.listModels();
         } catch (error) {
             console.debug('Durevcode model list failed:', errorText(error));
-            await this.safeReply(telegram, state, 'Could not load models, try again.');
+            await this.safeReply(telegram, state, en.COULD_NOT_LOAD_MODELS);
             return;
         }
         if (models.length === 0) {
-            await this.safeReply(telegram, state, 'No models available.');
+            await this.safeReply(telegram, state, en.NO_MODELS_AVAILABLE);
             return;
         }
         const currentId = displayModel(state.session.model);
@@ -4813,51 +4665,31 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private statusCardText(state: WatchedSession): string {
-        const now = Date.now();
         const session = state.session;
-        const snapshot = state.snapshot;
-        const limit = state.contextLimit;
-        const limitText = limit !== null && limit > 0 ? formatTokenShort(limit) : '';
-        let contextLine: string;
-        if (snapshot) {
-            const occupancy = snapshot.input + snapshot.cacheRead + snapshot.cacheWrite;
-            const occupancyText = formatTokenShort(occupancy);
-            const percent = limit !== null && limit > 0 ? Math.min(100, Math.max(0, Math.round((occupancy / limit) * 100))) : null;
-            contextLine = `${icon('inbox')} Context <b>${occupancyText}${limitText ? `/${limitText} (${percent}%)` : ''}</b>`;
-        } else {
-            contextLine = `${icon('inbox')} Context <b>—</b>${limitText ? ` · window ${limitText} (no turn tokens yet)` : ''}`;
-        }
-        const modelRefText = displayModel(session.model);
-        const variantText = modelVariant(session.model);
-        const whisper = this.config.whisper;
-        const whisperLine = whisper?.enabled === true
-            ? whisper.autoServe === false
-                ? 'CLI transcriber'
-                : `resident server ${whisper.serverUrl ?? ''}`
-            : 'off';
-        const voice = this.lastVoiceStats.get(session.id);
-        const title = state.appliedTopicName ?? session.title;
-        const lines = [
-            `${icon('gears')} <b>Status</b> · ${escapeHtml(title)} · <code>${escapeHtml(sessionTagOf(session.id))}</code>`,
-            `${icon('bot')} OpenCode ${escapeHtml(opencodeSourceDisplay(this.config.opencode.baseUrl))}`,
-            `${icon('brain')} Model <b>${escapeHtml(modelRefText)}</b>${variantText ? ` (${escapeHtml(variantText)})` : ''} · ${state.buildMode ? 'Build' : 'Plan'} · ${escapeHtml(state.sessionAgent)}`,
-            contextLine,
-            `${icon('active')} ${state.turnComplete ? 'Idle' : 'Running'} · last event ${shortAgo(now, state.lastEventAt)} · up ${shortUptime(now - this.bootAt)}`,
-        ];
-        if (state.promptQueue.length > 0) lines.push(`${icon('queued')} Queue: ${state.promptQueue.length}`);
-        if (session.cost > 0) lines.push(`${icon('coin')} $${session.cost.toFixed(2)}`);
-        if (Date.now() < this.rateLimitedUntil) {
-            lines.push(`${icon('hourglass')} Rate limit until ${new Date(this.rateLimitedUntil).toLocaleTimeString('en-GB')}`);
-        }
-        lines.push(`${icon('toolbox')} Whisper: ${whisperLine} (${whisper?.threads ?? 0} threads, ${whisper?.language ?? 'auto'})`);
-        if (voice) {
-            lines.push(`${icon('timer')} Last voice ${voice.audioSec.toFixed(0)}s → ${(voice.processingMs / 1000).toFixed(1)}s (${shortAgo(now, voice.at)})`);
-        }
-        return `${lines.join('\n')}\n`;
+        return en.statusCardText({
+            now: Date.now(),
+            bootAt: this.bootAt,
+            rateLimitedUntil: this.rateLimitedUntil,
+            opencodeBaseUrl: this.config.opencode.baseUrl,
+            whisper: this.config.whisper,
+            voice: this.lastVoiceStats.get(session.id) ?? null,
+            title: state.appliedTopicName ?? session.title,
+            sessionTag: en.sessionTagOf(session.id),
+            modelRefText: displayModel(session.model),
+            variantText: modelVariant(session.model),
+            buildMode: state.buildMode,
+            sessionAgent: state.sessionAgent,
+            turnComplete: state.turnComplete,
+            lastEventAt: state.lastEventAt,
+            promptQueueLength: state.promptQueue.length,
+            cost: session.cost,
+            snapshot: state.snapshot,
+            contextLimit: state.contextLimit,
+        });
     }
 
     private statusCardMarkup(state: WatchedSession): InlineKeyboardMarkup {
-        return { inline_keyboard: [[{ text: `${EMOJI.active} Refresh`, callback_data: `status:${state.session.id}` }]] };
+        return en.statusCardMarkup(state.session.id);
     }
 
     private async sendStatusCard(
@@ -4909,10 +4741,7 @@ export class DurevcodeAgent extends BaseAgent {
             ? mark.snapshot.input + mark.snapshot.cacheRead + mark.snapshot.cacheWrite
             : session.tokens_input + session.tokens_output + session.tokens_reasoning;
         const title = mark?.appliedTopicName ?? session.title;
-        const stateMark = mark !== null && !mark.turnComplete
-            ? `${EMOJI.active} running`
-            : `${EMOJI.soon} idle`;
-        return `${title} · ${stateMark} · ${formatTokenShort(occupancy)} tok · $${session.cost.toFixed(3)}`;
+        return en.sessionRowLabel(title, mark !== null && !mark.turnComplete, occupancy, session.cost);
     }
 
     private sessionsCardPairs(extras: SessionRow[]): Array<{ session: SessionRow; mark: WatchedSession | null }> {
@@ -4935,12 +4764,8 @@ export class DurevcodeAgent extends BaseAgent {
 
     private sessionsCardText(extras: SessionRow[] = []): string {
         const pairs = this.sessionsCardPairs(extras);
-        const header = `${icon('cache')} <b>Sessions</b> · ${pairs.length} ${this.plainChatMode ? 'available' : 'watched'}`;
-        if (pairs.length === 0) {
-            return `${header}\n${this.plainChatMode ? 'No sessions are available yet.' : 'No sessions are watched yet.'}`;
-        }
         const rows = pairs.map((pair, index) => `${index + 1}. ${escapeHtml(this.sessionRowLabelOf(pair.session, pair.mark))}`);
-        return `${header}\n${rows.join('\n')}\n\nTap a row to ${this.plainChatMode ? 'switch the chat to that session' : 'pull its status card'}.\n`;
+        return en.sessionsCardText(rows, pairs.length, this.plainChatMode);
     }
 
     private sessionsCardMarkup(extras: SessionRow[] = []): InlineKeyboardMarkup {
@@ -5094,7 +4919,7 @@ export class DurevcodeAgent extends BaseAgent {
                 this.applySetting(def.key, this.settingsBaseline[def.key]);
             }
             this.savePersistedCoalesced();
-            return 'Defaults restored.';
+            return en.SETTINGS_DEFAULTS_RESTORED;
         }
         const def = SETTINGS_DEFS.find((item) => item.key === key);
         if (!def) return null;
@@ -5112,7 +4937,7 @@ export class DurevcodeAgent extends BaseAgent {
         this.settingsOverrides[key] = next;
         this.applySetting(key, next);
         this.savePersistedCoalesced();
-        return `${def.label}: ${this.settingDisplay(def)}`;
+        return en.settingEcho(def.label, this.settingDisplay(def));
     }
 
     private settingDisplay(def: SettingDef): string {
@@ -5122,8 +4947,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private settingsCardText(): string {
-        const lines = SETTINGS_DEFS.map((def) => `⚙️ ${escapeHtml(def.label)}: <b>${escapeHtml(this.settingDisplay(def))}</b>`);
-        return `${icon('gears')} <b>Settings</b>\n${lines.join('\n')}\n\nTap a row to switch it. Overrides survive restarts.\n`;
+        return en.settingsCardText(SETTINGS_DEFS.map((def) => ({ label: def.label, display: this.settingDisplay(def) })));
     }
 
     private settingsCardMarkup(): InlineKeyboardMarkup {
@@ -5131,7 +4955,7 @@ export class DurevcodeAgent extends BaseAgent {
             text: `${def.label} · ${this.settingDisplay(def)}`,
             callback_data: `set:${def.key}`,
         }]);
-        rows.push([{ text: `${EMOJI.gears} Reset all`, callback_data: 'set:reset' }]);
+        rows.push([{ text: en.SETTINGS_RESET_ALL, callback_data: 'set:reset' }]);
         return { inline_keyboard: rows };
     }
 
@@ -5196,15 +5020,7 @@ export class DurevcodeAgent extends BaseAgent {
 
     private modeCardText(state: WatchedSession, agents: { build: string; plan: string } | null): string {
         const current = this.modeAgentName(agents, state.buildMode) || state.sessionAgent;
-        const plain = this.config.durevcode.watchOnly === true;
-        return `Mode: <b>${state.buildMode ? 'Build' : 'Plan'}</b>` +
-            `${current ? ` (${escapeHtml(current)})` : ''}` +
-            ` — tap to switch.\n` +
-            `<b>Build</b> — the model may edit files.\n` +
-            `<b>Plan</b> — the model reads and answers only, no edits.\n` +
-            (plain
-                ? `Watch only is on — typed prompts are ignored; tap the bottom row to resume prompting.`
-                : `Watch only is off — the bottom row turns the bot into a spectator that submits nothing.`);
+        return en.modeCardText({ build: state.buildMode, current, plain: this.config.durevcode.watchOnly === true });
     }
 
     private async loadModeAgents(
@@ -5239,7 +5055,7 @@ export class DurevcodeAgent extends BaseAgent {
         const target = await this.loadModeAgents(opencode);
         const agentId = build ? target?.build : target?.plan;
         if (!opencode || typeof opencode.setAgent !== 'function' || !agentId) {
-            await this.safePriorityReply(telegram, state, `${icon('fail')} Cannot switch mode: agent control is unavailable.`);
+            await this.safePriorityReply(telegram, state, en.MODE_NO_AGENT_CONTROL);
             return;
         }
         let switched = false;
@@ -5247,11 +5063,11 @@ export class DurevcodeAgent extends BaseAgent {
             switched = await opencode.setAgent(state.session.id, agentId);
         } catch (error) {
             console.debug('Durevcode mode switch failed:', errorText(error));
-            await this.safePriorityReply(telegram, state, `${icon('fail')} Could not switch mode, try again.`);
+            await this.safePriorityReply(telegram, state, en.MODE_SWITCH_FAILED);
             return;
         }
         if (!switched) {
-            await this.safePriorityReply(telegram, state, `${icon('fail')} Could not switch mode, session is gone.`);
+            await this.safePriorityReply(telegram, state, en.MODE_SWITCH_GONE);
             return;
         }
         state.buildMode = build;
@@ -5262,8 +5078,7 @@ export class DurevcodeAgent extends BaseAgent {
         await this.safePriorityReply(
             telegram,
             state,
-            `Mode: <b>${build ? 'Build' : 'Plan'}</b> — the model now runs as <b>${escapeHtml(agentId)}</b> and ` +
-                `${build ? 'may edit files' : 'will not edit anything'}.`,
+            en.modeSwitched(build, agentId),
         );
         if (!build) this.abandonLiveTool(state);
         if (state.contextMessageId !== null) await this.refreshContext(telegram, state);
@@ -5324,7 +5139,7 @@ export class DurevcodeAgent extends BaseAgent {
     ): Promise<void> {
         const currentRef = modelRef(state.session.model);
         if (modelId === null && !currentRef.id) {
-            await note('No model yet, pick one above.');
+            await note(en.NO_MODEL_YET);
             return;
         }
         let models: ModelApiInfo[];
@@ -5333,22 +5148,22 @@ export class DurevcodeAgent extends BaseAgent {
         } catch (error) {
             console.debug('Durevcode model list failed:', errorText(error));
             await note();
-            await this.safePriorityReply(telegram, state, 'Could not load models, try again.');
+            await this.safePriorityReply(telegram, state, en.COULD_NOT_LOAD_MODELS);
             return;
         }
         const picked = models.find((m) => m.id === (modelId ?? currentRef.id));
         if (!picked || !picked.providerID) {
-            await note('Outdated, ask again.');
+            await note(en.OUTDATED_ASK_AGAIN);
             return;
         }
         const currentVariant = modelVariant(state.session.model);
         if (modelId === null) {
             if (!modelVariantIds(picked).includes(variant)) {
-                await note('That effort is not offered for this model.');
+                await note(en.EFFORT_NOT_OFFERED);
                 return;
             }
             if (currentRef.variant === variant) {
-                await note('Already set.');
+                await note(en.ALREADY_SET);
                 return;
             }
         }
@@ -5365,11 +5180,11 @@ export class DurevcodeAgent extends BaseAgent {
                 return;
             }
             console.debug('Durevcode model switch failed:', errorText(error));
-            await this.safePriorityReply(telegram, state, 'Could not switch model, try again.');
+            await this.safePriorityReply(telegram, state, en.MODEL_SWITCH_FAILED);
             return;
         }
         if (!switched) {
-            await note('Outdated, ask again.');
+            await note(en.OUTDATED_ASK_AGAIN);
             return;
         }
         state.session = { ...state.session, model: JSON.stringify(nextModel) };
@@ -5384,7 +5199,7 @@ export class DurevcodeAgent extends BaseAgent {
         await this.editModelCard(telegram, state, models, cardMessageId);
         if (state.contextMessageId !== null) await this.refreshContext(telegram, state);
         if (modelId === null) {
-            await this.safePriorityReply(telegram, state, `Effort: <b>${escapeHtml(variant)}</b> for <b>${escapeHtml(picked.id)}</b>.`);
+            await this.safePriorityReply(telegram, state, en.effortSet(variant, picked.id));
         }
     }
 
@@ -5419,8 +5234,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private renderStopControlText(state: WatchedSession): string {
-        const mode = state.buildMode ? 'Build' : 'Plan';
-        return `${rocketIcon()} Running · ${mode} — tap Stop to interrupt and rewrite the task.`;
+        return en.stopControlText(state.buildMode);
     }
 
     private async updateStopControlText(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
@@ -5502,7 +5316,7 @@ export class DurevcodeAgent extends BaseAgent {
         return {
             inline_keyboard: [
                 [{
-                    text: '📄 Full text',
+                    text: en.THOUGHT_FULL_TEXT_BUTTON,
                     callback_data: `thinkdoc:${messageId}`,
                 }],
             ],
@@ -5622,16 +5436,16 @@ export class DurevcodeAgent extends BaseAgent {
             : null;
         const fullText = entry ? entry.fullText : live ? live.thinkingText : '';
         if (!fullText) {
-            await dismiss('Outdated, ask again.');
+            await dismiss(en.OUTDATED_ASK_AGAIN);
             return;
         }
         if (Date.now() < this.rateLimitedUntil) {
-            await dismiss('Rate limited, try again in a moment.');
+            await dismiss(en.ACK_RATE_LIMITED);
             return;
         }
         const docKey = entry ? messageId : mid ?? 0;
         if (this.thoughtDocBusy.has(docKey)) {
-            await dismiss('On its way.');
+            await dismiss(en.ACK_ON_ITS_WAY);
             return;
         }
         this.thoughtDocBusy.add(docKey);
@@ -5871,7 +5685,7 @@ export class DurevcodeAgent extends BaseAgent {
                 }
                 continue;
             }
-            const lines = [`${icon('question')} Permission needed`, `<b>${escapeHtml(request.action)}</b>`];
+            const lines = [en.PERMISSION_NEEDED_TITLE, `<b>${escapeHtml(request.action)}</b>`];
             if (request.resources.length > 0) {
                 lines.push(`<code>${escapeHtml(truncate(request.resources.join('\n'), 500))}</code>`);
             }
@@ -5905,7 +5719,7 @@ export class DurevcodeAgent extends BaseAgent {
         const order: PermissionDecision[] = ['always', 'once', 'reject'];
         return {
             inline_keyboard: [order.map((decision) => ({
-                text: `${PERMISSION_DECISION_ICONS[decision]} ${PERMISSION_DECISION_LABELS[decision]}`,
+                text: `${en.PERMISSION_DECISION_ICONS[decision]} ${en.PERMISSION_DECISION_LABELS[decision]}`,
                 callback_data: `p${permId}:${decision}`,
             }))],
         };
@@ -5942,14 +5756,14 @@ export class DurevcodeAgent extends BaseAgent {
                     }
                 }
                 state.knownPerms = state.knownPerms.filter((id) => id !== permId);
-                await this.safeReply(telegram, state, resolved ? permissionDecisionText(decision) : `${icon('warn')} Already resolved.`);
+                await this.safeReply(telegram, state, resolved ? en.permissionDecisionText(decision) : en.ALREADY_RESOLVED);
             } catch (error) {
                 if (isRateLimitError(error)) {
                     this.absorbRateLimit('topic-send', error, 'permission', state.session.id);
                     return;
                 }
                 console.warn('Durevcode permission reply failed:', errorText(error));
-                await this.safeReply(telegram, state, `${icon('fail')} Could not send the decision, try again.`);
+                await this.safeReply(telegram, state, en.DECISION_SEND_FAILED);
             }
         } finally {
             this.resolvingQuestions.delete(permKey);
@@ -5967,7 +5781,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (questionDoneRow(ctx.questions)) {
             const answered = ctx.picks.filter((picked) => picked.length > 0).length;
             rows.push([{
-                text: ctx.questions.length > 1 ? `Done ${answered}/${ctx.questions.length}` : 'Done',
+                text: ctx.questions.length > 1 ? en.questDoneLabel(answered, ctx.questions.length) : en.QUEST_DONE,
                 callback_data: `q${ctx.token}:done`,
             }]);
         }
@@ -6105,7 +5919,7 @@ export class DurevcodeAgent extends BaseAgent {
         const reply = (): Promise<boolean> => opencode.replyQuestion(state.session.id, ref.reqId, answers);
         const failOut = async (error: unknown): Promise<void> => {
             console.debug('Durevcode question reply failed:', errorText(error));
-            await this.safeReply(telegram, state, `${icon('fail')} Could not send the answer, try again.`);
+            await this.safeReply(telegram, state, en.ANSWER_SEND_FAILED);
             this.resolvingQuestions.delete(ref.reqId);
         };
         let resolved: boolean;
@@ -6208,13 +6022,13 @@ export class DurevcodeAgent extends BaseAgent {
         const fresh = Date.now() - state.serverErrorAt <= MODEL_ERROR_DETAIL_MS
             ? state.serverErrorText
             : null;
-        const detail = modelErrorNotice(fresh ?? '');
+        const detail = en.modelErrorNotice(fresh ?? '');
         const reason = finish === 'error' ? detail : `${text} — ${detail}`;
         try {
             await this.deliverMessage(
                 telegram,
                 state,
-                `${icon('warn')} opencode stopped the turn: ${escapeHtml(reason)}\n\nWrite again to continue.`,
+                en.turnStoppedByServer(reason),
             );
         } catch (error) {
             console.debug('Durevcode step failure notice failed:', errorText(error));
@@ -6521,7 +6335,7 @@ export class DurevcodeAgent extends BaseAgent {
         await this.safeReply(
             telegram,
             state,
-            `${icon('warn')} opencode error: ${escapeHtml(modelErrorNotice(text))}`,
+            en.opencodeModelError(en.modelErrorNotice(text)),
         );
         await this.finalizeSession(telegram, state);
     }
@@ -6597,7 +6411,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private adminGateText(): string {
-        return `${icon('denied')} Only forum admins can change this.`;
+        return en.ADMIN_GATE_GENERIC;
     }
 
     private async adminCardGate(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {
@@ -6653,7 +6467,7 @@ export class DurevcodeAgent extends BaseAgent {
             if (!(await this.gateCallback(query, 'stop', dismiss, ` (session=${stopMatch[1]})`))) return;
             const state = this.watched.get(stopMatch[1]);
             if (!state) {
-                await dismiss('Outdated, ask again.');
+                await dismiss(en.OUTDATED_ASK_AGAIN);
                 return;
             }
             await dismiss();
@@ -6670,12 +6484,12 @@ export class DurevcodeAgent extends BaseAgent {
         if (modeMatch) {
             if (!(await this.gateCallback(query, 'mode', dismiss))) return;
             if (!(await this.isForumAdmin(telegram, query.from?.id))) {
-                await dismiss('Only forum admins can change modes.');
+                await dismiss(en.ADMIN_ONLY_MODES);
                 return;
             }
             const target = this.callbackTarget(query, true);
             if (!target) {
-                await dismiss('Outdated, ask again.');
+                await dismiss(en.OUTDATED_ASK_AGAIN);
                 return;
             }
             if (modeMatch[1] === 'observer') {
@@ -6692,7 +6506,7 @@ export class DurevcodeAgent extends BaseAgent {
             if (!(await this.gateCallback(query, 'status', dismiss))) return;
             const target = this.callbackTarget(query, true);
             if (!target || target.session.id !== statusMatch[1]) {
-                await dismiss('Outdated, ask again.');
+                await dismiss(en.OUTDATED_ASK_AGAIN);
                 return;
             }
             await dismiss();
@@ -6703,7 +6517,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (focusMatch) {
             if (!(await this.gateCallback(query, 'session pickup', dismiss))) return;
             if (!(await this.isForumAdmin(telegram, query.from?.id))) {
-                await dismiss('Only forum admins can pull session cards.');
+                await dismiss(en.ADMIN_ONLY_SESSION_CARDS);
                 return;
             }
             const queryChatId = query.message?.chat.id ?? this.config.durevcode.chatId;
@@ -6715,7 +6529,7 @@ export class DurevcodeAgent extends BaseAgent {
             }
             const target = this.watched.get(focusMatch[1]);
             if (!target) {
-                await dismiss('Outdated, ask again.');
+                await dismiss(en.OUTDATED_ASK_AGAIN);
                 return;
             }
             await dismiss();
@@ -6726,12 +6540,12 @@ export class DurevcodeAgent extends BaseAgent {
         if (setMatch) {
             if (!(await this.gateCallback(query, 'settings', dismiss))) return;
             if (!(await this.isForumAdmin(telegram, query.from?.id))) {
-                await dismiss('Only forum admins can change settings.');
+                await dismiss(en.ADMIN_ONLY_SETTINGS);
                 return;
             }
             const target = this.callbackTarget(query, true);
             if (!target) {
-                await dismiss('Outdated, ask again.');
+                await dismiss(en.OUTDATED_ASK_AGAIN);
                 return;
             }
             const applied = await this.applySettingToggle(setMatch[1]);
@@ -6743,12 +6557,12 @@ export class DurevcodeAgent extends BaseAgent {
         if (modelMatch) {
             if (!(await this.gateCallback(query, 'model', dismiss))) return;
             if (!(await this.isForumAdmin(telegram, query.from?.id))) {
-                await dismiss('Only forum admins can change models.');
+                await dismiss(en.ADMIN_ONLY_MODELS);
                 return;
             }
             const target = this.callbackTarget(query, true);
             if (!target) {
-                await dismiss('Outdated, ask again.');
+                await dismiss(en.OUTDATED_ASK_AGAIN);
                 return;
             }
             await this.applyModelSelection(telegram, opencode, query, target, modelMatch[1], '');
@@ -6758,12 +6572,12 @@ export class DurevcodeAgent extends BaseAgent {
         if (variantMatch) {
             if (!(await this.gateCallback(query, 'model', dismiss))) return;
             if (!(await this.isForumAdmin(telegram, query.from?.id))) {
-                await dismiss('Only forum admins can change models.');
+                await dismiss(en.ADMIN_ONLY_MODELS);
                 return;
             }
             const target = this.callbackTarget(query, true);
             if (!target) {
-                await dismiss('Outdated, ask again.');
+                await dismiss(en.OUTDATED_ASK_AGAIN);
                 return;
             }
             await this.applyModelSelection(telegram, opencode, query, target, null, variantMatch[1]);
@@ -6775,7 +6589,7 @@ export class DurevcodeAgent extends BaseAgent {
             const permId = permMatch[1];
             const permState = this.callbackTarget(query);
             if (!permState) {
-                await dismiss('Outdated, ask again.');
+                await dismiss(en.OUTDATED_ASK_AGAIN);
                 return;
             }
             let pending: PermissionRequest[];
@@ -6787,7 +6601,7 @@ export class DurevcodeAgent extends BaseAgent {
                 return;
             }
             if (!pending.some((item) => item.id === permId)) {
-                await dismiss('Outdated, ask again.');
+                await dismiss(en.OUTDATED_ASK_AGAIN);
                 return;
             }
             await dismiss();
@@ -6808,7 +6622,7 @@ export class DurevcodeAgent extends BaseAgent {
         }
         const ctx = this.questPicks.get(match[1]);
         if (!ctx) {
-            await dismiss('Outdated, ask again.');
+            await dismiss(en.OUTDATED_ASK_AGAIN);
             return;
         }
             if (!(await this.gateCallback(query, 'question', dismiss, ` (session=${ctx.sessionId})`))) return;
@@ -6821,7 +6635,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (match[2] === 'done') {
             const complete = questionPicksComplete(ctx.questions.map((_item, i) => ctx.picks[i] ?? []));
             if (!complete) {
-                await dismiss('Answer every question first.');
+                await dismiss(en.ANSWER_ALL_QUESTIONS);
                 return;
             }
             await dismiss();
@@ -6879,11 +6693,11 @@ export class DurevcodeAgent extends BaseAgent {
         text: string,
     ): Promise<void> {
         if (ref.questions.length === 0) {
-            await this.safeReply(telegram, state, `${icon('warn')} This question card is outdated — answer on the fresh one.`);
+            await this.safeReply(telegram, state, en.QUESTION_OUTDATED);
             return;
         }
         if (ref.questions.length !== 1) {
-            await this.safeReply(telegram, state, `${icon('warn')} Tap an option or Done — free text fits single questions only.`);
+            await this.safeReply(telegram, state, en.QUESTION_FREE_TEXT_ONLY);
             return;
         }
         await this.resolveQuestion(telegram, opencode, state, ref, [[text]]);
@@ -7136,7 +6950,7 @@ export class DurevcodeAgent extends BaseAgent {
             await this.safeReply(
                 telegram,
                 state,
-                `${icon('fail')} The server accepted the prompt but is not processing it. Check the opencode serve log for "Failed to drain Session".`,
+                en.DRAIN_STALL_NOTICE,
             );
         }
     }
@@ -7812,7 +7626,7 @@ export class DurevcodeAgent extends BaseAgent {
             state.laneMention = '';
             state.turnReplyTo = null;
             state.turnMention = '';
-            this.enqueuePrompt(state, AUTO_CONTINUE_TEXT);
+            this.enqueuePrompt(state, en.AUTO_CONTINUE_TEXT);
         }
         this.logger.info(
             `Durevcode auto-continue #${state.autoNudges} after quiet stretch (session=${state.session.id} thread=${state.threadId}).`,
