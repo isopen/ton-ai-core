@@ -98,18 +98,22 @@ const config: DurevcodeConfig = {
     },
     durevcode: {
         chatId: Number.parseInt(process.env.DUREVCODE_CHAT_ID || '', 10),
+        botChatId: optionalInt('DUREVCODE_BOT_CHAT_ID', 0, -1_000_000_000_000, 1_000_000_000_000) || undefined,
         directory: process.env.DUREVCODE_DIR || process.cwd(),
         allowedUsers: userIdList(),
         sessionId: process.env.DUREVCODE_SESSION_ID || undefined,
         sessionIds: sessionIdList(),
         maxSessions: maxSessionsDefault,
         useThreads: optionalFlag('DUREVCODE_USE_THREADS', true),
+        forumEnabled: optionalFlag('DUREVCODE_FORUM_ENABLED', true),
+        botEnabled: optionalFlag('DUREVCODE_BOT_ENABLED', true),
         typingEnabled: optionalFlag('DUREVCODE_TYPING', true),
         reasoningStream: optionalFlag('DUREVCODE_REASONING_STREAM', true),
         reasoningRepaint: optionalFlag('DUREVCODE_REASONING_REPAINT', true),
         leadMention: optionalFlag('DUREVCODE_LEAD_MENTION', true),
         quoteReplies: optionalFlag('DUREVCODE_QUOTE_REPLIES', true),
         answerFanout: optionalFlag('DUREVCODE_ANSWER_FANOUT', false),
+        subagentUsers: optionalFlag('DUREVCODE_SUBAGENT_USERS', true),
         newTopics: optionalFlag('DUREVCODE_NEW_TOPICS', true),
         statePath:
             process.env.DUREVCODE_STATE_PATH ||

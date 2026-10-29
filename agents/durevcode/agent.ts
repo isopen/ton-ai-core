@@ -225,11 +225,14 @@ const SERVER_PART_UPDATED_SYNC_EVENT = 'message.part.updated.1';
 const SERVER_REASONING_DELTA_EVENT = 'session.reasoning.delta';
 const SERVER_REASONING_STARTED_EVENT = 'session.reasoning.started';
 const MAX_QUEUED_PROMPTS = 5;
+const SUBAGENT_PARALLEL_CAP = 8;
 const MAX_SEEN_INBOUND = 500;
 const MAX_THOUGHT_ARCHIVES = 12;
 const MAX_SUBMITTED_PROMPTS = 100;
 const SUBMITTED_WINDOW_MS = 120000;
 const PROMPT_TRACK_TTL_MS = 30 * 60_000;
+
+const DIGEST_PROMPT_PREFIX = 'Background subagent task finished.';
 const PERSISTED_SAVE_COALESCE_MS = 1500;
 
 const FILE_MODIFYING_PERMISSIONS = new Set(['edit']);
@@ -254,6 +257,7 @@ export const DUREVCODE_THREAD_TIMINGS = {
 const TOMBSTONE_CAP = 200;
 const DEAD_PRUNE_PER_TICK = 3;
 const DEAD_STRIKES = 2;
+const PLAIN_LANE_WARN_TTL_MS = 10 * 60 * 1000;
 const TOPIC_TAG_CAP = 500;
 const TOPIC_PROBE_MS = 5 * 60 * 1000;
 const TOPIC_CLOSED_WARN_MS = 30 * 60 * 1000;
@@ -279,6 +283,7 @@ const MODEL_PICK_ORDINALS: Array<[string, number]> = [
 ];
 const NUMBER_VOICE_FILLERS = ['номер', 'номера', 'модель', 'модели'];
 const STATUS_CARD_ROOTS = ['статус', 'status', 'состоян'];
+const SESSIONS_CARD_ROOTS = ['сесси', 'сессион', 'sessions'];
 const SETTINGS_CARD_ROOTS = ['настрой', 'settings'];
 const ADMIN_CACHE_TTL_MS = 300000;
 const VOICE_PERM_ALLOW = ['да', 'yes', 'ок', 'окей', 'хорошо', 'давай', 'конечно', 'ага'];
@@ -298,6 +303,7 @@ const SETTINGS_DEFS: SettingDef[] = [
     { key: 'quoteReplies', label: 'Reply quotes', bool: true },
     { key: 'autoFinish', label: 'Finish notices', bool: true },
     { key: 'answerFanout', label: 'Shared answers', bool: true },
+    { key: 'subagentUsers', label: 'Subagent users', bool: true },
     { key: 'newTopics', label: 'New topics', bool: true },
     { key: 'voice', label: 'Voice transcription', bool: true },
     { key: 'voiceLang', label: 'Voice language', values: ['auto', 'ru', 'en'] },
@@ -374,6 +380,10 @@ export function isThreadGoneError(error: unknown): boolean {
         error instanceof Error &&
         /message thread (not found|does not exist|deleted|invalid)|TOPIC_DELETED|TOPIC_ID_INVALID|thread deleted/i.test(error.message)
     );
+}
+
+export function isReplyGoneError(error: unknown): boolean {
+    return String(errorText(error)).includes('message to be replied not found');
 }
 
 export function hasUnfinishedLiveTool(
@@ -641,18 +651,22 @@ const QUESTION_DISARM_RETRIES = 4;
 
 export interface DurevcodeWatchConfig {
     chatId: number;
+    botChatId?: number;
     directory: string;
     allowedUsers: number[];
     sessionId?: string;
     sessionIds?: string[];
     maxSessions: number;
     useThreads: boolean;
+    forumEnabled?: boolean;
+    botEnabled?: boolean;
     typingEnabled?: boolean;
     reasoningStream?: boolean;
     reasoningRepaint?: boolean;
     leadMention?: boolean;
     quoteReplies?: boolean;
     answerFanout?: boolean;
+    subagentUsers?: boolean;
     whipSticker?: string;
     whipEmojiId?: string;
     newTopics?: boolean;
@@ -699,6 +713,7 @@ interface PromptAttribution {
     replyTo: number | null;
     mention: string;
     uid?: number;
+    chatId?: number;
 }
 
 interface TrackedPrompt {
@@ -707,10 +722,31 @@ interface TrackedPrompt {
     at: number;
     consumed?: boolean;
     pending?: boolean;
+    digest?: boolean;
+}
+
+interface ContendedRun {
+    ownerId: string;
+    sessionId: string;
+    task: string;
+    laneChatId: number | null;
+    threadId: number | null;
+    replyTo: number | null;
+    uid: number;
+    createdAt: number;
+    lastEventAt: number;
+    lastText: string;
+    toolCalls: number;
+    turnComplete: boolean;
+    seenPartKeys: Set<string>;
+    receiptId: string | null;
+    landed: boolean;
+    finished: boolean;
 }
 
 interface WatchedSession {
     session: SessionRow;
+    laneChatId: number | null;
     contextMessageId: number | null;
     pinnedThreadId: number | null;
     threadId: number | null;
@@ -807,9 +843,11 @@ interface WatchedSession {
     turnReplyTo: number | null;
     turnMention: string;
     turnUserId: number;
+    digestTurn: boolean;
     laneReplyTo: number | null;
     laneMention: string;
     laneUserId: number;
+    lastLaneConsumeAt: number;
 }
 
 interface PermissionReply {
@@ -883,6 +921,7 @@ export class DurevcodeAgent extends BaseAgent {
     private eventUnsub: (() => void) | null = null;
     private sessionTicks = new Set<string>();
     private promptLane = new Map<string, PromptAttribution[]>();
+    private contendedRuns: ContendedRun[] = [];
     private promptTracking = new Map<string, TrackedPrompt[]>();
     private fanoutGroups = new Map<string, { fingerprint: string; followers: Set<string>; holds: PromptAttribution[]; primed: boolean; at: number }>();
     private fanoutFollows = new Map<string, { primary: string; fingerprint: string; attribution: PromptAttribution; at: number }>();
@@ -910,6 +949,9 @@ export class DurevcodeAgent extends BaseAgent {
     private lastVoiceStats = new Map<string, { audioSec: number; processingMs: number; model: string; at: number }>();
     private settingsOverrides: Record<string, boolean | number | string> = {};
     private settingsBaseline: Record<string, boolean | number | string> = {};
+    private plainChatMode = false;
+    private plainLanes = new Map<number, string>();
+    private plainLaneWarnAt = 0;
     private whisperActivating: Promise<WhisperPlugin | null> | null = null;
     private adminGrant = new Map<number, { ok: boolean; at: number }>();
     private bootAt = Date.now();
@@ -926,8 +968,33 @@ export class DurevcodeAgent extends BaseAgent {
     constructor(config: DurevcodeConfig) {
         super(config);
         this.config = config;
+        this.applyChatModeConfig();
         for (const def of SETTINGS_DEFS) {
             this.settingsBaseline[def.key] = this.settingRawValue(def.key);
+        }
+    }
+
+    private applyChatModeConfig(): void {
+        if (this.config.durevcode.forumEnabled === false && this.config.durevcode.botEnabled === false) {
+            throw new Error(
+                'DUREVCODE_FORUM_ENABLED=0 and DUREVCODE_BOT_ENABLED=0 leave no lane for messages, enable one of them.',
+            );
+        }
+        this.threadsEnabled = this.config.durevcode.useThreads !== false && this.config.durevcode.forumEnabled !== false;
+        if (this.config.durevcode.chatId === this.config.durevcode.botChatId) {
+            this.config.durevcode.botChatId = undefined;
+        }
+        if (this.config.durevcode.botChatId !== undefined) {
+            console.log(
+                `Durevcode second chat lane enabled: bot chat ${this.config.durevcode.botChatId} runs its own plain lane ` +
+                    `next to chat ${this.config.durevcode.chatId}.`,
+            );
+        }
+        if (this.config.durevcode.forumEnabled === false) {
+            this.plainChatMode = true;
+            console.log(
+                `Durevcode plain lane forced: forum topics are off (chat ${this.config.durevcode.chatId}).`,
+            );
         }
     }
 
@@ -989,7 +1056,7 @@ export class DurevcodeAgent extends BaseAgent {
             void this.handleServerEvent(telegram, event).catch((error) => console.error('Durevcode server event failed:', error));
         });
 
-        this.threadsEnabled = this.config.durevcode.useThreads;
+        this.applyChatModeConfig();
         this.loadPersisted();
         this.applySettingsOverrides();
         await this.syncSessions();
@@ -1136,6 +1203,32 @@ export class DurevcodeAgent extends BaseAgent {
             const rawSettings = (parsed as Record<string, unknown>).settings;
             if (rawSettings && typeof rawSettings === 'object' && !Array.isArray(rawSettings)) {
                 this.settingsOverrides = sanitizeSettings(rawSettings as Record<string, unknown>);
+            }
+            const rawPlainLanes = (parsed as Record<string, unknown>).plainLanes;
+            if (this.plainLanes.size === 0 && rawPlainLanes && typeof rawPlainLanes === 'object' && !Array.isArray(rawPlainLanes)) {
+                for (const [key, sessionId] of Object.entries(rawPlainLanes as Record<string, unknown>)) {
+                    const chatId = Number.parseInt(key, 10);
+                    if (
+                        Number.isFinite(chatId) &&
+                        typeof sessionId === 'string' &&
+                        /^[A-Za-z0-9._-]{1,200}$/.test(sessionId)
+                    ) {
+                        this.plainLanes.set(chatId, sessionId);
+                    }
+                }
+            }
+            const rawPlainLanesLegacy = (parsed as Record<string, unknown>).plainLane;
+            if (this.plainLanes.size === 0 && rawPlainLanesLegacy && typeof rawPlainLanesLegacy === 'object' && !Array.isArray(rawPlainLanesLegacy)) {
+                const lane = rawPlainLanesLegacy as Record<string, unknown>;
+                const chatId = typeof lane.chatId === 'number' && Number.isFinite(lane.chatId) ? lane.chatId : null;
+                const sessionId = typeof lane.sessionId === 'string' && /^[A-Za-z0-9._-]{1,200}$/.test(lane.sessionId)
+                    ? lane.sessionId
+                    : null;
+                if (chatId !== null && sessionId !== null) this.plainLanes.set(chatId, sessionId);
+            }
+            if (this.plainLanes.has(this.config.durevcode.chatId) && this.config.durevcode.botEnabled !== false) {
+                this.plainChatMode = true;
+                this.threadsEnabled = false;
             }
             const sessions = (parsed as Record<string, unknown>).sessions;
             if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) return;
@@ -1326,7 +1419,7 @@ export class DurevcodeAgent extends BaseAgent {
             }
         }
         return {
-            threadId: state.threadId ?? this.persisted[state.session.id]?.threadId ?? null,
+            threadId: state.threadId ?? (this.isForumLane(state) ? (this.persisted[state.session.id]?.threadId ?? null) : null),
             contextMessageId: state.contextMessageId,
             pinnedThreadId: state.pinnedThreadId,
             lastSeen: Date.now(),
@@ -1377,6 +1470,7 @@ export class DurevcodeAgent extends BaseAgent {
                 tombstones: Object.fromEntries([...this.tombstonedSessions.entries()].slice(-TOMBSTONE_CAP)),
                 topics: Object.fromEntries([...this.topicTags.entries()]),
                 settings: this.settingsOverrides,
+                plainLanes: Object.fromEntries([...this.plainLanes.entries()].map(([chatId, sessionId]) => [String(chatId), sessionId])),
             }));
         } catch (error) {
             console.debug('Durevcode state save failed:', errorText(error));
@@ -1556,10 +1650,10 @@ export class DurevcodeAgent extends BaseAgent {
 
     private async ensureThreadId(
         telegram: TelegramBotPlugin,
-        state: Pick<WatchedSession, 'session'> & { threadId: number | null },
+        state: Pick<WatchedSession, 'session' | 'laneChatId'> & { threadId: number | null },
     ): Promise<number | null> {
         if (state.threadId !== null) return state.threadId;
-        if (!this.threadsEnabled) return null;
+        if (!this.isForumLane(state)) return null;
         if (Date.now() < (this.threadRetryAt.get(state.session.id) ?? 0)) return null;
         const tag = sessionTagOf(state.session.id);
         const known = this.topicTags.get(tag);
@@ -1576,7 +1670,7 @@ export class DurevcodeAgent extends BaseAgent {
         for (const withIcon of [true, false]) {
             try {
                 const topic = await telegram.createForumTopic({
-                    chat_id: this.chatId(),
+                    chat_id: this.chatIdOf(state),
                     name: formatTopicName(state.session.title, state.session.id),
                     ...(withIcon ? { icon_custom_emoji_id: TOPIC_ICON_CUSTOM_EMOJI_ID } : {}),
                 });
@@ -1638,8 +1732,8 @@ export class DurevcodeAgent extends BaseAgent {
         markup?: InlineKeyboardMarkup,
         opts?: { force?: boolean; replyTo?: number },
     ): Promise<number> {
-        const chatId = this.config.durevcode.chatId;
-        if (this.threadsEnabled && state.threadId === null) {
+        const chatId = this.chatIdOf(state);
+        if (this.isForumLane(state) && state.threadId === null) {
             throw new Error('Durevcode topic missing: refusing to post into General');
         }
         if (!opts?.force && Date.now() < this.rateLimitedUntil) {
@@ -1649,7 +1743,7 @@ export class DurevcodeAgent extends BaseAgent {
             throw backoffGateError('Telegram upstream backoff active');
         }
         const parts = splitTelegramHtml(text);
-        const sig = `${state.threadId ?? 'dm'}:${deliverySignature(text)}`;
+        const sig = `${this.chatIdOf(state)}:${state.threadId ?? 'dm'}:${deliverySignature(text)}`;
         for (const [key, pending] of this.partialSends) {
             if (Date.now() - pending.at > DELIVERY_DEDUP_MS) this.partialSends.delete(key);
         }
@@ -1661,7 +1755,7 @@ export class DurevcodeAgent extends BaseAgent {
             try {
                 const message = await telegram.sendMessage({
                     chat_id: chatId,
-                    message_thread_id: state.threadId ?? undefined,
+                    message_thread_id: this.isForumLane(state) ? (state.threadId ?? undefined) : undefined,
                     text: wellFormed(part),
                     parse_mode: 'HTML',
                     ...(withMarkup && markup ? { reply_markup: markup } : {}),
@@ -1752,10 +1846,11 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private async pinContextMessage(telegram: TelegramBotPlugin, state: WatchedSession): Promise<'ok' | 'gone' | 'rights' | 'failed'> {
+        if (this.isSideBotLane(state)) return 'failed';
         if (state.contextMessageId === null) return 'failed';
         try {
             await telegram.pinChatMessage({
-                chat_id: this.chatId(),
+                chat_id: this.chatIdOf(state),
                 message_id: state.contextMessageId,
                 disable_notification: true,
             });
@@ -1797,7 +1892,8 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private async sendFreshPin(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {
-        if (this.threadsEnabled && state.threadId === null) {
+        if (this.isSideBotLane(state)) return false;
+        if (this.isForumLane(state) && state.threadId === null) {
             console.debug(
                 `Durevcode context card deferred, no topic yet (session=${state.session.id} thread=${state.threadId}).`,
             );
@@ -1848,12 +1944,13 @@ export class DurevcodeAgent extends BaseAgent {
         session: SessionRow,
         existingThreadId?: number,
         userId?: number | null,
+        laneChatId?: number,
     ): Promise<WatchedSession> {
         const inFlight = this.attaching.get(session.id);
         if (inFlight) return inFlight;
         const tracked = this.watched.get(session.id);
         if (tracked) return tracked;
-        const run = this.doAttachSession(telegram, session, existingThreadId, userId);
+        const run = this.doAttachSession(telegram, session, existingThreadId, userId, laneChatId);
         run.then(() => undefined, () => undefined);
         this.attaching.set(session.id, run);
         try {
@@ -1868,10 +1965,12 @@ export class DurevcodeAgent extends BaseAgent {
         session: SessionRow,
         existingThreadId?: number,
         userId?: number | null,
+        laneChatId?: number,
     ): Promise<WatchedSession> {
         const stored = this.persisted[session.id];
         const state: WatchedSession = {
             session,
+            laneChatId: laneChatId ?? null,
             userId: userId ?? null,
             contextMessageId: stored?.contextMessageId ?? null,
             pinnedThreadId: stored?.pinnedThreadId ?? null,
@@ -1968,9 +2067,11 @@ export class DurevcodeAgent extends BaseAgent {
             turnReplyTo: null,
             turnMention: '',
             turnUserId: 0,
+            digestTurn: false,
             laneReplyTo: null,
             laneMention: '',
             laneUserId: 0,
+            lastLaneConsumeAt: 0,
         };
         if (existingThreadId !== undefined) {
             state.threadId = this.threadsEnabled ? existingThreadId : null;
@@ -2039,32 +2140,34 @@ export class DurevcodeAgent extends BaseAgent {
                 state.userNamed = false;
             }
         }
-        if (state.contextMessageId === null || state.pinnedThreadId !== state.threadId) {
-            await this.sendFreshPin(telegram, state);
-        } else {
-            const pinResult = await this.pinContextMessage(telegram, state);
-            if (pinResult === 'gone') {
-                state.contextMessageId = null;
-                state.pinnedThreadId = null;
+        if (!this.isSideBotLane(state)) {
+            if (state.contextMessageId === null || state.pinnedThreadId !== state.threadId) {
                 await this.sendFreshPin(telegram, state);
             } else {
-                const reusedPin = state.contextMessageId;
-                if (reusedPin !== null) {
-                    const want = this.wantStopButton(state);
-                    try {
-                        await telegram.editMessageReplyMarkup({
-                            chat_id: this.chatId(),
-                            message_id: reusedPin,
-                            reply_markup: want ? this.stopMarkup(state) : EMPTY_INLINE_MARKUP,
-                        });
-                        state.stopButtonOn = want;
-                    } catch (error) {
-                        if (isMessageNotModifiedError(error)) {
+                const pinResult = await this.pinContextMessage(telegram, state);
+                if (pinResult === 'gone') {
+                    state.contextMessageId = null;
+                    state.pinnedThreadId = null;
+                    await this.sendFreshPin(telegram, state);
+                } else {
+                    const reusedPin = state.contextMessageId;
+                    if (reusedPin !== null) {
+                        const want = this.wantStopButton(state);
+                        try {
+                            await telegram.editMessageReplyMarkup({
+                                chat_id: this.chatIdOf(state),
+                                message_id: reusedPin,
+                                reply_markup: want ? this.stopMarkup(state) : EMPTY_INLINE_MARKUP,
+                            });
                             state.stopButtonOn = want;
-                        } else {
-                            state.stopButtonOn = false;
-                            if (!isMessageGoneError(error)) {
-                                console.debug('Durevcode stop button reset failed:', errorText(error));
+                        } catch (error) {
+                            if (isMessageNotModifiedError(error)) {
+                                state.stopButtonOn = want;
+                            } else {
+                                state.stopButtonOn = false;
+                                if (!isMessageGoneError(error)) {
+                                    console.debug('Durevcode stop button reset failed:', errorText(error));
+                                }
                             }
                         }
                     }
@@ -2128,6 +2231,14 @@ export class DurevcodeAgent extends BaseAgent {
         let ids: string[] = [];
         try {
             ids = await this.resolveSessionIds();
+            if (this.plainChatMode) {
+                const boundId = this.plainLanes.get(this.config.durevcode.chatId) ?? null;
+                const picked = boundId !== null
+                    && (this.watched.has(boundId) || ids.includes(boundId) || this.persisted[boundId] !== undefined)
+                    ? boundId
+                    : ids[0] ?? null;
+                ids = picked ? [picked] : [];
+            }
         } catch (error) {
             console.debug('Durevcode session list failed:', errorText(error));
             return;
@@ -2170,7 +2281,7 @@ export class DurevcodeAgent extends BaseAgent {
             }
             if (attachedThisPass > 0) await this.boundaryGap(900, 400);
             try {
-                const state = await this.attachSession(telegram, session);
+                const state = await this.attachSession(telegram, session, undefined, undefined, this.plainLaneChatOfSession(id) ?? undefined);
                 this.watched.set(id, state);
                 attachedThisPass += 1;
                 if (state.threadId !== null) {
@@ -2196,12 +2307,16 @@ export class DurevcodeAgent extends BaseAgent {
         const now = Date.now();
         for (const [id, state] of this.watched) {
             if (seen.has(id)) continue;
+            if (this.plainLaneChatOfSession(state.session.id) !== null) continue;
             if (this.sessionTicks.has(id)) continue;
             if (isUserActiveWatch(state, now)) continue;
             if (!state.finalized && !isStaleEmptyWatch(state, now)) continue;
             this.watched.delete(id);
             this.dropSessionRefs(id);
             console.log(`Durevcode detached session ${id} (out of auto-pick window)`);
+        }
+        for (const sessionId of this.plainLanes.values()) {
+            if (this.watched.has(sessionId)) seen.add(sessionId);
         }
         this.evictWatchedOverflow(seen);
     }
@@ -2327,6 +2442,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private dropSessionRefs(sessionId: string): void {
+        this.contendedRuns = this.contendedRuns.filter((run) => run.ownerId !== sessionId);
         const renderTimer = this.thinkingRenderTimers.get(sessionId);
         if (renderTimer) {
             clearTimeout(renderTimer);
@@ -2630,6 +2746,13 @@ export class DurevcodeAgent extends BaseAgent {
         const lane = this.promptLane.get(state.session.id);
         const head = lane?.shift();
         if (lane && lane.length === 0) this.promptLane.delete(state.session.id);
+        if (head?.chatId !== undefined) {
+            const prev = state.laneChatId;
+            const next = head.chatId === this.config.durevcode.chatId ? null : head.chatId;
+            if (next !== prev && !this.laneCrossesSideBot(prev, next)) this.rehomeLaneCards(state);
+            state.laneChatId = next;
+            state.lastLaneConsumeAt = Date.now();
+        }
         return head ?? { replyTo: null, mention: '' };
     }
 
@@ -2651,8 +2774,10 @@ export class DurevcodeAgent extends BaseAgent {
         const tracked = (this.promptTracking.get(state.session.id) ?? []).filter(
             (entry) => now - entry.at < PROMPT_TRACK_TTL_MS,
         );
-        tracked.push({ text, attribution, at, pending });
+        const digest = text.startsWith(DIGEST_PROMPT_PREFIX);
+        tracked.push({ text, attribution, at, pending, digest });
         this.promptTracking.set(state.session.id, tracked);
+        state.digestTurn = digest;
     }
 
     private acceptEchoAttribution(state: WatchedSession, text: string, eventTime = Date.now()): boolean {
@@ -2664,6 +2789,7 @@ export class DurevcodeAgent extends BaseAgent {
         matched.consumed = true;
         matched.pending = false;
         if (eventTime > matched.at) matched.at = eventTime;
+        state.digestTurn = matched.digest === true;
         state.turnReplyTo = matched.attribution.replyTo;
         state.turnMention = matched.attribution.mention;
         state.turnUserId = matched.attribution.uid ?? 0;
@@ -2706,6 +2832,7 @@ export class DurevcodeAgent extends BaseAgent {
             return true;
         }
         this.trackExternalPart(state, event.time);
+        state.digestTurn = false;
         state.turnReplyTo = null;
         state.turnMention = '';
         state.turnUserId = 0;
@@ -2783,7 +2910,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (this.fanoutGroups.has(state.session.id)) this.fanoutGroups.delete(state.session.id);
         const laneHead = this.promptLane.get(state.session.id)?.[0];
         const attribution: PromptAttribution = laneHead
-            ? { replyTo: laneHead.replyTo, mention: laneHead.mention, uid: laneHead.uid }
+            ? { replyTo: laneHead.replyTo, mention: laneHead.mention, uid: laneHead.uid, chatId: laneHead.chatId }
             : { replyTo: null, mention: '' };
         this.fanoutFollows.set(state.session.id, { primary, fingerprint, attribution, at: Date.now() });
         group.followers.add(state.session.id);
@@ -2869,15 +2996,8 @@ export class DurevcodeAgent extends BaseAgent {
     ): Promise<void> {
         const from = message.from;
         if (!from || from.is_bot) return;
-        if (message.chat.id !== this.config.durevcode.chatId) {
+        if (!this.isManagedChat(message.chat.id)) {
             console.debug(`Durevcode inbound ignored: foreign chat ${message.chat.id} message ${message.message_id}.`);
-            return;
-        }
-        const threadId = message.message_thread_id;
-        if (!threadId) {
-            console.debug(
-                `Durevcode inbound ignored: no topic (chat=${message.chat.id} message=${message.message_id} user=${from.id}).`,
-            );
             return;
         }
         if (typeof message.message_id === 'number') {
@@ -2886,15 +3006,345 @@ export class DurevcodeAgent extends BaseAgent {
             this.seenInbound.add(seenKey);
             this.evictOldestEntries(this.seenInbound, MAX_SEEN_INBOUND);
         }
+        const threadId = message.message_thread_id ?? null;
+        if (threadId === null) {
+            if (this.config.durevcode.botEnabled === false) {
+                console.debug(
+                    `Durevcode inbound ignored: no topic and DUREVCODE_BOT_ENABLED=0 (message=${message.message_id}).`,
+                );
+                return;
+            }
+            if (message.is_topic_message === true) {
+                console.debug(
+                    `Durevcode inbound ignored: topic flag without id (message=${message.message_id}).`,
+                );
+                return;
+            }
+            await this.inboundPlainChat(telegram, opencode, message.chat.id, message);
+            return;
+        }
+        if (message.chat.id !== this.config.durevcode.chatId) {
+            console.debug(
+                `Durevcode inbound ignored: topical message outside the forum lane (chat=${message.chat.id} thread=${threadId}).`,
+            );
+            return;
+        }
         const state = this.findSessionByThread(threadId);
         if (!state) {
             await this.handleUnknownThread(telegram, opencode, message, threadId);
             return;
         }
+        await this.routeSessionInbound(telegram, opencode, state, message, threadId);
+    }
+
+    private chatIdOf(state: Pick<WatchedSession, 'laneChatId'>): number {
+        return state.laneChatId ?? this.config.durevcode.chatId;
+    }
+
+    private isForumLaneChat(chatId: number): boolean {
+        return chatId === this.config.durevcode.chatId && this.threadsEnabled && !this.plainChatMode;
+    }
+
+    private isForumLane(state: Pick<WatchedSession, 'laneChatId'>): boolean {
+        return this.isForumLaneChat(state.laneChatId ?? this.config.durevcode.chatId);
+    }
+
+    private isManagedChat(chatId: number): boolean {
+        return chatId === this.config.durevcode.chatId || chatId === this.config.durevcode.botChatId;
+    }
+
+    private isSideBotLane(state: Pick<WatchedSession, 'laneChatId'>): boolean {
+        const botChatId = this.config.durevcode.botChatId;
+        return botChatId !== undefined && this.chatIdOf(state) === botChatId;
+    }
+
+    private laneCrossesSideBot(prev: number | null, next: number | null): boolean {
+        const botChatId = this.config.durevcode.botChatId;
+        if (botChatId === undefined) return false;
+        const from = prev ?? this.config.durevcode.chatId;
+        const to = next ?? this.config.durevcode.chatId;
+        return (from === botChatId) !== (to === botChatId);
+    }
+
+    private rehomeLaneCards(state: WatchedSession): void {
+        state.contextMessageId = null;
+        state.stopMessageId = null;
+        state.thinkingMessageId = null;
+        state.modelCardMessageId = null;
+        state.stopButtonOn = false;
+        state.lastContextRendered = '';
+    }
+
+    private async withInteractionLane<T>(
+        state: WatchedSession,
+        laneChatId: number | null,
+        run: () => Promise<T>,
+    ): Promise<T> {
+        const prev = state.laneChatId;
+        if ((prev ?? this.config.durevcode.chatId) === (laneChatId ?? this.config.durevcode.chatId)) return run();
+        const before = state.lastLaneConsumeAt;
+        if (!this.laneCrossesSideBot(prev, laneChatId)) this.rehomeLaneCards(state);
+        state.laneChatId = laneChatId;
+        try {
+            return await run();
+        } finally {
+            if (state.lastLaneConsumeAt === before) state.laneChatId = prev;
+        }
+    }
+
+    private isTurnStreaming(state: WatchedSession): boolean {
+        return this.hasActiveDispatch(state)
+            || state.thinkingActive
+            || hasUnfinishedLiveTool(state, Date.now())
+            || (state.turnComplete === false && Date.now() - state.lastEventAt < WORKING_RECENCY_MS);
+    }
+
+    private isTurnBusy(state: WatchedSession): boolean {
+        return state.cliRun !== null
+            || state.thinkingActive
+            || hasUnfinishedLiveTool(state, Date.now())
+            || (state.turnComplete === false && Date.now() - state.lastEventAt < WORKING_RECENCY_MS);
+    }
+
+    private laneSettled(state: WatchedSession): boolean {
+        if (state.finalized) return true;
+        if (state.stopping || state.stoppedByUser || this.stopQuiet(state)) return true;
+        if (this.isTurnStreaming(state)) return false;
+        if (this.autoContinueArmed(state)) return false;
+        if (state.pending.length > 0 || state.pendingTodos) return false;
+        if (state.knownQuestions.length > 0 || state.knownPerms.length > 0) return false;
+        if (this.contendedRuns.some((run) => run.ownerId === state.session.id && !run.finished)) return false;
+        return true;
+    }
+
+    private autoContinueArmed(state: WatchedSession): boolean {
+        if (this.autoContinueMs() === 0) return false;
+        if (state.turnComplete) return false;
+        if (state.lastStepErrorAt !== 0) return false;
+        if (state.thinkingActive) return false;
+        const maxNudges = this.config.durevcode.autoContinueMax ?? AUTO_CONTINUE_DEFAULT_MAX;
+        if (state.autoNudges >= maxNudges) return false;
+        return state.toolCalls > 0 || state.lastText !== '';
+    }
+
+    private async inboundPlainChat(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion' | 'createSession' | 'sendPrompt' | 'getSession' | 'renameSession' | 'listModels'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'listAgents' | 'setAgent'>>,
+        chatId: number,
+        message: Message,
+    ): Promise<void> {
+        const from = message.from;
+        if (!from || from.is_bot) return;
+        const allowed = this.config.durevcode.allowedUsers;
+        if (allowed.length > 0 && !allowed.includes(from.id)) {
+            console.warn(`Durevcode plain chat denied for user ${from.id} (chat=${chatId}).`);
+            return;
+        }
+        if (chatId === this.config.durevcode.chatId) this.activatePlainChat();
+        const text = (message.text || message.caption || '').trim();
+        if (!text && !hasMediaMessage(message)) {
+            console.debug(
+                `Durevcode plain chat ignored: empty provider message (message=${message.message_id}).`,
+            );
+            return;
+        }
+        const state = await this.ensurePlainLane(telegram, opencode, chatId, from.id);
+        if (!state) {
+            console.warn(
+                `Durevcode plain chat: no session to bind (chat=${chatId} message=${message.message_id}).`,
+            );
+            return;
+        }
+        await this.routeSessionInbound(telegram, opencode, state, message, null);
+    }
+
+    private activatePlainChat(): void {
+        if (this.plainChatMode) return;
+        this.plainChatMode = true;
+        this.threadsEnabled = false;
+        console.log(
+            `Durevcode plain chat detected for chat ${this.config.durevcode.chatId}: it has no topics, the lane binds one session.`,
+        );
+    }
+
+    private plainLaneOnly(state: WatchedSession): boolean {
+        if (!this.plainChatMode) return false;
+        const boundId = this.plainLanes.get(this.config.durevcode.chatId) ?? null;
+        return boundId !== null && boundId !== state.session.id;
+    }
+
+    private plainLaneChatOfSession(sessionId: string): number | null {
+        for (const [chatId, bound] of this.plainLanes) {
+            if (bound === sessionId) return chatId;
+        }
+        return null;
+    }
+
+    private bindPlainLane(chatId: number, sessionId: string): void {
+        if (this.plainLanes.get(chatId) === sessionId) return;
+        this.plainLanes.set(chatId, sessionId);
+        this.savePersisted();
+        console.log(`Durevcode plain chat ${chatId} bound to session ${sessionId}.`);
+    }
+
+    private async ensurePlainLane(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion' | 'createSession' | 'sendPrompt' | 'getSession' | 'renameSession' | 'listModels'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'listAgents' | 'setAgent'>>,
+        chatId: number,
+        userId: number,
+    ): Promise<WatchedSession | null> {
+        const boundId = this.plainLanes.get(chatId) ?? null;
+        if (boundId !== null) {
+            const boundState = this.watched.get(boundId) ?? null;
+            if (boundState) return boundState;
+            const rebound = await this.attachPlainLaneSession(telegram, opencode, boundId, chatId, userId);
+            if (rebound) {
+                this.bindPlainLane(chatId, rebound.session.id);
+                return rebound;
+            }
+        }
+        const first = [...this.watched.values()][0] ?? null;
+        if (first) {
+            this.bindPlainLane(chatId, first.session.id);
+            return first;
+        }
+        for (const id of await this.resolveSessionIds()) {
+            const attached = await this.attachPlainLaneSession(telegram, opencode, id, chatId, userId);
+            if (attached) {
+                this.bindPlainLane(chatId, attached.session.id);
+                return attached;
+            }
+        }
+        if (this.config.durevcode.watchOnly === true) {
+            const now = Date.now();
+            if (now - this.plainLaneWarnAt >= PLAIN_LANE_WARN_TTL_MS) {
+                this.plainLaneWarnAt = now;
+                console.warn('Durevcode plain chat: watch only is on and there is no session to bind.');
+            }
+            return null;
+        }
+        try {
+            const created = await opencode.createSession(this.config.durevcode.directory);
+            const fresh = await this.attachSession(telegram, created, undefined, userId, chatId);
+            this.watched.set(created.id, fresh);
+            this.bindPlainLane(chatId, created.id);
+            console.log(`Durevcode plain chat created session ${created.id}.`);
+            return fresh;
+        } catch (error) {
+            console.warn(`Durevcode plain chat session creation failed: ${errorText(error)}`);
+            return null;
+        }
+    }
+
+    private async attachPlainLaneSession(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'getSession'>,
+        sessionId: string,
+        chatId: number,
+        userId: number,
+    ): Promise<WatchedSession | null> {
+        const tracked = this.watched.get(sessionId);
+        if (tracked) return tracked;
+        let row: SessionRow | null = null;
+        try {
+            row = await opencode.getSession(sessionId);
+        } catch (error) {
+            const strikes = (this.deadStrikes.get(sessionId) ?? 0) + 1;
+            this.deadStrikes.set(sessionId, strikes);
+            console.debug(
+                `Durevcode plain lane attach read failed (${strikes}/${DEAD_STRIKES}): ${errorText(error)}`,
+            );
+            if (strikes >= DEAD_STRIKES && this.plainLanes.get(chatId) === sessionId) {
+                this.deadStrikes.delete(sessionId);
+                this.plainLanes.delete(chatId);
+                this.savePersisted();
+                console.warn(`Durevcode plain lane binding dropped: session ${sessionId} is unreachable.`);
+            }
+            return null;
+        }
+        this.deadStrikes.delete(sessionId);
+        if (!row || isSubagentSession(row)) {
+            console.debug(`Durevcode plain lane attach: session ${sessionId} is unknown.`);
+            return null;
+        }
+        const state = await this.attachSession(telegram, row, undefined, userId, chatId);
+        this.watched.set(row.id, state);
+        this.savePersisted();
+        return state;
+    }
+
+    private async switchPlainLane(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'getSession'>,
+        chatId: number,
+        sessionId: string,
+        userId: number | null,
+    ): Promise<void> {
+        const id = sessionId.trim();
+        if (id === '' || id.length > 200) return;
+        if (this.plainLanes.get(chatId) === id && this.watched.has(id)) return;
+        let row: SessionRow | null = null;
+        try {
+            row = await opencode.getSession(id);
+        } catch (error) {
+            console.debug(`Durevcode plain lane switch read failed: ${errorText(error)}`);
+        }
+        if (!row || isSubagentSession(row)) return;
+        const title = (row.title || '').trim() || sessionTagOf(row.id);
+        try {
+            const tracked = this.watched.get(row.id) ?? null;
+            const state = tracked ?? await this.attachPlainLaneSession(telegram, opencode, row.id, chatId, userId ?? 0);
+            if (!state) {
+                console.warn(`Durevcode plain lane switch failed: session ${row.id} did not attach.`);
+                return;
+            }
+            this.bindPlainLane(chatId, row.id);
+            const lane = chatId === this.config.durevcode.chatId ? null : chatId;
+            const prevLane = state.laneChatId;
+            if ((prevLane ?? this.config.durevcode.chatId) !== (lane ?? this.config.durevcode.chatId) && !this.laneCrossesSideBot(prevLane, lane)) this.rehomeLaneCards(state);
+            state.laneChatId = lane;
+            if (tracked) await this.refreshSwitchedPin(telegram, state);
+            await this.deliverMessage(
+                telegram,
+                state,
+                `${checkIcon()} Switched to <b>${escapeHtml(title)}</b> · ${escapeHtml(sessionTagOf(row.id))}`,
+            );
+        } catch (error) {
+            console.debug(`Durevcode plain lane switch failed: ${errorText(error)}`);
+        }
+    }
+
+    private async refreshSwitchedPin(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        const before = state.contextMessageId;
+        try {
+            await this.refreshContext(telegram, state);
+        } catch (error) {
+            console.debug(`Durevcode lane switch card refresh failed (session=${state.session.id}): ${errorText(error)}`);
+            return;
+        }
+        if (before === null || state.contextMessageId === null) return;
+        if (before !== state.contextMessageId) return;
+        try {
+            await this.pinContextMessage(telegram, state);
+        } catch (error) {
+            console.debug(`Durevcode lane switch pin failed (session=${state.session.id}): ${errorText(error)}`);
+        }
+    }
+
+    private async routeSessionInbound(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'replyPermission' | 'replyQuestion' | 'createSession' | 'sendPrompt' | 'getSession' | 'renameSession' | 'listModels'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'listAgents' | 'setAgent'>>,
+        state: WatchedSession,
+        message: Message,
+        threadId: number | null,
+    ): Promise<void> {
+        const from = message.from;
+        if (!from || from.is_bot) return;
+        const tag = `thread=${threadId ?? 'dm'}`;
         const allowed = this.config.durevcode.allowedUsers;
         if (allowed.length > 0 && !allowed.includes(from.id)) {
             console.warn(
-                `Durevcode inbound denied for user ${from.id} (session=${state.session.id} thread=${threadId}).`,
+                `Durevcode inbound denied for user ${from.id} (session=${state.session.id} ${tag}).`,
             );
             return;
         }
@@ -2906,47 +3356,56 @@ export class DurevcodeAgent extends BaseAgent {
         const replyTo = message.reply_to_message?.message_id;
         state.laneReplyTo = typeof message.message_id === 'number' ? message.message_id : null;
         state.laneMention = this.replyMentionOf(message);
-        state.laneUserId = message.from && typeof message.from.id === 'number' ? message.from.id : 0;
-        if (await this.dispatchInboxCommand(telegram, opencode, state, text, replyTo)) return;
+        state.laneUserId = from.id;
+        const lane = threadId === null ? message.chat.id : null;
+        const prevLane = state.laneChatId;
+        if (
+            (prevLane ?? this.config.durevcode.chatId) !== (lane ?? this.config.durevcode.chatId)
+            && this.laneSettled(state)
+        ) {
+            if (!this.laneCrossesSideBot(prevLane, lane)) this.rehomeLaneCards(state);
+            state.laneChatId = lane;
+        }
+        if (await this.withInteractionLane(state, lane, () => this.dispatchInboxCommand(telegram, opencode, state, text, replyTo))) return;
         if (this.config.durevcode.watchOnly === true) {
             if (message.voice) {
-                await this.inboundVoice(telegram, state, message);
+                await this.withInteractionLane(state, lane, () => this.inboundVoice(telegram, state, message));
                 console.debug(`Durevcode plain mode: transcript posted, no prompt (session=${state.session.id} message=${message.message_id}).`);
                 return;
             }
-            console.debug(`Durevcode plain mode: ignored (session=${state.session.id} thread=${threadId} message=${message.message_id}).`);
+            console.debug(`Durevcode plain mode: ignored (session=${state.session.id} ${tag} message=${message.message_id}).`);
             return;
         }
         if (hasMediaMessage(message)) {
             const before = state.promptQueue.length;
-            await this.inboundMediaMessage(telegram, state, message, text);
+            await this.withInteractionLane(state, lane, () => this.inboundMediaMessage(telegram, state, message, text));
             const inboundMark = Date.now();
             await this.pumpPrompts(telegram, opencode, state);
             console.log(
-                `Durevcode inbound pump took ${Date.now() - inboundMark}ms (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
+                `Durevcode inbound pump took ${Date.now() - inboundMark}ms (session=${state.session.id} ${tag} queue=${state.promptQueue.length}).`,
             );
             if (state.promptQueue.length > before) await this.syncStopKeyboard(telegram, state);
             return;
         }
         if (!text) {
             console.debug(
-                `Durevcode inbound ignored: empty text (session=${state.session.id} thread=${threadId} message=${message.message_id}).`,
+                `Durevcode inbound ignored: empty text (session=${state.session.id} ${tag} message=${message.message_id}).`,
             );
             return;
         }
-        this.enqueuePrompt(state, text);
+        this.enqueuePrompt(state, text, lane);
         console.debug(
-            `Durevcode prompt queued (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
+            `Durevcode prompt queued (session=${state.session.id} ${tag} queue=${state.promptQueue.length}).`,
         );
         const inboundMark = Date.now();
         await this.pumpPrompts(telegram, opencode, state);
         console.log(
-            `Durevcode inbound pump took ${Date.now() - inboundMark}ms (session=${state.session.id} thread=${threadId} queue=${state.promptQueue.length}).`,
+            `Durevcode inbound pump took ${Date.now() - inboundMark}ms (session=${state.session.id} ${tag} queue=${state.promptQueue.length}).`,
         );
         const syncMark = Date.now();
         await this.syncStopKeyboard(telegram, state);
         console.log(
-            `Durevcode inbound sync took ${Date.now() - syncMark}ms (session=${state.session.id} thread=${threadId}).`,
+            `Durevcode inbound sync took ${Date.now() - syncMark}ms (session=${state.session.id} ${tag}).`,
         );
     }
 
@@ -2976,6 +3435,11 @@ export class DurevcodeAgent extends BaseAgent {
             await this.sendStatusCard(telegram, state);
             return true;
         }
+        if (command === '/sessions') {
+            if (!(await this.adminCardGate(telegram, state))) return true;
+            await this.sendSessionsCard(telegram, state);
+            return true;
+        }
         if (command === '/settings') {
             if (!(await this.adminCardGate(telegram, state))) return true;
             await this.sendSettingsCard(telegram, state);
@@ -2995,12 +3459,17 @@ export class DurevcodeAgent extends BaseAgent {
         }
         if (this.matchVoiceStop(text)) {
             console.debug(`Durevcode voice command: stop by text (session=${state.session.id}).`);
-            await this.stopSession(telegram, opencode, state);
+            await this.stopActiveTarget(telegram, opencode, state);
             return true;
         }
         const spoken = this.matchCardCommand(text);
         if (spoken === 'status') {
             await this.sendStatusCard(telegram, state);
+            return true;
+        }
+        if (spoken === 'sessions') {
+            if (!(await this.adminCardGate(telegram, state))) return true;
+            await this.sendSessionsCard(telegram, state);
             return true;
         }
         if (spoken === 'settings') {
@@ -3021,10 +3490,11 @@ export class DurevcodeAgent extends BaseAgent {
         return false;
     }
 
-    private matchCardCommand(text: string): 'mode' | 'models' | 'status' | 'settings' | null {
+    private matchCardCommand(text: string): 'mode' | 'models' | 'status' | 'settings' | 'sessions' | null {
         const normalized = text.trim().replace(/[?!.…]+$/, '').replace(/\s+/g, ' ').toLowerCase();
         const tokens = normalized.split(' ').filter((token) => token.length > 0);
         if (tokens.length === 0 || tokens.length > 5) return null;
+        if (SESSIONS_CARD_ROOTS.some((root) => tokens.some((token) => token.startsWith(root)))) return 'sessions';
         if (tokens.some((token) => MODELS_CARD_ROOTS.some((root) => token.startsWith(root)))) return 'models';
         if (tokens.some((token) => MODE_CARD_ROOTS.some((root) => token.startsWith(root)))) return 'mode';
         if (tokens.some((token) => STATUS_CARD_ROOTS.some((root) => token.startsWith(root)))) return 'status';
@@ -3210,8 +3680,8 @@ export class DurevcodeAgent extends BaseAgent {
         message: Message,
         threadId: number,
     ): Promise<void> {
-        if (!this.threadsEnabled) {
-            console.debug(`Durevcode unknown topic ignored: threads disabled (thread=${threadId}).`);
+        if (!this.isForumLaneChat(message.chat.id)) {
+            console.debug(`Durevcode unknown topic ignored: not a forum lane (chat=${message.chat.id} thread=${threadId}).`);
             return;
         }
         if (threadId === 1) {
@@ -3375,11 +3845,11 @@ export class DurevcodeAgent extends BaseAgent {
                 state.laneUserId = queuedMessage.from && typeof queuedMessage.from.id === 'number' ? queuedMessage.from.id : 0;
                 const queuedText = (queuedMessage.text || queuedMessage.caption || '').trim();
                 if (hasMediaMessage(queuedMessage)) {
-                    await this.inboundMediaMessage(telegram, state, queuedMessage, queuedText);
+                    await this.withInteractionLane(state, null, () => this.inboundMediaMessage(telegram, state, queuedMessage, queuedText));
                 } else if (queuedText) {
                     const queuedReplyTo = queuedMessage.reply_to_message?.message_id;
-                    if (await this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo)) continue;
-                    this.enqueuePrompt(state, queuedText);
+                    if (await this.withInteractionLane(state, null, () => this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo))) continue;
+                    this.enqueuePrompt(state, queuedText, null);
                 }
             }
             const late = this.creatingThreads.get(threadId);
@@ -3393,7 +3863,7 @@ export class DurevcodeAgent extends BaseAgent {
         await this.pumpPrompts(telegram, opencode, state);
     }
 
-    private enqueuePrompt(state: WatchedSession, text: string): void {
+    private enqueuePrompt(state: WatchedSession, text: string, laneChatId?: number | null): void {
         if (this.config.durevcode.answerFanout === true && state.promptQueue.length > 0) {
             this.dissolveFanoutFollow(state);
         }
@@ -3402,9 +3872,12 @@ export class DurevcodeAgent extends BaseAgent {
             this.consumeLaneHead(state);
             console.warn(`Durevcode prompt queue full, dropping oldest prompt (session=${state.session.id}).`);
         }
+        const turnChatId = laneChatId === undefined
+            ? (state.laneChatId ?? this.config.durevcode.chatId)
+            : (laneChatId ?? this.config.durevcode.chatId);
         const attribution: PromptAttribution = state.laneReplyTo !== null || state.laneMention !== ''
-            ? { replyTo: state.laneReplyTo, mention: state.laneMention, uid: state.laneUserId }
-            : { replyTo: null, mention: '' };
+            ? { replyTo: state.laneReplyTo, mention: state.laneMention, uid: state.laneUserId, chatId: turnChatId }
+            : { replyTo: null, mention: '', chatId: turnChatId };
         state.laneReplyTo = null;
         state.laneMention = '';
         state.laneUserId = 0;
@@ -3798,7 +4271,7 @@ export class DurevcodeAgent extends BaseAgent {
 
     private async pumpPrompts(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'sendPrompt'> & Partial<Pick<OpencodePlugin, 'ensureServer' | 'spawnRun'>>,
+        opencode: Pick<OpencodePlugin, 'sendPrompt'> & Partial<Pick<OpencodePlugin, 'ensureServer' | 'spawnRun' | 'createSession' | 'setAgent' | 'setModel'>>,
         state: WatchedSession,
     ): Promise<void> {
         if (state.promptQueue.length === 0) return;
@@ -3809,6 +4282,20 @@ export class DurevcodeAgent extends BaseAgent {
             return;
         }
         const head = state.promptQueue[0];
+        const headLane = this.promptLane.get(state.session.id)?.[0];
+        const headLaneChat = headLane?.chatId ?? this.config.durevcode.chatId;
+        const laneContended = (state.laneChatId ?? this.config.durevcode.chatId) !== headLaneChat;
+        const userContended = this.config.durevcode.subagentUsers !== false
+            && (headLane?.uid ?? 0) !== 0
+            && state.turnUserId !== 0
+            && headLane?.uid !== state.turnUserId;
+        if (
+            this.isTurnStreaming(state)
+            && (laneContended || (userContended && this.isTurnBusy(state)))
+            && typeof opencode.createSession === 'function'
+        ) {
+            if (await this.spawnContendedRun(telegram, opencode, state, head)) return;
+        }
         const stopStamp = state.stoppedAt;
         if (this.config.durevcode.answerFanout === true) {
             this.sweepFanout();
@@ -3825,7 +4312,7 @@ export class DurevcodeAgent extends BaseAgent {
                 if (!state.promptHeld) {
                     const laneHead = this.promptLane.get(state.session.id)?.[0];
                     ownGroup.holds.push(laneHead
-                        ? { replyTo: laneHead.replyTo, mention: laneHead.mention, uid: laneHead.uid }
+                        ? { replyTo: laneHead.replyTo, mention: laneHead.mention, uid: laneHead.uid, chatId: laneHead.chatId }
                         : { replyTo: null, mention: '' });
                     state.promptHeld = true;
                     const note = this.config.durevcode.leadMention === false
@@ -4025,6 +4512,236 @@ export class DurevcodeAgent extends BaseAgent {
         return { inline_keyboard: rows };
     }
 
+    private async spawnContendedRun(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'sendPrompt'> & Partial<Pick<OpencodePlugin, 'createSession' | 'setAgent' | 'setModel'>>,
+        state: WatchedSession,
+        head: string,
+    ): Promise<boolean> {
+        if (typeof opencode.createSession !== 'function') return false;
+        const activeRuns = this.contendedRuns.filter((entry) => entry.ownerId === state.session.id && !entry.finished).length;
+        if (activeRuns >= SUBAGENT_PARALLEL_CAP) {
+            console.debug(`Durevcode subagent parallel cap reached (${activeRuns}), prompt stays queued (session=${state.session.id}).`);
+            return false;
+        }
+        let child: SessionRow;
+        try {
+            const created = await opencode.createSession(state.session.directory || '.');
+            if (!created) return false;
+            child = created;
+        } catch (error) {
+            console.debug('Durevcode contended session create failed:', errorText(error));
+            return false;
+        }
+        const lane = this.promptLane.get(state.session.id);
+        const attached: PromptAttribution = lane?.shift() ?? { replyTo: null, mention: '' };
+        if (lane && lane.length === 0) this.promptLane.delete(state.session.id);
+        state.promptQueue.shift();
+        const run: ContendedRun = {
+            ownerId: state.session.id,
+            sessionId: child.id,
+            task: head,
+            laneChatId: attached.chatId === undefined
+                ? state.laneChatId
+                : (attached.chatId === this.config.durevcode.chatId ? null : attached.chatId),
+            threadId: state.threadId,
+            replyTo: attached.replyTo,
+            uid: attached.uid ?? 0,
+            createdAt: Date.now(),
+            lastEventAt: Date.now(),
+            lastText: '',
+            toolCalls: 0,
+            turnComplete: false,
+            seenPartKeys: new Set(),
+            receiptId: null,
+            landed: false,
+            finished: false,
+        };
+        if (state.session.agent && typeof opencode.setAgent === 'function') {
+            try {
+                await opencode.setAgent(run.sessionId, state.session.agent);
+            } catch (error) {
+                console.debug('Durevcode subagent agent sync failed:', errorText(error));
+            }
+        }
+        const model = state.session.model;
+        if (model && typeof opencode.setModel === 'function') {
+            const sep = model.indexOf('/');
+            if (sep > 0) {
+                try {
+                    await opencode.setModel(run.sessionId, { providerID: model.slice(0, sep), id: model.slice(sep + 1) });
+                } catch (error) {
+                    console.debug('Durevcode subagent model sync failed:', errorText(error));
+                }
+            }
+        }
+        try {
+            const receipt = await opencode.sendPrompt(run.sessionId, head);
+            if (!receipt.admitted || receipt.busy) throw new Error('subagent session did not admit the prompt');
+            run.receiptId = receipt.messageId ?? null;
+        } catch (error) {
+            console.warn('Durevcode subagent prompt failed, back to the main queue:', errorText(error));
+            this.contendedRuns = this.contendedRuns.filter((entry) => entry !== run);
+            state.promptQueue.unshift(head);
+            const attribution: PromptAttribution = {
+                replyTo: attached.replyTo,
+                mention: attached.mention,
+                uid: attached.uid,
+                chatId: attached.chatId ?? this.config.durevcode.chatId,
+            };
+            const laneBack = this.promptLane.get(state.session.id);
+            if (laneBack) laneBack.unshift(attribution);
+            else this.promptLane.set(state.session.id, [attribution]);
+            return false;
+        }
+        this.contendedRuns.push(run);
+        console.log(`Durevcode contended prompt routed to a parallel subagent (session=${state.session.id} subagent=${run.sessionId}).`);
+        const parallel = this.contendedRuns.filter((entry) => entry.ownerId === state.session.id && !entry.finished).length;
+        const tail = parallel > 1 ? ` ${parallel} tasks are running in parallel.` : '';
+        await this.subagentSend(telegram, run, `${icon('bot')} The task went to a parallel subagent — the answer will appear here.${tail}`, true);
+        return true;
+    }
+
+    private async subagentSend(telegram: TelegramBotPlugin, run: ContendedRun, text: string, quiet = false): Promise<void> {
+        const chatId = run.laneChatId ?? this.config.durevcode.chatId;
+        const send = async (part: string, replyTo: number | null): Promise<void> => {
+            await telegram.sendMessage({
+                chat_id: chatId,
+                ...(run.laneChatId === null && run.threadId !== null ? { message_thread_id: run.threadId } : {}),
+                ...(replyTo !== null ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}),
+                text: wellFormed(part),
+                parse_mode: 'HTML',
+                ...(quiet ? { disable_notification: true } : {}),
+            });
+        };
+        const parts = splitTelegramHtml(text);
+        for (let i = 0; i < parts.length; i += 1) {
+            const replyTo = i === 0 ? run.replyTo : null;
+            try {
+                await send(parts[i], replyTo);
+            } catch (error) {
+                if (isRateLimitError(error)) {
+                    this.absorbRateLimit('topic-send', error, 'subagent send', run.ownerId);
+                    return;
+                }
+                if (isReplyGoneError(error) && replyTo !== null) {
+                    try {
+                        await send(parts[i], null);
+                        continue;
+                    } catch (retryError) {
+                        console.debug('Durevcode subagent resend failed:', errorText(retryError));
+                    }
+                    return;
+                }
+                console.debug('Durevcode subagent send failed:', errorText(error));
+                return;
+            }
+        }
+    }
+
+    private async flushContendedRun(
+        telegram: TelegramBotPlugin,
+        opencode: OpencodePlugin,
+        state: WatchedSession,
+        run: ContendedRun,
+    ): Promise<void> {
+        if (!run.landed) {
+            if (run.receiptId === null || Date.now() - run.createdAt > CONFIRM_TIMEOUT_MS) {
+                run.landed = true;
+            } else {
+                try {
+                    run.landed = await opencode.hasMessage(run.sessionId, run.receiptId);
+                } catch (error) {
+                    console.debug('Durevcode subagent confirm failed:', errorText(error));
+                }
+                if (!run.landed) return;
+            }
+        }
+        let pairs: SessionEvent[] = [];
+        try {
+            pairs = await opencode.readEvents(run.sessionId, EVENT_READ_LIMIT);
+        } catch (error) {
+            console.debug('Durevcode subagent parts read failed:', errorText(error));
+            return;
+        }
+        for (const { key, event } of pairs) {
+            if (run.seenPartKeys.has(key)) continue;
+            run.seenPartKeys.add(key);
+            if (run.seenPartKeys.size > 2000) {
+                for (const stale of [...run.seenPartKeys].slice(0, 500)) run.seenPartKeys.delete(stale);
+            }
+            if (event.time <= run.createdAt) continue;
+            if (event.kind === 'text') {
+                run.lastText = event.text;
+                run.lastEventAt = Date.now();
+                await this.subagentSend(telegram, run, escapeHtml(event.text));
+                if (Date.now() < this.rateLimitedUntil) {
+                    run.seenPartKeys.delete(key);
+                    return;
+                }
+            }
+            if (event.kind === 'tool' && (event.status === 'ok' || event.status === 'fail')) {
+                run.toolCalls += 1;
+                run.lastEventAt = Date.now();
+            }
+            if (event.kind === 'step' && event.finish.trim().toLowerCase() === 'stop') {
+                run.turnComplete = true;
+            }
+        }
+        if (run.turnComplete && !run.finished) {
+            run.finished = true;
+            this.logger.info(`Durevcode subagent finished (owner=${run.ownerId} subagent=${run.sessionId}).`);
+            if (this.config.durevcode.autoFinish !== false) {
+                await this.subagentSend(telegram, run, `${checkIcon()} Subagent finished the task.`);
+            }
+            const digest = `${DIGEST_PROMPT_PREFIX} Task: ${run.task.slice(0, 120)}. Result summary: ${(run.lastText || '(no text)').slice(0, 400)}. Note this result in the session context. Do not reply with anything.`;
+            this.enqueuePrompt(state, digest);
+            await this.pumpPrompts(telegram, opencode, state);
+        }
+    }
+
+    private async flushContendedRuns(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        const runs = this.contendedRuns.filter((run) => run.ownerId === state.session.id);
+        if (runs.length === 0) return;
+        const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
+        if (!opencode || typeof opencode.readEvents !== 'function') return;
+        for (const run of [...runs]) {
+            if (Date.now() < this.rateLimitedUntil || Date.now() < this.upstreamBackoffUntil) return;
+            await this.flushContendedRun(telegram, opencode, state, run);
+        }
+        this.contendedRuns = this.contendedRuns.filter((run) => !(run.ownerId === state.session.id && run.finished));
+    }
+
+    private async interruptContendedRuns(telegram: TelegramBotPlugin, state: WatchedSession): Promise<number> {
+        const lane = state.laneChatId ?? this.config.durevcode.chatId;
+        const hits = this.contendedRuns.filter(
+            (run) => run.ownerId === state.session.id && !run.finished
+                && (run.laneChatId ?? this.config.durevcode.chatId) === lane,
+        );
+        if (hits.length === 0) return 0;
+        const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
+        for (const run of hits) {
+            try {
+                await opencode?.interruptSession(run.sessionId);
+            } catch (error) {
+                console.debug('Durevcode subagent interrupt failed:', errorText(error));
+            }
+            run.finished = true;
+        }
+        await this.subagentSend(telegram, hits[0], `${icon('stop')} Parallel task stopped.`);
+        return hits.length;
+    }
+
+    private async stopActiveTarget(
+        telegram: TelegramBotPlugin,
+        opencode: Partial<Pick<OpencodePlugin, 'interruptSession'>>,
+        state: WatchedSession,
+    ): Promise<void> {
+        if (await this.interruptContendedRuns(telegram, state) > 0) return;
+        await this.stopSession(telegram, opencode, state);
+    }
+
+
     private async sendModelCard(
         telegram: TelegramBotPlugin,
         opencode: Pick<OpencodePlugin, 'listModels'>,
@@ -4070,7 +4787,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (target !== null) {
             try {
                 await telegram.editMessageText({
-                    chat_id: this.chatId(),
+                    chat_id: this.chatIdOf(state),
                     message_id: target,
                     text: wellFormed(text),
                     parse_mode: 'HTML',
@@ -4164,7 +4881,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (messageId === null) return;
         try {
             await telegram.editMessageText({
-                chat_id: this.chatId(),
+                chat_id: this.chatIdOf(state),
                 message_id: messageId,
                 text: wellFormed(this.statusCardText(state)),
                 parse_mode: 'HTML',
@@ -4180,6 +4897,113 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
+    private sortedWatched(): WatchedSession[] {
+        return [...this.watched.values()].sort((a, b) => {
+            if (a.turnComplete !== b.turnComplete) return a.turnComplete ? 1 : -1;
+            return b.session.time_updated - a.session.time_updated;
+        });
+    }
+
+    private sessionRowLabelOf(session: SessionRow, mark: WatchedSession | null): string {
+        const occupancy = mark?.snapshot
+            ? mark.snapshot.input + mark.snapshot.cacheRead + mark.snapshot.cacheWrite
+            : session.tokens_input + session.tokens_output + session.tokens_reasoning;
+        const title = mark?.appliedTopicName ?? session.title;
+        const stateMark = mark !== null && !mark.turnComplete
+            ? `${EMOJI.active} running`
+            : `${EMOJI.soon} idle`;
+        return `${title} · ${stateMark} · ${formatTokenShort(occupancy)} tok · $${session.cost.toFixed(3)}`;
+    }
+
+    private sessionsCardPairs(extras: SessionRow[]): Array<{ session: SessionRow; mark: WatchedSession | null }> {
+        const pairs: Array<{ session: SessionRow; mark: WatchedSession | null }> = this.sortedWatched()
+            .map((state) => ({ session: state.session as SessionRow, mark: state as WatchedSession | null }));
+        const known = new Set(pairs.map((pair) => pair.session.id));
+        for (const row of extras) {
+            if (known.has(row.id) || isSubagentSession(row)) continue;
+            known.add(row.id);
+            pairs.push({ session: row, mark: null });
+        }
+        pairs.sort((a, b) => {
+            const aRunning = a.mark !== null && !a.mark.turnComplete;
+            const bRunning = b.mark !== null && !b.mark.turnComplete;
+            if (aRunning !== bRunning) return aRunning ? -1 : 1;
+            return b.session.time_updated - a.session.time_updated;
+        });
+        return pairs;
+    }
+
+    private sessionsCardText(extras: SessionRow[] = []): string {
+        const pairs = this.sessionsCardPairs(extras);
+        const header = `${icon('cache')} <b>Sessions</b> · ${pairs.length} ${this.plainChatMode ? 'available' : 'watched'}`;
+        if (pairs.length === 0) {
+            return `${header}\n${this.plainChatMode ? 'No sessions are available yet.' : 'No sessions are watched yet.'}`;
+        }
+        const rows = pairs.map((pair, index) => `${index + 1}. ${escapeHtml(this.sessionRowLabelOf(pair.session, pair.mark))}`);
+        return `${header}\n${rows.join('\n')}\n\nTap a row to ${this.plainChatMode ? 'switch the chat to that session' : 'pull its status card'}.\n`;
+    }
+
+    private sessionsCardMarkup(extras: SessionRow[] = []): InlineKeyboardMarkup {
+        const rows = this.sessionsCardPairs(extras).map((pair) => [{
+            text: this.sessionRowLabelOf(pair.session, pair.mark),
+            callback_data: `session:${pair.session.id}`,
+        }]);
+        return { inline_keyboard: rows };
+    }
+
+    private async plainSessionExtras(): Promise<SessionRow[]> {
+        const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
+        if (!opencode) return [];
+        let ids: string[] = [];
+        try {
+            ids = await this.resolveSessionIds();
+        } catch (error) {
+            console.debug('Durevcode plain sessions lookup failed:', errorText(error));
+            return [];
+        }
+        const need = ids.filter((id) => !this.watched.has(id)).slice(0, this.config.durevcode.maxSessions);
+        const rows: SessionRow[] = [];
+        for (const id of need) {
+            try {
+                const row = await opencode.getSession(id);
+                if (row) rows.push(row);
+            } catch (error) {
+                console.debug(`Durevcode plain session preview failed (${id}):`, errorText(error));
+            }
+        }
+        return rows;
+    }
+
+    private async sendSessionsCard(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        try {
+            const extras = this.plainChatMode ? await this.plainSessionExtras() : [];
+            await this.deliverMessage(telegram, state, wellFormed(this.sessionsCardText(extras)), this.sessionsCardMarkup(extras));
+        } catch (error) {
+            console.debug('Durevcode sessions card send failed:', errorText(error));
+        }
+    }
+
+    private async deliverFocusStatus(
+        telegram: TelegramBotPlugin,
+        query: CallbackQuery,
+        target: WatchedSession,
+    ): Promise<void> {
+        const threadId = query.message?.message_thread_id ?? target.threadId;
+        const chatId = query.message?.chat.id ?? this.chatIdOf(target);
+        try {
+            await telegram.sendMessage({
+                chat_id: chatId,
+                ...(this.isForumLaneChat(chatId) && threadId !== null ? { message_thread_id: threadId } : {}),
+                text: wellFormed(this.statusCardText(target)),
+                parse_mode: 'HTML',
+                reply_markup: this.statusCardMarkup(target),
+            });
+        } catch (error) {
+            console.debug('Durevcode session focus card send failed:', errorText(error));
+        }
+    }
+
+
     private settingRawValue(key: string): boolean | number | string {
         const voice = this.config.whisper;
         switch (key) {
@@ -4188,6 +5012,7 @@ export class DurevcodeAgent extends BaseAgent {
             case 'quoteReplies': return this.config.durevcode.quoteReplies !== false;
             case 'autoFinish': return this.config.durevcode.autoFinish !== false;
             case 'answerFanout': return this.config.durevcode.answerFanout === true;
+            case 'subagentUsers': return this.config.durevcode.subagentUsers !== false;
             case 'newTopics': return this.config.durevcode.newTopics !== false;
             case 'voice': return voice?.enabled === true;
             case 'voiceLang': return voice?.language ?? 'auto';
@@ -4225,6 +5050,9 @@ export class DurevcodeAgent extends BaseAgent {
                 break;
             case 'answerFanout':
                 this.config.durevcode.answerFanout = value === true;
+                break;
+            case 'subagentUsers':
+                this.config.durevcode.subagentUsers = value !== false;
                 break;
             case 'newTopics':
                 this.config.durevcode.newTopics = value !== false;
@@ -4319,7 +5147,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (messageId === null) return;
         try {
             await telegram.editMessageText({
-                chat_id: this.chatId(),
+                chat_id: this.chatIdOf(state),
                 message_id: messageId,
                 text: wellFormed(this.settingsCardText()),
                 parse_mode: 'HTML',
@@ -4454,7 +5282,7 @@ export class DurevcodeAgent extends BaseAgent {
         const text = this.modeCardText(state, agents);
         try {
             await telegram.editMessageText({
-                chat_id: this.chatId(),
+                chat_id: this.chatIdOf(state),
                 message_id: cardId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
@@ -4565,6 +5393,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private async ensureStopControl(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        if (this.isSideBotLane(state)) return;
         if (state.stopMessageId !== null || state.stopControlSending) return;
         if (state.finalized) return;
         if (Date.now() - state.stopControlAttemptAt < STOP_CONTROL_REPOST_MS) return;
@@ -4602,7 +5431,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (text === state.stopControlText) return;
         try {
             await telegram.editMessageText({
-                chat_id: this.chatId(),
+                chat_id: this.chatIdOf(state),
                 message_id: state.stopMessageId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
@@ -4742,9 +5571,10 @@ export class DurevcodeAgent extends BaseAgent {
     ): Promise<void> {
         const fullHtml = wellFormed(formatThoughtArchive(Date.now() - since, text));
         const markup = this.thoughtFoldMarkup(messageId);
+        const chatId = this.watched.get(sessionId)?.laneChatId ?? this.config.durevcode.chatId;
         try {
             await telegram.editMessageText({
-                chat_id: this.chatId(),
+                chat_id: chatId,
                 message_id: messageId,
                 text: fullHtml,
                 parse_mode: 'HTML',
@@ -4806,10 +5636,11 @@ export class DurevcodeAgent extends BaseAgent {
         }
         this.thoughtDocBusy.add(docKey);
         try {
+            const chatId = this.watched.get(entry?.sessionId ?? live?.session.id ?? '')?.laneChatId ?? query.message?.chat.id ?? this.config.durevcode.chatId;
             const threadId = query.message?.message_thread_id ?? (live || (entry ? this.watched.get(entry.sessionId) : null))?.threadId ?? null;
             try {
                 await telegram.sendDocument({
-                    chat_id: this.chatId(),
+                    chat_id: chatId,
                     ...(threadId !== null && threadId !== undefined ? { message_thread_id: threadId } : {}),
                     disable_notification: true,
                     document: {
@@ -4852,7 +5683,7 @@ export class DurevcodeAgent extends BaseAgent {
         const controlId = state.stopMessageId;
         try {
             await telegram.editMessageReplyMarkup({
-                chat_id: this.chatId(),
+                chat_id: this.chatIdOf(state),
                 message_id: controlId,
                 reply_markup: EMPTY_INLINE_MARKUP,
             });
@@ -4884,6 +5715,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private async syncStopKeyboard(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        if (this.isSideBotLane(state)) return;
         const want = this.wantStopButton(state);
         if (want) {
             await this.ensureStopControl(telegram, state);
@@ -4903,7 +5735,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (!this.governor.canSpend('topic-markup')) return;
         try {
             await telegram.editMessageReplyMarkup({
-                chat_id: this.chatId(),
+                chat_id: this.chatIdOf(state),
                 message_id: state.contextMessageId,
                 reply_markup: want ? this.stopMarkup(state) : EMPTY_INLINE_MARKUP,
             });
@@ -4989,11 +5821,12 @@ export class DurevcodeAgent extends BaseAgent {
     ): Promise<boolean> {
         if (messageIds.length === 0) return true;
         if (Date.now() < this.rateLimitedUntil) return false;
+        const chatId = this.watched.get(sessionId)?.laneChatId ?? this.config.durevcode.chatId;
         let settled = true;
         for (const messageId of messageIds) {
             try {
                 await telegram.editMessageReplyMarkup({
-                    chat_id: this.chatId(),
+                    chat_id: chatId,
                     message_id: messageId,
                     reply_markup: EMPTY_INLINE_MARKUP,
                 });
@@ -5096,7 +5929,7 @@ export class DurevcodeAgent extends BaseAgent {
                 if (Date.now() >= this.rateLimitedUntil) {
                     try {
                         await telegram.editMessageReplyMarkup({
-                            chat_id: this.chatId(),
+                            chat_id: this.chatIdOf(state),
                             message_id: replyTo,
                             reply_markup: EMPTY_INLINE_MARKUP,
                         });
@@ -5338,7 +6171,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (Date.now() < this.rateLimitedUntil) return false;
         try {
             await telegram.editMessageText({
-                chat_id: this.chatId(),
+                chat_id: this.chatIdOf(state),
                 message_id: msgId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
@@ -5628,7 +6461,7 @@ export class DurevcodeAgent extends BaseAgent {
             const editingSince = state.thinkingSince ?? Date.now();
             try {
                 await telegram.editMessageText({
-                    chat_id: this.chatId(),
+                    chat_id: this.chatIdOf(state),
                     message_id: editingId,
                     text: wellFormed(text),
                     parse_mode: 'HTML',
@@ -5747,6 +6580,14 @@ export class DurevcodeAgent extends BaseAgent {
             console.debug(`Durevcode admin check failed for ${userId}:`, errorText(error));
             return false;
         }
+        if (!ok && this.config.durevcode.botChatId !== undefined) {
+            try {
+                const member = await telegram.getChatMember({ chat_id: this.config.durevcode.botChatId, user_id: userId });
+                ok = member.status === 'member' || member.status === 'creator' || member.status === 'administrator';
+            } catch (error) {
+                console.debug(`Durevcode bot lane admin check failed for ${userId}:`, errorText(error));
+            }
+        }
         this.adminGrant.set(userId, { ok, at: now });
         for (const [key, entry] of this.adminGrant) {
             if (now - entry.at < ADMIN_CACHE_TTL_MS) continue;
@@ -5768,7 +6609,7 @@ export class DurevcodeAgent extends BaseAgent {
     private callbackGate(query: CallbackQuery, what: string, detail = ''): 'ok' | 'silent' | 'deny' {
         const from = query.from;
         if (!from || from.is_bot) return 'silent';
-        if (query.message && query.message.chat.id !== this.config.durevcode.chatId) return 'silent';
+        if (query.message && !this.isManagedChat(query.message.chat.id)) return 'silent';
         const allowed = this.config.durevcode.allowedUsers;
         if (allowed.length > 0 && !allowed.includes(from.id)) {
             console.warn(`Durevcode ${what} denied for user ${from.id}${detail}.`);
@@ -5778,9 +6619,17 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private callbackTarget(query: CallbackQuery, fallbackFirst = false): WatchedSession | null {
+        const chatId = query.message?.chat.id ?? null;
         const threadId = query.message?.message_thread_id ?? null;
         if (threadId === null) {
             if (!fallbackFirst) return null;
+            if (chatId !== null) {
+                const laneSession = this.plainLanes.get(chatId);
+                if (laneSession !== undefined) {
+                    const laneState = this.watched.get(laneSession) ?? null;
+                    if (laneState) return laneState;
+                }
+            }
             return [...this.watched.values()][0] ?? null;
         }
         return this.findSessionByThread(threadId);
@@ -5788,7 +6637,7 @@ export class DurevcodeAgent extends BaseAgent {
 
     private async handleCallback(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'replyQuestion' | 'setModel' | 'listModels' | 'replyPermission' | 'listPermissions'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'getModelLimit' | 'listAgents' | 'setAgent'>>,
+        opencode: Pick<OpencodePlugin, 'replyQuestion' | 'setModel' | 'listModels' | 'replyPermission' | 'listPermissions' | 'getSession'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'getModelLimit' | 'listAgents' | 'setAgent'>>,
         query: CallbackQuery,
     ): Promise<void> {
         const dismiss = (text?: string): Promise<void> => this.ackCallback(telegram, query, 'callback', text);
@@ -5848,6 +6697,29 @@ export class DurevcodeAgent extends BaseAgent {
             }
             await dismiss();
             await this.editStatusCard(telegram, target, query.message?.message_id ?? null);
+            return;
+        }
+        const focusMatch = data.match(/^session:([A-Za-z0-9._-]{1,56})$/);
+        if (focusMatch) {
+            if (!(await this.gateCallback(query, 'session pickup', dismiss))) return;
+            if (!(await this.isForumAdmin(telegram, query.from?.id))) {
+                await dismiss('Only forum admins can pull session cards.');
+                return;
+            }
+            const queryChatId = query.message?.chat.id ?? this.config.durevcode.chatId;
+            if (this.plainLanes.has(queryChatId) || this.plainChatMode) {
+                const laneChatId = this.plainLanes.has(queryChatId) ? queryChatId : this.config.durevcode.chatId;
+                await dismiss();
+                await this.switchPlainLane(telegram, opencode, laneChatId, focusMatch[1], query.from?.id ?? null);
+                return;
+            }
+            const target = this.watched.get(focusMatch[1]);
+            if (!target) {
+                await dismiss('Outdated, ask again.');
+                return;
+            }
+            await dismiss();
+            await this.deliverFocusStatus(telegram, query, target);
             return;
         }
         const setMatch = data.match(/^set:([A-Za-z0-9_]{1,20})$/);
@@ -5986,7 +6858,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (Date.now() < this.rateLimitedUntil) return;
         try {
             await telegram.editMessageReplyMarkup({
-                chat_id: this.chatId(),
+                chat_id: this.chatIdOf(state),
                 message_id: ctx.msgId,
                 reply_markup: this.questKeyboard(ctx),
             });
@@ -6103,12 +6975,14 @@ export class DurevcodeAgent extends BaseAgent {
         opencode: OpencodePlugin,
         state: WatchedSession,
     ): Promise<void> {
+        if (this.plainLaneOnly(state)) return;
         const tickMark = Date.now();
         try {
             if (state.threadId === null) {
                 await this.ensureThreadId(telegram, state);
             }
             await this.updateSession(telegram, state);
+            await this.flushContendedRuns(telegram, state);
             if (![...this.watched.values()].includes(state)) return;
             await this.pumpPrompts(telegram, opencode, state);
             await this.syncStopKeyboard(telegram, state);
@@ -6186,7 +7060,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private async syncTopicName(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
-        if (!this.threadsEnabled || state.threadId === null) return;
+        if (!this.isForumLane(state) || state.threadId === null) return;
         if (state.userNamed) return;
         if (Date.now() < this.rateLimitedUntil) return;
         const edit = (telegram as unknown as { editForumTopic?: unknown }).editForumTopic;
@@ -6195,7 +7069,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (name === state.appliedTopicName) return;
         try {
             await telegram.editForumTopic({
-                chat_id: this.chatId(),
+                chat_id: this.chatIdOf(state),
                 message_thread_id: state.threadId,
                 name,
             });
@@ -6268,6 +7142,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private async updateSession(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        if (this.plainLaneOnly(state)) return;
         const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
         if (!opencode) return;
 
@@ -6433,12 +7308,13 @@ export class DurevcodeAgent extends BaseAgent {
         const now = Date.now();
         for (const [sessionId, state] of [...this.watched]) {
             if (state.threadId === null) continue;
+            if (!this.isForumLane(state)) continue;
             if (now - (this.topicProbedAt.get(sessionId) ?? 0) < TOPIC_PROBE_MS) continue;
             if (!this.consumeTypingBudget()) return;
             this.topicProbedAt.set(sessionId, now);
             try {
                 await telegram.sendChatAction({
-                    chat_id: this.chatId(),
+                    chat_id: this.chatIdOf(state),
                     message_thread_id: state.threadId,
                     action: 'typing',
                 });
@@ -6471,6 +7347,7 @@ export class DurevcodeAgent extends BaseAgent {
     private isSessionActive(state: WatchedSession): boolean {
         if (state.finalized) return false;
         if (state.stopping) return false;
+        if (this.contendedRuns.some((run) => run.ownerId === state.session.id && !run.finished)) return true;
         if (this.hasActiveDispatch(state)) return true;
         if (this.stopQuiet(state)) return false;
         if (state.knownPerms.length > 0) return false;
@@ -6503,15 +7380,15 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
     ): Promise<void> {
         if (this.config.durevcode.typingEnabled === false) return;
-        if (this.threadsEnabled && state.threadId === null) return;
+        if (this.isForumLane(state) && state.threadId === null) return;
         if (!this.isSessionActive(state)) return;
         if (Date.now() < this.rateLimitedUntil) return;
         if (Date.now() - state.lastTypingAt < TYPING_COOLDOWN_MS) return;
         if (!this.consumeTypingBudget()) return;
         try {
             await telegram.sendChatAction({
-                chat_id: this.chatId(),
-                message_thread_id: state.threadId ?? undefined,
+                chat_id: this.chatIdOf(state),
+                message_thread_id: this.isForumLane(state) ? (state.threadId ?? undefined) : undefined,
                 action: 'typing',
             });
             state.lastTypingAt = Date.now();
@@ -6563,7 +7440,8 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private async updateContext(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
-        if (this.threadsEnabled && state.threadId === null) return;
+        if (this.isForumLane(state) && state.threadId === null) return;
+        if (this.isSideBotLane(state)) return;
         if (Date.now() < this.rateLimitedUntil) return;
         const text = this.renderContextText(state);
         if (text === state.lastContextRendered) return;
@@ -6574,7 +7452,7 @@ export class DurevcodeAgent extends BaseAgent {
                 if (!(await this.sendFreshPin(telegram, state))) return;
             } else {
                 await telegram.editMessageText({
-                    chat_id: this.chatId(),
+                    chat_id: this.chatIdOf(state),
                     message_id: state.contextMessageId,
                     text: wellFormed(text),
                     parse_mode: 'HTML',
@@ -6744,7 +7622,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (!live.done && !this.reasoningRepaintOn()) return;
         try {
             await telegram.editMessageText({
-                chat_id: this.chatId(),
+                chat_id: this.chatIdOf(state),
                 message_id: live.messageId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
@@ -6825,7 +7703,7 @@ export class DurevcodeAgent extends BaseAgent {
                 (event) => event.kind === 'text' || event.kind === 'files' || (event.kind === 'tool' && event.output !== ''),
             );
             const { text: answer, command: stopCommand } = takeStopCommand(text);
-            if (answer) {
+            if (answer && !state.digestTurn) {
                 const lead = this.leadAttribution(flushed);
                 const group = this.config.durevcode.answerFanout === true ? this.fanoutGroups.get(state.session.id) : undefined;
                 const extraLeads: PromptAttribution[] = [];
@@ -6846,7 +7724,7 @@ export class DurevcodeAgent extends BaseAgent {
                 await this.deliverFreshPart(telegram, state, answerText, this.quotedTarget(lead));
                 if (extraLeads.length === 0) await this.mirrorAnswerToFollowers(telegram, state, answer);
             }
-            if (stopCommand) {
+            if (stopCommand && !state.digestTurn) {
                 await this.deliverFreshPart(telegram, state, stopCommand);
                 const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
                 await this.stopSession(telegram, opencode ?? {}, state);
@@ -6950,21 +7828,21 @@ export class DurevcodeAgent extends BaseAgent {
     ): Promise<void> {
         const sticker = this.config.durevcode.whipSticker ?? WHIP_STICKER_DEFAULT;
         const emojiId = this.config.durevcode.whipEmojiId ?? WHIP_EMOJI_DEFAULT;
-        if (this.threadsEnabled && state.threadId === null) return;
+        if (this.isForumLane(state) && state.threadId === null) return;
         if (Date.now() < this.rateLimitedUntil) return;
         try {
             if (emojiId) {
                 await telegram.sendMessage({
-                    chat_id: this.chatId(),
-                    message_thread_id: state.threadId ?? undefined,
+                    chat_id: this.chatIdOf(state),
+                    message_thread_id: this.isForumLane(state) ? (state.threadId ?? undefined) : undefined,
                     text: '🤨',
                     entities: [{ offset: 0, length: 2, type: 'custom_emoji', custom_emoji_id: emojiId }],
                     disable_notification: true,
                 });
             } else {
                 await telegram.sendSticker({
-                    chat_id: this.chatId(),
-                    message_thread_id: state.threadId ?? undefined,
+                    chat_id: this.chatIdOf(state),
+                    message_thread_id: this.isForumLane(state) ? (state.threadId ?? undefined) : undefined,
                     sticker,
                     disable_notification: true,
                 });
@@ -6990,6 +7868,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (state.promptQueue.length > 0 || state.confirming || state.cliRun) return false;
         if (state.pending.length > 0 || state.pendingTodos || state.liveTool) return false;
         if (state.knownQuestions.length > 0 || state.knownPerms.length > 0) return false;
+        if (this.contendedRuns.some((run) => run.ownerId === state.session.id && !run.finished)) return false;
         if (this.stopQuiet(state)) return false;
         if (Date.now() < this.rateLimitedUntil) return false;
         this.logger.info(`Durevcode finished a turn on its own (session=${state.session.id} thread=${state.threadId}).`);

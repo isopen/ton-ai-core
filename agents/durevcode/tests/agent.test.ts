@@ -131,6 +131,8 @@ function makeAgent(over: Record<string, unknown> = {}): DurevcodeAgent {
             allowedUsers: [],
             maxSessions: 3,
             useThreads: true,
+            forumEnabled: true,
+            botEnabled: true,
             statePath: `/tmp/opencode/durevcode-test-state-${process.pid}-${stateCounter}.json`,
             pollMs: 1000,
             idleSec: 90,
@@ -151,6 +153,8 @@ function makeAgentWithState(statePath: string): DurevcodeAgent {
             allowedUsers: [],
             maxSessions: 3,
             useThreads: true,
+            forumEnabled: true,
+            botEnabled: true,
             statePath,
             pollMs: 1000,
             idleSec: 90,
@@ -3001,6 +3005,513 @@ describe('durevcode forum control', () => {
         assert.ok(String(fake.prompts[0].text).includes('look at this chart'), 'the user text is preserved');
         assert.ok(String(fake.prompts[0].text).includes('attachment dropped: media over 20 MB'), 'the missing file is not silent');
         assert.deepEqual(state.promptQueue, []);
+    });
+    test('the sessions card lists watched sessions and pulls one on tap', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        await attachWatched(agent, telegram);
+        const second = await attachWatched(agent, telegram, {
+            ...SESSION,
+            id: 'ses_other',
+            title: 'Other task',
+            tokens_input: 12000,
+            tokens_output: 800,
+            cost: 0.0234,
+        }) as unknown as { turnComplete: boolean };
+        second.turnComplete = true;
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 762, text: '/sessions' }, now));
+        const card = calls.find((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Sessions'));
+        assert.ok(card, 'the typed /sessions posts the card');
+        const text = String((card.params as Record<string, unknown>).text);
+        assert.ok(text.includes('2 watched'), 'both sessions are counted');
+        assert.ok(text.includes('Demo') && text.includes('Other task'), 'both titles are listed');
+        assert.ok(text.includes('$0.023'), 'the spend lands in the row');
+        const markup = (card.params as { reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> } }).reply_markup;
+        assert.equal(
+            markup?.inline_keyboard?.flat().filter((button) => button.callback_data === 'session:ses_test01').length,
+            1,
+            'the first session button is present',
+        );
+        assert.equal(
+            markup?.inline_keyboard?.flat().filter((button) => button.callback_data === 'session:ses_other').length,
+            1,
+            'the idle session button is present',
+        );
+        calls.length = 0;
+        await agent.handleCallback(
+            telegram,
+            fake.opencode,
+            {
+                id: 'cb-session',
+                from: { id: 42, is_bot: false, first_name: 'Owner' },
+                chat_instance: 'ci',
+                message: { message_id: 4243, chat: { id: 1, type: 'supergroup' }, message_thread_id: 8 },
+                data: 'session:ses_test01',
+            } as never,
+        );
+        const focus = calls.find(
+            (c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Status'),
+        );
+        assert.ok(focus, 'the tap pulls a fresh status card');
+        assert.deepEqual(fake.prompts, [], 'the sessions card never prompts');
+    });
+
+    test('plain chat routes without topics and keeps one sticky session', async () => {
+        const agent = makeAgent({ forumEnabled: false }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram) as unknown as { threadId: number | null };
+        assert.equal(state.threadId, null, 'the plain attach skips topic creation');
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 710, message_thread_id: undefined, text: 'first plainly' }, now),
+        );
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'first plainly' }]);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 711, message_thread_id: undefined, text: 'second plainly' }, now),
+        );
+        assert.deepEqual(
+            fake.prompts,
+            [
+                { sessionId: 'ses_test01', text: 'first plainly' },
+                { sessionId: 'ses_test01', text: 'second plainly' },
+            ],
+            'both messages ride the same sticky session',
+        );
+        assert.equal(state.threadId, null);
+        assert.ok(
+            calls.every((c) => c.op !== 'send' || (c.params as Record<string, unknown>).message_thread_id === undefined),
+            'plain sends never carry a thread id',
+        );
+    });
+
+    test('plain chat creates a session out of nothing', async () => {
+        const agent = makeAgent({ forumEnabled: false }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const fake = stubOpencode();
+        const laneOpencode = { ...fake.opencode, listSessions: async () => [] };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) =>
+            name === 'opencode' ? laneOpencode : undefined;
+        const { telegram, calls } = stubTelegram();
+        await agent.handleInbound(
+            telegram,
+            laneOpencode,
+            inboundMsg({ message_id: 712, message_thread_id: undefined, text: 'wake up' }, now),
+        );
+        assert.deepEqual(fake.created, [{ directory: '/repo' }], 'the lane falls back to creating a session');
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_new01', text: 'wake up' }]);
+        assert.ok(
+            calls.every((c) => c.op !== 'send' || (c.params as Record<string, unknown>).message_thread_id === undefined),
+            'fresh lane sends stay thread-free',
+        );
+    });
+
+    test('plain chat answers /status without a thread id', async () => {
+        const agent = makeAgent({ forumEnabled: false }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        await attachWatched(agent, telegram);
+        calls.length = 0;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 713, message_thread_id: undefined, text: '/status' }, now),
+        );
+        const status = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Status'));
+        assert.equal(status.length, 1, 'the status card lands in the plain chat');
+        assert.ok(
+            status.every((c) => (c.params as Record<string, unknown>).message_thread_id === undefined),
+            'the status card is sent without a thread id',
+        );
+        assert.deepEqual(fake.prompts, [], 'the slash command never prompts');
+    });
+
+    test('plain chat runs a voice through the whisper lane', async () => {
+        const agent = makeAgent({ forumEnabled: false }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => {
+            if (name === 'whisper') {
+                return {
+                    transcribeBuffer: async () => ({
+                        text: 'Прогони тесты заново',
+                        language: 'ru',
+                        audioSec: 2,
+                        processingMs: 5,
+                        model: 'ggml-test',
+                    }),
+                };
+            }
+            return undefined;
+        };
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({
+                message_id: 714,
+                message_thread_id: undefined,
+                text: '',
+                voice: { file_id: 'v20', file_unique_id: 'u20', duration: 2, mime_type: 'audio/ogg', file_size: 1000 },
+            }, now),
+        );
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'Прогони тесты заново' }]);
+        assert.ok(
+            calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Прогони тесты заново')),
+            'the transcript is posted into the plain chat',
+        );
+        assert.ok(
+            calls.every((c) => c.op !== 'send' || (c.params as Record<string, unknown>).message_thread_id === undefined),
+            'voice replies stay thread-free',
+        );
+    });
+
+    test('plain chat switches the lane from the sessions card', async () => {
+        const agent = makeAgent({ forumEnabled: false }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setGetSessionImpl((id: string) =>
+            id === 'ses_alt01' ? { ...SESSION, id: 'ses_alt01', title: 'Alt task' } : (id === 'ses_test01' ? SESSION : null));
+        await attachWatched(agent, telegram);
+        const other = await attachWatched(agent, telegram, { ...SESSION, id: 'ses_alt01', title: 'Alt task' }) as unknown as { turnComplete: boolean };
+        other.turnComplete = true;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 715, message_thread_id: undefined, text: '/status' }, now),
+        );
+        assert.equal(
+            (agent as unknown as { plainLanes: Map<number, string> }).plainLanes.get(1),
+            'ses_test01',
+            'the first plain message binds the leading watched session',
+        );
+        calls.length = 0;
+        await agent.handleCallback(
+            telegram,
+            fake.opencode,
+            {
+                id: 'cb-plain-switch',
+                from: { id: 42, is_bot: false, first_name: 'Owner' },
+                chat_instance: 'ci',
+                message: { message_id: 4244, chat: { id: 1, type: 'supergroup' } },
+                data: 'session:ses_alt01',
+            } as never,
+        );
+        const switchNote = calls.find(
+            (c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Switched to'),
+        );
+        assert.ok(switchNote, 'the switch is confirmed in the chat');
+        const lane = (agent as unknown as { plainLanes: Map<number, string> }).plainLanes.get(1);
+        assert.equal(lane, 'ses_alt01', 'the binding moved to the tapped session');
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 716, message_thread_id: undefined, text: 'now here' }, now),
+        );
+        assert.ok(
+            fake.prompts.some((entry) => entry.sessionId === 'ses_alt01' && entry.text === 'now here'),
+            `the follow-up runs on the switched session, got: ${JSON.stringify(fake.prompts)}`,
+        );
+        assert.ok(
+            calls.every((c) => c.op !== 'send' || (c.params as Record<string, unknown>).message_thread_id === undefined),
+            'switch sends stay thread-free',
+        );
+    });
+
+    test('the bot chat runs its own plain lane next to the forum', async () => {
+        const agent = makeAgent({ botChatId: 7 }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const forum = await attachWatched(agent, telegram) as unknown as { threadId: number | null; laneChatId: number | null };
+        assert.equal(forum.threadId, 8, 'the forum attach keeps its topic');
+        calls.length = 0;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 730, chat: { id: 7, type: 'private' }, message_thread_id: undefined, text: 'hello dm' }, now),
+        );
+        assert.equal(forum.threadId, 8, 'the dm turn keeps the forum topic binding');
+        assert.equal(forum.laneChatId, 7, 'the dm turn routes the same session into the bot chat');
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'hello dm' }]);
+        assert.equal(
+            calls.filter((c) => c.op === 'send' && (c.params as Record<string, unknown>).chat_id === 7).length,
+            0,
+            'the bot chat gets no context card or stop control',
+        );
+        assert.equal(calls.filter((c) => c.op === 'send').length, 0, 'nothing is posted while no answer events exist');
+        assert.equal(calls.filter((c) => c.op === 'create').length, 0, 'the dm lane never creates a topic');
+        const dmState = forum as unknown as {
+            pending: Array<Record<string, unknown>>;
+            pendingKeys: Map<string, number>;
+        };
+        dmState.pending = [{ kind: 'text', text: 'dm answer body', time: now }];
+        dmState.pendingKeys.set('db:dm1', 0);
+        await agent.flushEvents(telegram, forum);
+        assert.ok(
+            calls.some((c) => c.op === 'send' && (c.params as Record<string, unknown>).chat_id === 7
+                && String((c.params as Record<string, unknown>).text).includes('dm answer body')),
+            'the answer to the dm task lands in the bot chat',
+        );
+        assert.ok(
+            calls.every((c) => c.op !== 'send' || (c.params as Record<string, unknown>).chat_id === 7),
+            'dm answers never touch the forum chat',
+        );
+        const saved = JSON.parse(readFileSync(
+            (agent as unknown as { config: { durevcode: { statePath: string } } }).config.durevcode.statePath,
+            'utf8',
+        )) as Record<string, Record<string, string>>;
+        assert.equal(saved.plainLanes['7'], 'ses_test01', 'the dm binding persists under plainLanes');
+        const second = await attachWatched(agent, telegram, { ...SESSION, id: 'ses_forum2', title: 'Forum task' }) as unknown as { threadId: number | null };
+        assert.equal(second.threadId, 9, 'a new forum session still gets its own topic');
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 731, message_thread_id: 9, text: 'forum work' }, now),
+        );
+        assert.ok(
+            fake.prompts.some((entry) => entry.sessionId === 'ses_forum2' && entry.text === 'forum work'),
+            `the forum topic still routes to its session, got: ${JSON.stringify(fake.prompts)}`,
+        );
+        assert.ok(
+            calls.some((c) => c.op === 'send' && (c.params as Record<string, unknown>).chat_id === 1
+                && (c.params as Record<string, unknown>).message_thread_id === 9),
+            'the forum session answers inside its topic',
+        );
+        calls.length = 0;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 732, chat: { id: 7, type: 'private' }, message_thread_id: undefined, text: 'more dm' }, now),
+        );
+        assert.ok(
+            fake.prompts.some((entry) => entry.sessionId === 'ses_test01' && entry.text === 'more dm'),
+            'the dm binding is sticky across messages',
+        );
+        assert.ok(
+            calls.every((c) => c.op !== 'send' || (c.params as Record<string, unknown>).chat_id === 7),
+            'dm replies never touch the forum chat',
+        );
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 733, message_thread_id: 8, text: 'forum again' }, now),
+        );
+        assert.ok(
+            fake.prompts.some((entry) => entry.sessionId === 'ses_test01' && entry.text === 'forum again'),
+            'the same session still serves its forum topic',
+        );
+        assert.equal(forum.threadId, 8, 'forum work keeps the topic binding of the same session');
+        assert.equal(
+            (agent as unknown as { plainLanes: Map<number, string> }).plainLanes.get(7),
+            'ses_test01',
+            'the forum turn does not flip the dm binding',
+        );
+    });
+
+    test('without DUREVCODE_BOT_CHAT_ID a foreign chat-less message is ignored', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 740, chat: { id: 7, type: 'private' }, message_thread_id: undefined, text: 'dm attempt' }, now),
+        );
+        assert.deepEqual(fake.prompts, [], 'the foreign chat message never reaches the lane');
+        assert.equal(
+            calls.filter((c) => (c.params as Record<string, unknown>).chat_id === 7).length,
+            0,
+            'the foreign chat gets no replies',
+        );
+        assert.equal(
+            (agent as unknown as { plainLanes: Map<number, string> }).plainLanes.get(7),
+            undefined,
+            'the dm chat is not treated as a lane at all',
+        );
+    });
+
+    test('the bot chat can switch its lane from the sessions card', async () => {
+        const agent = makeAgent({ botChatId: 7 }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setGetSessionImpl((id: string) =>
+            id === 'ses_alt01' ? { ...SESSION, id: 'ses_alt01', title: 'Alt task' } : (id === 'ses_test01' ? SESSION : null));
+        await attachWatched(agent, telegram);
+        const alt = await attachWatched(agent, telegram, { ...SESSION, id: 'ses_alt01', title: 'Alt task' }) as unknown as { turnComplete: boolean; threadId: number | null };
+        alt.turnComplete = true;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 750, chat: { id: 7, type: 'private' }, message_thread_id: undefined, text: 'dm hello' }, now),
+        );
+        calls.length = 0;
+        await agent.handleCallback(
+            telegram,
+            fake.opencode,
+            {
+                id: 'cb-dm-switch',
+                from: { id: 42, is_bot: false, first_name: 'Owner' },
+                chat_instance: 'ci',
+                message: { message_id: 4245, chat: { id: 7, type: 'private' }, message_thread_id: undefined },
+                data: 'session:ses_alt01',
+            } as never,
+        );
+        const switchNote = calls.find(
+            (c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Switched to'),
+        );
+        assert.ok(switchNote, 'the switch is confirmed in the bot chat');
+        assert.equal((switchNote.params as Record<string, unknown>).chat_id, 7, 'the switch note lands in the bot chat');
+        assert.equal(alt.threadId, 9, 'the switched session keeps its forum topic');
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 751, chat: { id: 7, type: 'private' }, message_thread_id: undefined, text: 'now here' }, now),
+        );
+        assert.ok(
+            fake.prompts.some((entry) => entry.sessionId === 'ses_alt01' && entry.text === 'now here'),
+            `the dm follow-up runs on the switched session, got: ${JSON.stringify(fake.prompts)}`,
+        );
+        assert.equal(alt.threadId, 9, 'a dm turn on the switched session keeps its forum topic');
+    });
+
+    test('the plain lane switch keeps the context card out of the bot chat', async () => {
+        const agent = makeAgent({ botChatId: 7 }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        fake.setGetSessionImpl((id: string) =>
+            id === 'ses_alt01' ? { ...SESSION, id: 'ses_alt01', title: 'Alt task' } : (id === 'ses_test01' ? SESSION : null));
+        await attachWatched(agent, telegram);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 764, chat: { id: 7, type: 'private' }, message_thread_id: undefined, text: 'dm bounce' }, now),
+        );
+        calls.length = 0;
+        await agent.handleCallback(
+            telegram,
+            fake.opencode,
+            {
+                id: 'cb-dm-pin',
+                from: { id: 42, is_bot: false, first_name: 'Owner' },
+                chat_instance: 'ci',
+                message: { message_id: 4260, chat: { id: 7, type: 'private' }, message_thread_id: undefined },
+                data: 'session:ses_alt01',
+            } as never,
+        );
+        const switchOps = calls
+            .filter((c) => c.op === 'send' || c.op === 'pin')
+            .filter((c) => (c.params as Record<string, unknown>).chat_id === 7)
+            .map((c) => c.op);
+        assert.deepEqual(switchOps, ['send'], 'only the switch note is posted in the bot chat');
+        calls.length = 0;
+        await agent.handleCallback(
+            telegram,
+            fake.opencode,
+            {
+                id: 'cb-dm-pin-back',
+                from: { id: 42, is_bot: false, first_name: 'Owner' },
+                chat_instance: 'ci',
+                message: { message_id: 4261, chat: { id: 7, type: 'private' }, message_thread_id: undefined },
+                data: 'session:ses_test01',
+            } as never,
+        );
+        const backPins = calls.filter((c) => c.op === 'pin' && (c.params as Record<string, unknown>).chat_id === 7);
+        assert.equal(backPins.length, 0, 'the bot chat never gets a context pin');
+        const backSends = calls.filter(
+            (c) => c.op === 'send' && (c.params as Record<string, unknown>).chat_id !== 7,
+        );
+        assert.equal(backSends.length, 0, 'switching back never posts outside the bot chat');
+    });
+
+    test('dm binding keeps the forum topic across a save and reload', async () => {
+        const agent = makeAgent({ botChatId: 7 }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const fake = stubOpencode();
+        await attachWatched(agent, telegram);
+        const statePath = (agent as unknown as { config: { durevcode: { statePath: string } } }).config.durevcode.statePath;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 760, chat: { id: 7, type: 'private' }, message_thread_id: undefined, text: 'dm poke' }, now),
+        );
+        agent.savePersisted();
+        const saved = JSON.parse(readFileSync(statePath, 'utf8')) as Record<string, never>;
+        const records = saved.sessions as Record<string, { threadId: number | null }>;
+        assert.equal(records.ses_test01.threadId, 8, 'the dm turn keeps the forum topic binding on disk');
+        const topics = saved.topics as Record<string, { threadId: number; sessionId: string }>;
+        assert.equal(
+            Object.values(topics).some((entry) => entry.sessionId === 'ses_test01' && entry.threadId === 8),
+            true,
+            'the tag map keeps advertising the forum topic',
+        );
+        const second = makeAgentWithState(statePath) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        await second.loadPersisted();
+        const persisted = (second as unknown as { persisted: Record<string, { threadId: number | null }> }).persisted.ses_test01;
+        assert.ok(persisted && persisted.threadId === 8, 'a reload restores the forum topic binding');
+    });
+
+    test('the legacy plainLane state migrates into plainLanes', async () => {
+        const statePath = `/tmp/opencode/durevcode-test-state-${process.pid}-${Date.now()}-legacy.json`;
+        writeFileSync(statePath, JSON.stringify({
+            version: 1,
+            plainLane: { chatId: 1, sessionId: 'ses_test01' },
+        }));
+        const agent = makeAgentWithState(statePath) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        await agent.loadPersisted();
+        const lanes = (agent as unknown as { plainLanes: Map<number, string> }).plainLanes;
+        const plainChatMode = (agent as unknown as { plainChatMode: boolean }).plainChatMode;
+        assert.equal(lanes.get(1), 'ses_test01', 'the legacy binding moves to the new map');
+        assert.equal(plainChatMode, true, 'the legacy binding still forces the plain chat mode');
+    });
+
+    test('DUREVCODE_FORUM_ENABLED=0 forces the plain lane without a probe message', async () => {
+        const agent = makeAgent({ forumEnabled: false }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        assert.equal((agent as unknown as { threadsEnabled: boolean }).threadsEnabled, false);
+        assert.equal((agent as unknown as { plainChatMode: boolean }).plainChatMode, true);
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        const state = await attachWatched(agent, telegram) as unknown as { threadId: number | null };
+        assert.equal(state.threadId, null, 'topics are never created for the forced plain lane');
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 718, message_thread_id: 8, text: 'topic words' }, now),
+        );
+        assert.equal(fake.prompts.length, 0, 'topic messages are ignored while forum mode is off');
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 719, message_thread_id: undefined, text: 'plain words' }, now),
+        );
+        assert.deepEqual(fake.prompts, [{ sessionId: 'ses_test01', text: 'plain words' }]);
+        assert.ok(
+            calls.every((c) => c.op !== 'send' || (c.params as Record<string, unknown>).message_thread_id === undefined),
+            'forced lane sends stay thread-free',
+        );
+    });
+
+    test('DUREVCODE_BOT_ENABLED=0 keeps the bot topics-only', async () => {
+        const agent = makeAgent({ botEnabled: false }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const fake = stubOpencode();
+        await attachWatched(agent, telegram);
+        calls.length = 0;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 722, message_thread_id: undefined, text: 'plain word' }, now),
+        );
+        assert.equal(fake.prompts.length, 0, 'topic-less messages are ignored');
+        assert.equal((agent as unknown as { plainChatMode: boolean }).plainChatMode, false, 'the lane never activates');
+        assert.ok(
+            calls.every((c) => c.op !== 'send' || (c.params as Record<string, unknown>).message_thread_id === undefined),
+            'the ignore path sends nothing anyway',
+        );
     });
 });
 
