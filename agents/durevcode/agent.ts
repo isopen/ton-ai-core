@@ -1431,13 +1431,17 @@ export class DurevcodeAgent extends BaseAgent {
         const max = this.config.durevcode.maxSessions;
         if (max <= 0) return [];
         const freshSet = new Set(fresh);
-        const watchedClaims = new Set<number>();
-        for (const live of this.watched.values()) {
-            if (live.threadId !== null) watchedClaims.add(live.threadId);
+        const watchedOwner = new Map<number, string>();
+        for (const [liveId, live] of this.watched) {
+            if (live.threadId !== null) watchedOwner.set(live.threadId, liveId);
         }
         const candidates = Object.entries(this.persisted)
             .filter(([id, entry]) => entry.threadId !== null && !freshSet.has(id) && !this.tombstonedSessions.has(id))
-            .filter(([, entry]) => typeof entry.threadId === 'number' && !watchedClaims.has(entry.threadId))
+            .filter(([id, entry]) => {
+                if (typeof entry.threadId !== 'number') return false;
+                const owner = watchedOwner.get(entry.threadId);
+                return owner === undefined || owner === id;
+            })
             .sort((a, b) => b[1].lastSeen - a[1].lastSeen)
             .slice(0, Math.max(1, max * BOUND_REVIEW_MULT))
             .map(([id]) => id);
@@ -1446,13 +1450,15 @@ export class DurevcodeAgent extends BaseAgent {
         for (let i = 0; i < candidates.length; i += BOUND_VERIFY_CONCURRENCY) {
             rows.push(...(await Promise.all(candidates.slice(i, i + BOUND_VERIFY_CONCURRENCY).map((id) => this.verifiedSessionRow(opencode, id)))));
         }
-        const claimedThreads = new Set(watchedClaims);
+        const claimedThreads = new Set<number>();
         const active: Array<{ id: string; updated: number }> = [];
         for (let i = 0; i < candidates.length; i += 1) {
             const entry = this.persisted[candidates[i]];
             const row = rows[i];
             if (!row || !entry) continue;
-            if (entry.threadId === null || claimedThreads.has(entry.threadId)) continue;
+            if (entry.threadId === null) continue;
+            const activeOwner = watchedOwner.get(entry.threadId);
+            if ((activeOwner !== undefined && activeOwner !== candidates[i]) || claimedThreads.has(entry.threadId)) continue;
             this.lastSessionAgents.set(candidates[i], row.agent ?? '');
             if (!hasSessionWork(row)) continue;
             if (row.time_updated > entry.lastSeen) {
@@ -1470,7 +1476,9 @@ export class DurevcodeAgent extends BaseAgent {
             const entry = this.persisted[id];
             const row = rows[i];
             if (!row || !entry) continue;
-            if (entry.threadId === null || claimedThreads.has(entry.threadId)) continue;
+            if (entry.threadId === null) continue;
+            const restingOwner = watchedOwner.get(entry.threadId);
+            if ((restingOwner !== undefined && restingOwner !== id) || claimedThreads.has(entry.threadId)) continue;
             if (!hasSessionWork(row)) continue;
             claimedThreads.add(entry.threadId);
             resting.push(id);

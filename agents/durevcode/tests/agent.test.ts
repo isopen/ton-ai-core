@@ -3590,6 +3590,31 @@ describe('durevcode thread binding survival', () => {
         assert.equal(watched.has('ses_fresh2'), true, 'fresh window sessions keep their slots');
     });
 
+    test('a watched bound session outside the fresh window keeps its watch (no detach churn)', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            getPlugin: (name: string) => unknown;
+        };
+        const { telegram } = stubTelegram();
+        const state = (await agent.attachSession(telegram, SESSION)) as unknown as Record<string, unknown>;
+        state.startedAt = now - 11 * 60 * 1000;
+        state.toolCalls = 0;
+        state.lastText = '';
+        state.promptQueue = [];
+        state.finalized = false;
+        (agent as unknown as { watched: Map<string, unknown> }).watched.set(SESSION.id as string, state);
+        const other = { ...SESSION, id: 'ses_other' };
+        const boundRow = { ...SESSION, tokens_input: 900, time_updated: now + 60000 };
+        const fakeOpencode = {
+            listSessions: async () => [other],
+            getSession: async (id: string) => (id === 'ses_other' ? other : id === SESSION.id ? boundRow : null),
+        };
+        agent.getPlugin = (name: string) => (name === 'telegram-bot-api' ? telegram : fakeOpencode);
+        await agent.syncSessions();
+        const watched = (agent as unknown as { watched: Map<string, unknown> }).watched;
+        assert.equal(watched.has(SESSION.id as string), true, 'a watched session claiming its own topic stays mounted');
+        assert.equal(watched.has('ses_other'), true);
+    });
+
     test('recently worked bound sessions never take the final fresh slot', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
             getPlugin: (name: string) => unknown;
