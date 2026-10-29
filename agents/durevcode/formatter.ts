@@ -1,3 +1,6 @@
+import type { ModelApiInfo, ModelVariantInfo, QuestionRequest, RadarEvent } from '@ton-ai/opencode';
+import { parseTmdEntities, safeHref, codeLangClass, TmdEntity } from '@ton-ai/tmd';
+
 export const TELEGRAM_TEXT_LIMIT = 4096;
 export const RENDER_BUDGET = 3900;
 export const FORUM_TOPIC_NAME_LIMIT = 128;
@@ -5,49 +8,10 @@ export const TOOL_OUTPUT_CAP = 1200;
 export const LIVE_OUTPUT_MAX = 3000;
 export const LIVE_CARD_LIMIT = 3500;
 export const TOOL_DURATION_MIN_SEC = 1;
-
-export function formatLiveTool(event: RadarEvent, elapsedSec?: number): string {
-    if (event.kind !== 'tool') return formatConsoleBatch([event], null);
-    const span = elapsedSec ?? event.durationSec;
-    const output = event.output ?? '';
-    let tail = output.length > LIVE_OUTPUT_MAX ? `…${output.slice(-LIVE_OUTPUT_MAX)}` : output;
-    let body = toolBlockLines(event.status, event.summary, tail, span).join('\n');
-    let guard = 0;
-    while (body.length > LIVE_CARD_LIMIT && tail.length > 0 && guard < 12) {
-        tail = `…${tail.slice(-Math.max(64, Math.floor(tail.length / 2)))}`;
-        body = toolBlockLines(event.status, event.summary, tail, span).join('\n');
-        guard += 1;
-    }
-    return body;
-}
-
-function toolBlockLines(status: string, summary: string, output: string, span: number | undefined): string[] {
-    const age = span !== undefined && span >= TOOL_DURATION_MIN_SEC ? ` · ${span}s` : '';
-    const lines = [`${toolStateIcon(status)} ${escapeHtml(summary)}${age}`];
-    if (output) {
-        if (output.includes('```')) {
-            lines.push(markdownToTelegramHtml(output));
-        } else if (output.includes('\n')) {
-            lines.push(preBlock(output, langFromPath(summary)));
-        } else {
-            lines.push(codeNote(output));
-        }
-    }
-    return lines;
-}
-
-const STOP_COMMAND_LINE = /^\/stop(?:@[A-Za-z0-9_]+)?$/;
-
-export function takeStopCommand(text: string): { text: string; command: string | null } {
-    const trimmed = text.replace(/\s+$/, '');
-    if (!trimmed) return { text: '', command: null };
-    const lines = trimmed.split('\n');
-    const command = lines[lines.length - 1].trim();
-    if (!STOP_COMMAND_LINE.test(command)) return { text: trimmed, command: null };
-    const rest = lines.slice(0, -1).join('\n').replace(/\s+$/, '');
-    return { text: rest, command };
-}
-
+const CODE_SPOILER_LINES = 8;
+const CODE_NOTE_CHARS = 240;
+export const TOPIC_ICON_CUSTOM_EMOJI_ID = '5384090987024892581';
+const THOUGHT_ARCHIVE_CAP = 3600;
 export const EMOJI = {
     stop: '⛔️',
     coffee: '☕️',
@@ -81,7 +45,6 @@ export const EMOJI = {
     gears: '⚙️',
     rocket: '🚀',
 } as const;
-
 const ANIM_ID: Record<string, string> = {
     stop: '5388942221305196361',
     coffee: '5472223741708606653',
@@ -114,6 +77,75 @@ const ANIM_ID: Record<string, string> = {
     gears: '5411634513509885099',
     rocket: '5348324105701574477',
 };
+const TMD_TAG_BY_ENTITY: Record<string, [string, string]> = {
+    messageEntityBold: ['<b>', '</b>'],
+    messageEntityItalic: ['<i>', '</i>'],
+    messageEntityUnderline: ['<u>', '</u>'],
+    messageEntityStrike: ['<s>', '</s>'],
+    messageEntitySpoiler: ['<tg-spoiler>', '</tg-spoiler>'],
+    messageEntityCode: ['<code>', '</code>'],
+    messageEntityPre: ['<pre>', '</pre>'],
+    messageEntityBlockquote: ['<blockquote>', '</blockquote>'],
+    messageEntityExpandableBlockquote: ['<blockquote expandable>', '</blockquote>'],
+};
+const HTML_BALANCED_TAGS = new Set([
+    'b',
+    'i',
+    'u',
+    's',
+    'code',
+    'pre',
+    'a',
+    'tg-spoiler',
+    'blockquote',
+    'em',
+    'strong',
+    'ins',
+    'strike',
+    'del',
+]);
+const STOP_COMMAND_LINE = /^\/stop(?:@[A-Za-z0-9_]+)?$/;
+export const THINKING_HEAD = `${icon('soon')} Thinking`;
+
+export function formatLiveTool(event: RadarEvent, elapsedSec?: number): string {
+    if (event.kind !== 'tool') return formatConsoleBatch([event], null);
+    const span = elapsedSec ?? event.durationSec;
+    const output = event.output ?? '';
+    let tail = output.length > LIVE_OUTPUT_MAX ? `…${output.slice(-LIVE_OUTPUT_MAX)}` : output;
+    let body = toolBlockLines(event.status, event.summary, tail, span).join('\n');
+    let guard = 0;
+    while (body.length > LIVE_CARD_LIMIT && tail.length > 0 && guard < 12) {
+        tail = `…${tail.slice(-Math.max(64, Math.floor(tail.length / 2)))}`;
+        body = toolBlockLines(event.status, event.summary, tail, span).join('\n');
+        guard += 1;
+    }
+    return body;
+}
+
+function toolBlockLines(status: string, summary: string, output: string, span: number | undefined): string[] {
+    const age = span !== undefined && span >= TOOL_DURATION_MIN_SEC ? ` · ${span}s` : '';
+    const lines = [`${toolStateIcon(status)} ${escapeHtml(summary)}${age}`];
+    if (output) {
+        if (output.includes('```')) {
+            lines.push(markdownToTelegramHtml(output));
+        } else if (output.includes('\n')) {
+            lines.push(preBlock(output, langFromPath(summary)));
+        } else {
+            lines.push(codeNote(output));
+        }
+    }
+    return lines;
+}
+
+export function takeStopCommand(text: string): { text: string; command: string | null } {
+    const trimmed = text.replace(/\s+$/, '');
+    if (!trimmed) return { text: '', command: null };
+    const lines = trimmed.split('\n');
+    const command = lines[lines.length - 1].trim();
+    if (!STOP_COMMAND_LINE.test(command)) return { text: trimmed, command: null };
+    const rest = lines.slice(0, -1).join('\n').replace(/\s+$/, '');
+    return { text: rest, command };
+}
 
 export function icon(key: keyof typeof EMOJI): string {
     const id: string | undefined = ANIM_ID[key];
@@ -137,12 +169,6 @@ export function hourglassIcon(): string {
     return icon('hourglass');
 }
 
-const CODE_SPOILER_LINES = 8;
-const CODE_NOTE_CHARS = 240;
-
-import type { ModelApiInfo, ModelVariantInfo, QuestionRequest, RadarEvent } from '@ton-ai/opencode';
-import { parseTmdEntities, safeHref, codeLangClass, TmdEntity } from '@ton-ai/tmd';
-
 function topicTagSuffix(sessionId: string): string {
     const tag = sessionId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'session';
     return ` · ${tag}`;
@@ -159,8 +185,6 @@ export function parseTopicTitle(name: string, sessionId: string): string {
     return (title || 'Untitled session').slice(0, 200);
 }
 
-export const TOPIC_ICON_CUSTOM_EMOJI_ID = '5384090987024892581';
-
 export function formatTopicName(title: string, sessionId: string): string {
     const prefix = `${EMOJI.gram} `;
     const suffix = topicTagSuffix(sessionId);
@@ -173,18 +197,6 @@ export function formatTopicName(title: string, sessionId: string): string {
 export function escapeHtml(text: string): string {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
-
-const TMD_TAG_BY_ENTITY: Record<string, [string, string]> = {
-    messageEntityBold: ['<b>', '</b>'],
-    messageEntityItalic: ['<i>', '</i>'],
-    messageEntityUnderline: ['<u>', '</u>'],
-    messageEntityStrike: ['<s>', '</s>'],
-    messageEntitySpoiler: ['<tg-spoiler>', '</tg-spoiler>'],
-    messageEntityCode: ['<code>', '</code>'],
-    messageEntityPre: ['<pre>', '</pre>'],
-    messageEntityBlockquote: ['<blockquote>', '</blockquote>'],
-    messageEntityExpandableBlockquote: ['<blockquote expandable>', '</blockquote>'],
-};
 
 function renderTmdEntities(text: string, entities: TmdEntity[]): string {
     const esc = escapeHtml;
@@ -516,23 +528,6 @@ export interface ResultSnippet {
     text: string;
 }
 
-const HTML_BALANCED_TAGS = new Set([
-    'b',
-    'i',
-    'u',
-    's',
-    'code',
-    'pre',
-    'a',
-    'tg-spoiler',
-    'blockquote',
-    'em',
-    'strong',
-    'ins',
-    'strike',
-    'del',
-]);
-
 function parseHtmlTag(token: string): { name: string; close: boolean; self: boolean } {
     const close = token.startsWith('</');
     const self = token.endsWith('/>');
@@ -613,10 +608,6 @@ export function formatQuestionResolved(request: QuestionRequest, answers: string
     });
     return lines.join('\n');
 }
-
-const THOUGHT_ARCHIVE_CAP = 3600;
-
-export const THINKING_HEAD = `${icon('soon')} Thinking`;
 
 function reasoningTail(text: string, cap: number): string | null {
     const cut = text.length > cap;
