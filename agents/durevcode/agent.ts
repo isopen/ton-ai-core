@@ -192,6 +192,7 @@ const MAX_QUEUED_PROMPTS = 5;
 const SUBAGENT_PARALLEL_CAP = 8;
 const MAX_SEEN_INBOUND = 500;
 const MAX_THOUGHT_ARCHIVES = 12;
+const THOUGHT_DOC_CHUNK_CHARS = 3500;
 const MAX_SUBMITTED_PROMPTS = 100;
 const SUBMITTED_WINDOW_MS = 120000;
 const PROMPT_TRACK_TTL_MS = 30 * 60_000;
@@ -5477,10 +5478,45 @@ export class DurevcodeAgent extends BaseAgent {
                     return;
                 }
                 console.debug('Durevcode thought document failed:', errorText(error));
-                await dismiss();
+                await dismiss(en.THOUGHT_DOC_FAILED);
+                await this.sendThoughtTextFallback(telegram, chatId, threadId, fullText);
             }
         } finally {
             this.thoughtDocBusy.delete(docKey);
+        }
+    }
+
+    private async sendThoughtTextFallback(
+        telegram: TelegramBotPlugin,
+        chatId: number,
+        threadId: number | null | undefined,
+        text: string,
+    ): Promise<void> {
+        const chunks: string[] = [];
+        let rest = text;
+        while (rest.length > 0) {
+            let cut = Math.min(rest.length, THOUGHT_DOC_CHUNK_CHARS);
+            if (cut < rest.length) {
+                const nl = rest.lastIndexOf('\n', cut);
+                if (nl > THOUGHT_DOC_CHUNK_CHARS - 800) cut = nl + 1;
+            }
+            chunks.push(rest.slice(0, cut));
+            rest = rest.slice(cut);
+        }
+        if (chunks.length === 0) return;
+        for (const chunk of chunks) {
+            try {
+                await telegram.sendMessage({
+                    chat_id: chatId,
+                    ...(threadId != null ? { message_thread_id: threadId } : {}),
+                    text: chunk,
+                    disable_notification: true,
+                });
+            } catch (error) {
+                if (isRateLimitError(error)) this.absorbRateLimit('topic-send', error, 'thought text fallback', 'unknown');
+                console.debug('Durevcode thought text fallback failed:', errorText(error));
+                return;
+            }
         }
     }
 

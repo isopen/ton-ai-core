@@ -34,6 +34,7 @@ export const ACK_RATE_LIMITED = 'Rate limited, try again in a moment.';
 export const ACK_ON_ITS_WAY = 'On its way.';
 export const ANSWER_ALL_QUESTIONS = 'Answer every question first.';
 export const THOUGHT_FULL_TEXT_BUTTON = '📄 Full text';
+export const THOUGHT_DOC_FAILED = `${icon('fail')} Document upload failed — posting the full text as messages instead.`;
 export const PERMISSION_DECISION_LABELS: Record<PermissionDecision, string> = {
     always: 'Always allow',
     once: 'Allow once',

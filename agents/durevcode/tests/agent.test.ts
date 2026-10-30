@@ -26,6 +26,7 @@ function stubTelegram() {
     let draftImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
     let topicNameImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
     let memberImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
+    let docImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
     const telegram = {
         sendMessage: async (params: Record<string, unknown>) => {
             calls.push({ op: 'send', params, at: stamp() });
@@ -77,6 +78,7 @@ function stubTelegram() {
         },
         sendDocument: async (params: Record<string, unknown>) => {
             calls.push({ op: 'doc', params, at: stamp() });
+            if (docImpl) return docImpl(params);
             sentId += 1;
             return { message_id: sentId };
         },
@@ -113,6 +115,7 @@ function stubTelegram() {
         setDraftImpl: (fn: typeof draftImpl) => { draftImpl = fn; },
         setTopicNameImpl: (fn: typeof topicNameImpl) => { topicNameImpl = fn; },
         setMemberImpl: (fn: typeof memberImpl) => { memberImpl = fn; },
+        setDocImpl: (fn: typeof docImpl) => { docImpl = fn; },
     };
 }
 
@@ -5019,6 +5022,39 @@ describe('durevcode thread binding survival', () => {
         const expandedArchive = [...calls].reverse().find((c) => c.op === 'edit')?.params as Record<string, unknown> | undefined;
         assert.ok(expandedArchive, 'finalize edits the bubble again');
         assert.ok(String(expandedArchive.text).includes('<blockquote expandable>flow A and B'), 'the archive always settles into the native collapsed quote');
+    }, 8000);
+
+    test('thought doc upload failure falls back to full-text messages', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setDocImpl } = stubTelegram();
+        const fake = stubOpencode();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            thinkingMessageId: number | null;
+            thinkingSince: number | null;
+            thinkingText: string;
+        };
+        (agent as unknown as { getPlugin: (name: string) => unknown }).getPlugin = (name: string) => name === PLUGIN_NAMES.TELEGRAM ? telegram : null;
+        state.thinkingMessageId = 44270;
+        state.thinkingSince = Date.now() - 5000;
+        state.thinkingText = `HEADMARKER${'y'.repeat(7600)}TAILMARKER`;
+        await (agent as unknown as { clearThinkingMessage: (t: unknown, s: unknown) => Promise<void> }).clearThinkingMessage(telegram, state);
+        setDocImpl(async () => {
+            throw new Error('multipart upload exploded');
+        });
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_doc_fb',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 44270, chat: { id: 1, type: 'supergroup' } },
+            data: 'thinkdoc:44270',
+        });
+        assert.ok(calls.some((c) => c.op === 'doc'), 'the upload was attempted');
+        const parts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(parts.length >= 3, 'the long reasoning is split into chunks');
+        const joined = parts.join('');
+        assert.ok(joined.includes('HEADMARKER') && joined.includes('TAILMARKER'), 'nothing is lost across the chunks');
+        assert.ok(parts.every((part) => part.length <= 4096), 'every chunk fits the Telegram limit');
+        const ack = [...calls].reverse().find((c) => c.op === 'ack');
+        assert.ok(String((ack?.params as Record<string, unknown> | undefined)?.text ?? '').includes('Document upload failed'), 'the failure is not silent');
     }, 8000);
 
     test('a queued backlog keeps the stop control alive across the boundary', async () => {
