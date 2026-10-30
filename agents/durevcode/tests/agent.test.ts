@@ -2,7 +2,9 @@ import { strict as assert } from 'assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Message, CallbackQuery } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
-import { DurevcodeAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isThreadClosedError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, isBackoffGateSignal, backoffGateError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, unwrapServerPartEvent, serverEventError, DUREVCODE_THREAD_TIMINGS, instantResolveQuestion, questionDoneRow, questionPicksComplete } from '../agent';
+import { DurevcodeAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isThreadClosedError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, isBackoffGateSignal, backoffGateError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, unwrapServerPartEvent, serverEventError, DUREVCODE_THREAD_TIMINGS, instantResolveQuestion, questionDoneRow, questionPicksComplete, setBotLang, botLangOf } from '../agent';
+import * as enPack from '../langs/en';
+import * as ruPack from '../langs/ru';
 import { EMOJI, formatThinking, formatThinkingFolded, formatThoughtArchive, splitTelegramHtml, truncate, wellFormed } from '../formatter';
 import { TelegramRateGovernor } from '../governor';
 
@@ -1493,7 +1495,8 @@ describe('durevcode forum control', () => {
         const sentId = 102;
         await agent.handleInbound(telegram, fake.opencode, inboundMsg({ text: '/allow', reply_to_message: { message_id: sentId } }, now));
         assert.deepEqual(fake.replies, [{ sessionId: 'ses_test01', permId: 'per_1', decision: 'once' }]);
-        const confirm = calls[calls.length - 1] as { params: Record<string, unknown> };
+        assert.ok(calls.some((c) => c.op === 'delete' && c.params.message_id === 700), 'the answered /allow bubble is deleted');
+        const confirm = calls.filter((c) => c.op === 'send').pop() as { params: Record<string, unknown> };
         assert.ok(String(confirm.params.text).includes('Allowed'));
     });
 
@@ -1772,7 +1775,8 @@ describe('durevcode forum control', () => {
         await agent.pollPermissions(telegram, fake.opencode, state);
         await agent.handleInbound(telegram, fake.opencode, inboundMsg({ text: '/deny extra words', reply_to_message: { message_id: 102 } }, now));
         assert.deepEqual(fake.replies, [{ sessionId: 'ses_test01', permId: 'per_9', decision: 'reject' }]);
-        const confirm = calls[calls.length - 1] as { params: Record<string, unknown> };
+        assert.ok(calls.some((c) => c.op === 'delete' && c.params.message_id === 700), 'the answered /deny bubble is deleted');
+        const confirm = calls.filter((c) => c.op === 'send').pop() as { params: Record<string, unknown> };
         assert.ok(String(confirm.params.text).includes('Already resolved'));
     });
 
@@ -2477,8 +2481,10 @@ describe('durevcode forum control', () => {
                 data: 'set:watchOnly',
             } as never,
         );
+        const scopes = (agent as unknown as { settingsScopes: Record<string, Record<string, boolean | number | string>> }).settingsScopes;
+        assert.equal(scopes['t1:8']?.watchOnly, true, 'watchOnly flipped on in the topic scope');
         const config = (agent as unknown as { config: { durevcode: { watchOnly?: boolean } } }).config;
-        assert.equal(config.durevcode.watchOnly, true, 'watchOnly flipped on');
+        assert.notEqual(config.durevcode.watchOnly, true, 'the global config stays untouched');
         const edits = calls.filter((c) => c.op === 'edit');
         assert.equal(edits.length, 1, 'the settings card is edited in place');
         assert.equal((edits[0].params as Record<string, unknown>).message_id, 4250);
@@ -2486,6 +2492,199 @@ describe('durevcode forum control', () => {
         const acks = calls.filter((c) => c.op === 'ack');
         assert.ok(acks.length > 0, 'the toggle is acked');
         assert.ok(String((acks[0].params as Record<string, unknown>).text ?? '').includes('Watch only: on'));
+    });
+
+    test('the language row cycles the bot between en and ru texts', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 750, text: '/settings' }, now));
+        const card = calls.find((c) => String((c.params as Record<string, unknown> | undefined)?.text ?? '').includes('Settings'));
+        assert.ok(card, 'the settings card is rendered in English by default');
+        const markup = (card.params as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>> } }).reply_markup;
+        const langButton = markup?.inline_keyboard?.flat().find((button) => button.callback_data === 'set:lang');
+        assert.ok(langButton, 'the language toggle button exists');
+        assert.equal(langButton.text, 'Bot language · en', 'the row shows the current language');
+        const langCallback = {
+            id: 'cb-set-lang',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            chat_instance: 'ci',
+            message: { message_id: 760, chat: { id: 1, type: 'supergroup' }, message_thread_id: 8 },
+            data: 'set:lang',
+        };
+        await agent.handleCallback(telegram, fake.opencode, langCallback as never);
+        const config = (agent as unknown as { config: { durevcode: { lang?: string } } }).config;
+        assert.equal(config.durevcode.lang, 'ru', 'the language override lands in the config');
+        assert.equal(botLangOf(), 'ru', 'the pack swap goes live');
+        const ack = [...calls].reverse().find((c) => c.op === 'ack');
+        assert.ok(String((ack?.params as Record<string, unknown> | undefined)?.text ?? '').includes('Язык бота: ru'), 'the toggle echo is Russian');
+        const edit = [...calls].reverse().find((c) => c.op === 'edit');
+        const edited = String((edit?.params as Record<string, unknown> | undefined)?.text ?? '');
+        assert.ok(edited.includes('Настройки'), 'the card re-renders with the Russian title');
+        assert.ok(edited.includes('Только просмотр'), 'the settings labels switch to Russian too');
+        await agent.handleCallback(telegram, fake.opencode, { ...langCallback, id: 'cb-set-lang-back' } as never);
+        assert.equal(botLangOf(), 'en', 'a second press cycles back to English');
+        assert.equal((agent as unknown as { config: { durevcode: { lang?: string } } }).config.durevcode.lang, 'en');
+    });
+
+    test('the chat language row switches texts for its own topic only', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as { threadId: number | null };
+        const fake = stubOpencode();
+        const queryFor = (id: string, data: string) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 4261, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data,
+        });
+        await agent.handleCallback(telegram, fake.opencode, queryFor('cb-chatlang-1', 'set:chatLang') as never);
+        const ack1 = [...calls].reverse().find((c) => c.op === 'ack');
+        assert.ok(String((ack1?.params as Record<string, unknown> | undefined)?.text ?? '').includes('Chat language: en'), 'the first press moves bot to en');
+        await agent.handleCallback(telegram, fake.opencode, queryFor('cb-chatlang-2', 'set:chatLang') as never);
+        const viewer = agent as unknown as {
+            settingValue: (key: string, scope: string) => boolean | number | string;
+            settingsCardText: (scope: string) => string;
+            modeCardText: (state: unknown, agents: null) => string;
+        };
+        const topic = `t1:${state.threadId}`;
+        assert.equal(viewer.settingValue('chatLang', topic), 'ru', 'two presses land the topic on ru');
+        assert.equal(viewer.settingValue('chatLang', 't1:9'), 'bot', 'another topic stays on the bot baseline');
+        assert.equal(viewer.settingValue('chatLang', 'c1'), 'bot', 'the bot chat stays on the bot baseline');
+        const card = viewer.settingsCardText(topic);
+        assert.ok(card.includes('Настройки'), 'the topic card re-renders in Russian');
+        assert.ok(card.includes('Язык чата: <b>ru</b>'), 'the chat language row shows the scoped value');
+        assert.ok(card.includes('Язык бота'), 'even the bot language row label renders in the topic language');
+        assert.ok(!card.includes('Watch only'), 'no English labels leak into the Russian card');
+        assert.ok(viewer.settingsCardText('c1').includes('Settings'), 'the bot chat card stays English');
+        assert.ok(viewer.settingsCardText('c1').includes('Chat language'), 'the bot chat card keeps the English chat language row');
+        assert.ok(viewer.modeCardText(state as never, null).includes('Режим'), 'the mode card renders in the topic language');
+        const markup = (viewer as unknown as { settingsCardMarkup: (scope: string) => { inline_keyboard: Array<Array<{ text: string }>> } }).settingsCardMarkup(topic);
+        assert.ok(markup.inline_keyboard.flat().some((button) => button.text === 'Язык чата · ru'), 'the topic button shows the scoped chat language');
+        const edit = [...calls].reverse().find((c) => c.op === 'edit');
+        assert.ok(String((edit?.params as Record<string, unknown> | undefined)?.text ?? '').includes('Настройки'), 'the card is edited to Russian in place');
+    });
+
+    test('the settings card stacks every button in its own row', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 762, text: '/settings' }, now));
+        const card = calls.find((c) => String((c.params as Record<string, unknown> | undefined)?.text ?? '').includes('Settings'));
+        assert.ok(card, 'the settings card is rendered');
+        const rows = (card.params as { reply_markup?: { inline_keyboard?: Array<Array<{ text: string; callback_data: string }>> } }).reply_markup?.inline_keyboard ?? [];
+        assert.ok(rows.length >= 14, 'every button owns a row (thirteen settings plus reset)');
+        assert.ok(rows.every((row) => row.length === 1), 'no two buttons share a row');
+        assert.ok(rows.flat().filter((button) => button.callback_data !== 'set:reset').every((button) => button.text.includes(' · ')), 'each setting button keeps its label · value caption');
+        const keys = rows.flat().map((button) => String(button.callback_data));
+        assert.deepEqual(keys.slice(0, 2), ['set:lang', 'set:chatLang'], 'the row order stays intact');
+        assert.ok(keys.includes('set:reset'), 'the reset row keeps its callback');
+    });
+
+    test('the two columns row switches the settings layout for its scope only', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as { threadId: number | null };
+        const fake = stubOpencode();
+        const markup = (agent as unknown as { settingsCardMarkup: (scope: string) => { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } }).settingsCardMarkup;
+        const topic = `t1:${state.threadId}`;
+        assert.ok(markup.call(agent, topic).inline_keyboard.every((row) => row.length === 1), 'the default layout is one button per row');
+        const firstCard = markup.call(agent, topic).inline_keyboard;
+        const queryFor = (id: string, data: string, keyboard?: unknown) => ({
+            id,
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: {
+                message_id: 4262,
+                chat: { id: 1, type: 'supergroup' },
+                message_thread_id: state.threadId,
+                ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {}),
+            },
+            data,
+        });
+        await agent.handleCallback(telegram, fake.opencode, queryFor('cb-twocols-1', 'set:twoColumns', firstCard) as never);
+        const ack = [...calls].reverse().find((c) => c.op === 'ack');
+        assert.ok(String((ack?.params as Record<string, unknown> | undefined)?.text ?? '').includes('Two columns: on'), 'the toggle echoes its value');
+        assert.ok(markup.call(agent, 't1:9').inline_keyboard.every((row) => row.length === 1), 'another topic keeps one column');
+        assert.ok(markup.call(agent, 'c1').inline_keyboard.every((row) => row.length === 1), 'the bot chat keeps one column');
+        const edit = [...calls].reverse().find((c) => c.op === 'edit');
+        const editedRows = (edit?.params as { reply_markup?: { inline_keyboard?: Array<Array<{ text: string }>> } } | undefined)?.reply_markup?.inline_keyboard ?? [];
+        assert.ok(editedRows.every((row) => row.length === 1), 'the toggled card keeps its one-column layout');
+        assert.ok(editedRows.some((row) => row[0]?.text === 'Two columns · on'), 'the toggle caption updates in place');
+        const fresh = calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Settings'));
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4263, text: '/settings' }, now));
+        const reopened = calls.slice(fresh.length).filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Settings')).pop();
+        assert.ok(reopened, 'a fresh settings card is posted');
+        const wideRows = (reopened.params as { reply_markup?: { inline_keyboard?: Array<Array<unknown>> } } | undefined)?.reply_markup?.inline_keyboard ?? [];
+        assert.equal(wideRows.length, 8, 'fifteen buttons land in eight rows');
+        assert.ok(wideRows.slice(0, 7).every((row) => row.length === 2), 'the fresh card pairs two buttons per row');
+        assert.equal((wideRows[7] as Array<unknown> | undefined)?.length, 1, 'the odd reset button owns the last row');
+        const wideCard = markup.call(agent, topic).inline_keyboard;
+        await agent.handleCallback(telegram, fake.opencode, queryFor('cb-twocols-2', 'set:twoColumns', wideCard) as never);
+        assert.ok(markup.call(agent, topic).inline_keyboard.every((row) => row.length === 1), 'the value is back to baseline');
+        const edit2 = [...calls].reverse().find((c) => c.op === 'edit');
+        const editedRows2 = (edit2?.params as { reply_markup?: { inline_keyboard?: Array<Array<unknown>> } } | undefined)?.reply_markup?.inline_keyboard ?? [];
+        assert.equal(editedRows2.length, 8, 'the wide card keeps its paired layout while the toggle is off');
+        assert.ok(editedRows2.slice(0, 7).every((row) => row.length === 2), 'the wide card still pairs buttons in place');
+    });
+
+    test('a handled typed command is deleted so only the reply card stays', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4441, text: '/settings@durevcode_bot' }, now));
+        const deletes = calls.filter((c) => c.op === 'delete');
+        assert.equal(deletes.length, 1, 'the typed command bubble is deleted after handling');
+        assert.equal(deletes[0].params.message_id, 4441, 'the command message id is the one deleted');
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Settings')), 'the settings card was posted first');
+        calls.length = 0;
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4442, text: 'plain prompt text' }, now));
+        assert.equal(calls.filter((c) => c.op === 'delete').length, 0, 'plain prompts are never deleted');
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4443, text: 'настройки' }, now));
+        assert.equal(calls.filter((c) => c.op === 'delete').length, 0, 'spoken card phrases keep their bubbles');
+    });
+
+    test('the ru language pack mirrors every en export', () => {
+        const enKeys = Object.keys(enPack).sort();
+        const ruKeys = Object.keys(ruPack).sort();
+        assert.deepEqual(ruKeys, enKeys, 'ru exports exactly the en names');
+        for (const key of enKeys) {
+            const enValue = (enPack as unknown as Record<string, unknown>)[key];
+            const ruValue = (ruPack as unknown as Record<string, unknown>)[key];
+            assert.equal(typeof ruValue, typeof enValue, `${key} keeps its kind across packs`);
+            if (typeof enValue === 'string') assert.ok((ruValue as string).length > 0, `${key} is translated, not dropped`);
+        }
+    });
+
+    test('setBotLang swaps every text source live and falls back on junk', () => {
+        assert.equal(setBotLang('ru'), true, 'ru is a known language');
+        assert.equal(botLangOf(), 'ru');
+        assert.ok(explainModelError('HTTP 429 too many requests').includes('ограничивает частоту'), 'the model errors explain themselves in Russian');
+        assert.ok(modelErrorNotice('HTTP 429 too many requests').includes('opencode сказал'), 'the notice wrapper is Russian too');
+        assert.equal(setBotLang('de'), false, 'unknown codes are refused');
+        assert.equal(botLangOf(), 'ru', 'a refused code keeps the current language');
+        assert.equal(setBotLang('en'), true);
+        assert.equal(botLangOf(), 'en');
+        assert.ok(explainModelError('HTTP 429 too many requests').includes('rate limiting'), 'the switch back restores English');
+    });
+
+    test('the env-configured language renders Russian cards from attach', async () => {
+        try {
+            const agent = makeAgent({ lang: 'ru' }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+            const { telegram, calls } = stubTelegram();
+            await attachWatched(agent, telegram);
+            const fake = stubOpencode();
+            await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 751, text: '/settings' }, now));
+            const card = calls.find((c) => String((c.params as Record<string, unknown> | undefined)?.text ?? '').includes('Настройки'));
+            assert.ok(card, 'the settings card opens in Russian from the env baseline');
+            const markup = (card.params as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>> } }).reply_markup;
+            const langButton = markup?.inline_keyboard?.flat().find((button) => button.callback_data === 'set:lang');
+            assert.equal(langButton?.text, 'Язык бота · ru', 'the language row itself is Russian');
+        } finally {
+            setBotLang('en');
+        }
     });
 
     test('watch-only cards are admin-only for typed commands', async () => {
@@ -2580,9 +2779,11 @@ describe('durevcode forum control', () => {
                 data: 'set:voiceLang',
             } as never,
         );
+        const scopes = (agent as unknown as { settingsScopes: Record<string, Record<string, boolean | number | string>> }).settingsScopes;
+        assert.equal(scopes['t1:8']?.voiceLang, 'ru', 'the language cycled auto -> ru in the topic scope');
         const config = (agent as unknown as { config: { whisper: { language?: string } } }).config;
-        assert.equal(config.whisper.language, 'ru', 'language cycled auto -> ru');
-        assert.deepEqual(patches, [{ language: 'ru' }], 'the whisper plugin received the patch');
+        assert.notEqual(config.whisper.language, 'ru', 'the global whisper language stays untouched');
+        assert.deepEqual(patches, [], 'the whisper plugin is not patched for a scoped language');
         await agent.handleInbound(
             telegram,
             stubOpencode().opencode,
@@ -2601,7 +2802,7 @@ describe('durevcode forum control', () => {
             applySettingToggle: (key: string) => Promise<string | null>;
             savePersisted: () => void;
         };
-        const applied = await toggleAgent.applySettingToggle('voiceThreads');
+        const applied = await toggleAgent.applySettingToggle('voiceThreads', 't1:8');
         assert.equal(applied, 'Whisper threads: 12');
         toggleAgent.savePersisted();
         const agentB = makeAgentWithState(statePath) as unknown as Record<string, (...args: never[]) => Promise<never>>;
@@ -2628,31 +2829,98 @@ describe('durevcode forum control', () => {
             applySettingsOverrides: () => void;
             config: { durevcode: { watchOnly?: boolean }; whisper?: { enabled?: boolean; threads?: number } };
             settingsOverrides: Record<string, unknown>;
+            settingsScopes: Record<string, Record<string, boolean | number | string>>;
         };
         restore.loadPersisted();
         restore.applySettingsOverrides();
-        assert.equal(restore.config.durevcode.watchOnly, true, 'plainMode renamed to watchOnly');
-        assert.equal(restore.settingsOverrides.watchOnly, true, 'the override is stored under the new key');
-        assert.equal(restore.settingsOverrides.plainMode, undefined, 'the legacy key is dropped');
+        assert.equal(restore.settingsScopes.c1?.watchOnly, true, 'plainMode migrates into the bot chat scope');
+        assert.equal(restore.settingsScopes.c1?.plainMode, undefined, 'the legacy key is dropped');
+        assert.equal(restore.settingsOverrides.watchOnly, undefined, 'scoped keys stay out of the bot-wide layer');
         assert.equal(restore.config.whisper?.threads, 12, 'unrelated overrides stay put');
     });
 
-    test('settings reset restores baseline values', async () => {
+    test('legacy flat settings migrate out of the bot-wide layer on load', async () => {
+        stateCounter += 1;
+        const statePath = `/tmp/opencode/durevcode-settings-legacy-${process.pid}-${stateCounter}.json`;
+        writeFileSync(statePath, JSON.stringify({
+            version: 1,
+            sessions: {},
+            seenInbound: [],
+            seenCallbacks: [],
+            settings: { watchOnly: true, autoFinish: false, voiceThreads: '12', lang: 'ru', chatLang: 'ru' },
+        }));
+        const agent = makeAgentWithState(statePath) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const restore = agent as unknown as {
+            loadPersisted: () => void;
+            settingValue: (key: string, scope: string) => boolean | number | string;
+            settingsOverrides: Record<string, unknown>;
+            settingsScopes: Record<string, Record<string, boolean | number | string>>;
+        };
+        restore.loadPersisted();
+        assert.equal(restore.settingsScopes.c1?.watchOnly, true, 'the scoped toggle lands in the bot chat scope');
+        assert.equal(restore.settingsScopes.c1?.autoFinish, false);
+        assert.equal(restore.settingsScopes.c1?.chatLang, 'ru', 'the migrated chat language lands in the bot chat scope');
+        assert.equal(restore.settingsOverrides.voiceThreads, '12', 'the whisper threads stay bot-wide');
+        assert.equal(restore.settingsOverrides.lang, 'ru', 'the language stays bot-wide');
+        assert.equal(restore.settingValue('watchOnly', 't1:8'), false, 'a forum topic stays on the baseline');
+        assert.equal(restore.settingValue('watchOnly', 'c1'), true, 'the bot chat inherits the migrated toggle');
+        assert.equal(restore.settingValue('autoFinish', 't1:9'), true, 'another topic keeps the baseline');
+        assert.equal(restore.settingValue('chatLang', 't1:8'), 'bot', 'a forum topic stays on the chat-language baseline');
+        assert.equal(restore.settingValue('chatLang', 'c1'), 'ru', 'the bot chat inherits the migrated chat language');
+    });
+
+    test('settings reset restores the scope baseline and keeps other scopes', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const toggleAgent = agent as unknown as {
-            applySettingToggle: (key: string) => Promise<string | null>;
-            applySettingsOverrides: () => void;
+            applySettingToggle: (key: string, scope: string) => Promise<string | null>;
+            settingValue: (key: string, scope: string) => boolean | number | string;
         };
-        (agent as unknown as { config: Record<string, unknown> }).config.whisper = { enabled: true, language: 'auto', threads: 8 };
-        await toggleAgent.applySettingToggle('watchOnly');
-        await toggleAgent.applySettingToggle('voiceLang');
-        const config = (agent as unknown as { config: { durevcode: { watchOnly?: boolean }; whisper: { language?: string } } }).config;
-        assert.equal(config.durevcode.watchOnly, true);
-        assert.equal(config.whisper.language, 'ru');
-        const applied = await toggleAgent.applySettingToggle('reset');
+        await toggleAgent.applySettingToggle('watchOnly', 't1:8');
+        await toggleAgent.applySettingToggle('watchOnly', 't1:9');
+        await toggleAgent.applySettingToggle('watchOnly', 'c2');
+        assert.equal(toggleAgent.settingValue('watchOnly', 't1:8'), true);
+        assert.equal(toggleAgent.settingValue('watchOnly', 't1:9'), true);
+        assert.equal(toggleAgent.settingValue('watchOnly', 'c2'), true);
+        assert.equal(toggleAgent.settingValue('watchOnly', ''), false, 'the baseline stays off');
+        const applied = await toggleAgent.applySettingToggle('reset', 't1:8');
         assert.equal(applied, 'Defaults restored.');
-        assert.equal(config.durevcode.watchOnly, false, 'watchOnly back to baseline');
-        assert.equal(config.whisper.language, 'auto', 'language back to baseline');
+        assert.equal(toggleAgent.settingValue('watchOnly', 't1:8'), false, 'the topic is back to baseline');
+        assert.equal(toggleAgent.settingValue('watchOnly', 't1:9'), true, 'the other topic keeps its override');
+        assert.equal(toggleAgent.settingValue('watchOnly', 'c2'), true, 'the bot chat keeps its override');
+    });
+
+    test('a settings toggle in one topic stays out of other topics and the bot chat', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const toggleAgent = agent as unknown as {
+            applySettingToggle: (key: string, scope: string) => Promise<string | null>;
+            settingValue: (key: string, scope: string) => boolean | number | string;
+        };
+        await toggleAgent.applySettingToggle('autoFinish', 't1:8');
+        assert.equal(toggleAgent.settingValue('autoFinish', 't1:8'), false, 'the toggle lands in its topic');
+        assert.equal(toggleAgent.settingValue('autoFinish', 't1:9'), true, 'another topic keeps the baseline');
+        assert.equal(toggleAgent.settingValue('autoFinish', 'c2'), true, 'the bot chat keeps the baseline');
+        await toggleAgent.applySettingToggle('watchOnly', 'c2');
+        assert.equal(toggleAgent.settingValue('watchOnly', 'c2'), true, 'the bot chat toggle applies to the bot chat');
+        assert.equal(toggleAgent.settingValue('watchOnly', 't1:8'), false, 'the topic does not inherit the bot chat toggle');
+        const scopes = (agent as unknown as { settingsScopes: Record<string, Record<string, boolean | number | string>> }).settingsScopes;
+        assert.deepEqual(Object.keys(scopes).sort(), ['c2', 't1:8'], 'each scope keeps its own record');
+    });
+
+    test('scoped settings survive an agent restart', async () => {
+        stateCounter += 1;
+        const statePath = `/tmp/opencode/durevcode-settings-scopes-${process.pid}-${stateCounter}.json`;
+        const agentA = makeAgentWithState(statePath) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const toggleAgent = agentA as unknown as {
+            applySettingToggle: (key: string, scope: string) => Promise<string | null>;
+            savePersisted: () => void;
+        };
+        await toggleAgent.applySettingToggle('watchOnly', 't1:8');
+        toggleAgent.savePersisted();
+        const agentB = makeAgentWithState(statePath) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const restore = agentB as unknown as { loadPersisted: () => void; settingValue: (key: string, scope: string) => boolean | number | string };
+        restore.loadPersisted();
+        assert.equal(restore.settingValue('watchOnly', 't1:8'), true, 'the topic override survives the restart');
+        assert.equal(restore.settingValue('watchOnly', 't1:9'), false, 'other topics stay on the baseline');
     });
 
     test('voice settings phrase opens the settings card', async () => {
@@ -2709,8 +2977,10 @@ describe('durevcode forum control', () => {
                 data: 'set:voice',
             } as never,
         );
+        const scopes = (agent as unknown as { settingsScopes: Record<string, Record<string, boolean | number | string>> }).settingsScopes;
+        assert.equal(scopes['t1:8']?.voice, true, 'voice transcription flipped on in the topic scope');
         const config = (agent as unknown as { config: { whisper?: { enabled?: boolean } } }).config;
-        assert.equal(config.whisper?.enabled, true, 'voice transcription flipped on');
+        assert.notEqual(config.whisper?.enabled, true, 'the global whisper stays untouched');
         const acks = calls.filter((c) => c.op === 'ack');
         assert.ok(acks.length > 0, 'the toggle is acked');
     });
@@ -7920,8 +8190,8 @@ const MODE_AGENTS = [
         });
         calls.length = 0;
         await agent.handleCallback(telegram, modePlugin(switched), queryFor('cb_plain1', 'mode:observer'));
-        const config = (agent as unknown as { config: { durevcode: { watchOnly?: boolean } } }).config;
-        assert.equal(config.durevcode.watchOnly, true, 'plain observer flipped on');
+        const scopes = (agent as unknown as { settingsScopes: Record<string, Record<string, boolean | number | string>> }).settingsScopes;
+        assert.equal(scopes[`t1:${state.threadId}`]?.watchOnly, true, 'plain observer flipped on in the topic scope');
         assert.deepEqual(switched, [], 'no agent switch happens');
         const edited = calls.filter((c) => c.op === 'edit' && (c.params as Record<string, unknown>).message_id === 901);
         assert.equal(edited.length, 1, 'the mode card is edited in place');

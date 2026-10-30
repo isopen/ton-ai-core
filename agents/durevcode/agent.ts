@@ -37,9 +37,30 @@ import {
     ToolItem,
     ResultSnippet,
 } from './formatter';
-import * as en from './langs/en';
+import * as enPack from './langs/en';
+import * as ruPack from './langs/ru';
 
-export { sessionTagOf, explainModelError, modelErrorNotice } from './langs/en';
+export type BotLangPack = {
+    [K in keyof typeof enPack]: typeof enPack[K] extends string ? string : typeof enPack[K];
+};
+
+let en: BotLangPack = enPack;
+let langCode: 'en' | 'ru' = 'en';
+
+export function setBotLang(code: string): boolean {
+    if (code !== 'en' && code !== 'ru') return false;
+    langCode = code;
+    en = code === 'ru' ? ruPack : enPack;
+    return true;
+}
+
+export function botLangOf(): string {
+    return langCode;
+}
+
+export const sessionTagOf = (sessionId: string): string => en.sessionTagOf(sessionId);
+export const explainModelError = (text: string): string => en.explainModelError(text);
+export const modelErrorNotice = (text: string): string => en.modelErrorNotice(text);
 
 export const PLUGIN_NAMES = {
     TELEGRAM: 'telegram-bot-api',
@@ -256,24 +277,30 @@ const VOICE_CONTINUE_ROOTS = ['продолж'];
 
 interface SettingDef {
     key: string;
-    label: string;
     bool?: boolean;
     values?: string[];
 }
 
 const SETTINGS_DEFS: SettingDef[] = [
-    { key: 'watchOnly', label: 'Watch only', bool: true },
-    { key: 'leadMention', label: '@mention leads', bool: true },
-    { key: 'quoteReplies', label: 'Reply quotes', bool: true },
-    { key: 'autoFinish', label: 'Finish notices', bool: true },
-    { key: 'answerFanout', label: 'Shared answers', bool: true },
-    { key: 'subagentUsers', label: 'Subagent users', bool: true },
-    { key: 'newTopics', label: 'New topics', bool: true },
-    { key: 'voice', label: 'Voice transcription', bool: true },
-    { key: 'voiceLang', label: 'Voice language', values: ['auto', 'ru', 'en'] },
-    { key: 'voiceServer', label: 'Resident whisper server', bool: true },
-    { key: 'voiceThreads', label: 'Whisper threads', values: ['4', '8', '12', '16'] },
+    { key: 'lang', values: ['en', 'ru'] },
+    { key: 'chatLang', values: ['bot', 'en', 'ru'] },
+    { key: 'watchOnly', bool: true },
+    { key: 'leadMention', bool: true },
+    { key: 'quoteReplies', bool: true },
+    { key: 'autoFinish', bool: true },
+    { key: 'answerFanout', bool: true },
+    { key: 'subagentUsers', bool: true },
+    { key: 'newTopics', bool: true },
+    { key: 'voice', bool: true },
+    { key: 'voiceLang', values: ['auto', 'ru', 'en'] },
+    { key: 'voiceServer', bool: true },
+    { key: 'voiceThreads', values: ['4', '8', '12', '16'] },
+    { key: 'twoColumns', bool: true },
 ];
+
+// Settings whose scope is the whole bot process rather than a single topic/chat:
+// the language pack and the resident whisper server infrastructure.
+const SETTING_GLOBAL_KEYS: ReadonlySet<string> = new Set(['lang', 'voiceServer', 'voiceThreads']);
 
 function sanitizeSettings(raw: Record<string, unknown>): Record<string, boolean | number | string> {
     const merged: Record<string, unknown> = { ...raw };
@@ -601,6 +628,8 @@ export interface DurevcodeWatchConfig {
     answerFanout?: boolean;
     nativeQuestions?: boolean;
     subagentUsers?: boolean;
+    lang?: 'en' | 'ru';
+    chatLang?: 'bot' | 'en' | 'ru';
     whipSticker?: string;
     whipEmojiId?: string;
     newTopics?: boolean;
@@ -613,6 +642,7 @@ export interface DurevcodeWatchConfig {
     autoFinish?: boolean;
     deleteOnTopicGone?: boolean;
     watchOnly?: boolean;
+    twoColumns?: boolean;
 }
 
 export interface DurevcodeWhisperConfig {
@@ -880,6 +910,7 @@ export class DurevcodeAgent extends BaseAgent {
     private lastTasks = new Map<string, { text: string; at: number }>();
     private lastVoiceStats = new Map<string, { audioSec: number; processingMs: number; model: string; at: number }>();
     private settingsOverrides: Record<string, boolean | number | string> = {};
+    private settingsScopes: Record<string, Record<string, boolean | number | string>> = {};
     private settingsBaseline: Record<string, boolean | number | string> = {};
     private plainChatMode = false;
     private plainLanes = new Map<number, string>();
@@ -901,6 +932,7 @@ export class DurevcodeAgent extends BaseAgent {
         super(config);
         this.config = config;
         this.applyChatModeConfig();
+        setBotLang(this.config.durevcode.lang === 'ru' ? 'ru' : 'en');
         for (const def of SETTINGS_DEFS) {
             this.settingsBaseline[def.key] = this.settingRawValue(def.key);
         }
@@ -1141,7 +1173,27 @@ export class DurevcodeAgent extends BaseAgent {
             }
             const rawSettings = (parsed as Record<string, unknown>).settings;
             if (rawSettings && typeof rawSettings === 'object' && !Array.isArray(rawSettings)) {
-                this.settingsOverrides = sanitizeSettings(rawSettings as Record<string, unknown>);
+                // Legacy flat overrides were bot-wide before settings became scoped.
+                // Keep bot-wide keys in place; scoped keys migrate into the bot chat scope
+                // so a topic override never leaks into other topics.
+                const legacy = sanitizeSettings(rawSettings as Record<string, unknown>);
+                const botScope = this.scopeKeyOf(this.config.durevcode.botChatId ?? this.config.durevcode.chatId, null);
+                for (const [key, value] of Object.entries(legacy)) {
+                    if (SETTING_GLOBAL_KEYS.has(key)) {
+                        this.settingsOverrides[key] = value;
+                    } else {
+                        const scoped = this.settingsScopes[botScope] ?? (this.settingsScopes[botScope] = {});
+                        scoped[key] = value;
+                    }
+                }
+            }
+            const rawSettingsScopes = (parsed as Record<string, unknown>).settingsScopes;
+            if (rawSettingsScopes && typeof rawSettingsScopes === 'object' && !Array.isArray(rawSettingsScopes)) {
+                for (const [scope, record] of Object.entries(rawSettingsScopes as Record<string, unknown>)) {
+                    if (record && typeof record === 'object' && !Array.isArray(record)) {
+                        this.settingsScopes[scope] = sanitizeSettings(record as Record<string, unknown>);
+                    }
+                }
             }
             const rawPlainLanes = (parsed as Record<string, unknown>).plainLanes;
             if (this.plainLanes.size === 0 && rawPlainLanes && typeof rawPlainLanes === 'object' && !Array.isArray(rawPlainLanes)) {
@@ -1439,6 +1491,7 @@ export class DurevcodeAgent extends BaseAgent {
                 tombstones: Object.fromEntries([...this.tombstonedSessions.entries()].slice(-TOMBSTONE_CAP)),
                 topics: Object.fromEntries([...this.topicTags.entries()]),
                 settings: this.settingsOverrides,
+                settingsScopes: this.settingsScopes,
                 plainLanes: Object.fromEntries([...this.plainLanes.entries()].map(([chatId, sessionId]) => [String(chatId), sessionId])),
             }));
         } catch (error) {
@@ -2715,6 +2768,7 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
         now = Date.now(),
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         if (now - state.lastStopMsgAt < STOP_DEDUP_MS) return;
         state.lastStopMsgAt = now;
         this.endFanoutGroup(state);
@@ -2726,6 +2780,7 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
         now = Date.now(),
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         if (this.stopQuiet(state)) return;
         if (now - state.lastFinishMsgAt < FINISH_DEDUP_MS) return;
         state.lastFinishMsgAt = now;
@@ -2752,6 +2807,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private trackPrompt(state: WatchedSession, text: string, attribution: PromptAttribution, at = Date.now()): void {
+        const en = this.lp(this.stateScope(state));
         const now = Date.now();
         let pending = true;
         const deliveries = this.echoDeliveries.get(state.session.id);
@@ -2842,13 +2898,14 @@ export class DurevcodeAgent extends BaseAgent {
         return { replyTo: null, mention: '' };
     }
 
-    private answerLead(lead: PromptAttribution): string {
-        if (this.config.durevcode.leadMention === false || !lead.mention) return '';
+    private answerLead(lead: PromptAttribution, scope: string): string {
+        const en = this.lp(scope);
+        if (!this.settingBool('leadMention', scope) || !lead.mention) return '';
         return en.answerLeadHtml(lead.mention, lead.uid);
     }
 
-    private quotedTarget(lead: PromptAttribution): number | undefined {
-        return this.config.durevcode.quoteReplies === false ? undefined : lead.replyTo ?? undefined;
+    private quotedTarget(lead: PromptAttribution, scope: string): number | undefined {
+        return this.settingBool('quoteReplies', scope) ? lead.replyTo ?? undefined : undefined;
     }
 
     private promptFingerprint(text: string): string {
@@ -2862,7 +2919,8 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private beginAnswerFanout(state: WatchedSession, head: string): void {
-        if (this.config.durevcode.answerFanout !== true) return;
+        const en = this.lp(this.stateScope(state));
+        if (!this.settingBool('answerFanout', this.stateScope(state))) return;
         if (head === en.AUTO_CONTINUE_TEXT) return;
         const fingerprint = this.promptFingerprint(head);
         const group = this.fanoutGroups.get(state.session.id);
@@ -2909,6 +2967,7 @@ export class DurevcodeAgent extends BaseAgent {
         group.followers.add(state.session.id);
         this.logger.info(`Durevcode fanout joined (follower=${state.session.id} primary=${primary}).`);
         try {
+        const en = this.lp(this.stateScope(state));
             await this.safeReply(
                 telegram,
                 state,
@@ -2964,9 +3023,10 @@ export class DurevcodeAgent extends BaseAgent {
                 continue;
             }
             try {
-                const leadText = this.answerLead(follow.attribution);
+                const followerScope = this.stateScope(followerState);
+                const leadText = this.answerLead(follow.attribution, followerScope);
                 const text = leadText ? `${leadText} ${answer}` : answer;
-                await this.deliverFreshPart(telegram, followerState, text, this.quotedTarget(follow.attribution));
+                await this.deliverFreshPart(telegram, followerState, text, this.quotedTarget(follow.attribution, followerScope));
             } catch (error) {
                 console.debug('Durevcode fanout mirror failed:', errorText(error));
                 this.fanoutFollows.delete(sessionId);
@@ -3208,7 +3268,7 @@ export class DurevcodeAgent extends BaseAgent {
                 return attached;
             }
         }
-        if (this.config.durevcode.watchOnly === true) {
+        if (this.settingBool('watchOnly', this.scopeKeyOf(chatId, null))) {
             const now = Date.now();
             if (now - this.plainLaneWarnAt >= PLAIN_LANE_WARN_TTL_MS) {
                 this.plainLaneWarnAt = now;
@@ -3273,6 +3333,7 @@ export class DurevcodeAgent extends BaseAgent {
         sessionId: string,
         userId: number | null,
     ): Promise<void> {
+        const en = this.lp(this.scopeKeyOf(chatId, null));
         const id = sessionId.trim();
         if (id === '' || id.length > 200) return;
         if (this.plainLanes.get(chatId) === id && this.watched.has(id)) return;
@@ -3359,8 +3420,11 @@ export class DurevcodeAgent extends BaseAgent {
             if (!this.laneCrossesSideBot(prevLane, lane)) this.rehomeLaneCards(state);
             state.laneChatId = lane;
         }
-        if (await this.withInteractionLane(state, lane, () => this.dispatchInboxCommand(telegram, opencode, state, text, replyTo))) return;
-        if (this.config.durevcode.watchOnly === true) {
+        if (await this.withInteractionLane(state, lane, () => this.dispatchInboxCommand(telegram, opencode, state, text, replyTo))) {
+            await this.deleteCommandMessage(telegram, message);
+            return;
+        }
+        if (this.settingBool('watchOnly', this.scopeKeyOf(message.chat.id, threadId))) {
             if (message.voice) {
                 await this.withInteractionLane(state, lane, () => this.inboundVoice(telegram, state, message));
                 console.debug(`Durevcode plain mode: transcript posted, no prompt (session=${state.session.id} message=${message.message_id}).`);
@@ -3400,6 +3464,18 @@ export class DurevcodeAgent extends BaseAgent {
         console.log(
             `Durevcode inbound sync took ${Date.now() - syncMark}ms (session=${state.session.id} ${tag}).`,
         );
+    }
+
+    private async deleteCommandMessage(telegram: TelegramBotPlugin, message: Message): Promise<void> {
+        // Clients autocomplete typed commands to /cmd@botname in groups; once the command
+        // is handled, the bubble is deleted so only the reply card stays behind.
+        const head = (message.text || message.caption || '').trim().split(/\s+/)[0] ?? '';
+        if (!head.startsWith('/')) return;
+        try {
+            await telegram.deleteMessage({ chat_id: message.chat.id, message_id: message.message_id });
+        } catch (error) {
+            console.debug(`Durevcode command delete failed (message=${message.message_id}):`, errorText(error));
+        }
     }
 
     private async dispatchInboxCommand(
@@ -3548,6 +3624,7 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
         text: string,
     ): Promise<boolean> {
+        const en = this.lp(this.stateScope(state));
         if (state.modelCardMessageId === null) return false;
         let models: ModelApiInfo[];
         try {
@@ -3588,6 +3665,7 @@ export class DurevcodeAgent extends BaseAgent {
         opencode: Pick<OpencodePlugin, 'sendPrompt'>,
         state: WatchedSession,
     ): Promise<boolean> {
+        const en = this.lp(this.stateScope(state));
         const last = this.lastTasks.get(state.session.id);
         if (!last || last.text.trim() === '') {
             await this.safeReply(telegram, state, en.CONTINUE_NOTHING);
@@ -3636,6 +3714,7 @@ export class DurevcodeAgent extends BaseAgent {
         replyTo: number | undefined,
         text: string,
     ): Promise<boolean> {
+        const en = this.lp(this.stateScope(state));
         if (replyTo === undefined) return false;
         const pendingPerm = this.permReplies.get(replyTo);
         if (pendingPerm && pendingPerm.sessionId === state.session.id) {
@@ -3673,6 +3752,7 @@ export class DurevcodeAgent extends BaseAgent {
         message: Message,
         threadId: number,
     ): Promise<void> {
+        const en = this.lp(this.scopeKeyOf(message.chat?.id, threadId));
         if (!this.isForumLaneChat(message.chat.id)) {
             console.debug(`Durevcode unknown topic ignored: not a forum lane (chat=${message.chat.id} thread=${threadId}).`);
             return;
@@ -3681,11 +3761,12 @@ export class DurevcodeAgent extends BaseAgent {
             console.debug(`Durevcode unknown topic ignored: general topic (message=${message.message_id}).`);
             return;
         }
-        if (this.config.durevcode.newTopics === false) {
+        const inboundScope = this.scopeKeyOf(message.chat.id, threadId);
+        if (!this.settingBool('newTopics', inboundScope)) {
             console.debug(`Durevcode unknown topic ignored: new topics disabled (thread=${threadId}).`);
             return;
         }
-        if (this.config.durevcode.watchOnly === true) {
+        if (this.settingBool('watchOnly', inboundScope)) {
             console.debug(`Durevcode plain mode: new topic session not created (thread=${threadId}).`);
             return;
         }
@@ -3841,7 +3922,10 @@ export class DurevcodeAgent extends BaseAgent {
                     await this.withInteractionLane(state, null, () => this.inboundMediaMessage(telegram, state, queuedMessage, queuedText));
                 } else if (queuedText) {
                     const queuedReplyTo = queuedMessage.reply_to_message?.message_id;
-                    if (await this.withInteractionLane(state, null, () => this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo))) continue;
+                    if (await this.withInteractionLane(state, null, () => this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo))) {
+                        await this.deleteCommandMessage(telegram, queuedMessage);
+                        continue;
+                    }
                     this.enqueuePrompt(state, queuedText, null);
                 }
             }
@@ -3857,7 +3941,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private enqueuePrompt(state: WatchedSession, text: string, laneChatId?: number | null): void {
-        if (this.config.durevcode.answerFanout === true && state.promptQueue.length > 0) {
+        if (this.settingBool('answerFanout', this.stateScope(state)) && state.promptQueue.length > 0) {
             this.dissolveFanoutFollow(state);
         }
         if (state.promptQueue.length >= MAX_QUEUED_PROMPTS) {
@@ -3925,6 +4009,7 @@ export class DurevcodeAgent extends BaseAgent {
         message: Message,
         caption: string,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         if (message.document) {
             await this.inboundDocument(telegram, state, message, caption);
             return;
@@ -3985,10 +4070,12 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
         message: Message,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         const voice = message.voice;
         if (!voice) return;
-        const whisper = this.config.whisper?.enabled === true
-            ? await this.ensureWhisper()
+        const voiceScope = this.scopeKeyOf(message.chat?.id, message.message_thread_id ?? null);
+        const whisper = this.settingBool('voice', voiceScope)
+            ? await this.ensureWhisper(true)
             : undefined;
         if (!whisper) {
             await this.safeReply(
@@ -4002,8 +4089,8 @@ export class DurevcodeAgent extends BaseAgent {
             await this.rejectOversizedMedia(telegram, state, '');
             return;
         }
-        const language = this.config.whisper?.language;
-        const options = language && language !== 'auto' ? { language } : undefined;
+        const language = String(this.settingValue('voiceLang', voiceScope));
+        const options = language !== 'auto' ? { language } : undefined;
         try {
             await this.safeReply(telegram, state, en.VOICE_TRANSCRIBING);
             const buffer = await this.downloadToBuffer(telegram, state, voice.file_id, 'voice');
@@ -4030,7 +4117,7 @@ export class DurevcodeAgent extends BaseAgent {
                 telegram,
                 state,
                 en.transcriptEcho(text),
-                this.quotedTarget(attribution),
+                this.quotedTarget(attribution, voiceScope),
             );
             this.lastVoiceStats.set(state.session.id, { audioSec: result.audioSec, processingMs: result.processingMs, model: result.model, at: Date.now() });
             const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
@@ -4065,7 +4152,7 @@ export class DurevcodeAgent extends BaseAgent {
                 }
                 return;
             }
-            if (this.config.durevcode.watchOnly === true) {
+            if (this.settingBool('watchOnly', voiceScope)) {
                 console.debug(`Durevcode plain mode: transcript posted without prompting (session=${state.session.id}).`);
                 return;
             }
@@ -4085,6 +4172,7 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
         caption: string,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         if (caption.trim()) {
             this.enqueuePrompt(state, `${caption}\n\n[attachment dropped: media over 20 MB]`);
             return;
@@ -4098,6 +4186,7 @@ export class DurevcodeAgent extends BaseAgent {
         fileId: string,
         label: string,
     ): Promise<Buffer | null> {
+        const en = this.lp(this.stateScope(state));
         try {
             const data = await telegram.downloadFile(fileId);
             return Buffer.isBuffer(data) ? data : Buffer.from(String(data));
@@ -4117,6 +4206,7 @@ export class DurevcodeAgent extends BaseAgent {
         caption: string,
         kind: string,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         if (fileSize !== undefined && fileSize > MEDIA_MAX_BYTES) {
             await this.rejectOversizedMedia(telegram, state, caption);
             return;
@@ -4161,6 +4251,7 @@ export class DurevcodeAgent extends BaseAgent {
         message: Message,
         caption: string,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         const document = message.document;
         if (!document) return;
         if (document.mime_type?.startsWith('image/')) {
@@ -4213,6 +4304,7 @@ export class DurevcodeAgent extends BaseAgent {
         announce: boolean,
         unlandedSec: number | null,
     ): Promise<boolean> {
+        const en = this.lp(this.stateScope(state));
         if (typeof opencode.spawnRun !== 'function') return false;
         const child = opencode.spawnRun(state.session.id, text);
         state.cliRun = child;
@@ -4250,6 +4342,7 @@ export class DurevcodeAgent extends BaseAgent {
         state.promptNextAttemptAt = nowMs + PROMPT_BUSY_BACKOFF_MS;
         if (!state.promptBusySince) state.promptBusySince = nowMs;
         if (!state.promptBusyNotified && nowMs - state.promptBusySince >= PROMPT_BUSY_BACKOFF_MS) {
+        const en = this.lp(this.stateScope(state));
             state.promptBusyNotified = true;
             await this.safeReply(telegram, state, en.PROMPT_BUSY);
         }
@@ -4267,6 +4360,7 @@ export class DurevcodeAgent extends BaseAgent {
         opencode: Pick<OpencodePlugin, 'sendPrompt'> & Partial<Pick<OpencodePlugin, 'ensureServer' | 'spawnRun' | 'createSession' | 'setAgent' | 'setModel'>>,
         state: WatchedSession,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         if (state.promptQueue.length === 0) return;
         const pumpMark = Date.now();
         if (Date.now() < state.promptNextAttemptAt) return;
@@ -4278,7 +4372,7 @@ export class DurevcodeAgent extends BaseAgent {
         const headLane = this.promptLane.get(state.session.id)?.[0];
         const headLaneChat = headLane?.chatId ?? this.config.durevcode.chatId;
         const laneContended = (state.laneChatId ?? this.config.durevcode.chatId) !== headLaneChat;
-        const userContended = this.config.durevcode.subagentUsers !== false
+        const userContended = this.settingBool('subagentUsers', this.stateScope(state))
             && (headLane?.uid ?? 0) !== 0
             && state.turnUserId !== 0
             && headLane?.uid !== state.turnUserId;
@@ -4290,7 +4384,7 @@ export class DurevcodeAgent extends BaseAgent {
             if (await this.spawnContendedRun(telegram, opencode, state, head)) return;
         }
         const stopStamp = state.stoppedAt;
-        if (this.config.durevcode.answerFanout === true) {
+        if (this.settingBool('answerFanout', this.stateScope(state))) {
             this.sweepFanout();
             if (this.fanoutFollows.has(state.session.id)) return;
             const fingerprint = this.promptFingerprint(head);
@@ -4308,7 +4402,7 @@ export class DurevcodeAgent extends BaseAgent {
                         ? { replyTo: laneHead.replyTo, mention: laneHead.mention, uid: laneHead.uid, chatId: laneHead.chatId }
                         : { replyTo: null, mention: '' });
                     state.promptHeld = true;
-                    const note = this.config.durevcode.leadMention === false ? en.FANOUT_HOLD_QUIET : en.FANOUT_HOLD_TAGGED;
+                    const note = this.settingBool('leadMention', this.stateScope(state)) ? en.FANOUT_HOLD_TAGGED : en.FANOUT_HOLD_QUIET;
                     try {
                         await this.safeReply(telegram, state, note);
                     } catch (error) {
@@ -4430,14 +4524,17 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private stopMarkup(state: WatchedSession): InlineKeyboardMarkup {
+        const en = this.lp(this.stateScope(state));
         return en.stopMarkup(state.session.id);
     }
 
-    private modeMarkup(build: boolean): InlineKeyboardMarkup {
-        return en.modeMarkup(build, this.config.durevcode.watchOnly === true);
+    private modeMarkup(build: boolean, scope: string): InlineKeyboardMarkup {
+        const en = this.lp(scope);
+        return en.modeMarkup(build, this.settingBool('watchOnly', scope));
     }
 
-    private modelCardText(currentId: string, currentVariant: string, models?: ModelApiInfo[]): string {
+    private modelCardText(currentId: string, currentVariant: string, models: ModelApiInfo[] | undefined, scope: string): string {
+        const en = this.lp(scope);
         return en.modelCardText(currentId, currentVariant, models);
     }
 
@@ -4534,7 +4631,7 @@ export class DurevcodeAgent extends BaseAgent {
         this.contendedRuns.push(run);
         console.log(`Durevcode contended prompt routed to a parallel subagent (session=${state.session.id} subagent=${run.sessionId}).`);
         const parallel = this.contendedRuns.filter((entry) => entry.ownerId === state.session.id && !entry.finished).length;
-        await this.subagentSend(telegram, run, en.subagentDispatched(parallel), true);
+        await this.subagentSend(telegram, run, this.lp(this.runScopeOf(run)).subagentDispatched(parallel), true);
         return true;
     }
 
@@ -4627,7 +4724,9 @@ export class DurevcodeAgent extends BaseAgent {
         if (run.turnComplete && !run.finished) {
             run.finished = true;
             this.logger.info(`Durevcode subagent finished (owner=${run.ownerId} subagent=${run.sessionId}).`);
-            if (this.config.durevcode.autoFinish !== false) {
+            const runScope = this.runScopeOf(run);
+            const en = this.lp(runScope);
+            if (this.settingBool('autoFinish', runScope)) {
                 await this.subagentSend(telegram, run, en.SUBAGENT_FINISHED);
             }
             const digest = en.subagentDigestNote(run.task, run.lastText);
@@ -4664,7 +4763,7 @@ export class DurevcodeAgent extends BaseAgent {
             }
             run.finished = true;
         }
-        await this.subagentSend(telegram, hits[0], en.SUBAGENT_STOPPED);
+        await this.subagentSend(telegram, hits[0], this.lp(this.runScopeOf(hits[0])).SUBAGENT_STOPPED);
         return hits.length;
     }
 
@@ -4683,6 +4782,7 @@ export class DurevcodeAgent extends BaseAgent {
         opencode: Pick<OpencodePlugin, 'listModels'>,
         state: WatchedSession,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         let models: ModelApiInfo[];
         try {
             models = await opencode.listModels();
@@ -4701,7 +4801,7 @@ export class DurevcodeAgent extends BaseAgent {
             state.modelCardMessageId = await this.deliverMessage(
                 telegram,
                 state,
-                this.modelCardText(currentId, currentVariant, models),
+                this.modelCardText(currentId, currentVariant, models, this.stateScope(state)),
                 this.modelCardMarkup(models, currentId, currentVariant),
             );
         } catch (error) {
@@ -4718,7 +4818,7 @@ export class DurevcodeAgent extends BaseAgent {
         const target = messageId ?? state.modelCardMessageId;
         const currentId = displayModel(state.session.model);
         const currentVariant = modelVariant(state.session.model);
-        const text = this.modelCardText(currentId, currentVariant, models);
+        const text = this.modelCardText(currentId, currentVariant, models, this.stateScope(state));
         const markup = this.modelCardMarkup(models, currentId, currentVariant);
         if (target !== null) {
             try {
@@ -4749,6 +4849,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private statusCardText(state: WatchedSession): string {
+        const en = this.lp(this.stateScope(state));
         const session = state.session;
         return en.statusCardText({
             now: Date.now(),
@@ -4773,6 +4874,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private statusCardMarkup(state: WatchedSession): InlineKeyboardMarkup {
+        const en = this.lp(this.stateScope(state));
         return en.statusCardMarkup(state.session.id);
     }
 
@@ -4820,7 +4922,8 @@ export class DurevcodeAgent extends BaseAgent {
         });
     }
 
-    private sessionRowLabelOf(session: SessionRow, mark: WatchedSession | null): string {
+    private sessionRowLabelOf(session: SessionRow, mark: WatchedSession | null, scope: string): string {
+        const en = this.lp(scope);
         const occupancy = mark?.snapshot
             ? mark.snapshot.input + mark.snapshot.cacheRead + mark.snapshot.cacheWrite
             : session.tokens_input + session.tokens_output + session.tokens_reasoning;
@@ -4846,15 +4949,16 @@ export class DurevcodeAgent extends BaseAgent {
         return pairs;
     }
 
-    private sessionsCardText(extras: SessionRow[] = []): string {
+    private sessionsCardText(extras: SessionRow[] = [], scope: string): string {
+        const en = this.lp(scope);
         const pairs = this.sessionsCardPairs(extras);
-        const rows = pairs.map((pair, index) => `${index + 1}. ${escapeHtml(this.sessionRowLabelOf(pair.session, pair.mark))}`);
+        const rows = pairs.map((pair, index) => `${index + 1}. ${escapeHtml(this.sessionRowLabelOf(pair.session, pair.mark, scope))}`);
         return en.sessionsCardText(rows, pairs.length, this.plainChatMode);
     }
 
-    private sessionsCardMarkup(extras: SessionRow[] = []): InlineKeyboardMarkup {
+    private sessionsCardMarkup(extras: SessionRow[] = [], scope: string): InlineKeyboardMarkup {
         const rows = this.sessionsCardPairs(extras).map((pair) => [{
-            text: this.sessionRowLabelOf(pair.session, pair.mark),
+            text: this.sessionRowLabelOf(pair.session, pair.mark, scope),
             callback_data: `session:${pair.session.id}`,
         }]);
         return { inline_keyboard: rows };
@@ -4886,7 +4990,8 @@ export class DurevcodeAgent extends BaseAgent {
     private async sendSessionsCard(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         try {
             const extras = this.plainChatMode ? await this.plainSessionExtras() : [];
-            await this.deliverMessage(telegram, state, wellFormed(this.sessionsCardText(extras)), this.sessionsCardMarkup(extras));
+            const scope = this.stateScope(state);
+            await this.deliverMessage(telegram, state, wellFormed(this.sessionsCardText(extras, scope)), this.sessionsCardMarkup(extras, scope));
         } catch (error) {
             console.debug('Durevcode sessions card send failed:', errorText(error));
         }
@@ -4913,10 +5018,39 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
 
+    private scopeKeyOf(chatId: number | null | undefined, threadId: number | null | undefined): string {
+        if (!chatId) return '';
+        return threadId ? `t${chatId}:${threadId}` : `c${chatId}`;
+    }
+
+    private stateScope(state: Pick<WatchedSession, 'laneChatId'> & { threadId: number | null }): string {
+        return this.scopeKeyOf(this.chatIdOf(state), state.threadId);
+    }
+
+    private queryScope(query: CallbackQuery): string {
+        return this.scopeKeyOf(query.message?.chat.id, query.message?.message_thread_id ?? null);
+    }
+
+    private chatLang(scope: string): string {
+        const scoped = scope === '' ? undefined : this.settingsScopes[scope]?.chatLang;
+        return scoped === 'en' || scoped === 'ru' ? scoped : botLangOf();
+    }
+
+    private lp(scope: string): BotLangPack {
+        return this.chatLang(scope) === 'ru' ? ruPack : enPack;
+    }
+
+    private runScopeOf(run: ContendedRun): string {
+        return this.scopeKeyOf(run.laneChatId ?? this.config.durevcode.chatId, run.threadId);
+    }
+
     private settingRawValue(key: string): boolean | number | string {
         const voice = this.config.whisper;
         switch (key) {
+            case 'lang': return this.config.durevcode.lang === 'ru' ? 'ru' : 'en';
+            case 'chatLang': return this.config.durevcode.chatLang ?? 'bot';
             case 'watchOnly': return this.config.durevcode.watchOnly === true;
+            case 'twoColumns': return this.config.durevcode.twoColumns === true;
             case 'leadMention': return this.config.durevcode.leadMention !== false;
             case 'quoteReplies': return this.config.durevcode.quoteReplies !== false;
             case 'autoFinish': return this.config.durevcode.autoFinish !== false;
@@ -4929,6 +5063,20 @@ export class DurevcodeAgent extends BaseAgent {
             case 'voiceThreads': return String(voice?.threads ?? 8);
             default: return '';
         }
+    }
+
+    private settingValue(key: string, scope: string): boolean | number | string {
+        if (scope !== '' && !SETTING_GLOBAL_KEYS.has(key)) {
+            const scoped = this.settingsScopes[scope]?.[key];
+            if (scoped !== undefined) return scoped;
+        }
+        const global = this.settingsOverrides[key];
+        if (global !== undefined) return global;
+        return this.settingRawValue(key);
+    }
+
+    private settingBool(key: string, scope: string): boolean {
+        return this.settingValue(key, scope) === true;
     }
 
     private ensureWhisperConfig(): NonNullable<DurevcodeConfig['whisper']> {
@@ -4945,6 +5093,12 @@ export class DurevcodeAgent extends BaseAgent {
     private applySetting(key: string, value: boolean | number | string): void {
         const opts = this.ensureWhisperConfig();
         switch (key) {
+            case 'lang': {
+                const code = value === 'ru' ? 'ru' : 'en';
+                this.config.durevcode.lang = code;
+                setBotLang(code);
+                break;
+            }
             case 'watchOnly':
                 this.config.durevcode.watchOnly = value === true;
                 break;
@@ -4996,18 +5150,22 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
-    private async applySettingToggle(key: string): Promise<string | null> {
+    private async applySettingToggle(key: string, scope: string): Promise<string | null> {
         if (key === 'reset') {
-            this.settingsOverrides = {};
-            for (const def of SETTINGS_DEFS) {
-                this.applySetting(def.key, this.settingsBaseline[def.key]);
+            if (scope !== '') {
+                delete this.settingsScopes[scope];
+            } else {
+                this.settingsOverrides = {};
+                for (const def of SETTINGS_DEFS) {
+                    this.applySetting(def.key, this.settingsBaseline[def.key]);
+                }
             }
             this.savePersistedCoalesced();
-            return en.SETTINGS_DEFAULTS_RESTORED;
+            return this.lp(scope).SETTINGS_DEFAULTS_RESTORED;
         }
         const def = SETTINGS_DEFS.find((item) => item.key === key);
         if (!def) return null;
-        const current = this.settingRawValue(key);
+        const current = this.settingValue(key, scope);
         let next: boolean | number | string;
         if (def.bool) {
             next = current === true ? false : true;
@@ -5018,50 +5176,92 @@ export class DurevcodeAgent extends BaseAgent {
         } else {
             return null;
         }
-        this.settingsOverrides[key] = next;
-        this.applySetting(key, next);
+        if (SETTING_GLOBAL_KEYS.has(key)) {
+            this.settingsOverrides[key] = next;
+            this.applySetting(key, next);
+        } else if (scope !== '') {
+            const scoped = this.settingsScopes[scope] ?? (this.settingsScopes[scope] = {});
+            scoped[key] = next;
+        }
         this.savePersistedCoalesced();
-        return en.settingEcho(def.label, this.settingDisplay(def));
+        // The pack is captured after the toggle lands so a live language switch echoes in the new language.
+        const en = this.lp(scope);
+        return en.settingEcho(en.settingsLabel(def.key), this.settingDisplay(def, scope));
     }
 
-    private settingDisplay(def: SettingDef): string {
-        const value = this.settingRawValue(def.key);
-        if (def.bool) return value === true ? 'on' : 'off';
+    private settingDisplay(def: SettingDef, scope: string): string {
+        const en = this.lp(scope);
+        const value = this.settingValue(def.key, scope);
+        if (def.bool) return en.settingOnOff(value === true);
+        if (def.key === 'chatLang' && value === 'bot') return `bot · ${botLangOf()}`;
         return String(value);
     }
 
-    private settingsCardText(): string {
-        return en.settingsCardText(SETTINGS_DEFS.map((def) => ({ label: def.label, display: this.settingDisplay(def) })));
+    private settingsCardText(scope: string): string {
+        const en = this.lp(scope);
+        const where = scope.startsWith('t') ? 'topic' : 'chat';
+        return en.settingsCardText(
+            SETTINGS_DEFS.map((def) => ({ label: en.settingsLabel(def.key), display: this.settingDisplay(def, scope) })),
+            where,
+        );
     }
 
-    private settingsCardMarkup(): InlineKeyboardMarkup {
+    private settingButtons(scope: string): InlineKeyboardButton[] {
+        const en = this.lp(scope);
         const buttons: InlineKeyboardButton[] = SETTINGS_DEFS.map((def) => ({
-            text: `${def.label} · ${this.settingDisplay(def)}`,
+            text: `${en.settingsLabel(def.key)} · ${this.settingDisplay(def, scope)}`,
             callback_data: `set:${def.key}`,
         }));
         buttons.push({ text: en.SETTINGS_RESET_ALL, callback_data: 'set:reset' });
-        const rows: InlineKeyboardButton[][] = [];
-        for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
-        return { inline_keyboard: rows };
+        return buttons;
+    }
+
+    private settingsCardMarkup(scope: string): InlineKeyboardMarkup {
+        const buttons = this.settingButtons(scope);
+        // Two columns when the scoped toggle is on; labels never fit two per row across
+        // languages, so the default is one button per row.
+        if (this.settingBool('twoColumns', scope)) {
+            const rows: InlineKeyboardButton[][] = [];
+            for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
+            return { inline_keyboard: rows };
+        }
+        return { inline_keyboard: buttons.map((button) => [button]) };
+    }
+
+    private relabeledSettingsMarkup(scope: string, current: InlineKeyboardButton[][] | undefined): InlineKeyboardMarkup {
+        // A toggle only refreshes the captions: the row layout keeps its current shape and
+        // is rebuilt from the twoColumns setting on the next /settings.
+        if (!current || current.length === 0) return this.settingsCardMarkup(scope);
+        const buttons = this.settingButtons(scope);
+        if (current.flat().length !== buttons.length) return this.settingsCardMarkup(scope);
+        let index = 0;
+        return { inline_keyboard: current.map((row) => row.map(() => buttons[index++])) };
     }
 
     private async sendSettingsCard(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
         try {
-            await this.deliverMessage(telegram, state, wellFormed(this.settingsCardText()), this.settingsCardMarkup());
+            const scope = this.stateScope(state);
+            await this.deliverMessage(telegram, state, wellFormed(this.settingsCardText(scope)), this.settingsCardMarkup(scope));
         } catch (error) {
             console.debug('Durevcode settings card send failed:', errorText(error));
         }
     }
 
-    private async editSettingsCard(telegram: TelegramBotPlugin, state: WatchedSession, messageId: number | null): Promise<void> {
+    private async editSettingsCard(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        messageId: number | null,
+        currentKeyboard?: InlineKeyboardButton[][],
+    ): Promise<void> {
         if (messageId === null) return;
         try {
+            const scope = this.stateScope(state);
             await telegram.editMessageText({
                 chat_id: this.chatIdOf(state),
                 message_id: messageId,
-                text: wellFormed(this.settingsCardText()),
+                text: wellFormed(this.settingsCardText(scope)),
                 parse_mode: 'HTML',
-                reply_markup: this.settingsCardMarkup(),
+                reply_markup: this.relabeledSettingsMarkup(scope, currentKeyboard),
             });
         } catch (error) {
             if (isMessageNotModifiedError(error)) return;
@@ -5073,11 +5273,11 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
-    private async ensureWhisper(): Promise<WhisperPlugin | null> {
+    private async ensureWhisper(force = false): Promise<WhisperPlugin | null> {
         const existing = this.getPlugin<WhisperPlugin>(PLUGIN_NAMES.WHISPER);
         if (existing) return existing;
         const whisper = this.config.whisper;
-        if (!this.config.whisper?.enabled || !whisper?.modelPath) return null;
+        if ((!this.config.whisper?.enabled && !force) || !whisper?.modelPath) return null;
         if (this.whisperActivating) return this.whisperActivating;
         this.whisperActivating = (async () => {
             try {
@@ -5101,12 +5301,13 @@ export class DurevcodeAgent extends BaseAgent {
     ): Promise<void> {
         const agents = await this.loadModeAgents(opencode);
         const text = this.modeCardText(state, agents);
-        await this.safePriorityReply(telegram, state, text, this.modeMarkup(state.buildMode));
+        await this.safePriorityReply(telegram, state, text, this.modeMarkup(state.buildMode, this.stateScope(state)));
     }
 
     private modeCardText(state: WatchedSession, agents: { build: string; plan: string } | null): string {
+        const en = this.lp(this.stateScope(state));
         const current = this.modeAgentName(agents, state.buildMode) || state.sessionAgent;
-        return en.modeCardText({ build: state.buildMode, current, plain: this.config.durevcode.watchOnly === true });
+        return en.modeCardText({ build: state.buildMode, current, plain: this.settingBool('watchOnly', this.stateScope(state)) });
     }
 
     private async loadModeAgents(
@@ -5136,6 +5337,7 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
         build: boolean,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         await this.ackCallback(telegram, query, 'mode');
         if (state.buildMode === build) return;
         const target = await this.loadModeAgents(opencode);
@@ -5187,12 +5389,12 @@ export class DurevcodeAgent extends BaseAgent {
                 message_id: cardId,
                 text: wellFormed(text),
                 parse_mode: 'HTML',
-                reply_markup: this.modeMarkup(state.buildMode),
+                reply_markup: this.modeMarkup(state.buildMode, this.stateScope(state)),
             });
         } catch (error) {
             if (isMessageGoneError(error)) {
                 try {
-                    await this.deliverMessage(telegram, state, text, this.modeMarkup(state.buildMode));
+                    await this.deliverMessage(telegram, state, text, this.modeMarkup(state.buildMode, this.stateScope(state)));
                 } catch (resendError) {
                     console.debug('Durevcode mode card resend failed:', errorText(resendError));
                 }
@@ -5223,6 +5425,7 @@ export class DurevcodeAgent extends BaseAgent {
         cardMessageId: number | null,
         note: (text?: string) => Promise<void>,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         const currentRef = modelRef(state.session.model);
         if (modelId === null && !currentRef.id) {
             await note(en.NO_MODEL_YET);
@@ -5320,6 +5523,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private renderStopControlText(state: WatchedSession): string {
+        const en = this.lp(this.stateScope(state));
         return en.stopControlText(state.buildMode);
     }
 
@@ -5398,7 +5602,8 @@ export class DurevcodeAgent extends BaseAgent {
         await this.sendThought(telegram, state.session.id, id, since, text, 0);
     }
 
-    private thoughtFoldMarkup(messageId: number): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+    private thoughtFoldMarkup(messageId: number, scope: string): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+        const en = this.lp(scope);
         return {
             inline_keyboard: [
                 [{
@@ -5470,7 +5675,8 @@ export class DurevcodeAgent extends BaseAgent {
         attempt: number,
     ): Promise<void> {
         const fullHtml = wellFormed(formatThoughtArchive(Date.now() - since, text));
-        const markup = this.thoughtFoldMarkup(messageId);
+        const markState = this.watched.get(sessionId);
+        const markup = this.thoughtFoldMarkup(messageId, markState ? this.stateScope(markState) : '');
         const chatId = this.watched.get(sessionId)?.laneChatId ?? this.config.durevcode.chatId;
         try {
             await telegram.editMessageText({
@@ -5515,6 +5721,7 @@ export class DurevcodeAgent extends BaseAgent {
         messageId: number,
         dismiss: (text?: string) => Promise<void>,
     ): Promise<void> {
+        const en = this.lp(this.queryScope(query));
         const entry = messageId > 0 ? this.thoughtArchives.get(messageId) : undefined;
         const mid = query.message?.message_id;
         const live = entry ? null : mid !== undefined
@@ -5784,6 +5991,7 @@ export class DurevcodeAgent extends BaseAgent {
         opencode: Pick<OpencodePlugin, 'listPermissions' | 'replyPermission'>,
         state: WatchedSession,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         state.permTick = (state.permTick + 1) % 3;
         if (state.permTick !== 0) return;
         let current: PermissionRequest[];
@@ -5818,7 +6026,7 @@ export class DurevcodeAgent extends BaseAgent {
                     telegram,
                     state,
                     lines.join('\n'),
-                    this.permKeyboard(request.id),
+                    this.permKeyboard(request.id, this.stateScope(state)),
                 );
                 state.knownPerms.push(request.id);
                 this.permReplies.set(sentId, { sessionId: state.session.id, permId: request.id });
@@ -5836,8 +6044,9 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
-    private permKeyboard(permId: string): InlineKeyboardMarkup {
+    private permKeyboard(permId: string, scope: string): InlineKeyboardMarkup {
         const order: PermissionDecision[] = ['always', 'once', 'reject'];
+        const en = this.lp(scope);
         return {
             inline_keyboard: [order.map((decision) => ({
                 text: `${en.PERMISSION_DECISION_ICONS[decision]} ${en.PERMISSION_DECISION_LABELS[decision]}`,
@@ -5854,6 +6063,7 @@ export class DurevcodeAgent extends BaseAgent {
         replyTo: number,
         decision: PermissionDecision,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         const permKey = `perm:${state.session.id}:${permId}`;
         if (this.resolvingQuestions.has(permKey)) return;
         this.resolvingQuestions.add(permKey);
@@ -5891,7 +6101,8 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
-    private questKeyboard(ctx: QuestionPick): InlineKeyboardMarkup {
+    private questKeyboard(ctx: QuestionPick, scope: string): InlineKeyboardMarkup {
+        const en = this.lp(scope);
         const rows: InlineKeyboardMarkup['inline_keyboard'] = [];
         ctx.questions.forEach((item, qIdx) => {
             item.options.forEach((option, oIdx) => {
@@ -5948,7 +6159,7 @@ export class DurevcodeAgent extends BaseAgent {
                         msgId: 0,
                         token,
                     };
-                    sentId = await this.deliverMessage(telegram, state, formatQuestion(request), this.questKeyboard(ctx));
+                    sentId = await this.deliverMessage(telegram, state, formatQuestion(request), this.questKeyboard(ctx, this.stateScope(state)));
                     ctx.msgId = sentId;
                     this.questPicks.set(token, ctx);
                 }
@@ -6043,6 +6254,7 @@ export class DurevcodeAgent extends BaseAgent {
         draft: { question: string; labels: string[]; multiple: boolean },
         finToken: string,
     ): Promise<{ msgId: number; pollId: string | null }> {
+        const en = this.lp(this.stateScope(state));
         const message = await telegram.sendPoll({
             chat_id: this.chatIdOf(state),
             ...(this.isForumLane(state) && state.threadId !== null ? { message_thread_id: state.threadId } : {}),
@@ -6112,6 +6324,7 @@ export class DurevcodeAgent extends BaseAgent {
         token: string,
         dismiss: (text?: string) => Promise<void>,
     ): Promise<void> {
+        const en = this.lp(this.queryScope(query));
         const found = [...this.questPolls.entries()].find(([, ref]) => ref.finToken === token);
         if (!found) {
             await dismiss(en.OUTDATED_ASK_AGAIN);
@@ -6229,6 +6442,7 @@ export class DurevcodeAgent extends BaseAgent {
         ref: QuestionReply,
         answers: string[][],
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         if (this.resolvingQuestions.has(ref.reqId)) return;
         this.resolvingQuestions.add(ref.reqId);
         const reply = (): Promise<boolean> => opencode.replyQuestion(state.session.id, ref.reqId, answers);
@@ -6345,6 +6559,7 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
         finish: string,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         if (state.finalized) return;
         const text = stepFinishText(finish);
         console.warn(`Durevcode step failed (session=${state.session.id}): ${text}`);
@@ -6666,6 +6881,7 @@ export class DurevcodeAgent extends BaseAgent {
         state.serverErrorText = text;
         state.serverErrorAt = now;
         console.warn(`Durevcode server error (session=${sessionId}): ${text.slice(0, 200)}`);
+        const en = this.lp(this.stateScope(state));
         await this.flushEvents(telegram, state);
         await this.safeReply(
             telegram,
@@ -6745,13 +6961,13 @@ export class DurevcodeAgent extends BaseAgent {
         return ok;
     }
 
-    private adminGateText(): string {
-        return en.ADMIN_GATE_GENERIC;
+    private adminGateText(scope: string): string {
+        return this.lp(scope).ADMIN_GATE_GENERIC;
     }
 
     private async adminCardGate(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {
         if (await this.isForumAdmin(telegram, state.laneUserId)) return true;
-        await this.safePriorityReply(telegram, state, this.adminGateText());
+        await this.safePriorityReply(telegram, state, this.adminGateText(this.stateScope(state)));
         return false;
     }
 
@@ -6789,6 +7005,7 @@ export class DurevcodeAgent extends BaseAgent {
         opencode: Pick<OpencodePlugin, 'replyQuestion' | 'setModel' | 'listModels' | 'replyPermission' | 'listPermissions' | 'getSession'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'getModelLimit' | 'listAgents' | 'setAgent'>>,
         query: CallbackQuery,
     ): Promise<void> {
+        const en = this.lp(this.queryScope(query));
         const dismiss = (text?: string): Promise<void> => this.ackCallback(telegram, query, 'callback', text);
         if (this.seenCallbacks.has(query.id)) {
             await dismiss();
@@ -6834,7 +7051,7 @@ export class DurevcodeAgent extends BaseAgent {
                 return;
             }
             if (modeMatch[1] === 'observer') {
-                const applied = await this.applySettingToggle('watchOnly');
+                const applied = await this.applySettingToggle('watchOnly', this.queryScope(query));
                 await dismiss(applied ?? 'Watch only toggle failed.');
                 await this.refreshModeCard(telegram, opencode, query, target);
                 return;
@@ -6889,9 +7106,15 @@ export class DurevcodeAgent extends BaseAgent {
                 await dismiss(en.OUTDATED_ASK_AGAIN);
                 return;
             }
-            const applied = await this.applySettingToggle(setMatch[1]);
+            const applied = await this.applySettingToggle(setMatch[1], this.queryScope(query));
             await dismiss(applied ?? 'Unknown setting.');
-            await this.editSettingsCard(telegram, target, query.message?.message_id ?? null);
+            const existingKeyboard = (query.message?.reply_markup as { inline_keyboard?: InlineKeyboardButton[][] } | undefined)?.inline_keyboard;
+            await this.editSettingsCard(
+                telegram,
+                target,
+                query.message?.message_id ?? null,
+                Array.isArray(existingKeyboard) ? existingKeyboard : undefined,
+            );
             return;
         }
         const modelMatch = data.match(/^model:([A-Za-z0-9._-]{1,50})$/);
@@ -7015,7 +7238,7 @@ export class DurevcodeAgent extends BaseAgent {
             await telegram.editMessageReplyMarkup({
                 chat_id: this.chatIdOf(state),
                 message_id: ctx.msgId,
-                reply_markup: this.questKeyboard(ctx),
+                reply_markup: this.questKeyboard(ctx, this.stateScope(state)),
             });
         } catch (error) {
             if (isRateLimitError(error)) {
@@ -7033,6 +7256,7 @@ export class DurevcodeAgent extends BaseAgent {
         ref: QuestionReply,
         text: string,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         if (ref.questions.length === 0) {
             await this.safeReply(telegram, state, en.QUESTION_OUTDATED);
             return;
@@ -7250,6 +7474,7 @@ export class DurevcodeAgent extends BaseAgent {
         opencode: Pick<OpencodePlugin, 'hasMessage'> & Partial<Pick<OpencodePlugin, 'spawnRun'>>,
         state: WatchedSession,
     ): Promise<void> {
+        const en = this.lp(this.stateScope(state));
         const pending = state.confirming;
         if (!pending) return;
         let landed = false;
@@ -7860,9 +8085,10 @@ export class DurevcodeAgent extends BaseAgent {
             const { text: answer, command: stopCommand } = takeStopCommand(text);
             if (answer && !state.digestTurn) {
                 const lead = this.leadAttribution(flushed);
-                const group = this.config.durevcode.answerFanout === true ? this.fanoutGroups.get(state.session.id) : undefined;
+                const scope = this.stateScope(state);
+                const group = this.settingBool('answerFanout', scope) ? this.fanoutGroups.get(state.session.id) : undefined;
                 const extraLeads: PromptAttribution[] = [];
-                if (group && this.config.durevcode.leadMention !== false) {
+                if (group && this.settingBool('leadMention', scope)) {
                     for (const sessionId of [...group.followers]) {
                         const follow = this.fanoutFollows.get(sessionId);
                         if (follow && follow.primary === state.session.id) {
@@ -7874,9 +8100,9 @@ export class DurevcodeAgent extends BaseAgent {
                     }
                     for (const hold of group.holds) extraLeads.push(hold);
                 }
-                const leadText = [this.answerLead(lead), ...extraLeads.map((item) => this.answerLead(item))].filter((part) => part !== '').join(' ');
+                const leadText = [this.answerLead(lead, scope), ...extraLeads.map((item) => this.answerLead(item, scope))].filter((part) => part !== '').join(' ');
                 const answerText = leadText ? `${leadText} ${answer}` : answer;
-                await this.deliverFreshPart(telegram, state, answerText, this.quotedTarget(lead));
+                await this.deliverFreshPart(telegram, state, answerText, this.quotedTarget(lead, scope));
                 if (extraLeads.length === 0) await this.mirrorAnswerToFollowers(telegram, state, answer);
             }
             if (stopCommand && !state.digestTurn) {
@@ -7956,6 +8182,7 @@ export class DurevcodeAgent extends BaseAgent {
         opencode: Pick<OpencodePlugin, 'sendPrompt'>,
         state: WatchedSession,
     ): Promise<boolean> {
+        const en = this.lp(this.stateScope(state));
         if (this.autoContinueBlocked(state)) return false;
         const armed = Date.now() - state.whipArmedAt < WHIP_ARMED_TTL_MS;
         state.autoNudges += 1;
@@ -8016,7 +8243,7 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private async autoFinishIfDone(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {
-        if (this.config.durevcode.autoFinish === false) return false;
+        if (!this.settingBool('autoFinish', this.stateScope(state))) return false;
         if (!state.turnComplete) return false;
         if (state.lastText === '') return false;
         if (state.finalized || state.stopping) return false;

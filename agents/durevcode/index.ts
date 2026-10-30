@@ -54,6 +54,15 @@ function optionalFlag(name: string, fallback: boolean): boolean {
     return !['0', 'false', 'no', 'off'].includes(raw.trim().toLowerCase());
 }
 
+function botLang(): 'en' | 'ru' {
+    return (process.env.DUREVCODE_LANG || '').trim().toLowerCase() === 'ru' ? 'ru' : 'en';
+}
+
+function chatLang(): 'bot' | 'en' | 'ru' {
+    const raw = (process.env.DUREVCODE_CHAT_LANG || '').trim().toLowerCase();
+    return raw === 'en' || raw === 'ru' ? raw : 'bot';
+}
+
 function userIdList(): number[] {
     return (process.env.DUREVCODE_ALLOWED_USERS ?? '')
         .split(',')
@@ -114,6 +123,8 @@ const config: DurevcodeConfig = {
         quoteReplies: optionalFlag('DUREVCODE_QUOTE_REPLIES', true),
         answerFanout: optionalFlag('DUREVCODE_ANSWER_FANOUT', false),
         nativeQuestions: optionalFlag('DUREVCODE_NATIVE_QUESTIONS', false),
+        lang: botLang(),
+        chatLang: chatLang(),
         subagentUsers: optionalFlag('DUREVCODE_SUBAGENT_USERS', true),
         newTopics: optionalFlag('DUREVCODE_NEW_TOPICS', true),
         statePath:
@@ -129,6 +140,7 @@ const config: DurevcodeConfig = {
         autoFinish: optionalFlag('DUREVCODE_AUTO_FINISH', true),
         deleteOnTopicGone: optionalFlag('DUREVCODE_DELETE_ON_TOPIC_GONE', false),
         watchOnly: optionalFlag('DUREVCODE_WATCH_ONLY', optionalFlag('DUREVCODE_PLAIN_MODE', false)),
+        twoColumns: optionalFlag('DUREVCODE_TWO_COLUMNS', false),
     },
     whisper: {
         enabled: optionalFlag('DUREVCODE_WHISPER_ENABLED', false),
