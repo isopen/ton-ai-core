@@ -4951,11 +4951,13 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private settingsCardMarkup(): InlineKeyboardMarkup {
-        const rows: InlineKeyboardButton[][] = SETTINGS_DEFS.map((def) => [{
+        const buttons: InlineKeyboardButton[] = SETTINGS_DEFS.map((def) => ({
             text: `${def.label} · ${this.settingDisplay(def)}`,
             callback_data: `set:${def.key}`,
-        }]);
-        rows.push([{ text: en.SETTINGS_RESET_ALL, callback_data: 'set:reset' }]);
+        }));
+        buttons.push({ text: en.SETTINGS_RESET_ALL, callback_data: 'set:reset' });
+        const rows: InlineKeyboardButton[][] = [];
+        for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
         return { inline_keyboard: rows };
     }
 
