@@ -1,5 +1,5 @@
 import { InlineKeyboardMarkup } from '@ton-ai/telegram-bot-api';
-import { ContextSnapshot, ModelApiInfo, PermissionDecision } from '@ton-ai/opencode';
+import { ModelApiInfo, PermissionDecision } from '@ton-ai/opencode';
 import {
     EMOJI,
     checkIcon,
@@ -12,6 +12,9 @@ import {
     rocketIcon,
     truncate,
 } from '../formatter';
+import { StatusCardInput, formatTokenShort, opencodeSourceDisplay, settingRow, shortUptime } from './index';
+
+export * from './index';
 
 export const AUTO_CONTINUE_TEXT = 'Continue';
 export const DIGEST_PROMPT_PREFIX = 'Background subagent task finished.';
@@ -71,11 +74,6 @@ export const CONTINUE_NOTHING = `${icon('warn')} Nothing to continue yet — sen
 export const CONTINUE_QUEUED = `${icon('rocket')} Previous task is queued again.`;
 export const PERM_DECIDE_HINT = `${icon('warn')} Say yes or no — or tap the button.`;
 export const PERMISSION_NEEDED_TITLE = `${icon('question')} Permission needed`;
-export const PERMISSION_DECISION_ICONS: Record<PermissionDecision, string> = {
-    always: '♾️',
-    once: EMOJI.check,
-    reject: EMOJI.denied,
-};
 export const ALREADY_RESOLVED = `${icon('warn')} Already resolved.`;
 export const DECISION_SEND_FAILED = `${icon('fail')} Could not send the decision, try again.`;
 export const ANSWER_SEND_FAILED = `${icon('fail')} Could not send the answer, try again.`;
@@ -90,10 +88,22 @@ export const STOPPED_AGAIN = `${icon('stop')} Stopped, send the task again.`;
 export const TOPIC_RESTORE_FAILED = `${icon('fail')} Could not restore the session for this topic, try again.`;
 export const TOPIC_SESSION_CREATE_FAILED = `${icon('fail')} Could not create a session for this topic, try again.`;
 export const ADMIN_GATE_GENERIC = `${icon('denied')} Only forum admins can change this.`;
-
-export function sessionTagOf(sessionId: string): string {
-    return sessionId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'session';
-}
+export const SETTINGS_LABELS: Record<string, string> = {
+    lang: 'Bot language',
+    chatLang: 'Chat language',
+    watchOnly: 'Watch only',
+    leadMention: '@mention leads',
+    quoteReplies: 'Reply quotes',
+    autoFinish: 'Finish notices',
+    answerFanout: 'Shared answers',
+    subagentUsers: 'Subagent users',
+    newTopics: 'New topics',
+    voice: 'Voice transcription',
+    voiceLang: 'Voice language',
+    voiceServer: 'Resident whisper server',
+    voiceThreads: 'Whisper threads',
+    twoColumns: 'Two columns',
+};
 
 export function shortAgo(now: number, at: number): string {
     if (at === 0) return 'never';
@@ -102,33 +112,6 @@ export function shortAgo(now: number, at: number): string {
     if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
     if (sec < 172800) return `${Math.round(sec / 3600)}h ago`;
     return `${Math.round(sec / 86400)}d ago`;
-}
-
-export function formatTokenShort(value: number): string {
-    if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
-    if (value >= 1000) return `${(value / 1000).toFixed(1)}K`;
-    return String(value);
-}
-
-export function shortUptime(ms: number): string {
-    const minutes = Math.max(0, Math.floor(ms / 60000));
-    const days = Math.floor(minutes / 1440);
-    const hours = Math.floor((minutes % 1440) / 60);
-    const mins = minutes % 60;
-    if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
-    if (hours > 0) return minutes % 60 > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-    return `${mins}m`;
-}
-
-export function opencodeSourceDisplay(baseUrl: string): string {
-    const trimmed = baseUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-    return trimmed || 'unknown';
-}
-
-export function answerLeadHtml(mention: string, uid?: number): string {
-    return uid !== undefined && uid > 0
-        ? `<a href="tg://user?id=${uid}">${escapeHtml(mention)}</a>`
-        : `<b>${escapeHtml(mention)}</b>`;
 }
 
 export function subagentDigestNote(task: string, lastText: string): string {
@@ -207,10 +190,6 @@ export function mediaUnparsed(label: string): string {
     return `${icon('warn')} ${label} can't be parsed yet — send a photo, a video, a document, or text.`;
 }
 
-export function transcriptEcho(text: string): string {
-    return `${icon('chat')} ${escapeHtml(text)}`;
-}
-
 export function cliFailed(code: number): string {
     return `${icon('fail')} CLI run failed (exit ${code}).`;
 }
@@ -240,7 +219,15 @@ export function modeSwitched(build: boolean, agentId: string): string {
 }
 
 export function watchOnlyToggleLabel(plain: boolean): string {
-    return `Watch only · ${plain ? 'on' : 'off'}`;
+    return `Watch only · ${settingOnOff(plain)}`;
+}
+
+export function settingOnOff(on: boolean): string {
+    return on ? 'on' : 'off';
+}
+
+export function settingsLabel(key: string): string {
+    return SETTINGS_LABELS[key] ?? key;
 }
 
 export function modeMarkup(build: boolean, plain: boolean): InlineKeyboardMarkup {
@@ -286,75 +273,6 @@ export function modelCardText(currentId: string, currentVariant: string, models?
             (variants.length > 0 ? ` — options: ${escapeHtml(variants.join(', '))}` : ' — no variants.'),
     );
     return lines.join('\n');
-}
-
-export function modelCardEntries(models: ModelApiInfo[], currentId: string): ModelApiInfo[] {
-    const cappedModels = models.slice(0, 19);
-    if (currentId && !cappedModels.some((m) => m.id === currentId)) {
-        const currentModel = models.find((m) => m.id === currentId);
-        if (currentModel) cappedModels.push(currentModel);
-    }
-    return cappedModels;
-}
-
-export function modelCardMarkup(
-    models: ModelApiInfo[],
-    currentId: string,
-    currentVariant: string,
-): InlineKeyboardMarkup {
-    const label = (m: ModelApiInfo) => {
-        const prefix = m.id === currentId ? `${EMOJI.check} ` : '';
-        const context = formatModelContext(m.limit);
-        const base = truncate(m.name || m.id, context ? 28 : 40);
-        return context ? `${prefix}${base} · ${context}` : `${prefix}${base}`;
-    };
-    const cappedModels = modelCardEntries(models, currentId);
-    const rows: InlineKeyboardMarkup['inline_keyboard'] = cappedModels.map((m) => [{
-        text: label(m),
-        callback_data: `model:${m.id}`,
-    }]);
-    const current = cappedModels.find((m) => m.id === currentId);
-    const variants = current ? modelVariantIds(current) : [];
-    if (variants.length > 0) {
-        rows.push(variants.map((variant) => ({
-            text: variant === currentVariant ? `${EMOJI.check} ${variant}` : variant,
-            callback_data: `modelvariant:${variant}`,
-        })));
-    }
-    return { inline_keyboard: rows };
-}
-
-export interface StatusCardVoiceStats {
-    audioSec: number;
-    processingMs: number;
-    at: number;
-}
-
-export interface StatusCardInput {
-    now: number;
-    bootAt: number;
-    rateLimitedUntil: number;
-    opencodeBaseUrl: string;
-    whisper: {
-        enabled?: boolean;
-        autoServe?: boolean;
-        serverUrl?: string;
-        threads?: number;
-        language?: string;
-    } | null | undefined;
-    voice: StatusCardVoiceStats | null;
-    title: string;
-    sessionTag: string;
-    modelRefText: string;
-    variantText: string;
-    buildMode: boolean;
-    sessionAgent: string;
-    turnComplete: boolean;
-    lastEventAt: number;
-    promptQueueLength: number;
-    cost: number;
-    snapshot: ContextSnapshot | null;
-    contextLimit: number | null;
 }
 
 export function statusCardText(input: StatusCardInput): string {
@@ -411,17 +329,14 @@ export function sessionsCardText(rows: string[], count: number, plain: boolean):
     return `${header}\n${rows.join('\n')}\n\nTap a row to ${plain ? 'switch the chat to that session' : 'pull its status card'}.\n`;
 }
 
-export function settingRow(label: string, display: string): string {
-    return `⚙️ ${escapeHtml(label)}: <b>${escapeHtml(display)}</b>`;
-}
-
-export function settingsCardText(rows: Array<{ label: string; display: string }>): string {
+export function settingsCardText(rows: Array<{ label: string; display: string }>, where?: 'topic' | 'chat'): string {
     const lines = rows.map((row) => settingRow(row.label, row.display));
-    return `${icon('gears')} <b>Settings</b>\n${lines.join('\n')}\n\nTap a row to switch it. Overrides survive restarts.\n`;
-}
-
-export function settingEcho(label: string, display: string): string {
-    return `${label}: ${display}`;
+    const scope = where === 'topic'
+        ? 'Values apply to this topic only; Bot language, Whisper server/threads stay bot-wide.'
+        : where === 'chat'
+            ? 'Values apply to this chat only; Bot language, Whisper server/threads stay bot-wide.'
+            : 'Overrides survive restarts.';
+    return `${icon('gears')} <b>Settings</b>\n${lines.join('\n')}\n\nTap a row to switch it. ${scope}\n`;
 }
 
 export function stopControlText(build: boolean): string {
