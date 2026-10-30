@@ -563,7 +563,7 @@ export interface PersistedSession {
     promptAt?: number;
     pending?: StoredPendingPart[];
     partials?: StoredPartialSend[];
-    questMsgs?: Array<{ msgId: number; reqId: string; questions?: string[] }>;
+    questMsgs?: Array<{ msgId: number; reqId: string; questions?: string[]; pollId?: string; pollLabels?: string[]; finToken?: string; pollMultiple?: boolean; authorUid?: number }>;
 }
 
 const PERSISTED_TTL_MS = 30 * 24 * 3600 * 1000;
@@ -577,6 +577,10 @@ const LIVE_ABANDON_COOLDOWN_MS = 20_000;
 const BOUND_VERIFY_CONCURRENCY = 4;
 const QUESTION_DISARM_RETRY_MS = 2500;
 const QUESTION_DISARM_RETRIES = 4;
+const POLL_OPTIONS_MIN = 2;
+const POLL_OPTIONS_MAX = 10;
+const POLL_OPTION_CHARS = 100;
+const POLL_QUESTION_CHARS = 300;
 
 export interface DurevcodeWatchConfig {
     chatId: number;
@@ -595,6 +599,7 @@ export interface DurevcodeWatchConfig {
     leadMention?: boolean;
     quoteReplies?: boolean;
     answerFanout?: boolean;
+    nativeQuestions?: boolean;
     subagentUsers?: boolean;
     whipSticker?: string;
     whipEmojiId?: string;
@@ -788,6 +793,19 @@ interface QuestionReply {
     sessionId: string;
     reqId: string;
     questions: QuestionRequest['questions'];
+    pollId?: string;
+}
+
+interface PollRef {
+    sessionId: string;
+    reqId: string;
+    msgId: number;
+    questions: QuestionRequest['questions'];
+    labels: string[];
+    finToken?: string;
+    votes?: number[];
+    closed?: boolean;
+    authorUid?: number;
 }
 
 interface QuestionPick {
@@ -829,6 +847,7 @@ export class DurevcodeAgent extends BaseAgent {
     private pollInFlight: boolean = false;
     private inboundSub: string | null = null;
     private callbackSub: string | null = null;
+    private pollSub: string | null = null;
     private inboundChain: Promise<void> = Promise.resolve();
     private eventUnsub: (() => void) | null = null;
     private sessionTicks = new Set<string>();
@@ -843,6 +862,7 @@ export class DurevcodeAgent extends BaseAgent {
     private permReplies = new Map<number, PermissionReply>();
     private questReplies = new Map<number, QuestionReply>();
     private questPicks = new Map<string, QuestionPick>();
+    private questPolls = new Map<string, PollRef>();
     private questSeq: number = Date.now() % 1_000_000_000;
     private creatingThreads = new Map<number, Message[]>();
     private threadRetryAt = new Map<string, number>();
@@ -962,6 +982,7 @@ export class DurevcodeAgent extends BaseAgent {
             if (!opencode) return;
             void this.handleCallback(telegram, opencode, query).catch((error) => console.error('Durevcode callback failed:', error));
         });
+        this.pollSub = telegram.onPoll((poll) => this.handlePollCount(poll));
         this.eventUnsub = opencode.subscribeEvents((event) => {
             const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
             if (!telegram) return;
@@ -1010,6 +1031,7 @@ export class DurevcodeAgent extends BaseAgent {
         this.permReplies.clear();
         this.questReplies.clear();
         this.questPicks.clear();
+        this.questPolls.clear();
         this.creatingThreads.clear();
         this.resolvingQuestions.clear();
         for (const renderTimer of this.thinkingRenderTimers.values()) clearTimeout(renderTimer);
@@ -1026,6 +1048,11 @@ export class DurevcodeAgent extends BaseAgent {
             const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
             if (telegram) telegram.offUpdate(this.callbackSub);
             this.callbackSub = null;
+        }
+        if (this.pollSub) {
+            const telegram = this.getPlugin<TelegramBotPlugin>(PLUGIN_NAMES.TELEGRAM);
+            if (telegram) telegram.offUpdate(this.pollSub);
+            this.pollSub = null;
         }
         if (this.eventUnsub) {
             this.eventUnsub();
@@ -1204,9 +1231,9 @@ export class DurevcodeAgent extends BaseAgent {
                     if (validPartials.length > 0) partials = validPartials;
                 }
                 const rawQuestMsgs = record.questMsgs;
-                let questRefs: Array<{ msgId: number; reqId: string; questions?: string[] }> | undefined;
+                let questRefs: Array<{ msgId: number; reqId: string; questions?: string[]; pollId?: string; pollLabels?: string[]; finToken?: string; pollMultiple?: boolean; authorUid?: number }> | undefined;
                 if (Array.isArray(rawQuestMsgs)) {
-                    const validQuests: Array<{ msgId: number; reqId: string; questions?: string[] }> = [];
+                    const validQuests: Array<{ msgId: number; reqId: string; questions?: string[]; pollId?: string; pollLabels?: string[]; finToken?: string; pollMultiple?: boolean; authorUid?: number }> = [];
                     for (const entry of (rawQuestMsgs as unknown[]).slice(-8)) {
                         if (!entry || typeof entry !== 'object') continue;
                         const rec = entry as Record<string, unknown>;
@@ -1215,7 +1242,25 @@ export class DurevcodeAgent extends BaseAgent {
                         const questions = Array.isArray(rec.questions)
                             ? (rec.questions as unknown[]).slice(0, 8).filter((q): q is string => typeof q === 'string').map((q) => q.slice(0, PERSISTED_QUESTION_TEXT_CAP))
                             : undefined;
-                        validQuests.push({ msgId: rec.msgId, reqId: rec.reqId, ...(questions && questions.length > 0 ? { questions } : {}) });
+                        const pollId = typeof rec.pollId === 'string' && rec.pollId.length > 0 ? rec.pollId : undefined;
+                        const pollLabels = pollId !== undefined && Array.isArray(rec.pollLabels)
+                            ? (rec.pollLabels as unknown[]).slice(0, POLL_OPTIONS_MAX).filter((l): l is string => typeof l === 'string' && l.length > 0).map((l) => l.slice(0, POLL_OPTION_CHARS))
+                            : undefined;
+                        const finToken = pollId !== undefined && typeof rec.finToken === 'string' && rec.finToken.length > 0 ? rec.finToken : undefined;
+                        const pollMultiple = pollId !== undefined && rec.pollMultiple === true ? true : undefined;
+                        const authorUid = pollId !== undefined && typeof rec.authorUid === 'number' && Number.isFinite(rec.authorUid) && rec.authorUid > 0 ? rec.authorUid : undefined;
+                        validQuests.push({
+                            msgId: rec.msgId,
+                            reqId: rec.reqId,
+                            ...(questions && questions.length > 0 ? { questions } : {}),
+                            ...(pollId !== undefined && pollLabels !== undefined && pollLabels.length >= POLL_OPTIONS_MIN ? {
+                                pollId,
+                                pollLabels,
+                                ...(finToken ? { finToken } : {}),
+                                ...(pollMultiple ? { pollMultiple } : {}),
+                                ...(authorUid ? { authorUid } : {}),
+                            } : {}),
+                        });
                     }
                     if (validQuests.length > 0) questRefs = validQuests;
                 }
@@ -1319,7 +1364,7 @@ export class DurevcodeAgent extends BaseAgent {
             .filter(([sig]) => sig.startsWith(`${state.threadId ?? 'dm'}:`))
             .map(([sig, entry]) => ({ sig, ...entry }))
             .slice(-PARTIALS_PERSIST_CAP);
-        const questRefs: Array<{ msgId: number; reqId: string; questions?: string[] }> = [];
+        const questRefs: Array<{ msgId: number; reqId: string; questions?: string[]; pollId?: string; pollLabels?: string[] }> = [];
         for (const [msgId, ref] of this.questReplies) {
             if (ref.sessionId === state.session.id) {
                 const questions = ref.questions
@@ -1327,7 +1372,19 @@ export class DurevcodeAgent extends BaseAgent {
                     .map((item) => (typeof item.question === 'string' ? item.question : ''))
                     .filter((question) => question.length > 0)
                     .map((question) => question.slice(0, PERSISTED_QUESTION_TEXT_CAP));
-                questRefs.push({ msgId, reqId: ref.reqId, ...(questions.length > 0 ? { questions } : {}) });
+                const poll = ref.pollId ? this.questPolls.get(ref.pollId) : undefined;
+                questRefs.push({
+                    msgId,
+                    reqId: ref.reqId,
+                    ...(questions.length > 0 ? { questions } : {}),
+                    ...(ref.pollId && poll ? {
+                        pollId: ref.pollId,
+                        pollLabels: poll.labels,
+                        ...(poll.finToken ? { finToken: poll.finToken } : {}),
+                        ...(poll.questions[0]?.multiple === true ? { pollMultiple: true } : {}),
+                        ...(poll.authorUid ? { authorUid: poll.authorUid } : {}),
+                    } : {}),
+                });
             }
         }
         return {
@@ -2029,8 +2086,34 @@ export class DurevcodeAgent extends BaseAgent {
                 const savedStrings = Array.isArray(refRecord?.questions)
                     ? refRecord.questions.slice(0, 8).filter((q): q is string => typeof q === 'string').map((q) => q.slice(0, PERSISTED_QUESTION_TEXT_CAP))
                     : [];
-                const questions: QuestionRequest['questions'] = savedStrings.map((question) => ({ question, options: [], multiple: false }));
-                this.questReplies.set(refRecord.msgId, { sessionId: session.id, reqId: refRecord.reqId, questions });
+                const pollRestored = refRecord.pollId && Array.isArray(refRecord.pollLabels) && refRecord.pollLabels.length >= POLL_OPTIONS_MIN;
+                const questions: QuestionRequest['questions'] = savedStrings.map((question, idx) => {
+                    if (pollRestored && idx === 0) {
+                        return {
+                            question,
+                            options: (refRecord.pollLabels as string[]).map((label) => ({ label })),
+                            ...(refRecord.pollMultiple === true ? { multiple: true } : {}),
+                        };
+                    }
+                    return { question, options: [], multiple: false };
+                });
+                this.questReplies.set(refRecord.msgId, {
+                    sessionId: session.id,
+                    reqId: refRecord.reqId,
+                    questions,
+                    ...(refRecord.pollId ? { pollId: refRecord.pollId } : {}),
+                });
+                if (refRecord.pollId && Array.isArray(refRecord.pollLabels) && refRecord.pollLabels.length >= POLL_OPTIONS_MIN) {
+                    this.questPolls.set(refRecord.pollId, {
+                        sessionId: session.id,
+                        reqId: refRecord.reqId,
+                        msgId: refRecord.msgId,
+                        questions,
+                        labels: refRecord.pollLabels,
+                        ...(refRecord.finToken ? { finToken: refRecord.finToken } : {}),
+                        ...(refRecord.authorUid ? { authorUid: refRecord.authorUid } : {}),
+                    });
+                }
             }
         }
         state.needsTodoBaseline = state.knownParts.size > 0;
@@ -5845,39 +5928,75 @@ export class DurevcodeAgent extends BaseAgent {
             if (request.questions.length === 0) continue;
             alive.add(request.id);
             if (state.knownQuestions.includes(request.id)) continue;
-            const token = String((this.questSeq += 1));
-            const ctx: QuestionPick = {
+            const draft = this.nativeQuestionsOn() ? this.questionPollDraft(request) : null;
+            const finToken = String((this.questSeq += 1));
+            let sentId = 0;
+            let pollId: string | null = null;
+            try {
+                if (draft) {
+                    const sent = await this.sendQuestionPoll(telegram, state, draft, finToken);
+                    sentId = sent.msgId;
+                    pollId = sent.pollId;
+                    if (!pollId) console.debug('Durevcode question poll returned no poll id (session=' + state.session.id + ').');
+                } else {
+                    const token = finToken;
+                    const ctx: QuestionPick = {
+                        sessionId: state.session.id,
+                        reqId: request.id,
+                        questions: request.questions,
+                        picks: request.questions.map(() => []),
+                        msgId: 0,
+                        token,
+                    };
+                    sentId = await this.deliverMessage(telegram, state, formatQuestion(request), this.questKeyboard(ctx));
+                    ctx.msgId = sentId;
+                    this.questPicks.set(token, ctx);
+                }
+            } catch (error) {
+                if (draft && isRateLimitError(error)) {
+                    this.absorbRateLimit('topic-send', error, 'question poll', state.session.id);
+                    continue;
+                }
+                console.debug('Durevcode question notice failed, will retry:', errorText(error));
+                continue;
+            }
+            state.knownQuestions.push(request.id);
+            this.questReplies.set(sentId, {
                 sessionId: state.session.id,
                 reqId: request.id,
                 questions: request.questions,
-                picks: request.questions.map(() => []),
-                msgId: 0,
-                token,
-            };
-            try {
-                const sentId = await this.deliverMessage(telegram, state, formatQuestion(request), this.questKeyboard(ctx));
-                state.knownQuestions.push(request.id);
-                ctx.msgId = sentId;
-                this.questPicks.set(token, ctx);
-                this.questReplies.set(sentId, { sessionId: state.session.id, reqId: request.id, questions: request.questions });
-                const staleQuestionIds: number[] = [];
-                for (const [msgId, ref] of this.questReplies) {
-                    if (ref.sessionId === state.session.id && ref.reqId === request.id && msgId !== sentId) staleQuestionIds.push(msgId);
+                ...(draft && pollId ? { pollId } : {}),
+            });
+            if (draft && pollId) {
+                const authorUid = state.turnUserId > 0 ? state.turnUserId : this.timelineAttribution(state, Date.now()).uid ?? 0;
+                this.questPolls.set(pollId, {
+                    sessionId: state.session.id,
+                    reqId: request.id,
+                    msgId: sentId,
+                    questions: request.questions,
+                    labels: draft.labels,
+                    finToken,
+                    ...(authorUid > 0 ? { authorUid } : {}),
+                });
+            }
+            const staleQuestionIds: number[] = [];
+            for (const [msgId, ref] of this.questReplies) {
+                if (ref.sessionId === state.session.id && ref.reqId === request.id && msgId !== sentId) staleQuestionIds.push(msgId);
+            }
+            for (const msgId of staleQuestionIds) {
+                for (const [pickToken, pickCtx] of this.questPicks) {
+                    if (pickCtx.sessionId === state.session.id && pickCtx.reqId === request.id && pickCtx.msgId === msgId) this.questPicks.delete(pickToken);
                 }
-                for (const msgId of staleQuestionIds) {
-                    for (const [pickToken, pickCtx] of this.questPicks) {
-                        if (pickCtx.sessionId === state.session.id && pickCtx.reqId === request.id && pickCtx.msgId === msgId) this.questPicks.delete(pickToken);
-                    }
+            }
+            if (staleQuestionIds.length > 0) {
+                const split = this.splitQuestionMsgIds(staleQuestionIds);
+                for (const poll of split.polls) await this.stopPollQuiet(telegram, state, poll.msgId, poll.pollId);
+                for (const poll of split.polls) this.questReplies.delete(poll.msgId);
+                if (await this.disarmReplyKeyboards(telegram, split.cards, 'stale question replace', state.session.id)) {
+                    for (const msgId of split.cards) this.questReplies.delete(msgId);
+                } else if (split.cards.length > 0) {
+                    this.scheduleStaleQuestionDisarm(telegram, state, split.cards, 0);
                 }
-                if (staleQuestionIds.length > 0) {
-                    if (await this.disarmReplyKeyboards(telegram, staleQuestionIds, 'stale question replace', state.session.id)) {
-                        for (const msgId of staleQuestionIds) this.questReplies.delete(msgId);
-                    } else {
-                        this.scheduleStaleQuestionDisarm(telegram, state, staleQuestionIds, 0);
-                    }
-                }
-            } catch (error) {
-                console.debug('Durevcode question notice failed, will retry:', errorText(error));
             }
         }
         state.knownQuestions = state.knownQuestions.filter((id) => alive.has(id));
@@ -5889,10 +6008,159 @@ export class DurevcodeAgent extends BaseAgent {
                 deadReqIds.add(ref.reqId);
             }
         }
-        if (await this.disarmReplyKeyboards(telegram, deadQuestionMsgIds, 'question disarm', state.session.id)) {
-            for (const messageId of deadQuestionMsgIds) this.questReplies.delete(messageId);
+        if (deadQuestionMsgIds.length > 0) {
+            const split = this.splitQuestionMsgIds(deadQuestionMsgIds);
+            for (const poll of split.polls) await this.stopPollQuiet(telegram, state, poll.msgId, poll.pollId);
+            for (const poll of split.polls) this.questReplies.delete(poll.msgId);
+            if (await this.disarmReplyKeyboards(telegram, split.cards, 'question disarm', state.session.id)) {
+                for (const messageId of split.cards) this.questReplies.delete(messageId);
+            }
             for (const reqId of deadReqIds) this.dropQuestionRefs(state.session.id, reqId);
         }
+    }
+
+    private nativeQuestionsOn(): boolean {
+        return this.config.durevcode.nativeQuestions === true;
+    }
+
+    private questionPollDraft(request: QuestionRequest): { question: string; labels: string[]; multiple: boolean } | null {
+        if (request.questions.length !== 1) return null;
+        const item = request.questions[0];
+        const question = truncate(`${item.header ? `${item.header}: ` : ''}${item.question}`.trim(), POLL_QUESTION_CHARS);
+        if (!question) return null;
+        const labels: string[] = [];
+        for (const option of item.options) {
+            const label = truncate(option.label, POLL_OPTION_CHARS);
+            if (label && !labels.includes(label)) labels.push(label);
+        }
+        if (labels.length < POLL_OPTIONS_MIN || labels.length > POLL_OPTIONS_MAX) return null;
+        return { question, labels, multiple: item.multiple === true };
+    }
+
+    private async sendQuestionPoll(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        draft: { question: string; labels: string[]; multiple: boolean },
+        finToken: string,
+    ): Promise<{ msgId: number; pollId: string | null }> {
+        const message = await telegram.sendPoll({
+            chat_id: this.chatIdOf(state),
+            ...(this.isForumLane(state) && state.threadId !== null ? { message_thread_id: state.threadId } : {}),
+            question: draft.question,
+            options: draft.labels,
+            type: 'regular',
+            is_anonymous: true,
+            ...(draft.multiple ? { allows_multiple_answers: true } : {}),
+            reply_markup: {
+                inline_keyboard: [[{ text: en.POLL_FINISH_BUTTON, callback_data: `pollfin:${finToken}` }]],
+            },
+            disable_notification: true,
+        });
+        const pollId = (message as unknown as { poll?: { id?: string } }).poll?.id ?? null;
+        return { msgId: message.message_id, pollId };
+    }
+
+    private splitQuestionMsgIds(messageIds: number[]): { cards: number[]; polls: Array<{ msgId: number; pollId: string }> } {
+        const cards: number[] = [];
+        const polls: Array<{ msgId: number; pollId: string }> = [];
+        for (const msgId of messageIds) {
+            const pollId = this.questReplies.get(msgId)?.pollId;
+            if (pollId) polls.push({ msgId, pollId });
+            else cards.push(msgId);
+        }
+        return { cards, polls };
+    }
+
+    private async stopPollQuiet(telegram: TelegramBotPlugin, state: WatchedSession, msgId: number, pollId: string): Promise<void> {
+        const known = this.questPolls.get(pollId);
+        this.questPolls.delete(pollId);
+        if (known?.closed) return;
+        try {
+            await telegram.stopPoll({ chat_id: this.chatIdOf(state), message_id: msgId });
+        } catch (error) {
+            console.debug('Durevcode poll stop failed:', errorText(error));
+        }
+    }
+
+    private handlePollCount(poll: { id: string; options?: Array<{ voter_count?: number }> }): void {
+        const tracked = this.questPolls.get(poll.id);
+        if (!tracked || tracked.closed) return;
+        const counts = (poll.options ?? []).map((option) => (typeof option.voter_count === 'number' && option.voter_count > 0 ? option.voter_count : 0));
+        if (counts.length > 0) tracked.votes = counts;
+    }
+
+    private pollVoteLabels(tracked: PollRef, options?: Array<{ voter_count?: number }>): string[] {
+        const source = options && options.length > 0
+            ? options.map((option) => (typeof option.voter_count === 'number' && option.voter_count > 0 ? option.voter_count : 0))
+            : (tracked.votes ?? []).map((count) => (count > 0 ? count : 0));
+        const voted = source
+            .map((count, idx) => ({ idx, count }))
+            .filter((entry) => entry.count > 0 && typeof tracked.labels[entry.idx] === 'string' && tracked.labels[entry.idx].length > 0);
+        if (voted.length === 0) return [];
+        if (tracked.questions[0]?.multiple === true) return voted.map((entry) => tracked.labels[entry.idx]);
+        const sorted = [...voted].sort((a, b) => b.count - a.count || a.idx - b.idx);
+        if (sorted.length > 1 && sorted[0].count === sorted[1].count) {
+            return [voted.map((entry) => `${tracked.labels[entry.idx]} (${entry.count})`).join(', ')];
+        }
+        return [tracked.labels[sorted[0].idx]];
+    }
+
+    private async finishPoll(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'replyQuestion'>,
+        query: CallbackQuery,
+        token: string,
+        dismiss: (text?: string) => Promise<void>,
+    ): Promise<void> {
+        const found = [...this.questPolls.entries()].find(([, ref]) => ref.finToken === token);
+        if (!found) {
+            await dismiss(en.OUTDATED_ASK_AGAIN);
+            return;
+        }
+        const [pollId, tracked] = found;
+        if (tracked.closed) {
+            this.questPolls.delete(pollId);
+            await dismiss(en.OUTDATED_ASK_AGAIN);
+            return;
+        }
+        const state = this.watched.get(tracked.sessionId);
+        if (!state) {
+            this.questPolls.delete(pollId);
+            await dismiss();
+            return;
+        }
+        if (tracked.authorUid && tracked.authorUid > 0 && query.from?.id !== tracked.authorUid) {
+            await dismiss(en.POLL_AUTHOR_ONLY);
+            return;
+        }
+        if (this.resolvingQuestions.has(tracked.reqId)) {
+            await dismiss();
+            return;
+        }
+        await dismiss();
+        let finalOptions: Array<{ voter_count?: number }> | undefined;
+        try {
+            const stopped = await telegram.stopPoll({ chat_id: this.chatIdOf(state), message_id: tracked.msgId });
+            finalOptions = (stopped as unknown as { options?: Array<{ voter_count?: number }> }).options;
+        } catch (error) {
+            if (isRateLimitError(error)) {
+                const waitSec = this.absorbRateLimit('topic-edit', error, 'question poll', tracked.sessionId);
+                await dismiss(`Rate limited, try again in ${waitSec}s.`);
+                return;
+            }
+            console.debug('Durevcode poll finish failed:', errorText(error));
+            return;
+        }
+        tracked.closed = true;
+        const labels = this.pollVoteLabels(tracked, finalOptions);
+        const liveRef = this.questReplies.get(tracked.msgId);
+        const questions = liveRef && liveRef.reqId === tracked.reqId ? liveRef.questions : tracked.questions;
+        const ref = { sessionId: tracked.sessionId, reqId: tracked.reqId, questions, pollId };
+        if (labels.length === 0) {
+            await this.resolveQuestion(telegram, opencode, state, ref, [[en.POLL_NO_VOTES]]);
+            return;
+        }
+        await this.resolveQuestion(telegram, opencode, state, ref, [labels]);
     }
 
     private scheduleStaleQuestionDisarm(telegram: TelegramBotPlugin, state: WatchedSession, messageIds: number[], attempt: number): void {
@@ -5919,7 +6187,10 @@ export class DurevcodeAgent extends BaseAgent {
             if (ctx.sessionId === sessionId && ctx.reqId === reqId) this.questPicks.delete(token);
         }
         for (const [messageId, ref] of this.questReplies) {
-            if (ref.sessionId === sessionId && ref.reqId === reqId) this.questReplies.delete(messageId);
+            if (ref.sessionId === sessionId && ref.reqId === reqId) {
+                if (ref.pollId) this.questPolls.delete(ref.pollId);
+                this.questReplies.delete(messageId);
+            }
         }
     }
 
@@ -5931,14 +6202,20 @@ export class DurevcodeAgent extends BaseAgent {
         }
         if (msgIds.length === 0 && state.knownQuestions.length === 0 && this.questPicks.size === 0) return;
         state.knownQuestions = [];
-        if (await this.disarmReplyKeyboards(telegram, msgIds, 'question disarm', state.session.id)) {
+        const split = this.splitQuestionMsgIds(msgIds);
+        for (const poll of split.polls) await this.stopPollQuiet(telegram, state, poll.msgId, poll.pollId);
+        for (const poll of split.polls) this.questReplies.delete(poll.msgId);
+        if (await this.disarmReplyKeyboards(telegram, split.cards, 'question disarm', state.session.id)) {
             this.dropSessionQuestionRefs(sessionId);
         }
     }
 
     private dropSessionQuestionRefs(sessionId: string): void {
         for (const [messageId, ref] of this.questReplies) {
-            if (ref.sessionId === sessionId) this.questReplies.delete(messageId);
+            if (ref.sessionId === sessionId) {
+                if (ref.pollId) this.questPolls.delete(ref.pollId);
+                this.questReplies.delete(messageId);
+            }
         }
         for (const [token, ctx] of this.questPicks) {
             if (ctx.sessionId === sessionId) this.questPicks.delete(token);
@@ -5983,19 +6260,39 @@ export class DurevcodeAgent extends BaseAgent {
         }
         state.knownQuestions = state.knownQuestions.filter((id) => id !== ref.reqId);
         const request: QuestionRequest = { id: ref.reqId, sessionID: state.session.id, questions: ref.questions };
+        let questMsgId: number | null = null;
+        let questPollId: string | null = null;
+        for (const [messageId, live] of this.questReplies) {
+            if (live.sessionId === state.session.id && live.reqId === ref.reqId) {
+                questMsgId = messageId;
+                questPollId = live.pollId ?? null;
+                break;
+            }
+        }
         if (!resolved) {
             console.debug(`Durevcode question gone on server (session=${state.session.id} req=${ref.reqId}).`);
             const deadMsgIds: number[] = [];
             for (const [messageId, live] of this.questReplies) {
                 if (live.sessionId === state.session.id && live.reqId === ref.reqId) deadMsgIds.push(messageId);
             }
-            if (await this.disarmReplyKeyboards(telegram, deadMsgIds, 'question disarm', state.session.id)) {
-                this.dropQuestionRefs(state.session.id, ref.reqId);
+            const split = this.splitQuestionMsgIds(deadMsgIds);
+            for (const poll of split.polls) await this.stopPollQuiet(telegram, state, poll.msgId, poll.pollId);
+            for (const poll of split.polls) this.questReplies.delete(poll.msgId);
+            if (await this.disarmReplyKeyboards(telegram, split.cards, 'question disarm', state.session.id)) {
+                for (const messageId of split.cards) this.questReplies.delete(messageId);
             }
+            this.dropQuestionRefs(state.session.id, ref.reqId);
             this.resolvingQuestions.delete(ref.reqId);
             return;
         }
         const text = formatQuestionResolved(request, answers);
+        if (questPollId && questMsgId !== null) {
+            await this.stopPollQuiet(telegram, state, questMsgId, questPollId);
+            await this.safeReply(telegram, state, text);
+            this.dropQuestionRefs(state.session.id, ref.reqId);
+            this.resolvingQuestions.delete(ref.reqId);
+            return;
+        }
         const settled = await this.editQuestionMessage(telegram, state, request, text, true);
         if (settled) this.dropQuestionRefs(state.session.id, ref.reqId);
         this.resolvingQuestions.delete(ref.reqId);
@@ -6516,6 +6813,12 @@ export class DurevcodeAgent extends BaseAgent {
         if (docMatch) {
             if (!(await this.gateCallback(query, 'thought doc', dismiss))) return;
             await this.applyThoughtDoc(telegram, query, Number(docMatch[1]), dismiss);
+            return;
+        }
+        const pollFinMatch = data.match(/^pollfin:(\d{1,10})$/);
+        if (pollFinMatch) {
+            if (!(await this.gateCallback(query, 'question', dismiss))) return;
+            await this.finishPoll(telegram, opencode, query, pollFinMatch[1], dismiss);
             return;
         }
         const modeMatch = data.match(/^mode:(plan|plain|build|observer)$/);

@@ -27,6 +27,7 @@ function stubTelegram() {
     let topicNameImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
     let memberImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
     let docImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
+    let stopPollImpl: ((params: Record<string, unknown>) => Promise<unknown>) | null = null;
     const telegram = {
         sendMessage: async (params: Record<string, unknown>) => {
             calls.push({ op: 'send', params, at: stamp() });
@@ -82,6 +83,16 @@ function stubTelegram() {
             sentId += 1;
             return { message_id: sentId };
         },
+        sendPoll: async (params: Record<string, unknown>) => {
+            calls.push({ op: 'poll', params, at: stamp() });
+            sentId += 1;
+            return { message_id: sentId, poll: { id: `poll_${sentId}`, question: params.question, options: params.options } };
+        },
+        stopPoll: async (params: Record<string, unknown>) => {
+            calls.push({ op: 'stoppoll', params, at: stamp() });
+            if (stopPollImpl) return stopPollImpl(params);
+            return { id: 'poll_x', is_closed: true };
+        },
         sendMessageDraft: async (params: Record<string, unknown>) => {
             calls.push({ op: 'draft', params, at: stamp() });
             if (draftImpl) return draftImpl(params);
@@ -116,6 +127,7 @@ function stubTelegram() {
         setTopicNameImpl: (fn: typeof topicNameImpl) => { topicNameImpl = fn; },
         setMemberImpl: (fn: typeof memberImpl) => { memberImpl = fn; },
         setDocImpl: (fn: typeof docImpl) => { docImpl = fn; },
+        setStopPollImpl: (fn: typeof stopPollImpl) => { stopPollImpl = fn; },
     };
 }
 
@@ -7016,6 +7028,27 @@ describe('durevcode questions', () => {
         return String([...picks.keys()].pop() ?? '0');
     }
 
+    function pollFinToken(agent: unknown): string {
+        const polls = (agent as unknown as { questPolls: Map<string, { finToken?: string }> }).questPolls;
+        for (const ref of polls.values()) {
+            if (ref.finToken) return ref.finToken;
+        }
+        return '';
+    }
+
+    function finishMsg(over: Record<string, unknown>): Record<string, unknown> {
+        return {
+            id: 'cb_fin',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 300, chat: { id: 1, type: 'supergroup' } },
+            ...over,
+        };
+    }
+
+    function stopPollResult(counts: number[]): Record<string, unknown> {
+        return { id: 'poll_x', is_closed: true, options: counts.map((voter_count, idx) => ({ text: `opt${idx}`, voter_count })) };
+    }
+
     test('question is posted once with an inline keyboard', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -7112,6 +7145,222 @@ describe('durevcode questions', () => {
         assert.equal(calls.filter((c) => c.op === 'edit').length, 1);
         assert.equal(calls.filter((c) => c.op === 'ack').length, 2);
         assert.ok(!calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Already resolved')));
+    });
+
+    test('native poll replaces the card when the env flag is on', async () => {
+        const agent = makeAgent({ nativeQuestions: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const fake = { listQuestions: async () => [QUEST] };
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        const polls = calls.filter((c) => c.op === 'poll');
+        assert.equal(polls.length, 1);
+        const params = polls[0].params as Record<string, unknown>;
+        assert.equal(params.question, 'Pick: Which one?');
+        assert.deepEqual(params.options, ['Alpha', 'Beta']);
+        assert.equal(params.is_anonymous, true);
+        assert.equal(params.allows_multiple_answers, undefined);
+        assert.equal(params.message_thread_id, (state as unknown as { threadId: number }).threadId);
+        const markup = params.reply_markup as { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+        assert.equal(markup.inline_keyboard.length, 1);
+        assert.equal(markup.inline_keyboard[0][0].text, '✅ Finish vote');
+        assert.ok(/^pollfin:\d+$/.test(markup.inline_keyboard[0][0].callback_data), 'the finish knob carries a token');
+        assert.equal(pollFinToken(agent), markup.inline_keyboard[0][0].callback_data.split(':')[1]);
+        assert.equal(calls.filter((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Which one?')).length, 0);
+        assert.equal((agent as unknown as { questPicks: Map<string, unknown> }).questPicks.size, 0);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        assert.equal(calls.filter((c) => c.op === 'poll').length, 1, 'no duplicate polls while the question is pending');
+    });
+
+    test('the finish button resolves the poll by majority and a late press is ignored', async () => {
+        const agent = makeAgent({ nativeQuestions: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setStopPollImpl } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const answered: Array<{ sessionId: string; reqId: string; answers: string[][] }> = [];
+        const fake = {
+            listQuestions: async () => [QUEST],
+            replyQuestion: async (sessionId: string, reqId: string, answers: string[][]) => {
+                answered.push({ sessionId, reqId, answers });
+                return true;
+            },
+        };
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        const questPolls = (agent as unknown as { questPolls: Map<string, { msgId: number }> }).questPolls;
+        assert.equal(questPolls.size, 1);
+        const token = pollFinToken(agent);
+        assert.ok(token, 'the poll carries a finish token');
+        setStopPollImpl(async () => stopPollResult([2, 1]));
+        await agent.handleCallback(telegram, fake, finishMsg({ id: 'cb_fin1', data: `pollfin:${token}` }));
+        assert.deepEqual(answered, [{ sessionId: 'ses_test01', reqId: 'que_1', answers: [['Alpha']] }], 'the strict majority wins');
+        assert.equal(calls.filter((c) => c.op === 'stoppoll').length, 1, 'the poll is closed exactly once');
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Alpha')));
+        assert.equal(questPolls.size, 0);
+        assert.equal((agent as unknown as { questReplies: Map<unknown, unknown> }).questReplies.size, 0);
+        await agent.handleCallback(telegram, fake, finishMsg({ id: 'cb_fin2', data: `pollfin:${token}` }));
+        await agent.handleCallback(telegram, fake, finishMsg({ id: 'cb_fin3', data: 'pollfin:999999' }));
+        assert.equal(answered.length, 1, 'late and unknown finish presses are ignored');
+        const ack = [...calls].reverse().find((c) => c.op === 'ack');
+        assert.ok(String((ack?.params as Record<string, unknown> | undefined)?.text ?? '').includes('Outdated'), 'a stale finish press says so');
+    });
+
+    test('multiple-choice question sends a checkbox poll and collects every voted option', async () => {
+        const agent = makeAgent({ nativeQuestions: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setStopPollImpl } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const multi = { ...QUEST, questions: [{ ...QUEST.questions[0], multiple: true }] };
+        const answered: Array<{ sessionId: string; reqId: string; answers: string[][] }> = [];
+        const fake = {
+            listQuestions: async () => [multi],
+            replyQuestion: async (sessionId: string, reqId: string, answers: string[][]) => {
+                answered.push({ sessionId, reqId, answers });
+                return true;
+            },
+        };
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        const params = (calls.filter((c) => c.op === 'poll')[0].params) as Record<string, unknown>;
+        assert.equal(params.allows_multiple_answers, true);
+        setStopPollImpl(async () => stopPollResult([1, 2]));
+        await agent.handleCallback(telegram, fake, finishMsg({ id: 'cb_multi', data: `pollfin:${pollFinToken(agent)}` }));
+        assert.deepEqual(answered, [{ sessionId: 'ses_test01', reqId: 'que_1', answers: [['Alpha', 'Beta']] }], 'a checkbox poll collects every voted option');
+    });
+
+    test('a tied single-choice poll lands as free text with per-option counts', async () => {
+        const agent = makeAgent({ nativeQuestions: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setStopPollImpl } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const answered: Array<{ sessionId: string; reqId: string; answers: string[][] }> = [];
+        const fake = {
+            listQuestions: async () => [QUEST],
+            replyQuestion: async (sessionId: string, reqId: string, answers: string[][]) => {
+                answered.push({ sessionId, reqId, answers });
+                return true;
+            },
+        };
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        setStopPollImpl(async () => stopPollResult([1, 1]));
+        await agent.handleCallback(telegram, fake, finishMsg({ id: 'cb_tie', data: `pollfin:${pollFinToken(agent)}` }));
+        assert.equal(answered.length, 1);
+        const tie = answered[0].answers[0][0];
+        assert.ok(tie.includes('Alpha (1)') && tie.includes('Beta (1)'), 'a tie lands as free text with per-option counts');
+    });
+
+    test('the finish falls back to live vote counts when the stop reply has none', async () => {
+        const agent = makeAgent({ nativeQuestions: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const answered: Array<{ sessionId: string; reqId: string; answers: string[][] }> = [];
+        const fake = {
+            listQuestions: async () => [QUEST],
+            replyQuestion: async (sessionId: string, reqId: string, answers: string[][]) => {
+                answered.push({ sessionId, reqId, answers });
+                return true;
+            },
+        };
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        const pollId = [...(agent as unknown as { questPolls: Map<string, unknown> }).questPolls.keys()][0];
+        (agent as unknown as { handlePollCount: (poll: unknown) => void }).handlePollCount({ id: pollId, options: [{ voter_count: 0 }, { voter_count: 3 }] });
+        await agent.handleCallback(telegram, fake, finishMsg({ id: 'cb_live', data: `pollfin:${pollFinToken(agent)}` }));
+        assert.deepEqual(answered, [{ sessionId: 'ses_test01', reqId: 'que_1', answers: [['Beta']] }], 'live counts resolve when the stop reply carries none');
+        assert.equal(calls.filter((c) => c.op === 'stoppoll').length, 1);
+    });
+
+    test('finishing without votes closes the question with a no-votes answer', async () => {
+        const agent = makeAgent({ nativeQuestions: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setStopPollImpl } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        (state as unknown as { turnUserId: number }).turnUserId = 77;
+        const answered: Array<{ sessionId: string; reqId: string; answers: string[][] }> = [];
+        const fake = {
+            listQuestions: async () => [QUEST],
+            replyQuestion: async (sessionId: string, reqId: string, answers: string[][]) => {
+                answered.push({ sessionId, reqId, answers });
+                return true;
+            },
+        };
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        const pollId = [...(agent as unknown as { questPolls: Map<string, unknown> }).questPolls.keys()][0];
+        (agent as unknown as { handlePollCount: (poll: unknown) => void }).handlePollCount({ id: pollId, options: [{ voter_count: 0 }, { voter_count: 0 }] });
+        setStopPollImpl(async () => stopPollResult([0, 0]));
+        const pollsBefore = calls.filter((c) => c.op === 'poll').length;
+        const token = pollFinToken(agent);
+        await agent.handleCallback(telegram, fake, finishMsg({ id: 'cb_zero', from: { id: 77, is_bot: false, first_name: 'Author' }, data: `pollfin:${token}` }));
+        assert.deepEqual(
+            answered,
+            [{ sessionId: 'ses_test01', reqId: 'que_1', answers: [['Poll closed — no votes cast.']] }],
+            'the pending question is answered so the turn unblocks',
+        );
+        assert.equal(calls.filter((c) => c.op === 'stoppoll').length, 1, 'the empty vote still closes the poll');
+        assert.equal(calls.filter((c) => c.op === 'poll').length, pollsBefore, 'the same poll is not re-sent');
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('no votes cast')), 'the resolved summary names the no-votes outcome');
+        assert.equal((agent as unknown as { questPolls: Map<string, unknown> }).questPolls.size, 0, 'the closed poll ref is dropped');
+        assert.equal((agent as unknown as { questReplies: Map<unknown, unknown> }).questReplies.size, 0, 'the question refs are cleaned');
+        assert.deepEqual((state as unknown as { knownQuestions: string[] }).knownQuestions, [], 'the answered question leaves the known list');
+        await agent.handleCallback(telegram, fake, finishMsg({ id: 'cb_again', from: { id: 77, is_bot: false, first_name: 'Author' }, data: `pollfin:${token}` }));
+        assert.equal(answered.length, 1, 'a second press on the closed poll is ignored');
+        assert.equal(calls.filter((c) => c.op === 'stoppoll').length, 1, 'the closed poll is not stopped twice');
+        const staleAck = [...calls].reverse().find((c) => c.op === 'ack');
+        assert.ok(String((staleAck?.params as Record<string, unknown> | undefined)?.text ?? '').includes('Outdated'), 'a stale finish press says so');
+    });
+
+    test('only the prompt author can finish the poll', async () => {
+        const agent = makeAgent({ nativeQuestions: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls, setStopPollImpl } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        (state as unknown as { turnUserId: number }).turnUserId = 77;
+        const answered: Array<{ sessionId: string; reqId: string; answers: string[][] }> = [];
+        const fake = {
+            listQuestions: async () => [QUEST],
+            replyQuestion: async (sessionId: string, reqId: string, answers: string[][]) => {
+                answered.push({ sessionId, reqId, answers });
+                return true;
+            },
+        };
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        await agent.pollQuestions(telegram, fake, state);
+        const tracked = [...(agent as unknown as { questPolls: Map<string, { authorUid?: number }> }).questPolls.values()][0];
+        assert.equal(tracked.authorUid, 77, 'the poll snapshots the turn author');
+        setStopPollImpl(async () => stopPollResult([2, 1]));
+        await agent.handleCallback(telegram, fake, finishMsg({ id: 'cb_other', from: { id: 42, is_bot: false, first_name: 'Other' }, data: `pollfin:${pollFinToken(agent)}` }));
+        assert.equal(answered.length, 0);
+        assert.equal(calls.filter((c) => c.op === 'stoppoll').length, 0, 'the vote is untouched by a non-author');
+        assert.equal((agent as unknown as { questPolls: Map<string, unknown> }).questPolls.size, 1);
+        const ack = [...calls].reverse().find((c) => c.op === 'ack');
+        assert.ok(String((ack?.params as Record<string, unknown> | undefined)?.text ?? '').includes('prompt author'), 'the refusal names the author rule');
+        await agent.handleCallback(telegram, fake, finishMsg({ id: 'cb_author', from: { id: 77, is_bot: false, first_name: 'Author' }, data: `pollfin:${pollFinToken(agent)}` }));
+        assert.deepEqual(answered, [{ sessionId: 'ses_test01', reqId: 'que_1', answers: [['Alpha']] }], 'the author finishes the vote');
+        assert.equal(calls.filter((c) => c.op === 'stoppoll').length, 1);
+    });
+
+    test('multi-question and single-option requests fall back to the inline card', async () => {
+        const agent = makeAgent({ nativeQuestions: true }) as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const two = { ...QUEST, questions: [{ ...QUEST.questions[0], question: 'First?' }, { ...QUEST.questions[0], question: 'Second?' }] };
+        await agent.pollQuestions(telegram, { listQuestions: async () => [two] }, state);
+        await agent.pollQuestions(telegram, { listQuestions: async () => [two] }, state);
+        await agent.pollQuestions(telegram, { listQuestions: async () => [two] }, state);
+        assert.equal(calls.filter((c) => c.op === 'poll').length, 0);
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('First?')));
+        const one = { ...QUEST, id: 'que_2', questions: [{ ...QUEST.questions[0], options: [QUEST.questions[0].options[0]] }] };
+        await agent.pollQuestions(telegram, { listQuestions: async () => [one] }, state);
+        await agent.pollQuestions(telegram, { listQuestions: async () => [one] }, state);
+        await agent.pollQuestions(telegram, { listQuestions: async () => [one] }, state);
+        assert.equal(calls.filter((c) => c.op === 'poll').length, 0);
+        assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Which one?')));
     });
 
     test('concurrent taps on one card resolve once', async () => {

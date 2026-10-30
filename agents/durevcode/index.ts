@@ -113,6 +113,7 @@ const config: DurevcodeConfig = {
         leadMention: optionalFlag('DUREVCODE_LEAD_MENTION', true),
         quoteReplies: optionalFlag('DUREVCODE_QUOTE_REPLIES', true),
         answerFanout: optionalFlag('DUREVCODE_ANSWER_FANOUT', false),
+        nativeQuestions: optionalFlag('DUREVCODE_NATIVE_QUESTIONS', false),
         subagentUsers: optionalFlag('DUREVCODE_SUBAGENT_USERS', true),
         newTopics: optionalFlag('DUREVCODE_NEW_TOPICS', true),
         statePath:
