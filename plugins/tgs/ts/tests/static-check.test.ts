@@ -148,6 +148,54 @@ describe('hasAnimatedProperties', () => {
         }));
         expect(hasAnimatedProperties(anim)).toBe(true);
     });
+
+    it('is true for time-sliced uniform layers (flipbook) with static properties', () => {
+        const anim = parseTgs(tgs({
+            layers: [
+                { ind: 0, ty: 4, ip: 0, op: 90, ks: staticKs },
+                { ind: 1, ty: 4, ip: 90, op: 180, ks: staticKs },
+            ],
+        }));
+        expect(hasAnimatedProperties(anim)).toBe(true);
+    });
+
+    it('is false for multiple full-coverage static layers', () => {
+        const anim = parseTgs(tgs({
+            layers: [
+                { ind: 0, ty: 4, ip: 0, op: 180, ks: staticKs },
+                { ind: 1, ty: 4, ip: 0, op: 180, ks: staticKs },
+            ],
+        }));
+        expect(hasAnimatedProperties(anim)).toBe(false);
+    });
+
+    it('is false for a single full-coverage static layer with partial sibling absent', () => {
+        const anim = parseTgs(tgs({
+            layers: [
+                { ind: 0, ty: 4, ip: 0, op: 180, ks: staticKs },
+            ],
+        }));
+        expect(hasAnimatedProperties(anim)).toBe(false);
+    });
+
+    it('is true when precomposed asset layers have unequal time spans', () => {
+        const anim = parseTgs(tgs({
+            assets: [
+                {
+                    id: 'comp1',
+                    w: 512, h: 512,
+                    layers: [
+                        { ind: 0, ty: 4, ip: 0, op: 90, ks: staticKs },
+                        { ind: 1, ty: 4, ip: 90, op: 180, ks: staticKs },
+                    ],
+                },
+            ],
+            layers: [
+                { ind: 0, ty: 0, refId: 'comp1', ip: 0, op: 180, ks: staticKs },
+            ],
+        }));
+        expect(hasAnimatedProperties(anim)).toBe(true);
+    });
 });describe('hasAnimatedProperties edge cases', () => {
     it('is false when the walk detects a circular reference', () => {
         const anim = parseTgs(tgs({

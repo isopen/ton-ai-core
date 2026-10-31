@@ -37,5 +37,26 @@ export function hasAnimatedProperties(anim: ParsedAnimation): boolean {
             if (isLayerAnimated(layer, seen)) return true;
         }
     }
+    return hasTimedLayers(anim);
+}
+
+function hasTimedLayers(anim: ParsedAnimation): boolean {
+    if (anim.layers.length > 1) {
+        for (const layer of anim.layers) {
+            if (!layer) continue;
+            if (layer.inFrame == null) continue;
+            if (layer.inFrame > anim.inFrame) return true;
+            if (layer.outFrame != null && layer.outFrame < anim.outFrame) return true;
+        }
+    }
+    for (const asset of anim.assets) {
+        const ls = asset.layers || [];
+        if (ls.length <= 1) continue;
+        const s0 = ls[0].inFrame ?? null;
+        const e0 = ls[0].outFrame ?? null;
+        for (const layer of ls) {
+            if ((layer.inFrame ?? null) !== s0 || (layer.outFrame ?? null) !== e0) return true;
+        }
+    }
     return false;
 }
