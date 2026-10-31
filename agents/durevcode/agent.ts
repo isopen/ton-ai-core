@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync,
 import { basename, dirname, join } from 'node:path';
 import { TelegramRateGovernor } from './governor';
 import { BaseAgent, AgentConfig } from '@ton-ai/core';
-import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton } from '@ton-ai/telegram-bot-api';
+import { TelegramBotPlugin, TelegramBotConfig, Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand } from '@ton-ai/telegram-bot-api';
 import { ContextSnapshot, ModelApiInfo, OpencodeConfig, OpencodePlugin, OpencodeServerError, OpencodeServerEvent, PermissionDecision, PermissionRequest, QuestionRequest, RadarEvent, SessionEvent, SessionPermissionRule, SessionRow, pickModeAgents, SpawnedProcess } from '@ton-ai/opencode';
 import { WhisperPlugin } from '@ton-ai/whisper';
 import {
@@ -22,6 +22,7 @@ import {
     formatThinkingFolded,
     formatThought,
     formatThoughtArchive,
+    thinkingHead,
     icon,
     formatTopicName,
     parseTopicTitle,
@@ -39,23 +40,57 @@ import {
 } from './formatter';
 import * as enPack from './langs/en';
 import * as ruPack from './langs/ru';
+import * as zhPack from './langs/zh';
+import * as hiPack from './langs/hi';
 
 export type BotLangPack = {
     [K in keyof typeof enPack]: typeof enPack[K] extends string ? string : typeof enPack[K];
 };
 
 let en: BotLangPack = enPack;
-let langCode: 'en' | 'ru' = 'en';
+let langCode: 'en' | 'ru' | 'zh' | 'hi' = 'en';
 
 export function setBotLang(code: string): boolean {
-    if (code !== 'en' && code !== 'ru') return false;
+    if (code !== 'en' && code !== 'ru' && code !== 'zh' && code !== 'hi') return false;
     langCode = code;
-    en = code === 'ru' ? ruPack : enPack;
+    en = code === 'ru' ? ruPack : code === 'zh' ? zhPack : code === 'hi' ? hiPack : enPack;
     return true;
 }
 
 export function botLangOf(): string {
     return langCode;
+}
+
+// The answer-language directive rides at the tail of every submitted prompt;
+// the opencode session stores that exact text, so every echo comparison and any
+// visible render has to look past the appended directive again.
+const LANG_DIRECTIVES: string[] = [enPack, ruPack, zhPack, hiPack].map((pack) => pack.promptLangDirective());
+
+export function stripPromptDirectiveEcho(text: string): string {
+    for (const directive of LANG_DIRECTIVES) {
+        const suffix = `\n\n[${directive}]`;
+        if (text.endsWith(suffix)) return text.slice(0, text.length - suffix.length).trimEnd();
+    }
+    return text;
+}
+
+function stripDirectiveLines(text: string): string {
+    // The model sometimes repeats the appended directive line back; drop every
+    // standalone `[...]` line so it never reaches a visible answer (and from
+    // there a reply quote). Inline prose quotes stay untouched.
+    let out = text;
+    for (const directive of LANG_DIRECTIVES) {
+        const line = `[${directive}]`;
+        if (!out.includes(line)) continue;
+        out = out
+            .replaceAll(`\n\n${line}\n\n`, '\n\n')
+            .replaceAll(`\n\n${line}`, '')
+            .replaceAll(`${line}\n\n`, '')
+            .replaceAll(`\n${line}\n`, '\n')
+            .replaceAll(`\n${line}`, '')
+            .replaceAll(`${line}\n`, '');
+    }
+    return out;
 }
 
 export const sessionTagOf = (sessionId: string): string => en.sessionTagOf(sessionId);
@@ -281,9 +316,13 @@ interface SettingDef {
     values?: string[];
 }
 
+const LANG_SETTING_DEFS: SettingDef[] = [
+    { key: 'lang', values: ['en', 'ru', 'zh', 'hi'] },
+    { key: 'chatLang', values: ['bot', 'en', 'ru', 'zh', 'hi'] },
+];
+
 const SETTINGS_DEFS: SettingDef[] = [
-    { key: 'lang', values: ['en', 'ru'] },
-    { key: 'chatLang', values: ['bot', 'en', 'ru'] },
+    ...LANG_SETTING_DEFS,
     { key: 'watchOnly', bool: true },
     { key: 'leadMention', bool: true },
     { key: 'quoteReplies', bool: true },
@@ -301,6 +340,9 @@ const SETTINGS_DEFS: SettingDef[] = [
 // Settings whose scope is the whole bot process rather than a single topic/chat:
 // the language pack and the resident whisper server infrastructure.
 const SETTING_GLOBAL_KEYS: ReadonlySet<string> = new Set(['lang', 'voiceServer', 'voiceThreads']);
+
+// Language rows live on their own /langs card, not on the settings card.
+const LANGUAGE_SETTING_KEYS: ReadonlySet<string> = new Set(LANG_SETTING_DEFS.map((def) => def.key));
 
 function sanitizeSettings(raw: Record<string, unknown>): Record<string, boolean | number | string> {
     const merged: Record<string, unknown> = { ...raw };
@@ -628,8 +670,8 @@ export interface DurevcodeWatchConfig {
     answerFanout?: boolean;
     nativeQuestions?: boolean;
     subagentUsers?: boolean;
-    lang?: 'en' | 'ru';
-    chatLang?: 'bot' | 'en' | 'ru';
+    lang?: 'en' | 'ru' | 'zh' | 'hi';
+    chatLang?: 'bot' | 'en' | 'ru' | 'zh' | 'hi';
     whipSticker?: string;
     whipEmojiId?: string;
     newTopics?: boolean;
@@ -925,14 +967,14 @@ export class DurevcodeAgent extends BaseAgent {
     private isSelfSubmitted(sessionId: string, text: string, now: number): boolean {
         const fresh = this.submittedPrompts.filter((entry) => now - entry.at < SUBMITTED_WINDOW_MS);
         if (fresh.length !== this.submittedPrompts.length) this.submittedPrompts = fresh;
-        return fresh.some((entry) => entry.session === sessionId && entry.text === text);
+        return fresh.some((entry) => entry.session === sessionId && (entry.text === text || stripPromptDirectiveEcho(text) === entry.text));
     }
 
     constructor(config: DurevcodeConfig) {
         super(config);
         this.config = config;
         this.applyChatModeConfig();
-        setBotLang(this.config.durevcode.lang === 'ru' ? 'ru' : 'en');
+        setBotLang(this.config.durevcode.lang ?? 'en');
         for (const def of SETTINGS_DEFS) {
             this.settingsBaseline[def.key] = this.settingRawValue(def.key);
         }
@@ -974,6 +1016,29 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
+    private async setupBotCommands(telegram: TelegramBotPlugin): Promise<void> {
+        // The Telegram command menu (Bot API `setMyCommands`) is bot-wide
+        // infrastructure, so the descriptions follow the bot language; /lang is
+        // an alias and gets a hint inside the /langs description.
+        const pack = this.lp('');
+        const commands: BotCommand[] = [
+            { command: 'stop', description: pack.CMD_DESC_STOP },
+            { command: 'status', description: pack.CMD_DESC_STATUS },
+            { command: 'mode', description: pack.CMD_DESC_MODE },
+            { command: 'models', description: pack.CMD_DESC_MODELS },
+            { command: 'settings', description: pack.CMD_DESC_SETTINGS },
+            { command: 'langs', description: pack.CMD_DESC_LANGS },
+            { command: 'sessions', description: pack.CMD_DESC_SESSIONS },
+            { command: 'help', description: pack.CMD_DESC_HELP },
+        ];
+        try {
+            await telegram.setMyCommands({ commands });
+            console.log(`Durevcode bot menu: ${commands.length} commands registered`);
+        } catch (error) {
+            console.warn(`Durevcode bot menu registration failed: ${errorText(error)}.`);
+        }
+    }
+
     protected async onStart(): Promise<void> {
         console.log('Starting durevcode agent...');
 
@@ -997,6 +1062,7 @@ export class DurevcodeAgent extends BaseAgent {
         await this.waitForTelegram(telegram);
         const me = await telegram.getMe();
         console.log(`Durevcode bot: @${me.username ?? me.id}`);
+        await this.setupBotCommands(telegram);
 
         if (this.config.whisper?.enabled === true && !this.isPluginActive(PLUGIN_NAMES.WHISPER)) {
             await this.activatePlugin(PLUGIN_NAMES.WHISPER, this.config.whisper);
@@ -2430,10 +2496,15 @@ export class DurevcodeAgent extends BaseAgent {
             state.finalizedAt = 0;
         }
         switch (event.kind) {
-            case 'text':
+            case 'text': {
+                // Drop any directive line the model echoed back so it never
+                // reaches a visible answer (and from there a reply quote).
+                const cleaned = stripDirectiveLines(event.text);
+                if (cleaned !== event.text) event.text = cleaned;
                 state.turnComplete = false;
                 state.lastText = event.text;
                 break;
+            }
             case 'tool': {
                 state.turnComplete = false;
                 const toolState = toToolState(event.status);
@@ -2814,7 +2885,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (deliveries) {
             for (let i = deliveries.length - 1; i >= 0; i -= 1) {
                 const delivery = deliveries[i];
-                if (delivery.text !== text || delivery.time < at - 2000) continue;
+                if ((delivery.text !== text && stripPromptDirectiveEcho(delivery.text) !== text) || delivery.time < at - 2000) continue;
                 at = delivery.time;
                 pending = false;
                 deliveries.splice(i, 1);
@@ -2834,8 +2905,12 @@ export class DurevcodeAgent extends BaseAgent {
     private acceptEchoAttribution(state: WatchedSession, text: string, eventTime = Date.now()): boolean {
         const tracked = this.promptTracking.get(state.session.id);
         if (!tracked || tracked.length === 0) return false;
-        const probe = text.slice(0, 200);
-        const matched = tracked.find((entry) => !entry.consumed && (entry.text === text || entry.text.slice(0, 200) === probe));
+        // The session stores the prompt with the appended answer-language
+        // directive; compare against the original text so the reply quote and
+        // the @mention lead keep binding.
+        const echo = stripPromptDirectiveEcho(text);
+        const probe = echo.slice(0, 200);
+        const matched = tracked.find((entry) => !entry.consumed && (entry.text === echo || entry.text.slice(0, 200) === probe));
         if (!matched) return false;
         matched.consumed = true;
         matched.pending = false;
@@ -3512,6 +3587,15 @@ export class DurevcodeAgent extends BaseAgent {
         if (command === '/settings') {
             if (!(await this.adminCardGate(telegram, state))) return true;
             await this.sendSettingsCard(telegram, state);
+            return true;
+        }
+        if (command === '/langs' || command === '/lang') {
+            if (!(await this.adminCardGate(telegram, state))) return true;
+            await this.sendLangsCard(telegram, state);
+            return true;
+        }
+        if (command === '/help') {
+            await this.safeReply(telegram, state, this.lp(this.stateScope(state)).helpCardText());
             return true;
         }
         if (replyTo !== undefined) {
@@ -4306,7 +4390,7 @@ export class DurevcodeAgent extends BaseAgent {
     ): Promise<boolean> {
         const en = this.lp(this.stateScope(state));
         if (typeof opencode.spawnRun !== 'function') return false;
-        const child = opencode.spawnRun(state.session.id, text);
+        const child = opencode.spawnRun(state.session.id, this.promptWithLang(this.stateScope(state), text));
         state.cliRun = child;
         state.lastPromptAt = Date.now();
         child.on('exit', (code: unknown) => {
@@ -4449,7 +4533,7 @@ export class DurevcodeAgent extends BaseAgent {
             const postedAt = Date.now();
             const receipt: Awaited<ReturnType<OpencodePlugin['sendPrompt']>> = await opencode.sendPrompt(
                 state.session.id,
-                head,
+                this.promptWithLang(this.stateScope(state), head),
             );
             if (receipt.busy) {
                 this.endFanoutGroup(state, false);
@@ -4610,7 +4694,7 @@ export class DurevcodeAgent extends BaseAgent {
             }
         }
         try {
-            const receipt = await opencode.sendPrompt(run.sessionId, head);
+            const receipt = await opencode.sendPrompt(run.sessionId, this.promptWithLang(this.runScopeOf(run), head));
             if (!receipt.admitted || receipt.busy) throw new Error('subagent session did not admit the prompt');
             run.receiptId = receipt.messageId ?? null;
         } catch (error) {
@@ -5033,21 +5117,38 @@ export class DurevcodeAgent extends BaseAgent {
 
     private chatLang(scope: string): string {
         const scoped = scope === '' ? undefined : this.settingsScopes[scope]?.chatLang;
-        return scoped === 'en' || scoped === 'ru' ? scoped : botLangOf();
+        return scoped === 'en' || scoped === 'ru' || scoped === 'zh' || scoped === 'hi' ? scoped : botLangOf();
     }
 
     private lp(scope: string): BotLangPack {
-        return this.chatLang(scope) === 'ru' ? ruPack : enPack;
+        const code = this.chatLang(scope);
+        return code === 'ru' ? ruPack : code === 'zh' ? zhPack : code === 'hi' ? hiPack : enPack;
     }
 
     private runScopeOf(run: ContendedRun): string {
         return this.scopeKeyOf(run.laneChatId ?? this.config.durevcode.chatId, run.threadId);
     }
 
+    private explicitChatLang(scope: string): 'en' | 'ru' | 'zh' | 'hi' | undefined {
+        const scoped = scope === '' ? undefined : this.settingsScopes[scope]?.chatLang;
+        return scoped === 'en' || scoped === 'ru' || scoped === 'zh' || scoped === 'hi' ? scoped : undefined;
+    }
+
+    private promptWithLang(scope: string, text: string): string {
+        // An explicitly picked Chat language also directs the model's answers: the
+        // directive rides with every submitted prompt so the reply language holds
+        // no matter what language the user writes in.
+        if (!this.explicitChatLang(scope)) return text;
+        return `${text}\n\n[${this.lp(scope).promptLangDirective()}]`;
+    }
+
     private settingRawValue(key: string): boolean | number | string {
         const voice = this.config.whisper;
         switch (key) {
-            case 'lang': return this.config.durevcode.lang === 'ru' ? 'ru' : 'en';
+            case 'lang': {
+                const code = this.config.durevcode.lang;
+                return code === 'ru' || code === 'zh' || code === 'hi' ? code : 'en';
+            }
             case 'chatLang': return this.config.durevcode.chatLang ?? 'bot';
             case 'watchOnly': return this.config.durevcode.watchOnly === true;
             case 'twoColumns': return this.config.durevcode.twoColumns === true;
@@ -5094,7 +5195,7 @@ export class DurevcodeAgent extends BaseAgent {
         const opts = this.ensureWhisperConfig();
         switch (key) {
             case 'lang': {
-                const code = value === 'ru' ? 'ru' : 'en';
+                const code = value === 'ru' || value === 'zh' || value === 'hi' ? value : 'en';
                 this.config.durevcode.lang = code;
                 setBotLang(code);
                 break;
@@ -5150,7 +5251,7 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
-    private async applySettingToggle(key: string, scope: string): Promise<string | null> {
+    private async applySettingToggle(key: string, scope: string, target?: boolean | number | string): Promise<string | null> {
         if (key === 'reset') {
             if (scope !== '') {
                 delete this.settingsScopes[scope];
@@ -5171,8 +5272,8 @@ export class DurevcodeAgent extends BaseAgent {
             next = current === true ? false : true;
         } else if (def.values) {
             const list = def.values;
-            const idx = list.indexOf(String(current));
-            next = list[(idx + 1) % list.length];
+            const wanted = target === undefined ? null : String(target);
+            next = wanted !== null && list.includes(wanted) ? wanted : list[(list.indexOf(String(current)) + 1) % list.length];
         } else {
             return null;
         }
@@ -5201,17 +5302,21 @@ export class DurevcodeAgent extends BaseAgent {
         const en = this.lp(scope);
         const where = scope.startsWith('t') ? 'topic' : 'chat';
         return en.settingsCardText(
-            SETTINGS_DEFS.map((def) => ({ label: en.settingsLabel(def.key), display: this.settingDisplay(def, scope) })),
+            SETTINGS_DEFS
+                .filter((def) => !LANGUAGE_SETTING_KEYS.has(def.key))
+                .map((def) => ({ label: en.settingsLabel(def.key), display: this.settingDisplay(def, scope) })),
             where,
         );
     }
 
     private settingButtons(scope: string): InlineKeyboardButton[] {
         const en = this.lp(scope);
-        const buttons: InlineKeyboardButton[] = SETTINGS_DEFS.map((def) => ({
-            text: `${en.settingsLabel(def.key)} · ${this.settingDisplay(def, scope)}`,
-            callback_data: `set:${def.key}`,
-        }));
+        const buttons: InlineKeyboardButton[] = SETTINGS_DEFS
+            .filter((def) => !LANGUAGE_SETTING_KEYS.has(def.key))
+            .map((def) => ({
+                text: `${en.settingsLabel(def.key)} · ${this.settingDisplay(def, scope)}`,
+                callback_data: `set:${def.key}`,
+            }));
         buttons.push({ text: en.SETTINGS_RESET_ALL, callback_data: 'set:reset' });
         return buttons;
     }
@@ -5270,6 +5375,84 @@ export class DurevcodeAgent extends BaseAgent {
                 return;
             }
             console.debug('Durevcode settings card edit failed:', errorText(error));
+        }
+    }
+
+    private langButtons(scope: string): InlineKeyboardButton[] {
+        const en = this.lp(scope);
+        // The section labels live in the card text above the keyboard (not clickable);
+        // the rows themselves are just short language codes, one row per section.
+        const option = (def: SettingDef, code: string): InlineKeyboardButton => {
+            const label = en.LANG_NAMES[code] ?? code;
+            return {
+                text: code === String(this.settingValue(def.key, scope)) ? `${EMOJI.check} ${label}` : label,
+                callback_data: `lang:${def.key === 'lang' ? 'bot' : 'chat'}:${code}`,
+            };
+        };
+        return [
+            ...['en', 'ru', 'zh', 'hi'].map((code) => option(LANG_SETTING_DEFS[0], code)),
+            ...['en', 'ru', 'zh', 'hi'].map((code) => option(LANG_SETTING_DEFS[1], code)),
+        ];
+    }
+
+    private langsCardText(scope: string): string {
+        const en = this.lp(scope);
+        const where = scope.startsWith('t') ? 'topic' : 'chat';
+        return en.langsCardText(
+            LANG_SETTING_DEFS.map((def) => ({ label: en.settingsLabel(def.key), display: this.settingDisplay(def, scope) })),
+            where,
+        );
+    }
+
+    private langsCardMarkup(scope: string): InlineKeyboardMarkup {
+        const buttons = this.langButtons(scope);
+        // Row 1 picks the bot language, row 2 the chat language; the matching
+        // section headers sit in the card text right above the keyboard.
+        return { inline_keyboard: [buttons.slice(0, 4), buttons.slice(4)] };
+    }
+
+    private relabeledLangsMarkup(scope: string, current: InlineKeyboardButton[][] | undefined): InlineKeyboardMarkup {
+        // Same relabel-in-place contract as the settings card: taps refresh the captions
+        // without touching the row structure.
+        if (!current || current.length === 0) return this.langsCardMarkup(scope);
+        const buttons = this.langButtons(scope);
+        if (current.flat().length !== buttons.length) return this.langsCardMarkup(scope);
+        let index = 0;
+        return { inline_keyboard: current.map((row) => row.map(() => buttons[index++])) };
+    }
+
+    private async sendLangsCard(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        try {
+            const scope = this.stateScope(state);
+            await this.deliverMessage(telegram, state, wellFormed(this.langsCardText(scope)), this.langsCardMarkup(scope));
+        } catch (error) {
+            console.debug('Durevcode langs card send failed:', errorText(error));
+        }
+    }
+
+    private async editLangsCard(
+        telegram: TelegramBotPlugin,
+        state: WatchedSession,
+        messageId: number | null,
+        currentKeyboard?: InlineKeyboardButton[][],
+    ): Promise<void> {
+        if (messageId === null) return;
+        try {
+            const scope = this.stateScope(state);
+            await telegram.editMessageText({
+                chat_id: this.chatIdOf(state),
+                message_id: messageId,
+                text: wellFormed(this.langsCardText(scope)),
+                parse_mode: 'HTML',
+                reply_markup: this.relabeledLangsMarkup(scope, currentKeyboard),
+            });
+        } catch (error) {
+            if (isMessageNotModifiedError(error)) return;
+            if (isRateLimitError(error)) {
+                this.absorbRateLimit('topic-edit', error, 'langs card', state.session.id);
+                return;
+            }
+            console.debug('Durevcode langs card edit failed:', errorText(error));
         }
     }
 
@@ -5674,9 +5857,10 @@ export class DurevcodeAgent extends BaseAgent {
         text: string,
         attempt: number,
     ): Promise<void> {
-        const fullHtml = wellFormed(formatThoughtArchive(Date.now() - since, text));
         const markState = this.watched.get(sessionId);
-        const markup = this.thoughtFoldMarkup(messageId, markState ? this.stateScope(markState) : '');
+        const scope = markState ? this.stateScope(markState) : '';
+        const fullHtml = wellFormed(formatThoughtArchive(Date.now() - since, text, this.lp(scope).THOUGHT_LABEL));
+        const markup = this.thoughtFoldMarkup(messageId, scope);
         const chatId = this.watched.get(sessionId)?.laneChatId ?? this.config.durevcode.chatId;
         try {
             await telegram.editMessageText({
@@ -6777,11 +6961,13 @@ export class DurevcodeAgent extends BaseAgent {
         state.thinkingPainting = true;
         state.thinkingPaintEpoch = paintEpoch;
         const folded = state.thinkingFolded;
+        const en = this.lp(this.stateScope(state));
+        const head = thinkingHead(en.THINKING_LABEL);
         const text = folded
             ? (this.reasoningRepaintOn()
-                ? formatThinkingFolded(Date.now() - (state.thinkingSince ?? Date.now()), state.thinkingText.length)
-                : THINKING_HEAD)
-            : formatThinking(rawText);
+                ? formatThinkingFolded(Date.now() - (state.thinkingSince ?? Date.now()), state.thinkingText.length, head, en.CHARS_LABEL)
+                : head)
+            : formatThinking(rawText, head);
         try {
             if (state.thinkingMessageId === null) {
                 const epoch = this.thinkingEpoch.get(state.session.id) ?? 0;
@@ -7110,6 +7296,30 @@ export class DurevcodeAgent extends BaseAgent {
             await dismiss(applied ?? 'Unknown setting.');
             const existingKeyboard = (query.message?.reply_markup as { inline_keyboard?: InlineKeyboardButton[][] } | undefined)?.inline_keyboard;
             await this.editSettingsCard(
+                telegram,
+                target,
+                query.message?.message_id ?? null,
+                Array.isArray(existingKeyboard) ? existingKeyboard : undefined,
+            );
+            return;
+        }
+        const langMatch = data.match(/^lang:(bot|chat)(?::([A-Za-z]{2,5}))?$/);
+        if (langMatch) {
+            if (!(await this.gateCallback(query, 'settings', dismiss))) return;
+            if (!(await this.isForumAdmin(telegram, query.from?.id))) {
+                await dismiss(en.ADMIN_ONLY_SETTINGS);
+                return;
+            }
+            const target = this.callbackTarget(query, true);
+            if (!target) {
+                await dismiss(en.OUTDATED_ASK_AGAIN);
+                return;
+            }
+            const key = langMatch[1] === 'bot' ? 'lang' : 'chatLang';
+            const applied = await this.applySettingToggle(key, this.queryScope(query), langMatch[2]);
+            await dismiss(applied ?? 'Unknown setting.');
+            const existingKeyboard = (query.message?.reply_markup as { inline_keyboard?: InlineKeyboardButton[][] } | undefined)?.inline_keyboard;
+            await this.editLangsCard(
                 telegram,
                 target,
                 query.message?.message_id ?? null,
@@ -7969,7 +8179,11 @@ export class DurevcodeAgent extends BaseAgent {
             return;
         }
         if (Date.now() < this.rateLimitedUntil) return;
-        const text = formatLiveTool(live.event, Math.max(0, Math.floor((Date.now() - live.startedAt) / 1000)));
+        const text = formatLiveTool(
+            live.event,
+            Math.max(0, Math.floor((Date.now() - live.startedAt) / 1000)),
+            this.lp(this.stateScope(state)).PLAN_LABEL,
+        );
         if (!text) {
             if (live.done) state.liveTool = null;
             return;
@@ -8053,7 +8267,7 @@ export class DurevcodeAgent extends BaseAgent {
         if (Date.now() < this.rateLimitedUntil) return;
         if (state.pending.length === 0 && !state.pendingTodos) return;
         const todos = state.pendingTodos ? state.todos : null;
-        const text = formatConsoleBatch(state.pending, todos);
+        const text = formatConsoleBatch(state.pending, todos, this.lp(this.stateScope(state)).PLAN_LABEL);
         if (!text) {
             state.pending = [];
             state.pendingKeys.clear();

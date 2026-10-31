@@ -113,6 +113,16 @@ describe('formatter', () => {
         assert.ok(batch.indexOf('Plan') < batch.indexOf('bash ls'));
     });
 
+    test('formatConsoleBatch renders the plan label in the chat language', () => {
+        const batch = formatConsoleBatch(
+            [{ kind: 'tool', tool: 'bash', status: 'completed', summary: 'bash ls', output: 'ok', time: 2 }],
+            [{ content: 'write code', state: 'active' }],
+            'План',
+        );
+        assert.ok(batch.includes('План 0/1'), 'the plan header uses the scoped label');
+        assert.ok(!batch.includes('Plan '), 'the English default stays out when a label is passed');
+    });
+
     test('formatConsoleBatch keeps every line without cuts', () => {
         const batch = formatConsoleBatch(
             Array.from({ length: 60 }, (_, i) => ({

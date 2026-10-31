@@ -54,13 +54,14 @@ function optionalFlag(name: string, fallback: boolean): boolean {
     return !['0', 'false', 'no', 'off'].includes(raw.trim().toLowerCase());
 }
 
-function botLang(): 'en' | 'ru' {
-    return (process.env.DUREVCODE_LANG || '').trim().toLowerCase() === 'ru' ? 'ru' : 'en';
+function botLang(): 'en' | 'ru' | 'zh' | 'hi' {
+    const raw = (process.env.DUREVCODE_LANG || '').trim().toLowerCase();
+    return raw === 'ru' || raw === 'zh' || raw === 'hi' ? raw : 'en';
 }
 
-function chatLang(): 'bot' | 'en' | 'ru' {
+function chatLang(): 'bot' | 'en' | 'ru' | 'zh' | 'hi' {
     const raw = (process.env.DUREVCODE_CHAT_LANG || '').trim().toLowerCase();
-    return raw === 'en' || raw === 'ru' ? raw : 'bot';
+    return raw === 'en' || raw === 'ru' || raw === 'zh' || raw === 'hi' ? raw : 'bot';
 }
 
 function userIdList(): number[] {
