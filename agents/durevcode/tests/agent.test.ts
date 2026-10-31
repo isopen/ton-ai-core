@@ -1501,7 +1501,7 @@ describe('durevcode forum control', () => {
         const sentId = 102;
         await agent.handleInbound(telegram, fake.opencode, inboundMsg({ text: '/allow', reply_to_message: { message_id: sentId } }, now));
         assert.deepEqual(fake.replies, [{ sessionId: 'ses_test01', permId: 'per_1', decision: 'once' }]);
-        assert.ok(calls.some((c) => c.op === 'delete' && c.params.message_id === 700), 'the answered /allow bubble is deleted');
+        assert.ok(!calls.some((c) => c.op === 'delete' && c.params.message_id === 700), 'the answered /allow bubble stays in the chat');
         const confirm = calls.filter((c) => c.op === 'send').pop() as { params: Record<string, unknown> };
         assert.ok(String(confirm.params.text).includes('Allowed'));
     });
@@ -1781,7 +1781,7 @@ describe('durevcode forum control', () => {
         await agent.pollPermissions(telegram, fake.opencode, state);
         await agent.handleInbound(telegram, fake.opencode, inboundMsg({ text: '/deny extra words', reply_to_message: { message_id: 102 } }, now));
         assert.deepEqual(fake.replies, [{ sessionId: 'ses_test01', permId: 'per_9', decision: 'reject' }]);
-        assert.ok(calls.some((c) => c.op === 'delete' && c.params.message_id === 700), 'the answered /deny bubble is deleted');
+        assert.ok(!calls.some((c) => c.op === 'delete' && c.params.message_id === 700), 'the answered /deny bubble stays in the chat');
         const confirm = calls.filter((c) => c.op === 'send').pop() as { params: Record<string, unknown> };
         assert.ok(String(confirm.params.text).includes('Already resolved'));
     });
@@ -2680,15 +2680,13 @@ describe('durevcode forum control', () => {
         assert.ok(editedRows2.slice(0, 6).every((row) => row.length === 2), 'the wide card still pairs buttons in place');
     });
 
-    test('a handled typed command is deleted so only the reply card stays', async () => {
+    test('a handled typed command keeps its bubble next to the reply card', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
         await attachWatched(agent, telegram);
         const fake = stubOpencode();
         await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4441, text: '/settings@durevcode_bot' }, now));
-        const deletes = calls.filter((c) => c.op === 'delete');
-        assert.equal(deletes.length, 1, 'the typed command bubble is deleted after handling');
-        assert.equal(deletes[0].params.message_id, 4441, 'the command message id is the one deleted');
+        assert.equal(calls.filter((c) => c.op === 'delete').length, 0, 'the typed command bubble stays after handling');
         assert.ok(calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Settings')), 'the settings card was posted first');
         calls.length = 0;
         await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4442, text: 'plain prompt text' }, now));

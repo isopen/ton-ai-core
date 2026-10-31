@@ -3496,7 +3496,8 @@ export class DurevcodeAgent extends BaseAgent {
             state.laneChatId = lane;
         }
         if (await this.withInteractionLane(state, lane, () => this.dispatchInboxCommand(telegram, opencode, state, text, replyTo))) {
-            await this.deleteCommandMessage(telegram, message);
+            // Typed commands keep their bubbles: the subagent answers quote the
+            // command message, so deleting it would orphan the reply context.
             return;
         }
         if (this.settingBool('watchOnly', this.scopeKeyOf(message.chat.id, threadId))) {
@@ -3539,18 +3540,6 @@ export class DurevcodeAgent extends BaseAgent {
         console.log(
             `Durevcode inbound sync took ${Date.now() - syncMark}ms (session=${state.session.id} ${tag}).`,
         );
-    }
-
-    private async deleteCommandMessage(telegram: TelegramBotPlugin, message: Message): Promise<void> {
-        // Clients autocomplete typed commands to /cmd@botname in groups; once the command
-        // is handled, the bubble is deleted so only the reply card stays behind.
-        const head = (message.text || message.caption || '').trim().split(/\s+/)[0] ?? '';
-        if (!head.startsWith('/')) return;
-        try {
-            await telegram.deleteMessage({ chat_id: message.chat.id, message_id: message.message_id });
-        } catch (error) {
-            console.debug(`Durevcode command delete failed (message=${message.message_id}):`, errorText(error));
-        }
     }
 
     private async dispatchInboxCommand(
@@ -4007,7 +3996,6 @@ export class DurevcodeAgent extends BaseAgent {
                 } else if (queuedText) {
                     const queuedReplyTo = queuedMessage.reply_to_message?.message_id;
                     if (await this.withInteractionLane(state, null, () => this.dispatchInboxCommand(telegram, opencode, state, queuedText, queuedReplyTo))) {
-                        await this.deleteCommandMessage(telegram, queuedMessage);
                         continue;
                     }
                     this.enqueuePrompt(state, queuedText, null);
