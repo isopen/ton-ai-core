@@ -57,6 +57,7 @@ export const SUBAGENT_FINISHED = `${checkIcon()} 子代理已完成任务。`;
 export const SUBAGENT_HINT = '请在命令后直接写任务：/subagent <任务>。';
 export const SUBAGENT_FALLBACK = '没有空闲的子代理槽位——任务已排入主会话队列。';
 export const SUBAGENT_STOPPED = `${icon('stop')} 并行任务已停止。`;
+export const SUBAGENT_TAG = '#子代理';
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} 同样的问题已在另一个主题中运行 — 我也会把答案复制到这里。`;
 export const FANOUT_HOLD_TAGGED =
@@ -130,7 +131,7 @@ export function helpCardText(): string {
 }
 
 export function promptLangDirective(): string {
-    return '无论用户使用什么语言，请始终用中文思考和回答。';
+    return '无论用户使用什么语言，请始终用中文思考和回答；中文是你推理、中间消息和最终答案的唯一语言。';
 }
 export const SETTINGS_LABELS: Record<string, string> = {
     lang: '机器人语言',
@@ -156,14 +157,6 @@ export function shortAgo(now: number, at: number): string {
     if (sec < 3600) return `${Math.round(sec / 60)} 分钟前`;
     if (sec < 172800) return `${Math.round(sec / 3600)} 小时前`;
     return `${Math.round(sec / 86400)} 天前`;
-}
-
-export function subagentDigestNote(task: string, lastText: string): string {
-    return (
-        `${DIGEST_PROMPT_PREFIX} 任务：${task.slice(0, 120)}。 ` +
-        `结果摘要：${(lastText || '（无文本）').slice(0, 400)}。 ` +
-        '请在会话上下文中记录此结果。请勿回复任何内容。'
-    );
 }
 
 export function subagentDispatched(parallel: number): string {
@@ -405,5 +398,11 @@ export function stopControlText(build: boolean): string {
 export function stopMarkup(sessionId: string): InlineKeyboardMarkup {
     return { inline_keyboard: [[
         { text: `${EMOJI.coffee} 停止`, callback_data: `stop:${sessionId}` },
+    ]] };
+}
+
+export function subagentStopMarkup(sessionId: string): InlineKeyboardMarkup {
+    return { inline_keyboard: [[
+        { text: `${EMOJI.coffee} 停止`, callback_data: `substop:${sessionId}` },
     ]] };
 }

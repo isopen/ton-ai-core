@@ -2657,6 +2657,45 @@ describe('durevcode forum control', () => {
         assert.equal(run?.laneChatId, 2, 'the run streams into the side chat');
     });
 
+    test('subagent reasoning streams a tagged thinking card quoted to the author', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as { promptQueue: string[] };
+        const fake = stubOpencode();
+        fake.setCreateImpl(async () => ({ ...SESSION, id: 'ses_think01' }));
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4510, text: '/subagent think hard' }, now));
+        const run = (agent as unknown as { contendedRuns: Array<Record<string, unknown>> }).contendedRuns[0];
+        assert.ok(run, 'the spawn created a contended run');
+        const pairs = [
+            { key: 'srv:th1', event: { kind: 'reasoning', text: 'The user wants tea. Plan: boil water.', time: now + 1000 } },
+            { key: 'srv:th1b', event: { kind: 'text', text: 'Tea is ready.', time: now + 1500 } },
+            { key: 'srv:th2', event: { kind: 'step', tokens: 0, cost: 0, finish: 'stop', time: now + 2000 } },
+        ];
+        const live = { ...fake.opencode, readEvents: async () => pairs };
+        await agent.flushContendedRun(telegram, live as never, state, run as never);
+        const think = calls.find((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes(enPack.THINKING_LABEL));
+        assert.ok(think, 'the thinking card is posted with the subagent tag');
+        assert.ok(String(think?.params.text).trimEnd().endsWith(enPack.SUBAGENT_TAG), 'the tag sits at the bottom of the thinking card');
+        assert.equal(
+            (think?.params as { reply_parameters?: { message_id: number } }).reply_parameters?.message_id,
+            4510,
+            'the thinking card quotes the author task message',
+        );
+        assert.ok(String(think?.params.text).includes(enPack.THINKING_LABEL), 'the live card carries the thinking head');
+        assert.ok(String(think?.params.text).includes('boil water'), 'the live card streams the reasoning text');
+        const answer = calls.find((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Tea is ready.'));
+        assert.ok(answer, 'the answer text streams to the lane');
+        assert.ok(String(answer?.params.text).trimEnd().endsWith(enPack.SUBAGENT_TAG), 'the tag sits at the bottom of the answer message');
+        const folded = calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes(enPack.SUBAGENT_TAG));
+        assert.equal(folded.length, 1, 'the thinking card folds in place');
+        assert.ok(String(folded[0].params.text).includes(enPack.THOUGHT_LABEL), 'the folded card shows the thought header');
+        assert.ok(String(folded[0].params.text).includes('boil water'), 'the folded card keeps the reasoning tail');
+        assert.ok(String(folded[0].params.text).trimEnd().endsWith(enPack.SUBAGENT_TAG), 'the tag stays at the bottom of the folded card');
+        const done = (agent as unknown as { contendedRuns: Array<{ finished: boolean; thinkingMessageId: number | null }> }).contendedRuns[0];
+        assert.equal(done.finished, true, 'the run finished after the stop step');
+        assert.equal(done.thinkingMessageId, null, 'the thinking id is released after the fold');
+    });
+
     test('typed commands keep their bubbles in the chat', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -2840,7 +2879,7 @@ describe('durevcode forum control', () => {
         assert.ok(!plain.text.includes('по-русски'), 'no directive while the scope follows the bot language');
     });
 
-    test('the appended directive keeps the reply quote and @mention attribution bound', async () => {
+    test('the riding directive keeps the reply quote and @mention attribution bound', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
         const state = (await attachWatched(agent, telegram)) as unknown as {
@@ -2857,7 +2896,7 @@ describe('durevcode forum control', () => {
             getSession: async () => SESSION,
             readEvents: async () => [{
                 key: 'db:u9',
-                event: { kind: 'user', text: `сделай это\n\n[${ruPack.promptLangDirective()}]`, time: now },
+                event: { kind: 'user', text: `[${ruPack.promptLangDirective()}]\n\nсделай это\n\n[${ruPack.promptLangDirective()}]`, time: now },
             }],
             readTodos: async () => [],
             getModelLimit: async () => null,
@@ -2884,7 +2923,7 @@ describe('durevcode forum control', () => {
             getSession: async () => SESSION,
             readEvents: async () => [{
                 key: 'db:u10',
-                event: { kind: 'user', text: `do it here\n\n[${hiPack.promptLangDirective()}]`, time: now },
+                event: { kind: 'user', text: `[${hiPack.promptLangDirective()}]\n\ndo it here\n\n[${hiPack.promptLangDirective()}]`, time: now },
             }],
             readTodos: async () => [],
             getModelLimit: async () => null,
@@ -2905,6 +2944,11 @@ describe('durevcode forum control', () => {
             stripPromptDirectiveEcho(`do it\n\n[${ruPack.promptLangDirective()}]`),
             'do it',
             'the appended directive is stripped back out of the session echo',
+        );
+        assert.equal(
+            stripPromptDirectiveEcho(`[${ruPack.promptLangDirective()}]\n\ndo it\n\n[${ruPack.promptLangDirective()}]`),
+            'do it',
+            'head plus tail directives vanish together',
         );
         assert.equal(stripPromptDirectiveEcho('do it'), 'do it', 'plain prompts pass through untouched');
         const holder = {} as { turnComplete: boolean; lastText: string };

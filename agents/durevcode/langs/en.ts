@@ -50,6 +50,7 @@ export const SUBAGENT_FINISHED = `${checkIcon()} Subagent finished the task.`;
 export const SUBAGENT_HINT = 'Write the task right after the command: /subagent <task>.';
 export const SUBAGENT_FALLBACK = 'No free subagent slot — the task is queued for the main session.';
 export const SUBAGENT_STOPPED = `${icon('stop')} Parallel task stopped.`;
+export const SUBAGENT_TAG = '#subagent';
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} Same question is already running in another topic — I will copy the answer here too.`;
 export const FANOUT_HOLD_TAGGED =
@@ -123,7 +124,7 @@ export function helpCardText(): string {
 }
 
 export function promptLangDirective(): string {
-    return 'Think and answer in English regardless of the language the user writes in.';
+    return 'Think and answer in English regardless of the user\'s language; English is the only language for your reasoning, intermediate messages and the final answer.';
 }
 export const SETTINGS_LABELS: Record<string, string> = {
     lang: 'Bot language',
@@ -149,14 +150,6 @@ export function shortAgo(now: number, at: number): string {
     if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
     if (sec < 172800) return `${Math.round(sec / 3600)}h ago`;
     return `${Math.round(sec / 86400)}d ago`;
-}
-
-export function subagentDigestNote(task: string, lastText: string): string {
-    return (
-        `${DIGEST_PROMPT_PREFIX} Task: ${task.slice(0, 120)}. ` +
-        `Result summary: ${(lastText || '(no text)').slice(0, 400)}. ` +
-        'Note this result in the session context. Do not reply with anything.'
-    );
 }
 
 export function subagentDispatched(parallel: number): string {
@@ -398,5 +391,11 @@ export function stopControlText(build: boolean): string {
 export function stopMarkup(sessionId: string): InlineKeyboardMarkup {
     return { inline_keyboard: [[
         { text: `${EMOJI.coffee} Stop`, callback_data: `stop:${sessionId}` },
+    ]] };
+}
+
+export function subagentStopMarkup(sessionId: string): InlineKeyboardMarkup {
+    return { inline_keyboard: [[
+        { text: `${EMOJI.coffee} Stop`, callback_data: `substop:${sessionId}` },
     ]] };
 }

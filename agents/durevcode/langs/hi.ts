@@ -57,6 +57,7 @@ export const SUBAGENT_FINISHED = `${checkIcon()} सबएजेंट ने �
 export const SUBAGENT_HINT = 'कमांड के ठीक बाद कार्य लिखें: /subagent <कार्य>।';
 export const SUBAGENT_FALLBACK = 'कोई मुफ़्त सब-एजेंट स्लॉट नहीं — कार्य मुख्य सेशन की क़तार में लग गया।';
 export const SUBAGENT_STOPPED = `${icon('stop')} समानांतर कार्य रुक गया।`;
+export const SUBAGENT_TAG = '#सबएजेंट';
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} वही प्रश्न किसी अन्य टॉपिक में पहले से चल रहा है — उत्तर यहाँ भी कॉपी करूँगा।`;
 export const FANOUT_HOLD_TAGGED =
@@ -130,7 +131,7 @@ export function helpCardText(): string {
 }
 
 export function promptLangDirective(): string {
-    return 'उपयोगकर्ता किसी भी भाषा में लिखे, विचार और उत्तर हमेशा हिंदी में दें।';
+    return 'उपयोगकर्ता किसी भी भाषा में लिखे, विचार और उत्तर हमेशा हिंदी में ही दें; हिंदी ही आपके विचार, बीच के संदेश और अंतिम उत्तर की एकमात्र भाषा है।';
 }
 export const SETTINGS_LABELS: Record<string, string> = {
     lang: 'बॉट भाषा',
@@ -156,14 +157,6 @@ export function shortAgo(now: number, at: number): string {
     if (sec < 3600) return `${Math.round(sec / 60)}m पहले`;
     if (sec < 172800) return `${Math.round(sec / 3600)}h पहले`;
     return `${Math.round(sec / 86400)}d पहले`;
-}
-
-export function subagentDigestNote(task: string, lastText: string): string {
-    return (
-        `${DIGEST_PROMPT_PREFIX} कार्य: ${task.slice(0, 120)}। ` +
-        `परिणाम सार: ${(lastText || '(कोई टेक्स्ट नहीं)').slice(0, 400)}। ` +
-        'कृपया यह परिणाम सेशन संदर्भ में दर्ज करें। कुछ भी उत्तर न दें।'
-    );
 }
 
 export function subagentDispatched(parallel: number): string {
@@ -405,5 +398,11 @@ export function stopControlText(build: boolean): string {
 export function stopMarkup(sessionId: string): InlineKeyboardMarkup {
     return { inline_keyboard: [[
         { text: `${EMOJI.coffee} रोकें`, callback_data: `stop:${sessionId}` },
+    ]] };
+}
+
+export function subagentStopMarkup(sessionId: string): InlineKeyboardMarkup {
+    return { inline_keyboard: [[
+        { text: `${EMOJI.coffee} रोकें`, callback_data: `substop:${sessionId}` },
     ]] };
 }

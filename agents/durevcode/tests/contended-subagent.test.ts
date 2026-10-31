@@ -71,7 +71,10 @@ function stubTelegram() {
         closeForumTopic: async () => true,
         reopenForumTopic: async () => true,
         sendChatAction: async () => true,
-        editMessageReplyMarkup: async () => true,
+        editMessageReplyMarkup: async (params: Record<string, unknown>) => {
+            calls.push({ op: 'markup', params, at: stamp() });
+            return true;
+        },
         deleteMessage: async () => true,
         answerCallbackQuery: async () => true,
         downloadFile: async () => Buffer.from('x'),
@@ -307,7 +310,7 @@ describe('contended prompts run as parallel subagents', () => {
         assert.deepEqual(fake.prompts, [{ sessionId: CHILD_ID, text: 'dm task with todos open' }], 'the prompt runs on the child session');
     });
 
-    test('subagent events land only in its chat and finish enqueues a digest', async () => {
+    test('subagent events land only in its chat and no digest wakes the main session', async () => {
         const agent = makeAgent();
         const { telegram, calls } = stubTelegram();
         const base = now;
@@ -338,15 +341,53 @@ describe('contended prompts run as parallel subagents', () => {
             'nothing is posted into the forum during the flush',
         );
         assert.equal((agent as unknown as { contendedRuns: unknown[] }).contendedRuns.length, 0, 'the finished run is dropped');
-        assert.ok(
-            fake.prompts.some(
-                (p) => p.sessionId === SESSION.id
-                    && p.text.includes('Background subagent task finished')
-                    && p.text.includes('DM answer part one.'),
-            ),
-            `the digest goes back into the main session, got: ${JSON.stringify(fake.prompts)}`,
+        assert.deepEqual(
+            fake.prompts.filter((p) => p.sessionId === SESSION.id),
+            [],
+            `no digest is dispatched to the main session, got: ${JSON.stringify(fake.prompts)}`,
         );
-        assert.deepEqual(state.promptQueue, [], 'the digest is dispatched, not parked');
+        assert.deepEqual(state.promptQueue, [], 'nothing is parked for the main session');
+    });
+
+    test('the dispatch card carries a Stop button that interrupts its run', async () => {
+        const agent = makeAgent();
+        const { telegram, calls } = stubTelegram();
+        const fake = stubContended([]);
+        const state = await attachWatched(agent, telegram);
+        (agent as unknown as { getPlugin: (n: string) => unknown }).getPlugin = () => fake.opencode;
+        state.stopMessageId = 1;
+        const run = await spawnContended(agent, telegram, state, fake, 'dm task', 7);
+        assert.notEqual(run.dispatchMessageId, null, 'the dispatch message id is stored on the run');
+
+        const dispatch = calls.find((c) => (c.params as Record<string, unknown>).reply_markup !== undefined);
+        assert.ok(dispatch, 'the dispatch card carries a keyboard');
+        const buttons = (dispatch.params as { reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } }).reply_markup.inline_keyboard;
+        assert.equal(buttons.length, 1);
+        assert.equal(buttons[0][0].callback_data, `substop:${CHILD_ID}`);
+        assert.ok(buttons[0][0].text.includes('Stop'));
+
+        await (agent as unknown as {
+            handleCallback: (t: unknown, o: unknown, q: unknown) => Promise<void>;
+        }).handleCallback(telegram, fake.opencode, {
+            id: 'sub-stop-callback-1',
+            from: { id: 42 },
+            message: { chat: { id: 7 }, message_id: 555 },
+            data: `substop:${CHILD_ID}`,
+        });
+
+        assert.deepEqual(fake.interrupts, [CHILD_ID], 'the subagent session is interrupted');
+        assert.equal(run.finished, true, 'the run is marked stopped');
+        assert.equal(run.thinkingMessageId, null, 'nothing to fold, the thinking card was never painted');
+        const sends = calls.filter((c) => c.op === 'send');
+        assert.ok(
+            sends.some((c) => String((c.params as Record<string, unknown>).text).includes('Parallel task stopped.')),
+            'the stopped note lands in the run lane',
+        );
+        const reset = calls.find((c) => c.op === 'markup');
+        assert.ok(reset, 'the dispatch card loses its stop button');
+        assert.equal(JSON.stringify((reset.params as Record<string, unknown>).reply_markup), '{"inline_keyboard":[]}');
+        assert.equal((reset.params as Record<string, unknown>).chat_id, 7);
+        assert.equal((reset.params as Record<string, unknown>).message_id, run.dispatchMessageId);
     });
 
     test('subagent sends parse as HTML and escape raw answer text', async () => {

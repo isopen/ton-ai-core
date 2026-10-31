@@ -57,6 +57,7 @@ export const SUBAGENT_FINISHED = `${checkIcon()} Сабагент заверши
 export const SUBAGENT_HINT = 'Напишите задачу сразу после команды: /subagent <задача>.';
 export const SUBAGENT_FALLBACK = 'Свободного слота субагента нет — задача встала в очередь основной сессии.';
 export const SUBAGENT_STOPPED = `${icon('stop')} Параллельная задача остановлена.`;
+export const SUBAGENT_TAG = '#субагент';
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} Тот же вопрос уже выполняется в другом топике — скопирую ответ и сюда.`;
 export const FANOUT_HOLD_TAGGED =
@@ -130,7 +131,7 @@ export function helpCardText(): string {
 }
 
 export function promptLangDirective(): string {
-    return 'Размышляй и отвечай всегда по-русски, независимо от языка, на котором пишет пользователь.';
+    return 'Размышляй и отвечай всегда по-русски, независимо от языка пользователя; русский — единственный язык твоих рассуждений, промежуточных сообщений и ответа.';
 }
 export const SETTINGS_LABELS: Record<string, string> = {
     lang: 'Язык бота',
@@ -157,14 +158,6 @@ export function shortAgo(now: number, at: number): string {
     if (sec < 3600) return `${Math.round(sec / 60)} мин назад`;
     if (sec < 172800) return `${Math.round(sec / 3600)} ч назад`;
     return `${Math.round(sec / 86400)} д назад`;
-}
-
-export function subagentDigestNote(task: string, lastText: string): string {
-    return (
-        `${DIGEST_PROMPT_PREFIX} Задача: ${task.slice(0, 120)}. ` +
-        `Кратко о результате: ${(lastText || '(нет текста)').slice(0, 400)}. ` +
-        'Отметьте этот результат в контексте сессии. Ничего не отвечайте.'
-    );
 }
 
 export function subagentDispatched(parallel: number): string {
@@ -406,5 +399,11 @@ export function stopControlText(build: boolean): string {
 export function stopMarkup(sessionId: string): InlineKeyboardMarkup {
     return { inline_keyboard: [[
         { text: `${EMOJI.coffee} Стоп`, callback_data: `stop:${sessionId}` },
+    ]] };
+}
+
+export function subagentStopMarkup(sessionId: string): InlineKeyboardMarkup {
+    return { inline_keyboard: [[
+        { text: `${EMOJI.coffee} Стоп`, callback_data: `substop:${sessionId}` },
     ]] };
 }
