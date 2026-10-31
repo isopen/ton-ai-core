@@ -2,6 +2,7 @@ import { getLogger } from '@ton-ai/gram-debug';
 import { startFpsLogging } from '@ton-ai/gram-ui';
 import { setDevWarnings, traceComponent } from '@ton-ai/atom';
 import { initWasmCrypton } from '@ton-ai/crypton';
+import { initTgsWasm } from '@ton-ai/tgs';
 import { GramApp } from './app/gram-app';
 
 const log = getLogger('gram-browser');
@@ -49,6 +50,19 @@ function initApp() {
 
   startFpsLogging();
   (window as any).__wasmReady = wasmReady;
+
+  const tgsImpl = (((process.env as any)?.TGS_IMPL) || 'rust').toLowerCase();
+
+  wasmReady.then(() => {
+    if (tgsImpl === 'ts') {
+      log.info('[tgs] backend = TypeScript (pure JS) — TGS parse via TS');
+      return;
+    }
+    const tgsReady = initTgsWasm();
+    tgsReady.then((ok) => {
+      log.info('[tgs] parse backend = ' + (ok ? 'Rust (WASM)' : 'TypeScript (fallback)'));
+    });
+  });
 
   try {
     if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') {
