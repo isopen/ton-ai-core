@@ -12,7 +12,7 @@ import {
     rocketIcon,
     truncate,
 } from '../formatter';
-import { StatusCardInput, formatTokenShort, opencodeSourceDisplay, settingRow, shortUptime } from './index';
+import { StatusCardInput, formatTokenShort, langSectionLine, opencodeSourceDisplay, settingRow, shortUptime } from './index';
 
 export * from './index';
 
@@ -88,6 +88,39 @@ export const STOPPED_AGAIN = `${icon('stop')} Stopped, send the task again.`;
 export const TOPIC_RESTORE_FAILED = `${icon('fail')} Could not restore the session for this topic, try again.`;
 export const TOPIC_SESSION_CREATE_FAILED = `${icon('fail')} Could not create a session for this topic, try again.`;
 export const ADMIN_GATE_GENERIC = `${icon('denied')} Only forum admins can change this.`;
+export const THINKING_LABEL = 'Thinking';
+export const THOUGHT_LABEL = 'Thought';
+export const CHARS_LABEL = 'chars';
+export const PLAN_LABEL = 'Plan';
+export const CMD_DESC_STOP = 'Interrupt the running turn';
+export const CMD_DESC_STATUS = 'Show the status card';
+export const CMD_DESC_MODE = 'Running mode and watch only';
+export const CMD_DESC_MODELS = 'List or switch the model';
+export const CMD_DESC_SETTINGS = 'Live settings card';
+export const CMD_DESC_LANGS = 'Language settings (also /lang)';
+export const CMD_DESC_SESSIONS = 'List watched sessions';
+export const CMD_DESC_HELP = 'What the bot can do';
+
+export function helpCardText(): string {
+    return [
+        `${icon('bot')} <b>Durevcode</b>`,
+        '',
+        `/stop — ${CMD_DESC_STOP}`,
+        `/status — ${CMD_DESC_STATUS}`,
+        `/mode — ${CMD_DESC_MODE}`,
+        `/models — ${CMD_DESC_MODELS}`,
+        `/settings — ${CMD_DESC_SETTINGS}`,
+        `/langs — ${CMD_DESC_LANGS}`,
+        `/sessions — ${CMD_DESC_SESSIONS}`,
+        `/help — ${CMD_DESC_HELP}`,
+        '',
+        'Everything else you type goes to the agent as a prompt. Reply to a message to keep the quote, @mention to address the answer.',
+    ].join('\n');
+}
+
+export function promptLangDirective(): string {
+    return 'Think and answer in English regardless of the language the user writes in.';
+}
 export const SETTINGS_LABELS: Record<string, string> = {
     lang: 'Bot language',
     chatLang: 'Chat language',
@@ -332,11 +365,25 @@ export function sessionsCardText(rows: string[], count: number, plain: boolean):
 export function settingsCardText(rows: Array<{ label: string; display: string }>, where?: 'topic' | 'chat'): string {
     const lines = rows.map((row) => settingRow(row.label, row.display));
     const scope = where === 'topic'
-        ? 'Values apply to this topic only; Bot language, Whisper server/threads stay bot-wide.'
+        ? 'Values apply to this topic only; Whisper server/threads stay bot-wide.'
         : where === 'chat'
-            ? 'Values apply to this chat only; Bot language, Whisper server/threads stay bot-wide.'
+            ? 'Values apply to this chat only; Whisper server/threads stay bot-wide.'
             : 'Overrides survive restarts.';
     return `${icon('gears')} <b>Settings</b>\n${lines.join('\n')}\n\nTap a row to switch it. ${scope}\n`;
+}
+
+export function langsCardText(rows: Array<{ label: string; display: string }>, where?: 'topic' | 'chat'): string {
+    const [bot, chat] = rows;
+    const lines = [
+        langSectionLine('bot', bot?.label ?? 'lang', bot?.display ?? '', 'top row'),
+        langSectionLine('chat', chat?.label ?? 'chatLang', chat?.display ?? '', 'bottom row'),
+    ];
+    const scope = where === 'topic'
+        ? 'Bot language applies to the whole bot; Chat language applies to this topic only.'
+        : where === 'chat'
+            ? 'Bot language applies to the whole bot; Chat language applies to this chat only.'
+            : 'Bot language applies to the whole bot; Chat language is per topic or chat.';
+    return `${icon('globe')} <b>Languages</b>\n\n${lines.join('\n')}\n\nPick a language in the matching row below. ${scope}\n`;
 }
 
 export function stopControlText(build: boolean): string {

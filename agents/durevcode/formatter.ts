@@ -44,6 +44,7 @@ export const EMOJI = {
     thinking: '💪',
     gears: '⚙️',
     rocket: '🚀',
+    globe: '🌐',
 } as const;
 const ANIM_ID: Record<string, string> = {
     stop: '5388942221305196361',
@@ -107,8 +108,8 @@ const HTML_BALANCED_TAGS = new Set([
 const STOP_COMMAND_LINE = /^\/stop(?:@[A-Za-z0-9_]+)?$/;
 export const THINKING_HEAD = `${icon('soon')} Thinking`;
 
-export function formatLiveTool(event: RadarEvent, elapsedSec?: number): string {
-    if (event.kind !== 'tool') return formatConsoleBatch([event], null);
+export function formatLiveTool(event: RadarEvent, elapsedSec?: number, planLabel: string = 'Plan'): string {
+    if (event.kind !== 'tool') return formatConsoleBatch([event], null, planLabel);
     const span = elapsedSec ?? event.durationSec;
     const output = event.output ?? '';
     let tail = output.length > LIVE_OUTPUT_MAX ? `…${output.slice(-LIVE_OUTPUT_MAX)}` : output;
@@ -494,9 +495,9 @@ export function todoIcon(state: TodoState): string {
     return icon('queued');
 }
 
-export function todoLines(todos: TodoItem[]): string[] {
+export function todoLines(todos: TodoItem[], label: string = 'Plan'): string[] {
     const done = todos.filter((t) => t.state === 'done').length;
-    const lines = [`${icon('plan')} Plan ${done}/${todos.length}`];
+    const lines = [`${icon('plan')} ${label} ${done}/${todos.length}`];
     for (const todo of todos) {
         lines.push(`${todoIcon(todo.state)} ${escapeHtml(truncate(todo.content, 120))}`);
     }
@@ -617,14 +618,18 @@ function reasoningTail(text: string, cap: number): string | null {
     return escapeHtml(cut ? `…${tail}` : tail);
 }
 
-export function formatThinking(text: string): string {
-    const tail = reasoningTail(text, TOOL_OUTPUT_CAP);
-    if (!tail) return THINKING_HEAD;
-    return `${THINKING_HEAD}\n<blockquote>${tail}</blockquote>`;
+export function thinkingHead(label: string): string {
+    return `${icon('soon')} ${label}`;
 }
 
-export function formatThinkingFolded(ms: number, chars: number): string {
-    return `${THINKING_HEAD} (${formatThinkingTime(ms)} · ${Math.max(0, Math.round(chars))} chars)`;
+export function formatThinking(text: string, head: string = THINKING_HEAD): string {
+    const tail = reasoningTail(text, TOOL_OUTPUT_CAP);
+    if (!tail) return head;
+    return `${head}\n<blockquote>${tail}</blockquote>`;
+}
+
+export function formatThinkingFolded(ms: number, chars: number, head: string = THINKING_HEAD, charsLabel: string = 'chars'): string {
+    return `${head} (${formatThinkingTime(ms)} · ${Math.max(0, Math.round(chars))} ${charsLabel})`;
 }
 
 export function formatThinkingTime(ms: number): string {
@@ -634,21 +639,21 @@ export function formatThinkingTime(ms: number): string {
     return `${Math.floor(secs / 60)}m ${secs % 60}s`;
 }
 
-export function formatThought(ms: number): string {
-    return `${icon('thinking')} Thought (${formatThinkingTime(ms)})`;
+export function formatThought(ms: number, label: string = 'Thought'): string {
+    return `${icon('thinking')} ${label} (${formatThinkingTime(ms)})`;
 }
 
-export function formatThoughtArchive(ms: number, text: string): string {
-    const head = formatThought(ms);
+export function formatThoughtArchive(ms: number, text: string, label?: string): string {
+    const head = formatThought(ms, label);
     const tail = reasoningTail(text, THOUGHT_ARCHIVE_CAP);
     if (!tail) return head;
     return `${head}\n<blockquote expandable>${tail}</blockquote>`;
 }
 
-export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | null): string {
+export function formatConsoleBatch(events: RadarEvent[], todos: TodoItem[] | null, planLabel: string = 'Plan'): string {
     const chunks: string[][] = [];
     if (todos && todos.length > 0) {
-        chunks.push(todoLines(todos));
+        chunks.push(todoLines(todos, planLabel));
     }
     for (const event of events) {
         switch (event.kind) {

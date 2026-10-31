@@ -15,6 +15,7 @@ import {
 import {
     StatusCardInput,
     formatTokenShort,
+    langSectionLine,
     opencodeSourceDisplay,
     settingRow,
     shortUptime,
@@ -94,6 +95,39 @@ export const STOPPED_AGAIN = `${icon('stop')} Остановлено, отпра
 export const TOPIC_RESTORE_FAILED = `${icon('fail')} Не удалось восстановить сессию для этого топика, попробуйте ещё раз.`;
 export const TOPIC_SESSION_CREATE_FAILED = `${icon('fail')} Не удалось создать сессию для этого топика, попробуйте ещё раз.`;
 export const ADMIN_GATE_GENERIC = `${icon('denied')} Менять это могут только админы форума.`;
+export const THINKING_LABEL = 'Размышляю';
+export const THOUGHT_LABEL = 'Размышления';
+export const CHARS_LABEL = 'симв.';
+export const PLAN_LABEL = 'План';
+export const CMD_DESC_STOP = 'Прервать текущий ход';
+export const CMD_DESC_STATUS = 'Показать карточку статуса';
+export const CMD_DESC_MODE = 'Режим работы и watch only';
+export const CMD_DESC_MODELS = 'Список или смена модели';
+export const CMD_DESC_SETTINGS = 'Карточка живых настроек';
+export const CMD_DESC_LANGS = 'Языковые настройки (также /lang)';
+export const CMD_DESC_SESSIONS = 'Список отслеживаемых сессий';
+export const CMD_DESC_HELP = 'Что умеет бот';
+
+export function helpCardText(): string {
+    return [
+        `${icon('bot')} <b>Durevcode</b>`,
+        '',
+        `/stop — ${CMD_DESC_STOP}`,
+        `/status — ${CMD_DESC_STATUS}`,
+        `/mode — ${CMD_DESC_MODE}`,
+        `/models — ${CMD_DESC_MODELS}`,
+        `/settings — ${CMD_DESC_SETTINGS}`,
+        `/langs — ${CMD_DESC_LANGS}`,
+        `/sessions — ${CMD_DESC_SESSIONS}`,
+        `/help — ${CMD_DESC_HELP}`,
+        '',
+        'Всё остальное, что вы пишете, уходит агенту как промпт. Ответьте на сообщение — сохранится цитата, упомяните @username — ответ будет адресован.',
+    ].join('\n');
+}
+
+export function promptLangDirective(): string {
+    return 'Размышляй и отвечай всегда по-русски, независимо от языка, на котором пишет пользователь.';
+}
 export const SETTINGS_LABELS: Record<string, string> = {
     lang: 'Язык бота',
     chatLang: 'Язык чата',
@@ -339,11 +373,25 @@ export function sessionsCardText(rows: string[], count: number, plain: boolean):
 export function settingsCardText(rows: Array<{ label: string; display: string }>, where?: 'topic' | 'chat'): string {
     const lines = rows.map((row) => settingRow(row.label, row.display));
     const scope = where === 'topic'
-        ? 'Значения действуют только в этом топике; Язык бота, Whisper-сервер/потоки — на весь бот.'
+        ? 'Значения действуют только в этом топике; Whisper-сервер/потоки — на весь бот.'
         : where === 'chat'
-            ? 'Значения действуют только в этом чате; Язык бота, Whisper-сервер/потоки — на весь бот.'
+            ? 'Значения действуют только в этом чате; Whisper-сервер/потоки — на весь бот.'
             : 'Переопределения переживают рестарты.';
     return `${icon('gears')} <b>Настройки</b>\n${lines.join('\n')}\n\nНажмите на строку, чтобы переключить. ${scope}\n`;
+}
+
+export function langsCardText(rows: Array<{ label: string; display: string }>, where?: 'topic' | 'chat'): string {
+    const [bot, chat] = rows;
+    const lines = [
+        langSectionLine('bot', bot?.label ?? 'lang', bot?.display ?? '', 'верхний ряд'),
+        langSectionLine('chat', chat?.label ?? 'chatLang', chat?.display ?? '', 'нижний ряд'),
+    ];
+    const scope = where === 'topic'
+        ? 'Язык бота — на весь бот; язык чата — только этот топик.'
+        : where === 'chat'
+            ? 'Язык бота — на весь бот; язык чата — только этот чат.'
+            : 'Язык бота — на весь бот; язык чата — по топикам/чатам.';
+    return `${icon('globe')} <b>Языки</b>\n\n${lines.join('\n')}\n\nВыберите язык в соответствующем ряду ниже. ${scope}\n`;
 }
 
 export function stopControlText(build: boolean): string {
