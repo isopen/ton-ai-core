@@ -1,0 +1,25 @@
+[package]
+name = "tgs"
+version = "0.1.0"
+edition = "2021"
+description = "TGS (Telegram Lottie) parser and animation core, wasm-ready"
+publish = false
+
+[lib]
+name = "tgs"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+flate2 = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+overflow-checks = true

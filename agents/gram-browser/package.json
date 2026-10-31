@@ -20,6 +20,7 @@
     "@ton-ai/gram-ui": "*",
     "@ton-ai/mtproto": "*",
     "@ton-ai/telegram": "*",
+    "@ton-ai/tgs": "*",
     "@ton-ai/tl-language": "*",
     "@ton-ai/zlib": "*",
     "buffer": "^6.0.3",

@@ -1,4 +1,4 @@
-.PHONY: build build-core build-plugins build-agents clean build-% rebuild-% rebuild-quick-% rebuild-all-% install
+.PHONY: build build-core build-plugins build-agents clean build-% rebuild-% rebuild-quick-% rebuild-all-% rebuild-gram-browser-wasm install
 
 install:
 	npm install --no-audit --no-fund --prefer-offline
@@ -33,6 +33,9 @@ rebuild-quick-%:
 
 rebuild-all-%:
 	CONFIG=$*.json node scripts/run-config.cjs rebuild:all
+
+rebuild-gram-browser-wasm:
+	BUILD_WASM=1 node scripts/run-config.cjs rebuild:quick
 
 clean:
 	npm run clean -ws --if-present

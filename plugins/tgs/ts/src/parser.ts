@@ -7,6 +7,7 @@ import {
     LayerType, MatteType, MaskMode, GradientType,
 } from './types.js';
 import { parseValue } from './keyframes.js';
+import { isTgsWasmActive, wasmParseTgs } from '../../wasm.js';
 
 const SHAPE_TYPE_MAP: Record<string, string> = {
     gr: 'group',
@@ -363,6 +364,10 @@ function parseAnimation(data: TgsAnimation): ParsedAnimation {
 }
 
 export function parseTgs(json: string, options?: ParseOptions): ParsedAnimation {
+    if (isTgsWasmActive()) {
+        const wasmResult = wasmParseTgs(json, options?.key, options?.cache);
+        if (wasmResult) return wasmResult;
+    }
     let data: TgsAnimation;
     try {
         data = JSON.parse(json);

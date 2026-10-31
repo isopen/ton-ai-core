@@ -1,0 +1,16 @@
+{
+  "name": "tgs",
+  "type": "module",
+  "description": "TGS (Telegram Lottie) parser and animation core, wasm-ready",
+  "version": "0.1.0",
+  "files": [
+    "tgs_wasm_bg.wasm",
+    "tgs_wasm.js",
+    "tgs_wasm.d.ts"
+  ],
+  "main": "tgs_wasm.js",
+  "types": "tgs_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
