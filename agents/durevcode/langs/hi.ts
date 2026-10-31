@@ -54,6 +54,8 @@ export const PERMISSION_DECISION_LABELS: Record<PermissionDecision, string> = {
     reject: 'अस्वीकृत',
 };
 export const SUBAGENT_FINISHED = `${checkIcon()} सबएजेंट ने कार्य पूरा किया।`;
+export const SUBAGENT_HINT = 'कमांड के ठीक बाद कार्य लिखें: /subagent <कार्य>।';
+export const SUBAGENT_FALLBACK = 'कोई मुफ़्त सब-एजेंट स्लॉट नहीं — कार्य मुख्य सेशन की क़तार में लग गया।';
 export const SUBAGENT_STOPPED = `${icon('stop')} समानांतर कार्य रुक गया।`;
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} वही प्रश्न किसी अन्य टॉपिक में पहले से चल रहा है — उत्तर यहाँ भी कॉपी करूँगा।`;
@@ -105,6 +107,7 @@ export const CMD_DESC_MODE = 'रनिंग मोड और केवल द�
 export const CMD_DESC_MODELS = 'मॉडल सूची या स्विच';
 export const CMD_DESC_SETTINGS = 'लाइव सेटिंग्स कार्ड';
 export const CMD_DESC_LANGS = 'भाषा सेटिंग्स (/lang भी)';
+export const CMD_DESC_SUBAGENT = 'समानांतर सब-एजेंट (/subagent <कार्य>)';
 export const CMD_DESC_SESSIONS = 'देखे जा रहे सेशन की सूची';
 export const CMD_DESC_HELP = 'बॉट क्या कर सकता है';
 
@@ -118,6 +121,7 @@ export function helpCardText(): string {
         `/models — ${CMD_DESC_MODELS}`,
         `/settings — ${CMD_DESC_SETTINGS}`,
         `/langs — ${CMD_DESC_LANGS}`,
+        `/subagent — ${CMD_DESC_SUBAGENT}`,
         `/sessions — ${CMD_DESC_SESSIONS}`,
         `/help — ${CMD_DESC_HELP}`,
         '',

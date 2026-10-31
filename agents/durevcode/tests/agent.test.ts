@@ -2556,8 +2556,12 @@ describe('durevcode forum control', () => {
         assert.ok(registered, 'the menu is registered via setMyCommands');
         const commands = (registered.params as { commands: Array<{ command: string; description: string }> }).commands;
         assert.ok(commands.some((c) => c.command === 'langs' && c.description.includes('/lang')), 'the language command is in the menu with the /lang alias hint');
+        assert.ok(commands.some((c) => c.command === 'subagent'), 'the subagent command is in the menu');
         assert.ok(commands.some((c) => c.command === 'help'), 'the help command is in the menu');
         assert.ok(commands.some((c) => c.command === 'stop' && c.description === enPack.CMD_DESC_STOP), 'descriptions come from the bot-wide language pack');
+        const scopedMenus = calls.filter((c) => c.op === 'setCommands' && (c.params as { scope?: { chat_id?: number } }).scope);
+        assert.equal(scopedMenus.length, 1, 'the managed chat gets the same list pinned with a chat scope');
+        assert.equal((scopedMenus[0].params as { scope: { chat_id: number } }).scope.chat_id, 1, 'the chat scope targets the configured chat');
     });
 
     test('typed /help shows the localized command overview instead of a prompt', async () => {
@@ -2571,6 +2575,128 @@ describe('durevcode forum control', () => {
         assert.equal(fake.prompts.length, 0, 'the help command never reaches the model');
         const sent = calls.filter((c) => c.op === 'send').pop() as { params: Record<string, unknown> } | undefined;
                 assert.ok(sent && String(sent.params.text).includes('Что умеет бот'), 'the help card renders in the scope language');
+    });
+
+    test('a second user contends for a subagent even with a plain message', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            session: { id: string };
+            turnUserId: number;
+            promptQueue: string[];
+            thinkingActive: boolean;
+        };
+        const fake = stubOpencode();
+        state.turnUserId = 42;
+        state.thinkingActive = true;
+        state.promptQueue.push('task b');
+        (agent as unknown as { promptLane: Map<string, Array<{ replyTo: number | null; mention: string; uid?: number; chatId?: number }>> })
+            .promptLane.set(state.session.id, [{ replyTo: null, mention: '', uid: 77, chatId: 1 }]);
+        await agent.pumpPrompts(telegram, fake.opencode, state);
+        assert.equal(fake.created.length, 1, 'the plain message from a second user spawns a subagent session');
+        assert.equal(fake.prompts[0]?.sessionId, 'ses_new01', 'the task runs in the child session');
+        assert.equal(fake.prompts[0]?.text, 'task b', 'the task text reaches the subagent untouched');
+        assert.equal(state.promptQueue.length, 0, 'the task leaves the main queue');
+        const run = (agent as unknown as { contendedRuns: Array<{ uid: number }> }).contendedRuns[0];
+        assert.equal(run?.uid, 77, 'the subagent run carries the second user id');
+    });
+
+    test('/subagent runs the task in a parallel session from the same user', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as { threadId: number | null; promptQueue: string[] };
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4499, text: '/subagent make tea' }, now));
+        assert.equal(fake.created.length, 1, 'the command spawns a subagent session');
+        assert.equal(fake.prompts[0]?.sessionId, 'ses_new01', 'the task runs in the child session');
+        assert.equal(fake.prompts[0]?.text, 'make tea', 'the task text reaches the subagent');
+        assert.equal(state.promptQueue.length, 0, 'the main queue stays empty');
+        const run = (agent as unknown as { contendedRuns: Array<{ uid: number; replyTo: number | null }> }).contendedRuns[0];
+        assert.equal(run?.uid, 42, 'the run carries the author id');
+        assert.equal(run?.replyTo, 4499, 'the answer will quote the command message');
+        const ack = calls.filter((c) => c.op === 'send').pop() as { params: Record<string, unknown> };
+        assert.ok(String(ack.params.text).includes('parallel subagent'), 'the dispatch notice confirms the spawn');
+        assert.ok(!calls.some((c) => c.op === 'delete'), 'the command message stays in the chat so the quote keeps its target');
+    });
+
+    test('a subagent task carries the scoped chat language directive', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as { threadId: number | null };
+        const fake = stubOpencode();
+        const scopes = (agent as unknown as { settingsScopes: Record<string, Record<string, boolean | number | string>> }).settingsScopes;
+        scopes[`t1:${state.threadId}`] = { chatLang: 'ru' };
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4503, text: '/subagent make tea' }, now));
+        assert.equal(fake.prompts[0]?.sessionId, 'ses_new01', 'the task runs in the child session');
+        assert.ok(fake.prompts[0]?.text.includes('make tea'), 'the task text reaches the subagent intact');
+        assert.ok(fake.prompts[0]?.text.includes(ruPack.promptLangDirective()), 'the subagent answers and reasons in the picked chat language');
+    });
+
+    test('a side-lane subagent follows the language picked for its own chat', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            session: { id: string };
+            turnUserId: number;
+            thinkingActive: boolean;
+            promptQueue: string[];
+        };
+        const fake = stubOpencode();
+        const scopes = (agent as unknown as { settingsScopes: Record<string, Record<string, boolean | number | string>> }).settingsScopes;
+        scopes['c2'] = { chatLang: 'zh' };
+        state.turnUserId = 42;
+        state.thinkingActive = true;
+        state.promptQueue.push('make tea');
+        (agent as unknown as { promptLane: Map<string, Array<{ replyTo: number | null; mention: string; uid?: number; chatId?: number }>> })
+            .promptLane.set(state.session.id, [{ replyTo: null, mention: '', uid: 77, chatId: 2 }]);
+        await agent.pumpPrompts(telegram, fake.opencode, state);
+        assert.equal(fake.prompts[0]?.sessionId, 'ses_new01', 'the task runs in the child session');
+        assert.ok(fake.prompts[0]?.text.includes('make tea'), 'the task text reaches the subagent intact');
+        assert.ok(fake.prompts[0]?.text.includes(zhPack.promptLangDirective()), 'the side-lane run uses the language chosen for its own chat');
+        const run = (agent as unknown as { contendedRuns: Array<{ laneChatId: number | null }> }).contendedRuns[0];
+        assert.equal(run?.laneChatId, 2, 'the run streams into the side chat');
+    });
+
+    test('typed commands keep their bubbles in the chat', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4504, text: '/status' }, now));
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4505, text: '/help' }, now));
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4506, text: '/subagent' }, now));
+        assert.equal(calls.filter((c) => c.op === 'delete').length, 0, 'handled commands are never deleted from the chat');
+    });
+
+    test('/subagent without a task explains the usage', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4500, text: '/subagent' }, now));
+        assert.equal(fake.created.length, 0, 'no session is spawned without a task');
+        const sent = calls.filter((c) => c.op === 'send').pop() as { params: Record<string, unknown> };
+        assert.ok(String(sent.params.text).includes('/subagent <task>'), 'the hint shows the task syntax');
+    });
+
+    test('/subagent falls back to the main session when no slot is available', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as { promptQueue: string[] };
+        const fake = stubOpencode();
+        fake.setCreateImpl(async () => null);
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4501, text: '/subagent make tea' }, now));
+        assert.equal(fake.created.length, 1, 'the spawn attempt happened');
+        assert.deepEqual(
+            fake.prompts.map((p) => ({ sessionId: p.sessionId, text: p.text })),
+            [{ sessionId: 'ses_test01', text: 'make tea' }],
+            'the fallback task runs on the main session when it is idle',
+        );
+        assert.equal(state.promptQueue.length, 0, 'the queue is drained by the pump');
+        assert.ok(
+            calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('queued for the main session')),
+            'the fallback notice explains the queueing',
+        );
     });
 
     test('the chat language row switches texts for its own topic only', async () => {

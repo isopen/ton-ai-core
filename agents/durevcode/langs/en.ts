@@ -47,6 +47,8 @@ export const PERMISSION_DECISION_LABELS: Record<PermissionDecision, string> = {
     reject: 'Deny',
 };
 export const SUBAGENT_FINISHED = `${checkIcon()} Subagent finished the task.`;
+export const SUBAGENT_HINT = 'Write the task right after the command: /subagent <task>.';
+export const SUBAGENT_FALLBACK = 'No free subagent slot — the task is queued for the main session.';
 export const SUBAGENT_STOPPED = `${icon('stop')} Parallel task stopped.`;
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} Same question is already running in another topic — I will copy the answer here too.`;
@@ -98,6 +100,7 @@ export const CMD_DESC_MODE = 'Running mode and watch only';
 export const CMD_DESC_MODELS = 'List or switch the model';
 export const CMD_DESC_SETTINGS = 'Live settings card';
 export const CMD_DESC_LANGS = 'Language settings (also /lang)';
+export const CMD_DESC_SUBAGENT = 'Run a parallel subagent (/subagent <task>)';
 export const CMD_DESC_SESSIONS = 'List watched sessions';
 export const CMD_DESC_HELP = 'What the bot can do';
 
@@ -111,6 +114,7 @@ export function helpCardText(): string {
         `/models — ${CMD_DESC_MODELS}`,
         `/settings — ${CMD_DESC_SETTINGS}`,
         `/langs — ${CMD_DESC_LANGS}`,
+        `/subagent — ${CMD_DESC_SUBAGENT}`,
         `/sessions — ${CMD_DESC_SESSIONS}`,
         `/help — ${CMD_DESC_HELP}`,
         '',

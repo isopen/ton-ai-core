@@ -54,6 +54,8 @@ export const PERMISSION_DECISION_LABELS: Record<PermissionDecision, string> = {
     reject: '拒绝',
 };
 export const SUBAGENT_FINISHED = `${checkIcon()} 子代理已完成任务。`;
+export const SUBAGENT_HINT = '请在命令后直接写任务：/subagent <任务>。';
+export const SUBAGENT_FALLBACK = '没有空闲的子代理槽位——任务已排入主会话队列。';
 export const SUBAGENT_STOPPED = `${icon('stop')} 并行任务已停止。`;
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} 同样的问题已在另一个主题中运行 — 我也会把答案复制到这里。`;
@@ -105,6 +107,7 @@ export const CMD_DESC_MODE = '运行模式与仅观察';
 export const CMD_DESC_MODELS = '列出或切换模型';
 export const CMD_DESC_SETTINGS = '实时设置卡片';
 export const CMD_DESC_LANGS = '语言设置（也可用 /lang）';
+export const CMD_DESC_SUBAGENT = '并行子代理（/subagent <任务>）';
 export const CMD_DESC_SESSIONS = '已监视会话列表';
 export const CMD_DESC_HELP = '机器人的功能';
 
@@ -118,6 +121,7 @@ export function helpCardText(): string {
         `/models — ${CMD_DESC_MODELS}`,
         `/settings — ${CMD_DESC_SETTINGS}`,
         `/langs — ${CMD_DESC_LANGS}`,
+        `/subagent — ${CMD_DESC_SUBAGENT}`,
         `/sessions — ${CMD_DESC_SESSIONS}`,
         `/help — ${CMD_DESC_HELP}`,
         '',

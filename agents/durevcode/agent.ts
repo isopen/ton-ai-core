@@ -1028,12 +1028,27 @@ export class DurevcodeAgent extends BaseAgent {
             { command: 'models', description: pack.CMD_DESC_MODELS },
             { command: 'settings', description: pack.CMD_DESC_SETTINGS },
             { command: 'langs', description: pack.CMD_DESC_LANGS },
+            { command: 'subagent', description: pack.CMD_DESC_SUBAGENT },
             { command: 'sessions', description: pack.CMD_DESC_SESSIONS },
             { command: 'help', description: pack.CMD_DESC_HELP },
         ];
         try {
             await telegram.setMyCommands({ commands });
-            console.log(`Durevcode bot menu: ${commands.length} commands registered`);
+            // The default scope can be overridden or cached per chat, so the
+            // managed chats get the same list pinned with a chat scope too.
+            const chats = [this.config.durevcode.chatId];
+            const botChatId = this.config.durevcode.botChatId;
+            if (botChatId !== undefined && botChatId !== this.config.durevcode.chatId) chats.push(botChatId);
+            let scoped = 0;
+            for (const chatId of chats) {
+                try {
+                    await telegram.setMyCommands({ commands, scope: { type: 'chat', chat_id: chatId } });
+                    scoped += 1;
+                } catch (error) {
+                    console.warn(`Durevcode bot menu chat scope failed (chat=${chatId}): ${errorText(error)}.`);
+                }
+            }
+            console.log(`Durevcode bot menu: ${commands.length} commands registered (default + ${scoped} chat scopes)`);
         } catch (error) {
             console.warn(`Durevcode bot menu registration failed: ${errorText(error)}.`);
         }
@@ -3587,6 +3602,45 @@ export class DurevcodeAgent extends BaseAgent {
             await this.safeReply(telegram, state, this.lp(this.stateScope(state)).helpCardText());
             return true;
         }
+        if (command === '/subagent') {
+            // A same-user escape hatch: run the task in a parallel subagent
+            // session no matter who owns the current turn.
+            if (this.settingBool('watchOnly', this.stateScope(state))) return false;
+            const task = text.split(/\s+/).slice(1).join(' ').trim();
+            const scope = this.stateScope(state);
+            if (task.length === 0) {
+                await this.safeReply(telegram, state, this.lp(scope).SUBAGENT_HINT);
+                return true;
+            }
+            if (typeof opencode.createSession !== 'function') return false;
+            const attached: PromptAttribution = {
+                replyTo: state.laneReplyTo,
+                mention: state.laneMention,
+                uid: state.laneUserId,
+                chatId: state.laneChatId ?? this.config.durevcode.chatId,
+            };
+            state.laneReplyTo = null;
+            state.laneMention = '';
+            state.laneUserId = 0;
+            if (await this.launchSubagent(telegram, opencode, state, task, attached)) return true;
+            // No free slot (or the spawn failed) — run it through the main queue.
+            await this.safeReply(telegram, state, this.lp(scope).SUBAGENT_FALLBACK);
+            const lane = this.promptLane.get(state.session.id);
+            if (lane) lane.push(attached);
+            else this.promptLane.set(state.session.id, [attached]);
+            const wasEmpty = state.promptQueue.length === 0;
+            state.promptQueue.push(task);
+            state.stoppedAt = 0;
+            state.stoppedByUser = false;
+            this.lastTasks.set(state.session.id, { text: task, at: Date.now() });
+            if (wasEmpty) this.beginAnswerFanout(state, task);
+            this.submittedPrompts.push({ session: state.session.id, text: task, at: Date.now() });
+            if (this.submittedPrompts.length > MAX_SUBMITTED_PROMPTS) {
+                this.submittedPrompts.splice(0, this.submittedPrompts.length - MAX_SUBMITTED_PROMPTS);
+            }
+            await this.pumpPrompts(telegram, opencode, state);
+            return true;
+        }
         if (replyTo !== undefined) {
             const pendingPerm = this.permReplies.get(replyTo);
             if (pendingPerm && pendingPerm.sessionId === state.session.id && (command === '/allow' || command === '/deny')) {
@@ -4024,9 +4078,14 @@ export class DurevcodeAgent extends BaseAgent {
         const turnChatId = laneChatId === undefined
             ? (state.laneChatId ?? this.config.durevcode.chatId)
             : (laneChatId ?? this.config.durevcode.chatId);
-        const attribution: PromptAttribution = state.laneReplyTo !== null || state.laneMention !== ''
-            ? { replyTo: state.laneReplyTo, mention: state.laneMention, uid: state.laneUserId, chatId: turnChatId }
-            : { replyTo: null, mention: '', chatId: turnChatId };
+        // The user id always rides with the lane so a second user's plain
+        // message still contends for a parallel subagent run.
+        const attribution: PromptAttribution = {
+            replyTo: state.laneReplyTo,
+            mention: state.laneMention,
+            uid: state.laneUserId,
+            chatId: turnChatId,
+        };
         state.laneReplyTo = null;
         state.laneMention = '';
         state.laneUserId = 0;
@@ -4624,6 +4683,25 @@ export class DurevcodeAgent extends BaseAgent {
         state: WatchedSession,
         head: string,
     ): Promise<boolean> {
+        const lane = this.promptLane.get(state.session.id);
+        const attached: PromptAttribution = lane?.shift() ?? { replyTo: null, mention: '' };
+        if (lane && lane.length === 0) this.promptLane.delete(state.session.id);
+        state.promptQueue.shift();
+        if (await this.launchSubagent(telegram, opencode, state, head, attached)) return true;
+        state.promptQueue.unshift(head);
+        const laneBack = this.promptLane.get(state.session.id);
+        if (laneBack) laneBack.unshift(attached);
+        else this.promptLane.set(state.session.id, [attached]);
+        return false;
+    }
+
+    private async launchSubagent(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'sendPrompt'> & Partial<Pick<OpencodePlugin, 'createSession' | 'setAgent' | 'setModel'>>,
+        state: WatchedSession,
+        task: string,
+        attached: PromptAttribution,
+    ): Promise<boolean> {
         if (typeof opencode.createSession !== 'function') return false;
         const activeRuns = this.contendedRuns.filter((entry) => entry.ownerId === state.session.id && !entry.finished).length;
         if (activeRuns >= SUBAGENT_PARALLEL_CAP) {
@@ -4639,14 +4717,10 @@ export class DurevcodeAgent extends BaseAgent {
             console.debug('Durevcode contended session create failed:', errorText(error));
             return false;
         }
-        const lane = this.promptLane.get(state.session.id);
-        const attached: PromptAttribution = lane?.shift() ?? { replyTo: null, mention: '' };
-        if (lane && lane.length === 0) this.promptLane.delete(state.session.id);
-        state.promptQueue.shift();
         const run: ContendedRun = {
             ownerId: state.session.id,
             sessionId: child.id,
-            task: head,
+            task,
             laneChatId: attached.chatId === undefined
                 ? state.laneChatId
                 : (attached.chatId === this.config.durevcode.chatId ? null : attached.chatId),
@@ -4682,22 +4756,11 @@ export class DurevcodeAgent extends BaseAgent {
             }
         }
         try {
-            const receipt = await opencode.sendPrompt(run.sessionId, this.promptWithLang(this.runScopeOf(run), head));
+            const receipt = await opencode.sendPrompt(run.sessionId, this.promptWithLang(this.runScopeOf(run), task));
             if (!receipt.admitted || receipt.busy) throw new Error('subagent session did not admit the prompt');
             run.receiptId = receipt.messageId ?? null;
         } catch (error) {
-            console.warn('Durevcode subagent prompt failed, back to the main queue:', errorText(error));
-            this.contendedRuns = this.contendedRuns.filter((entry) => entry !== run);
-            state.promptQueue.unshift(head);
-            const attribution: PromptAttribution = {
-                replyTo: attached.replyTo,
-                mention: attached.mention,
-                uid: attached.uid,
-                chatId: attached.chatId ?? this.config.durevcode.chatId,
-            };
-            const laneBack = this.promptLane.get(state.session.id);
-            if (laneBack) laneBack.unshift(attribution);
-            else this.promptLane.set(state.session.id, [attribution]);
+            console.warn('Durevcode subagent prompt failed:', errorText(error));
             return false;
         }
         this.contendedRuns.push(run);
@@ -5114,7 +5177,11 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private runScopeOf(run: ContendedRun): string {
-        return this.scopeKeyOf(run.laneChatId ?? this.config.durevcode.chatId, run.threadId);
+        // A side-lane subagent streams into a plain chat that has no topics, so
+        // its language is that chat's own scope; a parent-lane run keeps the
+        // topic scope of the session it was spawned from.
+        if (run.laneChatId !== null) return this.scopeKeyOf(run.laneChatId, null);
+        return this.scopeKeyOf(this.config.durevcode.chatId, run.threadId);
     }
 
     private explicitChatLang(scope: string): 'en' | 'ru' | 'zh' | 'hi' | undefined {

@@ -54,6 +54,8 @@ export const PERMISSION_DECISION_LABELS: Record<PermissionDecision, string> = {
     reject: 'Запретить',
 };
 export const SUBAGENT_FINISHED = `${checkIcon()} Сабагент завершил задачу.`;
+export const SUBAGENT_HINT = 'Напишите задачу сразу после команды: /subagent <задача>.';
+export const SUBAGENT_FALLBACK = 'Свободного слота субагента нет — задача встала в очередь основной сессии.';
 export const SUBAGENT_STOPPED = `${icon('stop')} Параллельная задача остановлена.`;
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} Тот же вопрос уже выполняется в другом топике — скопирую ответ и сюда.`;
@@ -105,6 +107,7 @@ export const CMD_DESC_MODE = 'Режим работы и watch only';
 export const CMD_DESC_MODELS = 'Список или смена модели';
 export const CMD_DESC_SETTINGS = 'Карточка живых настроек';
 export const CMD_DESC_LANGS = 'Языковые настройки (также /lang)';
+export const CMD_DESC_SUBAGENT = 'Параллельный субагент (/subagent <задача>)';
 export const CMD_DESC_SESSIONS = 'Список отслеживаемых сессий';
 export const CMD_DESC_HELP = 'Что умеет бот';
 
@@ -118,6 +121,7 @@ export function helpCardText(): string {
         `/models — ${CMD_DESC_MODELS}`,
         `/settings — ${CMD_DESC_SETTINGS}`,
         `/langs — ${CMD_DESC_LANGS}`,
+        `/subagent — ${CMD_DESC_SUBAGENT}`,
         `/sessions — ${CMD_DESC_SESSIONS}`,
         `/help — ${CMD_DESC_HELP}`,
         '',
