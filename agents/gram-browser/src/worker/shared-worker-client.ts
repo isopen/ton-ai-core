@@ -27,7 +27,7 @@ export class SharedWorkerClient {
     async start(apiId: number, apiHash: string): Promise<void> {
         if (this.worker) return;
         try {
-            this.worker = new SharedWorker(new URL('./shared-worker.ts', import.meta.url), { name: 'gram-browser-v2' });
+            this.worker = new SharedWorker(new URL('./shared-worker.ts', import.meta.url), { name: 'gram-browser-v3' });
         } catch (e: any) {
             throw new Error('Failed to create SharedWorker: ' + e.message);
         }
@@ -284,6 +284,10 @@ export class SharedWorkerClient {
 
     async readHistory(peer: Record<string, any>, maxId = 0): Promise<void> {
         await this.send({ type: 'readHistory', peer, maxId });
+    }
+
+    async getServerTime(): Promise<{ offsetSec: number; serverTime: number }> {
+        return this.send({ type: 'serverTime' });
     }
 
     async getAuthState(): Promise<'none' | 'code_sent' | 'password_needed' | 'authenticated'> {

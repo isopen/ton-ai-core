@@ -236,6 +236,8 @@ async function _handleMessage(msg: Record<string, any>): Promise<any> {
             const state = TW.getAuthState();
             return { type: 'authState', state };
         }
+        case 'serverTime':
+            return { type: 'serverTimeResult', ...TW.getServerTimeInfo() };
         case 'clearPendingAuth': {
             await TW.clearPendingAuth(msg.phoneNumber);
             return { type: 'cleared' };

@@ -2,7 +2,6 @@ import { getLogger } from '@ton-ai/gram-debug';
 import { startFpsLogging } from '@ton-ai/gram-ui';
 import { setDevWarnings, traceComponent } from '@ton-ai/atom';
 import { initWasmCrypton } from '@ton-ai/crypton';
-import { initTgsWasm } from '@ton-ai/tgs';
 import { GramApp } from './app/gram-app';
 
 const log = getLogger('gram-browser');
@@ -51,19 +50,6 @@ function initApp() {
   startFpsLogging();
   (window as any).__wasmReady = wasmReady;
 
-  const tgsImpl = (((process.env as any)?.TGS_IMPL) || 'rust').toLowerCase();
-
-  wasmReady.then(() => {
-    if (tgsImpl === 'ts') {
-      log.info('[tgs] backend = TypeScript (pure JS) — TGS parse via TS');
-      return;
-    }
-    const tgsReady = initTgsWasm();
-    tgsReady.then((ok) => {
-      log.info('[tgs] parse backend = ' + (ok ? 'Rust (WASM)' : 'TypeScript (fallback)'));
-    });
-  });
-
   try {
     if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') {
       setDevWarnings(true);
@@ -80,7 +66,7 @@ function initApp() {
 
   try {
     // @ts-ignore
-    const w = new SharedWorker(new URL('./worker/shared-worker.ts', import.meta.url) as any, { name: 'gram-browser-v2' } as any);
+    const w = new SharedWorker(new URL('./worker/shared-worker.ts', import.meta.url) as any, { name: 'gram-browser-v3' } as any);
     w.port.start();
     setTimeout(() => { try { w.port.close(); } catch {} }, 10000);
   } catch {}

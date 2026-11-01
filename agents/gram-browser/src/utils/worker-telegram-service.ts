@@ -180,6 +180,11 @@ export class WorkerTelegramService extends TelegramService {
         }
     }
 
+    async getServerTime(): Promise<{ offsetSec: number; serverTime: number }> {
+        if (!this.workerClient) await this.warmUp();
+        return (this.workerClient as unknown as { getServerTime(): Promise<{ offsetSec: number; serverTime: number }> }).getServerTime();
+    }
+
     async getAuthState(): Promise<'none' | 'code_sent' | 'password_needed' | 'authenticated'> {
         if (!this.workerClient) return 'none';
         return this.workerClient.getAuthState();

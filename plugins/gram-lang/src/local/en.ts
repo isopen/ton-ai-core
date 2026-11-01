@@ -113,6 +113,7 @@ export const BUILTIN_STRINGS: Record<string, Record<string, string>> = {
     qrFailedExpiry: 'QR failed: invalid expiry',
     qrFailedToken: 'QR failed: invalid token hex',
     qrFailedNoToken: 'No token in response: ',
+    qrTokenStale: 'QR code expired or already used. Refreshing…',
     voiceSendUnavailable: 'Voice messages are not supported yet',
     giftSendUnavailable: 'Star gifts are not supported yet',
     attachUnavailable: 'Attachments are not supported yet',

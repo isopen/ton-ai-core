@@ -119,6 +119,10 @@ let pendingAuth: PendingAuth | null = null;
 let passwordPending = false;
 let curSessionId: string | null = null;
 let serverTimeOffset = 0;
+let serverTimeOffsetLocked = false;
+export function getServerTimeInfo(): { offsetSec: number; serverTime: number } {
+  return { offsetSec: serverTimeOffset, serverTime: Math.floor(Date.now() / 1000) + serverTimeOffset };
+}
 let connected = false;
 let authenticated = false;
 let readLoopRunning = false;
@@ -420,12 +424,7 @@ function dispatchMessage(_msgId: bigint, body: Buffer): void {
         const key = badMsgId.toString();
 
         if (errorCode === 16 || errorCode === 17 || errorCode === 18 || errorCode === 48) {
-            const serverSec = Number(_msgId >> 32n);
-            if (serverSec > 0 && Math.abs(serverSec - Math.floor(Date.now() / 1000)) > 2) {
-                serverTimeOffset = serverSec - Math.floor(Date.now() / 1000);
-                wlog('[worker] bad_msg code ' + errorCode + ' — syncing serverTimeOffset to ' + serverTimeOffset + 's');
-                if (curSessionId) persistSession().catch(() => {});
-            }
+            wlog('[worker] bad_msg code ' + errorCode + ' — keeping measured serverTimeOffset ' + serverTimeOffset + 's');
         }
         wlog('[worker] BAD_MSG_NOTIFICATION badMsgId=' + badMsgId + ' errorCode=' + errorCode + ' syncedOffset=' + serverTimeOffset);
         const pending = pendingCalls.get(key);
@@ -1082,12 +1081,7 @@ function dispatchDcMessage(entry: DcConnection, msgId: bigint, body: Buffer): vo
         const badMsgId = body.readBigUInt64LE(4);
         const errorCode = body.readInt32LE(16);
         if (errorCode === 16 || errorCode === 17 || errorCode === 18 || errorCode === 48) {
-            const serverSec = Number(msgId >> 32n);
-            if (serverSec > 0 && Math.abs(serverSec - Math.floor(Date.now() / 1000)) > 2) {
-                serverTimeOffset = serverSec - Math.floor(Date.now() / 1000);
-                wlog('[worker] DC' + entry.dcId + ' bad_msg code ' + errorCode + ' — syncing serverTimeOffset to ' + serverTimeOffset + 's');
-                persistSession().catch(() => {});
-            }
+            wlog('[worker] DC' + entry.dcId + ' bad_msg code ' + errorCode + ' — keeping measured serverTimeOffset ' + serverTimeOffset + 's');
         }
         if (errorCode === 16) {
             entry.initialized = false;
@@ -2339,6 +2333,7 @@ async function migrateDc(targetDcId: number): Promise<void> {
                     wlog('[worker] migrateDc: DH exchange complete, serverTime=' + authResult.serverTime);
 
                     serverTimeOffset = authResult.serverTime - Math.floor(Date.now() / 1000);
+                    serverTimeOffsetLocked = true;
                     setAuthKeys(authResult.authKey, authResult.authKeyId, authResult.serverSalt);
 
                     const akBuf = Buffer.alloc(8);
@@ -3066,6 +3061,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     }
     if (saved) {
         serverTimeOffset = saved.serverTimeOffset;
+        serverTimeOffsetLocked = true;
         const authKey = saved.authKey!;
         const authKeyId = saved.authKeyId!;
         const serverSalt = saved.serverSalt!;
@@ -3168,6 +3164,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     wlog('[worker] handshake complete, serverTime=' + authResult.serverTime);
 
     serverTimeOffset = authResult.serverTime - Math.floor(Date.now() / 1000);
+    serverTimeOffsetLocked = true;
     setAuthKeys(authResult.authKey, authResult.authKeyId, authResult.serverSalt);
     {
         const akBuf = Buffer.alloc(8);

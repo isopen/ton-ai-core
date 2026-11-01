@@ -52,6 +52,10 @@ export class TelegramWorkerClient {
         await this.client.checkPassword(password);
     }
 
+    async getServerTime(): Promise<{ offsetSec: number; serverTime: number }> {
+        return this.client.getServerTime();
+    }
+
     async getAuthState(): Promise<'none' | 'code_sent' | 'password_needed' | 'authenticated'> {
         return this.client.getAuthState();
     }

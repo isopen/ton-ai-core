@@ -453,27 +453,10 @@ export function createHandleUpdate(s: GramState) {
           tgui: s.tgui,
           userNameMap: s.userNameMap.current,
         });
-        if (u._ === 'updateShort' && u.update?._ === 'updateLoginToken') {
+        if (u._ === 'updateLoginToken' || (u._ === 'updateShort' && u.update?._ === 'updateLoginToken')) {
           try {
             if (typeof window !== 'undefined' && s.tgui.current?.state.page === 'auth') {
-              const st = s.tgui.current?.state.authStep;
-              if (st === 'phone' || st === 'qr_login' || st === 'password') {
-                addLog(s, 'Login token update, refreshing QR');
-                window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
-                window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
-              }
-            }
-          } catch {}
-        }
-        if (u._ === 'updateLoginToken') {
-          try {
-            if (typeof window !== 'undefined' && s.tgui.current?.state.page === 'auth') {
-              const st = s.tgui.current?.state.authStep;
-              if (st === 'phone' || st === 'qr_login' || st === 'password') {
-                addLog(s, 'Login token update, refreshing QR');
-                window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
-                window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
-              }
+              addLog(s, 'Login token update observed, QR poll will adopt it');
             }
           } catch {}
         }
@@ -598,12 +581,7 @@ export function createHandleUpdate(s: GramState) {
             if (upd._ === 'updateLoginToken') {
               try {
                 if (typeof window !== 'undefined' && s.tgui.current?.state.page === 'auth') {
-                  const st = s.tgui.current?.state.authStep;
-                  if (st === 'phone' || st === 'qr_login' || st === 'password') {
-                    addLog(s, 'Login token update, refreshing QR');
-                    window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
-                    window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
-                  }
+                  addLog(s, 'Login token update observed, QR poll will adopt it');
                 }
               } catch {}
             }

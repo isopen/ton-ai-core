@@ -118,6 +118,7 @@ export interface AppState {
     signupFirstname: string;
     signupLastname: string;
     qrToken: string;
+    qrExpiresAt?: number;
     phoneCodeHash: string;
     selfUserId: string;
   pluginSkills: Array<{ id: string; label: string }>;
@@ -202,7 +203,7 @@ export type UIAction =
     | { type: 'SET_COUNTRY_ISO2'; countryIso2: string }
     | { type: 'SET_SIGNUP_FIRSTNAME'; firstname: string }
     | { type: 'SET_SIGNUP_LASTNAME'; lastname: string }
-    | { type: 'SET_QR_TOKEN'; token: string }
+    | { type: 'SET_QR_TOKEN'; token: string; expiresAt?: number }
     | { type: 'SET_PHONE_CODE_HASH'; hash: string }
     | { type: 'SET_SELF_USER_ID'; userId: string }
     | { type: 'SET_PLUGIN_SKILLS'; skills: Array<{ id: string; label: string }> }

@@ -124,6 +124,10 @@
     "gram-media:source-diag": {
       "enabled": true,
       "level": "debug"
+    },
+    "gram-ui:qr": {
+      "enabled": true,
+      "level": "info"
     }
   }
 }

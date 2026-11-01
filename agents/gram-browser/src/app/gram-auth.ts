@@ -3,20 +3,29 @@ import { hexToBase64Url, makeQrUrl, generateQrDataUrl, QR_DEFAULTS, preloadQrMod
 import { dbGet, dbSet, dbDel } from '@/utils/db';
 import { getApiCredentials } from '@/utils/api-creds';
 import { addLog, setDialogsFromServer, fetchSelfUserId } from './gram-utils';
+import { getLogger } from '@ton-ai/gram-debug';
 import { recoverUpdateGap } from './gram-updates';
 import type { GramState } from './gram-state';
 import type { WorkerTelegramService } from '@/utils/worker-telegram-service';
 
+const log = getLogger('gram-browser');
+const qrLog = (s: GramState, text: string) => { log.info(text); addLog(s, text); };
+
 let activeQrPoll: { interval: ReturnType<typeof setInterval> | null; timeout: ReturnType<typeof setTimeout> | null; stop: () => void } | null = null;
 let activePreviewPoll: { interval: ReturnType<typeof setInterval> | null; timeout: ReturnType<typeof setTimeout> | null } | null = null;
+let qrServerOffsetSec: number | null = null;
 let authBusy = false;
-let qrBusy = false;
-let qrPollExceptIds: string[] = [];
+let qrReqId = 0;
+let previewReqId = 0;
 let passwordAttempts = 0;
 let qrRefreshTimeout: ReturnType<typeof setTimeout> | null = null;
 let suppressPhonePassword = false;
 const PASSWORD_MAX_ATTEMPTS = 5;
 let lastQrCache: { tgUrl: string; dataUrl: string; ts: number; expires: number; expiresAt: number } | null = null;
+let qrNextSwapAt = 0;
+let qrRotationPeriodMs = 30000;
+let qrLastSwapExpires = 0;
+let lastQrOffDowngradeLogAt = 0;
 let lastPreviewAt = 0;
 let authGen = 0;
 const QR_DB_KEY = 'qrCache_v1';
@@ -44,13 +53,14 @@ function getQrGenSize(base: number): number {
   return Math.max(32, Math.min(v, 512));
 }
 function getQrTtlMs(expires?: number): number {
-  if (typeof expires !== 'number' || !Number.isFinite(expires) || expires <= 0) return 30000;
-  if (expires > 1e9) return 30000;
-  return expires * 1000;
+  const remaining = getExpiresAt(Date.now(), expires) - Date.now();
+  return remaining > 0 ? remaining : 0;
 }
 function getExpiresAt(ts: number, expires?: number): number {
-  if (typeof expires === 'number' && expires > 1e9) return Date.now() + getQrTtlMs(expires);
-  return ts + getQrTtlMs(expires);
+  const off = qrServerOffsetSec ?? 0;
+  if (typeof expires === 'number' && Number.isFinite(expires) && expires > 1e9) return expires * 1000 - off * 1000;
+  if (typeof expires === 'number' && Number.isFinite(expires) && expires > 0) return ts + expires * 1000;
+  return ts + 30000;
 }
 function base64UrlToHex(b64url: string): string {
   try {
@@ -89,18 +99,36 @@ try {
       const d = ev.data as any;
       if (d?.tgUrl) {
         try {
-          window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: d.url || '', tgUrl: d.tgUrl, expires: d.expires } }));
-          window.dispatchEvent(new CustomEvent('tg-auth-qr-preview-url', { detail: { url: d.url || '', tgUrl: d.tgUrl, expires: d.expires } }));
+          window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: d.url || '', tgUrl: d.tgUrl, expires: d.expires, expiresAt: d.expiresAt } }));
+          window.dispatchEvent(new CustomEvent('tg-auth-qr-preview-url', { detail: { url: d.url || '', tgUrl: d.tgUrl, expires: d.expires, expiresAt: d.expiresAt } }));
         } catch {}
       }
     };
   }
 } catch {}
-function broadcastQr(tgUrl: string, url: string, expires?: number) {
-  try { qrBroadcast?.postMessage({ tgUrl, url, expires }); } catch {}
+function broadcastQr(tgUrl: string, url: string, expires?: number, expiresAt?: number) {
+  try { qrBroadcast?.postMessage({ tgUrl, url, expires, expiresAt }); } catch {}
+}
+let lastQrReanchorAt = 0;
+let lastHoldLogAt = 0;
+let lastShownQrUrl: string | null = null;
+let qrStallTries = 0;
+function reanchorQr(s: GramState, tgUrl: string, expires?: number) {
+  const now = Date.now();
+  if (now - lastQrReanchorAt < 10000) return;
+  const expAt = lastQrCache?.expiresAt || 0;
+  if (!expAt || expAt <= now) return;
+  lastQrReanchorAt = now;
+  qrStallTries = 0;
+  const remSec = Math.ceil((expAt - now) / 1000);
+  try { s.tgui.current?.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl, expiresAt: expAt }); } catch {}
+  window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: lastQrCache?.dataUrl || '', tgUrl, expires: remSec, expiresAt: expAt, keepImage: true } }));
+  window.dispatchEvent(new CustomEvent('tg-auth-qr-preview-url', { detail: { url: lastQrCache?.dataUrl || '', tgUrl, expires: remSec, expiresAt: expAt, keepImage: true } }));
+  broadcastQr(tgUrl, lastQrCache?.dataUrl || '', remSec, expAt);
 }
 
 function stopQrPolling() {
+  previewReqId++;
   const cur = activeQrPoll;
   activeQrPoll = null;
   if (cur) {
@@ -118,7 +146,6 @@ function stopQrPolling() {
     try { clearTimeout(qrRefreshTimeout); } catch {}
     qrRefreshTimeout = null;
   }
-  qrBusy = false;
   lastPreviewAt = 0;
 }
 
@@ -136,7 +163,6 @@ if (typeof window !== 'undefined') {
     if (step && step !== 'qr_login') {
       stopQrPolling();
       if (step === 'phone') {
-        qrPollExceptIds = [];
         const g = authGen;
         setTimeout(() => {
           if (g !== authGen) return;
@@ -170,11 +196,28 @@ export function createAuthCallbacks(
   getService: () => WorkerTelegramService | null,
 ) {
   const svc = () => getService();
+  const syncQrServerOffset = async (): Promise<void> => {
+    try {
+      const inst = svc();
+      if (inst) {
+        const info = await inst.getServerTime();
+        if (info && typeof info.offsetSec === 'number' && Number.isFinite(info.offsetSec)) {
+          if (qrServerOffsetSec === null) {
+            qrServerOffsetSec = info.offsetSec;
+          } else if (qrServerOffsetSec !== info.offsetSec) {
+            if (Date.now() - lastQrOffDowngradeLogAt >= 60000) {
+              lastQrOffDowngradeLogAt = Date.now();
+              qrLog(s, 'QR off re-measured ' + qrServerOffsetSec + '->' + info.offsetSec + 's, keeping sticky ' + qrServerOffsetSec + 's');
+            }
+          }
+        }
+      }
+    } catch {}
+  };
   try {
     window.addEventListener('tg-auth-cancel', () => {
       bumpAuthGen();
       stopQrPolling();
-      qrPollExceptIds = [];
       suppressPhonePassword = true;
       try { s.tgui.current?.dispatch({ type: 'SET_PHONE_CODE_HASH', hash: '' }); } catch {}
       try { s.tgui.current?.dispatch({ type: 'SET_CODE', code: '' }); } catch {}
@@ -249,9 +292,9 @@ export function createAuthCallbacks(
     if (msg.includes('PHONE_CODE_EMPTY') || msg.includes('PHONE_CODE_INVALID') || msg.includes('PHONE_CODE_HASH_EMPTY')) {
       return t(S.AUTH_ERROR_BAD_CODE);
     }
-    if (msg.includes('AUTH_TOKEN_EXPIRED')) return t(S.AUTH_ERROR_BAD_CODE);
-    if (msg.includes('AUTH_TOKEN_ALREADY_ACCEPTED')) return t(S.AUTH_ERROR_BAD_CODE);
-    if (msg.includes('AUTH_TOKEN_INVALID')) return t(S.AUTH_ERROR_BAD_CODE);
+    if (msg.includes('AUTH_TOKEN_EXPIRED') || msg.includes('AUTH_TOKEN_ALREADY_ACCEPTED') || msg.includes('AUTH_TOKEN_INVALID')) {
+      return t(S.QR_TOKEN_STALE);
+    }
     if (msg.includes('SESSION_REVOKED')) return t(S.AUTH_ERROR_BAD_CODE);
     if (msg.includes('AUTH_KEY_UNREGISTERED')) return t(S.AUTH_ERROR_BAD_CODE);
     if (msg.includes('USER_DEACTIVATED_BAN') || msg.includes('USER_DEACTIVATED') || msg.includes('PHONE_NUMBER_BANNED')) {
@@ -444,8 +487,6 @@ export function createAuthCallbacks(
       bumpAuthGen();
       stopQrPolling();
       passwordAttempts = 0;
-      qrPollExceptIds = [];
-      qrBusy = false;
       const gen = authGen;
       s.tgui.current!.setPage('auth');
       s.tgui.current!.setAuthStep('phone');
@@ -533,20 +574,21 @@ export function createAuthCallbacks(
         const st = s.tgui.current?.state.authStep;
         if (st !== 'qr_login' && st !== 'password') return;
       }
-      addLog(s, 'QR request start');
+      qrLog(s, 'QR request start');
+      const myReq = ++qrReqId;
+      await syncQrServerOffset();
       await loadQrCacheFromDb();
+      if (myReq !== qrReqId) return;
       if (lastQrCache && Date.now() < lastQrCache.expiresAt) {
         const remainingSec = Math.ceil(Math.max(0, lastQrCache.expiresAt - Date.now()) / 1000);
-        s.tgui.current?.dispatch({ type: 'SET_QR_TOKEN', token: lastQrCache.tgUrl });
-        window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: lastQrCache.dataUrl, tgUrl: lastQrCache.tgUrl, expires: remainingSec } }));
-        broadcastQr(lastQrCache.tgUrl, lastQrCache.dataUrl, remainingSec);
+        qrNextSwapAt = lastQrCache.expiresAt;
+        s.tgui.current?.dispatch({ type: 'SET_QR_TOKEN', token: lastQrCache.tgUrl, expiresAt: lastQrCache.expiresAt });
+        window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: lastQrCache.dataUrl || '', tgUrl: lastQrCache.tgUrl, expires: remainingSec, expiresAt: lastQrCache.expiresAt, keepImage: true } }));
+        broadcastQr(lastQrCache.tgUrl, lastQrCache.dataUrl || '', remainingSec, lastQrCache.expiresAt);
       }
-      if (qrBusy) return;
       const qrGen = authGen;
       try {
-        qrBusy = true;
         stopQrPolling();
-        qrPollExceptIds = [];
         scheduleQrPreload();
         const qrPreload = preloadQrModule().catch(() => null);
         const { apiId, apiHash } = getApiCredentials();
@@ -561,18 +603,32 @@ export function createAuthCallbacks(
         let pollTimeout: ReturnType<typeof setTimeout> | null = null;
         let floodBackoffUntil = 0;
         const stopPolling = () => {
-            const wasActive = activeQrPoll;
             if (pollInterval) clearInterval(pollInterval);
             if (pollTimeout) clearTimeout(pollTimeout);
             pollInterval = null;
             pollTimeout = null;
-            if (wasActive) stopQrPolling();
+            if (activeQrPoll === holder) activeQrPoll = null;
         };
         const holder: { interval: ReturnType<typeof setInterval> | null; timeout: ReturnType<typeof setTimeout> | null; stop: () => void } = { interval: null, timeout: null, stop: stopPolling };
         activeQrPoll = holder;
+        const scheduleQrRestart = (delayMs: number) => {
+            if (pollTimeout) { try { clearTimeout(pollTimeout); } catch {} }
+            pollTimeout = setTimeout(async () => {
+                qrLog(s, 'QR deadline hit, re-request (planned ' + Math.round(delayMs) + 'ms)');
+                stopPolling();
+                if (s.tgui.current?.state.authStep === 'qr_login') {
+                  try { await dbDel(QR_DB_KEY).catch(() => {}); lastQrCache = null; } catch {}
+                  if (s.tgui.current?.state.authStep === 'qr_login' && myReq === qrReqId) {
+                    s.tgui.current!.setError('');
+                    window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
+                  }
+                }
+            }, Math.max(delayMs, 3000));
+            holder.timeout = pollTimeout;
+        };
         const onLoginTokenSuccess = async (res: any): Promise<boolean> => {
             stopPolling();
-            if (qrGen !== authGen) return true;
+            if (myReq !== qrReqId || qrGen !== authGen) return true;
             const stepNow: string | undefined = s.tgui.current?.state.authStep;
             if (stepNow !== 'qr_login' && stepNow !== 'phone' && stepNow !== 'password') return true;
             try { await dbDel(QR_DB_KEY).catch(() => {}); lastQrCache = null; } catch {}
@@ -618,7 +674,6 @@ export function createAuthCallbacks(
                 await dbDel('authInvalidated').catch(() => {});
                 s.tgui.current!.setConnectionStatus('connected');
                 s.tgui.current!.setPage('dialogs');
-                qrPollExceptIds = [];
             } catch (e2: any) {
                 if (e2?.message?.includes('SESSION_PASSWORD_NEEDED')) {
                     if (qrGen !== authGen) return true;
@@ -643,7 +698,7 @@ export function createAuthCallbacks(
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('QR export timeout')), 25000)),
         ]);
         await qrPreload;
-        addLog(s, 'QR export ok expires=' + String((result as any)?.expires) + ' ctor=' + String((result as any)?._ || '?') + ' tok=' + String((result as any)?.token || '').slice(0, 8));
+        qrLog(s, 'QR export ok expires=' + String((result as any)?.expires) + ' ctor=' + String((result as any)?._ || '?') + ' tok=' + String((result as any)?.token || '').slice(0, 8));
         if ((result as any)?._ === 'auth.loginTokenSuccess') {
             const stepNow = s.tgui.current?.state.authStep;
             if (stepNow === 'qr_login' || stepNow === 'phone') {
@@ -658,7 +713,7 @@ export function createAuthCallbacks(
               const migToken = String((result as any).token || '');
               if (migToken && Number.isFinite(dcId)) {
                 const imported: any = await service.importLoginToken(migToken, dcId);
-                if (qrGen !== authGen) return;
+                if (qrGen !== authGen || myReq !== qrReqId) return;
                 if (imported?._ === 'auth.loginTokenSuccess') {
                   const stepNow2 = s.tgui.current?.state.authStep;
                   if (stepNow2 === 'qr_login' || stepNow2 === 'phone') { await onLoginTokenSuccess(imported); return; }
@@ -667,7 +722,8 @@ export function createAuthCallbacks(
               }
             } catch (e2: any) {
               if (String(e2?.message || '').includes('SESSION_PASSWORD_NEEDED')) {
-                if (qrGen !== authGen) return;
+                if (qrGen !== authGen || myReq !== qrReqId) return;
+                stopPolling();
                 s.tgui.current!.setAuthStep('password');
                 return;
               }
@@ -676,16 +732,19 @@ export function createAuthCallbacks(
         const expires = (result as any)?.expires;
         let tokenHex: string = result?.token;
         if (!tokenHex) {
+          stopPolling();
           s.tgui.current!.setError(t(S.QR_FAILED_NO_TOKEN) + escapeHtml(JSON.stringify(result).slice(0,200)));
           s.tgui.current!.setAuthStep('qr_login');
           return;
         }
         if (typeof expires !== 'number' || !Number.isFinite(expires) || expires <= 0) {
+          stopPolling();
           s.tgui.current!.setError(t(S.QR_FAILED_EXPIRY));
           s.tgui.current!.setAuthStep('qr_login');
           return;
         }
         try { hexToBase64Url(tokenHex); } catch {
+          stopPolling();
           s.tgui.current!.setError(t(S.QR_FAILED_TOKEN));
           s.tgui.current!.setAuthStep('qr_login');
           return;
@@ -700,11 +759,34 @@ export function createAuthCallbacks(
             return;
           }
           const ex = typeof exp === 'number' ? exp : expires;
-          const ttlSec = Math.ceil(getQrTtlMs(ex) / 1000);
-          s.tgui.current!.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl });
-          saveQrCacheToDb({ tgUrl, dataUrl: '', ts: Date.now(), expires: ex });
-          window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: '', tgUrl, expires: ttlSec } }));
-          broadcastQr(tgUrl, '', ttlSec);
+          if (tgUrl === lastShownQrUrl && getQrTtlMs(ex) <= 0) {
+            qrStallTries++;
+            const retryDelay = qrStallTries < 2 ? 900 : (qrStallTries < 4 ? 1800 : 3000);
+            if (s.tgui.current?.state.qrToken !== tgUrl) {
+              s.tgui.current!.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl, expiresAt: 0 });
+            }
+            qrLog(s, 'QR same token after deadline, quick retry ' + retryDelay + 'ms (try ' + qrStallTries + ')');
+            if (pollInterval) scheduleQrRestart(retryDelay);
+            return;
+          }
+          qrStallTries = 0;
+          const nowMs = Date.now();
+          if (qrLastSwapExpires > 1e9 && typeof ex === 'number' && ex > qrLastSwapExpires) {
+            const measured = (ex - qrLastSwapExpires) * 1000;
+            if (measured >= 15000 && measured <= 60000) qrRotationPeriodMs = measured;
+          }
+          if (typeof ex === 'number' && Number.isFinite(ex) && ex > 1e9) qrLastSwapExpires = ex;
+          const snapEstimate = getExpiresAt(nowMs, ex);
+          qrNextSwapAt = snapEstimate > nowMs ? snapEstimate : nowMs + qrRotationPeriodMs;
+          lastShownQrUrl = tgUrl;
+          const ttlMs = qrNextSwapAt - nowMs;
+          const ttlSec = Math.max(1, Math.ceil(ttlMs / 1000));
+          qrLog(s, 'QR set: ttl=' + Math.round(ttlMs) + 'ms period=' + Math.round(qrRotationPeriodMs / 1000) + 's off=' + (qrServerOffsetSec ?? 0) + 's url=' + tgUrl.slice(0, 34));
+          s.tgui.current!.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl, expiresAt: qrNextSwapAt });
+          if (pollInterval) scheduleQrRestart(ttlMs);
+          saveQrCacheToDb({ tgUrl, dataUrl: '', ts: nowMs, expires: ex, expiresAt: qrNextSwapAt });
+          window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: '', tgUrl, expires: ttlSec, expiresAt: qrNextSwapAt, keepImage: true } }));
+          broadcastQr(tgUrl, '', ttlSec, qrNextSwapAt);
           const themed = getThemedQrColors(getCurrentTheme(), 'default');
           generateQrDataUrl(tgUrl, {
             size: getQrGenSize(QR_DEFAULTS.size),
@@ -713,18 +795,41 @@ export function createAuthCallbacks(
             darkColor: themed.darkColor,
             lightColor: themed.lightColor,
           }).then(dataUrl => {
-            if (dataUrl) {
-              window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: dataUrl, tgUrl } }));
-              broadcastQr(tgUrl, dataUrl, undefined);
-              saveQrCacheToDb({ tgUrl, dataUrl, ts: Date.now(), expires: ex });
+            if (dataUrl && myReq === qrReqId && lastQrCache?.tgUrl === tgUrl) {
+              window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: dataUrl, tgUrl, expiresAt: qrNextSwapAt } }));
+              broadcastQr(tgUrl, dataUrl, undefined, qrNextSwapAt);
+              saveQrCacheToDb({ tgUrl, dataUrl, ts: Date.now(), expires: ex, expiresAt: qrNextSwapAt });
             }
           }).catch(() => {});
         };
         let freshUrl = '';
         try { freshUrl = makeQrUrl(tokenHex); } catch { freshUrl = ''; }
         const isNewToken = !freshUrl || freshUrl !== lastQrCache?.tgUrl;
+        const shownAlive = lastQrCache ? Date.now() < lastQrCache.expiresAt - 1500 : false;
+        qrLog(s, 'QR export: ttl=' + Math.round(getQrTtlMs(expires)) + 'ms off=' + (qrServerOffsetSec ?? 0) + 's ' + (isNewToken ? (shownAlive ? 'new token withheld (shown alive)' : 'new token') : 'same as cache'));
         if (isNewToken) {
-          dispatchQr(tokenHex, expires);
+          if (shownAlive) {
+          } else {
+            dispatchQr(tokenHex, expires);
+          }
+        }
+        if (shownAlive) {
+          const shownTgUrl = lastQrCache!.tgUrl;
+          const shownExpiresAt = lastQrCache!.expiresAt;
+          const entryThemed = getThemedQrColors(getCurrentTheme(), 'default');
+          generateQrDataUrl(shownTgUrl, {
+            size: getQrGenSize(QR_DEFAULTS.size),
+            margin: QR_DEFAULTS.margin,
+            errorCorrectionLevel: QR_DEFAULTS.errorCorrectionLevel,
+            darkColor: entryThemed.darkColor,
+            lightColor: entryThemed.lightColor,
+          }).then(dataUrl => {
+            if (dataUrl && myReq === qrReqId && lastQrCache?.tgUrl === shownTgUrl) {
+              window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: dataUrl, tgUrl: shownTgUrl, expiresAt: shownExpiresAt } }));
+              broadcastQr(shownTgUrl, dataUrl, undefined, shownExpiresAt);
+              saveQrCacheToDb({ tgUrl: shownTgUrl, dataUrl, ts: Date.now(), expires: lastQrCache!.expires, expiresAt: shownExpiresAt });
+            }
+          }).catch(() => {});
         }
         if (s.tgui.current?.state.authStep === 'password') {
           if (isNewToken) {
@@ -733,10 +838,11 @@ export function createAuthCallbacks(
             try { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } })); } catch {}
             s.tgui.current?.setAuthStep('phone');
           }
+          stopPolling();
           return;
         }
         const poll = async () => {
-            if (qrGen !== authGen) { stopPolling(); return true; }
+            if (myReq !== qrReqId || qrGen !== authGen) { stopPolling(); return true; }
             if (s.tgui.current?.state.authStep !== 'qr_login') { stopPolling(); return true; }
             if (Date.now() < floodBackoffUntil) return false;
             try {
@@ -745,39 +851,67 @@ export function createAuthCallbacks(
                     api_hash: apiHash,
                     except_ids: [],
                 });
-                if (qrGen !== authGen) { stopPolling(); return true; }
+                if (qrGen !== authGen || myReq !== qrReqId) { stopPolling(); return true; }
                 if (s.tgui.current?.state.authStep !== 'qr_login') { stopPolling(); return true; }
                 if (pollResult?._ === 'auth.loginTokenSuccess') {
                     return await onLoginTokenSuccess(pollResult);
                 }
                 if (pollResult?._ === 'auth.loginTokenMigrateTo') {
-                    if (qrGen !== authGen) return true;
+                    if (qrGen !== authGen || myReq !== qrReqId) return true;
                     try {
                       const dcId = typeof pollResult.dc_id === 'number' ? pollResult.dc_id : parseInt(String(pollResult.dc_id), 10);
                       const migToken = String(pollResult.token || '');
                       if (migToken && Number.isFinite(dcId)) {
                         const imported: any = await svc()!.importLoginToken(migToken, dcId);
-                        if (qrGen !== authGen) { stopPolling(); return true; }
+                        if (qrGen !== authGen || myReq !== qrReqId) { stopPolling(); return true; }
                         if (imported?._ === 'auth.loginTokenSuccess') return await onLoginTokenSuccess(imported);
                       }
                     } catch (e2: any) {
                       if (String(e2?.message || '').includes('SESSION_PASSWORD_NEEDED')) {
                         stopPolling();
-                        if (qrGen !== authGen) return true;
+                        if (qrGen !== authGen || myReq !== qrReqId) return true;
                         s.tgui.current!.setAuthStep('password');
                         return true;
                       }
                     }
                     return false;
                 }
+                if (pollResult?._ === 'auth.loginToken' && pollResult.token) {
+                    await syncQrServerOffset();
+                    let pollUrl = '';
+                    try { pollUrl = makeQrUrl(pollResult.token); } catch { pollUrl = ''; }
+                    if (pollUrl && pollUrl !== lastQrCache?.tgUrl) {
+                        if (!lastQrCache || Date.now() >= lastQrCache.expiresAt) {
+                            dispatchQr(pollResult.token, pollResult.expires);
+                        } else if (Date.now() - lastHoldLogAt >= 10000) {
+                            lastHoldLogAt = Date.now();
+                            qrLog(s, 'QR poll newer token, holding shown url=' + pollUrl.slice(0, 34));
+                        }
+                    } else if (pollUrl) {
+                        reanchorQr(s, pollUrl, pollResult.expires);
+                    }
+                    return false;
+                }
             } catch (e: any) {
-                if (qrGen !== authGen) { stopPolling(); return true; }
+                if (qrGen !== authGen || myReq !== qrReqId) { stopPolling(); return true; }
                 if (s.tgui.current?.state.authStep !== 'qr_login') { stopPolling(); return true; }
                 if (e.message?.includes('SESSION_PASSWORD_NEEDED')) {
                     stopPolling();
-                    if (qrGen !== authGen) return true;
+                    if (qrGen !== authGen || myReq !== qrReqId) return true;
                     if (s.tgui.current?.state.authStep !== 'qr_login') return true;
                     s.tgui.current!.setAuthStep('password');
+                    return true;
+                }
+                if (e.message?.includes('AUTH_TOKEN_EXPIRED') || e.message?.includes('AUTH_TOKEN_ALREADY_ACCEPTED') || e.message?.includes('AUTH_TOKEN_INVALID')) {
+                    stopPolling();
+                    if (myReq === qrReqId) {
+                        qrLog(s, 'QR token stale, restarting');
+                        try { await dbDel(QR_DB_KEY).catch(() => {}); lastQrCache = null; } catch {}
+                        if (s.tgui.current?.state.authStep === 'qr_login') {
+                            s.tgui.current!.setError('');
+                            window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
+                        }
+                    }
                     return true;
                 }
                 if (e.message?.includes('FLOOD_WAIT')) {
@@ -806,25 +940,14 @@ export function createAuthCallbacks(
             const done = await poll();
             if (done) stopPolling();
         }, 3000);
-        const ttlMs = getQrTtlMs(expires);
-        pollTimeout = setTimeout(async () => {
-            stopPolling();
-            if (s.tgui.current?.state.authStep === 'qr_login') {
-              try { await dbDel(QR_DB_KEY).catch(() => {}); lastQrCache = null; qrBusy = false; } catch {}
-              s.tgui.current!.setError('');
-              if (s.tgui.current?.state.authStep === 'qr_login' && !qrBusy) {
-                window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
-              }
-            }
-        }, ttlMs);
         holder.interval = pollInterval;
-        holder.timeout = pollTimeout;
-        addLog(s, 'QR poll start');
+        scheduleQrRestart(Math.max(1000, (qrNextSwapAt || Date.now() + qrRotationPeriodMs) - Date.now()));
+        qrLog(s, 'QR poll start');
       } catch (e: any) {
-        if (qrGen !== authGen) return;
+        if (qrGen !== authGen || myReq !== qrReqId) return;
         stopQrPolling();
         const msg = e?.message || String(e);
-        addLog(s, 'QR request failed: ' + msg.slice(0, 160));
+        qrLog(s, 'QR request failed: ' + msg.slice(0, 160));
         const st: string | undefined = s.tgui.current?.state.authStep;
         if (msg.includes('AUTH_KEY_UNREGISTERED') && st === 'password') {
           try { s.tgui.current?.dispatch({ type: 'SET_PASSWORD', password: '' }); } catch {}
@@ -842,7 +965,7 @@ export function createAuthCallbacks(
           return;
         }
         if (st === 'phone' && msg.includes('SESSION_PASSWORD_NEEDED')) {
-          addLog(s, 'QR pending, will retry');
+          qrLog(s, 'QR pending, will retry');
           if (qrRefreshTimeout) { try { clearTimeout(qrRefreshTimeout); } catch {} qrRefreshTimeout = null; }
           qrRefreshTimeout = setTimeout(() => {
             qrRefreshTimeout = null;
@@ -854,22 +977,39 @@ export function createAuthCallbacks(
           }, 30000);
           return;
         }
+        if (st === 'qr_login' && (msg.includes('AUTH_TOKEN_EXPIRED') || msg.includes('AUTH_TOKEN_ALREADY_ACCEPTED') || msg.includes('AUTH_TOKEN_INVALID'))) {
+          qrLog(s, 'QR token stale, restarting');
+          try { await dbDel(QR_DB_KEY).catch(() => {}); lastQrCache = null; } catch {}
+          qrRefreshTimeout = setTimeout(() => {
+            qrRefreshTimeout = null;
+            try {
+              if (s.tgui.current?.state.page === 'auth' && s.tgui.current?.state.authStep === 'qr_login') {
+                s.tgui.current!.setError('');
+                window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
+              }
+            } catch {}
+          }, 1500);
+          return;
+        }
         if (st !== 'phone' && st !== 'qr_login' && st !== 'loading') return;
         s.tgui.current!.setError(formatAuthError('QR failed: ' + msg.slice(0,200)));
         s.tgui.current!.setAuthStep('qr_login');
-      } finally {
-        qrBusy = false;
       }
     },
     requestQrPreview: async () => {
+      const myPrevReq = ++previewReqId;
+      if (s.tgui.current?.state.page !== 'auth') return;
+      await syncQrServerOffset();
       await loadQrCacheFromDb();
+      if (myPrevReq !== previewReqId) return;
       const useCache = lastQrCache && Date.now() < lastQrCache.expiresAt;
       if (useCache) {
         const remainingSec = Math.ceil(Math.max(0, lastQrCache!.expiresAt - Date.now()) / 1000);
-        s.tgui.current?.dispatch({ type: 'SET_QR_TOKEN', token: lastQrCache!.tgUrl });
-        window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: lastQrCache!.dataUrl, tgUrl: lastQrCache!.tgUrl, expires: remainingSec } }));
-        window.dispatchEvent(new CustomEvent('tg-auth-qr-preview-url', { detail: { url: lastQrCache!.dataUrl, tgUrl: lastQrCache!.tgUrl, expires: remainingSec } }));
-        broadcastQr(lastQrCache!.tgUrl, lastQrCache!.dataUrl, remainingSec);
+        qrNextSwapAt = lastQrCache!.expiresAt;
+        s.tgui.current?.dispatch({ type: 'SET_QR_TOKEN', token: lastQrCache!.tgUrl, expiresAt: lastQrCache!.expiresAt });
+        window.dispatchEvent(new CustomEvent('tg-auth-qr-preview-url', { detail: { url: lastQrCache!.dataUrl, tgUrl: lastQrCache!.tgUrl, expires: remainingSec, expiresAt: lastQrCache!.expiresAt } }));
+        window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: '', tgUrl: lastQrCache!.tgUrl, expires: remainingSec, expiresAt: lastQrCache!.expiresAt, keepImage: true } }));
+        broadcastQr(lastQrCache!.tgUrl, lastQrCache!.dataUrl, remainingSec, lastQrCache!.expiresAt);
       }
       lastPreviewAt = Date.now();
       if (activePreviewPoll) {
@@ -879,8 +1019,92 @@ export function createAuthCallbacks(
       }
       scheduleQrPreload();
       const qrPreload = preloadQrModule().catch(() => null);
+      let previewPoll: ReturnType<typeof setInterval> | null = null;
+      let previewPollTimeout: ReturnType<typeof setTimeout> | null = null;
+      const schedulePreviewDeadline = (delayMsRaw: number) => {
+        const delayMs = Math.max(1000, delayMsRaw);
+        if (previewPollTimeout) { try { clearTimeout(previewPollTimeout); } catch {} }
+        previewPollTimeout = setTimeout(() => {
+          if (previewPoll) clearInterval(previewPoll);
+          if (activePreviewPoll?.interval === previewPoll) activePreviewPoll = null;
+          try { dbDel(QR_DB_KEY).catch(() => {}); } catch {}
+        }, delayMs);
+        if (activePreviewPoll?.interval === previewPoll) activePreviewPoll.timeout = previewPollTimeout;
+        if (qrRefreshTimeout) { try { clearTimeout(qrRefreshTimeout); } catch {} qrRefreshTimeout = null; }
+        qrRefreshTimeout = setTimeout(() => {
+          if (myPrevReq !== previewReqId) return;
+          if (s.tgui.current?.state.page === 'auth' && (s.tgui.current?.state.authStep === 'phone' || s.tgui.current?.state.authStep === 'qr_login')) {
+            try { dbDel(QR_DB_KEY).catch(() => {}); } catch {}
+            window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
+          }
+        }, delayMs);
+      };
+      const dispatchPreviewQr = async (hex: string, exp: number): Promise<void> => {
+        let tgUrl = '';
+        try { tgUrl = makeQrUrl(hex); } catch { return; }
+        if (tgUrl === lastShownQrUrl && getQrTtlMs(exp) <= 0) {
+          qrStallTries++;
+          const retryDelay = qrStallTries < 2 ? 900 : 3000;
+          if (s.tgui.current?.state.qrToken !== tgUrl) {
+            s.tgui.current?.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl, expiresAt: 0 });
+          }
+          qrLog(s, 'QR preview same token after deadline, quick retry ' + retryDelay + 'ms (try ' + qrStallTries + ')');
+          if (qrRefreshTimeout) { try { clearTimeout(qrRefreshTimeout); } catch {} qrRefreshTimeout = null; }
+          qrRefreshTimeout = setTimeout(() => {
+            if (myPrevReq !== previewReqId) return;
+            if (s.tgui.current?.state.page === 'auth' && (s.tgui.current?.state.authStep === 'phone' || s.tgui.current?.state.authStep === 'qr_login')) {
+              try { dbDel(QR_DB_KEY).catch(() => {}); } catch {}
+              window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
+            }
+          }, retryDelay);
+          return;
+        }
+        qrStallTries = 0;
+        const nowMs = Date.now();
+        if (qrLastSwapExpires > 1e9 && exp > qrLastSwapExpires) {
+          const measured = (exp - qrLastSwapExpires) * 1000;
+          if (measured >= 15000 && measured <= 60000) qrRotationPeriodMs = measured;
+        }
+        if (exp > 1e9) qrLastSwapExpires = exp;
+        const snapEstimate = getExpiresAt(nowMs, exp);
+        qrNextSwapAt = snapEstimate > nowMs ? snapEstimate : nowMs + qrRotationPeriodMs;
+        lastShownQrUrl = tgUrl;
+        const ttlSec = Math.max(1, Math.ceil((qrNextSwapAt - nowMs) / 1000));
+        qrLog(s, 'QR preview set: ttl=' + Math.round(qrNextSwapAt - nowMs) + 'ms period=' + Math.round(qrRotationPeriodMs / 1000) + 's off=' + (qrServerOffsetSec ?? 0) + 's url=' + tgUrl.slice(0, 34));
+        s.tgui.current?.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl, expiresAt: qrNextSwapAt });
+        if (previewPoll && activePreviewPoll?.interval === previewPoll) schedulePreviewDeadline(qrNextSwapAt - nowMs);
+        window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: '', tgUrl, expires: ttlSec, expiresAt: qrNextSwapAt, keepImage: true } }));
+        window.dispatchEvent(new CustomEvent('tg-auth-qr-preview-url', { detail: { url: '', tgUrl, expires: ttlSec, expiresAt: qrNextSwapAt, keepImage: true } }));
+        broadcastQr(tgUrl, '', ttlSec, qrNextSwapAt);
+        saveQrCacheToDb({ tgUrl, dataUrl: '', ts: nowMs, expires: exp, expiresAt: qrNextSwapAt });
+        if (s.tgui.current?.state.authStep === 'password') {
+          try { s.tgui.current?.dispatch({ type: 'SET_PASSWORD', password: '' }); } catch {}
+          try { s.tgui.current?.setError(''); } catch {}
+          try { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } })); } catch {}
+          s.tgui.current?.setAuthStep('phone');
+          return;
+        }
+        await qrPreload;
+        let dataUrl = '';
+        try {
+          const themedPreview = getThemedQrColors(getCurrentTheme(), 'small');
+          dataUrl = await generateQrDataUrl(tgUrl, {
+            size: getQrGenSize(52),
+            margin: 1,
+            errorCorrectionLevel: 'L',
+            darkColor: themedPreview.darkColor,
+            lightColor: themedPreview.lightColor,
+          });
+        } catch {}
+        if (dataUrl && lastQrCache?.tgUrl === tgUrl) {
+          window.dispatchEvent(new CustomEvent('tg-auth-qr-preview-url', { detail: { url: dataUrl, tgUrl, expiresAt: qrNextSwapAt } }));
+          broadcastQr(tgUrl, dataUrl, undefined, qrNextSwapAt);
+          saveQrCacheToDb({ tgUrl, dataUrl, ts: Date.now(), expires: exp, expiresAt: qrNextSwapAt });
+        }
+      };
       const doPreview = async (attempt = 0): Promise<void> => {
         const previewGen = authGen;
+        if (myPrevReq !== previewReqId) return;
         if (s.tgui.current?.state.page !== 'auth') return;
         {
           const st = s.tgui.current?.state.authStep;
@@ -901,7 +1125,7 @@ export function createAuthCallbacks(
           if (!service) throw new Error('not connected');
 
           const completePreviewLogin = async (res: any): Promise<boolean> => {
-            if (previewGen !== authGen) return true;
+            if (previewGen !== authGen || myPrevReq !== previewReqId) return true;
             if (s.tgui.current?.state.page !== 'auth') return true;
             const st: string | undefined = s.tgui.current?.state.authStep;
             if (st !== 'phone' && st !== 'qr_login' && st !== 'password') return true;
@@ -950,9 +1174,10 @@ export function createAuthCallbacks(
             api_hash: apiHash,
             except_ids: [],
           });
+          if (myPrevReq !== previewReqId) return;
           const expires = (result as any)?.expires;
           let tokenHex: string = result?.token;
-          addLog(s, 'QR preview export ok expires=' + String((result as any)?.expires) + ' ctor=' + String((result as any)?._ || '?') + ' tok=' + String((result as any)?.token || '').slice(0, 8));
+          qrLog(s, 'QR preview export ok expires=' + String((result as any)?.expires) + ' ctor=' + String((result as any)?._ || '?') + ' tok=' + String((result as any)?.token || '').slice(0, 8));
           if (result?._ === 'auth.loginTokenSuccess') {
             await completePreviewLogin(result);
             return;
@@ -963,7 +1188,7 @@ export function createAuthCallbacks(
               const migToken = String(result.token || '');
               if (migToken && Number.isFinite(dcId)) {
                 const imported: any = await service.importLoginToken(migToken, dcId);
-                if (previewGen !== authGen) return;
+                if (previewGen !== authGen || myPrevReq !== previewReqId) return;
                 if (imported?._ === 'auth.loginTokenSuccess') { await completePreviewLogin(imported); return; }
               }
             } catch (e2: any) {
@@ -979,45 +1204,18 @@ export function createAuthCallbacks(
           hexToBase64Url(tokenHex);
           suppressPhonePassword = false;
           const tgUrl = makeQrUrl(tokenHex);
-          const isPreviewNew = tgUrl !== lastQrCache?.tgUrl;
-          if (isPreviewNew) {
-            const ttlSec = Math.ceil(getQrTtlMs(expires) / 1000);
-            s.tgui.current?.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl });
-            window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: '', tgUrl, expires: ttlSec } }));
-            window.dispatchEvent(new CustomEvent('tg-auth-qr-preview-url', { detail: { url: '', tgUrl, expires: ttlSec } }));
-            broadcastQr(tgUrl, '', ttlSec);
-            saveQrCacheToDb({ tgUrl, dataUrl: '', ts: Date.now(), expires });
-            if (s.tgui.current?.state.authStep === 'password') {
-              try { s.tgui.current?.dispatch({ type: 'SET_PASSWORD', password: '' }); } catch {}
-              try { s.tgui.current?.setError(''); } catch {}
-              try { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'phone' } })); } catch {}
-              s.tgui.current?.setAuthStep('phone');
-              return;
-            }
-            await qrPreload;
-            let dataUrl = '';
-            try {
-              const themedPreview = getThemedQrColors(getCurrentTheme(), 'small');
-              dataUrl = await generateQrDataUrl(tgUrl, {
-                size: getQrGenSize(52),
-                margin: 1,
-                errorCorrectionLevel: 'L',
-                darkColor: themedPreview.darkColor,
-                lightColor: themedPreview.lightColor,
-              });
-            } catch {}
-            if (dataUrl) {
-              window.dispatchEvent(new CustomEvent('tg-auth-qr-url', { detail: { url: dataUrl, tgUrl } }));
-              window.dispatchEvent(new CustomEvent('tg-auth-qr-preview-url', { detail: { url: dataUrl, tgUrl } }));
-              broadcastQr(tgUrl, dataUrl, undefined);
-              saveQrCacheToDb({ tgUrl, dataUrl, ts: Date.now(), expires });
+          if (tgUrl !== lastQrCache?.tgUrl) {
+            if (!lastQrCache || Date.now() >= lastQrCache.expiresAt) {
+              await dispatchPreviewQr(tokenHex, expires);
+              if (myPrevReq !== previewReqId) return;
+            } else {
+              qrLog(s, 'QR preview fresh token withheld (shown alive)');
             }
           }
-          let pollToken = tokenHex;
           let previewPoll: ReturnType<typeof setInterval> | null = null;
           let previewPollTimeout: ReturnType<typeof setTimeout> | null = null;
           const pollPreview = async () => {
-            if (previewGen !== authGen) { try { if (activePreviewPoll) { clearInterval(activePreviewPoll.interval!); clearTimeout(activePreviewPoll.timeout!); activePreviewPoll = null; } } catch {} return true; }
+            if (previewGen !== authGen || myPrevReq !== previewReqId) { try { if (activePreviewPoll?.interval === previewPoll) { clearInterval(activePreviewPoll.interval!); clearTimeout(activePreviewPoll.timeout!); activePreviewPoll = null; } } catch {} return true; }
             if (!s.tgui.current) return false;
             if (s.tgui.current.state.page !== 'auth') return true;
             if (s.tgui.current.state.authStep !== 'phone') return true;
@@ -1029,20 +1227,20 @@ export function createAuthCallbacks(
                 api_hash: apiHash,
                 except_ids: [],
               });
-              if (previewGen !== authGen) return true;
+              if (previewGen !== authGen || myPrevReq !== previewReqId) return true;
               if (s.tgui.current?.state.page !== 'auth') return true;
               if (s.tgui.current?.state.authStep !== 'phone') return true;
               if (pr?._ === 'auth.loginTokenSuccess') {
                 return await completePreviewLogin(pr);
               }
               if (pr?._ === 'auth.loginTokenMigrateTo') {
-                if (previewGen !== authGen) return true;
+                if (previewGen !== authGen || myPrevReq !== previewReqId) return true;
                 try {
                   const dcId = typeof pr.dc_id === 'number' ? pr.dc_id : parseInt(String(pr.dc_id), 10);
                   const migToken = String(pr.token || '');
                   if (migToken && Number.isFinite(dcId)) {
                     const imported: any = await svcInst.importLoginToken(migToken, dcId);
-                    if (previewGen !== authGen) return true;
+                    if (previewGen !== authGen || myPrevReq !== previewReqId) return true;
                     if (imported?._ === 'auth.loginTokenSuccess') return await completePreviewLogin(imported);
                   }
                 } catch (e2: any) {
@@ -1056,8 +1254,25 @@ export function createAuthCallbacks(
                 }
                 return false;
               }
+              if (pr?._ === 'auth.loginToken' && pr.token) {
+                await syncQrServerOffset();
+                let pUrl = '';
+                try { pUrl = makeQrUrl(pr.token); } catch { pUrl = ''; }
+                if (pUrl && pUrl !== lastQrCache?.tgUrl) {
+                  if (!lastQrCache || Date.now() >= lastQrCache.expiresAt) {
+                    await dispatchPreviewQr(pr.token, pr.expires);
+                    if (myPrevReq !== previewReqId) return true;
+                  } else if (Date.now() - lastHoldLogAt >= 10000) {
+                    lastHoldLogAt = Date.now();
+                    qrLog(s, 'QR preview poll newer token, holding shown url=' + pUrl.slice(0, 34));
+                  }
+                } else if (pUrl) {
+                  reanchorQr(s, pUrl, pr.expires);
+                }
+                return false;
+              }
             } catch (e: any) {
-              if (previewGen !== authGen) return true;
+              if (previewGen !== authGen || myPrevReq !== previewReqId) return true;
               if (e.message?.includes('SESSION_PASSWORD_NEEDED')) {
                 if (s.tgui.current?.state.authStep !== 'phone' && s.tgui.current?.state.authStep !== 'qr_login') return true;
                 if (s.tgui.current?.state.authStep === 'phone') {
@@ -1065,6 +1280,14 @@ export function createAuthCallbacks(
                 }
                 s.tgui.current?.setAuthStep('password');
                 try { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'password' } })); } catch {}
+                return true;
+              }
+              if (e.message?.includes('AUTH_TOKEN_EXPIRED') || e.message?.includes('AUTH_TOKEN_ALREADY_ACCEPTED') || e.message?.includes('AUTH_TOKEN_INVALID')) {
+                qrLog(s, 'QR token stale, restarting preview');
+                try { await dbDel(QR_DB_KEY).catch(() => {}); lastQrCache = null; } catch {}
+                if (myPrevReq === previewReqId && s.tgui.current?.state.authStep === 'phone') {
+                  window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
+                }
                 return true;
               }
             }
@@ -1076,25 +1299,13 @@ export function createAuthCallbacks(
               if (previewPoll) clearInterval(previewPoll);
               if (previewPollTimeout) clearTimeout(previewPollTimeout);
               if (qrRefreshTimeout) { try { clearTimeout(qrRefreshTimeout); } catch {} qrRefreshTimeout = null; }
-              activePreviewPoll = null;
+              if (activePreviewPoll?.interval === previewPoll) activePreviewPoll = null;
             }
           }, 3000);
-          previewPollTimeout = setTimeout(async () => {
-            if (previewPoll) clearInterval(previewPoll);
-            activePreviewPoll = null;
-            try { await dbDel(QR_DB_KEY).catch(() => {}); } catch {}
-          }, getQrTtlMs(expires));
-          activePreviewPoll = { interval: previewPoll, timeout: previewPollTimeout };
-          const ttlMs = getQrTtlMs(expires);
-          if (qrRefreshTimeout) { try { clearTimeout(qrRefreshTimeout); } catch {} qrRefreshTimeout = null; }
-          qrRefreshTimeout = setTimeout(() => {
-            if (s.tgui.current?.state.page === 'auth' && (s.tgui.current?.state.authStep === 'phone' || s.tgui.current?.state.authStep === 'qr_login')) {
-              try { dbDel(QR_DB_KEY).catch(() => {}); } catch {}
-              window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
-            }
-          }, ttlMs);
+          activePreviewPoll = { interval: previewPoll, timeout: null };
+          schedulePreviewDeadline(Math.max(1000, (qrNextSwapAt || Date.now() + qrRotationPeriodMs) - Date.now()));
         } catch (e: any) {
-          if (previewGen !== authGen) return;
+          if (previewGen !== authGen || myPrevReq !== previewReqId) return;
           const msg = String(e?.message || e);
 
           if (msg.includes('AUTH_KEY_UNREGISTERED') && s.tgui.current?.state.authStep === 'password') {
@@ -1113,7 +1324,7 @@ export function createAuthCallbacks(
               s.tgui.current?.setAuthStep('password');
               try { window.dispatchEvent(new CustomEvent('tg-auth-set-step', { detail: { step: 'password' } })); } catch {}
             } else if (st === 'phone') {
-              addLog(s, 'QR pending, will retry');
+              qrLog(s, 'QR pending, will retry');
               if (qrRefreshTimeout) { try { clearTimeout(qrRefreshTimeout); } catch {} qrRefreshTimeout = null; }
               qrRefreshTimeout = setTimeout(() => {
                 qrRefreshTimeout = null;

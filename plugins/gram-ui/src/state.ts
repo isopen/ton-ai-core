@@ -114,7 +114,7 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'SET_COUNTRY_ISO2': return { ...state, countryIso2: action.countryIso2 };
     case 'SET_SIGNUP_FIRSTNAME': return { ...state, signupFirstname: action.firstname };
     case 'SET_SIGNUP_LASTNAME': return { ...state, signupLastname: action.lastname };
-    case 'SET_QR_TOKEN': return { ...state, qrToken: action.token };
+    case 'SET_QR_TOKEN': return { ...state, qrToken: action.token, qrExpiresAt: action.token ? (action.expiresAt ?? state.qrExpiresAt) : undefined };
     case 'SET_PHONE_CODE_HASH': return { ...state, phoneCodeHash: action.hash };
     case 'SET_SELF_USER_ID': return { ...state, selfUserId: action.userId };
     case 'SET_PLUGIN_SKILLS': return { ...state, pluginSkills: action.skills };

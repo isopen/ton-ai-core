@@ -481,7 +481,7 @@ function PhoneView({ state, dispatch }: { state: AppState; dispatch: Dispatch })
             errorVersion={state.errorVersion}
           />
         </div>
-        <QrCodeView dispatch={dispatch} variant="small" />
+        <QrCodeView dispatch={dispatch} variant="small" stateToken={state.qrToken} stateExpiresAt={state.qrExpiresAt} />
       </div>
 
       <button class="login-btn login-btn-primary" type="submit" aria-disabled={isCountriesLoading ? 'true' : 'false'} disabled={isCountriesLoading}>
@@ -815,7 +815,7 @@ export function AuthScreen({ state, dispatch }: { state: AppState; dispatch: Dis
             {state.authStep === 'code' ? <CodeView dispatch={dispatch} state={state} /> : null}
             {state.authStep === 'password' ? <PasswordView dispatch={dispatch} state={state} /> : null}
             {state.authStep === 'signup' ? <SignUpView state={state} dispatch={dispatch} /> : null}
-            {state.authStep === 'qr_login' ? <QrCodeView dispatch={dispatch} /> : null}
+            {state.authStep === 'qr_login' ? <QrCodeView dispatch={dispatch} stateToken={state.qrToken} stateExpiresAt={state.qrExpiresAt} /> : null}
           </div>
         )}
       </div>

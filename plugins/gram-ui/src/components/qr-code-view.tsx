@@ -1,29 +1,58 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useDomEvent } from '@ton-ai/atom/hooks';
 import { t, S } from '@ton-ai/gram-lang';
+import { getLogger } from '@ton-ai/gram-debug';
 import { QrCode } from '../primitives/qr-code.js';
 import { QR_DEFAULTS, getThemedQrColors, getCurrentTheme } from '../utils/qr.js';
+
+const log = getLogger('gram-ui:qr');
 
 interface QrCodeViewProps {
   dispatch: any;
   variant?: 'default' | 'small';
   showTimer?: boolean;
+  stateToken?: string;
+  stateExpiresAt?: number;
 }
 
-export function QrCodeView({ dispatch, variant = 'default', showTimer = true }: QrCodeViewProps) {
+export function QrCodeView({ dispatch, variant = 'default', showTimer = true, stateToken, stateExpiresAt }: QrCodeViewProps) {
   const isSmall = variant === 'small';
 
   const [tgUrl, setTgUrl] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [loading, setLoading] = useState(true);
-  const [expires, setExpires] = useState<number | undefined>(undefined);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => getCurrentTheme());
   const themedColors = getThemedQrColors(theme, isSmall ? 'small' : 'default');
 
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const deadlineRef = useRef(0);
+
+  const qrLeftSec = () => {
+    const d = deadlineRef.current;
+    if (!d) return 0;
+    return Math.max(0, Math.ceil((d - Date.now()) / 1000));
+  };
+  const applyCountdown = (secs?: number) => {
+    if (typeof secs === 'number' && Number.isFinite(secs) && secs > 0) {
+      const clamped = Math.min(secs > 1e9 ? 30 : secs, 3600);
+      deadlineRef.current = Date.now() + clamped * 1000;
+    }
+    setSecondsLeft(qrLeftSec());
+  };
+  const resetCountdown = () => {
+    deadlineRef.current = 0;
+    setSecondsLeft(0);
+  };
+  const applyQrDeadline = (absMs?: number, secs?: number) => {
+    if (typeof absMs === 'number' && Number.isFinite(absMs) && absMs > 1e9) {
+      deadlineRef.current = absMs;
+      setSecondsLeft(qrLeftSec());
+      return;
+    }
+    applyCountdown(secs);
+  };
 
   const requestEvent = isSmall ? 'tg-auth-request-qr-preview' : 'tg-auth-request-qr';
   const handleQrEvent = (e: any) => {
@@ -31,13 +60,15 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true }: 
     const url = e.detail?.url || '';
     const tUrl = e.detail?.tgUrl || '';
     const expRaw = typeof e.detail?.expires === 'number' ? e.detail.expires : undefined;
+    const expAbs = typeof e.detail?.expiresAt === 'number' ? e.detail.expiresAt : undefined;
+    log.info('[qr] event ' + e.type + ' ' + (e.detail?.keepImage ? 'keep' : 'fresh') + ' url=' + (url ? 'data' : (url === '' ? 'empty' : String(url).slice(0, 10))) + ' tg=' + tUrl.slice(0, 16) + ' exp=' + (expRaw ?? '?') + 's abs=' + (expAbs ?? '?') + ' now=' + Date.now());
     if (tUrl) {
       setTgUrl(tUrl);
       if (url && url.startsWith('data:image/')) setQrDataUrl(url);
-      else setQrDataUrl('');
+      else if (!e.detail?.keepImage) setQrDataUrl('');
       setLoading(false);
       retryCountRef.current = 0;
-      if (expRaw) setExpires(expRaw);
+      applyQrDeadline(expAbs, expRaw);
       if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
     } else if (url) {
       if (url.startsWith('data:image/')) {
@@ -76,16 +107,19 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true }: 
     if (step === 'phone' && isSmall) {
       setTgUrl('');
       setQrDataUrl('');
-      setExpires(undefined);
+      resetCountdown();
       setLoading(true);
       retryCountRef.current = 0;
       if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
       window.dispatchEvent(new CustomEvent(requestEvent));
     } else if (step === 'qr_login' && !isSmall) {
-      setTgUrl('');
-      setQrDataUrl('');
-      setExpires(undefined);
-      setLoading(true);
+      const tokenAlive = !!stateToken && (!stateExpiresAt || stateExpiresAt - 300 > Date.now());
+      if (!tokenAlive) {
+        setTgUrl('');
+        setQrDataUrl('');
+        resetCountdown();
+        setLoading(true);
+      }
       retryCountRef.current = 0;
       window.dispatchEvent(new CustomEvent(requestEvent));
     }
@@ -98,36 +132,54 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true }: 
   }, [tgUrl]);
 
   useEffect(() => {
-    if (!expires) {
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-      return;
-    }
-    const toSeconds = (exp: number) => {
-      const secs = exp > 1e9 ? 30 : exp;
-      return Math.max(0, Math.min(secs, 120));
-    };
-    setSecondsLeft(toSeconds(expires));
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = setInterval(() => {
+    const iv = setInterval(() => {
+      if (!deadlineRef.current) return;
       setSecondsLeft(prev => {
-        if (prev <= 1) {
-          if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-          return 0;
-        }
-        return prev - 1;
+        const next = qrLeftSec();
+        return prev === next ? prev : next;
       });
-    }, 1000);
-    return () => {
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    };
-  }, [expires, tgUrl]);
+    }, 500);
+    return () => clearInterval(iv);
+  }, []);
 
   useEffect(() => {
-    setTgUrl('');
-    setQrDataUrl('');
-    setLoading(true);
-    retryCountRef.current = 0;
-    if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+    if (!stateToken) {
+      if (tgUrl) {
+        setTgUrl('');
+        setQrDataUrl('');
+        resetCountdown();
+      }
+      return;
+    }
+    if (stateExpiresAt && Number.isFinite(stateExpiresAt) && stateExpiresAt <= Date.now()) {
+      log.info('[qr] state apply skipped (expired prop): token=' + stateToken.slice(0, 16) + ' expAt=' + stateExpiresAt);
+      return;
+    }
+    if (stateToken !== tgUrl) {
+      setTgUrl(stateToken);
+      if (stateToken.startsWith('data:image/')) setQrDataUrl(stateToken);
+      else setQrDataUrl('');
+      setLoading(false);
+      retryCountRef.current = 0;
+      if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+      log.info('[qr] state apply token=' + stateToken.slice(0, 16) + ' now=' + Date.now());
+    }
+    if (stateExpiresAt && Number.isFinite(stateExpiresAt)) {
+      deadlineRef.current = stateExpiresAt;
+      setSecondsLeft(qrLeftSec());
+      log.info('[qr] state apply deadline=' + stateExpiresAt + ' (+ms to zero ' + Math.round(stateExpiresAt - Date.now()) + ')');
+    }
+  }, [stateToken, stateExpiresAt]);
+
+  useEffect(() => {
+    const tokenAlive = !!stateToken && (!stateExpiresAt || stateExpiresAt - 300 > Date.now());
+    if (!tokenAlive) {
+      setTgUrl('');
+      setQrDataUrl('');
+      setLoading(true);
+      retryCountRef.current = 0;
+      if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+    }
     window.dispatchEvent(new CustomEvent(requestEvent));
     if (!isSmall) return;
 
