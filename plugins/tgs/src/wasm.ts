@@ -1,5 +1,5 @@
 import { getLogger } from '@ton-ai/gram-debug';
-import type { ParsedAnimation } from './ts/src/types.js';
+import type { ParsedAnimation } from './types.js';
 
 const log = getLogger('tgs-rust');
 

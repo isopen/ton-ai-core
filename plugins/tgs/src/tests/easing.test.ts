@@ -2,7 +2,7 @@ import { CubicBezier, buildEasing } from '@ton-ai/tgs';
 let easingValue: (easing: { x1: number; y1: number; x2: number; y2: number }, t: number) => number;
 beforeEach(() => {
     jest.resetModules();
-    const m = require('../src/easing.js');
+    const m = require('../easing.js');
     easingValue = m.easingValue;
 });
 

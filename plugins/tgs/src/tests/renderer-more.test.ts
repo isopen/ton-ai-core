@@ -119,7 +119,7 @@ describe('renderFrame extras', () => {
                 return c;
             },
         };
-        renderFrame = require('../src/renderer.js').renderFrame;
+        renderFrame = require('../renderer.js').renderFrame;
     });
     afterAll(() => {
         delete (globalThis as any).document;
@@ -274,7 +274,7 @@ describe('renderFrame deep coverage', () => {
                 return c;
             },
         };
-        renderFrame = require('../src/renderer.js').renderFrame;
+        renderFrame = require('../renderer.js').renderFrame;
     });
     it('renders a rounded polygon with outer roundness', () => {
         const POLY = {
@@ -426,7 +426,7 @@ describe('renderFrame deep coverage', () => {
         };
         const c = render(body, { clientWidth: 3000, clientHeight: 3000 });
         expect(c.ctx.fills).toEqual([]);
-        const m = require('../src/renderer.js');
+        const m = require('../renderer.js');
         const stats = m.getBufferPoolStats();
         expect(stats.pixels).toBeLessThanOrEqual(stats.maxPixels + 3000 * 3000);
         expect(stats.size).toBeGreaterThan(0);
@@ -471,7 +471,7 @@ describe('renderFrame deep coverage', () => {
                 return c;
             },
         };
-        renderFrame = require('../src/renderer.js').renderFrame;
+        renderFrame = require('../renderer.js').renderFrame;
     });
 
     function baseLayer(over: any = {}): any {

@@ -90,7 +90,7 @@ describe('p1 fixes', () => {
     beforeEach(() => {
         jest.resetModules();
         (globalThis as any).document = { createElement: () => new MockCanvas() };
-        renderFrame = require('../src/renderer.js').renderFrame;
+        renderFrame = require('../renderer.js').renderFrame;
     });
     afterAll(() => { delete (globalThis as any).document; });
 

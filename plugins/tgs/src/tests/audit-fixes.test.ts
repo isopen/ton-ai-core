@@ -144,7 +144,7 @@ describe('T2: wrapped individually-trim renders instead of freezing', () => {
     function renderTrim(trimShape: any, frame: number): MiniCtx {
         const anim = parseTgs(buildLayer(trimShape));
         const ctx = new MiniCtx();
-        const mod = require('../src/renderer.js');
+        const mod = require('../renderer.js');
         canvas.getContext = () => ctx as any;
         mod.renderFrame(canvas as any, anim as any, frame, 1, undefined, undefined, 'default');
         return ctx;

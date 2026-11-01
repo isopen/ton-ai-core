@@ -2,9 +2,9 @@
     "extends": "../../tsconfig.json",
     "compilerOptions": {
         "outDir": "./dist",
-        "rootDir": ".",
+        "rootDir": "./src",
         "lib": ["ES2022", "DOM"]
     },
-    "include": ["ts/src/**/*", "wasm.ts"],
+    "include": ["src/*.ts"],
     "exclude": ["node_modules", "dist"]
 }

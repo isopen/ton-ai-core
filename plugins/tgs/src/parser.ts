@@ -7,7 +7,7 @@ import {
     LayerType, MatteType, MaskMode, GradientType,
 } from './types.js';
 import { parseValue } from './keyframes.js';
-import { isTgsWasmActive, wasmParseTgs } from '../../wasm.js';
+import { isTgsWasmActive, wasmParseTgs } from './wasm.js';
 
 const SHAPE_TYPE_MAP: Record<string, string> = {
     gr: 'group',

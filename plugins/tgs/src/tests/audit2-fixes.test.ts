@@ -97,7 +97,7 @@ describe('audit2: trim path modes (m:1 simultaneous vs m:2 individually)', () =>
                 return c;
             },
         };
-        renderFrame = require('../src/renderer.js').renderFrame;
+        renderFrame = require('../renderer.js').renderFrame;
     });
     afterAll(() => { delete (globalThis as any).document; });
 
@@ -147,7 +147,7 @@ describe('audit2: hiddenLayers applies to matte consumers', () => {
                 return c;
             },
         };
-        renderFrame = require('../src/renderer.js').renderFrame;
+        renderFrame = require('../renderer.js').renderFrame;
     });
     afterAll(() => { delete (globalThis as any).document; });
 

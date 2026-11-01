@@ -217,7 +217,7 @@ describe('renderFrame', () => {
                 return c;
             },
         };
-        const m = require('../src/renderer.js');
+        const m = require('../renderer.js');
         renderFrame = m.renderFrame;
         getBufferPoolStats = m.getBufferPoolStats;
     });

@@ -2,13 +2,13 @@
     "name": "@ton-ai/tgs",
     "version": "0.1.0",
     "description": "TGS (Telegram Lottie) parser and renderer plugin",
-    "main": "dist/ts/src/index.js",
-    "types": "dist/ts/src/index.d.ts",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
     "files": [
         "dist"
     ],
     "scripts": {
-        "build": "rm -rf dist && tsc && mkdir -p dist/rust && cp -r rust/wasm dist/rust/wasm",
+        "build": "rm -rf dist && tsc && mkdir -p dist/rust && cp -r src/rust/wasm dist/rust/wasm",
         "clean": "rm -rf dist"
     },
     "dependencies": {
