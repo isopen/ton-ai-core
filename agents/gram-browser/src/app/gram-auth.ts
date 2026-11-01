@@ -111,8 +111,10 @@ function broadcastQr(tgUrl: string, url: string, expires?: number, expiresAt?: n
 }
 let lastQrReanchorAt = 0;
 let lastHoldLogAt = 0;
+let lastQrAttemptAt = 0;
 let lastShownQrUrl: string | null = null;
 let qrStallTries = 0;
+let qrExportRetryCount = 0;
 function reanchorQr(s: GramState, tgUrl: string, expires?: number) {
   const now = Date.now();
   if (now - lastQrReanchorAt < 10000) return;
@@ -214,6 +216,20 @@ export function createAuthCallbacks(
       }
     } catch {}
   };
+  const forceQrServerOffsetResync = async (): Promise<void> => {
+    try {
+      const inst = svc();
+      if (!inst) return;
+      const info = await inst.getServerTime();
+      if (info && typeof info.offsetSec === 'number' && Number.isFinite(info.offsetSec)) {
+        if (qrServerOffsetSec !== info.offsetSec) {
+          const old = qrServerOffsetSec;
+          qrServerOffsetSec = info.offsetSec;
+          qrLog(s, 'QR off force resync ' + String(old) + '->' + info.offsetSec + 's');
+        }
+      }
+    } catch {}
+  };
   try {
     window.addEventListener('tg-auth-cancel', () => {
       bumpAuthGen();
@@ -234,6 +250,26 @@ export function createAuthCallbacks(
       } catch {}
     });
   } catch {}
+
+  let lastQrWatchdogKickAt = 0;
+  window.setInterval(() => {
+    const st = s.tgui.current?.state;
+    if (!st || st.page !== 'auth') return;
+    const stp = st.authStep;
+    if (stp !== 'phone' && stp !== 'qr_login') return;
+    const now = Date.now();
+    if (now - lastQrAttemptAt < 8000) return;
+    const staleDeadline = !!qrNextSwapAt && qrNextSwapAt <= now;
+    const idleQr = !st.qrToken && !qrNextSwapAt;
+    if (!staleDeadline && !idleQr) return;
+    if (now - lastQrWatchdogKickAt < 4000) return;
+    lastQrWatchdogKickAt = now;
+    qrLog(s, 'QR watchdog: ' + (staleDeadline ? 'swap deadline stale ' + Math.round(now - qrNextSwapAt) + 'ms ago' : 'no active token') + ', re-request');
+    lastQrCache = null;
+    lastShownQrUrl = null;
+    try { dbDel(QR_DB_KEY).catch(() => {}); } catch {}
+    window.dispatchEvent(new CustomEvent(stp === 'qr_login' ? 'tg-auth-request-qr' : 'tg-auth-request-qr-preview'));
+  }, 3000);
 
   function sanitizeName(s: string): string {
     return s.replace(/[\x00-\x1F\x7F]/g, '').replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '').trim();
@@ -576,7 +612,8 @@ export function createAuthCallbacks(
       }
       qrLog(s, 'QR request start');
       const myReq = ++qrReqId;
-      await syncQrServerOffset();
+      lastQrAttemptAt = Date.now();
+      void syncQrServerOffset();
       await loadQrCacheFromDb();
       if (myReq !== qrReqId) return;
       if (lastQrCache && Date.now() < lastQrCache.expiresAt) {
@@ -597,7 +634,14 @@ export function createAuthCallbacks(
           s.tgui.current!.setAuthStep('qr_login');
           return;
         }
-        const service = svc();
+        let service = svc();
+        let waitService = 0;
+        while (!service && waitService < 40) {
+          await new Promise(r => setTimeout(r, 50));
+          if (myReq !== qrReqId) return;
+          service = svc();
+          waitService++;
+        }
         if (!service) throw new Error('not connected');
         let pollInterval: ReturnType<typeof setInterval> | null = null;
         let pollTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -697,6 +741,7 @@ export function createAuthCallbacks(
           }),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('QR export timeout')), 25000)),
         ]);
+        qrExportRetryCount = 0;
         await qrPreload;
         qrLog(s, 'QR export ok expires=' + String((result as any)?.expires) + ' ctor=' + String((result as any)?._ || '?') + ' tok=' + String((result as any)?.token || '').slice(0, 8));
         if ((result as any)?._ === 'auth.loginTokenSuccess') {
@@ -760,14 +805,21 @@ export function createAuthCallbacks(
           }
           const ex = typeof exp === 'number' ? exp : expires;
           if (tgUrl === lastShownQrUrl && getQrTtlMs(ex) <= 0) {
-            qrStallTries++;
-            const retryDelay = qrStallTries < 2 ? 900 : (qrStallTries < 4 ? 1800 : 3000);
-            if (s.tgui.current?.state.qrToken !== tgUrl) {
-              s.tgui.current!.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl, expiresAt: 0 });
+            if (qrStallTries < 3) {
+              qrStallTries++;
+              const retryDelay = qrStallTries < 2 ? 900 : 1800;
+              if (s.tgui.current?.state.qrToken !== tgUrl) {
+                s.tgui.current!.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl, expiresAt: 0 });
+              }
+              qrLog(s, 'QR same token after deadline, quick retry ' + retryDelay + 'ms (try ' + qrStallTries + ')');
+              if (pollInterval) scheduleQrRestart(retryDelay);
+              return;
             }
-            qrLog(s, 'QR same token after deadline, quick retry ' + retryDelay + 'ms (try ' + qrStallTries + ')');
-            if (pollInterval) scheduleQrRestart(retryDelay);
-            return;
+            qrLog(s, 'QR same token stale after ' + qrStallTries + ' tries, re-anchoring dead token');
+            void forceQrServerOffsetResync();
+            lastShownQrUrl = null;
+            lastQrCache = null;
+            try { dbDel(QR_DB_KEY).catch(() => {}); } catch {}
           }
           qrStallTries = 0;
           const nowMs = Date.now();
@@ -812,6 +864,8 @@ export function createAuthCallbacks(
           } else {
             dispatchQr(tokenHex, expires);
           }
+        } else if (!lastQrCache || Date.now() >= lastQrCache.expiresAt) {
+          dispatchQr(tokenHex, expires);
         }
         if (shownAlive) {
           const shownTgUrl = lastQrCache!.tgUrl;
@@ -877,10 +931,10 @@ export function createAuthCallbacks(
                     return false;
                 }
                 if (pollResult?._ === 'auth.loginToken' && pollResult.token) {
-                    await syncQrServerOffset();
+                    void syncQrServerOffset();
                     let pollUrl = '';
                     try { pollUrl = makeQrUrl(pollResult.token); } catch { pollUrl = ''; }
-                    if (pollUrl && pollUrl !== lastQrCache?.tgUrl) {
+                    if (pollUrl && (pollUrl !== lastQrCache?.tgUrl || !lastQrCache || Date.now() >= lastQrCache.expiresAt)) {
                         if (!lastQrCache || Date.now() >= lastQrCache.expiresAt) {
                             dispatchQr(pollResult.token, pollResult.expires);
                         } else if (Date.now() - lastHoldLogAt >= 10000) {
@@ -992,6 +1046,24 @@ export function createAuthCallbacks(
           return;
         }
         if (st !== 'phone' && st !== 'qr_login' && st !== 'loading') return;
+        const permanentQrErr = msg.includes('no credentials') || msg.includes('API_ID_INVALID') || msg.includes('CONNECTION_API_ID_INVALID');
+        if (st === 'qr_login' && !permanentQrErr) {
+          const retryDelay = Math.min(8000, 2000 + qrExportRetryCount * 1000);
+          qrExportRetryCount++;
+          qrLog(s, 'QR transient failure, retry ' + qrExportRetryCount + ' in ' + retryDelay + 'ms: ' + msg.slice(0, 120));
+          if (qrRefreshTimeout) { try { clearTimeout(qrRefreshTimeout); } catch {} qrRefreshTimeout = null; }
+          qrRefreshTimeout = setTimeout(() => {
+            qrRefreshTimeout = null;
+            lastQrAttemptAt = Date.now();
+            try {
+              if (s.tgui.current?.state.page === 'auth' && s.tgui.current?.state.authStep === 'qr_login') {
+                s.tgui.current!.setError('');
+                window.dispatchEvent(new CustomEvent('tg-auth-request-qr'));
+              }
+            } catch {}
+          }, retryDelay);
+          return;
+        }
         s.tgui.current!.setError(formatAuthError('QR failed: ' + msg.slice(0,200)));
         s.tgui.current!.setAuthStep('qr_login');
       }
@@ -999,10 +1071,12 @@ export function createAuthCallbacks(
     requestQrPreview: async () => {
       const myPrevReq = ++previewReqId;
       if (s.tgui.current?.state.page !== 'auth') return;
-      await syncQrServerOffset();
+      qrLog(s, 'QR preview request');
+      void syncQrServerOffset();
       await loadQrCacheFromDb();
       if (myPrevReq !== previewReqId) return;
-      const useCache = lastQrCache && Date.now() < lastQrCache.expiresAt;
+      const useCache = lastQrCache && lastQrCache.expiresAt - Date.now() >= 3000;
+      qrLog(s, 'QR cache ' + (useCache ? 'hit ttl=' + Math.ceil(Math.max(0, lastQrCache!.expiresAt - Date.now()) / 1000) + 's' : 'miss/expired'));
       if (useCache) {
         const remainingSec = Math.ceil(Math.max(0, lastQrCache!.expiresAt - Date.now()) / 1000);
         qrNextSwapAt = lastQrCache!.expiresAt;
@@ -1043,21 +1117,28 @@ export function createAuthCallbacks(
         let tgUrl = '';
         try { tgUrl = makeQrUrl(hex); } catch { return; }
         if (tgUrl === lastShownQrUrl && getQrTtlMs(exp) <= 0) {
-          qrStallTries++;
-          const retryDelay = qrStallTries < 2 ? 900 : 3000;
-          if (s.tgui.current?.state.qrToken !== tgUrl) {
-            s.tgui.current?.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl, expiresAt: 0 });
-          }
-          qrLog(s, 'QR preview same token after deadline, quick retry ' + retryDelay + 'ms (try ' + qrStallTries + ')');
-          if (qrRefreshTimeout) { try { clearTimeout(qrRefreshTimeout); } catch {} qrRefreshTimeout = null; }
-          qrRefreshTimeout = setTimeout(() => {
-            if (myPrevReq !== previewReqId) return;
-            if (s.tgui.current?.state.page === 'auth' && (s.tgui.current?.state.authStep === 'phone' || s.tgui.current?.state.authStep === 'qr_login')) {
-              try { dbDel(QR_DB_KEY).catch(() => {}); } catch {}
-              window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
+          if (qrStallTries < 3) {
+            qrStallTries++;
+            const retryDelay = qrStallTries < 2 ? 900 : 1800;
+            if (s.tgui.current?.state.qrToken !== tgUrl) {
+              s.tgui.current?.dispatch({ type: 'SET_QR_TOKEN', token: tgUrl, expiresAt: 0 });
             }
-          }, retryDelay);
-          return;
+            qrLog(s, 'QR preview same token after deadline, quick retry ' + retryDelay + 'ms (try ' + qrStallTries + ')');
+            if (qrRefreshTimeout) { try { clearTimeout(qrRefreshTimeout); } catch {} qrRefreshTimeout = null; }
+            qrRefreshTimeout = setTimeout(() => {
+              if (myPrevReq !== previewReqId) return;
+              if (s.tgui.current?.state.page === 'auth' && (s.tgui.current?.state.authStep === 'phone' || s.tgui.current?.state.authStep === 'qr_login')) {
+                try { dbDel(QR_DB_KEY).catch(() => {}); } catch {}
+                window.dispatchEvent(new CustomEvent('tg-auth-request-qr-preview'));
+              }
+            }, retryDelay);
+            return;
+          }
+          qrLog(s, 'QR preview same token stale after ' + qrStallTries + ' tries, re-anchoring dead token');
+          void forceQrServerOffsetResync();
+          lastShownQrUrl = null;
+          lastQrCache = null;
+          try { dbDel(QR_DB_KEY).catch(() => {}); } catch {}
         }
         qrStallTries = 0;
         const nowMs = Date.now();
@@ -1106,6 +1187,8 @@ export function createAuthCallbacks(
         const previewGen = authGen;
         if (myPrevReq !== previewReqId) return;
         if (s.tgui.current?.state.page !== 'auth') return;
+        lastQrAttemptAt = Date.now();
+        qrLog(s, 'QR preview attempt ' + attempt);
         {
           const st = s.tgui.current?.state.authStep;
           if (st !== 'phone' && st !== 'password') return;
@@ -1123,7 +1206,7 @@ export function createAuthCallbacks(
             if (service) break;
           }
           if (!service) throw new Error('not connected');
-
+          qrLog(s, 'QR preview callRpc auth.exportLoginToken started');
           const completePreviewLogin = async (res: any): Promise<boolean> => {
             if (previewGen !== authGen || myPrevReq !== previewReqId) return true;
             if (s.tgui.current?.state.page !== 'auth') return true;
@@ -1169,11 +1252,14 @@ export function createAuthCallbacks(
             return true;
           };
 
-          const result = await service.callRpc('auth.exportLoginToken', {
-            api_id: apiId,
-            api_hash: apiHash,
-            except_ids: [],
-          });
+          const result = await Promise.race([
+            service.callRpc('auth.exportLoginToken', {
+              api_id: apiId,
+              api_hash: apiHash,
+              except_ids: [],
+            }),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('QR preview export timeout')), 20000)),
+          ]) as any;
           if (myPrevReq !== previewReqId) return;
           const expires = (result as any)?.expires;
           let tokenHex: string = result?.token;
@@ -1204,7 +1290,7 @@ export function createAuthCallbacks(
           hexToBase64Url(tokenHex);
           suppressPhonePassword = false;
           const tgUrl = makeQrUrl(tokenHex);
-          if (tgUrl !== lastQrCache?.tgUrl) {
+          if (tgUrl !== lastQrCache?.tgUrl || !lastQrCache || Date.now() >= lastQrCache.expiresAt) {
             if (!lastQrCache || Date.now() >= lastQrCache.expiresAt) {
               await dispatchPreviewQr(tokenHex, expires);
               if (myPrevReq !== previewReqId) return;
@@ -1255,11 +1341,12 @@ export function createAuthCallbacks(
                 return false;
               }
               if (pr?._ === 'auth.loginToken' && pr.token) {
-                await syncQrServerOffset();
+                void syncQrServerOffset();
                 let pUrl = '';
                 try { pUrl = makeQrUrl(pr.token); } catch { pUrl = ''; }
-                if (pUrl && pUrl !== lastQrCache?.tgUrl) {
-                  if (!lastQrCache || Date.now() >= lastQrCache.expiresAt) {
+                const cacheDead = !lastQrCache || Date.now() >= lastQrCache.expiresAt;
+                if (pUrl && (pUrl !== lastQrCache?.tgUrl || cacheDead)) {
+                  if (cacheDead) {
                     await dispatchPreviewQr(pr.token, pr.expires);
                     if (myPrevReq !== previewReqId) return true;
                   } else if (Date.now() - lastHoldLogAt >= 10000) {
@@ -1338,16 +1425,16 @@ export function createAuthCallbacks(
             return;
           }
 
-          if (attempt < 6 && msg.includes('not connected')) {
-            await new Promise(r => setTimeout(r, 700 + attempt * 300));
-            return doPreview(attempt + 1);
+          if (msg.includes('no credentials') || msg.includes('API_ID_INVALID') || msg.includes('CONNECTION_API_ID_INVALID')) {
+            qrLog(s, 'QR preview permanent failure: ' + msg.slice(0, 120));
+            window.dispatchEvent(new CustomEvent('tg-auth-qr-preview-error', { detail: { error: msg, permanent: true } }));
+            return;
           }
-
-          if (attempt < 2 && (msg.includes('timeout') || msg.includes('network'))) {
-            await new Promise(r => setTimeout(r, 800));
-            return doPreview(attempt + 1);
-          }
-          window.dispatchEvent(new CustomEvent('tg-auth-qr-preview-error', { detail: { error: msg } }));
+          const retryDelay = Math.min(10000, 800 + attempt * 900);
+          qrLog(s, 'QR preview transient failure, retry in ' + retryDelay + 'ms (try ' + (attempt + 1) + '): ' + msg.slice(0, 120));
+          await new Promise(r => setTimeout(r, retryDelay));
+          lastQrAttemptAt = Date.now();
+          return doPreview(attempt + 1);
         }
       };
       doPreview();
