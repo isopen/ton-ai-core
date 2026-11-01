@@ -28,6 +28,19 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true, st
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deadlineRef = useRef(0);
+  const tgUrlRef = useRef('');
+  const lastKickRef = useRef(0);
+  const qrDataUrlRef = useRef('');
+
+  const updateTgUrl = (v: string) => {
+    tgUrlRef.current = v;
+    setTgUrl(v);
+  };
+
+  const updateQrDataUrl = (v: string) => {
+    qrDataUrlRef.current = v;
+    setQrDataUrl(v);
+  };
 
   const qrLeftSec = () => {
     const d = deadlineRef.current;
@@ -63,20 +76,25 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true, st
     const expAbs = typeof e.detail?.expiresAt === 'number' ? e.detail.expiresAt : undefined;
     log.info('[qr] event ' + e.type + ' ' + (e.detail?.keepImage ? 'keep' : 'fresh') + ' url=' + (url ? 'data' : (url === '' ? 'empty' : String(url).slice(0, 10))) + ' tg=' + tUrl.slice(0, 16) + ' exp=' + (expRaw ?? '?') + 's abs=' + (expAbs ?? '?') + ' now=' + Date.now());
     if (tUrl) {
+      const tokenChanged = tUrl !== tgUrlRef.current;
+      if (tokenChanged) {
+        tgUrlRef.current = tUrl;
+        lastKickRef.current = 0;
+      }
       setTgUrl(tUrl);
-      if (url && url.startsWith('data:image/')) setQrDataUrl(url);
-      else if (!e.detail?.keepImage) setQrDataUrl('');
+      if (url && url.startsWith('data:image/')) updateQrDataUrl(url);
+      else if (!e.detail?.keepImage || tokenChanged) updateQrDataUrl('');
       setLoading(false);
       retryCountRef.current = 0;
       applyQrDeadline(expAbs, expRaw);
       if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
     } else if (url) {
       if (url.startsWith('data:image/')) {
-        setQrDataUrl(url);
+        updateQrDataUrl(url);
         setLoading(false);
       } else if (url.startsWith('tg://')) {
-        setTgUrl(url);
-        setQrDataUrl('');
+        updateTgUrl(url);
+        updateQrDataUrl('');
         setLoading(false);
         retryCountRef.current = 0;
         if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
@@ -84,18 +102,23 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true, st
     }
   };
 
-  const handlePreviewError = () => {
-    if (!isSmall) { setLoading(false); return; }
-    if (retryCountRef.current < 6) {
-      retryCountRef.current++;
-      const delay = Math.min(800 * retryCountRef.current, 3000);
-      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-      retryTimerRef.current = setTimeout(() => {
-        window.dispatchEvent(new CustomEvent(requestEvent));
-      }, delay);
-    } else {
+  const handlePreviewError = (e: any) => {
+    if (e?.detail?.permanent) {
+      log.info('[qr] preview permanent error, giving up: ' + String(e?.detail?.error || '').slice(0, 120));
+      retryCountRef.current = 0;
+      if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+      updateTgUrl('');
+      updateQrDataUrl('');
       setLoading(false);
+      return;
     }
+    if (!isSmall) { setLoading(false); return; }
+    retryCountRef.current++;
+    const delay = Math.min(800 * retryCountRef.current, 5000);
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(requestEvent));
+    }, delay);
   };
 
   useDomEvent(window, 'tg-auth-qr-url', handleQrEvent, []);
@@ -105,8 +128,8 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true, st
   useDomEvent(window, 'tg-auth-set-step', (e: any) => {
     const step = e?.detail?.step;
     if (step === 'phone' && isSmall) {
-      setTgUrl('');
-      setQrDataUrl('');
+      updateTgUrl('');
+      updateQrDataUrl('');
       resetCountdown();
       setLoading(true);
       retryCountRef.current = 0;
@@ -115,8 +138,8 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true, st
     } else if (step === 'qr_login' && !isSmall) {
       const tokenAlive = !!stateToken && (!stateExpiresAt || stateExpiresAt - 300 > Date.now());
       if (!tokenAlive) {
-        setTgUrl('');
-        setQrDataUrl('');
+        updateTgUrl('');
+        updateQrDataUrl('');
         resetCountdown();
         setLoading(true);
       }
@@ -128,25 +151,38 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true, st
   useDomEvent(window, 'tg-theme-changed', (e: any) => {
     const t = e?.detail?.theme === 'dark' ? 'dark' : 'light';
     setTheme(t);
-    if (tgUrl) setQrDataUrl('');
+    if (tgUrl) updateQrDataUrl('');
   }, [tgUrl]);
 
   useEffect(() => {
     const iv = setInterval(() => {
-      if (!deadlineRef.current) return;
+      if (!deadlineRef.current) {
+        if (!tgUrlRef.current && !qrDataUrlRef.current) setLoading(true);
+        return;
+      }
+      const next = qrLeftSec();
       setSecondsLeft(prev => {
-        const next = qrLeftSec();
         return prev === next ? prev : next;
       });
+      if (next === 0 && deadlineRef.current < Date.now() - 4000) {
+        updateTgUrl('');
+        updateQrDataUrl('');
+        setLoading(true);
+        if (Date.now() - lastKickRef.current > 12000) {
+          lastKickRef.current = Date.now();
+          log.info('[qr] countdown stale at 00:00, kick request');
+          window.dispatchEvent(new CustomEvent(requestEvent));
+        }
+      }
     }, 500);
     return () => clearInterval(iv);
-  }, []);
+  }, [requestEvent]);
 
   useEffect(() => {
     if (!stateToken) {
       if (tgUrl) {
-        setTgUrl('');
-        setQrDataUrl('');
+        updateTgUrl('');
+        updateQrDataUrl('');
         resetCountdown();
       }
       return;
@@ -156,9 +192,10 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true, st
       return;
     }
     if (stateToken !== tgUrl) {
-      setTgUrl(stateToken);
-      if (stateToken.startsWith('data:image/')) setQrDataUrl(stateToken);
-      else setQrDataUrl('');
+      updateTgUrl(stateToken);
+      if (stateToken.startsWith('data:image/')) updateQrDataUrl(stateToken);
+      else updateQrDataUrl('');
+      lastKickRef.current = 0;
       setLoading(false);
       retryCountRef.current = 0;
       if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
@@ -174,8 +211,8 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true, st
   useEffect(() => {
     const tokenAlive = !!stateToken && (!stateExpiresAt || stateExpiresAt - 300 > Date.now());
     if (!tokenAlive) {
-      setTgUrl('');
-      setQrDataUrl('');
+      updateTgUrl('');
+      updateQrDataUrl('');
       setLoading(true);
       retryCountRef.current = 0;
       if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
@@ -188,10 +225,8 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true, st
         window.dispatchEvent(new CustomEvent(requestEvent));
       }
     }, 900);
-    const t2 = setTimeout(() => setLoading(false), 9000);
     return () => {
       clearTimeout(t);
-      clearTimeout(t2);
       if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
     };
   }, [requestEvent, isSmall]);
@@ -276,7 +311,7 @@ export function QrCodeView({ dispatch, variant = 'default', showTimer = true, st
             showLogo={true}
             logoSize={28}
             alt={t(S.QR_IMAGE_ALT)}
-            onGenerated={(url) => { if (url && url !== qrDataUrl) setQrDataUrl(url); }}
+            onGenerated={(url) => { if (url && url !== qrDataUrl) updateQrDataUrl(url); }}
           />
         ) : hasDataUrl ? (
           <QrCode value="" dataUrl={qrDataUrl} size={256} margin={1} errorCorrectionLevel="M" alt={t(S.QR_IMAGE_ALT)} />
