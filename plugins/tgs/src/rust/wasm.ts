@@ -1,5 +1,5 @@
 import { getLogger } from '@ton-ai/gram-debug';
-import type { ParsedAnimation } from './types.js';
+import type { ParsedAnimation } from '../ts/types.js';
 
 const log = getLogger('tgs-rust');
 
@@ -32,7 +32,7 @@ export function initTgsWasm(wasmBinary?: Uint8Array): Promise<boolean> {
     const gen = generation;
     initPromise = (async () => {
         try {
-            const raw: any = await import('./rust/wasm/tgs_wasm.js');
+            const raw: any = await import('./wasm/tgs_wasm.js');
             const mod: any =
                 typeof raw?.parse_tgs_json === 'function'
                     ? raw

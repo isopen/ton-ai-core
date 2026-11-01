@@ -2,7 +2,7 @@ import { strict as assert } from 'assert';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-const WASM_PATH = join(__dirname, '..', 'rust', 'wasm', 'tgs_wasm_bg.wasm');
+const WASM_PATH = join(__dirname, '..', '..', 'rust', 'wasm', 'tgs_wasm_bg.wasm');
 
 function readWasmBinary(): Uint8Array {
     return new Uint8Array(readFileSync(WASM_PATH));
