@@ -1,4 +1,4 @@
-const CACHE = 'gram-v7';
+const CACHE = 'gram-v8';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -30,13 +30,10 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/static/')) {
     event.respondWith(
       caches.open(CACHE).then((cache) => {
-        return cache.match(event.request).then((cached) => {
-          const networkFetch = fetch(event.request).then((response) => {
-            if (response.ok) event.waitUntil(cache.put(event.request, response.clone()).catch(() => {}));
-            return response;
-          }).catch(() => cached);
-          return cached || networkFetch;
-        });
+        return fetch(event.request).then((response) => {
+          if (response.ok) event.waitUntil(cache.put(event.request, response.clone()).catch(() => {}));
+          return response.ok ? response : cache.match(event.request).then((cached) => cached || response);
+        }).catch(() => cache.match(event.request).then((cached) => cached || new Response('', { status: 504 })));
       })
     );
     return;
@@ -50,7 +47,7 @@ self.addEventListener('fetch', (event) => {
           event.waitUntil(caches.open(CACHE).then((cache) => cache.put(event.request, cloned).catch(() => {})));
         }
         return response;
-      });
+      }).catch(() => new Response('', { status: 504 }));
     })
   );
 });
