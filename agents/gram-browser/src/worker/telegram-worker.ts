@@ -1383,7 +1383,7 @@ async function callRpcOnDcInner(dcId: number, methodName: string, params: Record
                     msg.includes('suspect drained');
                 if (isAuthUnregistered && authRebuilds < 2) {
                     authRebuilds++;
-                    wlog('[worker] DC ' + dcId + ' AUTH_KEY_UNREGISTERED on ' + methodName + ' — dropping key and reconnecting (' + authRebuilds + '/2)');
+                    log.info('[worker] DC ' + dcId + ' AUTH_KEY_UNREGISTERED on ' + methodName + ' — dropping key and reconnecting (' + authRebuilds + '/2)');
                     invalidateDcKey(dcId);
                     dc = null;
                     continue;
@@ -1981,9 +1981,9 @@ function startReadLoop(): void {
                     rejectAllPending(new Error('Connection closed'));
                     if (authenticated) {
                         reconnectQuickFail++;
-                        wlog('[worker] Quick reconnect #' + reconnectQuickFail + ' while authenticated');
+                        log.info('[worker] Quick reconnect #' + reconnectQuickFail + ' while authenticated');
                         if (reconnectQuickFail >= 3) {
-                            wlog('[worker] too many quick reconnects, session likely invalidated');
+                            log.info('[worker] too many quick reconnects, session likely invalidated');
                             notifyAuthInvalidated();
                             break;
                         }
@@ -2051,14 +2051,14 @@ async function scheduleReconnect(): Promise<void> {
     if (!curSessionId || !ses) return;
     reconnectAttempts++;
     const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
-    wlog('[worker] scheduling reconnect in ' + delay + 'ms (attempt ' + reconnectAttempts + ')');
+    log.info('[worker] scheduling reconnect in ' + delay + 'ms (attempt ' + reconnectAttempts + ')');
     reconnectTimer = setTimeout(async () => {
         reconnectTimer = null;
         try {
             await handleConnectInternal(curSessionId!, ses!.dcId);
             reconnectAttempts = 0;
         } catch (e: any) {
-            wlog('[worker] reconnect attempt ' + reconnectAttempts + ' failed: ' + e.message);
+            log.info('[worker] reconnect attempt ' + reconnectAttempts + ' failed: ' + e.message);
             scheduleReconnect();
         }
     }, delay);
@@ -3112,7 +3112,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     ];
     let c: BrowserObfuscatedConnection | null = null;
     for (const entry of hosts) {
-        wlog('[worker] connecting to ' + entry.host + ':' + dcOpts.port + ' noObfuscation=' + !!entry.noObfuscation);
+        log.info('[worker] connect: trying host=' + entry.host + ':' + dcOpts.port + ' dc=' + effectiveDcId + ' noObf=' + !!entry.noObfuscation);
         try {
             c = new BrowserObfuscatedConnection();
             if (saved) {
@@ -3122,10 +3122,10 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
                 c.expectedAuthKeyBuf = akBuf;
             }
             await c.connect(entry.host, dcOpts.port, undefined, effectiveDcId, !!entry.noObfuscation);
-            wlog('[worker] connected via ' + entry.host);
+            log.info('[worker] connected via ' + entry.host);
             break;
         } catch (e: any) {
-            wlog('[worker] connect to ' + entry.host + ' failed: ' + e.message);
+            log.info('[worker] connect to ' + entry.host + ' failed: ' + e.message);
             if (c) { try { c.close(); } catch {} }
             c = null;
         }

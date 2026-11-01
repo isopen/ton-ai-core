@@ -64,7 +64,7 @@ TW.setVideoStreamLogHandler((text) => {
     }
 });
 TW.setWlogForwardHandler((text) => {
-    if (!text.includes('[dl') && !text.includes('requestPhotoDownload')) return;
+    if (!text.includes('[dl') && !text.includes('requestPhotoDownload') && !text.includes('[worker] connect') && !text.includes('[worker] scheduling reconnect') && !text.includes('[worker] reconnect attempt') && !text.includes('[worker] Quick reconnect') && !text.includes('[worker] too many quick reconnects') && !text.includes('AUTH_KEY_UNREGISTERED')) return;
     for (const port of ports) {
         try { port.postMessage({ type: 'streamLog', text }); } catch { ports.delete(port); }
     }
