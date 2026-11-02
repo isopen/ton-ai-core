@@ -38,10 +38,9 @@ describe('tgs WASM (Rust core) golden', () => {
             try {
                 const tsModel = parseTgs(fixtures[name]);
                 assert.ok(!isTgsWasmActive());
-                const tsJson = JSON.stringify(tsModel);
-                const wasmJson = JSON.stringify(wasmModel);
-                assert.strictEqual(tsJson, wasmJson);
-                assert.deepStrictEqual(JSON.parse(tsJson), wasmModel);
+                // Compare structurally: wasm serializes vertices with a different key order (c/i/o/v),
+                // so raw JSON strings can differ while the parsed models are identical.
+                assert.deepStrictEqual(JSON.parse(JSON.stringify(wasmModel)), JSON.parse(JSON.stringify(tsModel)));
             } finally {
                 assert.ok(await initTgsWasm(readWasmBinary()));
             }

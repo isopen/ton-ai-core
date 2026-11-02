@@ -12,7 +12,7 @@
     "clean:gram-debug": "cd plugins/gram-debug && npm run clean",
     "clean:telegram": "cd plugins/telegram && (npm run clean 2>/dev/null || rm -rf dist)",
     "clean:tl-language": "cd plugins/tl-language && npm run clean",
-    "clean:tgs": "rm -rf plugins/tgs/dist/wasm 2>/dev/null || true; rm -rf \"$HOME/.cache/tgs-cargo-target\" 2>/dev/null || true",
+    "clean:tgs": "rm -rf plugins/tgs/dist 2>/dev/null || true; rm -rf \"$HOME/.cache/tgs-cargo-target\" 2>/dev/null || true",
     "clean:tmd": "cd plugins/tmd && (npm run clean 2>/dev/null || rm -rf dist)",
     "clean:crypton": "rm -rf plugins/crypton/dist/wasm 2>/dev/null || true; rm -rf plugins/crypton/src/rust/target 2>/dev/null || true",
     "clean:zlib": "cd plugins/zlib && npm run clean",

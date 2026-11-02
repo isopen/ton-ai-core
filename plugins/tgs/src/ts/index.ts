@@ -29,7 +29,7 @@ export type { LayerOrder } from './renderer.js';
 export {
     LayerType, MatteType, MaskMode, GradientType,
 } from './types.js';
-export { initTgsWasm, isTgsWasmActive, deinitTgsWasm, enableTgsWasmLogging } from '../rust/wasm.js';
+export { initTgsWasm, isTgsWasmActive, deinitTgsWasm, enableTgsWasmLogging, isTgsWasmSimd, isWasmSimdSupported } from '../rust/wasm.js';
 
 const GZIP_MAGIC: [number, number] = [0x1f, 0x8b];
 const MAX_DECOMPRESSED_BYTES = 16 * 1024 * 1024;

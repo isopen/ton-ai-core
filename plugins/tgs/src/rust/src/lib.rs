@@ -1,9 +1,11 @@
 pub mod bezier;
+pub mod bridge;
 pub mod easing;
 pub mod inflate;
 pub mod jsutil;
 pub mod keyframes;
 pub mod keypath;
+pub mod ljson;
 pub mod parser;
 pub mod static_check;
 pub mod types;
@@ -17,8 +19,8 @@ pub use inflate::inflate_tgs;
 pub use keyframes::{interpolate_keyframes, lerp_value, parse_value};
 pub use keypath::{get_override, match_key_path, set_value, FrameInfo, Property};
 pub use parser::{
-    analyze_tgs_features, configure_model_cache_size, frame_at_pos, layer_info, load_tgs, parse_tgs, ParseError,
-    ParseOptions, TgsFeatureReport,
+    analyze_tgs_features, configure_model_cache_size, frame_at_pos, layer_info, load_tgs, parse_tgs, parse_tgs_lex, parse_tgs_parts,
+    ParseError, ParseOptions, TgsFeatureReport,
 };
 pub use static_check::has_animated_properties;
 pub use types::{

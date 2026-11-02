@@ -51,11 +51,11 @@ function initApp() {
   startFpsLogging();
   (window as any).__wasmReady = wasmReady;
 
-  const tgsImpl = (((process.env as any)?.TGS_IMPL) || 'rust').toLowerCase();
+  const tgsImpl = (((process.env as any)?.TGS_IMPL) || 'ts').toLowerCase();
 
   wasmReady.then(() => {
     if (tgsImpl === 'ts') {
-      log.info('[tgs] backend = TypeScript (pure JS) — TGS parse via TS');
+      log.info('[tgs] backend = TypeScript (pure JS) default; set TGS_IMPL=rust for wasm parse bridge');
       return;
     }
     const tgsReady = initTgsWasm();

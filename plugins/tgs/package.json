@@ -9,7 +9,8 @@
     ],
     "scripts": {
         "build": "rm -rf dist && tsc && mkdir -p dist/rust && cp -r src/rust/wasm dist/rust/wasm",
-        "clean": "rm -rf dist"
+        "clean": "rm -rf dist",
+        "bench": "node tools/bench.mjs"
     },
     "dependencies": {
         "@ton-ai/core": "*",

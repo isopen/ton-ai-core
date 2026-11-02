@@ -1013,3 +1013,70 @@ fn nth_child(anim: &ParsedAnimation, layer: usize, shape: usize, child: usize) -
 fn nums(v: &[f64]) -> PropertyValue {
     PropertyValue::Numbers(v.to_vec())
 }
+
+fn rich_body() -> JsonValue {
+    json!({
+        "layers": [
+            {
+                "ind": 1, "ty": 4, "nm": "L1", "ip": 0, "op": 100, "st": 0, "sr": 1,
+                "ks": { "o": { "a": 0, "k": 90 }, "r": { "a": 1, "k": [ { "t": 0, "s": [0], "e": [180], "i": { "x": [0.4], "y": [1] }, "o": { "x": [0.6], "y": [0] }, "to": [1, 0], "ti": [0, -1] }, { "t": 50, "h": 1 } ] }, "p": { "a": 0, "k": [10.5, -2.25, 0] }, "a": { "a": 0, "k": [0, 0, 0] }, "s": { "a": 0, "k": [120, 80, 100] } },
+                "shapes": [
+                    { "ty": "gr", "nm": "G", "it": [
+                        { "ty": "sh", "ks": { "a": 0, "k": { "c": true, "v": [[0, 0]], "i": [[0, 0]], "o": [[0, 0]] } } },
+                        { "ty": "gf", "s": { "a": 0, "k": [0, 0] }, "e": { "a": 0, "k": [10, 0] }, "t": 1, "g": { "p": 2, "k": { "a": 0, "k": [0, 1, 1, 1, 1, 0, 0.2, 0] } }, "o": { "a": 0, "k": 80 } },
+                        { "ty": "st", "c": { "a": 0, "k": [1, 1, 1, 1] }, "o": { "a": 0, "k": 100 }, "w": { "a": 0, "k": 3 }, "lc": 2, "lj": 2, "ml": 4, "d": [ { "n": "d", "nm": "dash", "v": { "a": 0, "k": 5 } } ] },
+                        { "ty": "tr", "p": { "a": 0, "k": [1, 2] }, "a": { "a": 0, "k": [0, 0] }, "s": { "a": 0, "k": [50, 200] }, "r": { "a": 0, "k": 15 }, "o": { "a": 0, "k": 60 }, "sk": { "a": 0, "k": 5 }, "sa": { "a": 0, "k": 10 } }
+                    ] },
+                    { "ty": "sr", "sy": 2, "pt": { "a": 0, "k": 5 }, "p": { "a": 0, "k": [3, 4] }, "r": { "a": 0, "k": 0 }, "or": { "a": 0, "k": 40 }, "ir": { "a": 0, "k": 20 }, "os": { "a": 0, "k": 0 }, "is": { "a": 0, "k": 0 }, "d": 1 },
+                    { "ty": "rc", "d": 2, "s": { "a": 0, "k": [60, 20] }, "p": { "a": 0, "k": [5, 5] }, "r": { "a": 0, "k": 8 }, "rd": { "a": 0, "k": 8 } },
+                    { "ty": "rp", "c": { "a": 0, "k": 3 }, "o": { "a": 0, "k": 0 }, "m": 1, "tr": { "p": { "a": 0, "k": [10, 0] }, "a": { "a": 0, "k": [0, 0] }, "s": { "a": 0, "k": [100, 100] }, "r": { "a": 0, "k": 0 }, "o": { "a": 0, "k": 100 } } },
+                    { "ty": "tm", "s": { "a": 1, "k": [ { "t": 0, "s": [0] }, { "t": 40, "s": [10] } ] }, "e": { "a": 0, "k": 100 }, "o": { "a": 0, "k": 0 }, "m": 2 }
+                ],
+                "masksProperties": [
+                    { "nm": "M1", "inv": true, "mode": "s", "pt": { "a": 0, "k": { "c": true, "v": [[1, 1]], "i": [[0, 0]], "o": [[0, 0]] } }, "o": { "a": 0, "k": 100 }, "x": { "a": 0, "k": 0 } }
+                ],
+                "tm": { "a": 0, "k": 0 },
+                "bm": 1, "sc": "#ff0000", "sw": 11, "sh": 22, "w": 33, "h": 44, "ao": 1, "ddd": 1, "tt": 2, "td": 1
+            },
+            { "ind": 2, "ty": 0, "refId": "a1", "nm": "PRE", "ks": {}, "parent": 1 }
+        ],
+        "assets": [
+            { "id": "a1", "w": 5, "h": 6, "u": "img/", "p": "pic.png", "layers": [ { "ind": 1, "ty": 2, "ks": {} } ] },
+            { "id": "a2", "layers": [] }
+        ],
+        "markers": [
+            { "cm": "m0", "tm": 5, "dr": 10 },
+            { "cm": "m1", "tm": 20.5, "dr": 0 }
+        ],
+        "chars": [ { "ch": "A", "style": "b", "size": 10, "family": "F" } ]
+    })
+}
+
+#[test]
+fn lex_parser_matches_serde_parser() {
+    use tgs::bridge::encode_animation;
+    let a = parse(rich_body());
+    let j = tgs_json(rich_body());
+    let b = tgs::parse_tgs_lex(&j, None).unwrap();
+    assert_eq!(encode_animation(&a), encode_animation(&b));
+}
+
+#[test]
+fn lex_parser_matches_serde_parser_on_edge_json() {
+    use tgs::bridge::encode_animation;
+    let cases = [
+        r#"{"tgs":1,"v":"5.6.0","fr":25,"ip":-1.5,"op":1e2,"w":100,"h":100,"layers":[],"markers":null}"#,
+        r#"{"tgs":1,"fr":30,"ip":0,"op":10,"w":1,"h":2,"layers":[{"ind":1,"ty":4,"ks":{},"nm":"é\"x\n\t"}],"assets":[]}"#,
+        r#"{"tgs":1,"fr":30,"ip":0,"op":10,"w":1,"h":2,"layers":[],"assets":[{"id":"A\u0041", "p":"a.b"}]}"#,
+    ];
+    for j in cases {
+        let a = tgs::parse_tgs(j, None).unwrap();
+        let b = tgs::parse_tgs_lex(j, None).unwrap();
+        assert_eq!(encode_animation(&a), encode_animation(&b), "case {j}");
+    }
+    let bad = ["", "not json", "{\"layers\":123}", "{\"tgs\":1,\"fr\":30,\"ip\":0,\"op\":10,\"w\":1,\"h\":2}"];
+    for j in bad {
+        assert!(tgs::parse_tgs(j, None).is_err());
+        assert!(tgs::parse_tgs_lex(j, None).is_err(), "case {j}");
+    }
+}

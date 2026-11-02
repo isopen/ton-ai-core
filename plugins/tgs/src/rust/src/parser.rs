@@ -724,10 +724,16 @@ fn parse_animation(data: &JsonValue) -> ParsedAnimation {
 }
 
 pub fn parse_tgs(json: &str, options: Option<ParseOptions>) -> Result<ParsedAnimation, ParseError> {
-    let data: JsonValue = match serde_json::from_str(json) {
-        Ok(v) => v,
-        Err(_) => return Err(crate::TgsError("Invalid TGS JSON".to_string())),
-    };
+    let data = parse_json_value(json)?;
+    build_animation(data, options)
+}
+
+pub fn parse_tgs_lex(json: &str, options: Option<ParseOptions>) -> Result<ParsedAnimation, ParseError> {
+    let data = crate::ljson::parse(json).map_err(|_| crate::TgsError("Invalid TGS JSON".to_string()))?;
+    build_animation(data, options)
+}
+
+fn build_animation(data: JsonValue, options: Option<ParseOptions>) -> Result<ParsedAnimation, ParseError> {
     let layers_ok = data
         .get("layers")
         .map(|l| l.is_array())
@@ -752,8 +758,81 @@ pub fn parse_tgs(json: &str, options: Option<ParseOptions>) -> Result<ParsedAnim
     Ok(animation)
 }
 
-pub fn layer_info(animation: &ParsedAnimation) -> Vec<LayerInfo> {
-    animation
+/// Untrusted-input guard: reject JSON whose structural nesting or node count exceeds
+/// safe limits before triggering recursive parsing.
+const MAX_JSON_NESTING: usize = 512;
+const MAX_JSON_NODES: usize = 500_000;
+
+fn scan_json_structure(json: &str) -> Result<(), crate::TgsError> {
+    let bytes = json.as_bytes();
+    let mut depth: usize = 0;
+    let mut nodes: usize = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    for &b in bytes {
+        match b {
+            b'"' => {
+                if !escape {
+                    in_string = !in_string;
+                }
+                escape = false;
+            }
+            b'\\' if in_string => escape = !escape,
+            b'{' | b'[' if !in_string => {
+                nodes += 1;
+                if nodes > MAX_JSON_NODES {
+                    return Err(crate::TgsError("TGS JSON too complex".to_string()));
+                }
+                depth += 1;
+                if depth > MAX_JSON_NESTING {
+                    return Err(crate::TgsError("TGS JSON too deep".to_string()));
+                }
+            }
+            b'}' | b']' if !in_string => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => escape = false,
+        }
+    }
+    Ok(())
+}
+
+fn parse_json_value(json: &str) -> Result<JsonValue, crate::TgsError> {
+    scan_json_structure(json)?;
+    serde_json::from_str(json).map_err(|_| crate::TgsError("Invalid TGS JSON".to_string()))
+}
+
+/// Benchmark-only: wall time (ms) of [serde json->Value, model build, serde serialize].
+/// Runs without cache; returns truncated floats to 2 decimals.
+pub fn parse_tgs_parts(json: &str) -> Result<(f64, f64, f64, f64), ParseError> {
+    let t0 = crate::jsutil::clock_now();
+    let data = parse_json_value(json)?;
+    let t_json = crate::jsutil::clock_now() - t0;
+    let ok = data
+        .get("layers")
+        .map(|l| l.is_array())
+        .unwrap_or(false);
+    if !ok {
+        return Err(crate::TgsError("TGS has no layers".to_string()));
+    }
+    let t1 = crate::jsutil::clock_now();
+    let animation = parse_animation(&data);
+    let t_build = crate::jsutil::clock_now() - t1;
+    let t2 = crate::jsutil::clock_now();
+    let s = serde_json::to_string(&animation)
+        .map_err(|_| crate::TgsError("tgs serialize failed".to_string()))?;
+    let t_ser = crate::jsutil::clock_now() - t2;
+    let t3 = crate::jsutil::clock_now();
+    let lex_ok = crate::ljson::parse(json).is_ok();
+    let t_lex = crate::jsutil::clock_now() - t3;
+    let _ = s;
+    if !lex_ok {
+        return Err(crate::TgsError("lex parse failed".to_string()));
+    }
+    Ok((t_json, t_build, t_ser, t_lex))
+}
+
+pub fn layer_info(animation: &ParsedAnimation) -> Vec<LayerInfo> {    animation
         .layers
         .iter()
         .map(|l| LayerInfo {

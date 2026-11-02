@@ -1,5 +1,33 @@
 use serde_json::Value as JsonValue;
 
+#[cfg(target_arch = "wasm32")]
+mod clock {
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_name = now, js_namespace = ["performance"])]
+        pub(crate) fn perf_now() -> f64;
+    }
+}
+
+/// Monotonic-ish ms clock that works on wasm32 (std Instant is unavailable there).
+#[allow(dead_code)]
+pub(crate) fn clock_now() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        clock::perf_now()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64()
+            * 1000.0
+    }
+}
+
 pub fn js_number(v: &JsonValue) -> f64 {
     match v {
         JsonValue::Number(n) => n.as_f64().unwrap_or(f64::NAN),
