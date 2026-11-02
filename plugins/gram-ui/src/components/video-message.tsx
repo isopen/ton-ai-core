@@ -108,17 +108,18 @@ interface VideoMessageProps {
   timeStr: string;
   out: boolean;
   status: 'pending' | 'sent' | 'delivered' | 'read';
-  documentUrls: Record<number, string>;
-  documentProgress?: Record<number, number>;
+  documentUrls: Record<number | string, string>;
+  documentProgress?: Record<number | string, number>;
   documentSources?: Record<number, string>;
   sameSenderPrev?: boolean;
   sameSenderNext?: boolean;
   onOpenViewer?: (item: MediaViewerItem) => void;
   maxWidth?: number;
+  fluid?: boolean;
 }
 
 export function VideoMessage(props: VideoMessageProps) {
-  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext, onOpenViewer, maxWidth = 480 } = props;
+  const { m, timeStr, out, status, documentUrls, documentProgress, documentSources, sameSenderPrev, sameSenderNext, onOpenViewer, maxWidth = 480, fluid = false } = props;
 
   const frameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -432,8 +433,9 @@ export function VideoMessage(props: VideoMessageProps) {
   if (sameSenderPrev) bubbleCls += ' MessageBubble_group_prev';
   if (sameSenderNext) bubbleCls += ' MessageBubble_group_next';
 
-  const bubbleStyle = displayW ? `width:${displayW}px` : '';
-  const containerStyle = displayW && displayH ? `width:${displayW}px;height:${displayH}px` : displayW ? `width:${displayW}px` : '';
+  const bubbleStyle = fluid ? '' : (displayW ? `width:${displayW}px` : '');
+  const containerStyle = fluid ? '' : (displayW && displayH ? `width:${displayW}px;height:${displayH}px` : displayW ? `width:${displayW}px` : '');
+  const fluidFrameStyle = videoW && videoH ? `aspect-ratio:${videoW} / ${videoH}` : 'aspect-ratio:16/9';
 
   return (
     <div class={bubbleCls} style={bubbleStyle}>
@@ -441,7 +443,7 @@ export function VideoMessage(props: VideoMessageProps) {
         <div
           ref={frameRef}
           class={'video-message__frame' + (isHover ? ' is-hover' : '')}
-          style={displayW && displayH ? undefined : 'aspect-ratio:16/9'}
+          style={fluid ? fluidFrameStyle : (displayW && displayH ? undefined : 'aspect-ratio:16/9')}
           data-state={uiState}
           data-duration={duration}
           data-start="0"

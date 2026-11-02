@@ -43,6 +43,7 @@ interface MessageBubbleProps {
   replyMarkup?: any;
   richMessage?: any;
   richDocumentUrls?: Record<number | string, string>;
+  documentProgress?: Record<number | string, number>;
 
   media?: any;
   inactiveButtons?: Record<string, true>;
@@ -72,6 +73,7 @@ export function MessageBubble(props: MessageBubbleProps) {
     replyMarkup,
     richMessage,
     richDocumentUrls,
+    documentProgress,
     media,
     inactiveButtons,
     buttonNotice,
@@ -99,6 +101,7 @@ export function MessageBubble(props: MessageBubbleProps) {
               messageId={messageId ?? ''}
               documentUrls={richDocumentUrls || documentUrls || {}}
               documentSources={documentSources}
+              documentProgress={documentProgress}
               inactiveButtons={inactiveButtons}
               onButton={(data: string, e?: any) => onRichButton?.(data, messageId ?? '', e)}
               onOpenPhoto={onOpenPhoto} />

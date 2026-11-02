@@ -817,7 +817,7 @@ function fwdFromLabel(fwd: any): string {
   return 'hidden author';
 }
 
-export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, documentSources, inactiveButtons, buttonNotice, selfPeer, reactions, onReact, onOpenPhoto, onOpenViewer, onOpenPeer }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; documentSources?: Record<number | string, string>; inactiveButtons?: Record<string, true>; buttonNotice?: ButtonNoticeData | null; selfPeer?: boolean; reactions?: MessageReaction[]; onOpenPeer?: (peer: PeerInfo) => void; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void; onOpenViewer?: (item: MediaViewerItem) => void }) {
+export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOutboxMaxId, documentUrl, progress, documentSource, photoSource, emojiUrls, documentSources, inactiveButtons, buttonNotice, selfPeer, reactions, onReact, onOpenPhoto, onOpenViewer, onOpenPeer, richProgress }: { m: any; sameSenderPrev: boolean; sameSenderNext: boolean; isGroup: boolean; readOutboxMaxId?: number; documentUrl?: string; progress?: number; documentSource?: string; photoSource?: string; emojiUrls?: Record<number, string>; documentSources?: Record<number | string, string>; inactiveButtons?: Record<string, true>; buttonNotice?: ButtonNoticeData | null; selfPeer?: boolean; reactions?: MessageReaction[]; onOpenPeer?: (peer: PeerInfo) => void; onReact?: (emoji: string, adding: boolean) => void; onOpenPhoto?: (image: ImageSpec, index: number) => void; onOpenViewer?: (item: MediaViewerItem) => void; richProgress?: Record<number | string, number> }) {
   const timeStr = formatMessageTime(m.date);
   const out = effectiveOut(m, selfPeer);
   const status = msgStatus(m, readOutboxMaxId, out);
@@ -954,13 +954,14 @@ export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOu
                 replyMarkup={m.replyMarkup}
                 richMessage={m.richMessage}
                 richDocumentUrls={emojiUrls}
+                documentProgress={richProgress}
                 onOpenPhoto={onOpenPhoto}
                 onKbButton={onKbButton}
                 onRichButton={(data, mid, e) => onKbButton({ kind: 'callback', data }, mid, e)}
                 media={<GiftCard m={m} gift={giftOfMessage(m) as any} documentUrl={documentUrl} documentSource={documentSource} photoSource={photoSource} />}
               />
               : <WebPageBubble m={m} timeStr={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} />
-            : <MessageBubble text={showUnsupported ? unsupportedText : bubbleText} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} documentSources={documentSources} inactiveButtons={inactiveButtons} buttonNotice={buttonNotice} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} messageId={m.id} replyMarkup={m.replyMarkup} richMessage={m.richMessage} richDocumentUrls={emojiUrls} onOpenPhoto={onOpenPhoto}
+            : <MessageBubble text={showUnsupported ? unsupportedText : bubbleText} time={timeStr} out={out} status={status} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} entities={m.entities} documentUrls={emojiUrls} documentSources={documentSources} inactiveButtons={inactiveButtons} buttonNotice={buttonNotice} reactions={reactions} onReact={onReact ? (emoji) => onReact(emoji, true) : undefined} reactionUrls={emojiUrls} messageId={m.id} replyMarkup={m.replyMarkup} richMessage={m.richMessage} richDocumentUrls={emojiUrls} documentProgress={richProgress} onOpenPhoto={onOpenPhoto}
               onKbButton={onKbButton} onRichButton={(data, mid, e) => onKbButton({ kind: 'callback', data }, mid, e)} />
       }
     </div>
@@ -1380,7 +1381,7 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
             return (
               <div>
                 {daySep}
-                <MessageItemMemo m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrl={state.documentUrls?.[m.id] || ''} progress={state.documentProgress?.[m.id]} documentSource={state.documentSources?.[m.id]} photoSource={state.photoSources?.[m.id]} emojiUrls={emojiUrls} documentSources={state.documentSources} inactiveButtons={state.inactiveButtons} buttonNotice={state.buttonNotice && String(state.buttonNotice.messageId) === String(m.id) ? state.buttonNotice : null} selfPeer={selfPeer} reactions={msgReactions} onReact={onReact} onOpenPhoto={onOpenPhoto} onOpenViewer={onOpenViewer} onOpenPeer={onOpenPeer} />
+                <MessageItemMemo m={m} sameSenderPrev={sameSenderPrev} sameSenderNext={sameSenderNext} isGroup={isGroup} readOutboxMaxId={readOutboxMaxId} documentUrl={state.documentUrls?.[m.id] || ''} progress={state.documentProgress?.[m.id]} documentSource={state.documentSources?.[m.id]} photoSource={state.photoSources?.[m.id]} emojiUrls={emojiUrls} documentSources={state.documentSources} richProgress={state.documentProgress} inactiveButtons={state.inactiveButtons} buttonNotice={state.buttonNotice && String(state.buttonNotice.messageId) === String(m.id) ? state.buttonNotice : null} selfPeer={selfPeer} reactions={msgReactions} onReact={onReact} onOpenPhoto={onOpenPhoto} onOpenViewer={onOpenViewer} onOpenPeer={onOpenPeer} />
               </div>
             );
           }}
