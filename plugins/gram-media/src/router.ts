@@ -184,6 +184,23 @@ export class GramMediaRouter {
         };
         w.addEventListener('tg-media-viewport', onMediaViewport);
 
+        const onRetainBlobUrl = (e: Event) => {
+            const { url } = (e as CustomEvent).detail || {};
+            const key = String(url || '');
+            if (!key.startsWith('blob:')) return;
+            this.externalBlobUrlHolders.set(key, (this.externalBlobUrlHolders.get(key) || 0) + 1);
+        };
+        const onReleaseBlobUrl = (e: Event) => {
+            const { url } = (e as CustomEvent).detail || {};
+            const key = String(url || '');
+            if (!key.startsWith('blob:')) return;
+            const count = (this.externalBlobUrlHolders.get(key) || 1) - 1;
+            if (count <= 0) this.externalBlobUrlHolders.delete(key);
+            else this.externalBlobUrlHolders.set(key, count);
+        };
+        w.addEventListener('tg-retain-blob-url', onRetainBlobUrl);
+        w.addEventListener('tg-release-blob-url', onReleaseBlobUrl);
+
         this.emoji.attach(w);
         this.picker.attach(w);
 
@@ -192,6 +209,8 @@ export class GramMediaRouter {
             w.removeEventListener('tg-download-document-thumb', onDownloadDocumentThumb);
             w.removeEventListener('tg-download-document', onDownloadDocument);
             w.removeEventListener('tg-media-viewport', onMediaViewport);
+            w.removeEventListener('tg-retain-blob-url', onRetainBlobUrl);
+            w.removeEventListener('tg-release-blob-url', onReleaseBlobUrl);
             this.emoji.detach(w);
             this.picker.detach(w);
         });
@@ -982,8 +1001,7 @@ export class GramMediaRouter {
             const cached = this.photoUrlCache.get(ck);
             if (cached) {
                 this.photoQueuedKeys.delete(String(item.messageId) + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
-                this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached, cacheSource: 'memory' });
-                if (String(item.messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(item.photo?.id ?? ''), url: cached, messageId: item.messageId });
+                this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached, photoId: String(item.photo?.id ?? ''), cacheSource: 'memory' });
                 continue;
             }
             if (this.photoInFlightByKey.has(ck) || this.photoInFlight >= MAX_PARALLEL_PHOTOS) {
@@ -1023,7 +1041,7 @@ export class GramMediaRouter {
             const cached = this.photoUrlCache.get(ck);
             if (cached) {
                 this.avatarQueuedKeys.delete(item.messageId + '_' + item.sizeType + '_' + (item.photo?.id ?? ''));
-                this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached, cacheSource: 'memory' });
+                this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId: item.messageId, sizeType: item.sizeType, url: cached, photoId: String(item.photo?.id ?? ''), cacheSource: 'memory' });
                 continue;
             }
             if (this.avatarInFlightByKey.has(ck) || this.avatarInFlight >= MAX_PARALLEL_AVATARS) {
@@ -1049,8 +1067,7 @@ export class GramMediaRouter {
         const ck = this.getPhotoCacheKey(photo, sizeType);
         const cached = this.photoUrlCache.get(ck);
         if (cached) {
-            this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: cached, cacheSource: 'memory' });
-            if (String(messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(photo?.id ?? currentPhoto?.id ?? ''), url: cached, messageId });
+            this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: cached, photoId: String(photo?.id ?? currentPhoto?.id ?? ''), cacheSource: 'memory' });
             return;
         }
 
@@ -1088,9 +1105,8 @@ export class GramMediaRouter {
                     const url = this.bytesToBlobUrl(result.bytes, result.mime);
                     this.photoUrlCacheSet(ck2, url);
                     this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url,
-
-                    cacheSource: result.cacheSource });
-                    if (String(messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(currentPhoto?.id ?? photo?.id ?? ''), url, messageId });
+                        photoId: String(currentPhoto?.id ?? photo?.id ?? ''),
+                        cacheSource: result.cacheSource });
                     return;
                 }
 
@@ -1099,9 +1115,8 @@ export class GramMediaRouter {
                     this.photoUrlCacheSet(ck2, result.photoUrl);
                     if (isAvatar) this.avatarRequeueCounts.delete(String(messageId));
                     this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO', messageId, sizeType, url: result.photoUrl,
-
-                    cacheSource: result.cacheSource });
-                    if (String(messageId).startsWith('rich-')) this.emitWindow('tg-rich-photo-url', { photoId: String(currentPhoto?.id ?? photo?.id ?? ''), url: result.photoUrl, messageId });
+                        photoId: String(currentPhoto?.id ?? photo?.id ?? ''),
+                        cacheSource: result.cacheSource });
                     return;
                 }
 
@@ -1119,7 +1134,7 @@ export class GramMediaRouter {
                         continue;
                     } else {
                         log.error('[gram-media] could not refresh photo for message', messageId);
-                        this.failPhotoDownload(messageId, sizeType, requeuePhoto);
+                        this.failPhotoDownload(messageId, sizeType, requeuePhoto, String(currentPhoto?.id ?? photo?.id ?? ''));
                         return;
                     }
                 }
@@ -1150,7 +1165,7 @@ export class GramMediaRouter {
                         continue;
                     } else {
                         log.error('[gram-media] could not refresh photo for message', messageId);
-                        this.failPhotoDownload(messageId, sizeType, requeuePhoto);
+                        this.failPhotoDownload(messageId, sizeType, requeuePhoto, String(currentPhoto?.id ?? photo?.id ?? ''));
                         return;
                     }
                 }
@@ -1160,12 +1175,12 @@ export class GramMediaRouter {
                 }
             }
         }
-        this.failPhotoDownload(messageId, sizeType, requeuePhoto);
+        this.failPhotoDownload(messageId, sizeType, requeuePhoto, String(currentPhoto?.id ?? photo?.id ?? ''));
     }
 
-    private failPhotoDownload(messageId: number | string, sizeType: string, requeuePhoto?: any): void {
+    private failPhotoDownload(messageId: number | string, sizeType: string, requeuePhoto?: any, photoId?: string): void {
         if (this.debug) log.info('[gram-media] photo download FAILED, dispatching error', messageId, sizeType);
-        this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_FAILED', messageId, sizeType });
+        this.host.dispatch({ type: 'UPDATE_MESSAGE_PHOTO_FAILED', messageId, sizeType, photoId });
         this.emitWindow('tg-photo-download-failed', { messageId, sizeType });
         if (requeuePhoto) {
             const key = String(messageId);
@@ -1865,6 +1880,7 @@ export class GramMediaRouter {
             }
             if (freshDoc?.id) this.registerStickerDoc(freshDoc);
             this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_THUMB', messageId, thumbType, url });
+            this.emitWindow('tg-document-thumb-url', { docId: String(document?.id ?? ''), messageId, thumbType, url });
             if (typeof messageId === 'string' && this.isWallpaperKey(messageId)) {
                 this.dispatchDocumentUrl(messageId, url, cacheSource);
             }

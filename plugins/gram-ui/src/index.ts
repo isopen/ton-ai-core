@@ -18,7 +18,7 @@ export { FpsMeter } from './components/fps-meter.js';
 export { startFpsLogging } from './utils/fps-log.js';
 export { buildPeerBlurThumb } from './utils.js';
 export { peerKeyOf, findChatWallpaper, wallpaperIdentity, wallpaperUrlKey, isPatternWallpaper, wallpaperPhotoDoc, wallpaperThumbType, wallColorToCss, wallpaperSettingsColors, wallpaperGradient, wallpaperRotation, wallpaperFlowValue, wallpaperFlowProps, wallpaperPatternOpacity, wallpaperIntensityOf, wallpaperRender, wallpaperDownloadPlan } from './utils.js';
-export { requestPhoto, requestDocument, requestDocumentThumb, photoAvailability, bestSourceUrl } from './components/media-source.js';
+export { requestPhoto, requestDocument, requestDocumentThumb, photoAvailability, bestSourceUrl, retainPhotoBlobUrl, releasePhotoBlobUrl } from './components/media-source.js';
 export { runLocalInteractionFx } from './components/emoji-burst.js';
 export type { PhotoDownloadNeed, PhotoRequestOptions, DocumentRequestOptions, PhotoAvailability } from './components/media-source.js';
 export { QrCode, QrCodeDefaults, QrCodeLimits } from './primitives/qr-code.js';

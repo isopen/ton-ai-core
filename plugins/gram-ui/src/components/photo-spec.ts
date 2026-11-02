@@ -36,7 +36,7 @@ function sizeUrl(s: any): string {
   return url;
 }
 
-function sizeDim(s: any): { w: number; h: number } {
+export function sizeDim(s: any): { w: number; h: number } {
   let w = s.w || s.width || 0;
   let h = s.h || s.height || 0;
   if (!w && !h && s._ === 'photoStrippedSize' && s.bytes?.length > 2) {

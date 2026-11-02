@@ -2,6 +2,7 @@ import { h } from '@ton-ai/atom/jsx-runtime';
 import { useState, useEffect, useRef, useCallback } from '@ton-ai/atom/hooks';
 import type { ImageSpec } from '../types.js';
 import { getLogger } from '@ton-ai/gram-debug';
+import { retainPhotoBlobUrl, releasePhotoBlobUrl } from '../components/media-source.js';
 
 const imgLog = getLogger('gram-ui:image');
 
@@ -48,6 +49,7 @@ export function Image(props: {
   const [error, setError] = useState(false);
   const [currentSrc, setCurrentSrc] = useState(image.thumbnail?.url || '');
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  const [naturalIsThumb, setNaturalIsThumb] = useState(false);
   const [attachTick, setAttachTick] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -56,6 +58,14 @@ export function Image(props: {
     rootRef.current = el;
     setAttachTick(t => t + 1);
   }, []);
+
+  // Keep displayed blob URLs alive: protect against gram-media LRU eviction
+  // while this component renders the image. Single place for every image.
+  useEffect(() => {
+    if (!currentSrc || !currentSrc.startsWith('blob:')) return;
+    retainPhotoBlobUrl(currentSrc);
+    return () => { releasePhotoBlobUrl(currentSrc); };
+  }, [currentSrc]);
 
   useEffect(() => {
     if (!lazy || visible) return;
@@ -87,7 +97,7 @@ export function Image(props: {
 
     if (error) setError(false);
 
-    if (!currentSrc && image.thumbnail?.url) setCurrentSrc(image.thumbnail.url);
+  if (!currentSrc && image.thumbnail?.url) setCurrentSrc(image.thumbnail.url);
 
     (async () => {
       for (const url of srcs) {
@@ -97,7 +107,10 @@ export function Image(props: {
           if (!ac.signal.aborted) {
             imgLog.info('[Image] loaded', image.id, 'len:', url.length, 'natural:', res.w + 'x' + res.h);
             setCurrentSrc(res.url);
-            if (res.w > 0 && res.h > 0) setNatural({ w: res.w, h: res.h });
+            if (res.w > 0 && res.h > 0) {
+              setNatural({ w: res.w, h: res.h });
+              setNaturalIsThumb(url === image.thumbnail?.url);
+            }
 
             if (url !== image.thumbnail?.url) setLoaded(true);
             setError(false);
@@ -125,8 +138,8 @@ export function Image(props: {
     }
   }, [error, image.thumbnail?.url, image.medium?.url, image.original?.url]);
 
-  const srcW = image.width || natural?.w || 0;
-  const srcH = image.height || natural?.h || 0;
+  const srcW = (!naturalIsThumb && natural?.w) || image.width || 0;
+  const srcH = (!naturalIsThumb && natural?.h) || image.height || 0;
   const hasAspect = srcW > 0 && srcH > 0;
 
   let imgW: number;
@@ -169,7 +182,7 @@ export function Image(props: {
   const showThumb = !!image.thumbnail?.url && !usingFullSrc;
 
   if (imgLog.enabled && currentSrc) {
-    imgLog.info('[Image] render', image.id, 'currentSrc len:', currentSrc.length, 'loaded:', loaded, 'visible:', visible, 'src == original:', currentSrc === image.original?.url);
+    imgLog.info('[Image] render', image.id, 'currentSrc len:', currentSrc.length, 'loaded:', loaded, 'visible:', visible, 'src == original:', currentSrc === image.original?.url, 'src=' + srcW + 'x' + srcH, 'natural=' + (natural ? natural.w + 'x' + natural.h : 'null') + (naturalIsThumb ? ' (thumb)' : ''), 'dim=' + dimStyle);
   }
 
   const handleClick = () => {

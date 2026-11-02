@@ -216,9 +216,9 @@ export type UIAction =
     | { type: 'SET_AVATAR_RADIUS'; radius: number }
     | { type: 'SET_ACTIVE_SKILL'; id: string | null }
     | { type: 'SET_LANG_OPTIONS'; options: LangOption[] }
-    | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number | string; sizeType: string; url: string; cacheSource?: string }
+    | { type: 'UPDATE_MESSAGE_PHOTO'; messageId: number | string; sizeType: string; url: string; photoId?: string; cacheSource?: string }
     | { type: 'UPDATE_MESSAGE_PHOTO_PROGRESS'; messageId: number; progress: number }
-    | { type: 'UPDATE_MESSAGE_PHOTO_FAILED'; messageId: number; sizeType: string }
+    | { type: 'UPDATE_MESSAGE_PHOTO_FAILED'; messageId: number | string; sizeType: string; photoId?: string }
     | { type: 'REFRESH_MESSAGE_PHOTO'; messageId: number; photo: any }
     | { type: 'UPDATE_MESSAGE_DOCUMENT'; messageId: number | string; url: string; cacheSource?: string }
     | { type: 'UPDATE_MESSAGE_DOCUMENT_PROGRESS'; messageId: number | string; progress: number }

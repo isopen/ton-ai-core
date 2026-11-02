@@ -3,7 +3,6 @@ import { useEffect, useRef } from '@ton-ai/atom/hooks';
 import { t, S } from '@ton-ai/gram-lang';
 import { requestPhoto } from './media-source.js';
 import { useNearViewport } from './use-near-viewport.js';
-
 function siteColor(site: string): string {
   let hash = 0;
   for (let i = 0; i < site.length; i++) hash = site.charCodeAt(i) + ((hash << 5) - hash);
@@ -48,13 +47,8 @@ export function WebPageBubble({ m, timeStr, out, status, sameSenderPrev, sameSen
   const { visible } = useNearViewport(() => rootRef.current, m.id);
   useEffect(() => {
     if (!visible || hasImage || !wpPhoto?.sizes?.length) return;
-    const prio = ['m', 'x', 'y'];
-    let best: any;
-    for (const t of prio) {
-      best = wpPhoto.sizes.find((sz: any) => sz.type === t && !sz.url && !sz.src);
-      if (best) break;
-    }
-    if (best) requestPhoto(wpPhoto, m.id, { sizeType: best.type, tag: 'LinkPreview' });
+    // Single photo-download machinery: media-source picks the first missing size itself.
+    requestPhoto(wpPhoto, m.id, { prio: ['m', 'x', 'y'], tag: 'LinkPreview' });
   }, [visible, m.id, hasImage, wpPhoto]);
 
   const wpType = wp?.type || '';

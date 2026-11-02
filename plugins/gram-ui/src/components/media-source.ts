@@ -41,10 +41,22 @@ export function requestPhoto(photo: any, messageId: number | string, opts: Photo
   const w = eventTarget();
   if (!w) return null;
   mediaLog.info(tag + 'dispatch photo msg=' + String(messageId) + ' need=' + sizeType);
-  const detail: Record<string, unknown> = { photo, sizeType, messageId };
+  const detail: Record<string, unknown> = { photo, sizeType, messageId, photoId: String(photo?.id ?? '') };
   if (opts.ctx != null) detail.ctx = opts.ctx;
   w.dispatchEvent(new CustomEvent('tg-download-photo', { detail }));
   return { sizeType, id: Number(photo.id ?? 0) };
+}
+
+export function retainPhotoBlobUrl(url: string): void {
+  const w = eventTarget();
+  if (!w || !url || !url.startsWith('blob:')) return;
+  w.dispatchEvent(new CustomEvent('tg-retain-blob-url', { detail: { url } }));
+}
+
+export function releasePhotoBlobUrl(url: string): void {
+  const w = eventTarget();
+  if (!w || !url || !url.startsWith('blob:')) return;
+  w.dispatchEvent(new CustomEvent('tg-release-blob-url', { detail: { url } }));
 }
 
 export function requestDocument(document: any, messageId: number | string, priority = 1, opts: DocumentRequestOptions = {}): boolean {

@@ -184,27 +184,48 @@ export function reducer(state: AppState, action: UIAction): AppState {
       }
       let targetFound = false;
       let changed = false;
+      const updPhoto = (photo: any): any => {
+        if (!photo || !Array.isArray(photo.sizes)) return photo;
+        let sizeChanged = false;
+        const sizes = photo.sizes.map((s: any) => {
+          if (s.type !== action.sizeType || s.url === action.url) return s;
+          sizeChanged = true;
+          return { ...s, url: action.url };
+        });
+        if (!sizeChanged) return photo;
+        return { ...photo, sizes, failed: false };
+      };
       const messages = state.messages.map(m => {
         if (m.id !== action.messageId) return m;
-        const media = m.media;
-        if (!media) return m;
         targetFound = true;
-        const updPhoto = (photo: any): any => {
-          if (!photo || !Array.isArray(photo.sizes)) return photo;
-          let sizeChanged = false;
-          const sizes = photo.sizes.map((s: any) => {
-            if (s.type !== action.sizeType || s.url === action.url) return s;
-            sizeChanged = true;
-            return { ...s, url: action.url };
+        // Media-borne photos: m.media.photo / webpage.photo / attached_media.photo
+        const media = m.media;
+        let nextMedia = media;
+        let mediaChanged = false;
+        if (media) {
+          const photo = updPhoto(media.photo);
+          const webpage = media.webpage ? { ...media.webpage, photo: updPhoto(media.webpage.photo) } : media.webpage;
+          const attachedMedia = media.attached_media ? { ...media.attached_media, photo: updPhoto(media.attached_media.photo) } : media.attached_media;
+          if (photo !== media.photo || webpage !== media.webpage || attachedMedia !== media.attached_media) {
+            mediaChanged = true;
+            nextMedia = { ...media, photo, webpage, attached_media: attachedMedia };
+          }
+        }
+        // Rich page photos (webpage preview / slideshow) live outside media: m.richMessage.photos
+        let richMessage = (m as any).richMessage;
+        let richChanged = false;
+        if (richMessage && Array.isArray(richMessage.photos) && richMessage.photos.length > 0) {
+          const photos = richMessage.photos.map((p: any) => {
+            if (!p || String(p?.id ?? '') !== String(action.photoId ?? '')) return p;
+            const next = updPhoto(p);
+            if (next !== p) { richChanged = true; return next; }
+            return p;
           });
-          if (!sizeChanged) return photo;
-          changed = true;
-          return { ...photo, sizes, failed: false };
-        };
-        const photo = updPhoto(media.photo);
-        const webpage = media.webpage ? { ...media.webpage, photo: updPhoto(media.webpage.photo) } : media.webpage;
-        const attachedMedia = media.attached_media ? { ...media.attached_media, photo: updPhoto(media.attached_media.photo) } : media.attached_media;
-        return { ...m, media: { ...media, photo, webpage, attached_media: attachedMedia } };
+          if (richChanged) richMessage = { ...richMessage, photos };
+        }
+        if (!mediaChanged && !richChanged) return m;
+        changed = true;
+        return { ...m, media: nextMedia, richMessage };
       });
       if (!targetFound || !changed) return state;
       return {
@@ -232,10 +253,28 @@ export function reducer(state: AppState, action: UIAction): AppState {
     case 'UPDATE_MESSAGE_PHOTO_FAILED': {
       let mutated = false;
       const messages = state.messages.map(m => {
-        if (m.id !== action.messageId || !m.media?.photo) return m;
-        if (m.media.photo.failed === true) return m;
-        mutated = true;
-        return { ...m, media: { ...m.media, photo: { ...m.media.photo, failed: true } } };
+        if (m.id !== action.messageId) return m;
+        const media = m.media;
+        if (media?.photo && !media.photo.failed) {
+          mutated = true;
+          return { ...m, media: { ...media, photo: { ...media.photo, failed: true } } };
+        }
+        // Rich page photos: mark the failed photo inside m.richMessage.photos
+        const rm: any = (m as any).richMessage;
+        if (rm && Array.isArray(rm.photos) && rm.photos.length > 0) {
+          let richChanged = false;
+          const photos = rm.photos.map((p: any) => {
+            if (!p || p.failed === true) return p;
+            if (action.photoId != null && String(p?.id ?? '') !== String(action.photoId)) return p;
+            richChanged = true;
+            return { ...p, failed: true };
+          });
+          if (richChanged) {
+            mutated = true;
+            return { ...m, richMessage: { ...rm, photos } };
+          }
+        }
+        return m;
       });
       if (!mutated) return state;
       return {
