@@ -168,6 +168,40 @@ function mountPathChips(root: HTMLElement) {
   }
 }
 
+function fixTruncatedMdImages(root: HTMLElement): string[] {
+  const created: string[] = [];
+  const imgs = root.querySelectorAll('img.md-image');
+  imgs.forEach((el) => {
+    const img = el as HTMLImageElement;
+    const raw = img.getAttribute('src') || '';
+    const kind = raw.startsWith('blob:') ? 'blob' : raw.startsWith('data:') ? 'data' : /^https?:\/\//i.test(raw) ? 'http' : raw.startsWith('//') ? 'proto-rel' : raw.startsWith('/') ? 'root-rel' : 'other';
+    tmdLog.info('[TmdView] md-img kind=' + kind + ' len=' + raw.length + ' head=' + raw.slice(0, 80) + ' complete=' + img.complete + ' natural=' + img.naturalWidth + 'x' + img.naturalHeight);
+    if (kind === 'blob' || kind === 'data') return;
+    if ((img as any).__tmdFullFetched === raw) return;
+    (img as any).__tmdFullFetched = raw;
+    let url = raw.startsWith('//') ? (location.protocol + raw) : raw;
+    if (url.startsWith(location.origin + '/')) url = url.slice(location.origin.length);
+    const attempt = (n: number) => {
+      fetch(url, { mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' }).then(async (resp) => {
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const blob = await resp.blob();
+        const len = Number(resp.headers.get('content-length') || '0');
+        if (!blob.size) throw new Error('empty body');
+        if (len && blob.size < len) throw new Error('truncated ' + blob.size + '/' + len);
+        const objUrl = URL.createObjectURL(blob);
+        created.push(objUrl);
+        img.src = objUrl;
+        tmdLog.info('[TmdView] md-image fully fetched size=' + blob.size + ' url=' + url.slice(0, 120));
+      }).catch((err) => {
+        if (n < 2) attempt(n + 1);
+        else tmdLog.warn('[TmdView] md-image full fetch failed, keeping browser load: ' + url.slice(0, 120), err);
+      });
+    };
+    attempt(0);
+  });
+  return created;
+}
+
 const SERVER_FORMATTED_ENTITIES = new Set([
   'messageEntityBold',
   'messageEntityItalic',
@@ -225,6 +259,7 @@ export function TmdView({ text, foreignEntities, documentUrls, documentSources, 
   }, [text, foreignEntities, serverFormatted]);
 
   const ref = useRef<HTMLDivElement | null>(null);
+  const blobUrlsRef = useRef<string[]>([]);
   const hasTime = typeof time === 'string' && time.length > 0;
 
   if (!html) {
@@ -248,10 +283,12 @@ export function TmdView({ text, foreignEntities, documentUrls, documentSources, 
     mountCustomEmojis(el, (documentUrls || {}) as any, documentSources);
     mountCodeBlocks(el);
 
-    requestAnimationFrame(() => {
+    const raf = requestAnimationFrame(() => {
       mountStandardEmojis(el, (documentUrls || {}) as any, documentSources);
       mountPathChips(el);
+      blobUrlsRef.current.push(...fixTruncatedMdImages(el));
     });
+    return () => cancelAnimationFrame(raf);
   }, [html, documentSources]);
 
   useEffect(() => {
@@ -262,6 +299,11 @@ export function TmdView({ text, foreignEntities, documentUrls, documentSources, 
     mountStandardEmojis(el, (documentUrls || {}) as any, documentSources);
     mountPathChips(el);
   }, [documentUrls, documentSources]);
+
+  useEffect(() => () => {
+    for (const u of blobUrlsRef.current) { try { URL.revokeObjectURL(u); } catch {} }
+    blobUrlsRef.current = [];
+  }, []);
 
   const handleTableClick = (e: any) => {
     try {

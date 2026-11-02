@@ -8,23 +8,69 @@ import { getLogger } from '@ton-ai/gram-debug';
 
 const tgsLog = getLogger('gram-ui:tgs');
 
-let activePlayers = 0;
-const MAX_ACTIVE_PLAYERS = 8;
-const MAX_PLAYER_TIME = 12000;
-const playerWaiters = new Set<() => void>();
+type PlayerTick = (ts: number, deadline: number) => void;
 
-const SCROLL_SETTLE_MS = 90;
-let lastScrollAt = 0;
-let scrollTrackingAttached = false;
-function trackScrollActivity(): void {
-    if (scrollTrackingAttached || typeof document === 'undefined') return;
-    scrollTrackingAttached = true;
-    document.addEventListener('scroll', () => { lastScrollAt = performance.now(); }, true);
+const PLAYER_DRAW_BUDGET_MS = 6;
+const playerTicks = new Set<PlayerTick>();
+let playerTickRaf = 0;
+let lastTickTs = 0;
+let lastGapLoggedAt = 0;
+let hudMaxGap = 0;
+let hudBudgetDrops = 0;
+
+function schedulePlayerTick(): void {
+    if (playerTickRaf || typeof requestAnimationFrame !== 'function') return;
+    playerTickRaf = requestAnimationFrame(playerTickStep);
 }
-trackScrollActivity();
 
-function scrollSettled(): boolean {
-    return performance.now() - lastScrollAt >= SCROLL_SETTLE_MS;
+function playerTickStep(timestamp: number): void {
+    playerTickRaf = 0;
+    if (playerTicks.size === 0) {
+        lastTickTs = 0;
+        return;
+    }
+    if (lastTickTs > 0) {
+        const gap = timestamp - lastTickTs;
+        if (gap > hudMaxGap) hudMaxGap = gap;
+        if (gap > 60 && timestamp - lastGapLoggedAt > 2000) {
+            lastGapLoggedAt = timestamp;
+            tgsLog.info('[TGS_LOG] rAF gap ' + Math.round(gap) + 'ms tasks=' + playerTicks.size);
+        }
+    }
+    lastTickTs = timestamp;
+    const deadline = performance.now() + PLAYER_DRAW_BUDGET_MS;
+    for (const task of Array.from(playerTicks)) {
+        try {
+            task(timestamp, deadline);
+        } catch (e) {
+            tgsLog.info('[TGS_LOG] player tick error', e);
+        }
+        if (playerTicks.has(task)) {
+            playerTicks.delete(task);
+            playerTicks.add(task);
+        }
+        if (performance.now() >= deadline) {
+            hudBudgetDrops++;
+            break;
+        }
+    }
+    if (playerTicks.size > 0) schedulePlayerTick();
+}
+
+export function getTgsStats(): { tasks: number; gap: number; drops: number } {
+    const s = { tasks: playerTicks.size, gap: Math.round(hudMaxGap), drops: hudBudgetDrops };
+    hudMaxGap = 0;
+    hudBudgetDrops = 0;
+    return s;
+}
+
+function addPlayerTick(task: PlayerTick): void {
+    playerTicks.add(task);
+    schedulePlayerTick();
+}
+
+function removePlayerTick(task: PlayerTick): void {
+    playerTicks.delete(task);
 }
 
 const completedAnims = new Map<string, boolean>();
@@ -43,26 +89,6 @@ export function resetCompletedAnimations(): void {
 
 export function isAnimationCompleted(key: string): boolean {
     return completedAnims.get(key) === true;
-}
-
-function acquirePlayerSlot(): boolean {
-    if (activePlayers < MAX_ACTIVE_PLAYERS) {
-        activePlayers++;
-        return true;
-    }
-    return false;
-}
-
-function releasePlayerSlot(): void {
-    if (activePlayers > 0) activePlayers--;
-    for (const w of playerWaiters) {
-        if (activePlayers < MAX_ACTIVE_PLAYERS) {
-            activePlayers++;
-            playerWaiters.delete(w);
-            w();
-            return;
-        }
-    }
 }
 
 export interface TgsPlayerProps {
@@ -114,11 +140,6 @@ export function TgsPlayer(props: TgsPlayerProps) {
     const rootRef = useRef<HTMLDivElement | null>(null);
     const animRef = useRef<ParsedAnimation | null>(null);
     const frameRef = useRef(0);
-    const rafRef = useRef<number | null>(null);
-    const lastTimeRef = useRef(0);
-    const lastDrawRef = useRef(performance.now() - Math.random() * 33.33);
-    const lastDrawnFrameRef = useRef(-1);
-    const yieldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const ioRef = useRef<IntersectionObserver | null>(null);
     const onEndRef = useRef(onEnd);
     onEndRef.current = onEnd;
@@ -134,7 +155,7 @@ export function TgsPlayer(props: TgsPlayerProps) {
             setInView(true);
             return;
         }
-        const io = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), { rootMargin: '0px' });
+        const io = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), { rootMargin: '120px' });
         ioRef.current = io;
         io.observe(el);
         return () => {
@@ -163,7 +184,6 @@ export function TgsPlayer(props: TgsPlayerProps) {
                     frameRef.current = parsed.inFrame;
                     endFiredRef.current = false;
                 }
-                lastTimeRef.current = 0;
                 setAnimVersion((v) => v + 1);
                 if (tgsLog.enabled) {
                     tgsLog.info('[TGS_LOG] parsed', { w: parsed.width, h: parsed.height, fps: parsed.fps, inFrame: parsed.inFrame, outFrame: parsed.outFrame, layers: parsed.layers.length });
@@ -189,17 +209,9 @@ export function TgsPlayer(props: TgsPlayerProps) {
     useEffect(() => {
         const anim = animRef.current;
         if (!anim) return;
-        const drawNow = () => {
-            const total = anim.outFrame - anim.inFrame;
-            const frame = (showLastFrame || (endFiredRef.current && total > 0)) ? anim.outFrame - 1 : anim.inFrame;
-            drawFrame(frame);
-        };
-        if (scrollSettled()) {
-            drawNow();
-        } else {
-            const t = setTimeout(drawNow, SCROLL_SETTLE_MS);
-            return () => clearTimeout(t);
-        }
+        const total = anim.outFrame - anim.inFrame;
+        const frame = (showLastFrame || (endFiredRef.current && total > 0)) ? anim.outFrame - 1 : anim.inFrame;
+        drawFrame(frame);
     }, [animationData, inView, animVersion, drawFrame, showLastFrame]);
 
     useEffect(() => {
@@ -234,22 +246,12 @@ export function TgsPlayer(props: TgsPlayerProps) {
         }
         endFiredRef.current = false;
         frameRef.current = animRef.current ? animRef.current.inFrame : 0;
-        lastDrawnFrameRef.current = -1;
-        lastTimeRef.current = 0;
         setPlaying(autoplay);
     };
     useDomEvent(window, 'tg-playback-reset', onPlaybackReset, [autoplay, showLastFrame]);
 
-    const retryOnVisibleRef = useRef<null | (() => void)>(null);
-
     useEffect(() => {
-        if (!playing || !inView) {
-            if (rafRef.current != null) {
-                cancelAnimationFrame(rafRef.current);
-                rafRef.current = null;
-            }
-            return;
-        }
+        if (!playing || !inView) return;
 
         const anim = animRef.current;
         if (!anim) return;
@@ -258,180 +260,82 @@ export function TgsPlayer(props: TgsPlayerProps) {
         if (totalFrames <= 0) return;
 
         const frameDuration = 1000 / anim.fps / speed;
+        let lastTime = 0;
+        let nextDrawAt = 0;
+        let lastDrawFrameIdx = -1;
+        endFiredRef.current = false;
 
-        let started = false;
-        let acquired = false;
-        const stopRaf = () => {
-            if (yieldTimerRef.current != null) {
-                clearTimeout(yieldTimerRef.current);
-                yieldTimerRef.current = null;
-            }
-            if (rafRef.current != null) {
-                cancelAnimationFrame(rafRef.current);
-                rafRef.current = null;
-            }
-            if (started) {
-                started = false;
-                if (acquired) {
-                    acquired = false;
-                    releasePlayerSlot();
-                }
-            }
-        };
-
-        let playStart = 0;
-        const start = () => {
-            if (started) return;
-            started = true;
-            lastTimeRef.current = 0;
-            playStart = performance.now();
-            endFiredRef.current = false;
-            function tick(timestamp: number) {
-                if (!animRef.current) {
-                    started = false;
-                    if (acquired) {
-                        acquired = false;
-                        releasePlayerSlot();
-                    }
-                    return;
-                }
-                if (document.hidden) {
-                    stopRaf();
-                    return;
-                }
-                if (lastTimeRef.current === 0) {
-                    lastTimeRef.current = timestamp;
-                }
-                const delta = timestamp - lastTimeRef.current;
-                lastTimeRef.current = timestamp;
-                let frame = frameRef.current + delta / frameDuration;
-                let forceDraw = false;
-                if (frame >= animRef.current.outFrame) {
-                    if (loop) {
-                        const passed = Math.floor((frame - animRef.current.inFrame) / totalFrames);
-                        frame = animRef.current.inFrame + ((frame - animRef.current.inFrame) % totalFrames);
-                        if (passed > 0) onLoopDoneRef.current?.();
-                    } else {
-                        if (!endFiredRef.current) {
-                            endFiredRef.current = true;
-                            forceDraw = true;
-                            frame = animRef.current.outFrame - 1;
-                            setPlaying(false);
-                            if (playKey) markCompleted(playKey);
-                            onEndRef.current?.();
-                        } else {
-                            frame = animRef.current.outFrame - 1;
-                        }
-                    }
-                }
-                frameRef.current = frame;
-                if (onFrameProgressRef.current) {
-                    const animProg = animRef.current;
-                    const total = animProg.outFrame - animProg.inFrame;
-                    const progress = total > 0
-                        ? Math.min(1, Math.max(0, (frame - animProg.inFrame) / total))
-                        : 0;
-                    onFrameProgressRef.current(progress);
-                }
-                const el = canvasRef.current;
-                const drawInterval = activePlayers > 12 ? 100 : activePlayers > 8 ? 66 : activePlayers > 4 ? 50 : 33.33;
-                const drawFrameIndex = Math.floor(frame);
-                if (forceDraw || !el || (drawFrameIndex !== lastDrawnFrameRef.current && timestamp - lastDrawRef.current >= drawInterval)) {
-                    try {
-                        drawFrame(frame);
-                        lastDrawnFrameRef.current = drawFrameIndex;
-                        lastDrawRef.current = timestamp;
-                    } catch (e) {
-                        tgsLog.info('[TGS_LOG] draw error', e);
-                        started = false;
-                        if (acquired) {
-                            acquired = false;
-                            releasePlayerSlot();
-                        }
-                        if (!loop && !endFiredRef.current) {
-                            endFiredRef.current = true;
-                            onEndRef.current?.();
-                        }
-                        return;
-                    }
-                }
-                if (timestamp - playStart > MAX_PLAYER_TIME) {
-                    started = false;
-                    if (acquired) {
-                        acquired = false;
-                        releasePlayerSlot();
-                    }
-                    yieldTimerRef.current = setTimeout(() => {
-                        yieldTimerRef.current = null;
-                        maybeStart();
-                    }, 0);
-                    return;
-                }
-                rafRef.current = requestAnimationFrame(tick);
-            }
-            rafRef.current = requestAnimationFrame(tick);
-        };
-
-        let deferredStartTimer: ReturnType<typeof setTimeout> | null = null;
-        let acquireRetryTimer: ReturnType<typeof setTimeout> | null = null;
-        const maybeStart = () => {
-            if (started || !playing || !inView) return;
-            if (!scrollSettled()) {
-                if (deferredStartTimer == null) {
-                    deferredStartTimer = setTimeout(() => {
-                        deferredStartTimer = null;
-                        maybeStart();
-                    }, 40);
-                }
+        const task: PlayerTick = (ts, deadline) => {
+            const active = animRef.current;
+            if (!active) {
+                removePlayerTick(task);
                 return;
             }
-            if (!bypassPlayerLimit) {
-                if (!acquirePlayerSlot()) {
-                    if (acquireRetryTimer == null) {
-                        acquireRetryTimer = setTimeout(() => {
-                            acquireRetryTimer = null;
-                            maybeStart();
-                        }, 200);
+            if (document.hidden) {
+                lastTime = 0;
+                return;
+            }
+            if (lastTime === 0) {
+                lastTime = ts;
+            }
+            const delta = ts - lastTime;
+            lastTime = ts;
+            let frame = frameRef.current + delta / frameDuration;
+            let forceDraw = false;
+            if (frame >= active.outFrame) {
+                if (loop) {
+                    const passed = Math.floor((frame - active.inFrame) / totalFrames);
+                    frame = active.inFrame + ((frame - active.inFrame) % totalFrames);
+                    if (passed > 0) onLoopDoneRef.current?.();
+                } else {
+                    if (!endFiredRef.current) {
+                        endFiredRef.current = true;
+                        forceDraw = true;
+                        frame = active.outFrame - 1;
+                        setPlaying(false);
+                        if (playKey) markCompleted(playKey);
+                        onEndRef.current?.();
+                    } else {
+                        frame = active.outFrame - 1;
                     }
-                    return;
                 }
-                acquired = true;
             }
-            start();
+            frameRef.current = frame;
+            if (onFrameProgressRef.current) {
+                const total = active.outFrame - active.inFrame;
+                const progress = total > 0
+                    ? Math.min(1, Math.max(0, (frame - active.inFrame) / total))
+                    : 0;
+                onFrameProgressRef.current(progress);
+            }
+            const iconVotes = playerTicks.size;
+            const drawInterval = iconVotes > 16 ? 100 : iconVotes > 10 ? 66 : iconVotes > 5 ? 50 : 33.33;
+            const drawFrameIndex = Math.floor(frame);
+            const due = ts >= nextDrawAt && drawFrameIndex !== lastDrawFrameIdx;
+            if (forceDraw || (due && (bypassPlayerLimit || performance.now() < deadline))) {
+                try {
+                    drawFrame(frame);
+                    lastDrawFrameIdx = drawFrameIndex;
+                    nextDrawAt = ts + drawInterval;
+                } catch (e) {
+                    tgsLog.info('[TGS_LOG] draw error', e);
+                    removePlayerTick(task);
+                    if (!loop && !endFiredRef.current) {
+                        endFiredRef.current = true;
+                        onEndRef.current?.();
+                    }
+                }
+            }
         };
 
-        maybeStart();
-
-        retryOnVisibleRef.current = () => {
-            if (!started) maybeStart();
-        };
-
-        return () => {
-            retryOnVisibleRef.current = null;
-            if (deferredStartTimer != null) {
-                clearTimeout(deferredStartTimer);
-                deferredStartTimer = null;
-            }
-            if (acquireRetryTimer != null) {
-                clearTimeout(acquireRetryTimer);
-                acquireRetryTimer = null;
-            }
-            playerWaiters.delete(start);
-            stopRaf();
-        };
+        addPlayerTick(task);
+        return () => removePlayerTick(task);
     }, [playing, inView, loop, speed, animVersion, drawFrame, bypassPlayerLimit]);
-
-    useDomEvent(document, 'visibilitychange', () => {
-        if (!document.hidden && playing && inView && scrollSettled()) {
-            retryOnVisibleRef.current?.();
-        }
-    }, [playing, inView]);
 
     const togglePlay = useCallback(() => {
         const anim = animRef.current;
         frameRef.current = anim ? anim.inFrame : 0;
         endFiredRef.current = false;
-        lastTimeRef.current = 0;
         setPlaying(true);
     }, []);
 

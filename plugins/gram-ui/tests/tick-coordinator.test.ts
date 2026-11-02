@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 import { strict as assert } from 'assert';
-import { registerTickClient, setTickScheduler, tickClientCount } from '../src/utils/animated-renderer/tick-coordinator';
+import { registerTickClient, resetTickHostObserver, setTickClientHost, setTickScheduler, tickClientCount } from '../src/utils/animated-renderer/tick-coordinator';
 import { shouldFullCacheFrames, createPaintRateState, notePaintLatency, skipPaintTick } from '../src/utils/animated-renderer/frame-cache-policy';
 
 describe('tick-coordinator', () => {
@@ -53,6 +53,103 @@ describe('tick-coordinator', () => {
     const un = registerTickClient(() => true);
     queued[0]();
     assert.equal(tickClientCount(), 1);
+    un();
+    assert.equal(tickClientCount(), 0);
+  });
+});
+
+describe('tick-coordinator viewport pause', () => {
+  let queued: Array<() => void>;
+  const fakes: Array<{ cb: (list: Array<{ target: Element; isIntersecting: boolean; intersectionRatio: number }>) => void; targets: Set<Element> }> = [];
+
+  class FakeIO {
+    cb: (list: Array<{ target: Element; isIntersecting: boolean; intersectionRatio: number }>) => void;
+    targets = new Set<Element>();
+    constructor(cb: (list: Array<{ target: Element; isIntersecting: boolean; intersectionRatio: number }>) => void) {
+      this.cb = cb;
+      fakes.push(this);
+    }
+    observe(t: Element) { this.targets.add(t); }
+    unobserve(t: Element) { this.targets.delete(t); }
+    disconnect() { this.targets.clear(); }
+    takeRecords() { return []; }
+  }
+
+  function observerFor(el: Element) {
+    for (let i = fakes.length - 1; i >= 0; i--) {
+      if (fakes[i].targets.has(el)) return fakes[i];
+    }
+    return null;
+  }
+
+  beforeEach(() => {
+    resetTickHostObserver();
+    (globalThis as any).IntersectionObserver = FakeIO;
+    queued = [];
+    setTickScheduler(
+      (cb) => { queued.push(cb); return queued.length; },
+      () => { },
+    );
+  });
+
+  afterEach(() => {
+    resetTickHostObserver();
+    delete (globalThis as any).IntersectionObserver;
+    setTickScheduler(null, null);
+  });
+
+  test('host outside viewport skips fn but keeps client', () => {
+    const el = document.createElement('canvas');
+    document.body.appendChild(el);
+    let runs = 0;
+    const un = registerTickClient(() => { runs++; return true; }, el);
+    assert.equal(queued.length, 1);
+    const obs = observerFor(el);
+    assert.ok(obs, 'host must be observed');
+    obs?.cb([{ target: el, isIntersecting: true, intersectionRatio: 1 }]);
+    queued[0]();
+    assert.equal(runs, 1);
+    obs?.cb([{ target: el, isIntersecting: false, intersectionRatio: 0 }]);
+    queued[0]();
+    assert.equal(runs, 1);
+    assert.equal(tickClientCount(), 1, 'client must stay registered while hidden');
+    assert.equal(queued.length, 2, 'fully hidden tick must not reschedule an extra raf');
+    un();
+    assert.equal(tickClientCount(), 0);
+  });
+
+  test('hidden client wakes up when scrolled back into view', () => {
+    const el = document.createElement('canvas');
+    document.body.appendChild(el);
+    let runs = 0;
+    const un = registerTickClient(() => { runs++; return true; }, el);
+    const obs = observerFor(el);
+    obs?.cb([{ target: el, isIntersecting: false, intersectionRatio: 0 }]);
+    queued[0]();
+    assert.equal(runs, 0);
+    obs?.cb([{ target: el, isIntersecting: true, intersectionRatio: 1 }]);
+    assert.equal(queued.length, 2, 'visibility restore must wake the tick loop');
+    queued[1]();
+    assert.equal(runs, 1);
+    un();
+    assert.equal(tickClientCount(), 0);
+  });
+
+  test('detached host is skipped until host is re-set', () => {
+    const el = document.createElement('canvas');
+    document.body.appendChild(el);
+    let runs = 0;
+    const un = registerTickClient(() => { runs++; return true; }, el);
+    el.remove();
+    queued[0]();
+    assert.equal(runs, 0, 'detached canvas must not draw');
+    assert.equal(tickClientCount(), 1);
+    const el2 = document.createElement('canvas');
+    document.body.appendChild(el2);
+    setTickClientHost(un, el2);
+    assert.equal(queued.length, 2, 'setTickClientHost must wake the loop');
+    queued[1]();
+    assert.equal(runs, 1, 'canvas re-attached via setTickClientHost resumes drawing');
     un();
     assert.equal(tickClientCount(), 0);
   });

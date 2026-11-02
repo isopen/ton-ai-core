@@ -1,6 +1,6 @@
 import type { AnimatedRendererParams, AnimatedRendererView, IAnimatedRenderer } from './types.js';
 import { getMediaWorkers, MAX_WORKERS, respawnWorker } from './media-workers.js';
-import { registerTickClient } from './tick-coordinator.js';
+import { registerTickClient, setTickClientHost } from './tick-coordinator.js';
 import { shouldFullCacheFrames, createPaintRateState, notePaintLatency, skipPaintTick } from './frame-cache-policy.js';
 import type { MediaWorker } from './media-workers.js';
 import { isPageFocused } from './page-focus.js';
@@ -272,7 +272,7 @@ export class TgsRenderer implements IAnimatedRenderer {
       this.tickUnregister = registerTickClient(() => {
         this.step();
         return this.isLooping;
-      });
+      }, this.pickHostCanvas());
     }
   }
 
@@ -666,6 +666,17 @@ export class TgsRenderer implements IAnimatedRenderer {
     } else if (!this.initInFlight) {
       this.initRenderer();
     }
+    if (this.isLooping && this.tickUnregister) {
+      const host = this.pickHostCanvas();
+      if (host) setTickClientHost(this.tickUnregister, host);
+    }
+  }
+
+  private pickHostCanvas(): Element | null {
+    for (const v of this.views.values()) {
+      if (!v.isSharedCanvas) return v.canvas;
+    }
+    return null;
   }
 
   private calcSizeFactor() {

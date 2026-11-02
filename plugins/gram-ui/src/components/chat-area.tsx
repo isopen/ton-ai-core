@@ -25,7 +25,7 @@ import { flushEmojiBatch, getEmojiDocId, getDiceDocId, matchEmojiRuns, normalize
 import { SlotMachineSticker, resetSlotMachineDone } from './slot-machine.js';
 import { resetCompletedAnimations } from './tgs-player.js';
 import { observeVisibility, useMessageFontSize } from './emoji-canvas.js';
-import { beginHeavyAnimation } from '../utils/heavy-animation.js';
+import { isClickFxDisabled } from './emoji-burst.js';
 import { formatMessageTime, formatDaySeparator, senderColor, getMediaType, getStickerEmoji, getInitials, getPeerName, isAnimatedMedia, buildDocumentThumb, mediaFallbackText, isInactiveButtonData, buttonBubbleRel, resolveAvatar, resolveDisplayPeer, peerKeyOf, findChatWallpaper, wallpaperUrlKey, wallpaperPhotoDoc, wallpaperRender, wallpaperDownloadPlan, MESSAGE_FONT_DEFAULT } from '../utils.js';
 import { loadDefaultWallpaper } from './wallpaper-store.js';
 import { MediaPlayer } from './media-player.js';
@@ -334,9 +334,11 @@ export function StickerBubble({ m, timeStr, out, status, documentUrls, documentP
       const match = mid === m.id || String(mid) === String(m.id);
       if (!match || detail.mediaType !== 'sticker' || !rootRef.current) return;
       if (fxUrlRef.current) {
-        fxLog.info('[gram-app] sticker-fx overlay for msg=' + m.id + ' (interaction server fx)');
-        stickerFxTapSeq = (stickerFxTapSeq + 1) % 1000000;
-        playStickerFxOverlay('fx' + m.id + '_' + Date.now() + '_' + stickerFxTapSeq, fxUrlRef.current, rootRef.current, rootRef.current.getBoundingClientRect());
+        if (!isClickFxDisabled()) {
+          fxLog.info('[gram-app] sticker-fx overlay for msg=' + m.id + ' (interaction server fx)');
+          stickerFxTapSeq = (stickerFxTapSeq + 1) % 1000000;
+          playStickerFxOverlay('fx' + m.id + '_' + Date.now() + '_' + stickerFxTapSeq, fxUrlRef.current, rootRef.current, rootRef.current.getBoundingClientRect());
+        }
       } else if (!detail.hasCanvasFx) {
         window.dispatchEvent(new CustomEvent('tg-interaction-local', { detail: { messageId: String(mid), x: detail.x, y: detail.y } }));
       }
@@ -1036,11 +1038,6 @@ function ChatAreaView({ state, dispatch, skills = [] }: { state: AppState; dispa
     setVisRange([0, 0]);
     setNewBelow(0);
     setViewer(null);
-  }, [peer?.id]);
-
-  useEffect(() => {
-    if (!peer?.id) return undefined;
-    return beginHeavyAnimation(600);
   }, [peer?.id]);
 
   const peerKey = peer ? peerKeyOf(peer) : '';

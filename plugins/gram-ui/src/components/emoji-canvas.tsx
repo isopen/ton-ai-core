@@ -871,7 +871,7 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
   useEffect(() => {
     const el = wrapRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
-    return observeVisibility(el, 0, (v) => setPlaying(v));
+    return observeVisibility(el, 120, (v) => setPlaying(v));
   }, [slotsKey]);
 
   useEffect(() => {

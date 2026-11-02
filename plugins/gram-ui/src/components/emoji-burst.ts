@@ -14,7 +14,7 @@ const log = getLogger('gram-ui:emoji-burst');
 
 const LAYER_CAP = 4;
 const PARTICLES_PER_LAYER_BASE = 7;
-const TOTAL_PARTICLE_CAP = 60;
+const TOTAL_PARTICLE_CAP = 50;
 const TAP_SESSION_MS = 2200;
 
 function isStandaloneMedia(bubble: HTMLElement): boolean {
@@ -42,9 +42,9 @@ function rand(min: number, max: number): number {
     return min + Math.random() * (max - min);
 }
 
-function snapshotVideoFrame(vid: HTMLVideoElement): string {
+function snapshotVideoTile(vid: HTMLVideoElement): HTMLCanvasElement | null {
     try {
-        if (!(vid.videoWidth > 0)) return '';
+        if (!(vid.videoWidth > 0)) return null;
 
         const maxSide = 96;
         const scale = Math.min(1, maxSide / Math.max(vid.videoWidth, vid.videoHeight));
@@ -52,26 +52,26 @@ function snapshotVideoFrame(vid: HTMLVideoElement): string {
         tmp.width = Math.max(1, Math.round(vid.videoWidth * scale));
         tmp.height = Math.max(1, Math.round(vid.videoHeight * scale));
         tmp.getContext('2d')!.drawImage(vid, 0, 0, tmp.width, tmp.height);
-        return tmp.toDataURL();
-    } catch {  return ''; }
+        return tmp;
+    } catch { return null; }
 }
 
-function resolveDrawableValue(node: Element, px: number, py: number): string {
+function resolveBurstSource(node: Element, px: number, py: number): BurstSource {
     if (node instanceof HTMLCanvasElement && node.width > 0) {
-        const cropped = snapshotCanvasAt(node, px, py);
-        if (cropped) return cropped;
-        try { return node.toDataURL(); } catch { return ''; }
+        const tile = snapshotCanvasTile(node, px, py);
+        if (tile) return { kind: 'image', value: '', canvas: tile };
+        return { kind: 'image', value: '', canvas: node };
     }
     if (node instanceof HTMLImageElement && node.src) {
-        return node.src;
+        return { kind: 'image', value: node.src };
     }
 
     const vid = node.querySelector('video');
     if (vid instanceof HTMLVideoElement && vid.videoWidth > 0) {
-        const frame = snapshotVideoFrame(vid);
-        if (frame) return frame;
+        const frame = snapshotVideoTile(vid);
+        if (frame) return { kind: 'video', value: vid.src, canvas: frame };
     }
-    return '';
+    return { kind: 'image', value: '' };
 }
 
 function centerDistance(el: Element, x: number, y: number): number {
@@ -81,7 +81,7 @@ function centerDistance(el: Element, x: number, y: number): number {
     return Math.hypot(dx, dy);
 }
 
-function snapshotCanvasAt(cv: HTMLCanvasElement, px: number, py: number, tileSize?: number): string | null {
+function snapshotCanvasTile(cv: HTMLCanvasElement, px: number, py: number, tileSize?: number): HTMLCanvasElement | null {
     try {
         const r = cv.getBoundingClientRect();
         const scaleX = cv.width / (r.width || cv.width);
@@ -98,13 +98,13 @@ function snapshotCanvasAt(cv: HTMLCanvasElement, px: number, py: number, tileSiz
         const tctx = tmp.getContext('2d');
         if (!tctx) return null;
         tctx.drawImage(cv, sx, sy, size, size, 0, 0, size, size);
-        return tmp.toDataURL();
+        return tmp;
     } catch {
         return null;
     }
 }
 
-export function snapshotSlotFromCanvas(slotRect: DOMRect, scopeForCanvas: Element): string {
+function snapshotSlotTile(slotRect: DOMRect, scopeForCanvas: Element): HTMLCanvasElement | null {
     let scv: HTMLCanvasElement | null = null;
     for (const c of Array.from(scopeForCanvas.querySelectorAll<HTMLCanvasElement>('canvas'))) {
         const r = c.getBoundingClientRect();
@@ -114,7 +114,7 @@ export function snapshotSlotFromCanvas(slotRect: DOMRect, scopeForCanvas: Elemen
             break;
         }
     }
-    if (!scv) return '';
+    if (!scv) return null;
     try {
         const cr = scv.getBoundingClientRect();
         const scaleX = scv.width / (cr.width || 1);
@@ -123,7 +123,7 @@ export function snapshotSlotFromCanvas(slotRect: DOMRect, scopeForCanvas: Elemen
         tmp.width = Math.max(1, Math.round(slotRect.width * scaleX));
         tmp.height = Math.max(1, Math.round(slotRect.height * scaleY));
         const tctx = tmp.getContext('2d');
-        if (!tctx) return '';
+        if (!tctx) return null;
         tctx.drawImage(
             scv,
             Math.round((slotRect.left + slotRect.width / 2 - cr.left) * scaleX - tmp.width / 2),
@@ -131,13 +131,17 @@ export function snapshotSlotFromCanvas(slotRect: DOMRect, scopeForCanvas: Elemen
             tmp.width, tmp.height,
             0, 0, tmp.width, tmp.height,
         );
-        return tmp.toDataURL();
+        return tmp;
     } catch {
-        return '';
+        return null;
     }
 }
 
-export type BurstSource = { kind: 'image' | 'text' | 'video'; value: string };
+export type BurstSource = {
+    kind: 'image' | 'text' | 'video';
+    value: string;
+    canvas?: HTMLCanvasElement;
+};
 
 const VIDEO_PARTICLE_CAP = 6;
 let liveVideoParticles = 0;
@@ -147,14 +151,20 @@ function spawnParticle(
     y: number,
     source: BurstSource,
     layer: number,
-    staticFrame?: string,
+    staticFrame?: string | HTMLCanvasElement,
     size = 30,
     spread = 1,
+    quota?: { video: number },
 ): void {
     if (liveParticles >= TOTAL_PARTICLE_CAP) return;
     let node: HTMLElement;
     let isVideoParticle = false;
-    if (source.kind === 'video' && liveVideoParticles < VIDEO_PARTICLE_CAP && !document.hidden) {
+    const canVideo = source.kind === 'video'
+        && (!quota || quota.video > 0)
+        && liveVideoParticles < VIDEO_PARTICLE_CAP
+        && !document.hidden;
+    if (canVideo) {
+        if (quota) quota.video--;
         const v = document.createElement('video');
         v.src = source.value;
         v.muted = true;
@@ -168,11 +178,25 @@ function spawnParticle(
         node = document.createElement('span');
         node.textContent = source.value;
     } else {
-        if (source.kind === 'video' && !staticFrame) return;
-        node = document.createElement('img');
-        (node as HTMLImageElement).src = source.kind === 'video'
-            ? staticFrame!
-            : source.value;
+        const frameCanvas = source.canvas ?? (source.kind === 'video' && staticFrame instanceof HTMLCanvasElement ? staticFrame : null);
+        if (frameCanvas instanceof HTMLCanvasElement) {
+            const c = document.createElement('canvas');
+            c.width = Math.max(1, frameCanvas.width);
+            c.height = Math.max(1, frameCanvas.height);
+            const ctx = c.getContext('2d');
+            if (ctx) ctx.drawImage(frameCanvas, 0, 0);
+            node = c;
+        } else {
+            if (source.kind === 'video') {
+                if (typeof staticFrame !== 'string' || !staticFrame) return;
+                node = document.createElement('img');
+                (node as HTMLImageElement).src = staticFrame;
+            } else {
+                if (!source.value) return;
+                node = document.createElement('img');
+                (node as HTMLImageElement).src = source.value;
+            }
+        }
     }
 
     const half = Math.round(size / 2);
@@ -217,8 +241,30 @@ function spawnParticle(
     }
 }
 
+let burstSpawnsWindow = 0;
+
+export function getBurstStats(): { particles: number; video: number; spawns: number } {
+    const s = { particles: liveParticles, video: liveVideoParticles, spawns: burstSpawnsWindow };
+    burstSpawnsWindow = 0;
+    return s;
+}
+
+function clickFxDisabled(): boolean {
+    try {
+        const s = typeof location !== 'undefined' ? location.search || '' : '';
+        if (/[?&]nofx[=&]/.test(s) || /[?&]nofx$/.test(s)) return true;
+        const h = typeof location !== 'undefined' ? location.hash || '' : '';
+        return /(^|[#&])nofx/.test(h);
+    } catch { return false; }
+}
+
+export function isClickFxDisabled(): boolean {
+    if (typeof document === 'undefined') return false;
+    return clickFxDisabled();
+}
+
 export function spawnEmojiBurst(x: number, y: number, source: BurstSource, key: object, staticFrame?: string, big = false): void {
-    if (document.hidden) return;
+    if (document.hidden || clickFxDisabled()) return;
     const layerNode = ensureLayer();
 
     const now = Date.now();
@@ -232,11 +278,17 @@ export function spawnEmojiBurst(x: number, y: number, source: BurstSource, key: 
     const perLayer = PARTICLES_PER_LAYER_BASE + layers * 2;
     const size = burstParticleSize(big);
     const spread = (big ? 1.35 : 1) * readMessageFontSize() / MESSAGE_FONT_DEFAULT;
+    log.info('[emoji-burst] spawn layers=' + layers + ' perLayer=' + perLayer + ' size=' + size + ' live=' + liveParticles);
+    burstSpawnsWindow++;
 
-    for (let l = 0; l < layers; l++) {
-        const n = Math.ceil(perLayer / layers);
+    const clickBudget = liveParticles >= 40 ? 2 : liveParticles >= 25 ? 4 : perLayer;
+    const quota = { video: 2 };
+    let remaining = clickBudget;
+    for (let l = 0; l < layers && remaining > 0; l++) {
+        const n = Math.min(Math.ceil(perLayer / layers), remaining);
         for (let i = 0; i < n; i++) {
-            setTimeout(() => spawnParticle(x + rand(-10, 10), y + rand(-8, 8), source, l, staticFrame, size, spread), l * 90 + i * 12);
+            remaining--;
+            setTimeout(() => spawnParticle(x + rand(-10, 10), y + rand(-8, 8), source, l, staticFrame, size, spread, quota), l * 90 + i * 12);
         }
     }
     void layerNode;
@@ -297,7 +349,7 @@ export function playVideoEmojiFx(anchor: Element, vid: HTMLVideoElement, x?: num
     const r = anchor.getBoundingClientRect();
     const px = x != null && r.width > 0 ? Math.max(r.left, Math.min(x, r.right)) : r.left + r.width / 2;
     const py = y != null && r.height > 0 ? Math.max(r.top, Math.min(y, r.bottom)) : r.top + r.height / 2;
-    spawnEmojiBurst(px, py, { kind: 'video', value: vid.src }, vid, snapshotVideoFrame(vid), big);
+    spawnEmojiBurst(px, py, { kind: 'video', value: vid.src, canvas: snapshotVideoTile(vid) ?? undefined }, vid, undefined, big);
 }
 
 function playStickerTapBurst(stickerEl: HTMLElement, mainCv: Element | null, x: number, y: number): void {
@@ -305,16 +357,16 @@ function playStickerTapBurst(stickerEl: HTMLElement, mainCv: Element | null, x: 
         const r = stickerEl.getBoundingClientRect();
         const px = r.width > 0 ? Math.max(r.left, Math.min(x, r.right)) : x;
         const py = r.height > 0 ? Math.max(r.top, Math.min(y, r.bottom)) : y;
-        let value = '';
-        if (mainCv instanceof HTMLCanvasElement) value = resolveDrawableValue(mainCv, px, py);
-        if (!value) {
+        let source: BurstSource | null = null;
+        if (mainCv instanceof HTMLCanvasElement) source = resolveBurstSource(mainCv, px, py);
+        if (!source || (!source.canvas && !source.value)) {
             const still = stickerEl.querySelector('.tgui-sticker-preview img, .tgui-sticker-preview video, img, video');
-            if (still instanceof HTMLCanvasElement) value = resolveDrawableValue(still, px, py);
-            else if (still instanceof HTMLImageElement) value = still.src || '';
-            else if (still instanceof HTMLVideoElement) value = snapshotVideoFrame(still);
+            if (still instanceof HTMLCanvasElement) source = resolveBurstSource(still, px, py);
+            else if (still instanceof HTMLImageElement) source = { kind: 'image', value: still.src || '' };
+            else if (still instanceof HTMLVideoElement) source = { kind: 'video', value: still.src, canvas: snapshotVideoTile(still) ?? undefined };
         }
-        if (!value) return;
-        spawnEmojiBurst(px, py, { kind: 'image', value }, stickerEl, undefined, true);
+        if (!source || (!source.canvas && !source.value)) return;
+        spawnEmojiBurst(px, py, source, stickerEl, undefined, true);
     } catch {}
 }
 
@@ -341,8 +393,10 @@ export function attachEmojiBurst(): void {
             const mainCv = stickerEl.querySelector(':scope > .tgui-sticker-preview canvas.tgui-animated-sticker');
 
             if (!stickerEl.hasAttribute('data-server-fx') && mainCv instanceof HTMLCanvasElement) {
-                scheduleStickerClickFx(stickerEl, mainCv, rowId0.slice(4), x, y);
-                playStickerTapBurst(stickerEl, mainCv, x, y);
+                if (!clickFxDisabled()) {
+                    scheduleStickerClickFx(stickerEl, mainCv, rowId0.slice(4), x, y);
+                    playStickerTapBurst(stickerEl, mainCv, x, y);
+                }
             }
 
             dispatchInteractionRequest({
@@ -442,6 +496,7 @@ export function attachEmojiInteractions(): void {
         if (document.hidden) return;
         const detail = ((e as CustomEvent).detail || {}) as { messageId?: string; url?: string; key?: string; x?: number; y?: number; exact?: boolean };
         if (!detail.url || detail.messageId == null) return;
+        if (clickFxDisabled()) return;
         const bubble = document.getElementById('msg-' + detail.messageId);
         if (!bubble) return;
 
@@ -497,12 +552,12 @@ function playBurstFallback(bubble: HTMLElement, x?: number, y?: number): void {
         return;
     }
     if (node) {
-        const value = resolveDrawableValue(node, px, py);
-        if (value) { spawnEmojiBurst(px, py, { kind: 'image', value }, node, undefined, big); return; }
+        const source = resolveBurstSource(node, px, py);
+        if (source.canvas || source.value) { spawnEmojiBurst(px, py, source, node, undefined, big); return; }
     }
     if (el) {
-        const v = snapshotSlotFromCanvas(el.getBoundingClientRect(), el.closest('.tgui-emoji-canvas-wrap') ?? bubble);
-        if (v) { spawnEmojiBurst(px, py, { kind: 'image', value: v }, bubble, undefined, big); return; }
+        const tile = snapshotSlotTile(el.getBoundingClientRect(), el.closest('.tgui-emoji-canvas-wrap') ?? bubble);
+        if (tile) { spawnEmojiBurst(px, py, { kind: 'image', value: '', canvas: tile }, bubble, undefined, big); return; }
     }
     const m = (bubble.textContent || '').match(/\p{Extended_Pictographic}/u);
     if (m) spawnEmojiBurst(px, py, { kind: 'text', value: m[0] }, bubble, undefined, big);

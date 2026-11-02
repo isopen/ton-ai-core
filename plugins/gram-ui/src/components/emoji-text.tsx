@@ -17,6 +17,41 @@ const EMOJI_ONLY_SIZE = 30;
 
 const SINGLE_EMOJI_SIZE = INLINE_EMOJI_SIZE * 8;
 
+const MAX_ACTIVE_EMOJI_VIDEOS = 32;
+const activeEmojiVideos = new Set<HTMLVideoElement>();
+const pendingEmojiVideos: HTMLVideoElement[] = [];
+
+export function getEmojiVideoStats(): { active: number; pending: number } {
+  return { active: activeEmojiVideos.size, pending: pendingEmojiVideos.length };
+}
+
+function emojiVideoSlotRequest(v: HTMLVideoElement): boolean {
+  if (activeEmojiVideos.has(v)) return true;
+  if (activeEmojiVideos.size < MAX_ACTIVE_EMOJI_VIDEOS) {
+    activeEmojiVideos.add(v);
+    if (v.paused) v.play().catch(() => { });
+    return true;
+  }
+  if (!pendingEmojiVideos.includes(v)) pendingEmojiVideos.push(v);
+  return false;
+}
+
+function emojiVideoSlotRelease(v: HTMLVideoElement): void {
+  activeEmojiVideos.delete(v);
+  const qi = pendingEmojiVideos.indexOf(v);
+  if (qi >= 0) pendingEmojiVideos.splice(qi, 1);
+  emojiVideoPromote();
+}
+
+function emojiVideoPromote(): void {
+  while (activeEmojiVideos.size < MAX_ACTIVE_EMOJI_VIDEOS && pendingEmojiVideos.length > 0) {
+    const next = pendingEmojiVideos.shift()!;
+    if (!next.isConnected || activeEmojiVideos.has(next)) continue;
+    activeEmojiVideos.add(next);
+    if (next.paused) next.play().catch(() => { });
+  }
+}
+
 export { releaseEmojiCache } from './emoji-canvas.js';
 
 function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, playKey, showLastFrame, fontScaled = false }: { docId?: string; url: string; alt?: string; size: number; autoplay?: boolean; loop?: boolean; playKey?: string; showLastFrame?: boolean; fontScaled?: boolean }) {
@@ -43,17 +78,23 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
       const v = videoRef.current;
       if (!v) return;
       if (entry.isIntersecting) {
-        if (v.paused) v.play().catch(() => {});
+        if (!emojiVideoSlotRequest(v)) return;
+        if (v.paused) v.play().catch(() => { });
       } else {
         v.pause();
+        emojiVideoSlotRelease(v);
       }
-    }, { rootMargin: '80px' });
+    }, { rootMargin: '200px' });
     videoIoRef.current = io;
     io.observe(videoRef.current);
     return () => {
       if (videoIoRef.current) {
         videoIoRef.current.disconnect();
         videoIoRef.current = null;
+      }
+      const v = videoRef.current;
+      if (v) {
+        emojiVideoSlotRelease(v);
       }
     };
   }, [data?.kind, autoplay]);
@@ -117,7 +158,7 @@ function EmojiInline({ docId, url, alt, size, autoplay = true, loop = true, play
         autoplay={autoplay && !showLastFrame}
         onLoadedData={() => {
           const v = videoRef.current;
-          if (autoplay && !showLastFrame && v && v.paused) v.play().catch(() => {});
+          if (autoplay && !showLastFrame && v) emojiVideoSlotRequest(v);
         }}
       />
     );

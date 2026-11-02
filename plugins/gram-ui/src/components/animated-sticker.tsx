@@ -24,6 +24,7 @@ export function replayAnimatedCanvas(canvas: Element): boolean {
 
 const FX_OVERLAY_SIZE = 300;
 const FX_OVERLAY_TTL_MS = 3400;
+const MAX_ACTIVE_FX_OVERLAYS = 3;
 
 const activeFxOverlays = new Map<string, { host: HTMLDivElement; renderer: IAnimatedRenderer; timer: number; anchorEl: Element | null; detach: (() => void) | null }>();
 
@@ -79,11 +80,14 @@ function fxTrackEnsure(): void {
 export function disposeStickerFxOverlay(key: string): void {
   const active = activeFxOverlays.get(key);
   if (!active) return;
-  activeFxOverlays.delete(key);
-  try { active.detach?.(); } catch { }
+  activeFxOverlays.delete(key);  try { active.detach?.(); } catch { }
   clearTimeout(active.timer);
   try { active.renderer.destroy(); } catch { }
   active.host.remove();
+}
+
+export function getStickerFxOverlayStats(): { overlays: number } {
+  return { overlays: activeFxOverlays.size };
 }
 
 function placeFxHost(host: HTMLDivElement, placed: { left: number; top: number }): void {
@@ -108,7 +112,8 @@ export function playStickerFxOverlay(key: string, tgsUrl: string, anchorEl: Elem
     const c0 = fxInitialCenter(anchorEl, fallbackRect ?? null);
     const geo = { left: c0.x - FX_OVERLAY_SIZE / 2, top: c0.y - FX_OVERLAY_SIZE / 2 };
     const existing = activeFxOverlays.get(key);
-  if (existing && existing.host.isConnected) {
+    if (!existing && activeFxOverlays.size >= MAX_ACTIVE_FX_OVERLAYS) return;
+    if (existing && existing.host.isConnected) {
     existing.renderer.restart?.();
     existing.anchorEl = anchorEl;
     if (existing.host.parentNode !== document.body) document.body.appendChild(existing.host);

@@ -83,6 +83,31 @@ function releaseTakeover(cv: HTMLCanvasElement, cleanup: () => void): void {
   if (activeCleanups.get(cv) === cleanup) activeCleanups.delete(cv);
 }
 
+let fxLiveParticles = 0;
+let fxSpawnsWindow = 0;
+
+function trackParticleLifetime(dur: number): void {
+  fxLiveParticles++;
+  fxSpawnsWindow++;
+  let done = false;
+  const dec = () => {
+    if (done) return;
+    done = true;
+    fxLiveParticles = Math.max(0, fxLiveParticles - 1);
+  };
+  window.setTimeout(dec, dur + 240);
+}
+
+export function getStickerFxStats(): { particles: number; spawns: number; nodes: number } {
+  const s = {
+    particles: fxLiveParticles,
+    spawns: fxSpawnsWindow,
+    nodes: layerEl && layerEl.isConnected ? layerEl.childElementCount : 0,
+  };
+  fxSpawnsWindow = 0;
+  return s;
+}
+
 function spawnParticle(
   layer: HTMLElement,
   sx: number,
@@ -118,12 +143,13 @@ function spawnParticle(
   }
   const anim = el.animate(kf, { duration: dur, easing: 'linear', fill: 'both' });
   layer.appendChild(el);
+  trackParticleLifetime(dur);
   removeOnFinish(el, anim, dur + 200);
 }
 
 function fxPixelBurst(cv: HTMLCanvasElement, x: number, y: number): boolean {
   const r = rectOf(cv);
-  const samples = samplePixels(cv, 74, false);
+  const samples = samplePixels(cv, 30, false);
   if (samples.length === 0) return false;
   const layer = ensureLayer();
   for (const s of samples) spawnParticle(layer, r.left, r.top, s, r.width, { confetti: false, upBias: 1 });
@@ -132,7 +158,7 @@ function fxPixelBurst(cv: HTMLCanvasElement, x: number, y: number): boolean {
 
 function fxConfetti(cv: HTMLCanvasElement, x: number, y: number): boolean {
   const r = rectOf(cv);
-  const samples = samplePixels(cv, 46, true);
+  const samples = samplePixels(cv, 20, true);
   if (samples.length === 0) return false;
   const layer = ensureLayer();
   for (const s of samples) spawnParticle(layer, r.left, r.top, s, r.width, { confetti: true, upBias: 1.25 });
@@ -977,6 +1003,7 @@ if (typeof window !== 'undefined') {
 
 export function scheduleStickerClickFx(stickerEl: HTMLElement, cv: HTMLCanvasElement, messageId: string, x: number, y: number): void {
   if (typeof document === 'undefined' || document.hidden) return;
+  if (typeof location !== 'undefined' && /(^|[#&?])nofx/.test((location.hash || '') + (location.search || ''))) return;
   cancelPending(messageId);
   const entry: PendingFx = {
     messageId,
@@ -993,8 +1020,10 @@ function runRandomEffect(stickerEl: HTMLElement, cv: HTMLCanvasElement, x: numbe
     if (!cv.isConnected) return;
     const k = fxLayerScale();
     const layer = ensureLayer();
+    if (layer.childElementCount >= 24) return;
     layer.style.transform = k === 1 ? '' : 'scale(' + k.toFixed(3) + ')';
     layer.style.transformOrigin = x + 'px ' + y + 'px';
+    fxSpawnsWindow++;
     let kind = pick([...KINDS]);
     if (kind === lastKind) kind = pick([...KINDS]);
     lastKind = kind;
