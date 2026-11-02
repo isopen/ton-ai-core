@@ -1679,6 +1679,18 @@ async function directRpcWith(
     return rpcResult;
 }
 
+function resolvePhotoSizeForDownload(photo: any, asked: string): string {
+    const sizes: any[] = Array.isArray(photo?.sizes) ? photo.sizes : [];
+    if (sizes.length === 0) return asked;
+    const isReal = (s: any): boolean => !!s && s._ !== 'photoStrippedSize' && s._ !== 'photoCachedSize' && Number(s.w || s.width || 0) > 0;
+    if (sizes.some((s: any) => s.type === asked && isReal(s))) return asked;
+    for (const t of ['w', 'y', 'x', 'u', 'v', 'm']) {
+        if (t === asked) continue;
+        if (sizes.some((s: any) => s.type === t && isReal(s))) return t;
+    }
+    return asked;
+}
+
 async function requestPhotoDownload(photo: any, sizeType: string, messageId?: any, onProgress?: (pct: number) => void): Promise<{ bytes: ArrayBuffer; mime: string; cacheSource?: string } | null> {
     wlog('[worker] requestPhotoDownload CALLED', { sizeType, photoId: photo?.id?.toString(), hasId: !!photo?.id, hasAccessHash: !!photo?.access_hash, hasFileRef: !!photo?.file_reference, fileRefType: typeof photo?.file_reference, fileRefLen: photo?.file_reference?.length, messageId });
     if (!photo) { wlog('[worker] requestPhotoDownload: photo is null'); return null; }
@@ -1711,7 +1723,11 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
         photo = { ...photo, id: photo.photo_id, thumb_size: sizeType };
         locationOverride = { _: 'inputPeerPhotoFileLocation', flags: 0, peer, photo_id: photoId };
     }
-    const photoWithThumb = { ...photo, thumb_size: sizeType };
+    const effectiveSizeType = resolvePhotoSizeForDownload(photo, sizeType);
+    if (effectiveSizeType !== sizeType) {
+        wlog('[worker] requestPhotoDownload sizeType remap asked=' + sizeType + ' actual=' + effectiveSizeType + ' photoId=' + photo?.id?.toString() + ' messageId=' + messageId);
+    }
+    const photoWithThumb = { ...photo, thumb_size: effectiveSizeType };
     if (!locationOverride && !buildDownloadLocation(undefined, photoWithThumb)) {
         wlog('[worker] requestPhotoDownload: buildDownloadLocation returned null', { id: photo?.id, access_hash: photo?.access_hash, file_reference: !!photo?.file_reference, sizeType });
         return null;
@@ -1720,7 +1736,7 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
     const genRef = isAvatarMsg
         ? { value: avatarDownloadGen, counter: 'avatar' as const }
         : { value: photoDownloadGen, counter: 'photo' as const };
-    const sizeEntry = (photo.sizes || []).find((s: any) => s.type === sizeType);
+    const sizeEntry = (photo.sizes || []).find((s: any) => s.type === effectiveSizeType);
     let totalSize = sizeEntry?.size || 0;
     if (!totalSize && sizeEntry?.bytes) {
         totalSize = typeof sizeEntry.bytes === 'string' ? sizeEntry.bytes.length : (sizeEntry.bytes as any)?.length || 0;
@@ -1755,6 +1771,34 @@ async function requestPhotoDownload(photo: any, sizeType: string, messageId?: an
     const mime = photoStorageMime(result.type);
 
     return { bytes: result.bytes, mime, cacheSource: result.cacheSource };
+}
+
+function imageBytesIntegrity(typeName: string, buf: Buffer): boolean {
+    if (!buf || buf.length === 0) return true;
+    try {
+        if (typeName === 'storage.fileJpeg') {
+            if (buf.length < 4) return false;
+            if (buf[0] !== 0xFF || buf[1] !== 0xD8) return false;
+            const from = Math.max(0, buf.length - 4096);
+            for (let i = buf.length - 2; i >= from; i--) {
+                if (buf[i] === 0xFF && buf[i + 1] === 0xD9) return true;
+            }
+            return false;
+        }
+        if (typeName === 'storage.fileWebp') {
+            if (buf.length < 16) return false;
+            if (buf.toString('ascii', 0, 4) !== 'RIFF') return false;
+            if (buf.toString('ascii', 8, 12) !== 'WEBP') return false;
+            const riffSize = buf.readUInt32LE(4);
+            return riffSize + 8 === buf.length;
+        }
+        if (typeName === 'storage.filePng') {
+            if (buf.length < 12) return false;
+            return buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47
+                && buf.toString('ascii', buf.length - 8, buf.length - 4) === 'IEND';
+        }
+    } catch {}
+    return true;
 }
 
 function photoStorageMime(fileType: string): string {
@@ -3795,15 +3839,25 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             if (downloadCache.has(cacheKey)) {
                 const cached = downloadCacheGet(cacheKey)!;
                 wlog('[dl] cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey);
-                if (cached.type && cached.bytes && cached.bytes.length > 0) return { type: cached.type, bytes: b64ToAb(cached.bytes), cacheSource: 'memory' };
+                if (cached.type && cached.bytes && cached.bytes.length > 0) {
+                    const memBytes = b64ToAb(cached.bytes);
+                    if (imageBytesIntegrity(cached.type, Buffer.from(memBytes))) {
+                        return { type: cached.type, bytes: memBytes, cacheSource: 'memory' };
+                    }
+                    wlog('[dl] memory cache integrity FAIL id=' + id + ' label=' + label + ' — refetching');
+                }
             }
 
             if (!isNoMediaCache()) {
                 const persisted = await loadPersistedDownloadCache(cacheKey);
                 if (persisted && persisted.type && persisted.bytes && persisted.bytes.length > 0) {
-                    wlog('[dl] gram-db cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey + ' bytesLen=' + persisted.bytes.length);
-                    downloadCacheSet(cacheKey, persisted, document?.mime_type);
-                    return { type: persisted.type, bytes: b64ToAb(persisted.bytes), cacheSource: 'persisted' };
+                    const pBytes = b64ToAb(persisted.bytes);
+                    if (imageBytesIntegrity(persisted.type, Buffer.from(pBytes))) {
+                        wlog('[dl] gram-db cache HIT id=' + id + ' label=' + label + ' cacheKey=' + cacheKey + ' bytesLen=' + persisted.bytes.length);
+                        downloadCacheSet(cacheKey, persisted, document?.mime_type);
+                        return { type: persisted.type, bytes: pBytes, cacheSource: 'persisted' };
+                    }
+                    wlog('[dl] gram-db cache integrity FAIL id=' + id + ' label=' + label + ' — refetching');
                 }
             }
         }
@@ -4015,7 +4069,7 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
         const chunks: Buffer[] = [firstChunk];
         finalType = typeName;
 
-        if (!hasRange && (firstChunk.length < PART_SIZE || typeName !== 'storage.filePartial')) {
+        if (!hasRange && firstChunk.length < PART_SIZE) {
             wlog('[dl] single chunk id=' + id + ' label=' + label + ' chunkLen=' + firstChunk.length + ' type=' + typeName);
             const allBytes = Buffer.concat(chunks);
             if (allBytes.length === 0) {
@@ -4038,6 +4092,13 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
                 return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
             }
 
+            if (knownSize > 0 && allBytes.length < knownSize) {
+                wlog('[dl] single chunk SHORT vs knownSize id=' + id + ' label=' + label + ' bytes=' + allBytes.length + '/' + knownSize + ' (accepted)');
+            }
+            if (!imageBytesIntegrity(finalType, allBytes)) {
+                wlog('[dl] single chunk integrity WARN id=' + id + ' label=' + label + ' type=' + finalType + ' bytes=' + allBytes.length + ' (accepted)');
+            }
+
             const res: DownloadResult = { type: finalType, bytes: bufToAb(allBytes), cacheSource: serverType };
             if (cacheKey) {
                 downloadCacheSet(cacheKey, { type: finalType, bytes: allBytes.toString('base64') }, document?.mime_type);
@@ -4046,7 +4107,12 @@ async function downloadFile_(document?: any, photo?: any, genRef?: { value: numb
             return res;
         }
 
-        let maxTotal = hasRange ? rangeEnd : (knownSize > 0 ? knownSize : MAX_FILE_SIZE);
+        const distrustKnownSize = !hasRange && knownSize > 0 && knownSize <= PART_SIZE;
+        const maxPartsLimit = distrustKnownSize ? 64 : Number.POSITIVE_INFINITY;
+        if (distrustKnownSize) {
+            wlog('[dl] distrust knownSize=' + knownSize + ' <= PART_SIZE id=' + id + ' label=' + label + ' — fetching until EOF/short part (cap 64 parts)');
+        }
+        let maxTotal = hasRange ? rangeEnd : (knownSize > 0 && !distrustKnownSize ? knownSize : MAX_FILE_SIZE);
         let nextPart = hasRange ? rangeFirstPart + 1 : 1;
         const usePartsResume = !!cacheKey && !isNoMediaCache() && knownSize > 0 && knownSize > PART_SIZE;
         const resumed = usePartsResume ? await loadPersistedParts(cacheKey) : null;
@@ -4088,9 +4154,9 @@ if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen 
             throw lastErr;
         };
 
-        while (nextPart * PART_SIZE < maxTotal) {
+        while (nextPart * PART_SIZE < maxTotal && totalParts < maxPartsLimit) {
             if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen : photoDownloadGen)) return { type: '', bytes: new ArrayBuffer(0), error: 'ABORTED' };
-            const lastPartIdx = hasRange ? rangeLastExclusive : (knownSize > 0 ? Math.ceil(knownSize / PART_SIZE) : Infinity);
+            const lastPartIdx = hasRange ? rangeLastExclusive : (knownSize > 0 && !distrustKnownSize ? Math.ceil(knownSize / PART_SIZE) : Infinity);
             const batch: Promise<{ idx: number; chunk: Buffer }>[] = [];
             for (let i = 0; i < MAX_CONCURRENT; i++) {
                 const partIdx = nextPart + i;
@@ -4123,6 +4189,12 @@ if (genRef && genRef.value !== (genRef.counter === 'avatar' ? avatarDownloadGen 
         if (allBytes.length === 0) {
             if (hasRange) return { type: finalType, bytes: new ArrayBuffer(0), cacheSource: serverType };
             return { type: '', bytes: new ArrayBuffer(0), error: 'Empty file from server' };
+        }
+        if (!hasRange && knownSize > 0 && allBytes.length < knownSize) {
+            wlog('[dl] SHORT vs knownSize id=' + id + ' label=' + label + ' bytes=' + allBytes.length + '/' + knownSize + ' (accepted)');
+        }
+        if (!hasRange && !imageBytesIntegrity(finalType, allBytes)) {
+            wlog('[dl] integrity WARN id=' + id + ' label=' + label + ' type=' + finalType + ' bytes=' + allBytes.length + ' (accepted)');
         }
         const rangeBytes = hasRange ? allBytes.slice(rangeOffset - rangeFirstPart * PART_SIZE, rangeOffset - rangeFirstPart * PART_SIZE + rangeLimit) : allBytes;
         const res: DownloadResult = { type: finalType, bytes: bufToAb(rangeBytes), cacheSource: serverType };
