@@ -2,7 +2,7 @@ import { strict as assert } from 'assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Message, CallbackQuery } from '@ton-ai/telegram-bot-api';
 import { PermissionDecision } from '@ton-ai/opencode';
-import { DurevcodeAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isThreadClosedError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, isBackoffGateSignal, backoffGateError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, unwrapServerPartEvent, serverEventError, DUREVCODE_THREAD_TIMINGS, instantResolveQuestion, questionDoneRow, questionPicksComplete, setBotLang, botLangOf, stripPromptDirectiveEcho } from '../agent';
+import { DurevcodeAgent, PLUGIN_NAMES, isSubagentSession, isMessageNotModifiedError, isThreadGoneError, isThreadClosedError, isTopicNotModifiedError, hasUnfinishedLiveTool, isUpstreamServerError, isRateLimitError, isBackoffGateSignal, backoffGateError, getRetryAfterSec, isMessageGoneError, isPinRightsError, isPermanentPromptError, hasSessionWork, rankSessionIds, isStaleEmptyWatch, selectSessionIds, serverErrorText, isAbortedServerError, explainModelError, modelErrorNotice, serverEventSessionId, unwrapServerPartEvent, serverEventError, serverEventAssistantMessageId, serverErrorIsDuplicate, DUREVCODE_THREAD_TIMINGS, instantResolveQuestion, questionDoneRow, questionPicksComplete, setBotLang, botLangOf, stripPromptDirectiveEcho } from '../agent';
 import * as enPack from '../langs/en';
 import * as ruPack from '../langs/ru';
 import * as zhPack from '../langs/zh';
@@ -2668,7 +2668,7 @@ describe('durevcode forum control', () => {
         assert.ok(run, 'the spawn created a contended run');
         const pairs = [
             { key: 'srv:th1', event: { kind: 'reasoning', text: 'The user wants tea. Plan: boil water.', time: now + 1000 } },
-            { key: 'srv:th1b', event: { kind: 'text', text: 'Tea is ready.', time: now + 1500 } },
+            { key: 'srv:th1b', event: { kind: 'text', text: '**Tea is ready.** Use `kettle` wheels.', time: now + 1500 } },
             { key: 'srv:th2', event: { kind: 'step', tokens: 0, cost: 0, finish: 'stop', time: now + 2000 } },
         ];
         const live = { ...fake.opencode, readEvents: async () => pairs };
@@ -2683,9 +2683,15 @@ describe('durevcode forum control', () => {
         );
         assert.ok(String(think?.params.text).includes(enPack.THINKING_LABEL), 'the live card carries the thinking head');
         assert.ok(String(think?.params.text).includes('boil water'), 'the live card streams the reasoning text');
-        const answer = calls.find((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Tea is ready.'));
+        const answer = calls.find((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('<b>Tea is ready.</b>'));
         assert.ok(answer, 'the answer text streams to the lane');
+        assert.ok(String(answer?.params.text).includes('<code>kettle</code>'), 'the answer renders inline code from markdown');
+        assert.ok(!String(answer?.params.text).includes('**'), 'the answer carries no literal markdown asterisks');
         assert.ok(String(answer?.params.text).trimEnd().endsWith(enPack.SUBAGENT_TAG), 'the tag sits at the bottom of the answer message');
+        assert.ok(
+            String(answer?.params.text).includes(`\n\n${enPack.SUBAGENT_TAG}`),
+            'a blank line separates the tag from the answer',
+        );
         const folded = calls.filter((c) => c.op === 'edit' && String((c.params as Record<string, unknown>).text).includes(enPack.SUBAGENT_TAG));
         assert.equal(folded.length, 1, 'the thinking card folds in place');
         assert.ok(String(folded[0].params.text).includes(enPack.THOUGHT_LABEL), 'the folded card shows the thought header');
@@ -2735,6 +2741,127 @@ describe('durevcode forum control', () => {
         assert.ok(
             calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('queued for the main session')),
             'the fallback notice explains the queueing',
+        );
+    });
+
+    test('a reply to a subagent message continues the same child session', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4499, text: '/subagent make tea' }, now));
+        const tracked = (agent as unknown as { subagentMessages: Map<string, string> }).subagentMessages;
+        const entry = [...tracked.entries()].find(([, sessionId]) => sessionId === 'ses_new01');
+        assert.ok(entry, 'the subagent message is tracked for replies');
+        const messageId = Number(entry![0].split(':')[1]);
+        calls.length = 0;
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 4600, text: 'add sugar', reply_to_message: { message_id: messageId } }, now + 1000),
+        );
+        assert.deepEqual(
+            fake.prompts.map((p) => p.sessionId),
+            ['ses_new01', 'ses_new01'],
+            'the follow-up goes to the child session, not the main one',
+        );
+        assert.equal(fake.prompts[1]?.text, 'add sugar', 'the follow-up text reaches the subagent');
+        assert.ok(
+            calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes(enPack.SUBAGENT_CONTINUED)),
+            'the follow-up is acknowledged in the lane',
+        );
+        const run = (agent as unknown as { contendedRuns: Array<{ replyTo: number | null }> }).contendedRuns[0];
+        assert.equal(run?.replyTo, 4600, 'the subagent answers quote the follow-up message');
+    });
+
+    test('a reply to a finished subagent reactivates it', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4499, text: '/subagent make tea' }, now));
+        const runs = (agent as unknown as { contendedRuns: Array<{ finished: boolean; finishedAt: number; createdAt: number; turnComplete: boolean }> }).contendedRuns;
+        runs[0].finished = true;
+        runs[0].finishedAt = now;
+        runs[0].turnComplete = true;
+        const tracked = (agent as unknown as { subagentMessages: Map<string, string> }).subagentMessages;
+        const messageId = Number([...tracked.keys()][0].split(':')[1]);
+        await agent.handleInbound(
+            telegram,
+            fake.opencode,
+            inboundMsg({ message_id: 4601, text: 'one more thing', reply_to_message: { message_id: messageId } }, now + 2000),
+        );
+        assert.equal(fake.prompts[1]?.sessionId, 'ses_new01', 'the follow-up continues the finished child session');
+        assert.equal(runs[0].finished, false, 'the run is active again');
+        assert.equal(runs[0].turnComplete, false, 'the finished flag is reset for the new turn');
+        assert.equal(runs[0].createdAt, now, 'the event window restarts for the follow-up');
+    });
+
+    test('/subagents lists active runs with continue and stop buttons', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4499, text: '/subagent make tea' }, now));
+        calls.length = 0;
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4602, text: '/subagents' }, now));
+        const card = calls.filter((c) => c.op === 'send').pop() as { params: Record<string, unknown> };
+        assert.ok(String(card.params.text).includes('Active subagents'), 'the card names the list');
+        assert.ok(String(card.params.text).includes('make tea'), 'the card shows the running task');
+        const markup = card.params.reply_markup as { inline_keyboard: Array<Array<{ callback_data: string }>> };
+        assert.deepEqual(
+            markup.inline_keyboard[0].map((button) => button.callback_data),
+            ['subgo:ses_new01', 'substop:ses_new01'],
+            'each run carries a continue and a stop button',
+        );
+    });
+
+    test('/subagents reports an empty list when nothing runs', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const fake = stubOpencode();
+        calls.length = 0;
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4603, text: '/subagents' }, now));
+        const notice = calls.filter((c) => c.op === 'send').pop() as { params: Record<string, unknown> };
+        assert.ok(String(notice.params.text).includes(enPack.SUBAGENTS_EMPTY), 'the empty notice comes from the language pack');
+    });
+
+    test('the continue button nudges the running subagent', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as { threadId: number | null };
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4499, text: '/subagent make tea' }, now));
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_go1',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 501, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data: 'subgo:ses_new01',
+        });
+        assert.equal(fake.prompts[1]?.sessionId, 'ses_new01', 'the nudge reaches the child session');
+        assert.equal(fake.prompts[1]?.text, enPack.AUTO_CONTINUE_TEXT, 'the nudge asks the subagent to continue');
+    });
+
+    test('the stop button interrupts exactly the listed subagent', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as { threadId: number | null };
+        const fake = stubOpencode();
+        await agent.handleInbound(telegram, fake.opencode, inboundMsg({ message_id: 4499, text: '/subagent make tea' }, now));
+        calls.length = 0;
+        await agent.handleCallback(telegram, fake.opencode, {
+            id: 'cb_stop1',
+            from: { id: 42, is_bot: false, first_name: 'Owner' },
+            message: { message_id: 502, chat: { id: 1, type: 'supergroup' }, message_thread_id: state.threadId },
+            data: 'substop:ses_new01',
+        });
+        const run = (agent as unknown as { contendedRuns: Array<{ finished: boolean; finishedAt: number }> }).contendedRuns[0];
+        assert.equal(run.finished, true, 'the run stops');
+        assert.ok(run.finishedAt > 0, 'the finish time is stamped for retention');
+        assert.ok(
+            calls.some((c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes(enPack.SUBAGENT_STOPPED)),
+            'the lane confirms the stop',
         );
     });
 
@@ -9702,6 +9829,49 @@ describe('durevcode model error wording', () => {
         assert.ok(notice!.includes('OpenCode\'s free tier can only be used from within OpenCode.'), notice);
     });
 
+    test('a free limit gates the session and nags with a whip sticker every two minutes until it recovers', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await agent.attachSession(telegram, SESSION)) as {
+            serverErrorText: string | null;
+            serverErrorAt: number;
+            freeLimitGated: boolean;
+            freeLimitNagAt: number;
+            lastEventAt: number;
+            finalized: boolean;
+            threadId: number | null;
+            session: { id: string };
+        };
+        state.serverErrorText = freeTier;
+        state.serverErrorAt = now;
+        state.lastEventAt = now;
+        await (agent as unknown as { reportStepFailure: (t: unknown, s: unknown, f: string) => Promise<void> })
+            .reportStepFailure(telegram, state, 'error');
+        assert.equal(state.freeLimitGated, true, 'the free-limit gate arms on a fresh provider error');
+        assert.equal(state.freeLimitNagAt, now, 'the nag clock starts at the error');
+
+        calls.length = 0;
+        now += 119000;
+        await (agent as unknown as { freeLimitNagTick: (t: unknown, s: unknown) => Promise<void> })
+            .freeLimitNagTick(telegram, state);
+        assert.equal(calls.length, 0, 'no nag before two minutes elapse');
+
+        now += 1000;
+        await (agent as unknown as { freeLimitNagTick: (t: unknown, s: unknown) => Promise<void> })
+            .freeLimitNagTick(telegram, state);
+        const whipped = calls.filter((c) => c.op === 'send' && (c.params as Record<string, unknown>).entities);
+        assert.equal(whipped.length, 1, 'the whip sticker flies once the interval elapses');
+        const texts = calls.filter((c) => c.op === 'send').map((c) => String((c.params as Record<string, unknown>).text));
+        assert.ok(texts.some((t) => t.includes('OpenCode\'s free tier')), 'the nag keeps the provider reason in front of the user');
+
+        calls.length = 0;
+        state.lastEventAt = now + 1000;
+        await (agent as unknown as { freeLimitNagTick: (t: unknown, s: unknown) => Promise<void> })
+            .freeLimitNagTick(telegram, state);
+        assert.equal(state.freeLimitGated, false, 'the first fresh event lifts the gate');
+        assert.equal(calls.length, 0, 'no nag after recovery');
+    });
+
     test('a stale provider error is not blamed on a later failure', async () => {
         const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
         const { telegram, calls } = stubTelegram();
@@ -9783,6 +9953,168 @@ describe('durevcode server errors', () => {
         });
         assert.equal(calls.filter((c) => c.op === 'send').length, sendsBefore);
         assert.equal(state.finalized, false);
+    });
+
+    function retryEvent(text: string, attempt = 1, messageId = 'msg_retry'): Record<string, unknown> {
+        return {
+            type: 'session.retry.scheduled',
+            data: {
+                sessionID: 'ses_test01',
+                assistantMessageID: messageId,
+                attempt,
+                at: now,
+                error: { name: 'ProviderError', data: { message: text } },
+            },
+        };
+    }
+
+    function failedEvent(text: string, messageId: string): Record<string, unknown> {
+        return {
+            type: 'session.step.failed',
+            data: {
+                sessionID: 'ses_test01',
+                assistantMessageID: messageId,
+                error: { name: 'ProviderError', data: { message: text } },
+            },
+        };
+    }
+
+    test('a scheduled retry posts the engine error at once without finalizing', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as ErrorState & {
+            serverErrorText: string | null;
+            freeLimitGated: boolean;
+        };
+        state.pending.push({ kind: 'text', text: 'partial', time: now });
+        await agent.handleServerEvent(telegram, retryEvent('Free usage limit reached'));
+        const sends = calls.filter((c) => c.op === 'send');
+        assert.ok(
+            sends.some((c) => String((c.params as Record<string, unknown>).text).includes('Free usage limit reached')),
+            'the retry reason must reach the chat immediately',
+        );
+        assert.equal(state.finalized, false, 'a retry must not end the turn');
+        assert.equal(state.serverErrorText, 'Free usage limit reached');
+        assert.equal(state.freeLimitGated, true, 'a free-limit retry arms the nag');
+        assert.deepEqual(state.pending, [], 'queued output is flushed before the retry card');
+    });
+
+    test('every retry attempt is visible while a replayed attempt is not repeated', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as ErrorState;
+        const cards = (needle: string): number =>
+            calls.filter(
+                (c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes(needle),
+            ).length;
+        await agent.handleServerEvent(telegram, retryEvent('Provider overloaded', 1));
+        assert.equal(cards('Provider overloaded'), 1, 'the first attempt must reach the chat');
+        await agent.handleServerEvent(telegram, retryEvent('Provider overloaded', 1));
+        assert.equal(cards('Provider overloaded'), 1, 'a replayed attempt must not duplicate the card');
+        await agent.handleServerEvent(telegram, retryEvent('Provider overloaded', 2));
+        assert.equal(cards('Provider overloaded'), 2, 'the next attempt must be visible');
+        await agent.handleServerEvent(telegram, retryEvent('Provider request timed out', 3));
+        assert.equal(cards('Provider request timed out'), 1, 'a different retry reason must be delivered');
+        assert.equal(state.finalized, false);
+    });
+
+    test('a retry card shows the attempt number and the next attempt delay', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const event = retryEvent('Provider overloaded', 3) as { data: Record<string, unknown> };
+        event.data.at = now + 8000;
+        await agent.handleServerEvent(telegram, event as never);
+        const text = calls
+            .filter((c) => c.op === 'send')
+            .map((c) => String((c.params as Record<string, unknown>).text))
+            .find((entry) => entry.includes('Provider overloaded'));
+        assert.ok(text !== undefined, 'the retry must be reported');
+        assert.ok(text!.includes('retry 3'), text);
+        assert.ok(text!.includes('8s'), text);
+    });
+
+    test('a retry without a provider message is still visible', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        await agent.handleServerEvent(telegram, retryEvent('', 2));
+        const text = calls
+            .filter((c) => c.op === 'send')
+            .map((c) => String((c.params as Record<string, unknown>).text))
+            .find((entry) => entry.includes('retry 2'));
+        assert.ok(text !== undefined, 'a retry without a reason must still be reported');
+    });
+
+    test('the terminal error after a retry finalizes without repeating the card', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as ErrorState;
+        await agent.handleServerEvent(telegram, retryEvent('Free usage limit reached'));
+        await agent.handleServerEvent(telegram, serverError('Free usage limit reached'));
+        const cards = calls.filter(
+            (c) =>
+                c.op === 'send'
+                && String((c.params as Record<string, unknown>).text).includes('Free usage limit reached'),
+        );
+        assert.equal(cards.length, 1, 'the retry card already carried the reason');
+        assert.equal(state.finalized, true, 'the terminal event must still end the turn');
+    });
+
+    test('the same reason in a new assistant message is delivered again', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>>;
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        const cards = (): number =>
+            calls.filter(
+                (c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Free usage limit reached'),
+            ).length;
+        await agent.handleServerEvent(telegram, failedEvent('Free usage limit reached', 'msg_first'));
+        await agent.handleServerEvent(telegram, failedEvent('Free usage limit reached', 'msg_second'));
+        assert.equal(cards(), 2, 'a new turn must report the same reason at once');
+    });
+
+    test('a new prompt clears the previous error before the next turn', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            trackPrompt: (state: unknown, text: string, attribution: unknown) => void;
+        };
+        const { telegram } = stubTelegram();
+        const state = (await attachWatched(agent, telegram)) as unknown as {
+            serverErrorText: string | null;
+            serverErrorAt: number;
+            serverErrorMsgId: string | null;
+        };
+        await agent.handleServerEvent(telegram, failedEvent('Free usage limit reached', 'msg_first'));
+        assert.equal(state.serverErrorText, 'Free usage limit reached');
+        agent.trackPrompt(state, 'again', { replyTo: null, mention: '' });
+        assert.equal(state.serverErrorText, null, 'the old reason must not mask the next turn');
+        assert.equal(state.serverErrorAt, 0);
+        assert.equal(state.serverErrorMsgId, null);
+    });
+
+    test('an error card bypasses the local rate-limit backoff', async () => {
+        const agent = makeAgent() as unknown as Record<string, (...args: never[]) => Promise<never>> & {
+            rateLimitedUntil: number;
+        };
+        const { telegram, calls } = stubTelegram();
+        await attachWatched(agent, telegram);
+        agent.rateLimitedUntil = now + 120000;
+        calls.length = 0;
+        await agent.handleServerEvent(telegram, retryEvent('Provider overloaded', 1, 'msg_fast'));
+        const cards = calls.filter(
+            (c) => c.op === 'send' && String((c.params as Record<string, unknown>).text).includes('Provider overloaded'),
+        );
+        assert.equal(cards.length, 1, 'the error must not wait for the streaming backoff to expire');
+    });
+
+    test('error helpers read the assistant message id and scope dedup by it', () => {
+        assert.equal(serverEventAssistantMessageId(retryEvent('x', 1, 'msg_a') as never), 'msg_a');
+        assert.equal(serverEventAssistantMessageId(serverError('x') as never), null);
+        const base = { serverErrorText: 'x', serverErrorAt: now, serverErrorMsgId: 'msg_a' };
+        assert.equal(serverErrorIsDuplicate(base, 'x', 'msg_a', now + 1000, 60000), true);
+        assert.equal(serverErrorIsDuplicate(base, 'x', 'msg_b', now + 1000, 60000), false);
+        assert.equal(serverErrorIsDuplicate(base, 'x', null, now + 1000, 60000), true);
+        assert.equal(serverErrorIsDuplicate(base, 'x', 'msg_a', now + 61000, 60000), false);
     });
 
     test('duplicate error is suppressed within the window', async () => {

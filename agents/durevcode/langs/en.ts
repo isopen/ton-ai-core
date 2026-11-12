@@ -50,6 +50,12 @@ export const SUBAGENT_FINISHED = `${checkIcon()} Subagent finished the task.`;
 export const SUBAGENT_HINT = 'Write the task right after the command: /subagent <task>.';
 export const SUBAGENT_FALLBACK = 'No free subagent slot — the task is queued for the main session.';
 export const SUBAGENT_STOPPED = `${icon('stop')} Parallel task stopped.`;
+export const SUBAGENTS_EMPTY = `${icon('warn')} No active subagents.`;
+export const SUBAGENT_CONTINUE_BUTTON = '▶ Continue';
+export const SUBAGENT_STOP_BUTTON = '⏹ Stop';
+export const SUBAGENT_CONTINUED = `${icon('rocket')} Sent to the subagent.`;
+export const SUBAGENT_CONTINUE_FAILED = `${icon('fail')} The subagent did not take the message, try again.`;
+export const SUBAGENT_GONE = `${icon('warn')} That subagent is no longer available.`;
 export const SUBAGENT_TAG = '#subagent';
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} Same question is already running in another topic — I will copy the answer here too.`;
@@ -102,6 +108,7 @@ export const CMD_DESC_MODELS = 'List or switch the model';
 export const CMD_DESC_SETTINGS = 'Live settings card';
 export const CMD_DESC_LANGS = 'Language settings (also /lang)';
 export const CMD_DESC_SUBAGENT = 'Run a parallel subagent (/subagent <task>)';
+export const CMD_DESC_SUBAGENTS = 'List active subagents';
 export const CMD_DESC_SESSIONS = 'List watched sessions';
 export const CMD_DESC_HELP = 'What the bot can do';
 
@@ -116,6 +123,7 @@ export function helpCardText(): string {
         `/settings — ${CMD_DESC_SETTINGS}`,
         `/langs — ${CMD_DESC_LANGS}`,
         `/subagent — ${CMD_DESC_SUBAGENT}`,
+        `/subagents — ${CMD_DESC_SUBAGENTS}`,
         `/sessions — ${CMD_DESC_SESSIONS}`,
         `/help — ${CMD_DESC_HELP}`,
         '',
@@ -173,6 +181,13 @@ export function opencodeRetry(errText: string): string {
     return `${icon('warn')} opencode error: ${escapeHtml(errText)} — retrying, your prompt stays queued.`;
 }
 
+export function opencodeRetryNotice(attempt: number, waitSec: number | null, text: string): string {
+    const label = attempt > 0 ? `retry ${attempt}` : 'retry';
+    const wait = waitSec !== null && waitSec > 0 ? ` in ~${waitSec}s` : '';
+    const reason = text.trim() ? `: ${escapeHtml(truncate(text.trim(), 400))}` : '';
+    return `${hourglassIcon()} opencode ${label}${wait}${reason}`;
+}
+
 export function turnStoppedByServer(reason: string): string {
     return `${icon('warn')} opencode stopped the turn: ${escapeHtml(reason)}\n\nWrite again to continue.`;
 }
@@ -207,6 +222,11 @@ export function explainModelError(text: string): string {
     }
     if (!raw) return 'opencode did not report why the turn stopped.';
     return 'the model call failed for an unclear reason.';
+}
+
+export function isFreeLimitError(text: string): boolean {
+    return /free (usage )?limit reached|usage limit reached|free (tier )?limit/i.test(text)
+        || /FreeTierError|free tier can only be used/i.test(text);
 }
 
 export function modelErrorNotice(text: string): string {
@@ -398,4 +418,21 @@ export function subagentStopMarkup(sessionId: string): InlineKeyboardMarkup {
     return { inline_keyboard: [[
         { text: `${EMOJI.coffee} Stop`, callback_data: `substop:${sessionId}` },
     ]] };
+}
+
+export function subagentsCardText(entries: Array<{ tag: string; task: string; ageSec: number; tools: number }>): string {
+    const lines = [`${icon('bot')} <b>Active subagents</b>`];
+    for (const entry of entries) {
+        lines.push(`${escapeHtml(entry.tag)} · ${escapeHtml(truncate(entry.task, 80))} · ${entry.ageSec}s · ${entry.tools}`);
+    }
+    return lines.join('\n');
+}
+
+export function subagentsMarkup(sessionIds: string[]): InlineKeyboardMarkup {
+    return {
+        inline_keyboard: sessionIds.map((id) => ([
+            { text: SUBAGENT_CONTINUE_BUTTON, callback_data: `subgo:${id}` },
+            { text: SUBAGENT_STOP_BUTTON, callback_data: `substop:${id}` },
+        ])),
+    };
 }

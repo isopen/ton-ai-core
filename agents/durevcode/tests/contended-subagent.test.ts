@@ -340,7 +340,9 @@ describe('contended prompts run as parallel subagents', () => {
             0,
             'nothing is posted into the forum during the flush',
         );
-        assert.equal((agent as unknown as { contendedRuns: unknown[] }).contendedRuns.length, 0, 'the finished run is dropped');
+        const runs = (agent as unknown as { contendedRuns: Array<{ finished: boolean }> }).contendedRuns;
+        assert.equal(runs.length, 1, 'the finished run is kept for follow-ups');
+        assert.equal(runs[0].finished, true, 'the kept run is marked finished');
         assert.deepEqual(
             fake.prompts.filter((p) => p.sessionId === SESSION.id),
             [],

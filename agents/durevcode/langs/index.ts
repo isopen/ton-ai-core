@@ -123,8 +123,6 @@ export function settingRow(label: string, display: string): string {
     return `⚙️ ${escapeHtml(label)}: <b>${escapeHtml(display)}</b>`;
 }
 
-// Short codes of the supported interface languages — the /langs card option
-// buttons show these so every language is selectable in one tap.
 export const LANG_NAMES: Record<string, string> = {
     en: 'EN',
     ru: 'RU',
@@ -132,8 +130,6 @@ export const LANG_NAMES: Record<string, string> = {
     hi: 'HI',
 };
 
-// A /langs section line: the section label lives in the card text (above the
-// keyboard, not clickable), with an explicit hint which button row belongs to it.
 export function langSectionLine(iconKey: 'bot' | 'chat', label: string, display: string, rowHint: string): string {
     return `${icon(iconKey)} <b>${escapeHtml(label)}</b>: <b>${escapeHtml(display)}</b> · ${escapeHtml(rowHint)}`;
 }

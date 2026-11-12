@@ -57,6 +57,12 @@ export const SUBAGENT_FINISHED = `${checkIcon()} 子代理已完成任务。`;
 export const SUBAGENT_HINT = '请在命令后直接写任务：/subagent <任务>。';
 export const SUBAGENT_FALLBACK = '没有空闲的子代理槽位——任务已排入主会话队列。';
 export const SUBAGENT_STOPPED = `${icon('stop')} 并行任务已停止。`;
+export const SUBAGENTS_EMPTY = `${icon('warn')} 没有活跃的子代理。`;
+export const SUBAGENT_CONTINUE_BUTTON = '▶ 继续';
+export const SUBAGENT_STOP_BUTTON = '⏹ 停止';
+export const SUBAGENT_CONTINUED = `${icon('rocket')} 已发送给子代理。`;
+export const SUBAGENT_CONTINUE_FAILED = `${icon('fail')} 子代理未接受消息，请重试。`;
+export const SUBAGENT_GONE = `${icon('warn')} 该子代理已不可用。`;
 export const SUBAGENT_TAG = '#子代理';
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} 同样的问题已在另一个主题中运行 — 我也会把答案复制到这里。`;
@@ -109,6 +115,7 @@ export const CMD_DESC_MODELS = '列出或切换模型';
 export const CMD_DESC_SETTINGS = '实时设置卡片';
 export const CMD_DESC_LANGS = '语言设置（也可用 /lang）';
 export const CMD_DESC_SUBAGENT = '并行子代理（/subagent <任务>）';
+export const CMD_DESC_SUBAGENTS = '活跃子代理列表';
 export const CMD_DESC_SESSIONS = '已监视会话列表';
 export const CMD_DESC_HELP = '机器人的功能';
 
@@ -123,6 +130,7 @@ export function helpCardText(): string {
         `/settings — ${CMD_DESC_SETTINGS}`,
         `/langs — ${CMD_DESC_LANGS}`,
         `/subagent — ${CMD_DESC_SUBAGENT}`,
+        `/subagents — ${CMD_DESC_SUBAGENTS}`,
         `/sessions — ${CMD_DESC_SESSIONS}`,
         `/help — ${CMD_DESC_HELP}`,
         '',
@@ -180,6 +188,13 @@ export function opencodeRetry(errText: string): string {
     return `${icon('warn')} opencode 错误：${escapeHtml(errText)} — 正在重试，你的请求仍在队列中。`;
 }
 
+export function opencodeRetryNotice(attempt: number, waitSec: number | null, text: string): string {
+    const label = attempt > 0 ? `第 ${attempt} 次重试` : '重试';
+    const wait = waitSec !== null && waitSec > 0 ? `，约 ${waitSec} 秒后` : '';
+    const reason = text.trim() ? `：${escapeHtml(truncate(text.trim(), 400))}` : '';
+    return `${hourglassIcon()} opencode ${label}${wait}${reason}`;
+}
+
 export function turnStoppedByServer(reason: string): string {
     return `${icon('warn')} opencode 停止了本轮：${escapeHtml(reason)}\n\n请再次输入以继续。`;
 }
@@ -214,6 +229,11 @@ export function explainModelError(text: string): string {
     }
     if (!raw) return 'opencode 未报告本轮停止的原因。';
     return '模型调用因不明原因失败。';
+}
+
+export function isFreeLimitError(text: string): boolean {
+    return /free (usage )?limit reached|usage limit reached|free (tier )?limit/i.test(text)
+        || /FreeTierError|free tier can only be used/i.test(text);
 }
 
 export function modelErrorNotice(text: string): string {
@@ -405,4 +425,21 @@ export function subagentStopMarkup(sessionId: string): InlineKeyboardMarkup {
     return { inline_keyboard: [[
         { text: `${EMOJI.coffee} 停止`, callback_data: `substop:${sessionId}` },
     ]] };
+}
+
+export function subagentsCardText(entries: Array<{ tag: string; task: string; ageSec: number; tools: number }>): string {
+    const lines = [`${icon('bot')} <b>活跃子代理</b>`];
+    for (const entry of entries) {
+        lines.push(`${escapeHtml(entry.tag)} · ${escapeHtml(truncate(entry.task, 80))} · ${entry.ageSec} 秒 · ${entry.tools}`);
+    }
+    return lines.join('\n');
+}
+
+export function subagentsMarkup(sessionIds: string[]): InlineKeyboardMarkup {
+    return {
+        inline_keyboard: sessionIds.map((id) => ([
+            { text: SUBAGENT_CONTINUE_BUTTON, callback_data: `subgo:${id}` },
+            { text: SUBAGENT_STOP_BUTTON, callback_data: `substop:${id}` },
+        ])),
+    };
 }

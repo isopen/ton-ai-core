@@ -57,6 +57,12 @@ export const SUBAGENT_FINISHED = `${checkIcon()} Сабагент заверши
 export const SUBAGENT_HINT = 'Напишите задачу сразу после команды: /subagent <задача>.';
 export const SUBAGENT_FALLBACK = 'Свободного слота субагента нет — задача встала в очередь основной сессии.';
 export const SUBAGENT_STOPPED = `${icon('stop')} Параллельная задача остановлена.`;
+export const SUBAGENTS_EMPTY = `${icon('warn')} Нет активных сабагентов.`;
+export const SUBAGENT_CONTINUE_BUTTON = '▶ Продолжить';
+export const SUBAGENT_STOP_BUTTON = '⏹ Стоп';
+export const SUBAGENT_CONTINUED = `${icon('rocket')} Передано сабагенту.`;
+export const SUBAGENT_CONTINUE_FAILED = `${icon('fail')} Сабагент не принял сообщение, попробуйте снова.`;
+export const SUBAGENT_GONE = `${icon('warn')} Этот сабагент больше недоступен.`;
 export const SUBAGENT_TAG = '#субагент';
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} Тот же вопрос уже выполняется в другом топике — скопирую ответ и сюда.`;
@@ -109,6 +115,7 @@ export const CMD_DESC_MODELS = 'Список или смена модели';
 export const CMD_DESC_SETTINGS = 'Карточка живых настроек';
 export const CMD_DESC_LANGS = 'Языковые настройки (также /lang)';
 export const CMD_DESC_SUBAGENT = 'Параллельный субагент (/subagent <задача>)';
+export const CMD_DESC_SUBAGENTS = 'Список активных сабагентов';
 export const CMD_DESC_SESSIONS = 'Список отслеживаемых сессий';
 export const CMD_DESC_HELP = 'Что умеет бот';
 
@@ -123,6 +130,7 @@ export function helpCardText(): string {
         `/settings — ${CMD_DESC_SETTINGS}`,
         `/langs — ${CMD_DESC_LANGS}`,
         `/subagent — ${CMD_DESC_SUBAGENT}`,
+        `/subagents — ${CMD_DESC_SUBAGENTS}`,
         `/sessions — ${CMD_DESC_SESSIONS}`,
         `/help — ${CMD_DESC_HELP}`,
         '',
@@ -181,6 +189,13 @@ export function opencodeRetry(errText: string): string {
     return `${icon('warn')} Ошибка opencode: ${escapeHtml(errText)} — повторяю, ваш запрос остаётся в очереди.`;
 }
 
+export function opencodeRetryNotice(attempt: number, waitSec: number | null, text: string): string {
+    const label = attempt > 0 ? `повтор ${attempt}` : 'повтор';
+    const wait = waitSec !== null && waitSec > 0 ? ` через ~${waitSec} с` : '';
+    const reason = text.trim() ? `: ${escapeHtml(truncate(text.trim(), 400))}` : '';
+    return `${hourglassIcon()} opencode, ${label}${wait}${reason}`;
+}
+
 export function turnStoppedByServer(reason: string): string {
     return `${icon('warn')} opencode остановил ход: ${escapeHtml(reason)}\n\nНапишите снова, чтобы продолжить.`;
 }
@@ -215,6 +230,11 @@ export function explainModelError(text: string): string {
     }
     if (!raw) return 'opencode не сообщил причину остановки хода.';
     return 'вызов модели не удался по неясной причине.';
+}
+
+export function isFreeLimitError(text: string): boolean {
+    return /free (usage )?limit reached|usage limit reached|free (tier )?limit/i.test(text)
+        || /FreeTierError|free tier can only be used/i.test(text);
 }
 
 export function modelErrorNotice(text: string): string {
@@ -406,4 +426,21 @@ export function subagentStopMarkup(sessionId: string): InlineKeyboardMarkup {
     return { inline_keyboard: [[
         { text: `${EMOJI.coffee} Стоп`, callback_data: `substop:${sessionId}` },
     ]] };
+}
+
+export function subagentsCardText(entries: Array<{ tag: string; task: string; ageSec: number; tools: number }>): string {
+    const lines = [`${icon('bot')} <b>Активные сабагенты</b>`];
+    for (const entry of entries) {
+        lines.push(`${escapeHtml(entry.tag)} · ${escapeHtml(truncate(entry.task, 80))} · ${entry.ageSec} с · ${entry.tools}`);
+    }
+    return lines.join('\n');
+}
+
+export function subagentsMarkup(sessionIds: string[]): InlineKeyboardMarkup {
+    return {
+        inline_keyboard: sessionIds.map((id) => ([
+            { text: SUBAGENT_CONTINUE_BUTTON, callback_data: `subgo:${id}` },
+            { text: SUBAGENT_STOP_BUTTON, callback_data: `substop:${id}` },
+        ])),
+    };
 }

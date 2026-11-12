@@ -13,6 +13,7 @@ import {
     formatConsoleBatch,
     formatContextPin,
     formatLiveTool,
+    markdownToTelegramHtml,
     modelVariant,
     modelRef,
     modelVariantIds,
@@ -61,9 +62,6 @@ export function botLangOf(): string {
     return langCode;
 }
 
-// The answer-language directive rides at the tail of every submitted prompt;
-// the opencode session stores that exact text, so every echo comparison and any
-// visible render has to look past the appended directive again.
 const LANG_DIRECTIVES: string[] = [enPack, ruPack, zhPack, hiPack].map((pack) => pack.promptLangDirective());
 
 export function stripPromptDirectiveEcho(text: string): string {
@@ -78,9 +76,6 @@ export function stripPromptDirectiveEcho(text: string): string {
 }
 
 function stripDirectiveLines(text: string): string {
-    // The model sometimes repeats the appended directive line back; drop every
-    // standalone `[...]` line so it never reaches a visible answer (and from
-    // there a reply quote). Inline prose quotes stay untouched.
     let out = text;
     for (const directive of LANG_DIRECTIVES) {
         const line = `[${directive}]`;
@@ -234,9 +229,11 @@ const MAX_CONSECUTIVE_FAILURES = 3;
 const CONFIRM_TIMEOUT_MS = 20000;
 const SERVER_ERROR_DEDUP_MS = 60000;
 const MODEL_ERROR_DETAIL_MS = 5 * 60 * 1000;
+const FREE_LIMIT_NAG_MS = 2 * 60 * 1000;
 const SERVER_STEP_FAILED_EVENT = 'session.next.step.failed';
 const SERVER_STEP_FAILED_EVENT_V2 = 'session.step.failed';
 const SERVER_EXECUTION_FAILED_EVENT_V2 = 'session.execution.failed';
+const SERVER_RETRY_EVENT = 'session.retry.scheduled';
 const SERVER_ERROR_EVENTS = new Set([
     'session.error',
     SERVER_STEP_FAILED_EVENT,
@@ -250,6 +247,9 @@ const SERVER_REASONING_STARTED_EVENT = 'session.reasoning.started';
 const MAX_QUEUED_PROMPTS = 5;
 const SUBAGENT_PARALLEL_CAP = 8;
 const SUBAGENT_THINKING_REPAINT_MS = 2000;
+const SUBAGENT_RETENTION_MS = 30 * 60 * 1000;
+const SUBAGENT_MESSAGE_MAP_CAP = 4096;
+const SUBAGENT_TAG_GAP = '\n\n';
 const MAX_SEEN_INBOUND = 500;
 const MAX_THOUGHT_ARCHIVES = 12;
 const THOUGHT_DOC_CHUNK_CHARS = 3500;
@@ -341,11 +341,8 @@ const SETTINGS_DEFS: SettingDef[] = [
     { key: 'twoColumns', bool: true },
 ];
 
-// Settings whose scope is the whole bot process rather than a single topic/chat:
-// the language pack and the resident whisper server infrastructure.
 const SETTING_GLOBAL_KEYS: ReadonlySet<string> = new Set(['lang', 'voiceServer', 'voiceThreads']);
 
-// Language rows live on their own /langs card, not on the settings card.
 const LANGUAGE_SETTING_KEYS: ReadonlySet<string> = new Set(LANG_SETTING_DEFS.map((def) => def.key));
 
 function sanitizeSettings(raw: Record<string, unknown>): Record<string, boolean | number | string> {
@@ -578,6 +575,27 @@ export function serverEventError(event: OpencodeServerEvent): OpencodeServerErro
     return undefined;
 }
 
+export function serverEventAssistantMessageId(event: OpencodeServerEvent): string | null {
+    const data = event?.data as Record<string, unknown> | undefined;
+    const properties = event?.properties as Record<string, unknown> | undefined;
+    const candidates = [data?.assistantMessageID, properties?.assistantMessageID, (event as unknown as Record<string, unknown>)?.assistantMessageID];
+    for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.length > 0) return candidate;
+    }
+    return null;
+}
+
+export function serverErrorIsDuplicate(
+    state: { serverErrorText: string | null; serverErrorAt: number; serverErrorMsgId: string | null },
+    text: string,
+    messageId: string | null,
+    now: number,
+    windowMs: number,
+): boolean {
+    if (state.serverErrorText !== text || now - state.serverErrorAt >= windowMs) return false;
+    return messageId === null || state.serverErrorMsgId === null || messageId === state.serverErrorMsgId;
+}
+
 const NORMAL_STEP_FINISHES = new Set(['stop', 'tool-calls']);
 
 export function isAbnormalStepFinish(finish: string): boolean {
@@ -621,6 +639,11 @@ export interface StoredPartialSend {
     at: number;
 }
 
+export interface StoredDeliveredPart {
+    key: string;
+    at: number;
+}
+
 export interface PersistedSession {
     threadId: number | null;
     contextMessageId: number | null;
@@ -635,6 +658,7 @@ export interface PersistedSession {
     stopMessageId?: number;
     promptAt?: number;
     pending?: StoredPendingPart[];
+    delivered?: StoredDeliveredPart[];
     partials?: StoredPartialSend[];
     questMsgs?: Array<{ msgId: number; reqId: string; questions?: string[]; pollId?: string; pollLabels?: string[]; finToken?: string; pollMultiple?: boolean; authorUid?: number }>;
 }
@@ -642,6 +666,7 @@ export interface PersistedSession {
 const PERSISTED_TTL_MS = 30 * 24 * 3600 * 1000;
 const PERSISTED_CURSOR_CAP = 200;
 const PENDING_PERSIST_CAP = 100;
+const DELIVERED_KEYS_CAP = 1000;
 const PENDING_RESTORE_TTL_MS = 30 * 60 * 1000;
 const PARTIALS_PERSIST_CAP = 4;
 const PERSISTED_SIG_CAP_CHARS = 2000;
@@ -757,6 +782,7 @@ interface ContendedRun {
     landed: boolean;
     dispatchMessageId: number | null;
     finished: boolean;
+    finishedAt: number;
 }
 
 interface WatchedSession {
@@ -796,6 +822,7 @@ interface WatchedSession {
     pendingTodos: boolean;
     flushing: boolean;
     recentDelivered: Array<{ sig: string; at: number }>;
+    deliveredKeys: Map<string, number>;
     needsTodoBaseline: boolean;
     needsEventBaseline: boolean;
     promptQueue: string[];
@@ -832,6 +859,10 @@ interface WatchedSession {
     thinkingFolded: boolean;
     serverErrorText: string | null;
     serverErrorAt: number;
+    serverErrorMsgId: string | null;
+    serverRetryKey: string | null;
+    freeLimitGated: boolean;
+    freeLimitNagAt: number;
     stoppedAt: number;
     stopping: boolean;
     lastStopMsgAt: number;
@@ -934,6 +965,7 @@ export class DurevcodeAgent extends BaseAgent {
     private sessionTicks = new Set<string>();
     private promptLane = new Map<string, PromptAttribution[]>();
     private contendedRuns: ContendedRun[] = [];
+    private subagentMessages = new Map<string, string>();
     private promptTracking = new Map<string, TrackedPrompt[]>();
     private fanoutGroups = new Map<string, { fingerprint: string; followers: Set<string>; holds: PromptAttribution[]; primed: boolean; at: number }>();
     private fanoutFollows = new Map<string, { primary: string; fingerprint: string; attribution: PromptAttribution; at: number }>();
@@ -1026,9 +1058,6 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private async setupBotCommands(telegram: TelegramBotPlugin): Promise<void> {
-        // The Telegram command menu (Bot API `setMyCommands`) is bot-wide
-        // infrastructure, so the descriptions follow the bot language; /lang is
-        // an alias and gets a hint inside the /langs description.
         const pack = this.lp('');
         const commands: BotCommand[] = [
             { command: 'stop', description: pack.CMD_DESC_STOP },
@@ -1038,13 +1067,12 @@ export class DurevcodeAgent extends BaseAgent {
             { command: 'settings', description: pack.CMD_DESC_SETTINGS },
             { command: 'langs', description: pack.CMD_DESC_LANGS },
             { command: 'subagent', description: pack.CMD_DESC_SUBAGENT },
+            { command: 'subagents', description: pack.CMD_DESC_SUBAGENTS },
             { command: 'sessions', description: pack.CMD_DESC_SESSIONS },
             { command: 'help', description: pack.CMD_DESC_HELP },
         ];
         try {
             await telegram.setMyCommands({ commands });
-            // The default scope can be overridden or cached per chat, so the
-            // managed chats get the same list pinned with a chat scope too.
             const chats = [this.config.durevcode.chatId];
             const botChatId = this.config.durevcode.botChatId;
             if (botChatId !== undefined && botChatId !== this.config.durevcode.chatId) chats.push(botChatId);
@@ -1263,9 +1291,6 @@ export class DurevcodeAgent extends BaseAgent {
             }
             const rawSettings = (parsed as Record<string, unknown>).settings;
             if (rawSettings && typeof rawSettings === 'object' && !Array.isArray(rawSettings)) {
-                // Legacy flat overrides were bot-wide before settings became scoped.
-                // Keep bot-wide keys in place; scoped keys migrate into the bot chat scope
-                // so a topic override never leaks into other topics.
                 const legacy = sanitizeSettings(rawSettings as Record<string, unknown>);
                 const botScope = this.scopeKeyOf(this.config.durevcode.botChatId ?? this.config.durevcode.chatId, null);
                 for (const [key, value] of Object.entries(legacy)) {
@@ -1354,6 +1379,19 @@ export class DurevcodeAgent extends BaseAgent {
                     }
                     if (valid.length > 0) pending = valid;
                 }
+                const rawDelivered = record.delivered;
+                let delivered: StoredDeliveredPart[] | undefined;
+                if (Array.isArray(rawDelivered)) {
+                    const validDelivered: StoredDeliveredPart[] = [];
+                    for (const entry of (rawDelivered as unknown[]).slice(-DELIVERED_KEYS_CAP)) {
+                        if (!entry || typeof entry !== 'object') continue;
+                        const rec = entry as Record<string, unknown>;
+                        if (typeof rec.key !== 'string' || rec.key.length === 0) continue;
+                        if (typeof rec.at !== 'number' || !Number.isFinite(rec.at) || rec.at <= 0) continue;
+                        validDelivered.push({ key: rec.key, at: rec.at });
+                    }
+                    if (validDelivered.length > 0) delivered = validDelivered;
+                }
                 const rawPartials = record.partials;
                 let partials: StoredPartialSend[] | undefined;
                 if (Array.isArray(rawPartials)) {
@@ -1432,6 +1470,7 @@ export class DurevcodeAgent extends BaseAgent {
                         ? { promptAt: record.promptAt }
                         : {}),
                     ...(pending ? { pending } : {}),
+                    ...(delivered ? { delivered } : {}),
                     ...(partials ? { partials } : {}),
                     ...(questRefs ? { questMsgs: questRefs } : {}),
                 };
@@ -1503,9 +1542,14 @@ export class DurevcodeAgent extends BaseAgent {
             if (key) pendingPairs.push({ key, event });
         });
         const partials: StoredPartialSend[] = [...this.partialSends.entries()]
-            .filter(([sig]) => sig.startsWith(`${state.threadId ?? 'dm'}:`))
+            .filter(([sig]) => sig.startsWith(`${this.chatIdOf(state)}:${state.threadId ?? 'dm'}:`))
             .map(([sig, entry]) => ({ sig, ...entry }))
             .slice(-PARTIALS_PERSIST_CAP);
+        const deliveredCutoff = Date.now() - PENDING_RESTORE_TTL_MS;
+        const deliveredCursor: StoredDeliveredPart[] = [...(state.deliveredKeys ?? new Map<string, number>()).entries()]
+            .filter(([, at]) => at >= deliveredCutoff)
+            .slice(-DELIVERED_KEYS_CAP)
+            .map(([key, at]) => ({ key, at }));
         const questRefs: Array<{ msgId: number; reqId: string; questions?: string[]; pollId?: string; pollLabels?: string[] }> = [];
         for (const [msgId, ref] of this.questReplies) {
             if (ref.sessionId === state.session.id) {
@@ -1543,6 +1587,7 @@ export class DurevcodeAgent extends BaseAgent {
             ...(state.stopMessageId !== null ? { stopMessageId: state.stopMessageId } : {}),
             ...(state.lastPromptAt > 0 ? { promptAt: state.lastPromptAt } : {}),
             ...(pendingPairs.length > 0 ? { pending: pendingPairs.slice(-PENDING_PERSIST_CAP) } : {}),
+            ...(deliveredCursor.length > 0 ? { delivered: deliveredCursor } : {}),
             ...(partials.length > 0 ? { partials } : {}),
             ...(questRefs.length > 0 ? { questMsgs: questRefs.slice(-8) } : {}),
         };
@@ -1563,6 +1608,7 @@ export class DurevcodeAgent extends BaseAgent {
             for (const [id, state] of this.watched) {
                 sessions[id] = this.persistedFromState(state);
             }
+            this.persisted = sessions;
             const now = Date.now();
             for (const [id, entry] of Object.entries(sessions)) {
                 if (entry.threadId === null) continue;
@@ -2117,6 +2163,7 @@ export class DurevcodeAgent extends BaseAgent {
             pendingTodos: false,
             flushing: false,
             recentDelivered: [],
+            deliveredKeys: new Map(),
             needsTodoBaseline: false,
             needsEventBaseline: true,
             promptQueue: [],
@@ -2153,6 +2200,10 @@ export class DurevcodeAgent extends BaseAgent {
             thinkingFolded: true,
             serverErrorText: null,
             serverErrorAt: 0,
+            serverErrorMsgId: null,
+            serverRetryKey: null,
+            freeLimitGated: false,
+            freeLimitNagAt: 0,
             stoppedAt: 0,
             stopping: false,
             lastStopMsgAt: 0,
@@ -2199,6 +2250,16 @@ export class DurevcodeAgent extends BaseAgent {
             for (const [key, sig] of Object.entries(storedSigs)) state.knownEventSig.set(key, sig);
         }
         state.knownPerms = [...new Set(stored?.knownPerms ?? [])].slice(-PERSISTED_CURSOR_CAP);
+        const storedDelivered = stored?.delivered;
+        if (Array.isArray(storedDelivered)) {
+            const deliveredCutoff = Date.now() - PENDING_RESTORE_TTL_MS;
+            for (const entry of storedDelivered) {
+                if (typeof entry?.key !== 'string' || entry.key.length === 0) continue;
+                if (typeof entry.at !== 'number' || entry.at < deliveredCutoff) continue;
+                const prev = state.deliveredKeys.get(entry.key);
+                if (prev === undefined || prev < entry.at) state.deliveredKeys.set(entry.key, entry.at);
+            }
+        }
         const storedPending = stored?.pending;
         if (Array.isArray(storedPending) && Date.now() - (stored?.lastSeen ?? 0) < PENDING_RESTORE_TTL_MS) {
             for (const pair of storedPending) {
@@ -2206,6 +2267,9 @@ export class DurevcodeAgent extends BaseAgent {
                 if (typeof pair?.key !== 'string' || pair.key.length === 0) continue;
                 if (!event || typeof event.kind !== 'string') continue;
                 if (state.pendingKeys.has(pair.key)) continue;
+                const eventTime = typeof event.time === 'number' && event.time > 0 ? event.time : 0;
+                const deliveredAt = state.deliveredKeys.get(pair.key);
+                if (deliveredAt !== undefined && deliveredAt >= eventTime) continue;
                 state.pendingKeys.set(pair.key, state.pending.length);
                 state.pending.push(event);
                 if (!state.knownParts.has(pair.key)) {
@@ -2521,8 +2585,6 @@ export class DurevcodeAgent extends BaseAgent {
         }
         switch (event.kind) {
             case 'text': {
-                // Drop any directive line the model echoed back so it never
-                // reaches a visible answer (and from there a reply quote).
                 const cleaned = stripDirectiveLines(event.text);
                 if (cleaned !== event.text) event.text = cleaned;
                 state.turnComplete = false;
@@ -2585,6 +2647,10 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private dropSessionRefs(sessionId: string): void {
+        for (const [key, childId] of [...this.subagentMessages]) {
+            const run = this.contendedRuns.find((entry) => entry.sessionId === childId);
+            if (!run || run.ownerId === sessionId) this.subagentMessages.delete(key);
+        }
         this.contendedRuns = this.contendedRuns.filter((run) => run.ownerId !== sessionId);
         const renderTimer = this.thinkingRenderTimers.get(sessionId);
         if (renderTimer) {
@@ -2754,6 +2820,15 @@ export class DurevcodeAgent extends BaseAgent {
         }
     }
 
+    private async safeErrorReply(telegram: TelegramBotPlugin, state: WatchedSession, text: string): Promise<void> {
+        try {
+            await this.deliverMessage(telegram, state, text, undefined, { force: true });
+        } catch (error) {
+            console.debug('Durevcode error reply failed, scheduling retry:', errorText(error));
+            await this.safeReply(telegram, state, text);
+        }
+    }
+
     private absorbRateLimit(scope: string, error: unknown, label: string, sessionId: string): number {
         if (isBackoffGateSignal(error)) return 0;
         const waitSec = getRetryAfterSec(error) ?? 10;
@@ -2800,6 +2875,18 @@ export class DurevcodeAgent extends BaseAgent {
         if (state.recentDelivered.length > DELIVERY_DEDUP_KEEP) {
             state.recentDelivered.splice(0, state.recentDelivered.length - DELIVERY_DEDUP_KEEP);
         }
+    }
+
+    private rememberDeliveredKeys(state: WatchedSession, keys: Array<string | undefined>): void {
+        const at = Date.now();
+        let changed = false;
+        for (const key of keys) {
+            if (key === undefined) continue;
+            state.deliveredKeys.set(key, at);
+            changed = true;
+        }
+        if (!changed) return;
+        this.evictOldestEntries(state.deliveredKeys, DELIVERED_KEYS_CAP);
     }
 
     private async deliverFreshPart(telegram: TelegramBotPlugin, state: WatchedSession, part: string, replyTo?: number): Promise<void> {
@@ -2904,6 +2991,10 @@ export class DurevcodeAgent extends BaseAgent {
     private trackPrompt(state: WatchedSession, text: string, attribution: PromptAttribution, at = Date.now()): void {
         const en = this.lp(this.stateScope(state));
         const now = Date.now();
+        state.serverErrorText = null;
+        state.serverErrorAt = 0;
+        state.serverErrorMsgId = null;
+        state.serverRetryKey = null;
         let pending = true;
         const deliveries = this.echoDeliveries.get(state.session.id);
         if (deliveries) {
@@ -2929,9 +3020,6 @@ export class DurevcodeAgent extends BaseAgent {
     private acceptEchoAttribution(state: WatchedSession, text: string, eventTime = Date.now()): boolean {
         const tracked = this.promptTracking.get(state.session.id);
         if (!tracked || tracked.length === 0) return false;
-        // The session stores the prompt with the appended answer-language
-        // directive; compare against the original text so the reply quote and
-        // the @mention lead keep binding.
         const echo = stripPromptDirectiveEcho(text);
         const probe = echo.slice(0, 200);
         const matched = tracked.find((entry) => !entry.consumed && (entry.text === echo || entry.text.slice(0, 200) === probe));
@@ -3520,8 +3608,6 @@ export class DurevcodeAgent extends BaseAgent {
             state.laneChatId = lane;
         }
         if (await this.withInteractionLane(state, lane, () => this.dispatchInboxCommand(telegram, opencode, state, text, replyTo))) {
-            // Typed commands keep their bubbles: the subagent answers quote the
-            // command message, so deleting it would orphan the reply context.
             return;
         }
         if (this.settingBool('watchOnly', this.scopeKeyOf(message.chat.id, threadId))) {
@@ -3532,6 +3618,13 @@ export class DurevcodeAgent extends BaseAgent {
             }
             console.debug(`Durevcode plain mode: ignored (session=${state.session.id} ${tag} message=${message.message_id}).`);
             return;
+        }
+        if (text && replyTo !== undefined) {
+            const run = this.subagentReplyTarget(message.chat.id, replyTo);
+            if (run) {
+                await this.continueSubagent(telegram, opencode, state, run, text, state.laneReplyTo ?? replyTo, from.id);
+                return;
+            }
         }
         if (hasMediaMessage(message)) {
             const before = state.promptQueue.length;
@@ -3611,9 +3704,11 @@ export class DurevcodeAgent extends BaseAgent {
             await this.safeReply(telegram, state, this.lp(this.stateScope(state)).helpCardText());
             return true;
         }
+        if (command === '/subagents') {
+            await this.sendSubagentsCard(telegram, state);
+            return true;
+        }
         if (command === '/subagent') {
-            // A same-user escape hatch: run the task in a parallel subagent
-            // session no matter who owns the current turn.
             if (this.settingBool('watchOnly', this.stateScope(state))) return false;
             const task = text.split(/\s+/).slice(1).join(' ').trim();
             const scope = this.stateScope(state);
@@ -3632,7 +3727,6 @@ export class DurevcodeAgent extends BaseAgent {
             state.laneMention = '';
             state.laneUserId = 0;
             if (await this.launchSubagent(telegram, opencode, state, task, attached)) return true;
-            // No free slot (or the spawn failed) — run it through the main queue.
             await this.safeReply(telegram, state, this.lp(scope).SUBAGENT_FALLBACK);
             const lane = this.promptLane.get(state.session.id);
             if (lane) lane.push(attached);
@@ -4087,8 +4181,6 @@ export class DurevcodeAgent extends BaseAgent {
         const turnChatId = laneChatId === undefined
             ? (state.laneChatId ?? this.config.durevcode.chatId)
             : (laneChatId ?? this.config.durevcode.chatId);
-        // The user id always rides with the lane so a second user's plain
-        // message still contends for a parallel subagent run.
         const attribution: PromptAttribution = {
             replyTo: state.laneReplyTo,
             mention: state.laneMention,
@@ -4750,6 +4842,7 @@ export class DurevcodeAgent extends BaseAgent {
             landed: false,
             dispatchMessageId: null,
             finished: false,
+            finishedAt: 0,
         };
         if (state.session.agent && typeof opencode.setAgent === 'function') {
             try {
@@ -4812,16 +4905,17 @@ export class DurevcodeAgent extends BaseAgent {
             return sent.message_id;
         };
         const parts = splitTelegramHtml(text);
-        // The subagent tag rides at the bottom of every message the run
-        // produces, so the whole thread filters by the hashtag in the client.
         const tag = this.lp(this.runScopeOf(run)).SUBAGENT_TAG;
         let firstMessageId: number | null = null;
         for (let i = 0; i < parts.length; i += 1) {
             const replyTo = i === 0 ? run.replyTo : null;
             const withMarkup = i === 0 && markup !== undefined;
             try {
-                const sent = await send(`${parts[i]}\n${tag}`, replyTo, withMarkup);
-                if (i === 0 && sent !== undefined) firstMessageId = sent;
+                const sent = await send(`${parts[i]}${SUBAGENT_TAG_GAP}${tag}`, replyTo, withMarkup);
+                if (sent !== undefined) {
+                    this.trackSubagentMessage(chatId, sent, run.sessionId);
+                    if (i === 0) firstMessageId = sent;
+                }
             } catch (error) {
                 if (isRateLimitError(error)) {
                     this.absorbRateLimit('topic-send', error, 'subagent send', run.ownerId);
@@ -4830,7 +4924,10 @@ export class DurevcodeAgent extends BaseAgent {
                 if (isReplyGoneError(error) && replyTo !== null) {
                     try {
                         const sent = await send(parts[i], null, withMarkup);
-                        if (i === 0 && sent !== undefined) firstMessageId = sent;
+                        if (sent !== undefined) {
+                            this.trackSubagentMessage(chatId, sent, run.sessionId);
+                            if (i === 0) firstMessageId = sent;
+                        }
                         continue;
                     } catch (retryError) {
                         console.debug('Durevcode subagent resend failed:', errorText(retryError));
@@ -4844,8 +4941,106 @@ export class DurevcodeAgent extends BaseAgent {
         return firstMessageId;
     }
 
+    private trackSubagentMessage(chatId: number, messageId: number, sessionId: string): void {
+        this.subagentMessages.set(`${chatId}:${messageId}`, sessionId);
+        this.evictOldestEntries(this.subagentMessages, SUBAGENT_MESSAGE_MAP_CAP);
+    }
+
+    private subagentReplyTarget(chatId: number, replyTo: number): ContendedRun | null {
+        const sessionId = this.subagentMessages.get(`${chatId}:${replyTo}`);
+        if (sessionId === undefined) return null;
+        return this.contendedRuns.find((run) => run.sessionId === sessionId) ?? null;
+    }
+
+    private async continueSubagent(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'sendPrompt'>,
+        state: WatchedSession,
+        run: ContendedRun,
+        text: string,
+        replyTo: number,
+        uid: number,
+    ): Promise<void> {
+        const scope = this.runScopeOf(run);
+        const pack = this.lp(scope);
+        if (run.finished) {
+            run.finished = false;
+            run.finishedAt = 0;
+            run.turnComplete = false;
+            run.landed = false;
+            run.receiptId = null;
+            run.createdAt = Date.now();
+            run.lastEventAt = Date.now();
+            run.lastText = '';
+            run.toolCalls = 0;
+            run.thinkingMessageId = null;
+            run.thinkingSince = null;
+            run.thinkingText = '';
+            run.thinkingPaintedAt = 0;
+            run.seenPartKeys.clear();
+        }
+        run.replyTo = replyTo;
+        if (uid > 0) run.uid = uid;
+        try {
+            const receipt = await opencode.sendPrompt(run.sessionId, this.promptWithLang(scope, text));
+            if (!receipt.admitted || receipt.busy) throw new Error('subagent session did not admit the prompt');
+            run.receiptId = receipt.messageId ?? null;
+        } catch (error) {
+            console.warn(`Durevcode subagent follow-up failed (subagent=${run.sessionId}): ${errorText(error)}`);
+            await this.safeReply(telegram, state, pack.SUBAGENT_CONTINUE_FAILED);
+            return;
+        }
+        console.log(`Durevcode subagent follow-up queued (owner=${state.session.id} subagent=${run.sessionId}).`);
+        await this.subagentSend(telegram, run, pack.SUBAGENT_CONTINUED, true);
+    }
+
+    private async nudgeSubagent(
+        telegram: TelegramBotPlugin,
+        opencode: Pick<OpencodePlugin, 'sendPrompt'>,
+        run: ContendedRun,
+    ): Promise<void> {
+        const scope = this.runScopeOf(run);
+        const pack = this.lp(scope);
+        try {
+            const receipt = await opencode.sendPrompt(run.sessionId, this.promptWithLang(scope, pack.AUTO_CONTINUE_TEXT));
+            if (!receipt.admitted || receipt.busy) throw new Error('subagent session did not admit the prompt');
+            run.receiptId = receipt.messageId ?? null;
+            run.landed = false;
+            run.lastEventAt = Date.now();
+        } catch (error) {
+            console.debug('Durevcode subagent nudge failed:', errorText(error));
+            await this.subagentSend(telegram, run, pack.SUBAGENT_CONTINUE_FAILED);
+        }
+    }
+
+    private async sendSubagentsCard(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        const pack = this.lp(this.stateScope(state));
+        const runs = this.contendedRuns.filter((run) => run.ownerId === state.session.id && !run.finished);
+        if (runs.length === 0) {
+            await this.safeReply(telegram, state, pack.SUBAGENTS_EMPTY);
+            return;
+        }
+        const now = Date.now();
+        const entries = runs.map((run) => ({
+            tag: pack.sessionTagOf(run.sessionId),
+            task: run.task,
+            ageSec: Math.max(1, Math.round((now - run.createdAt) / 1000)),
+            tools: run.toolCalls,
+        }));
+        try {
+            await this.deliverMessage(
+                telegram,
+                state,
+                wellFormed(pack.subagentsCardText(entries)),
+                pack.subagentsMarkup(runs.map((run) => run.sessionId)),
+            );
+        } catch (error) {
+            console.debug('Durevcode subagents card send failed:', errorText(error));
+        }
+    }
+
     private subagentThinkingCard(run: ContendedRun, pack: BotLangPack): string {
-        return `${formatThinking(run.thinkingText, thinkingHead(pack.THINKING_LABEL))}\n${pack.SUBAGENT_TAG}`;
+        return `${formatThinking(run.thinkingText, thinkingHead(pack.THINKING_LABEL))}${SUBAGENT_TAG_GAP}${pack.SUBAGENT_TAG}`;
     }
 
     private async paintSubagentThinking(telegram: TelegramBotPlugin, run: ContendedRun): Promise<void> {
@@ -4860,8 +5055,6 @@ export class DurevcodeAgent extends BaseAgent {
         const chatId = run.laneChatId ?? this.config.durevcode.chatId;
         const text = wellFormed(this.subagentThinkingCard(run, pack));
         if (run.thinkingMessageId === null) {
-            // The live card opens as a reply-quote to the author's task message,
-            // so the thinking is visibly attached to whoever spawned the run.
             try {
                 const sent = await telegram.sendMessage({
                     chat_id: chatId,
@@ -4873,6 +5066,7 @@ export class DurevcodeAgent extends BaseAgent {
                 });
                 run.thinkingMessageId = sent.message_id;
                 run.thinkingPaintedAt = Date.now();
+                this.trackSubagentMessage(chatId, sent.message_id, run.sessionId);
             } catch (error) {
                 if (isRateLimitError(error)) this.absorbRateLimit('topic-send', error, 'subagent thinking', run.ownerId);
                 else console.debug('Durevcode subagent thinking paint failed:', errorText(error));
@@ -4900,7 +5094,7 @@ export class DurevcodeAgent extends BaseAgent {
         run.thinkingPaintedAt = 0;
         const pack = this.lp(this.runScopeOf(run));
         const ms = Date.now() - (run.thinkingSince ?? run.createdAt);
-        const text = `${formatThoughtArchive(ms, run.thinkingText, pack.THOUGHT_LABEL)}\n${pack.SUBAGENT_TAG}`;
+        const text = `${formatThoughtArchive(ms, run.thinkingText, pack.THOUGHT_LABEL)}${SUBAGENT_TAG_GAP}${pack.SUBAGENT_TAG}`;
         const chatId = run.laneChatId ?? this.config.durevcode.chatId;
         try {
             await telegram.editMessageText({ chat_id: chatId, message_id: id, text: wellFormed(text), parse_mode: 'HTML' });
@@ -4951,7 +5145,7 @@ export class DurevcodeAgent extends BaseAgent {
             if (event.kind === 'text') {
                 run.lastText = event.text;
                 run.lastEventAt = Date.now();
-                await this.subagentSend(telegram, run, escapeHtml(event.text));
+                await this.subagentSend(telegram, run, markdownToTelegramHtml(event.text));
                 if (Date.now() < this.rateLimitedUntil) {
                     run.seenPartKeys.delete(key);
                     return;
@@ -4967,6 +5161,7 @@ export class DurevcodeAgent extends BaseAgent {
         }
         if (run.turnComplete && !run.finished) {
             run.finished = true;
+            run.finishedAt = Date.now();
             this.logger.info(`Durevcode subagent finished (owner=${run.ownerId} subagent=${run.sessionId}).`);
             await this.foldSubagentThinking(telegram, run);
             const runScope = this.runScopeOf(run);
@@ -4984,10 +5179,16 @@ export class DurevcodeAgent extends BaseAgent {
         const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
         if (!opencode || typeof opencode.readEvents !== 'function') return;
         for (const run of [...runs]) {
+            if (run.finished) continue;
             if (Date.now() < this.rateLimitedUntil || Date.now() < this.upstreamBackoffUntil) return;
             await this.flushContendedRun(telegram, opencode, state, run);
         }
-        this.contendedRuns = this.contendedRuns.filter((run) => !(run.ownerId === state.session.id && run.finished));
+        const now = Date.now();
+        this.contendedRuns = this.contendedRuns.filter(
+            (run) => run.ownerId !== state.session.id
+                || !run.finished
+                || now - run.finishedAt < SUBAGENT_RETENTION_MS,
+        );
     }
 
     private async interruptContendedRuns(telegram: TelegramBotPlugin, state: WatchedSession): Promise<number> {
@@ -5286,9 +5487,6 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private runScopeOf(run: ContendedRun): string {
-        // A side-lane subagent streams into a plain chat that has no topics, so
-        // its language is that chat's own scope; a parent-lane run keeps the
-        // topic scope of the session it was spawned from.
         if (run.laneChatId !== null) return this.scopeKeyOf(run.laneChatId, null);
         return this.scopeKeyOf(this.config.durevcode.chatId, run.threadId);
     }
@@ -5299,9 +5497,6 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private promptWithLang(scope: string, text: string): string {
-        // An explicitly picked Chat language also directs the model's answers: the
-        // directive rides with every submitted prompt so the reply language holds
-        // no matter what language the user writes in.
         if (!this.explicitChatLang(scope)) return text;
         const directive = this.lp(scope).promptLangDirective();
         return `[${directive}]\n\n${text}\n\n[${directive}]`;
@@ -5450,7 +5645,6 @@ export class DurevcodeAgent extends BaseAgent {
             scoped[key] = next;
         }
         this.savePersistedCoalesced();
-        // The pack is captured after the toggle lands so a live language switch echoes in the new language.
         const en = this.lp(scope);
         return en.settingEcho(en.settingsLabel(def.key), this.settingDisplay(def, scope));
     }
@@ -5488,8 +5682,6 @@ export class DurevcodeAgent extends BaseAgent {
 
     private settingsCardMarkup(scope: string): InlineKeyboardMarkup {
         const buttons = this.settingButtons(scope);
-        // Two columns when the scoped toggle is on; labels never fit two per row across
-        // languages, so the default is one button per row.
         if (this.settingBool('twoColumns', scope)) {
             const rows: InlineKeyboardButton[][] = [];
             for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
@@ -5499,8 +5691,6 @@ export class DurevcodeAgent extends BaseAgent {
     }
 
     private relabeledSettingsMarkup(scope: string, current: InlineKeyboardButton[][] | undefined): InlineKeyboardMarkup {
-        // A toggle only refreshes the captions: the row layout keeps its current shape and
-        // is rebuilt from the twoColumns setting on the next /settings.
         if (!current || current.length === 0) return this.settingsCardMarkup(scope);
         const buttons = this.settingButtons(scope);
         if (current.flat().length !== buttons.length) return this.settingsCardMarkup(scope);
@@ -5545,8 +5735,6 @@ export class DurevcodeAgent extends BaseAgent {
 
     private langButtons(scope: string): InlineKeyboardButton[] {
         const en = this.lp(scope);
-        // The section labels live in the card text above the keyboard (not clickable);
-        // the rows themselves are just short language codes, one row per section.
         const option = (def: SettingDef, code: string): InlineKeyboardButton => {
             const label = en.LANG_NAMES[code] ?? code;
             return {
@@ -5571,14 +5759,10 @@ export class DurevcodeAgent extends BaseAgent {
 
     private langsCardMarkup(scope: string): InlineKeyboardMarkup {
         const buttons = this.langButtons(scope);
-        // Row 1 picks the bot language, row 2 the chat language; the matching
-        // section headers sit in the card text right above the keyboard.
         return { inline_keyboard: [buttons.slice(0, 4), buttons.slice(4)] };
     }
 
     private relabeledLangsMarkup(scope: string, current: InlineKeyboardButton[][] | undefined): InlineKeyboardMarkup {
-        // Same relabel-in-place contract as the settings card: taps refresh the captions
-        // without touching the row structure.
         if (!current || current.length === 0) return this.langsCardMarkup(scope);
         const buttons = this.langButtons(scope);
         if (current.flat().length !== buttons.length) return this.langsCardMarkup(scope);
@@ -6921,6 +7105,10 @@ export class DurevcodeAgent extends BaseAgent {
         const fresh = Date.now() - state.serverErrorAt <= MODEL_ERROR_DETAIL_MS
             ? state.serverErrorText
             : null;
+        if (fresh && en.isFreeLimitError(fresh)) {
+            state.freeLimitGated = true;
+            state.freeLimitNagAt = Date.now();
+        }
         const detail = en.modelErrorNotice(fresh ?? '');
         const reason = finish === 'error' ? detail : `${text} — ${detail}`;
         try {
@@ -7218,6 +7406,10 @@ export class DurevcodeAgent extends BaseAgent {
             this.syncLiveReasoning(event);
             return;
         }
+        if (event.type === SERVER_RETRY_EVENT) {
+            await this.handleServerRetry(telegram, event);
+            return;
+        }
         if (!SERVER_ERROR_EVENTS.has(event.type)) return;
         const sessionId = serverEventSessionId(event);
         if (!sessionId) return;
@@ -7228,18 +7420,63 @@ export class DurevcodeAgent extends BaseAgent {
         const text = serverErrorText(raw);
         if (!text) return;
         const now = Date.now();
-        if (state.serverErrorText === text && now - state.serverErrorAt < SERVER_ERROR_DEDUP_MS) return;
+        const messageId = serverEventAssistantMessageId(event);
+        const duplicate = serverErrorIsDuplicate(state, text, messageId, now, SERVER_ERROR_DEDUP_MS);
         state.serverErrorText = text;
         state.serverErrorAt = now;
+        if (messageId !== null) state.serverErrorMsgId = messageId;
+        const scope = this.stateScope(state);
+        if (this.lp(scope).isFreeLimitError(text)) {
+            state.freeLimitGated = true;
+            state.freeLimitNagAt = now;
+        }
         console.warn(`Durevcode server error (session=${sessionId}): ${text.slice(0, 200)}`);
+        if (!duplicate) {
+            const en = this.lp(this.stateScope(state));
+            await this.flushEvents(telegram, state);
+            await this.safeErrorReply(
+                telegram,
+                state,
+                en.opencodeModelError(en.modelErrorNotice(text)),
+            );
+        }
+        await this.finalizeSession(telegram, state);
+    }
+
+    private async handleServerRetry(telegram: TelegramBotPlugin, event: OpencodeServerEvent): Promise<void> {
+        const sessionId = serverEventSessionId(event);
+        if (!sessionId) return;
+        const state = this.watched.get(sessionId);
+        if (!state || state.finalized) return;
+        const raw = serverEventError(event);
+        if (isAbortedServerError(raw)) return;
+        const payload = (event.data ?? event.properties) as unknown as Record<string, unknown> | undefined;
+        const attempt = typeof payload?.attempt === 'number' && Number.isFinite(payload.attempt) ? payload.attempt : 0;
+        const at = typeof payload?.at === 'number' && Number.isFinite(payload.at) ? payload.at : 0;
+        const text = serverErrorText(raw);
+        const now = Date.now();
+        const waitSec = at > now ? Math.max(1, Math.round((at - now) / 1000)) : null;
+        const messageId = serverEventAssistantMessageId(event);
+        const key = `${messageId ?? ''}|${attempt}|${text}`;
+        if (state.serverRetryKey === key) return;
+        state.serverRetryKey = key;
+        if (text) {
+            state.serverErrorText = text;
+            state.serverErrorAt = now;
+            if (messageId !== null) state.serverErrorMsgId = messageId;
+        }
+        if (text && this.lp(this.stateScope(state)).isFreeLimitError(text)) {
+            state.freeLimitGated = true;
+            state.freeLimitNagAt = now;
+        }
+        console.warn(`Durevcode server retry (session=${sessionId} attempt=${attempt}): ${text.slice(0, 200)}`);
         const en = this.lp(this.stateScope(state));
         await this.flushEvents(telegram, state);
-        await this.safeReply(
+        await this.safeErrorReply(
             telegram,
             state,
-            en.opencodeModelError(en.modelErrorNotice(text)),
+            en.opencodeRetryNotice(attempt, waitSec, text),
         );
-        await this.finalizeSession(telegram, state);
     }
 
     private async ackCallback(
@@ -7353,7 +7590,7 @@ export class DurevcodeAgent extends BaseAgent {
 
     private async handleCallback(
         telegram: TelegramBotPlugin,
-        opencode: Pick<OpencodePlugin, 'replyQuestion' | 'setModel' | 'listModels' | 'replyPermission' | 'listPermissions' | 'getSession'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'getModelLimit' | 'listAgents' | 'setAgent'>>,
+        opencode: Pick<OpencodePlugin, 'replyQuestion' | 'setModel' | 'listModels' | 'replyPermission' | 'listPermissions' | 'getSession' | 'sendPrompt'> & Partial<Pick<OpencodePlugin, 'interruptSession' | 'getModelLimit' | 'listAgents' | 'setAgent'>>,
         query: CallbackQuery,
     ): Promise<void> {
         const en = this.lp(this.queryScope(query));
@@ -7377,6 +7614,18 @@ export class DurevcodeAgent extends BaseAgent {
             await this.stopSession(telegram, opencode, state);
             return;
         }
+        const subGoMatch = data.match(/^subgo:(.+)$/);
+        if (subGoMatch) {
+            if (!(await this.gateCallback(query, 'subagent', dismiss, ` (subagent=${subGoMatch[1]})`))) return;
+            const run = this.contendedRuns.find((entry) => entry.sessionId === subGoMatch[1]);
+            if (!run || run.finished) {
+                await dismiss(en.SUBAGENT_GONE);
+                return;
+            }
+            await dismiss();
+            await this.nudgeSubagent(telegram, opencode, run);
+            return;
+        }
         const subStopMatch = data.match(/^substop:(.+)$/);
         if (subStopMatch) {
             if (!(await this.gateCallback(query, 'stop', dismiss, ` (subagent=${subStopMatch[1]})`))) return;
@@ -7392,6 +7641,7 @@ export class DurevcodeAgent extends BaseAgent {
                 console.debug('Durevcode subagent interrupt failed:', errorText(error));
             }
             run.finished = true;
+            run.finishedAt = Date.now();
             await this.foldSubagentThinking(telegram, run);
             await this.subagentSend(telegram, run, this.lp(this.runScopeOf(run)).SUBAGENT_STOPPED);
             if (run.dispatchMessageId !== null) {
@@ -8084,6 +8334,13 @@ export class DurevcodeAgent extends BaseAgent {
             return;
         }
 
+        await this.freeLimitNagTick(telegram, state);
+        if (state.freeLimitGated) {
+            await this.sendProgressTyping(telegram, state);
+            await this.syncStopKeyboard(telegram, state);
+            return;
+        }
+
         await this.sendProgressTyping(telegram, state);
         await this.syncStopKeyboard(telegram, state);
         await this.syncThinkingMessage(telegram, state);
@@ -8488,6 +8745,9 @@ export class DurevcodeAgent extends BaseAgent {
         const flushedTodos = state.pendingTodos;
         const flushedTodosRef = state.todos;
         const flushedCount = flushed.length + (flushedTodos ? 1 : 0);
+        const flushedIdxToKey = new Map<number, string>();
+        for (const [key, idx] of state.pendingKeys) flushedIdxToKey.set(idx, key);
+        const flushedKeys = flushed.map((_, idx) => flushedIdxToKey.get(idx));
         try {
             const flushMark = Date.now();
             const substantive = flushed.some(
@@ -8521,6 +8781,7 @@ export class DurevcodeAgent extends BaseAgent {
                 const opencode = this.getPlugin<OpencodePlugin>(PLUGIN_NAMES.OPENCODE);
                 await this.stopSession(telegram, opencode ?? {}, state);
             }
+            this.rememberDeliveredKeys(state, flushedKeys);
             console.log(
                 `Durevcode events delivered (session=${state.session.id} count=${flushedCount} in ${Date.now() - flushMark}ms).`,
             );
@@ -8651,6 +8912,26 @@ export class DurevcodeAgent extends BaseAgent {
             }
             console.debug('Durevcode whip sticker failed:', errorText(error));
         }
+    }
+
+    private async freeLimitNagTick(telegram: TelegramBotPlugin, state: WatchedSession): Promise<void> {
+        if (!state.freeLimitGated) return;
+        if (Date.now() < state.serverErrorAt + MODEL_ERROR_DETAIL_MS) {
+            if (state.lastEventAt > state.serverErrorAt) {
+                state.freeLimitGated = false;
+                return;
+            }
+        } else {
+            state.freeLimitGated = false;
+            return;
+        }
+        const now = Date.now();
+        if (now - state.freeLimitNagAt < FREE_LIMIT_NAG_MS) return;
+        state.freeLimitNagAt = now;
+        const en = this.lp(this.stateScope(state));
+        const notice = `${en.opencodeModelError(en.modelErrorNotice(state.serverErrorText ?? ''))}`;
+        await this.safeReply(telegram, state, notice);
+        await this.sendWhipSticker(telegram, state);
     }
 
     private async autoFinishIfDone(telegram: TelegramBotPlugin, state: WatchedSession): Promise<boolean> {

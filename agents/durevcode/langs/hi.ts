@@ -57,6 +57,12 @@ export const SUBAGENT_FINISHED = `${checkIcon()} सबएजेंट ने �
 export const SUBAGENT_HINT = 'कमांड के ठीक बाद कार्य लिखें: /subagent <कार्य>।';
 export const SUBAGENT_FALLBACK = 'कोई मुफ़्त सब-एजेंट स्लॉट नहीं — कार्य मुख्य सेशन की क़तार में लग गया।';
 export const SUBAGENT_STOPPED = `${icon('stop')} समानांतर कार्य रुक गया।`;
+export const SUBAGENTS_EMPTY = `${icon('warn')} कोई सक्रिय सबएजेंट नहीं।`;
+export const SUBAGENT_CONTINUE_BUTTON = '▶ जारी रखें';
+export const SUBAGENT_STOP_BUTTON = '⏹ रोकें';
+export const SUBAGENT_CONTINUED = `${icon('rocket')} सबएजेंट को भेज दिया।`;
+export const SUBAGENT_CONTINUE_FAILED = `${icon('fail')} सबएजेंट ने संदेश नहीं लिया, फिर कोशिश करें।`;
+export const SUBAGENT_GONE = `${icon('warn')} वह सबएजेंट अब उपलब्ध नहीं है।`;
 export const SUBAGENT_TAG = '#सबएजेंट';
 export const FANOUT_COPIED_ELSEWHERE =
     `${hourglassIcon()} वही प्रश्न किसी अन्य टॉपिक में पहले से चल रहा है — उत्तर यहाँ भी कॉपी करूँगा।`;
@@ -109,6 +115,7 @@ export const CMD_DESC_MODELS = 'मॉडल सूची या स्विच
 export const CMD_DESC_SETTINGS = 'लाइव सेटिंग्स कार्ड';
 export const CMD_DESC_LANGS = 'भाषा सेटिंग्स (/lang भी)';
 export const CMD_DESC_SUBAGENT = 'समानांतर सब-एजेंट (/subagent <कार्य>)';
+export const CMD_DESC_SUBAGENTS = 'सक्रिय सबएजेंट की सूची';
 export const CMD_DESC_SESSIONS = 'देखे जा रहे सेशन की सूची';
 export const CMD_DESC_HELP = 'बॉट क्या कर सकता है';
 
@@ -123,6 +130,7 @@ export function helpCardText(): string {
         `/settings — ${CMD_DESC_SETTINGS}`,
         `/langs — ${CMD_DESC_LANGS}`,
         `/subagent — ${CMD_DESC_SUBAGENT}`,
+        `/subagents — ${CMD_DESC_SUBAGENTS}`,
         `/sessions — ${CMD_DESC_SESSIONS}`,
         `/help — ${CMD_DESC_HELP}`,
         '',
@@ -180,6 +188,13 @@ export function opencodeRetry(errText: string): string {
     return `${icon('warn')} opencode त्रुटि: ${escapeHtml(errText)} — फिर कोशिश कर रहा हूँ, आपका प्रॉम्प्ट कतार में बना रहता है।`;
 }
 
+export function opencodeRetryNotice(attempt: number, waitSec: number | null, text: string): string {
+    const label = attempt > 0 ? `पुनः प्रयास ${attempt}` : 'पुनः प्रयास';
+    const wait = waitSec !== null && waitSec > 0 ? `, ~${waitSec}s में` : '';
+    const reason = text.trim() ? `: ${escapeHtml(truncate(text.trim(), 400))}` : '';
+    return `${hourglassIcon()} opencode ${label}${wait}${reason}`;
+}
+
 export function turnStoppedByServer(reason: string): string {
     return `${icon('warn')} opencode ने यह चरण रोक दिया: ${escapeHtml(reason)}\n\nजारी रखने के लिए दोबारा लिखें।`;
 }
@@ -214,6 +229,11 @@ export function explainModelError(text: string): string {
     }
     if (!raw) return 'opencode ने यह नहीं बताया कि चरण क्यों रुका।';
     return 'अज्ञात कारण से मॉडल कॉल विफल हुई।';
+}
+
+export function isFreeLimitError(text: string): boolean {
+    return /free (usage )?limit reached|usage limit reached|free (tier )?limit/i.test(text)
+        || /FreeTierError|free tier can only be used/i.test(text);
 }
 
 export function modelErrorNotice(text: string): string {
@@ -405,4 +425,21 @@ export function subagentStopMarkup(sessionId: string): InlineKeyboardMarkup {
     return { inline_keyboard: [[
         { text: `${EMOJI.coffee} रोकें`, callback_data: `substop:${sessionId}` },
     ]] };
+}
+
+export function subagentsCardText(entries: Array<{ tag: string; task: string; ageSec: number; tools: number }>): string {
+    const lines = [`${icon('bot')} <b>सक्रिय सबएजेंट</b>`];
+    for (const entry of entries) {
+        lines.push(`${escapeHtml(entry.tag)} · ${escapeHtml(truncate(entry.task, 80))} · ${entry.ageSec}s · ${entry.tools}`);
+    }
+    return lines.join('\n');
+}
+
+export function subagentsMarkup(sessionIds: string[]): InlineKeyboardMarkup {
+    return {
+        inline_keyboard: sessionIds.map((id) => ([
+            { text: SUBAGENT_CONTINUE_BUTTON, callback_data: `subgo:${id}` },
+            { text: SUBAGENT_STOP_BUTTON, callback_data: `substop:${id}` },
+        ])),
+    };
 }
