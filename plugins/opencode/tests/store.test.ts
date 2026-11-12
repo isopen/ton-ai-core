@@ -113,6 +113,56 @@ describe('opencode v2 store', () => {
         }
     });
 
+    test('readParts and hasMessage work without legacy part and message tables', () => {
+        const db = v2Db();
+        const insert = db.prepare(
+            'INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        );
+        insert.run('m1', 's1', 'user', 1, 100, 100, JSON.stringify({ text: 'hi' }));
+        insert.run('m2', 's1', 'assistant', 2, 200, 200, JSON.stringify({ content: [{ type: 'text', text: 'answer' }] }));
+        try {
+            const store = new OpencodeStore(db);
+            assert.deepEqual(store.readParts('s1', 10), []);
+            assert.equal(store.hasMessage('s1', 'm1'), true);
+            assert.equal(store.hasMessage('s1', 'm2'), true);
+            assert.equal(store.hasMessage('s1', 'ghost'), false);
+            assert.equal(store.readSessionMessages('s1', 10).length, 2);
+        } finally {
+            db.close();
+        }
+    });
+
+    test('readParts reads the v2 session_part table and skips user parts', () => {
+        const db = v2Db();
+        db.exec(
+            `CREATE TABLE session_part (
+                message_id TEXT NOT NULL, session_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+                type TEXT NOT NULL, call_id TEXT, time_created INTEGER NOT NULL,
+                time_updated INTEGER NOT NULL, data TEXT NOT NULL,
+                PRIMARY KEY (message_id, ordinal)
+            )`,
+        );
+        const insertMessage = db.prepare(
+            'INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        );
+        insertMessage.run('mu', 's1', 'user', 1, 100, 100, JSON.stringify({ text: 'hi' }));
+        insertMessage.run('ma', 's1', 'assistant', 2, 200, 200, JSON.stringify({ content: [] }));
+        const insertPart = db.prepare(
+            'INSERT INTO session_part (message_id, session_id, ordinal, type, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        );
+        insertPart.run('mu', 's1', 0, 'text', 100, 100, JSON.stringify({ type: 'text', text: 'hi' }));
+        insertPart.run('ma', 's1', 0, 'text', 200, 200, JSON.stringify({ type: 'text', text: 'answer' }));
+        insertPart.run('ma', 's1', 1, 'reasoning', 210, 210, JSON.stringify({ type: 'reasoning', text: 'why' }));
+        try {
+            const store = new OpencodeStore(db);
+            const rows = store.readParts('s1', 10);
+            assert.equal(rows.map((row) => row.id).join(','), 'ma:0,ma:1');
+            assert.equal(rows[1].message_id, 'ma');
+        } finally {
+            db.close();
+        }
+    });
+
     test('readTodos falls back to the legacy todo table when no todowrite part exists', () => {
         const db = v2Db();
         db.prepare('INSERT INTO todo (session_id, content, status, priority, position, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?)')

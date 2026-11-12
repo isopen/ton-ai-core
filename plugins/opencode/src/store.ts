@@ -83,6 +83,7 @@ export class OpencodeStore {
                 : allRows<SessionRow>(this.db, v2Sql, limit);
             if (rows.length > 0) return rows;
         }
+        if (!this.hasTable('session')) return [];
         const columns = `id, title, directory, COALESCE(agent, '') AS agent, COALESCE(model, '') AS model,
                 time_created, time_updated, COALESCE(cost, 0) AS cost, COALESCE(tokens_input, 0) AS tokens_input,
                 COALESCE(tokens_output, 0) AS tokens_output, COALESCE(tokens_reasoning, 0) AS tokens_reasoning`;
@@ -117,6 +118,7 @@ export class OpencodeStore {
     }
 
     getSession(sessionId: string): SessionRow | null {
+        if (!this.hasTable('session')) return null;
         return oneRow<SessionRow>(
             this.db,
             `SELECT id, title, directory, COALESCE(agent, '') AS agent, COALESCE(model, '') AS model,
@@ -128,18 +130,41 @@ export class OpencodeStore {
     }
 
     readParts(sessionId: string, limit = 120): PartRow[] {
-        const rows = allRows<PartRow>(
-            this.db,
-            `SELECT part.id, part.message_id, part.session_id, part.time_created, part.time_updated, part.data
-             FROM part JOIN message ON message.id = part.message_id
-             WHERE part.session_id = ?
-               AND (json_valid(message.data) = 0
-                    OR COALESCE(json_extract(message.data, '$.role'), 'assistant') != 'user')
-             ORDER BY part.time_created DESC LIMIT ?`,
-            sessionId,
-            limit,
-        );
-        return rows.reverse();
+        if (this.hasTable('part') && this.hasTable('message')) {
+            try {
+                const rows = allRows<PartRow>(
+                    this.db,
+                    `SELECT part.id, part.message_id, part.session_id, part.time_created, part.time_updated, part.data
+                     FROM part JOIN message ON message.id = part.message_id
+                     WHERE part.session_id = ?
+                       AND (json_valid(message.data) = 0
+                            OR COALESCE(json_extract(message.data, '$.role'), 'assistant') != 'user')
+                     ORDER BY part.time_created DESC LIMIT ?`,
+                    sessionId,
+                    limit,
+                );
+                return rows.reverse();
+            } catch {
+                return [];
+            }
+        }
+        if (!this.hasTable('session_part') || !this.hasTable('session_message')) return [];
+        try {
+            const rows = allRows<PartRow>(
+                this.db,
+                `SELECT session_part.message_id || ':' || session_part.ordinal AS id,
+                        session_part.message_id, session_part.session_id,
+                        session_part.time_created, session_part.time_updated, session_part.data
+                 FROM session_part JOIN session_message ON session_message.id = session_part.message_id
+                 WHERE session_part.session_id = ? AND session_message.type != 'user'
+                 ORDER BY session_part.time_created DESC, session_part.ordinal DESC LIMIT ?`,
+                sessionId,
+                limit,
+            );
+            return rows.reverse();
+        } catch {
+            return [];
+        }
     }
 
     readTodos(sessionId: string): TodoRow[] {
@@ -158,6 +183,7 @@ export class OpencodeStore {
                 );
                 const todos = parseTodoInput(rows[0]?.input);
                 if (todos.length > 0) return todos;
+                if (!this.hasTable('todo')) return [];
                 const legacyEmpty = allRows<{ found: number }>(
                     this.db,
                     `SELECT 1 AS found FROM todo WHERE session_id = ? LIMIT 1`,
@@ -168,6 +194,7 @@ export class OpencodeStore {
                 return [];
             }
         }
+        if (!this.hasTable('todo')) return [];
         return allRows<TodoRow>(
             this.db,
             `SELECT content, status, priority, position FROM todo
@@ -192,6 +219,7 @@ export class OpencodeStore {
                 return null;
             }
         }
+        if (!this.hasTable('message')) return null;
         const legacy = allRows<{ data: string }>(
             this.db,
             `SELECT data FROM message WHERE session_id = ? ORDER BY time_created DESC LIMIT 10`,
@@ -205,13 +233,15 @@ export class OpencodeStore {
     }
 
     hasMessage(sessionId: string, messageId: string): boolean {
-        const legacy = oneRow<{ found: number }>(
-            this.db,
-            `SELECT 1 AS found FROM message WHERE id = ? AND session_id = ? LIMIT 1`,
-            messageId,
-            sessionId,
-        );
-        if (legacy !== null) return true;
+        if (this.hasTable('message')) {
+            const legacy = oneRow<{ found: number }>(
+                this.db,
+                `SELECT 1 AS found FROM message WHERE id = ? AND session_id = ? LIMIT 1`,
+                messageId,
+                sessionId,
+            );
+            if (legacy !== null) return true;
+        }
         for (const table of ['session_message', 'session_inbox', 'session_input']) {
             if (!this.hasTable(table)) continue;
             try {
@@ -223,7 +253,7 @@ export class OpencodeStore {
                 );
                 if (found !== null) return true;
             } catch {
-                return false;
+                continue;
             }
         }
         return false;
