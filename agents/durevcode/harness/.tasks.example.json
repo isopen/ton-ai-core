@@ -1,0 +1,143 @@
+[
+  {
+    "id": "question-radio",
+    "title": "Two-question form answers the model with an empty first answer",
+    "prompt": "In this repository the Telegram agent durevcode (agents/durevcode) shows the user a question card whenever the model calls the question tool. A user reports: when a form has exactly two single-choice questions (multiple: false) and they tap options one by one, the model receives an empty answer for the first question. Task: find the root cause in agents/durevcode/agent.ts (tap handlers for q{token}:{qIdx}:{oIdx} and q{token}:done buttons), fix it with a minimal diff and prove the reproduction - add regression tests to agents/durevcode/tests/agent.test.ts (follow the existing test style: makeAgent, stubTelegram, stubOpencode, handleInbound). Required behavior: a tap on a single-choice option stores the pick instead of submitting the whole form; the Done button is shown for every multi-question form and its label shows progress (for example \"Done 0/2\", \"Done 1/2\"); Done submits only when every question has at least one pick, otherwise it must not reply. A single-question single-choice form keeps the immediate resolve on tap. Run npx jest agents/durevcode/tests/agent.test.ts and make it green. No unrelated refactoring. Hypothesis with file:line first, then the fix.",
+    "checker": {
+      "kind": "jest",
+      "spec": "agents/durevcode/tests/agent.test.ts",
+      "timeoutSec": 900,
+      "testFilesFrom": "55a2170",
+      "testNamePattern": "first tap selects a radio answer|keyboard shows Done with progress|single-question single-choice keeps",
+      "requireChangesIn": [
+        "agents/durevcode/agent.ts"
+      ]
+    },
+    "expectChangesIn": [
+      "agents/durevcode/"
+    ],
+    "base": "55a2170^",
+    "lessonsHint": "Reference behavior: tapping a single option in a multi-question form acts as a radio pick (stores the choice); the whole form is submitted only via the Done button; the Done label shows progress such as \"Done 0/2\" and \"Done 1/2\"; Done requires an answer for every question; exported helpers instantResolveQuestion/questionDoneRow/questionPicksComplete; submitting empty answers instead of showing hints is not allowed."
+  },
+  {
+    "id": "topic-name-pin",
+    "title": "Manually renamed forum topic gets overwritten by session title sync",
+    "prompt": "In agents/durevcode/agent.ts there is a mechanism that renames a Telegram forum topic to match the opencode session title (syncTopicName, updateSession ticks every ~1s). A user manually renamed the topic (message.forum_topic_edited arrives at inboundTopicRename), but after the task activates opencode re-titles the session (first prompt or auto-titling), and the agent overwrites the topic name with the canonical 💎 <title> · tag form. Task: find the root cause (the formatTopicName(session.title) !== appliedTopicName comparison on every tick), introduce a persistent pin of the user-made name (a userNamed field in PersistedSession/WatchedSession) that stops syncTopicName, while keeping auto-sync for topics the agent itself created. Add regression tests to agents/durevcode/tests/agent.test.ts. Run npx jest agents/durevcode/tests/agent.test.ts. Minimal diff, no unrelated changes.",
+    "checker": {
+      "kind": "jest",
+      "spec": "agents/durevcode/tests/agent.test.ts",
+      "timeoutSec": 900,
+      "testFilesFrom": "fb24f61",
+      "testNamePattern": "manual topic rename pins the name|failed topic rename still pins|fresh session in a hand-made topic",
+      "requireChangesIn": [
+        "agents/durevcode/agent.ts"
+      ]
+    },
+    "expectChangesIn": [
+      "agents/durevcode/"
+    ],
+    "base": "fb24f61^",
+    "lessonsHint": "Reference solution: userNamed=true on forum_topic_edited (and when binding a session to a foreign topic), appliedTopicName stores the raw user name, syncTopicName returns early on the pin; persist via savePersisted."
+  },
+  {
+    "id": "watch-slot-user",
+    "title": "An actively chatting user loses the watch slot after the old prompt window",
+    "prompt": "In agents/durevcode/agent.ts the watcher keeps at most maxSessions sessions and evicts the overflow in evictWatchedOverflow. The protected set still uses a 90s prompt-land window (PROMPT_LAND_GRACE_MS) and never looks at when a turn finalized, so a user who just got an answer or prompted a couple of minutes ago can be evicted while the model is still thinking, and the reply is lost. Task: find the root cause in evictWatchedOverflow and the WatchedSession/PersistedSession fields, then add a user-activity window: export isUserActiveWatch({finalizedAt,lastPromptAt}, now) with a 2-minute finalized grace and a 5-minute prompt window, track finalizedAt when a turn finalizes, persist the prompt/finalized timestamps, and protect such sessions from the trim. Add regression tests to agents/durevcode/tests/restart-limits.test.ts (makeAgent/internals/baseState style) covering a just-finalized conversation, a recent user prompt during a long thinking silence, and the helper windows. Run npx jest agents/durevcode/tests/restart-limits.test.ts. Minimal diff, no unrelated refactoring.",
+    "checker": {
+      "kind": "jest",
+      "spec": "agents/durevcode/tests/restart-limits.test.ts",
+      "timeoutSec": 900,
+      "testFilesFrom": "b398363",
+      "testNamePattern": "a just-finalized conversation keeps its slot|a session with a recent user prompt survives long thinking silences|user-activity windows",
+      "requireChangesIn": [
+        "agents/durevcode/agent.ts"
+      ]
+    },
+    "expectChangesIn": [
+      "agents/durevcode/"
+    ],
+    "base": "b398363^",
+    "lessonsHint": "Reference solution: export isUserActiveWatch(state, now) returning true when finalizedAt is within FINALIZED_GRACE_MS=120000 or lastPromptAt is within USER_ACTIVE_MS=300000; set finalizedAt on finalize, persist promptAt/finalizedAt in PersistedSession, restore them in WatchedSession, and call the helper from evictWatchedOverflow. The old 90s prompt-land window alone is not enough."
+  },
+  {
+    "id": "bound-window",
+    "title": "A watched bound session outside the fresh window is detached and reattached",
+    "prompt": "In agents/durevcode/agent.ts boundSessionIds builds the auto-pick window from persisted thread bindings. A watched session that still owns its own forum topic is excluded because watchedClaims contains every watched threadId, so once it leaves the fresh list it is never returned, gets detached after the grace window, and is resurrected by the resting branch minutes later. Task: find the root cause in boundSessionIds (watchedClaims / claimedThreads) and fix the ownership check so a persisted candidate may keep the topic it already owns, while a rival watched session still blocks the same topic. Add a regression test to agents/durevcode/tests/agent.test.ts (makeAgent, stubTelegram, attachSession, syncSessions style). Run npx jest agents/durevcode/tests/agent.test.ts. Minimal diff, no unrelated changes.",
+    "checker": {
+      "kind": "jest",
+      "spec": "agents/durevcode/tests/agent.test.ts",
+      "timeoutSec": 900,
+      "testFilesFrom": "d4c0442",
+      "testNamePattern": "a watched bound session outside the fresh window keeps its watch",
+      "requireChangesIn": [
+        "agents/durevcode/agent.ts"
+      ]
+    },
+    "expectChangesIn": [
+      "agents/durevcode/"
+    ],
+    "base": "d4c0442^",
+    "lessonsHint": "Reference solution: map threadId -> live session id instead of a Set of claimed threads; a persisted candidate whose thread is owned by itself stays eligible, while a different watched owner or an already claimed thread still excludes it. Apply the same ownership test in the active and resting passes."
+  },
+  {
+    "id": "cmd-bubble",
+    "title": "Handled command bubbles are deleted and subagent replies lose their quote",
+    "prompt": "In agents/durevcode/agent.ts handled Telegram commands (/settings, /allow, /deny, /subagent and the rest) call deleteCommandMessage after dispatch, so the typed command bubble disappears. A subagent answer quotes that command message, and deleting it orphans the reply context; the chat history also loses what the user asked. Task: find the root cause in handleInbound and the queued-command path, remove the deletion (and the now-unused helper) so handled command bubbles stay next to the reply card, and keep the rest of the command flow intact. Update the regression tests in agents/durevcode/tests/agent.test.ts (makeAgent, stubTelegram, stubOpencode, handleInbound style). Run npx jest agents/durevcode/tests/agent.test.ts. Minimal diff, no unrelated refactoring.",
+    "checker": {
+      "kind": "jest",
+      "spec": "agents/durevcode/tests/agent.test.ts",
+      "timeoutSec": 900,
+      "testFilesFrom": "617b3da",
+      "testNamePattern": "a handled typed command keeps its bubble",
+      "requireChangesIn": [
+        "agents/durevcode/agent.ts"
+      ]
+    },
+    "expectChangesIn": [
+      "agents/durevcode/"
+    ],
+    "base": "617b3da^",
+    "lessonsHint": "Reference solution: handled commands keep their Telegram bubbles; deleteCommandMessage is removed and both the direct and queued dispatch paths simply return after the command is handled. /allow and /deny bubbles also stay in the chat."
+  },
+  {
+    "id": "thought-doc-fallback",
+    "title": "Thought document upload failure hides the whole reasoning text",
+    "prompt": "In agents/durevcode/agent.ts the thinkdoc callback uploads the full reasoning as a Telegram document. When sendDocument fails (multipart error, size limit), the handler only dismisses the card, so the user loses the reasoning entirely. Task: find the root cause in the thinkdoc handler (clearThinkingMessage / document upload) and add a text fallback: dismiss the card with a visible failure notice and send the full text as chunked messages that respect the Telegram 4096-char limit, splitting on newlines when possible. Add a regression test to agents/durevcode/tests/agent.test.ts (stubTelegram setDocImpl, handleCallback style). Run npx jest agents/durevcode/tests/agent.test.ts. Minimal diff, no unrelated changes.",
+    "checker": {
+      "kind": "jest",
+      "spec": "agents/durevcode/tests/agent.test.ts",
+      "timeoutSec": 900,
+      "testFilesFrom": "9237009",
+      "testNamePattern": "thought doc upload failure falls back",
+      "requireChangesIn": [
+        "agents/durevcode/agent.ts"
+      ]
+    },
+    "expectChangesIn": [
+      "agents/durevcode/"
+    ],
+    "base": "9237009^",
+    "lessonsHint": "Reference solution: on a document upload failure call dismiss(en.THOUGHT_DOC_FAILED) and sendThoughtTextFallback, which chunks the text at ~3500 chars on a newline boundary, sends each chunk with disable_notification, and absorbs rate limits; every chunk stays under the 4096 Telegram limit and nothing is lost."
+  },
+  {
+    "id": "crypton-plan",
+    "title": "Ambiguous \"Crypton on C\" request needs a plan document",
+    "prompt": "A user asks for \"Write the Crypton version in C\". The repo has plugins/crypton (@ton-ai/crypton: AES-256 modes, SHA-1, RSA, DH, KDF as Rust to WASM plus TypeScript bindings), but \"Crypton\" is also an AES candidate block cipher from 1998 (Lim, 640-bit block). The interpretation changes all the research and scope. Task: do not write code. Write a short plan document in markdown under docs/plans/ (pick the file name yourself): which interpretation is chosen and why; if you choose the plugins/crypton port, list the files/modules for the C version and the order of work; if you choose the cipher implementation, describe the state, round schedule and KAT. No code or test changes. The file must mention Crypton, the state/round structure and KAT/self-test.",
+    "checker": {
+      "kind": "file-contains",
+      "keywords": [
+        "Crypton",
+        "round",
+        "KAT"
+      ],
+      "extensions": [
+        "md"
+      ],
+      "baseDir": "docs/plans",
+      "expectChanged": true
+    },
+    "expectChangesIn": [
+      "docs/"
+    ]
+  }
+]
