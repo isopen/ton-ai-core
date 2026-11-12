@@ -93,6 +93,7 @@ const config: DurevcodeConfig = {
         retryOnError: true,
         maxRetries: 0,
         requestTimeoutMs: optionalInt('TELEGRAM_REQUEST_TIMEOUT_MS', 30000, 1000, 300000),
+        proxyUrl: process.env.DUREVCODE_TELEGRAM_PROXY || undefined,
     },
     opencode: {
         baseUrl: process.env.OPENCODE_SERVER_URL || 'http://127.0.0.1:4096',
