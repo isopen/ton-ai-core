@@ -276,6 +276,10 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
 
     protected async onInit() {
         this.logger.info('Initializing Telegram Bot API plugin...');
+        if (this.config.proxyUrl === undefined) {
+            const envProxy = (process.env.TELEGRAM_PROXY || process.env.TG_PROXY || '').trim();
+            if (envProxy) this.config = { ...this.config, proxyUrl: envProxy };
+        }
         this.components = new TelegramBotComponents(this.context, this.config);
         this.skills = new TelegramBotSkills(this.context, this.components, this.config);
         if (this.config.token) this.skills.setToken(this.config.token);

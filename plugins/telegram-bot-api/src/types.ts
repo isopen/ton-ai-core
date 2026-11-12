@@ -17,6 +17,7 @@ export interface TelegramBotConfig extends BasePluginConfig {
     retryOnError?: boolean;
     maxRetries?: number;
     requestTimeoutMs?: number;
+    proxyUrl?: string;
 }
 
 export interface Update {

@@ -308,6 +308,7 @@ export class TelegramBotSkills {
     private maxRetries: number = 3;
     private requestTimeoutMs: number = 30000;
     private floodWaitUntil: number = 0;
+    private proxyDispatcher: unknown = null;
 
     constructor(
         context: PluginContext,
@@ -320,6 +321,15 @@ export class TelegramBotSkills {
         this.token = config.token || '';
         this.maxRetries = config.maxRetries ?? 3;
         this.requestTimeoutMs = config.requestTimeoutMs ?? 30000;
+        const proxyUrl = (config.proxyUrl || process.env.TELEGRAM_PROXY || process.env.TG_PROXY || '').trim();
+        if (proxyUrl) {
+            try {
+                this.proxyDispatcher = (globalThis as unknown as { __loadUndiciProxyDispatcher?: (uri: string, opts?: { auth?: string; connect?: Record<string, unknown> }) => unknown }).__loadUndiciProxyDispatcher?.(proxyUrl);
+            } catch (error) {
+                console.warn('Telegram proxy dispatcher failed:', error);
+                this.proxyDispatcher = null;
+            }
+        }
     }
 
     isReady(): boolean {
@@ -391,8 +401,9 @@ export class TelegramBotSkills {
                     method: 'POST',
                     headers,
                     body,
-                    signal: AbortSignal.timeout(timeoutMs)
-                });
+                    signal: AbortSignal.timeout(timeoutMs),
+                    ...(this.proxyDispatcher ? { dispatcher: this.proxyDispatcher } as Record<string, unknown> : {}),
+                } as RequestInit);
 
                 try {
                     responseData = await response.json() as any;
@@ -1603,7 +1614,7 @@ export class TelegramBotSkills {
         }
 
         const url = await this.getFileUrl(file.file_path);
-        const response = await fetch(url, { signal: AbortSignal.timeout(60000) });
+        const response = await fetch(url, { signal: AbortSignal.timeout(60000), ...(this.proxyDispatcher ? { dispatcher: this.proxyDispatcher } as Record<string, unknown> : {}) } as RequestInit);
         if (!response.ok) {
             throw new Error(`Telegram file download failed: HTTP ${response.status}`);
         }
