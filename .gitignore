@@ -29,7 +29,8 @@ yarn-error.log*
 .DS_Store
 
 coverage/
-harness/
+/harness/
+/harness2/
 .nyc_output/
 
 *.tsbuildinfo
@@ -55,6 +56,10 @@ libtdjson.*
 .tgcloud/
 
 *.o
+
+# durevcode harness: local task set and run output stay out of git
+agents/durevcode/harness/.tasks.json
+agents/durevcode/harness/out/
 
 # Track C wasm JS glue (source), ignore generated wasm binaries
 !plugins/crypton/src/c/wasm/
