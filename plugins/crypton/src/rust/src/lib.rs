@@ -1,10 +1,13 @@
-use wasm_bindgen::prelude::*;
 use std::fmt;
 use bigint::{Limb, MontCtx, divmod, mont_mod_pow};
 pub mod aes;
 pub mod hashes;
 pub mod bigint;
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
+#[cfg(target_arch = "wasm32")]
 const MAX_RANDOM_CHUNK: usize = 65_536;
 const MAX_RANDOM_BYTES: usize = 1 << 20;
 const MAX_DERIVED_LEN: usize = 255 * 64;
@@ -88,20 +91,26 @@ pub fn require_modpow_size(operands: &[&[u64]]) -> Result<(), CryptoError> {
     Ok(())
 }
 
-#[wasm_bindgen]
+#[cfg(target_arch = "wasm32")]
 extern "C" {
-    #[wasm_bindgen(js_namespace = crypto, js_name = getRandomValues)]
-    fn js_get_random_values(arr: &mut [u8]);
+    #[link_name = "get_random_values"]
+    fn imp_get_random_values(ptr: *mut u8, len: u32);
 }
 
-#[wasm_bindgen]
-pub fn get_random_bytes(len: usize) -> Result<Vec<u8>, JsError> {
-    if len > MAX_RANDOM_BYTES { return Err(JsError::new(&CryptoError::RandomTooLarge.to_string())); }
-    let mut buf = vec![0u8; len];
-    for chunk in buf.chunks_mut(MAX_RANDOM_CHUNK) {
-        js_get_random_values(chunk);
+pub fn get_random_bytes(len: usize) -> Result<Vec<u8>, CryptoError> {
+    if len > MAX_RANDOM_BYTES { return Err(CryptoError::RandomTooLarge); }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut buf = vec![0u8; len];
+        for chunk in buf.chunks_mut(MAX_RANDOM_CHUNK) {
+            unsafe { imp_get_random_values(chunk.as_mut_ptr(), chunk.len() as u32); }
+        }
+        Ok(buf)
     }
-    Ok(buf)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        random_bytes(len)
+    }
 }
 
 pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
@@ -117,7 +126,9 @@ pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 #[cfg(target_arch = "wasm32")]
 fn random_bytes(n: usize) -> Result<Vec<u8>, CryptoError> {
     let mut v = vec![0u8; n];
-    js_get_random_values(&mut v);
+    for chunk in v.chunks_mut(MAX_RANDOM_CHUNK) {
+        unsafe { imp_get_random_values(chunk.as_mut_ptr(), chunk.len() as u32); }
+    }
     Ok(v)
 }
 
@@ -417,22 +428,18 @@ pub fn ctr_process_checked(data: &[u8], key: &[u8], iv: &[u8], byte_offset: u64)
     Ok(out)
 }
 
-#[wasm_bindgen]
 pub fn sha1_hash(data: &[u8]) -> Vec<u8> {
     hashes::sha1(data).to_vec()
 }
 
-#[wasm_bindgen]
 pub fn sha256_hash(data: &[u8]) -> Vec<u8> {
     hashes::sha256(data).to_vec()
 }
 
-#[wasm_bindgen]
 pub fn sha512_hash(data: &[u8]) -> Vec<u8> {
     hashes::sha512(data).to_vec()
 }
 
-#[wasm_bindgen]
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut k = key.to_vec();
     if k.len() > 64 { k = hashes::sha256(&k).to_vec(); }
@@ -454,7 +461,6 @@ pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     mac
 }
 
-#[wasm_bindgen]
 pub fn hmac_sha512(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut k = key.to_vec();
     if k.len() > 128 { k = hashes::sha512(&k).to_vec(); }
@@ -476,7 +482,6 @@ pub fn hmac_sha512(key: &[u8], data: &[u8]) -> Vec<u8> {
     mac
 }
 
-#[wasm_bindgen]
 pub fn hkdf_sha512_extract(salt: &[u8], ikm: &[u8]) -> Vec<u8> {
     hmac_sha512(salt, ikm)
 }
@@ -633,9 +638,8 @@ pub fn miller_rabin(n: &[Limb], rounds: u32) -> Result<bool, CryptoError> {
     Ok(true)
 }
 
-#[wasm_bindgen]
-pub fn is_probably_prime(n_hex: &str, rounds: u32) -> Result<bool, JsError> {
-    is_probably_prime_checked(n_hex, rounds).map_err(|e| JsError::new(&e.to_string()))
+pub fn is_probably_prime(n_hex: &str, rounds: u32) -> Result<bool, CryptoError> {
+    is_probably_prime_checked(n_hex, rounds)
 }
 
 pub fn is_probably_prime_checked(n_hex: &str, rounds: u32) -> Result<bool, CryptoError> {
@@ -644,72 +648,58 @@ pub fn is_probably_prime_checked(n_hex: &str, rounds: u32) -> Result<bool, Crypt
     miller_rabin(&n, rounds)
 }
 
-#[wasm_bindgen]
-pub fn aes256_ecb_encrypt(key: &[u8], data: &[u8]) -> Result<Vec<u8>, JsError> {
-    ecb_encrypt_checked(key, data).map_err(|e| JsError::new(&e.to_string()))
+pub fn aes256_ecb_encrypt(key: &[u8], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    ecb_encrypt_checked(key, data)
 }
 
-#[wasm_bindgen]
-pub fn aes256_ecb_decrypt(key: &[u8], data: &[u8]) -> Result<Vec<u8>, JsError> {
-    ecb_decrypt_checked(key, data).map_err(|e| JsError::new(&e.to_string()))
+pub fn aes256_ecb_decrypt(key: &[u8], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    ecb_decrypt_checked(key, data)
 }
 
-#[wasm_bindgen]
-pub fn aes256_cbc_encrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, JsError> {
-    cbc_encrypt_checked(key, iv, data).map_err(|e| JsError::new(&e.to_string()))
+pub fn aes256_cbc_encrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    cbc_encrypt_checked(key, iv, data)
 }
 
-#[wasm_bindgen]
-pub fn aes256_cbc_encrypt_etm(mac_key: &[u8], enc_key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, JsError> {
-    cbc_encrypt_etm_checked(mac_key, enc_key, iv, plaintext).map_err(|e| JsError::new(&e.to_string()))
+pub fn aes256_cbc_encrypt_etm(mac_key: &[u8], enc_key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    cbc_encrypt_etm_checked(mac_key, enc_key, iv, plaintext)
 }
 
-#[wasm_bindgen]
-pub fn aes256_cbc_decrypt_etm(mac_key: &[u8], enc_key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, JsError> {
-    cbc_decrypt_etm_checked(mac_key, enc_key, iv, data).map_err(|e| JsError::new(&e.to_string()))
+pub fn aes256_cbc_decrypt_etm(mac_key: &[u8], enc_key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    cbc_decrypt_etm_checked(mac_key, enc_key, iv, data)
 }
 
-#[wasm_bindgen]
-pub fn aes256_cbc_seal(mac_key: &[u8], enc_key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, JsError> {
-    cbc_seal_checked(mac_key, enc_key, plaintext).map_err(|e| JsError::new(&e.to_string()))
+pub fn aes256_cbc_seal(mac_key: &[u8], enc_key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    cbc_seal_checked(mac_key, enc_key, plaintext)
 }
 
-#[wasm_bindgen]
-pub fn aes256_cbc_open(mac_key: &[u8], enc_key: &[u8], sealed: &[u8]) -> Result<Vec<u8>, JsError> {
-    cbc_open_checked(mac_key, enc_key, sealed).map_err(|e| JsError::new(&e.to_string()))
+pub fn aes256_cbc_open(mac_key: &[u8], enc_key: &[u8], sealed: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    cbc_open_checked(mac_key, enc_key, sealed)
 }
 
-#[wasm_bindgen]
-pub fn aes256_cbc_decrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, JsError> {
-    cbc_decrypt_checked(key, iv, data).map_err(|e| JsError::new(&e.to_string()))
+pub fn aes256_cbc_decrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    cbc_decrypt_checked(key, iv, data)
 }
 
-#[wasm_bindgen]
-pub fn aes256_ige_encrypt(data: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, JsError> {
-    ige_encrypt_checked(data, key, iv).map_err(|e| JsError::new(&e.to_string()))
+pub fn aes256_ige_encrypt(data: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    ige_encrypt_checked(data, key, iv)
 }
 
-#[wasm_bindgen]
-pub fn aes256_ige_decrypt(data: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, JsError> {
-    ige_decrypt_checked(data, key, iv).map_err(|e| JsError::new(&e.to_string()))
+pub fn aes256_ige_decrypt(data: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    ige_decrypt_checked(data, key, iv)
 }
 
-#[wasm_bindgen]
-pub fn aes256_ctr_process(data: &[u8], key: &[u8], iv: &[u8], byte_offset: u64) -> Result<Vec<u8>, JsError> {
-    ctr_process_checked(data, key, iv, byte_offset).map_err(|e| JsError::new(&e.to_string()))
+pub fn aes256_ctr_process(data: &[u8], key: &[u8], iv: &[u8], byte_offset: u64) -> Result<Vec<u8>, CryptoError> {
+    ctr_process_checked(data, key, iv, byte_offset)
 }
 
-#[wasm_bindgen]
-pub fn hkdf_sha512_expand(prk: &[u8], info: &[u8], len: usize) -> Result<Vec<u8>, JsError> {
-    hkdf_expand_checked(prk, info, len).map_err(|e| JsError::new(&e.to_string()))
+pub fn hkdf_sha512_expand(prk: &[u8], info: &[u8], len: usize) -> Result<Vec<u8>, CryptoError> {
+    hkdf_expand_checked(prk, info, len)
 }
 
-#[wasm_bindgen]
-pub fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: usize, dk_len: usize) -> Result<Vec<u8>, JsError> {
-    pbkdf2_sha256_checked(password, salt, iterations, dk_len).map_err(|e| JsError::new(&e.to_string()))
+pub fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: usize, dk_len: usize) -> Result<Vec<u8>, CryptoError> {
+    pbkdf2_sha256_checked(password, salt, iterations, dk_len)
 }
 
-#[wasm_bindgen]
-pub fn mod_pow(base_hex: &str, exp_hex: &str, mod_hex: &str) -> Result<String, JsError> {
-    mod_pow_hex_checked(base_hex, exp_hex, mod_hex).map_err(|e| JsError::new(&e.to_string()))
+pub fn mod_pow(base_hex: &str, exp_hex: &str, mod_hex: &str) -> Result<String, CryptoError> {
+    mod_pow_hex_checked(base_hex, exp_hex, mod_hex)
 }
