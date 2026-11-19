@@ -10,7 +10,11 @@
     "scripts": {
         "build": "rm -rf dist && tsc && mkdir -p dist/rust && cp -r src/rust/wasm dist/rust/wasm",
         "clean": "rm -rf dist",
-        "bench": "node tools/bench.mjs"
+        "bench": "node tools/bench.mjs",
+        "bench:corpus": "node tools/bench-corpus.mjs",
+        "smoke": "node tools/render-smoke.mjs",
+        "pixel:diff": "node tools/pixel-diff.mjs",
+        "png:dump": "node tools/png-dump.mjs"
     },
     "dependencies": {
         "@ton-ai/core": "*",
