@@ -1,8 +1,9 @@
 import { h } from '@ton-ai/atom/jsx-runtime';
 import { t, S } from '@ton-ai/gram-lang';
 import { useState, useEffect, useRef, useCallback, useDomEvent } from '@ton-ai/atom/hooks';
-import { renderFrame } from '@ton-ai/tgs';
-import type { LayerOrder, ParsedAnimation } from '@ton-ai/tgs';
+import { renderFrame, isTgsNativeRenderActive, tgsWasmRenderSupports, wasmCreateTgsRender } from '@ton-ai/tgs';
+import type { LayerOrder, ParsedAnimation, TgsWasmRender } from '@ton-ai/tgs';
+import { nativeBackendPref, ensureTgsWasmActive, wasmFrameImageData } from '../utils/animated-renderer/native-backend.js';
 import { parseTgsJson } from '../utils/tgs-parse.js';
 import { getLogger } from '@ton-ai/gram-debug';
 
@@ -148,6 +149,12 @@ export function TgsPlayer(props: TgsPlayerProps) {
     const onFrameProgressRef = useRef(onFrameProgress);
     onFrameProgressRef.current = onFrameProgress;
     const endFiredRef = useRef(false);
+    const wasmRef = useRef<TgsWasmRender | null>(null);
+    const destroyWasm = () => {
+        const inst = wasmRef.current;
+        wasmRef.current = null;
+        if (inst) { try { inst.free?.(); } catch { } }
+    };
 
     useEffect(() => {
         const el = rootRef.current;
@@ -174,6 +181,19 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 const parsed = await parseTgsJson(json, cacheKey);
                 if (cancelled) return;
                 animRef.current = parsed;
+                destroyWasm();
+                try {
+                    await ensureTgsWasmActive();
+                    const sizeHint = Math.max(4, Math.min(parsed.width, parsed.height));
+                    const backend = nativeBackendPref();
+                    if (backend !== 'canvas' && isTgsNativeRenderActive() && tgsWasmRenderSupports(parsed)) {
+                        wasmRef.current = wasmCreateTgsRender(json, sizeHint, sizeHint) || null;
+                        if (wasmRef.current) tgsLog.info('[TGS_LOG] wasm render backend', backend);
+                    }
+                } catch (backendErr) {
+                    tgsLog.info('[TGS_LOG] wasm render backend init failed', backendErr);
+                    destroyWasm();
+                }
                 setError(null);
                 const done = showLastFrame;
                 if (done && parsed.outFrame - parsed.inFrame > 0) {
@@ -195,7 +215,10 @@ export function TgsPlayer(props: TgsPlayerProps) {
                 animRef.current = null;
             }
         })();
-        return () => { cancelled = true; };
+        return () => {
+            cancelled = true;
+            destroyWasm();
+        };
     }, [animationData, cacheKey, playKey, showLastFrame]);
 
     const drawFrame = useCallback((frame: number) => {
@@ -203,6 +226,35 @@ export function TgsPlayer(props: TgsPlayerProps) {
         const anim = animRef.current;
         if (!canvas || !anim) return;
         const dpr = Math.min(window.devicePixelRatio || 1, width <= 128 ? 1.5 : 2);
+        const inst = (hiddenLayers || (layerOrder && layerOrder !== 'default')) ? null : wasmRef.current;
+        if (inst) {
+            try {
+                const scale = dpr > 0 ? dpr : 1;
+                const dispW = canvas.clientWidth || anim.width;
+                const dispH = canvas.clientHeight || anim.height;
+                const w = Math.round(dispW * scale);
+                const h = Math.round(dispH * scale);
+                if (w === 0 || h === 0) return;
+                if (canvas.width !== w) canvas.width = w;
+                if (canvas.height !== h) canvas.height = h;
+                const fr = wasmFrameImageData(inst, frame, w, h);
+                if (fr) {
+                    const ctx = canvas.getContext('2d');
+                    if (ctx) {
+                        ctx.setTransform(1, 0, 0, 1, 0, 0);
+                        ctx.putImageData(new ImageData(fr.data, w, h), 0, 0);
+                        return;
+                    }
+                }
+                tgsLog.info('[TGS_LOG] wasm render null, canvas fallback');
+                destroyWasm();
+                wasmRef.current = null;
+            } catch (e) {
+                tgsLog.info('[TGS_LOG] wasm render error', e);
+                destroyWasm();
+                wasmRef.current = null;
+            }
+        }
         renderFrame(canvas, anim, frame, dpr, undefined, undefined, layerOrder, hiddenLayers);
     }, [layerOrder, hiddenLayers, width]);
 
