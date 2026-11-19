@@ -199,7 +199,12 @@ async function handleMessage(msg: Record<string, any>): Promise<any> {
         log.debug('[worker] ← ' + String(msg.type) + ' OK (' + String(Date.now() - t0) + 'ms)');
         return result;
     } catch (e: any) {
-        log.warn('[worker] ← ' + String(msg.type) + ' ERROR (' + String(Date.now() - t0) + 'ms):', e?.message || e);
+        const message = e?.message ? String(e.message) : String(e);
+        if (/EMOTICON_EMPTY|EMOTICON_INVALID/.test(message)) {
+            log.debug('[worker] ← ' + String(msg.type) + ' benign ERROR (' + String(Date.now() - t0) + 'ms):', message);
+        } else {
+            log.warn('[worker] ← ' + String(msg.type) + ' ERROR (' + String(Date.now() - t0) + 'ms):', message);
+        }
         throw e;
     }
 }
