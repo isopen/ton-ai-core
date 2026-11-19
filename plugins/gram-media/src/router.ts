@@ -1669,6 +1669,7 @@ export class GramMediaRouter {
                             mseEndRequested = true;
                             pumpMse();
                             if (gen !== this.documentDownloadGen) return;
+                            if (streamCacheSource && !this.isSyntheticDocId(messageId)) this.host.dispatch({ type: 'UPDATE_MESSAGE_DOCUMENT_SOURCE', messageId, cacheSource: streamCacheSource });
                             if (this.debug) log.info('[gram-media] mse stream done', messageId, 'chunks:', chunkCount);
                             break;
                         }
