@@ -5,6 +5,7 @@ import { MediaCaption } from './media-caption.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import { UNKNOWN_SOURCE } from './emoji-source.js';
 import { requestDocument, requestDocumentThumb } from './media-source.js';
+import { useDocProgress, useDocSource, useDocSourcesMap } from '../doc-state.js';
 import type { MediaViewerItem } from './media-viewer.js';
 
 const RING_CIRC = 2 * Math.PI * 28;
@@ -110,7 +111,7 @@ interface VideoMessageProps {
   status: 'pending' | 'sent' | 'delivered' | 'read';
   documentUrls: Record<number | string, string>;
   documentProgress?: Record<number | string, number>;
-  documentSources?: Record<number, string>;
+  documentSources?: Record<number | string, string>;
   sameSenderPrev?: boolean;
   sameSenderNext?: boolean;
   onOpenViewer?: (item: MediaViewerItem) => void;
@@ -192,7 +193,11 @@ export function VideoMessage(props: VideoMessageProps) {
 
   const doc = m.media?.document;
   const url = documentUrls[m.id] || '';
-  const progress = documentProgress?.[m.id] ?? -1;
+  const storeSource = useDocSource(m.id);
+  const storeProgress = useDocProgress(m.id);
+  const storeSources = useDocSourcesMap();
+  const cacheSource = documentSources?.[m.id] || storeSource || '';
+  const progress = documentProgress?.[m.id] ?? storeProgress;
   const attrs: any[] = doc?.attributes || [];
   const videoAttr = attrs.find((a: any) => a._ === 'documentAttributeVideo');
   const duration = videoAttr?.duration || doc?.duration || 45;
@@ -488,7 +493,7 @@ export function VideoMessage(props: VideoMessageProps) {
               </div>
             </div>
             <div class="video-message__top-right">
-              <MediaSourceBadge source={documentSources?.[m.id] || UNKNOWN_SOURCE} absolute={false} />
+              <MediaSourceBadge source={cacheSource || UNKNOWN_SOURCE} absolute={false} />
               <button type="button" class="badge badge--icon video-message__action" data-action="download" onClick={(e: any) => {
                 e.stopPropagation();
                 const doc = m.media?.document;
@@ -546,7 +551,7 @@ export function VideoMessage(props: VideoMessageProps) {
         </div>
 
       </div>
-      <MediaCaption text={m.message} entities={m.entities} documentUrls={documentUrls} documentSources={documentSources} timeStr={timeStr} out={out} status={status} />
+      <MediaCaption text={m.message} entities={m.entities} documentUrls={documentUrls} documentSources={documentSources ?? storeSources} timeStr={timeStr} out={out} status={status} />
     </div>
   );
 }

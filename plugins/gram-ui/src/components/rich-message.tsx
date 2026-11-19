@@ -426,7 +426,7 @@ function richVideoDuration(doc: any): string | null {
   return null;
 }
 
-function RichVideo({ doc, caption, documentUrls, documentProgress }: { doc: any; caption?: any; documentUrls?: Record<number | string, string>; documentProgress?: Record<number | string, number> }): any {
+function RichVideo({ doc, caption, documentUrls }: { doc: any; caption?: any; documentUrls?: Record<number | string, string> }): any {
   const docId = doc?.id != null ? String(doc.id) : '';
   const dur = richVideoDuration(doc);
   if (!doc) return <div class="rich-unknown">[video]</div>;
@@ -438,7 +438,6 @@ function RichVideo({ doc, caption, documentUrls, documentProgress }: { doc: any;
         out={false}
         status="sent"
         documentUrls={documentUrls || {}}
-        documentProgress={documentProgress}
         fluid
       />
       {caption ? <div class="rich-photo-caption"><RichText node={caption.text || caption} />{caption.credit ? <div class="rich-photo-credit"><RichText node={caption.credit} /></div> : null}</div> : null}
@@ -446,7 +445,7 @@ function RichVideo({ doc, caption, documentUrls, documentProgress }: { doc: any;
   );
 }
 
-function Block({ block, messageId, onButton, documentUrls, documentProgress, inactiveButtons, richMessage, photoMaxWidth = 480, photoFluid = false, onOpenPhoto }: { block: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; documentProgress?: Record<number | string, number>; inactiveButtons?: Record<string, true>; richMessage?: any; photoMaxWidth?: number; photoFluid?: boolean; onOpenPhoto?: (image: ImageSpec, index: number) => void }): any {
+function Block({ block, messageId, onButton, documentUrls, inactiveButtons, richMessage, photoMaxWidth = 480, photoFluid = false, onOpenPhoto }: { block: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true>; richMessage?: any; photoMaxWidth?: number; photoFluid?: boolean; onOpenPhoto?: (image: ImageSpec, index: number) => void }): any {
   switch (block._) {
     case 'pageBlockPhoto': {
       const pid = block.photo_id != null ? String(block.photo_id) : (block as any).photo?.id ? String((block as any).photo.id) : '';
@@ -466,7 +465,7 @@ function Block({ block, messageId, onButton, documentUrls, documentProgress, ina
         log.warn('[RichMessage] pageBlockVideo doc not found', block.video_id != null ? String(block.video_id) : String(block.video ?? ''));
         return <div class="rich-unknown">[video]</div>;
       }
-      return <RichVideo doc={vid} caption={(block as any).caption} documentUrls={documentUrls} documentProgress={documentProgress} />;
+      return <RichVideo doc={vid} caption={(block as any).caption} documentUrls={documentUrls} />;
     }
     case 'pageBlockSlideshow':
     case 'pageBlockCollage': {
@@ -616,7 +615,7 @@ function Block({ block, messageId, onButton, documentUrls, documentProgress, ina
   }
 }
 
-export function RichMessageView({ richMessage, messageId, onButton, documentUrls, documentSources, documentProgress, inactiveButtons, className = '', onOpenPhoto }: {
+export function RichMessageView({ richMessage, messageId, onButton, documentUrls, documentSources, inactiveButtons, className = '', onOpenPhoto }: {
   richMessage: any;
   messageId: number | string;
   onButton?: (data: string, e?: any) => void;
@@ -635,7 +634,7 @@ export function RichMessageView({ richMessage, messageId, onButton, documentUrls
       <div class={'rich-body' + (className ? ' ' + className : '')}>
         {blocks.map((b: any, i: number) => (
           <div key={'rblk' + i} class="rich-block">
-            <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} documentProgress={documentProgress} inactiveButtons={inactiveButtons} richMessage={richMessage} onOpenPhoto={onOpenPhoto} />
+            <SafeBlock block={b} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} onOpenPhoto={onOpenPhoto} />
           </div>
         ))}
       </div>
@@ -646,9 +645,9 @@ export function RichMessageView({ richMessage, messageId, onButton, documentUrls
   }
 }
 
-function SafeBlock({ block, messageId, onButton, documentUrls, documentProgress, inactiveButtons, richMessage, photoMaxWidth = 480, photoFluid = false, onOpenPhoto }: { block: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; documentProgress?: Record<number | string, number>; inactiveButtons?: Record<string, true>; richMessage?: any; photoMaxWidth?: number; photoFluid?: boolean; onOpenPhoto?: (image: ImageSpec, index: number) => void }): any {
+function SafeBlock({ block, messageId, onButton, documentUrls, inactiveButtons, richMessage, photoMaxWidth = 480, photoFluid = false, onOpenPhoto }: { block: any; messageId: number | string; onButton?: (data: string, e?: any) => void; documentUrls?: Record<number | string, string>; inactiveButtons?: Record<string, true>; richMessage?: any; photoMaxWidth?: number; photoFluid?: boolean; onOpenPhoto?: (image: ImageSpec, index: number) => void }): any {
   try {
-    return <Block block={block} messageId={messageId} onButton={onButton} documentUrls={documentUrls} documentProgress={documentProgress} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={photoMaxWidth} photoFluid={photoFluid} onOpenPhoto={onOpenPhoto} />;
+    return <Block block={block} messageId={messageId} onButton={onButton} documentUrls={documentUrls} inactiveButtons={inactiveButtons} richMessage={richMessage} photoMaxWidth={photoMaxWidth} photoFluid={photoFluid} onOpenPhoto={onOpenPhoto} />;
   } catch (e: any) {
     log.error('[RichMessage] block render failed', block?._ || '?', e);
     return <div class="rich-error">block error: {block?._ || '?'} — {String(e?.message || e)}</div>;

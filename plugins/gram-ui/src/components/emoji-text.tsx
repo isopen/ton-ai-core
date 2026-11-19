@@ -1,5 +1,6 @@
 import { h, Fragment } from '@ton-ai/atom/jsx-runtime';
 import { useEffect, useRef, useState, useDomEvent } from '@ton-ai/atom/hooks';
+import { useDocSourcesMap } from '../doc-state.js';
 import { createContext, useContext } from '@ton-ai/atom/context';
 import { EmojiCanvas, StaticEmojiText, fetchEmojiData, getCachedEmojiData, subscribeEmojiData, useMessageFontSize } from './emoji-canvas.js';
 import type { EmojiSegment } from './emoji-canvas.js';
@@ -294,6 +295,8 @@ function isEmojiOnlyText(text: string, entities?: any[]): boolean {
 export const EmojiAutoplayContext = createContext<boolean | null>(null);
 
 export function EmojiText({ text, entities, documentUrls, documentSources, inlineSize = INLINE_EMOJI_SIZE, singleLine = false, ctx = 'chat', fontScaled = true }: { text: string; entities?: any[]; documentUrls: Record<number, string>; documentSources?: Record<number | string, string>; inlineSize?: number; singleLine?: boolean; ctx?: 'dialog' | 'chat'; fontScaled?: boolean }) {
+  const storeSources = useDocSourcesMap();
+  const effectiveSources = (documentSources ?? storeSources) as Record<number | string, string> | undefined;
   const emojiEntities = (entities || [])
     .map((e: any) => ({ e, off: Number(e?.offset), len: Number(e?.length) }))
     .filter((x: any) => x.e?._ === 'messageEntityCustomEmoji' && Number.isFinite(x.off) && Number.isFinite(x.len) && x.len > 0)
@@ -386,5 +389,5 @@ export function EmojiText({ text, entities, documentUrls, documentSources, inlin
     return <StaticEmojiText value={text} size={size} fontScaled={fontScaled} />;
   }
 
-  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} documentSources={documentSources as Record<string, string> | undefined} size={size} singleLine={singleLine} vAlign={isDialog ? 'middle' : 'top'} fontScaled={fontScaled} />;
+  return <EmojiCanvas segments={segments} documentUrls={documentUrls as Record<string, string>} documentSources={effectiveSources as Record<string, string> | undefined} size={size} singleLine={singleLine} vAlign={isDialog ? 'middle' : 'top'} fontScaled={fontScaled} />;
 }

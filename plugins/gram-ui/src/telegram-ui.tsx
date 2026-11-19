@@ -11,6 +11,7 @@ import type { SkillDef } from './plugin/types.js';
 import { SkillPlugin } from './plugin/skill-plugin.js';
 import { PluginManager } from '@ton-ai/core';
 import { defaultState, reducer } from './state.js';
+import { syncDocState } from './doc-state.js';
 import { injectStyles } from './styles.js';
 import { normalizeMapProvider, clampMessageFontSize, writeMessageFontSizeVar, MESSAGE_FONT_DEFAULT, clampMessageBubbleRadius, writeMessageBubbleRadiusVar, MESSAGE_BUBBLE_RADIUS_DEFAULT, clampAvatarRadius, writeAvatarRadiusVar, AVATAR_RADIUS_DEFAULT } from './utils.js';
 import { setPhotoQuality } from './components/photo-spec.js';
@@ -98,6 +99,7 @@ export class TelegramUI {
       const revealRef = useRef<RevealHandle | null>(null);
       const setStateRef = useRef(setState);
       setStateRef.current = setState;
+      syncDocState(state);
 
       useEffect(() => {
         const t = setTimeout(() => {
@@ -190,6 +192,7 @@ export class TelegramUI {
         setStateRef.current((prev: AppState) => {
           const next = reducer(prev, action);
           self._state = next;
+          syncDocState(next);
           return next;
         });
         if (action.type === 'SET_SELECTED_PEER' && action.peer) {
