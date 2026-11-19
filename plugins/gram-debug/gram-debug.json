@@ -46,8 +46,8 @@
       "level": "debug"
     },
     "gram-ui:tgs": {
-      "enabled": false,
-      "level": "debug"
+      "enabled": true,
+      "level": "info"
     },
     "gram-ui:tgs-renderer": {
       "enabled": false,
