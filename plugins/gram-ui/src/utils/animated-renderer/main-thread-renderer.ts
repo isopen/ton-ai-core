@@ -1,11 +1,12 @@
 import { getLogger } from '@ton-ai/gram-debug';
-import { loadTgs, renderFrame, hasAnimatedProperties } from '@ton-ai/tgs';
-import type { ParsedAnimation } from '@ton-ai/tgs';
+import { loadTgs, renderFrame, hasAnimatedProperties, inflateTgs } from '@ton-ai/tgs';
+import type { ParsedAnimation, TgsWasmRender } from '@ton-ai/tgs';
 import type { AnimatedRendererParams, AnimatedRendererView, IAnimatedRenderer } from './types.js';
 import { isPageFocused } from './page-focus.js';
 import { resetDrawBudgetIfExpired, tryAcquireDrawCall } from './draw-budget.js';
+import { nativeBackendPref, ensureTgsWasmActive, createNativeRender, wasmFrameImageData } from './native-backend.js';
 
-const log = getLogger('gram-ui');
+const log = getLogger('gram-ui:tgs');
 
 const RENDER_BUDGET = 6;
 const MAX_MAIN_LOADS = 2;
@@ -45,6 +46,10 @@ export class MainThreadRenderer implements IAnimatedRenderer {
   private views = new Map<string, AnimatedRendererView>();
 
   private anim?: ParsedAnimation;
+
+  private json?: string;
+
+  private wasm?: TgsWasmRender;
 
   private imgSize = 0;
 
@@ -310,7 +315,14 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     this.isDestroyed = true;
     this.stopHeartbeat();
     this.stopLoop();
+    this.destroyWasm();
     if (instancesByRenderId.get(this.renderId) === this) instancesByRenderId.delete(this.renderId);
+  }
+
+  private destroyWasm() {
+    const inst = this.wasm;
+    this.wasm = undefined;
+    if (inst) { try { inst.free?.(); } catch {} }
   }
 
   private async load() {
@@ -318,12 +330,22 @@ export class MainThreadRenderer implements IAnimatedRenderer {
     try {
       const resp = await fetch(this.tgsUrl);
       const ct = (resp.headers.get('content-type') || '').toLowerCase();
-      this.anim = ct.startsWith('text/') || ct.includes('json')
-        ? await loadTgs(await resp.text())
-        : await loadTgs(new Uint8Array(await resp.arrayBuffer()));
+      const isJsonCt = ct.startsWith('text/') || ct.includes('json');
+      const json = isJsonCt ? await resp.text() : await inflateTgs(new Uint8Array(await resp.arrayBuffer()));
+      this.anim = await loadTgs(json);
+      this.json = json;
       this.isStatic = !hasAnimatedProperties(this.anim);
       this.framesCount = this.isStatic ? 1 : Math.max(1, this.anim.outFrame - this.anim.inFrame);
-      if (this.isDestroyed) return;
+      await ensureTgsWasmActive();
+      const wasWasm = this.wasm;
+      this.wasm = createNativeRender(nativeBackendPref(), json, this.anim, this.imgSize);
+      if (this.wasm && !wasWasm) log.info('[AnimatedRenderer] native render backend', this.renderId, this.imgSize + 'px', this.isStatic ? 'static' : String(this.framesCount) + 'fr');
+      else if (!this.wasm && wasWasm) log.info('[AnimatedRenderer] native render backend disabled, canvas fallback', this.renderId);
+      if (wasWasm && wasWasm !== this.wasm) { try { wasWasm.free?.(); } catch {} }
+      if (this.isDestroyed) {
+        this.destroyWasm();
+        return;
+      }
       if (this.isPlayingFlag) {
         this.startLoop();
       }
@@ -335,6 +357,7 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       }
     } catch (err: any) {
       log.error('[AnimatedRenderer] main-thread init error:', this.renderId, err?.message || err);
+      this.destroyWasm();
       if (!this.isDestroyed) {
         this.loadFailed = true;
         for (const view of this.views.values()) {
@@ -404,21 +427,50 @@ export class MainThreadRenderer implements IAnimatedRenderer {
       if (span > 0) {
         frame = anim.inFrame + (((now - startT) / 1000) * anim.fps) % span;
       }
+      let wasmFrame: { data: Uint8ClampedArray<ArrayBuffer>; empty: boolean } | null = null;
+      if (this.wasm) {
+        try {
+          wasmFrame = wasmFrameImageData(this.wasm, Math.round(frame), this.imgSize, this.imgSize);
+          if (!wasmFrame) {
+            log.info('[AnimatedRenderer] wasm render null, canvas fallback', this.renderId);
+            this.destroyWasm();
+          }
+        } catch (err) {
+          log.info('[AnimatedRenderer] wasm render failed, canvas fallback', this.renderId, (err as Error)?.message || err);
+          this.destroyWasm();
+          wasmFrame = null;
+        }
+      }
+      if (wasmFrame) {
+        if (!this.offscreen) {
+          this.offscreen = document.createElement('canvas');
+          this.offscreen.width = this.imgSize;
+          this.offscreen.height = this.imgSize;
+        }
+        this.offscreen.getContext('2d')!.putImageData(new ImageData(wasmFrame.data, this.imgSize, this.imgSize), 0, 0);
+      }
       if (view.isSharedCanvas) {
         if (!this.offscreen) {
           this.offscreen = document.createElement('canvas');
           this.offscreen.width = this.imgSize;
           this.offscreen.height = this.imgSize;
         }
-        renderFrame(this.offscreen, anim, Math.round(frame), 1, this.imgSize, this.imgSize);
+        if (!wasmFrame) {
+          renderFrame(this.offscreen, anim, Math.round(frame), 1, this.imgSize, this.imgSize);
+        }
         const c = this.getScaledCoords(view);
         const prev = view.prevScaledCoords;
         if (prev && (prev.x !== c.x || prev.y !== c.y)) {
           view.ctx.clearRect(prev.x, prev.y, this.imgSize, this.imgSize);
         }
         view.ctx.clearRect(c.x, c.y, this.imgSize, this.imgSize);
-        view.ctx.drawImage(this.offscreen, c.x, c.y);
+        view.ctx.drawImage(this.offscreen!, c.x, c.y);
         view.prevScaledCoords = { x: c.x, y: c.y };
+      } else if (wasmFrame) {
+        const cw = view.canvas.width;
+        const ch = view.canvas.height;
+        view.ctx.clearRect(0, 0, cw, ch);
+        view.ctx.drawImage(this.offscreen!, 0, 0, cw, ch);
       } else {
         renderFrame(view.canvas, anim, Math.round(frame), 1, this.imgSize, this.imgSize);
       }

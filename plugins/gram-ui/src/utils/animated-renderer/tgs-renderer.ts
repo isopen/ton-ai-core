@@ -7,7 +7,7 @@ import { isPageFocused } from './page-focus.js';
 import { resetDrawBudgetIfExpired, tryAcquireDrawCall } from './draw-budget.js';
 import { getLogger } from '@ton-ai/gram-debug';
 
-const log = getLogger('gram-ui');
+const log = getLogger('gram-ui:tgs');
 const debugLog = getLogger('gram-ui:tgs-renderer');
 
 const HIGH_PRIORITY_QUALITY = 1;

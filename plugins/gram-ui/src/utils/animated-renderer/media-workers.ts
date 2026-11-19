@@ -3,7 +3,7 @@ import { getLogger } from '@ton-ai/gram-debug';
 export const MAX_WORKERS = Math.min(typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4, 4);
 const MAX_INITS = 16;
 
-const log = getLogger('gram-ui');
+const log = getLogger('gram-ui:tgs');
 
 const REQUEST_TIMEOUT_MS = 12_000;
 
@@ -71,11 +71,18 @@ function makeWorker(): MediaWorker | null {
     log.warn('[AnimatedRenderer] worker #' + id + ' construction failed:', err?.message || err);
     return null;
   }
+  log.info('[AnimatedRenderer] worker #' + id + ' created');
   const pending = new Map<number, Pending>();
   let nextMsgId = 1;
   let crashed = false;
   w.onmessage = (e: MessageEvent) => {
-    const { msgId, ok, data, error } = (e.data || {}) as any;
+    const m = (e.data || {}) as any;
+    if (m.t === 'log') {
+      const fn = m.level === 'error' ? log.error : m.level === 'warn' ? log.warn : m.level === 'debug' ? log.debug : log.info;
+      try { (fn as (...a: unknown[]) => void)('[tgs-worker] ' + m.text); } catch {}
+      return;
+    }
+    const { msgId, ok, data, error } = m;
     const p = pending.get(msgId);
     if (!p) return;
     pending.delete(msgId);

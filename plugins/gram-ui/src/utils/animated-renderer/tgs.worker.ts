@@ -1,10 +1,34 @@
 import { getLogger, isEnabled } from '@ton-ai/gram-debug';
 import { loadTgs, renderFrame, inflateTgs, hasAnimatedProperties, analyzeTgsFeatures } from '@ton-ai/tgs';
-import type { ParsedAnimation } from '@ton-ai/tgs';
+import type { ParsedAnimation, TgsWasmRender } from '@ton-ai/tgs';
+import { nativeBackendPref, ensureTgsWasmActive, createNativeRender, wasmFrameImageData } from './native-backend.js';
 
-const log = getLogger('gram-ui');
+
+const baseLog = getLogger('gram-ui:tgs');
 
 const ctx = self as unknown as Worker;
+
+const FWD_INFO = ['[tgs-worker] backend', '[tgs-worker] wasm render failed', '[tgs-worker] wasm render returned null'];
+function fwd(level: 'debug' | 'info' | 'warn' | 'error', args: unknown[]): void {
+  if (level !== 'warn' && level !== 'error') {
+    const text = args.map((a) => (typeof a === 'string' ? a : '')).join(' ');
+    if (!FWD_INFO.some((p) => p === text.slice(0, p.length))) return;
+  }
+  try {
+    ctx.postMessage({ t: 'log', level, text: args.map((a) => stringifyLogArg(a)).join(' ') });
+  } catch {}
+}
+function stringifyLogArg(a: unknown): string {
+  if (typeof a === 'string') return a;
+  try { return JSON.stringify(a); } catch { return String(a); }
+}
+
+const log = {
+  debug: (...a: unknown[]) => { baseLog.debug(...a); },
+  info: (...a: unknown[]) => { baseLog.info(...a); fwd('info', a); },
+  warn: (...a: unknown[]) => { baseLog.warn(...a); fwd('warn', a); },
+  error: (...a: unknown[]) => { baseLog.error(...a); fwd('error', a); },
+};
 
 interface WorkerAnim {
   anim: ParsedAnimation;
@@ -13,6 +37,7 @@ interface WorkerAnim {
   msPerFrame: number;
   framesCount: number;
   baseFrame: number;
+  wasm?: TgsWasmRender;
 }
 
 const anims = new Map<string, WorkerAnim>();
@@ -69,6 +94,7 @@ function idleGet(renderId: string): WorkerAnim | undefined {
   const rec = idleAnims.get(renderId);
   if (!rec) return undefined;
   if (Date.now() - rec.ts > IDLE_TTL_MS) {
+    disposeEntry(rec.entry);
     idleAnims.delete(renderId);
     const i = idleOrder.indexOf(renderId);
     if (i >= 0) idleOrder.splice(i, 1);
@@ -89,11 +115,17 @@ function idleInsert(renderId: string, entry: WorkerAnim) {
   idleOrder.push(renderId);
   while (idleOrder.length > IDLE_MAX) {
     const oldest = idleOrder.shift()!;
+    disposeEntry(idleAnims.get(oldest)!.entry);
     idleAnims.delete(oldest);
   }
 }
 
 const destroyedDuringLoad = new Set<string>();
+
+function disposeEntry(entry: WorkerAnim): void {
+    try { entry.wasm?.free?.(); } catch { }
+    entry.wasm = undefined;
+}
 
 function loadingFor(renderId: string): Promise<void>[] {
   return [...loading.entries()].filter(([k]) => k.split('\u0000')[0] === renderId).map(([, p]) => p);
@@ -157,6 +189,9 @@ async function load(renderId: string, tgsUrl: string, tgsJson: string | Uint8Arr
     const maxFps = isLowPriority ? 30 : 60;
     const reduceFactor = anim.fps % maxFps === 0 ? anim.fps / maxFps : 1;
     const isStatic = !hasAnimatedProperties(anim);
+    await ensureTgsWasmActive();
+    const wasm = createNativeRender(nativeBackendPref(), json, anim, imgSize);
+    log.info('[tgs-worker] backend', renderId, wasm ? 'wasm' : 'canvas', imgSize + 'px', isStatic ? 'static' : String(Math.max(1, Math.ceil((anim.outFrame - anim.inFrame) / reduceFactor))) + 'fr');
     const entry: WorkerAnim = {
       anim,
       imgSize,
@@ -164,11 +199,14 @@ async function load(renderId: string, tgsUrl: string, tgsJson: string | Uint8Arr
       msPerFrame: 1000 / (anim.fps / reduceFactor),
       framesCount: isStatic ? 1 : Math.max(1, Math.ceil((anim.outFrame - anim.inFrame) / reduceFactor)),
       baseFrame: anim.inFrame,
+      wasm,
     };
     if (generation(renderId) !== gen) {
       if (destroyedDuringLoad.has(renderId)) {
         destroyedDuringLoad.delete(renderId);
         idleInsert(renderId, entry);
+      } else {
+        disposeEntry(entry);
       }
       return;
     }
@@ -206,12 +244,37 @@ function inflateAndDecode(buf: Uint8Array): Promise<string> {
   return inflateTgs(buf);
 }
 
+async function renderWasmFrame(entry: WorkerAnim, frameIndex: number, srcFrame: number): Promise<{ imageBitmap: ImageBitmap; empty: boolean } | null> {
+  const inst = entry.wasm;
+  if (!inst) return null;
+  const frame = wasmFrameImageData(inst, srcFrame, entry.imgSize, entry.imgSize);
+  if (!frame) return null;
+  const imageData = new ImageData(frame.data, entry.imgSize, entry.imgSize);
+  logFrameDiff(entry.anim, frameIndex, entry.framesCount, imageData);
+  const imageBitmap = await createImageBitmap(imageData);
+  return { imageBitmap, empty: frame.empty };
+}
+
 async function renderFrames(renderId: string, frameIndex: number): Promise<{ frameIndex: number; imageBitmap: ImageBitmap; empty?: boolean }> {
   const entry = (await waitForLoads(renderId));
   if (!entry) throw new Error('TGS anim not found: ' + renderId);
   const t0 = Date.now();
   const srcFrame = entry.baseFrame + frameIndex * entry.reduceFactor;
   log.info('[tgs-worker] render start', renderId, 'idx=' + frameIndex, 'srcFr=' + srcFrame, 'of=' + (entry.framesCount || 0));
+  if (entry.wasm) {
+    try {
+      const res = await renderWasmFrame(entry, frameIndex, srcFrame);
+      if (res) {
+        log.info('[tgs-worker] render done', renderId, 'idx=' + frameIndex, (Date.now() - t0) + 'ms');
+        return { frameIndex, imageBitmap: res.imageBitmap, empty: res.empty };
+      }
+      log.info('[tgs-worker] wasm render returned null, canvas fallback', renderId, 'idx=' + frameIndex);
+      disposeEntry(entry);
+    } catch (err) {
+      log.info('[tgs-worker] wasm render failed, canvas fallback', renderId, 'idx=' + frameIndex, (err as Error)?.message || err);
+      disposeEntry(entry);
+    }
+  }
   try {
     const off = new OffscreenCanvas(entry.imgSize, entry.imgSize);
     renderFrame(off as unknown as HTMLCanvasElement, entry.anim, srcFrame, 1, entry.imgSize, entry.imgSize);
@@ -327,9 +390,13 @@ ctx.onmessage = (e: MessageEvent) => {
       if (type === 'tgs:init' || type === 'tgs:changeData') {
         if (type === 'tgs:changeData') {
           bumpGeneration(renderId);
+          const old1 = anims.get(renderId);
+          if (old1) disposeEntry(old1);
           anims.delete(renderId);
           const i = idleOrder.indexOf(renderId);
           if (i >= 0) idleOrder.splice(i, 1);
+          const old2 = idleAnims.get(renderId);
+          if (old2) disposeEntry(old2.entry);
           idleAnims.delete(renderId);
         }
         const entry = await ensureAnimsEntry(renderId, tgsUrl, tgsJson, imgSize, isLowPriority);

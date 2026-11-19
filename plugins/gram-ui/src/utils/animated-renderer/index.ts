@@ -3,7 +3,7 @@ import type { AnimatedRendererParams, IAnimatedRenderer } from './types.js';
 import { TgsRenderer } from './tgs-renderer.js';
 import { MainThreadRenderer } from './main-thread-renderer.js';
 
-const log = getLogger('gram-ui');
+const log = getLogger('gram-ui:tgs');
 
 let backendChoice: 'worker' | 'main' | null = null;
 let workerBroken = false;
