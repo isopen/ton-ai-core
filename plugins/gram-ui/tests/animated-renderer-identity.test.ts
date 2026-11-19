@@ -13,7 +13,7 @@ import type { AnimatedRendererParams } from '../src/utils/animated-renderer/type
 const PARAMS: AnimatedRendererParams = { size: 32 };
 
 function fixture(name: string): string {
-  return readFileSync(resolve(__dirname, '../../tgs/tests/fixtures', name), 'utf8');
+  return readFileSync(resolve(__dirname, '../../tgs/src/ts/tests/fixtures', name), 'utf8');
 }
 
 const tick = (n = 6) => new Promise<void>((r) => {

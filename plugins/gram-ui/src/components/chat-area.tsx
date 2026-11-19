@@ -878,6 +878,7 @@ export function MessageItem({ m, sameSenderPrev, sameSenderNext, isGroup, readOu
             replyMarkup={m.replyMarkup}
             richMessage={m.richMessage}
             richDocumentUrls={emojiUrls}
+            documentProgress={richProgress}
             onOpenPhoto={onOpenPhoto}
             onKbButton={onKbButton}
             onRichButton={(data, mid, e) => onKbButton({ kind: 'callback', data }, mid, e)}

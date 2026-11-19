@@ -170,6 +170,7 @@ function mountPathChips(root: HTMLElement) {
 
 function fixTruncatedMdImages(root: HTMLElement): string[] {
   const created: string[] = [];
+  if (typeof fetch !== 'function') return created;
   const imgs = root.querySelectorAll('img.md-image');
   imgs.forEach((el) => {
     const img = el as HTMLImageElement;
