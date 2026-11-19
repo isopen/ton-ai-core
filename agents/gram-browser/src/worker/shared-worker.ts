@@ -210,6 +210,10 @@ async function handleMessage(msg: Record<string, any>): Promise<any> {
 }
 
 async function _handleMessage(msg: Record<string, any>): Promise<any> {
+    const skipConnect = msg.type === 'start' || msg.type === 'connect' || msg.type === 'disconnect' || msg.type === 'logout';
+    if (!skipConnect && lastSessionId) {
+        await ensureConnected();
+    }
     switch (msg.type) {
         case 'start':
             try { TW.setApiCreds(msg.apiId, msg.apiHash); } catch {}

@@ -1984,6 +1984,7 @@ function startReadLoop(): void {
         while (connected && thisConn?.isConnected()) {
             try {
             const data = await thisConn.readPacket();
+            if (thisConn !== conn) break;
             if (!connected) break;
             lastPongAt = Date.now();
             if (pingFails !== 0) pingFails = 0;
@@ -2019,6 +2020,7 @@ function startReadLoop(): void {
                 if (!result) continue;
                 dispatchMessage(result.msgId, result.body);
             } catch (e: any) {
+                if (thisConn !== conn) break;
                 if (!connected || !readLoopRunning) break;
                 if (e.message.includes('Connection closed') || e.message === 'Not connected') {
                     connected = false;
@@ -2048,10 +2050,12 @@ function startReadLoop(): void {
                 break;
             }
         }
-        readLoopRunning = false;
-        if (resolveReadLoopEnd) {
-            resolveReadLoopEnd();
-            resolveReadLoopEnd = null;
+        if (thisConn === conn) {
+            readLoopRunning = false;
+            if (resolveReadLoopEnd) {
+                resolveReadLoopEnd();
+                resolveReadLoopEnd = null;
+            }
         }
     })();
 }
@@ -2106,6 +2110,28 @@ async function scheduleReconnect(): Promise<void> {
             scheduleReconnect();
         }
     }, delay);
+}
+
+async function ensureMainConnected(): Promise<void> {
+    if (conn?.isConnected() && connected && ses) return;
+    if (!curSessionId || !ses) throw new Error('Not connected');
+    if (migratingDc !== 0) throw new Error('Migrating');
+    await handleConnectInternal(curSessionId, ses.dcId);
+}
+
+async function waitForMainConnection(timeoutMs = 15000): Promise<void> {
+    if (conn?.isConnected() && ses) return;
+    if (!ses) return;
+    const deadline = Date.now() + timeoutMs;
+    let lastKick = 0;
+    while (Date.now() < deadline) {
+        if (conn?.isConnected() && ses) return;
+        if (curSessionId && migratingDc === 0 && !mainConnectPromise && Date.now() - lastKick > 1000) {
+            lastKick = Date.now();
+            ensureMainConnected().catch(() => {});
+        }
+        await new Promise(r => setTimeout(r, 150));
+    }
 }
 
 function notifyAuthInvalidated(): void {
@@ -2469,9 +2495,9 @@ function buildCallBody(constructorId: number, params: Record<string, any>): Buff
         codeSettings: 0xad253d78,
         inputPeerSelf: 0x7da07ec9,
         inputPeerEmpty: 0x7f3b18ea,
-        inputPeerUser: 0x7b8e7de6,
-        inputPeerChat: 0x179be863,
-        inputPeerChannel: 0x20adaef8,
+        inputPeerUser: 0xdde8a54c,
+        inputPeerChat: 0x35a95cb9,
+        inputPeerChannel: 0x27bcbbfc,
         inputDocumentFileLocation: 0xbad07584,
         inputPhotoFileLocation: 0x40181ffe,
         inputFileLocation: 0xdfdaabe1,
@@ -2499,6 +2525,7 @@ function buildCallBody(constructorId: number, params: Record<string, any>): Buff
 }
 
 async function call(constructorId: number, params: Record<string, any> = {}): Promise<Buffer> {
+    if (!conn?.isConnected() || !ses) await waitForMainConnection();
     if (!conn || !ses) throw new Error('Not connected');
 
     let nonFloodRetries = 0;
@@ -2845,6 +2872,7 @@ async function sendMediaAction(params: { peer: Record<string, any>; document: an
 }
 
 async function callRpc(methodName: string, params: Record<string, any> = {}, options?: { noMigrate?: boolean }): Promise<any> {
+    if (!conn?.isConnected() || !ses) await waitForMainConnection();
     if (!conn || !ses) throw new Error('Not connected');
     const registry = getSchemaRegistry();
     const comb = registry.findFunctionByName(methodName);
@@ -3075,10 +3103,28 @@ function doReq(payload: Buffer, host: string, port: number, timeout = 15000): Pr
     });
 }
 
-async function handleConnectInternal(reqSessionId: string, dcId: number): Promise<void> {
-    if (conn?.isConnected()) {
+let mainConnectPromise: Promise<void> | null = null;
+
+function handleConnectInternal(reqSessionId: string, dcId: number): Promise<void> {
+    if (mainConnectPromise) return mainConnectPromise;
+    const p = (async () => {
+        while (migratingDc !== 0) {
+            await new Promise(r => setTimeout(r, 100));
+        }
+        await handleConnectImpl(reqSessionId, dcId);
+    })().finally(() => {
+        if (mainConnectPromise === p) mainConnectPromise = null;
+    });
+    mainConnectPromise = p;
+    return p;
+}
+
+async function handleConnectImpl(reqSessionId: string, dcId: number): Promise<void> {
+    if (conn?.isConnected() && connected && readLoopRunning) {
         if (!isConnectionStale()) return;
         dropMainConnection('stale-on-connect');
+    } else if (conn) {
+        dropMainConnection('half-open-on-connect');
     }
     curSessionId = reqSessionId;
     await getGramDb().init();
@@ -3181,6 +3227,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     if (saved) {
         wlog('[worker] saved session, starting read loop');
         connected = true;
+        reconnectQuickFail = 0;
         startReadLoop();
         stopPing();
         pingTimer = setInterval(() => {
@@ -3225,6 +3272,7 @@ async function handleConnectInternal(reqSessionId: string, dcId: number): Promis
     };
     authenticated = false;
     connected = true;
+    reconnectQuickFail = 0;
     startReadLoop();
 
     pingTimer = setInterval(() => {
@@ -3253,12 +3301,14 @@ async function handleDisconnect(): Promise<void> {
 }
 
 async function handleLogout(): Promise<void> {
-    try {
-        await callRpc('account.updateStatus', { offline: true });
-    } catch {}
-    try {
-        await callRpc('auth.logOut', {});
-    } catch {}
+    if (conn?.isConnected()) {
+        try {
+            await callRpc('account.updateStatus', { offline: true });
+        } catch {}
+        try {
+            await callRpc('auth.logOut', {});
+        } catch {}
+    }
     authenticated = false;
     passwordPending = false;
     stopHealthCheck();
