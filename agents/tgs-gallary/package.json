@@ -1,0 +1,18 @@
+{
+  "name": "@ton-ai/tgs-gallary",
+  "version": "0.1.0",
+  "description": "Telegram Serverless Mini App gallery rendering TGS fixtures with the @ton-ai/tgs WASM renderer on the ton-ai-core agent + Atom UI",
+  "author": "TON AI Core Team",
+  "license": "Boost Software License 1.0",
+  "scripts": {
+    "sync": "node scripts/sync.mjs",
+    "check": "node scripts/check-clean.mjs",
+    "predeploy": "npm run sync && npm run check",
+    "deploy": "tgcloud push"
+  },
+  "devDependencies": {
+    "@tgcloud/cli": "^0.2.0",
+    "@types/jest": "^30.0.0",
+    "typescript": "^5.3.3"
+  }
+}

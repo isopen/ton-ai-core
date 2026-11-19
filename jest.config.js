@@ -72,7 +72,8 @@ module.exports = {
     '<rootDir>/plugins/telegram-bot-api/tests',
     '<rootDir>/plugins/durevcode/tests',
     '<rootDir>/plugins/tgcloud-hello/tests',
-    '<rootDir>/agents/tgcloud-agent/tests'
+    '<rootDir>/agents/tgcloud-agent/tests',
+    '<rootDir>/agents/tgs-gallary/tests'
   ],
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '_test_intercept'],
