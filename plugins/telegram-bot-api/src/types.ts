@@ -49,16 +49,26 @@ export interface Update {
     subscription?: BotSubscriptionUpdated;
     stopped_message_generation?: MessageGenerationStopped;
     purchased_paid_media?: PaidMediaPurchased;
+    widget_query?: WidgetQuery;
+    shared_widget_query?: SharedWidgetQuery;
 }
 
 export interface MessageEntity {
-    type: 'mention' | 'hashtag' | 'cashtag' | 'bot_command' | 'url' | 'email' | 'phone_number' | 'bold' | 'italic' | 'underline' | 'strikethrough' | 'spoiler' | 'blockquote' | 'expandable_blockquote' | 'code' | 'pre' | 'text_link' | 'text_mention' | 'custom_emoji' | 'date_time';
+    type: 'mention' | 'hashtag' | 'cashtag' | 'bot_command' | 'url' | 'email' | 'phone_number' | 'bank_card_number' | 'ton_address' | 'bold' | 'italic' | 'underline' | 'strikethrough' | 'spoiler' | 'blockquote' | 'expandable_blockquote' | 'code' | 'pre' | 'text_link' | 'text_mention' | 'custom_emoji' | 'date_time';
     offset: number;
     length: number;
     url?: string;
     user?: User;
     language?: string;
     custom_emoji_id?: string;
+}
+
+export interface TextQuote {
+    text: string;
+    entities?: MessageEntity[];
+    rich_texts?: RichText[];
+    position: number;
+    is_manual?: boolean;
 }
 
 export interface Message {
@@ -72,7 +82,7 @@ export interface Message {
     is_topic_message?: boolean;
     reply_to_message?: Message;
     external_reply?: ExternalReplyInfo;
-    quote?: any;
+    quote?: TextQuote;
     reply_to_story?: any;
     via_bot?: User;
     guest_bot_caller_user?: User;
@@ -90,6 +100,7 @@ export interface Message {
     link_preview_options?: LinkPreviewOptions;
     effect_id?: string;
     rich_message?: RichMessage;
+    widget?: Widget;
     animation?: Animation;
     audio?: Audio;
     document?: Document;
@@ -151,6 +162,8 @@ export interface Message {
     community_chat_added?: CommunityChatAdded;
     community_chat_joined?: CommunityChatJoined;
     community_chat_removed?: CommunityChatRemoved;
+    paid_messages_waived?: PaidMessagesWaived;
+    ton_wallet_transfer?: TonWalletTransfer;
 }
 
 export interface User {
@@ -169,6 +182,9 @@ export interface User {
     supports_join_request_queries?: boolean;
     can_connect_to_business?: boolean;
     has_main_web_app?: boolean;
+    has_topics_enabled?: boolean;
+    allows_users_to_create_topics?: boolean;
+    can_manage_bots?: boolean;
 }
 
 export interface Chat {
@@ -309,6 +325,15 @@ export interface Voice {
     duration: number;
     mime_type?: string;
     file_size?: number;
+}
+
+export interface Widget {
+    id?: string;
+    width?: number;
+    height?: number;
+    html: string;
+    public_data?: string;
+    chat_data?: string;
 }
 
 export interface Sticker {
@@ -639,6 +664,53 @@ export interface ChosenInlineResult {
     query: string;
 }
 
+export interface WidgetQueryTypeData {
+    type: 'data';
+    wallet_card?: TonWalletCard;
+}
+export interface WidgetQueryTypeSignData {
+    type: 'sign_data';
+    wallet: WidgetQueryWallet;
+    sign_data: string;
+}
+export interface WidgetQueryTypeSentTransaction {
+    type: 'sent_transaction';
+    wallet: WidgetQueryWallet;
+    msg_hash: string;
+}
+export type WidgetQueryType =
+    | WidgetQueryTypeData
+    | WidgetQueryTypeSignData
+    | WidgetQueryTypeSentTransaction;
+
+export interface WidgetQueryWallet {
+    address: string;
+    amount: string;
+    public_key?: string;
+    state_init?: string;
+}
+
+export interface WidgetQuery {
+    id: string;
+    from: User;
+    chat?: Chat;
+    message_id?: number;
+    inline_message_id?: string;
+    chat_instance: string;
+    chat_type?: 'sender' | 'private' | 'group' | 'supergroup' | 'channel';
+    type: WidgetQueryType;
+    data: string;
+    widget_id?: string;
+}
+
+export interface SharedWidgetQuery {
+    id: string;
+    from: User;
+    type: WidgetQueryType;
+    data: string;
+    widget_id: string;
+}
+
 export interface CallbackQuery {
     id: string;
     from: User;
@@ -736,13 +808,36 @@ export interface InputInvoiceMessageContent {
     send_email_to_provider?: boolean;
     is_flexible?: boolean;
 }
+export interface InputWidgetMessageContent {
+    html: string;
+    width?: number;
+    height?: number;
+    public_data?: string;
+    chat_data?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+    allow_queries?: boolean;
+    is_shared?: boolean;
+}
+export interface InputSharedWidgetMessageContent {
+    widget_id: string;
+    chat_data?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+}
 export type InputMessageContent =
     | InputTextMessageContent
     | InputRichMessageContent
     | InputLocationMessageContent
     | InputVenueMessageContent
     | InputContactMessageContent
-    | InputInvoiceMessageContent;
+    | InputInvoiceMessageContent
+    | InputWidgetMessageContent
+    | InputSharedWidgetMessageContent;
 export interface InlineQueryResultArticle {
     type: 'article';
     id: string;
@@ -1260,6 +1355,7 @@ export interface ExternalReplyInfo {
     video?: Video;
     video_note?: VideoNote;
     voice?: Voice;
+    widget?: Widget;
     has_media_spoiler?: boolean;
     checklist?: any;
     contact?: Contact;
@@ -1282,15 +1378,16 @@ export interface InlineKeyboardButton {
     text: string;
     url?: string;
     callback_data?: string;
-    web_app?: any;
-    login_url?: any;
+    web_app?: WebAppInfo;
+    login_url?: LoginUrl;
     switch_inline_query?: string;
     switch_inline_query_current_chat?: string;
-    switch_inline_query_chosen_chat?: any;
-    copy_text?: any;
-    callback_game?: any;
+    switch_inline_query_chosen_chat?: SwitchInlineQueryChosenChat;
+    copy_text?: CopyTextButton;
+    callback_game?: CallbackGame;
     pay?: boolean;
     icon_custom_emoji_id?: string;
+    style?: 'danger' | 'success' | 'primary';
     disabled?: DisabledButton;
 }
 
@@ -1308,15 +1405,70 @@ export interface ReplyKeyboardMarkup {
     force_reply?: boolean;
 }
 
+export interface WebAppInfo {
+    url: string;
+}
+export interface LoginUrl {
+    url: string;
+    forward_text?: string;
+    bot_username?: string;
+    request_write_access?: boolean;
+}
+export interface SwitchInlineQueryChosenChat {
+    query?: string;
+    allow_user_chats?: boolean;
+    allow_bot_chats?: boolean;
+    allow_group_chats?: boolean;
+    allow_channel_chats?: boolean;
+}
+export interface CopyTextButton {
+    text: string;
+}
+export interface CallbackGame {
+    [key: string]: never;
+}
+export interface KeyboardButtonRequestUsers {
+    request_id: number;
+    user_is_bot?: boolean;
+    user_is_premium?: boolean;
+    max_quantity?: number;
+    request_name?: boolean;
+    request_username?: boolean;
+    request_photo?: boolean;
+}
+export interface KeyboardButtonRequestChat {
+    request_id: number;
+    chat_is_channel: boolean;
+    chat_is_forum?: boolean;
+    chat_has_username?: boolean;
+    chat_is_created?: boolean;
+    user_administrator_rights?: ChatAdministratorRights;
+    bot_administrator_rights?: ChatAdministratorRights;
+    bot_is_member?: boolean;
+    request_title?: boolean;
+    request_username?: boolean;
+    request_photo?: boolean;
+}
+export interface KeyboardButtonRequestManagedBot {
+    request_id: number;
+    suggested_name?: string;
+    suggested_username?: string;
+}
+export interface KeyboardButtonPollType {
+    type?: 'quiz' | 'regular';
+}
+
 export interface KeyboardButton {
     text: string;
-    request_users?: any;
-    request_chat?: any;
+    request_users?: KeyboardButtonRequestUsers;
+    request_chat?: KeyboardButtonRequestChat;
+    request_managed_bot?: KeyboardButtonRequestManagedBot;
     request_contact?: boolean;
     request_location?: boolean;
-    request_poll?: any;
-    web_app?: any;
+    request_poll?: KeyboardButtonPollType;
+    web_app?: WebAppInfo;
     icon_custom_emoji_id?: string;
+    style?: 'danger' | 'success' | 'primary';
 }
 
 export interface ReplyKeyboardRemove {
@@ -1338,13 +1490,14 @@ export interface ReplyParameters {
     quote?: string;
     quote_parse_mode?: string;
     quote_entities?: MessageEntity[];
+    quote_rich_texts?: RichText[];
     quote_position?: number;
     checklist_task_id?: number;
     poll_option_id?: string;
 }
 
 export interface EphemeralMessageParameters {
-    receiver_user_id: number;
+    receiver_user_id?: number;
     callback_query_id?: string;
     replace_callback_query_message?: boolean;
 }
@@ -1361,7 +1514,7 @@ export type ReplyMarkupUnion =
     | ForceReply;
 
 export interface SendMessageParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     text: string;
     message_thread_id?: number;
     direct_messages_topic_id?: number;
@@ -1395,7 +1548,7 @@ export interface SendMessageDraftParams {
 }
 
 export interface SendPhotoParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     photo: InputFile | string;
     message_thread_id?: number;
     caption?: string;
@@ -1416,7 +1569,7 @@ export interface SendPhotoParams {
 }
 
 export interface SendAudioParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     audio: InputFile | string;
     message_thread_id?: number;
     caption?: string;
@@ -1439,7 +1592,7 @@ export interface SendAudioParams {
 }
 
 export interface SendDocumentParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     document: InputFile | string;
     message_thread_id?: number;
     thumbnail?: InputFile | string;
@@ -1460,7 +1613,7 @@ export interface SendDocumentParams {
 }
 
 export interface SendVideoParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     video: InputFile | string;
     message_thread_id?: number;
     duration?: number;
@@ -1486,7 +1639,7 @@ export interface SendVideoParams {
 }
 
 export interface SendAnimationParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     animation: InputFile | string;
     message_thread_id?: number;
     duration?: number;
@@ -1511,7 +1664,7 @@ export interface SendAnimationParams {
 }
 
 export interface SendVoiceParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     voice: InputFile | string;
     message_thread_id?: number;
     caption?: string;
@@ -1531,7 +1684,7 @@ export interface SendVoiceParams {
 }
 
 export interface SendVideoNoteParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     video_note: InputFile | string;
     message_thread_id?: number;
     duration?: number;
@@ -1563,7 +1716,7 @@ export interface SendMediaGroupParams {
 }
 
 export interface SendLocationParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     latitude: number;
     longitude: number;
     message_thread_id?: number;
@@ -1584,7 +1737,7 @@ export interface SendLocationParams {
 }
 
 export interface SendVenueParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     latitude: number;
     longitude: number;
     title: string;
@@ -1607,7 +1760,7 @@ export interface SendVenueParams {
 }
 
 export interface SendContactParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     phone_number: string;
     first_name: string;
     message_thread_id?: number;
@@ -1690,7 +1843,7 @@ export interface SendChatActionParams {
 }
 
 export interface SendStickerParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     sticker: InputFile | string;
     message_thread_id?: number;
     emoji?: string;
@@ -2349,13 +2502,15 @@ export interface BottomButton {
 }
 
 
-export const BOT_API_VERSION = '10.3';
+export const BOT_API_VERSION = '10.4';
 
 export interface ChatFullInfo extends Chat {
     max_reaction_count?: number;
     available_reactions?: ReactionType[];
     guard_bot?: User;
     community?: Community;
+    ton_wallet_card?: TonWalletCard;
+    share_theme?: ChatShareTheme;
 }
 
 export interface ChatMemberAdministrator {
@@ -2496,10 +2651,54 @@ export interface BotAccessSettings {
     added_users?: User[];
 }
 
+export interface UniqueGiftBackdropColors {
+    center_color: number;
+    edge_color: number;
+    symbol_color: number;
+    text_color: number;
+}
+
+export interface UniqueGiftModel {
+    name: string;
+    sticker: Sticker;
+    rarity_per_mille: number;
+    rarity?: 'uncommon' | 'rare' | 'epic' | 'legendary';
+}
+
+export interface UniqueGiftSymbol {
+    name: string;
+    sticker: Sticker;
+    rarity_per_mille: number;
+}
+
+export interface UniqueGiftBackdrop {
+    name: string;
+    colors: UniqueGiftBackdropColors;
+    rarity_per_mille: number;
+}
+
+export interface UniqueGiftColors {
+    model_custom_emoji_id: string;
+    symbol_custom_emoji_id: string;
+    light_theme_main_color: number;
+    light_theme_other_colors: number[];
+    dark_theme_main_color: number;
+    dark_theme_other_colors: number[];
+}
+
 export interface UniqueGift {
-    gift_id?: string;
-    name?: string;
-    [key: string]: any;
+    gift_id: string;
+    base_name: string;
+    name: string;
+    number: number;
+    model: UniqueGiftModel;
+    symbol: UniqueGiftSymbol;
+    backdrop: UniqueGiftBackdrop;
+    is_premium?: boolean;
+    is_burned?: boolean;
+    is_from_blockchain?: boolean;
+    colors?: UniqueGiftColors;
+    publisher_chat?: Chat;
 }
 
 export interface UniqueGiftInfo {
@@ -2541,6 +2740,7 @@ export type RichText =
     | RichTextEmailAddress
     | RichTextPhoneNumber
     | RichTextBankCardNumber
+    | RichTextTonAddress
     | RichTextMention
     | RichTextHashtag
     | RichTextCashtag
@@ -2568,6 +2768,7 @@ export interface RichTextUrl { type: 'url'; text: RichText; url: string; }
 export interface RichTextEmailAddress { type: 'email_address'; text: RichText; email_address: string; }
 export interface RichTextPhoneNumber { type: 'phone_number'; text: RichText; phone_number: string; }
 export interface RichTextBankCardNumber { type: 'bank_card_number'; text: RichText; bank_card_number: string; }
+export interface RichTextTonAddress { type: 'ton_address'; text: RichText; address: string; }
 export interface RichTextMention { type: 'mention'; text: RichText; username: string; }
 export interface RichTextHashtag { type: 'hashtag'; text: RichText; hashtag: string; }
 export interface RichTextCashtag { type: 'cashtag'; text: RichText; cashtag: string; }
@@ -2583,13 +2784,13 @@ export interface RichMessageButton {
     style?: 'danger' | 'success' | 'primary' | 'link';
     url?: string;
     callback_data?: string;
-    web_app?: any;
-    login_url?: any;
+    web_app?: WebAppInfo;
+    login_url?: LoginUrl;
     switch_inline_query?: string;
     switch_inline_query_current_chat?: string;
-    switch_inline_query_chosen_chat?: any;
-    copy_text?: any;
-    callback_game?: any;
+    switch_inline_query_chosen_chat?: SwitchInlineQueryChosenChat;
+    copy_text?: CopyTextButton;
+    callback_game?: CallbackGame;
     pay?: boolean;
     disabled?: DisabledButton;
 }
@@ -2802,7 +3003,7 @@ export interface SendChatJoinRequestWebAppParams {
 }
 
 export interface SendLivePhotoParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     live_photo: InputFile | string;
     photo: InputFile | string;
     message_thread_id?: number;
@@ -2824,7 +3025,7 @@ export interface SendLivePhotoParams {
 }
 
 export interface SendRichMessageParams {
-    chat_id: number | string;
+    chat_id?: number | string;
     rich_message: InputRichMessage;
     message_thread_id?: number;
     direct_messages_topic_id?: number;
@@ -3187,10 +3388,14 @@ export interface RepostStoryParams {
 export interface VerifyUserParams {
     user_id: number;
     custom_description?: string;
+    custom_description_parse_mode?: string;
+    custom_description_entities?: MessageEntity[];
 }
 export interface VerifyChatParams {
     chat_id: number | string;
     custom_description?: string;
+    custom_description_parse_mode?: string;
+    custom_description_entities?: MessageEntity[];
 }
 export interface RemoveUserVerificationParams {
     user_id: number;
@@ -3245,13 +3450,74 @@ export interface LocationAddress {
     city?: string;
     street?: string;
 }
-export interface StoryAreaPosition {
+export interface AreaPosition {
     x_percentage: number;
     y_percentage: number;
     width_percentage: number;
     height_percentage: number;
     rotation_angle: number;
     corner_radius_percentage: number;
+}
+export type StoryAreaPosition = AreaPosition;
+
+export interface TonNftAttribute {
+    trait_type: string;
+    value: string;
+}
+export interface TonNft {
+    address: string;
+    collection_address?: string;
+    index: string;
+    name: string;
+    description: string;
+    attributes?: TonNftAttribute[];
+    gift?: UniqueGift;
+}
+export interface TonWalletCardSticker {
+    position: AreaPosition;
+    nft: TonNft;
+}
+export interface TonWalletCard {
+    address: string;
+    amount: string;
+    stickers: TonWalletCardSticker[];
+    background_nft_address?: string;
+}
+export interface TonWalletTransfer {
+    transaction_id: string;
+    peer_address: string;
+    amount: string;
+    comment?: string;
+}
+export interface PaidMessagesWaived {
+    [key: string]: never;
+}
+export interface EmojiTypeEmoji {
+    type: 'emoji';
+    emoji: string;
+}
+export interface EmojiTypeCustomEmoji {
+    type: 'custom_emoji';
+    custom_emoji_id: string;
+}
+export type EmojiType = EmojiTypeEmoji | EmojiTypeCustomEmoji;
+export interface ChatShareThemeEmoji {
+    type: 'emoji';
+    emojis: EmojiType[];
+    background_backdrop_id?: number;
+}
+export interface ChatShareThemeUniqueGift {
+    type: 'unique_gift';
+    gift: UniqueGift;
+}
+export type ChatShareTheme = ChatShareThemeEmoji | ChatShareThemeUniqueGift;
+export interface ChatShareThemeBackdrop {
+    id: number;
+    name: string;
+    colors: UniqueGiftBackdropColors;
+}
+export interface ChatShareThemeBackdrops {
+    backdrops: ChatShareThemeBackdrop[];
 }
 export interface StoryAreaTypeLocation {
     type: 'location';
@@ -3358,6 +3624,67 @@ export interface OwnedGifts {
     gifts: OwnedGift[];
     next_offset?: string;
 }
+export interface SendWidgetParams {
+    chat_id: number | string;
+    message_thread_id?: number;
+    html: string;
+    width?: number;
+    height?: number;
+    public_data?: string;
+    chat_data?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+    allow_queries?: boolean;
+    is_shared?: boolean;
+    disable_notification?: boolean;
+    protect_content?: boolean;
+    allow_paid_broadcast?: boolean;
+    message_effect_id?: string;
+    reply_parameters?: ReplyParameters;
+    reply_markup?: ReplyMarkupUnion;
+}
+export interface SendSharedWidgetParams {
+    chat_id: number | string;
+    message_thread_id?: number;
+    widget_id: string;
+    chat_data?: string;
+    caption?: string;
+    parse_mode?: string;
+    caption_entities?: MessageEntity[];
+    show_caption_above_media?: boolean;
+    disable_notification?: boolean;
+    protect_content?: boolean;
+    allow_paid_broadcast?: boolean;
+    message_effect_id?: string;
+    reply_parameters?: ReplyParameters;
+    reply_markup?: ReplyMarkupUnion;
+}
+export interface AnswerWidgetQueryParams {
+    widget_query_id: string;
+    data?: string;
+}
+export interface EditMessageWidgetDataParams {
+    chat_id?: number | string;
+    message_id?: number;
+    inline_message_id?: string;
+    public_data?: string;
+    chat_data?: string;
+}
+export interface EditSharedWidgetDataParams {
+    widget_id: string;
+    public_data: string;
+    cache_time?: number;
+}
+export interface GetUniqueGiftParams {
+    name: string;
+}
+export interface DeleteBusinessAccountGiftParams {
+    business_connection_id: string;
+    owned_gift_id: string;
+}
+
 export interface PreparedInlineMessage {
     id: string;
     expiration_date: number;

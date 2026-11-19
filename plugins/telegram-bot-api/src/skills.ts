@@ -222,6 +222,7 @@ import {
     StarAmount,
     Gifts,
     OwnedGifts,
+    UniqueGift,
     Story,
     PreparedInlineMessage,
     PreparedKeyboardButton,
@@ -232,7 +233,15 @@ import {
     SavePreparedInlineMessageParams,
     SavePreparedKeyboardButtonParams,
     SetMyProfilePhotoParams,
-    SetUserEmojiStatusParams
+    SetUserEmojiStatusParams,
+    SendWidgetParams,
+    SendSharedWidgetParams,
+    AnswerWidgetQueryParams,
+    EditMessageWidgetDataParams,
+    EditSharedWidgetDataParams,
+    GetUniqueGiftParams,
+    DeleteBusinessAccountGiftParams,
+    ChatShareThemeBackdrops
 } from './types';
 
 const DEFAULT_ADMIN_RIGHTS_KEY = 0;
@@ -2441,5 +2450,37 @@ export class TelegramBotSkills {
 
     async setUserEmojiStatus(params: SetUserEmojiStatusParams): Promise<boolean> {
         return this.request<boolean>('setUserEmojiStatus', params);
+    }
+
+    async sendWidget(params: SendWidgetParams): Promise<Message> {
+        return this.request<Message>('sendWidget', params);
+    }
+
+    async sendSharedWidget(params: SendSharedWidgetParams): Promise<Message> {
+        return this.request<Message>('sendSharedWidget', params);
+    }
+
+    async answerWidgetQuery(params: AnswerWidgetQueryParams): Promise<boolean> {
+        return this.request<boolean>('answerWidgetQuery', params);
+    }
+
+    async editMessageWidgetData(params: EditMessageWidgetDataParams): Promise<boolean> {
+        return this.request<boolean>('editMessageWidgetData', params);
+    }
+
+    async editSharedWidgetData(params: EditSharedWidgetDataParams): Promise<boolean> {
+        return this.request<boolean>('editSharedWidgetData', params);
+    }
+
+    async getChatShareThemeBackdrops(): Promise<ChatShareThemeBackdrops> {
+        return this.request<ChatShareThemeBackdrops>('getChatShareThemeBackdrops');
+    }
+
+    async getUniqueGift(params: GetUniqueGiftParams): Promise<UniqueGift> {
+        return this.request<UniqueGift>('getUniqueGift', params);
+    }
+
+    async deleteBusinessAccountGift(params: DeleteBusinessAccountGiftParams): Promise<boolean> {
+        return this.request<boolean>('deleteBusinessAccountGift', params);
     }
 }

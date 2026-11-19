@@ -220,6 +220,17 @@ import {
     SavePreparedKeyboardButtonParams,
     SetMyProfilePhotoParams,
     SetUserEmojiStatusParams,
+    SendWidgetParams,
+    SendSharedWidgetParams,
+    AnswerWidgetQueryParams,
+    EditMessageWidgetDataParams,
+    EditSharedWidgetDataParams,
+    GetUniqueGiftParams,
+    DeleteBusinessAccountGiftParams,
+    ChatShareThemeBackdrops,
+    UniqueGift,
+    WidgetQuery,
+    SharedWidgetQuery,
     StarAmount,
     Gifts,
     OwnedGifts,
@@ -243,7 +254,7 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
         name: 'telegram-bot-api',
         version: '0.2.0',
         botApiVersion: BOT_API_VERSION,
-        description: 'Complete Telegram Bot API integration (Bot API 10.3)',
+        description: 'Complete Telegram Bot API integration (Bot API 10.4)',
         author: 'TON AI Core Team',
         dependencies: [] as string[]
     };
@@ -1717,6 +1728,62 @@ export class TelegramBotPlugin extends BasePlugin<TelegramBotConfig> {
     async setUserEmojiStatus(params: SetUserEmojiStatusParams): Promise<boolean> {
         this.checkInitialized();
         return this.skills.setUserEmojiStatus(params);
+    }
+
+    async sendWidget(params: SendWidgetParams): Promise<Message> {
+        this.checkInitialized();
+        return this.skills.sendWidget(params);
+    }
+
+    async sendSharedWidget(params: SendSharedWidgetParams): Promise<Message> {
+        this.checkInitialized();
+        return this.skills.sendSharedWidget(params);
+    }
+
+    async answerWidgetQuery(params: AnswerWidgetQueryParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.answerWidgetQuery(params);
+    }
+
+    async editMessageWidgetData(params: EditMessageWidgetDataParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.editMessageWidgetData(params);
+    }
+
+    async editSharedWidgetData(params: EditSharedWidgetDataParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.editSharedWidgetData(params);
+    }
+
+    async getChatShareThemeBackdrops(): Promise<ChatShareThemeBackdrops> {
+        this.checkInitialized();
+        return this.skills.getChatShareThemeBackdrops();
+    }
+
+    async getUniqueGift(params: GetUniqueGiftParams): Promise<UniqueGift> {
+        this.checkInitialized();
+        return this.skills.getUniqueGift(params);
+    }
+
+    async deleteBusinessAccountGift(params: DeleteBusinessAccountGiftParams): Promise<boolean> {
+        this.checkInitialized();
+        return this.skills.deleteBusinessAccountGift(params);
+    }
+
+    onWidgetQuery(callback: (query: WidgetQuery) => void): string {
+        return this.onUpdate((update) => {
+            if (update.widget_query) {
+                callback(update.widget_query);
+            }
+        });
+    }
+
+    onSharedWidgetQuery(callback: (query: SharedWidgetQuery) => void): string {
+        return this.onUpdate((update) => {
+            if (update.shared_widget_query) {
+                callback(update.shared_widget_query);
+            }
+        });
     }
 
     onGuestMessage(callback: (message: Message) => void): string {
