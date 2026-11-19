@@ -51,6 +51,7 @@ module.exports = {
     extensions: ['.ts', '.js', '.mjs'],
     alias: {
       '@': path.resolve(__dirname, 'src'),
+      'process/browser$': require.resolve('process/browser'),
     },
     fallback: {
       buffer: require.resolve('buffer/'),
@@ -95,6 +96,9 @@ module.exports = {
       'process.env.TELEGRAM_API_ID': JSON.stringify(env.TELEGRAM_API_ID),
       'process.env.TELEGRAM_API_HASH': JSON.stringify(env.TELEGRAM_API_HASH),
       'process.env.GRAM_BUILD_TIME': JSON.stringify(new Date().toISOString()),
+    }),
+    new webpack.NormalModuleReplacementPlugin(/^node:(fs|url)$/, (resource) => {
+      resource.request = resource.request.replace(/^node:/, '');
     }),
     new webpack.NormalModuleReplacementPlugin(
       /^@ton-ai\/core$/,
