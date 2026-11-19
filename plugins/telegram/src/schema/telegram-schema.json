@@ -1305,6 +1305,100 @@
       "predicate": "inputMediaStakeDice"
     },
     {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "allow_queries",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "shared_widget",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "width",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "height",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "html",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "public_data",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "chat_data",
+          "type": "string",
+          "repr": "flags.3?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        }
+      ],
+      "type": "InputMedia",
+      "id": "1157021774",
+      "predicate": "inputMediaWidget"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "widget_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "chat_data",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "InputMedia",
+      "id": "2089114805",
+      "predicate": "inputMediaWidgetId"
+    },
+    {
       "params": [],
       "type": "InputChatPhoto",
       "id": "480546647",
@@ -2112,6 +2206,16 @@
           "flag": {
             "field": "flags2",
             "bit": 20
+          }
+        },
+        {
+          "name": "bot_forum_sidebar",
+          "type": "true",
+          "repr": "flags2.22?true",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 22
           }
         },
         {
@@ -2932,6 +3036,26 @@
           }
         },
         {
+          "name": "in_news",
+          "type": "true",
+          "repr": "flags2.21?true",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 21
+          }
+        },
+        {
+          "name": "forum_sidebar",
+          "type": "true",
+          "repr": "flags2.23?true",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 23
+          }
+        },
+        {
           "name": "id",
           "type": "long",
           "repr": "long"
@@ -3130,10 +3254,20 @@
             "field": "flags2",
             "bit": 20
           }
+        },
+        {
+          "name": "pinned_msg_id",
+          "type": "int",
+          "repr": "flags2.22?int",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 22
+          }
         }
       ],
       "type": "Chat",
-      "id": "-727763770",
+      "id": "2060538432",
       "predicate": "channel"
     },
     {
@@ -4190,10 +4324,20 @@
             "field": "flags2",
             "bit": 23
           }
+        },
+        {
+          "name": "share_theme",
+          "type": "ShareTheme",
+          "repr": "flags2.25?ShareTheme",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 25
+          }
         }
       ],
       "type": "ChatFull",
-      "id": "-1605464774",
+      "id": "-993731264",
       "predicate": "channelFull"
     },
     {
@@ -5952,6 +6096,103 @@
       "type": "MessageMedia",
       "id": "-899896439",
       "predicate": "messageMediaVideoStream"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "is_copy",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "can_query",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "background_query",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "width",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "height",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "payload",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "public_data",
+          "type": "string",
+          "repr": "flags.3?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "public_data_hash",
+          "type": "long",
+          "repr": "flags.3?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "chat_data",
+          "type": "string",
+          "repr": "flags.4?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        },
+        {
+          "name": "widget_id",
+          "type": "long",
+          "repr": "flags.5?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
+        }
+      ],
+      "type": "MessageMedia",
+      "id": "574157332",
+      "predicate": "messageMediaWidget"
     },
     {
       "params": [],
@@ -8062,6 +8303,131 @@
           "repr": "#"
         },
         {
+          "name": "comment_encrypted",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "amount",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "peer_address",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "transaction_id",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "comment",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "MessageAction",
+      "id": "-1825969613",
+      "predicate": "messageActionGramTransfer"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "accepted",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "declined",
+          "type": "true",
+          "repr": "flags.3?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "session_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "expires",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "topic",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "trace_id",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "dapp_name",
+          "type": "string",
+          "repr": "flags.4?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        }
+      ],
+      "type": "MessageAction",
+      "id": "1773716671",
+      "predicate": "messageActionWalletTonConnectRequest"
+    },
+    {
+      "params": [],
+      "type": "MessageAction",
+      "id": "-1043140154",
+      "predicate": "messageActionNoPaidMessagesTokenUsed"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
           "name": "pinned",
           "type": "true",
           "repr": "flags.2?true",
@@ -9951,10 +10317,30 @@
             "field": "flags2",
             "bit": 25
           }
+        },
+        {
+          "name": "wallet_card",
+          "type": "wallet.Card",
+          "repr": "flags2.19?wallet.Card",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 19
+          }
+        },
+        {
+          "name": "share_theme",
+          "type": "ShareTheme",
+          "repr": "flags2.27?ShareTheme",
+          "optional": true,
+          "flag": {
+            "field": "flags2",
+            "bit": 27
+          }
         }
       ],
       "type": "UserFull",
-      "id": "114026053",
+      "id": "-1190384899",
       "predicate": "userFull"
     },
     {
@@ -14633,6 +15019,463 @@
     {
       "params": [
         {
+          "name": "state",
+          "type": "WalletState",
+          "repr": "WalletState"
+        }
+      ],
+      "type": "Update",
+      "id": "1791226538",
+      "predicate": "updateWalletState"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "gasless",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "msg_hash",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "transaction",
+          "type": "WalletTransaction",
+          "repr": "flags.1?WalletTransaction",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "Update",
+      "id": "-1320989366",
+      "predicate": "updateSentWalletTransaction"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "available",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "left",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "reset_at",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "min_amount",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "relayer_address",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Update",
+      "id": "-1464984404",
+      "predicate": "updateWalletGaslessInfo"
+    },
+    {
+      "params": [
+        {
+          "name": "session",
+          "type": "TonConnectSession",
+          "repr": "TonConnectSession"
+        }
+      ],
+      "type": "Update",
+      "id": "1352896014",
+      "predicate": "updateWalletTonConnectSession"
+    },
+    {
+      "params": [
+        {
+          "name": "session_ids",
+          "type": "Vector<long>",
+          "repr": "Vector<long>"
+        }
+      ],
+      "type": "Update",
+      "id": "-772898407",
+      "predicate": "updateWalletTonConnectPendingDisconnect"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "Peer",
+          "repr": "Peer"
+        },
+        {
+          "name": "topic_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "icon_emoji_id",
+          "type": "long",
+          "repr": "flags.1?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "closed",
+          "type": "Bool",
+          "repr": "flags.2?Bool",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "hidden",
+          "type": "Bool",
+          "repr": "flags.3?Bool",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        }
+      ],
+      "type": "Update",
+      "id": "593913436",
+      "predicate": "updateEditForumTopic"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "query_type",
+          "type": "WidgetQueryType",
+          "repr": "WidgetQueryType"
+        },
+        {
+          "name": "user_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "peer",
+          "type": "Peer",
+          "repr": "Peer"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "chat_instance",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "chat_type",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "data",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "widget_id",
+          "type": "long",
+          "repr": "flags.0?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "wallet_card",
+          "type": "wallet.Card",
+          "repr": "flags.1?wallet.Card",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "Update",
+      "id": "-1284243864",
+      "predicate": "updateBotWidgetQuery"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "query_type",
+          "type": "WidgetQueryType",
+          "repr": "WidgetQueryType"
+        },
+        {
+          "name": "user_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "inline_message_id",
+          "type": "InputBotInlineMessageID",
+          "repr": "InputBotInlineMessageID"
+        },
+        {
+          "name": "chat_instance",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "chat_type",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "data",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "widget_id",
+          "type": "long",
+          "repr": "flags.0?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "wallet_card",
+          "type": "wallet.Card",
+          "repr": "flags.1?wallet.Card",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "Update",
+      "id": "-1510965752",
+      "predicate": "updateInlineBotWidgetQuery"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "query_type",
+          "type": "WidgetQueryType",
+          "repr": "WidgetQueryType"
+        },
+        {
+          "name": "user_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "data",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "widget_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "wallet_card",
+          "type": "wallet.Card",
+          "repr": "flags.1?wallet.Card",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "Update",
+      "id": "-91635977",
+      "predicate": "updateBotWidgetCopyQuery"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "Peer",
+          "repr": "Peer"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "public_data",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "public_data_hash",
+          "type": "long",
+          "repr": "flags.0?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "chat_data",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "pts",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "pts_count",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "Update",
+      "id": "-1146062627",
+      "predicate": "updateMessageWidgetData"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "pending",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "transcription_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Update",
+      "id": "1934372475",
+      "predicate": "updateTranscribedAudioFile"
+    },
+    {
+      "params": [
+        {
           "name": "pts",
           "type": "int",
           "repr": "int"
@@ -15460,6 +16303,16 @@
           "flag": {
             "field": "flags",
             "bit": 14
+          }
+        },
+        {
+          "name": "fpnv_allowed",
+          "type": "true",
+          "repr": "flags.17?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 17
           }
         },
         {
@@ -19728,6 +20581,23 @@
       "predicate": "messageEntityDiffDelete"
     },
     {
+      "params": [
+        {
+          "name": "offset",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "length",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "MessageEntity",
+      "id": "-39075891",
+      "predicate": "messageEntityTonAddress"
+    },
+    {
       "params": [],
       "type": "InputChannel",
       "id": "-292807034",
@@ -20936,6 +21806,170 @@
           "repr": "#"
         },
         {
+          "name": "allow_queries",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "shared_widget",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "invert_media",
+          "type": "true",
+          "repr": "flags.6?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 6
+          }
+        },
+        {
+          "name": "width",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "height",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "html",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "public_data",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "chat_data",
+          "type": "string",
+          "repr": "flags.3?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "reply_markup",
+          "type": "ReplyMarkup",
+          "repr": "flags.4?ReplyMarkup",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "entities",
+          "type": "Vector<MessageEntity>",
+          "repr": "flags.5?Vector<MessageEntity>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
+        }
+      ],
+      "type": "InputBotInlineMessage",
+      "id": "-174611472",
+      "predicate": "inputBotInlineMessageWidget"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "invert_media",
+          "type": "true",
+          "repr": "flags.3?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "widget_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "chat_data",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "reply_markup",
+          "type": "ReplyMarkup",
+          "repr": "flags.1?ReplyMarkup",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "entities",
+          "type": "Vector<MessageEntity>",
+          "repr": "flags.2?Vector<MessageEntity>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        }
+      ],
+      "type": "InputBotInlineMessage",
+      "id": "-24413909",
+      "predicate": "inputBotInlineMessageWidgetId"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
           "name": "id",
           "type": "string",
           "repr": "string"
@@ -21551,6 +22585,108 @@
       "type": "BotInlineMessage",
       "id": "174161531",
       "predicate": "botInlineMessageRichMessage"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "invert_media",
+          "type": "true",
+          "repr": "flags.5?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
+        },
+        {
+          "name": "width",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "height",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "payload",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "public_data",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "public_data_hash",
+          "type": "long",
+          "repr": "flags.0?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "chat_data",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "reply_markup",
+          "type": "ReplyMarkup",
+          "repr": "flags.2?ReplyMarkup",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "widget_id",
+          "type": "long",
+          "repr": "flags.3?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "entities",
+          "type": "Vector<MessageEntity>",
+          "repr": "flags.4?Vector<MessageEntity>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        }
+      ],
+      "type": "BotInlineMessage",
+      "id": "-1163823052",
+      "predicate": "botInlineMessageWidget"
     },
     {
       "params": [
@@ -23559,6 +24695,18 @@
       "type": "RichText",
       "id": "-1345872682",
       "predicate": "textButton"
+    },
+    {
+      "params": [
+        {
+          "name": "text",
+          "type": "RichText",
+          "repr": "RichText"
+        }
+      ],
+      "type": "RichText",
+      "id": "1020437354",
+      "predicate": "textTonAddress"
     },
     {
       "params": [],
@@ -31069,6 +32217,16 @@
           }
         },
         {
+          "name": "request_wallet",
+          "type": "true",
+          "repr": "flags.8?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 8
+          }
+        },
+        {
           "name": "bot",
           "type": "User",
           "repr": "User"
@@ -31147,10 +32305,30 @@
             "field": "flags",
             "bit": 7
           }
+        },
+        {
+          "name": "tc_session_id",
+          "type": "long",
+          "repr": "flags.9?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 9
+          }
+        },
+        {
+          "name": "tc_client_id",
+          "type": "string",
+          "repr": "flags.10?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 10
+          }
         }
       ],
       "type": "UrlAuthResult",
-      "id": "1020666860",
+      "id": "-1110810265",
       "predicate": "urlAuthResultRequest"
     },
     {
@@ -33178,10 +34356,20 @@
             "field": "flags",
             "bit": 12
           }
+        },
+        {
+          "name": "quote_rich",
+          "type": "Vector<RichText>",
+          "repr": "flags.14?Vector<RichText>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 14
+          }
         }
       ],
       "type": "MessageReplyHeader",
-      "id": "462937446",
+      "id": "-575296651",
       "predicate": "messageReplyHeader"
     },
     {
@@ -37099,6 +38287,26 @@
           }
         },
         {
+          "name": "deletable",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "expired",
+          "type": "true",
+          "repr": "flags.3?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
           "name": "username",
           "type": "string",
           "repr": "string"
@@ -39021,10 +40229,20 @@
             "field": "flags",
             "bit": 7
           }
+        },
+        {
+          "name": "quote_rich",
+          "type": "Vector<RichText>",
+          "repr": "flags.8?Vector<RichText>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 8
+          }
         }
       ],
       "type": "InputReplyTo",
-      "id": "1003796418",
+      "id": "1975627120",
       "predicate": "inputReplyToMessage"
     },
     {
@@ -44765,8 +45983,8 @@
         },
         {
           "name": "custom_description",
-          "type": "string",
-          "repr": "flags.0?string",
+          "type": "TextWithEntities",
+          "repr": "flags.0?TextWithEntities",
           "optional": true,
           "flag": {
             "field": "flags",
@@ -44775,7 +45993,7 @@
         }
       ],
       "type": "BotVerifierSettings",
-      "id": "-1328716265",
+      "id": "-1591021569",
       "predicate": "botVerifierSettings"
     },
     {
@@ -44792,12 +46010,12 @@
         },
         {
           "name": "description",
-          "type": "string",
-          "repr": "string"
+          "type": "TextWithEntities",
+          "repr": "TextWithEntities"
         }
       ],
       "type": "BotVerification",
-      "id": "-113453988",
+      "id": "-147976487",
       "predicate": "botVerification"
     },
     {
@@ -47241,18 +48459,6 @@
     {
       "params": [
         {
-          "name": "pnv_token",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "InputPasskeyCredential",
-      "id": "1528613672",
-      "predicate": "inputPasskeyCredentialFirebasePNV"
-    },
-    {
-      "params": [
-        {
           "name": "center_color",
           "type": "int",
           "repr": "int"
@@ -49071,6 +50277,1319 @@
     {
       "params": [
         {
+          "name": "currency",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "rate",
+          "type": "double",
+          "repr": "double"
+        }
+      ],
+      "type": "CurrencyRate",
+      "id": "819557436",
+      "predicate": "currencyRate"
+    },
+    {
+      "params": [
+        {
+          "name": "rates",
+          "type": "Vector<CurrencyRate>",
+          "repr": "Vector<CurrencyRate>"
+        }
+      ],
+      "type": "payments.CurrencyRates",
+      "id": "-1144199998",
+      "predicate": "payments.currencyRates"
+    },
+    {
+      "params": [
+        {
+          "name": "response",
+          "type": "DataJSON",
+          "repr": "DataJSON"
+        }
+      ],
+      "type": "toncenter.ApiResponse",
+      "id": "-1399980519",
+      "predicate": "toncenter.apiResponse"
+    },
+    {
+      "params": [
+        {
+          "name": "url",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "expires",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "toncenter.StreamingUrl",
+      "id": "428373505",
+      "predicate": "toncenter.streamingUrl"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "available",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "payment_method",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "OnrampMethodAvailability",
+      "id": "-1631009112",
+      "predicate": "onrampMethodAvailability"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "supports_base_currencies",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "supports_limits",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "supports_quote",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "crypto_currencies",
+          "type": "Vector<string>",
+          "repr": "Vector<string>"
+        }
+      ],
+      "type": "OnrampProviderInfo",
+      "id": "230847874",
+      "predicate": "onrampProviderInfo"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "allowed",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "buy_allowed",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "country_code",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "state",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "methods",
+          "type": "Vector<OnrampMethodAvailability>",
+          "repr": "Vector<OnrampMethodAvailability>"
+        }
+      ],
+      "type": "OnrampAvailability",
+      "id": "-104314509",
+      "predicate": "onrampAvailability"
+    },
+    {
+      "params": [
+        {
+          "name": "base_currency",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "base_min_amount",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "base_max_amount",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "crypto_min_amount",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "crypto_max_amount",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "payment_method",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "OnrampLimits",
+      "id": "2078435198",
+      "predicate": "onrampLimits"
+    },
+    {
+      "params": [
+        {
+          "name": "base_currency",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "base_amount",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "crypto_currency",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "crypto_amount",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "crypto_price",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "fee_amount",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "extra_fee_amount",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "network_fee_amount",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "total_amount",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "payment_method",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "expires_date",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "OnrampQuote",
+      "id": "2055213545",
+      "predicate": "onrampQuote"
+    },
+    {
+      "params": [
+        {
+          "name": "provider",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "session_id",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "expires_date",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "OnrampSession",
+      "id": "-773575132",
+      "predicate": "onrampSession"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "creating",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "WalletState",
+      "id": "-1665551636",
+      "predicate": "walletStateEmpty"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "backup_enabled",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "can_export_phrase",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "can_enable_backup",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "address",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "public_key",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "balance",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "WalletState",
+      "id": "-1782238101",
+      "predicate": "walletState"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "user_id",
+          "type": "long",
+          "repr": "flags.0?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "address",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "public_key",
+          "type": "bytes",
+          "repr": "bytes"
+        }
+      ],
+      "type": "WalletUserAddress",
+      "id": "-25628980",
+      "predicate": "walletUserAddress"
+    },
+    {
+      "params": [
+        {
+          "name": "addresses",
+          "type": "Vector<WalletUserAddress>",
+          "repr": "Vector<WalletUserAddress>"
+        },
+        {
+          "name": "users",
+          "type": "Vector<User>",
+          "repr": "Vector<User>"
+        }
+      ],
+      "type": "wallet.UserAddresses",
+      "id": "-1836156075",
+      "predicate": "wallet.userAddresses"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "user_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "address",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "domain",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "WalletTransactionPeer",
+      "id": "-722833299",
+      "predicate": "walletTransactionPeerUser"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "address",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "domain",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "WalletTransactionPeer",
+      "id": "103596476",
+      "predicate": "walletTransactionPeerAddress"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "address",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "domain",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "provider_name",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "WalletTransactionPeer",
+      "id": "-443213714",
+      "predicate": "walletTransactionPeerOnramp"
+    },
+    {
+      "params": [],
+      "type": "WalletTransactionPeer",
+      "id": "1921772890",
+      "predicate": "walletTransactionPeerUnsupported"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "channel_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "address",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "domain",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "WalletTransactionPeer",
+      "id": "1424428081",
+      "predicate": "walletTransactionPeerChannel"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "own_profile",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "WalletTransactionPeer",
+      "id": "-193817447",
+      "predicate": "walletTransactionPeerTelegramGift"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "incoming",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "gasless",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "failed",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "key_change",
+          "type": "true",
+          "repr": "flags.5?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
+        },
+        {
+          "name": "comment_encrypted",
+          "type": "true",
+          "repr": "flags.6?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 6
+          }
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "amount",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "fee",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "date",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "peer",
+          "type": "WalletTransactionPeer",
+          "repr": "WalletTransactionPeer"
+        },
+        {
+          "name": "comment",
+          "type": "string",
+          "repr": "flags.3?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "tx_hash",
+          "type": "string",
+          "repr": "flags.4?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        },
+        {
+          "name": "nft",
+          "type": "wallet.NftItem",
+          "repr": "flags.7?wallet.NftItem",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 7
+          }
+        }
+      ],
+      "type": "WalletTransaction",
+      "id": "-1792163517",
+      "predicate": "walletTransaction"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "balance",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "transactions",
+          "type": "Vector<WalletTransaction>",
+          "repr": "Vector<WalletTransaction>"
+        },
+        {
+          "name": "next_offset",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "chats",
+          "type": "Vector<Chat>",
+          "repr": "Vector<Chat>"
+        },
+        {
+          "name": "users",
+          "type": "Vector<User>",
+          "repr": "Vector<User>"
+        }
+      ],
+      "type": "wallet.Transactions",
+      "id": "1126356389",
+      "predicate": "wallet.transactions"
+    },
+    {
+      "params": [
+        {
+          "name": "token",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "dcs",
+          "type": "Vector<int>",
+          "repr": "Vector<int>"
+        }
+      ],
+      "type": "wallet.SecretPhraseParts",
+      "id": "-422514943",
+      "predicate": "wallet.secretPhraseParts"
+    },
+    {
+      "params": [
+        {
+          "name": "data",
+          "type": "bytes",
+          "repr": "bytes"
+        }
+      ],
+      "type": "wallet.EncryptedSecretPhrasePart",
+      "id": "417867063",
+      "predicate": "wallet.encryptedSecretPhrasePart"
+    },
+    {
+      "params": [
+        {
+          "name": "dc",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "public_key",
+          "type": "bytes",
+          "repr": "bytes"
+        }
+      ],
+      "type": "wallet.HolderDc",
+      "id": "-103410961",
+      "predicate": "wallet.holderDc"
+    },
+    {
+      "params": [
+        {
+          "name": "payload",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "expires",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "domain",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "wallet.ProofChallenge",
+      "id": "-1713105145",
+      "predicate": "wallet.proofChallenge"
+    },
+    {
+      "params": [
+        {
+          "name": "timestamp",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "signature",
+          "type": "bytes",
+          "repr": "bytes"
+        }
+      ],
+      "type": "WalletOwnershipProof",
+      "id": "1622985485",
+      "predicate": "walletOwnershipProof"
+    },
+    {
+      "params": [],
+      "type": "InputWalletReplacement",
+      "id": "1671708892",
+      "predicate": "inputWalletNew"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "public_key",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "anchor_public_key",
+          "type": "bytes",
+          "repr": "flags.0?bytes",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "proof",
+          "type": "WalletOwnershipProof",
+          "repr": "WalletOwnershipProof"
+        }
+      ],
+      "type": "InputWalletReplacement",
+      "id": "1722182203",
+      "predicate": "inputWalletImported"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "icon",
+          "type": "WebDocument",
+          "repr": "flags.0?WebDocument",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "TonConnectManifest",
+      "id": "304255588",
+      "predicate": "tonConnectManifest"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "pending",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "closing",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "closed",
+          "type": "true",
+          "repr": "flags.2?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "dapp_client_id",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "client_id",
+          "type": "string",
+          "repr": "flags.3?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "nonce",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "manifest",
+          "type": "TonConnectManifest",
+          "repr": "flags.4?TonConnectManifest",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        },
+        {
+          "name": "manifest_error",
+          "type": "int",
+          "repr": "flags.5?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
+        },
+        {
+          "name": "date",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "TonConnectSession",
+      "id": "308631238",
+      "predicate": "tonConnectSession"
+    },
+    {
+      "params": [
+        {
+          "name": "challenge",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "event_id",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "wallet.TonConnectChallenge",
+      "id": "1271436947",
+      "predicate": "wallet.tonConnectChallenge"
+    },
+    {
+      "params": [
+        {
+          "name": "event_id",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "TonConnectNextEventId",
+      "id": "1478780131",
+      "predicate": "tonConnectNextEventId"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "session_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "body",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "expires",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "topic",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "trace_id",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "TonConnectRequest",
+      "id": "-1587575533",
+      "predicate": "tonConnectRequest"
+    },
+    {
+      "params": [
+        {
+          "name": "session",
+          "type": "TonConnectSession",
+          "repr": "TonConnectSession"
+        },
+        {
+          "name": "requests",
+          "type": "Vector<TonConnectRequest>",
+          "repr": "Vector<TonConnectRequest>"
+        }
+      ],
+      "type": "wallet.TonConnectPending",
+      "id": "-2050952924",
+      "predicate": "wallet.tonConnectPending"
+    },
+    {
+      "params": [
+        {
+          "name": "sessions",
+          "type": "Vector<TonConnectSession>",
+          "repr": "Vector<TonConnectSession>"
+        }
+      ],
+      "type": "wallet.TonConnectSessions",
+      "id": "236939414",
+      "predicate": "wallet.tonConnectSessions"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "has_balance",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "wallet.ExistingBalance",
+      "id": "-1108800883",
+      "predicate": "wallet.existingBalance"
+    },
+    {
+      "params": [
+        {
+          "name": "trait_type",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "value",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "wallet.NftAttribute",
+      "id": "1277096206",
+      "predicate": "wallet.nftAttribute"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "collection_address",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "address",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "owner_address",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "index",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "image",
+          "type": "WebDocument",
+          "repr": "flags.3?WebDocument",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "image_small",
+          "type": "WebDocument",
+          "repr": "flags.4?WebDocument",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        },
+        {
+          "name": "content_url",
+          "type": "WebDocument",
+          "repr": "flags.5?WebDocument",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
+        },
+        {
+          "name": "lottie",
+          "type": "WebDocument",
+          "repr": "flags.6?WebDocument",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 6
+          }
+        },
+        {
+          "name": "attributes",
+          "type": "Vector<wallet.NftAttribute>",
+          "repr": "flags.7?Vector<wallet.NftAttribute>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 7
+          }
+        },
+        {
+          "name": "extra",
+          "type": "DataJSON",
+          "repr": "flags.8?DataJSON",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 8
+          }
+        },
+        {
+          "name": "gift",
+          "type": "StarGift",
+          "repr": "flags.9?StarGift",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 9
+          }
+        }
+      ],
+      "type": "wallet.NftItem",
+      "id": "389937907",
+      "predicate": "wallet.nftItem"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "items",
+          "type": "Vector<wallet.NftItem>",
+          "repr": "Vector<wallet.NftItem>"
+        },
+        {
+          "name": "next_offset",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "wallet.NftItems",
+      "id": "2035107951",
+      "predicate": "wallet.nftItems"
+    },
+    {
+      "params": [
+        {
           "name": "nonce",
           "type": "string",
           "repr": "string"
@@ -49086,862 +51605,391 @@
       "predicate": "auth.firebasePnvIntent"
     },
     {
-      "id": "1450380236",
-      "predicate": "null",
-      "params": [],
-      "type": "Null"
-    },
-    {
-      "id": "-813865807",
-      "predicate": "userStatusHidden",
-      "params": [],
-      "type": "UserStatus"
-    },
-    {
-      "id": "29007925",
-      "predicate": "messageActionPhoneNumberRequest",
-      "params": [],
-      "type": "MessageAction"
-    },
-    {
-      "id": "1431655760",
-      "predicate": "messageActionUserJoined",
-      "params": [],
-      "type": "MessageAction"
-    },
-    {
-      "id": "1431655761",
-      "predicate": "messageActionUserUpdatedPhoto",
       "params": [
         {
-          "name": "new_user_photo",
-          "type": "UserProfilePhoto",
-          "repr": "UserProfilePhoto"
+          "name": "session_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "challenge_answer",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "body",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "proof",
+          "type": "WalletOwnershipProof",
+          "repr": "WalletOwnershipProof"
         }
       ],
-      "type": "MessageAction"
+      "type": "InputTonConnectOauthSession",
+      "id": "1654613710",
+      "predicate": "inputTonConnectOauthSession"
     },
     {
-      "id": "1431655762",
-      "predicate": "messageActionTTLChange",
       "params": [
         {
-          "name": "ttl",
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "expires",
+          "type": "int",
+          "repr": "flags.0?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "ExportedNoPaidMessagesToken",
+      "id": "1767755842",
+      "predicate": "exportedNoPaidMessagesToken"
+    },
+    {
+      "params": [],
+      "type": "ShareTheme",
+      "id": "-1783830449",
+      "predicate": "shareThemeDefault"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "backdrop_id",
+          "type": "int",
+          "repr": "flags.0?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "emojis",
+          "type": "Vector<Reaction>",
+          "repr": "flags.1?Vector<Reaction>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "ShareTheme",
+      "id": "1689466081",
+      "predicate": "shareThemeEmojiBackdrop"
+    },
+    {
+      "params": [
+        {
+          "name": "stargift",
+          "type": "StarGift",
+          "repr": "StarGift"
+        }
+      ],
+      "type": "ShareTheme",
+      "id": "-336796051",
+      "predicate": "shareThemeGift"
+    },
+    {
+      "params": [
+        {
+          "name": "stargift",
+          "type": "InputSavedStarGift",
+          "repr": "InputSavedStarGift"
+        }
+      ],
+      "type": "ShareTheme",
+      "id": "1069099867",
+      "predicate": "inputShareThemeGift"
+    },
+    {
+      "params": [
+        {
+          "name": "backdrop_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "center_color",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "edge_color",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "pattern_color",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "text_color",
           "type": "int",
           "repr": "int"
         }
       ],
-      "type": "MessageAction"
+      "type": "ShareThemeBackdropOption",
+      "id": "1170331218",
+      "predicate": "shareThemeBackdropOption"
     },
     {
-      "id": "1431655767",
-      "predicate": "messageActionCreatedBroadcastList",
       "params": [],
-      "type": "MessageAction"
+      "type": "ShareThemeBackdrops",
+      "id": "2050977279",
+      "predicate": "shareThemeBackdropsNotModified"
     },
     {
-      "id": "1431655925",
-      "predicate": "messageActionLoginUnknownLocation",
       "params": [
         {
-          "name": "title",
+          "name": "hash",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "backdrops",
+          "type": "Vector<ShareThemeBackdropOption>",
+          "repr": "Vector<ShareThemeBackdropOption>"
+        }
+      ],
+      "type": "ShareThemeBackdrops",
+      "id": "-1427448608",
+      "predicate": "shareThemeBackdrops"
+    },
+    {
+      "params": [
+        {
+          "name": "coordinates",
+          "type": "MediaAreaCoordinates",
+          "repr": "MediaAreaCoordinates"
+        },
+        {
+          "name": "nft_address",
           "type": "string",
           "repr": "string"
+        }
+      ],
+      "type": "InputWalletCardSticker",
+      "id": "1474250151",
+      "predicate": "inputWalletCardSticker"
+    },
+    {
+      "params": [
+        {
+          "name": "coordinates",
+          "type": "MediaAreaCoordinates",
+          "repr": "MediaAreaCoordinates"
+        },
+        {
+          "name": "nft",
+          "type": "wallet.NftItem",
+          "repr": "wallet.NftItem"
+        }
+      ],
+      "type": "wallet.CardSticker",
+      "id": "-218035014",
+      "predicate": "wallet.cardSticker"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "stickers",
+          "type": "Vector<wallet.CardSticker>",
+          "repr": "flags.0?Vector<wallet.CardSticker>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "bg_nft_item",
+          "type": "wallet.NftItem",
+          "repr": "flags.1?wallet.NftItem",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
         },
         {
           "name": "address",
           "type": "string",
           "repr": "string"
-        }
-      ],
-      "type": "MessageAction"
-    },
-    {
-      "id": "-648121413",
-      "predicate": "inputMessagesFilterPhotoVideoDocuments",
-      "params": [],
-      "type": "MessagesFilter"
-    },
-    {
-      "id": "-2006880112",
-      "predicate": "updateTranscribeAudio",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
         },
         {
-          "name": "final",
-          "type": "true",
-          "repr": "flags.0?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 0
-          }
-        },
-        {
-          "name": "transcription_id",
+          "name": "balance",
           "type": "long",
           "repr": "long"
-        },
+        }
+      ],
+      "type": "wallet.Card",
+      "id": "-1898953807",
+      "predicate": "wallet.card"
+    },
+    {
+      "params": [
         {
-          "name": "text",
+          "name": "nft_address",
           "type": "string",
           "repr": "string"
-        }
-      ],
-      "type": "Update"
-    },
-    {
-      "id": "-1464975695",
-      "predicate": "updateBotSubscriptionExpire",
-      "params": [
-        {
-          "name": "user_id",
-          "type": "long",
-          "repr": "long"
         },
         {
           "name": "payload",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "until_date",
-          "type": "int",
-          "repr": "int"
-        },
-        {
-          "name": "qts",
-          "type": "int",
-          "repr": "int"
-        }
-      ],
-      "type": "Update"
-    },
-    {
-      "id": "-736472729",
-      "predicate": "webPageUrlPending",
-      "params": [
-        {
-          "name": "url",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "WebPage"
-    },
-    {
-      "id": "-670292500",
-      "predicate": "keyboardButtonUrl",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "url",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "-433338016",
-      "predicate": "keyboardButtonCallback",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "requires_password",
-          "type": "true",
-          "repr": "flags.0?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 0
-          }
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "data",
           "type": "bytes",
           "repr": "bytes"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "1098841487",
-      "predicate": "keyboardButtonRequestPhone",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "-1438582451",
-      "predicate": "keyboardButtonRequestGeoLocation",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "-1726768644",
-      "predicate": "keyboardButtonSwitchInline",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "same_peer",
-          "type": "true",
-          "repr": "flags.0?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 0
-          }
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "query",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "peer_types",
-          "type": "InlineQueryPeerType",
-          "repr": "flags.1?Vector<InlineQueryPeerType>",
-          "optional": true,
-          "vector": true,
-          "flag": {
-            "field": "flags",
-            "bit": 1
-          }
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "-1983540999",
-      "predicate": "keyboardButtonGame",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "1067792645",
-      "predicate": "keyboardButtonBuy",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "-183499015",
-      "predicate": "keyboardButtonUrlAuth",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "fwd_text",
-          "type": "string",
-          "repr": "flags.0?string",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 0
-          }
-        },
-        {
-          "name": "url",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "button_id",
-          "type": "int",
-          "repr": "int"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "1744911986",
-      "predicate": "inputKeyboardButtonUrlAuth",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "request_write_access",
-          "type": "true",
-          "repr": "flags.0?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 0
-          }
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "fwd_text",
-          "type": "string",
-          "repr": "flags.1?string",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 1
-          }
-        },
-        {
-          "name": "url",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "bot",
-          "type": "InputUser",
-          "repr": "InputUser"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "2047989634",
-      "predicate": "keyboardButtonRequestPoll",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "quiz",
-          "type": "Bool",
-          "repr": "flags.0?Bool",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 0
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "2103314375",
-      "predicate": "inputKeyboardButtonUserProfile",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "user_id",
-          "type": "InputUser",
-          "repr": "InputUser"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "-1057137399",
-      "predicate": "keyboardButtonUserProfile",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "user_id",
-          "type": "long",
-          "repr": "long"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "-398020192",
-      "predicate": "keyboardButtonWebView",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "url",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "-514047120",
-      "predicate": "keyboardButtonSimpleWebView",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "url",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "1527715317",
-      "predicate": "keyboardButtonRequestPeer",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "button_id",
-          "type": "int",
-          "repr": "int"
-        },
-        {
-          "name": "peer_type",
-          "type": "RequestPeerType",
-          "repr": "RequestPeerType"
-        },
-        {
-          "name": "max_quantity",
-          "type": "int",
-          "repr": "int"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "45580630",
-      "predicate": "inputKeyboardButtonRequestPeer",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "name_requested",
-          "type": "true",
-          "repr": "flags.0?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 0
-          }
-        },
-        {
-          "name": "username_requested",
-          "type": "true",
-          "repr": "flags.1?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 1
-          }
-        },
-        {
-          "name": "photo_requested",
-          "type": "true",
-          "repr": "flags.2?true",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 2
-          }
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "button_id",
-          "type": "int",
-          "repr": "int"
-        },
-        {
-          "name": "peer_type",
-          "type": "RequestPeerType",
-          "repr": "RequestPeerType"
-        },
-        {
-          "name": "max_quantity",
-          "type": "int",
-          "repr": "int"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "-1127960816",
-      "predicate": "keyboardButtonCopy",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "style",
-          "type": "KeyboardButtonStyle",
-          "repr": "flags.10?KeyboardButtonStyle",
-          "optional": true,
-          "flag": {
-            "field": "flags",
-            "bit": 10
-          }
-        },
-        {
-          "name": "text",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "copy_text",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "KeyboardButton"
-    },
-    {
-      "id": "-26672755",
-      "predicate": "channelAdminLogEventActionChangeTheme",
-      "params": [
-        {
-          "name": "prev_value",
-          "type": "string",
-          "repr": "string"
-        },
-        {
-          "name": "new_value",
-          "type": "string",
-          "repr": "string"
-        }
-      ],
-      "type": "ChannelAdminLogEventAction"
-    },
-    {
-      "id": "1062078024",
-      "predicate": "messages.messageEmpty",
-      "params": [],
-      "type": "messages.MessageEmpty"
-    },
-    {
-      "id": "2042649079",
-      "predicate": "premiumGiftOption",
-      "params": [
-        {
-          "name": "flags",
-          "type": "#",
-          "repr": "#"
-        },
-        {
-          "name": "months",
-          "type": "int",
-          "repr": "int"
-        },
-        {
-          "name": "currency",
-          "type": "string",
-          "repr": "string"
         },
         {
           "name": "amount",
           "type": "long",
           "repr": "long"
+        }
+      ],
+      "type": "payments.StarGiftDepositPayload",
+      "id": "1918612715",
+      "predicate": "payments.starGiftDepositPayload"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
         },
         {
-          "name": "bot_url",
+          "name": "address",
           "type": "string",
-          "repr": "flags.1?string",
+          "repr": "string"
+        },
+        {
+          "name": "balance",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "public_key",
+          "type": "bytes",
+          "repr": "flags.0?bytes",
           "optional": true,
           "flag": {
             "field": "flags",
-            "bit": 1
+            "bit": 0
           }
         },
         {
-          "name": "store_product",
+          "name": "state_init",
+          "type": "bytes",
+          "repr": "flags.0?bytes",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "UserWallet",
+      "id": "1162684215",
+      "predicate": "userWallet"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "with_wallet",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "WidgetQueryType",
+      "id": "383307531",
+      "predicate": "widgetQueryTypeData"
+    },
+    {
+      "params": [
+        {
+          "name": "wallet",
+          "type": "UserWallet",
+          "repr": "UserWallet"
+        },
+        {
+          "name": "sign_data",
+          "type": "DataJSON",
+          "repr": "DataJSON"
+        }
+      ],
+      "type": "WidgetQueryType",
+      "id": "421545948",
+      "predicate": "widgetQueryTypeSignData"
+    },
+    {
+      "params": [
+        {
+          "name": "wallet",
+          "type": "UserWallet",
+          "repr": "UserWallet"
+        },
+        {
+          "name": "msg_hash",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "WidgetQueryType",
+      "id": "-12897356",
+      "predicate": "widgetQueryTypeSentTransaction"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "result",
           "type": "string",
           "repr": "flags.0?string",
           "optional": true,
@@ -49951,25 +51999,49 @@
           }
         }
       ],
-      "type": "PremiumGiftOption"
+      "type": "messages.BotWidgetQueryAnswer",
+      "id": "-1783156701",
+      "predicate": "messages.botWidgetQueryAnswer"
     },
     {
-      "id": "-1428220517",
-      "predicate": "messages.webViewResult",
       "params": [
         {
-          "name": "result",
-          "type": "BotInlineResult",
-          "repr": "BotInlineResult"
-        },
-        {
-          "name": "users",
-          "type": "User",
-          "repr": "Vector<User>",
-          "vector": true
+          "name": "period",
+          "type": "int",
+          "repr": "int"
         }
       ],
-      "type": "messages.WebViewResult"
+      "type": "messages.WidgetPublicData",
+      "id": "-1189515689",
+      "predicate": "messages.widgetPublicDataNotModified"
+    },
+    {
+      "params": [
+        {
+          "name": "hash",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "data",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "period",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "messages.WidgetPublicData",
+      "id": "71908351",
+      "predicate": "messages.widgetPublicData"
+    },
+    {
+      "id": "1450380236",
+      "params": [],
+      "type": "Null",
+      "predicate": "null"
     }
   ],
   "methods": [
@@ -50905,6 +52977,33 @@
     {
       "params": [
         {
+          "name": "web_auth_token",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Bool",
+      "id": "1225633185",
+      "method": "auth.cancelWebTokenAuthorization"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "except_ids",
+          "type": "Vector<long>",
+          "repr": "flags.0?Vector<long>",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
           "name": "api_id",
           "type": "int",
           "repr": "int"
@@ -50916,7 +53015,7 @@
         }
       ],
       "type": "auth.FirebasePnvIntent",
-      "id": "2004743034",
+      "id": "1682904512",
       "method": "auth.initFirebasePnvLogin"
     },
     {
@@ -54033,6 +56132,55 @@
       "type": "Bool",
       "id": "329212923",
       "method": "contacts.updateContactNote"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "revoke",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "temporary",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "ExportedNoPaidMessagesToken",
+      "id": "-2084206930",
+      "method": "contacts.exportNoPaidMessagesToken"
+    },
+    {
+      "params": [
+        {
+          "name": "user_id",
+          "type": "InputUser",
+          "repr": "InputUser"
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "User",
+      "id": "900187850",
+      "method": "contacts.importNoPaidMessagesToken"
     },
     {
       "params": [
@@ -57983,10 +60131,20 @@
             "field": "flags",
             "bit": 4
           }
+        },
+        {
+          "name": "tonconnect_session",
+          "type": "InputTonConnectOauthSession",
+          "repr": "flags.5?InputTonConnectOauthSession",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
         }
       ],
       "type": "UrlAuthResult",
-      "id": "1738797278",
+      "id": "417156754",
       "method": "messages.acceptUrlAuth"
     },
     {
@@ -62173,6 +64331,256 @@
       "method": "messages.requestChatJoinWebView"
     },
     {
+      "params": [
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "theme",
+          "type": "ShareTheme",
+          "repr": "ShareTheme"
+        }
+      ],
+      "type": "Bool",
+      "id": "1770691354",
+      "method": "messages.setShareTheme"
+    },
+    {
+      "params": [
+        {
+          "name": "hash",
+          "type": "int",
+          "repr": "int"
+        }
+      ],
+      "type": "ShareThemeBackdrops",
+      "id": "-195453198",
+      "method": "messages.getShareThemeBackdrops"
+    },
+    {
+      "params": [
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "query_type",
+          "type": "WidgetQueryType",
+          "repr": "WidgetQueryType"
+        },
+        {
+          "name": "data",
+          "type": "bytes",
+          "repr": "bytes"
+        }
+      ],
+      "type": "messages.BotWidgetQueryAnswer",
+      "id": "1549075833",
+      "method": "messages.getBotWidgetQueryAnswer"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "query_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "result",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "Bool",
+      "id": "-120722326",
+      "method": "messages.setBotWidgetQueryAnswer"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "public_data",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "chat_data",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "Updates",
+      "id": "-165364706",
+      "method": "messages.editMessageWidgetData"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "id",
+          "type": "InputBotInlineMessageID",
+          "repr": "InputBotInlineMessageID"
+        },
+        {
+          "name": "public_data",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "chat_data",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "Bool",
+      "id": "1670827563",
+      "method": "messages.editInlineBotMessageWidgetData"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "widget_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "public_data",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "cache_time",
+          "type": "int",
+          "repr": "flags.0?int",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "Bool",
+      "id": "-356301888",
+      "method": "messages.editWidgetData"
+    },
+    {
+      "params": [
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "hash",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "messages.WidgetPublicData",
+      "id": "1875194241",
+      "method": "messages.getWidgetPublicData"
+    },
+    {
+      "params": [
+        {
+          "name": "file",
+          "type": "InputFile",
+          "repr": "InputFile"
+        }
+      ],
+      "type": "messages.TranscribedAudio",
+      "id": "120401655",
+      "method": "messages.transcribeAudioFile"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "flags.0?InputPeer",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "Vector<string>",
+      "id": "-1167271510",
+      "method": "messages.getTranscriptionLangs"
+    },
+    {
       "params": [],
       "type": "updates.State",
       "id": "-304838614",
@@ -63925,10 +66333,15 @@
           "name": "tabs",
           "type": "Bool",
           "repr": "Bool"
+        },
+        {
+          "name": "sidebar",
+          "type": "Bool",
+          "repr": "Bool"
         }
       ],
       "type": "Updates",
-      "id": "1073174324",
+      "id": "-1567282348",
       "method": "channels.toggleForum"
     },
     {
@@ -64882,8 +67295,8 @@
         },
         {
           "name": "custom_description",
-          "type": "string",
-          "repr": "flags.2?string",
+          "type": "TextWithEntities",
+          "repr": "flags.2?TextWithEntities",
           "optional": true,
           "flag": {
             "field": "flags",
@@ -64892,7 +67305,7 @@
         }
       ],
       "type": "Bool",
-      "id": "-1953898563",
+      "id": "-191600809",
       "method": "bots.setCustomVerification"
     },
     {
@@ -64910,13 +67323,28 @@
     {
       "params": [
         {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "additional",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
           "name": "username",
           "type": "string",
           "repr": "string"
         }
       ],
       "type": "Bool",
-      "id": "-2014174821",
+      "id": "-475247519",
       "method": "bots.checkUsername"
     },
     {
@@ -65072,6 +67500,40 @@
       "type": "Bool",
       "id": "-417708016",
       "method": "bots.setJoinChatResults"
+    },
+    {
+      "params": [
+        {
+          "name": "bot",
+          "type": "InputUser",
+          "repr": "InputUser"
+        },
+        {
+          "name": "username",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Bool",
+      "id": "889307274",
+      "method": "bots.addUsername"
+    },
+    {
+      "params": [
+        {
+          "name": "bot",
+          "type": "InputUser",
+          "repr": "InputUser"
+        },
+        {
+          "name": "username",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Bool",
+      "id": "-956033923",
+      "method": "bots.removeUsername"
     },
     {
       "params": [
@@ -66211,18 +68673,23 @@
     {
       "params": [
         {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
           "name": "stargift",
           "type": "InputSavedStarGift",
           "repr": "InputSavedStarGift"
         },
         {
-          "name": "password",
-          "type": "InputCheckPasswordSRP",
-          "repr": "InputCheckPasswordSRP"
+          "name": "tmp_password",
+          "type": "bytes",
+          "repr": "bytes"
         }
       ],
       "type": "payments.StarGiftWithdrawalUrl",
-      "id": "-798059608",
+      "id": "-926252677",
       "method": "payments.getStarGiftWithdrawalUrl"
     },
     {
@@ -66704,6 +69171,387 @@
       "type": "Updates",
       "id": "-1325832113",
       "method": "payments.craftStarGift"
+    },
+    {
+      "params": [],
+      "type": "payments.CurrencyRates",
+      "id": "-749108248",
+      "method": "payments.getCurrencyRates"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "crypto_currency",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "Vector<OnrampProviderInfo>",
+      "id": "1061028060",
+      "method": "payments.getOnrampProviders"
+    },
+    {
+      "params": [
+        {
+          "name": "provider",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "crypto_currency",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Vector<string>",
+      "id": "478932467",
+      "method": "payments.getOnrampBaseCurrencies"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "provider",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "crypto_currency",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "base_currency",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "OnrampAvailability",
+      "id": "784505169",
+      "method": "payments.getOnrampAvailability"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "provider",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "crypto_currency",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "base_currency",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "payment_method",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "OnrampLimits",
+      "id": "-2132258307",
+      "method": "payments.getOnrampLimits"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "provider",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "crypto_currency",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "base_currency",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "base_amount",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "crypto_amount",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "payment_method",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        }
+      ],
+      "type": "OnrampQuote",
+      "id": "-530168326",
+      "method": "payments.getOnrampQuote"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "provider",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "crypto_currency",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "address",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "payment_method",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "base_currency",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "base_amount",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        },
+        {
+          "name": "memo",
+          "type": "string",
+          "repr": "flags.3?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 3
+          }
+        },
+        {
+          "name": "theme",
+          "type": "string",
+          "repr": "flags.4?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 4
+          }
+        },
+        {
+          "name": "success_return_url",
+          "type": "string",
+          "repr": "flags.5?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 5
+          }
+        },
+        {
+          "name": "fail_return_url",
+          "type": "string",
+          "repr": "flags.6?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 6
+          }
+        },
+        {
+          "name": "crypto_amount",
+          "type": "string",
+          "repr": "flags.7?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 7
+          }
+        }
+      ],
+      "type": "OnrampSession",
+      "id": "-1575387914",
+      "method": "payments.createOnrampSession"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "keep_on_profile",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "stargift",
+          "type": "InputSavedStarGift",
+          "repr": "InputSavedStarGift"
+        },
+        {
+          "name": "tmp_password",
+          "type": "bytes",
+          "repr": "bytes"
+        }
+      ],
+      "type": "Bool",
+      "id": "-333434706",
+      "method": "payments.withdrawStarGift"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "hide_sender",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "InputPeer"
+        },
+        {
+          "name": "slug",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "payments.StarGiftDepositPayload",
+      "id": "-1063064929",
+      "method": "payments.depositStarGift"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "peer",
+          "type": "InputPeer",
+          "repr": "flags.0?InputPeer",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "slug",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "Bool",
+      "id": "1252389118",
+      "method": "payments.displayStarGift"
+    },
+    {
+      "params": [
+        {
+          "name": "stargift",
+          "type": "InputSavedStarGift",
+          "repr": "InputSavedStarGift"
+        }
+      ],
+      "type": "Bool",
+      "id": "1020983466",
+      "method": "payments.deleteStarGift"
     },
     {
       "params": [
@@ -70790,65 +73638,6 @@
       "method": "ephemeral.getWelcomeMessages"
     },
     {
-      "id": "1340184318",
-      "method": "contacts.importCard",
-      "params": [
-        {
-          "name": "export_card",
-          "type": "int",
-          "repr": "Vector<int>",
-          "vector": true
-        }
-      ],
-      "type": "User"
-    },
-    {
-      "id": "582402580",
-      "method": "messages.getWebViewResult",
-      "params": [
-        {
-          "name": "peer",
-          "type": "InputPeer",
-          "repr": "InputPeer"
-        },
-        {
-          "name": "bot",
-          "type": "InputUser",
-          "repr": "InputUser"
-        },
-        {
-          "name": "query_id",
-          "type": "long",
-          "repr": "long"
-        }
-      ],
-      "type": "messages.WebViewResult"
-    },
-    {
-      "id": "865483769",
-      "method": "messages.forwardMessage",
-      "params": [
-        {
-          "name": "peer",
-          "type": "InputPeer",
-          "repr": "InputPeer"
-        },
-        {
-          "name": "id",
-          "type": "int",
-          "repr": "int"
-        },
-        {
-          "name": "random_id",
-          "type": "long",
-          "repr": "long"
-        }
-      ],
-      "type": "Updates"
-    },
-    {
-      "id": "-2127811866",
-      "method": "messages.getStatsURL",
       "params": [
         {
           "name": "flags",
@@ -70856,7 +73645,7 @@
           "repr": "#"
         },
         {
-          "name": "dark",
+          "name": "post",
           "type": "true",
           "repr": "flags.0?true",
           "optional": true,
@@ -70866,112 +73655,638 @@
           }
         },
         {
-          "name": "peer",
-          "type": "InputPeer",
-          "repr": "InputPeer"
-        },
-        {
-          "name": "params",
+          "name": "endpoint",
           "type": "string",
           "repr": "string"
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "payload",
+          "type": "string",
+          "repr": "flags.2?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
         }
       ],
-      "type": "StatsURL"
+      "type": "toncenter.ApiResponse",
+      "id": "-1921262239",
+      "method": "toncenter.performApiRequest"
     },
     {
-      "id": "-2023787330",
-      "method": "messages.getAllChats",
+      "params": [],
+      "type": "toncenter.StreamingUrl",
+      "id": "-844143673",
+      "method": "toncenter.getStreamingUrl"
+    },
+    {
+      "params": [],
+      "type": "WalletState",
+      "id": "-1417432262",
+      "method": "wallet.getState"
+    },
+    {
       "params": [
         {
-          "name": "except_ids",
-          "type": "long",
-          "repr": "Vector<long>",
-          "vector": true
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "force",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "id",
+          "type": "Vector<InputUser>",
+          "repr": "Vector<InputUser>"
+        },
+        {
+          "name": "addresses",
+          "type": "Vector<string>",
+          "repr": "Vector<string>"
         }
       ],
-      "type": "messages.Chats"
+      "type": "wallet.UserAddresses",
+      "id": "1383456733",
+      "method": "wallet.getUserAddresses"
     },
     {
-      "id": "-467873507",
-      "method": "messages.setWebViewResult",
       "params": [
         {
-          "name": "query_id",
-          "type": "long",
-          "repr": "long"
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "inbound",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "outbound",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "offset",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "repr": "int"
         }
       ],
-      "type": "Bool"
+      "type": "wallet.Transactions",
+      "id": "-1467807101",
+      "method": "wallet.getTransactions"
     },
     {
-      "id": "342791565",
-      "method": "payments.requestRecurringPayment",
       "params": [
+        {
+          "name": "id",
+          "type": "Vector<string>",
+          "repr": "Vector<string>"
+        }
+      ],
+      "type": "wallet.Transactions",
+      "id": "-2128811338",
+      "method": "wallet.getTransactionsByIDs"
+    },
+    {
+      "params": [
+        {
+          "name": "msg_hash",
+          "type": "Vector<string>",
+          "repr": "Vector<string>"
+        }
+      ],
+      "type": "wallet.Transactions",
+      "id": "-1497663139",
+      "method": "wallet.getTransactionsByMsgHash"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "password",
+          "type": "InputCheckPasswordSRP",
+          "repr": "flags.0?InputCheckPasswordSRP",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "wallet.SecretPhraseParts",
+      "id": "-1871197780",
+      "method": "wallet.exportSecretPhrase"
+    },
+    {
+      "params": [
+        {
+          "name": "token",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "public_key",
+          "type": "bytes",
+          "repr": "bytes"
+        }
+      ],
+      "type": "wallet.EncryptedSecretPhrasePart",
+      "id": "-180804145",
+      "method": "wallet.fetchEncryptedSecretPhrasePart"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "wallet",
+          "type": "InputWalletReplacement",
+          "repr": "InputWalletReplacement"
+        },
+        {
+          "name": "password",
+          "type": "InputCheckPasswordSRP",
+          "repr": "flags.0?InputCheckPasswordSRP",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "WalletState",
+      "id": "-658034964",
+      "method": "wallet.replaceWallet"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "password",
+          "type": "InputCheckPasswordSRP",
+          "repr": "flags.0?InputCheckPasswordSRP",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "new_public_key",
+          "type": "bytes",
+          "repr": "flags.1?bytes",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "proof",
+          "type": "WalletOwnershipProof",
+          "repr": "flags.2?WalletOwnershipProof",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        }
+      ],
+      "type": "WalletState",
+      "id": "185331930",
+      "method": "wallet.disableBackup"
+    },
+    {
+      "params": [],
+      "type": "Vector<wallet.HolderDc>",
+      "id": "-780544876",
+      "method": "wallet.getBackupHolderDcs"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "parts",
+          "type": "Vector<bytes>",
+          "repr": "Vector<bytes>"
+        },
+        {
+          "name": "new_public_key",
+          "type": "bytes",
+          "repr": "flags.1?bytes",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "proof",
+          "type": "WalletOwnershipProof",
+          "repr": "flags.2?WalletOwnershipProof",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 2
+          }
+        }
+      ],
+      "type": "WalletState",
+      "id": "1157678373",
+      "method": "wallet.enableBackup"
+    },
+    {
+      "params": [],
+      "type": "wallet.ProofChallenge",
+      "id": "539354775",
+      "method": "wallet.getProofChallenge"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "data_normal",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "data_gasless",
+          "type": "bytes",
+          "repr": "flags.0?bytes",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
         {
           "name": "user_id",
           "type": "InputUser",
           "repr": "InputUser"
         },
         {
-          "name": "recurring_init_charge",
+          "name": "random_id",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "Updates",
+      "id": "-639247902",
+      "method": "wallet.sendTransfer"
+    },
+    {
+      "params": [],
+      "type": "Updates",
+      "id": "1949167777",
+      "method": "wallet.getGaslessInfo"
+    },
+    {
+      "params": [],
+      "type": "wallet.ExistingBalance",
+      "id": "1763656544",
+      "method": "wallet.getExistingWaltBalance"
+    },
+    {
+      "params": [
+        {
+          "name": "offset",
           "type": "string",
           "repr": "string"
         },
         {
-          "name": "invoice_media",
-          "type": "InputMedia",
-          "repr": "InputMedia"
-        }
-      ],
-      "type": "Updates"
-    },
-    {
-      "id": "472471681",
-      "method": "folders.deleteFolder",
-      "params": [
-        {
-          "name": "folder_id",
+          "name": "limit",
           "type": "int",
           "repr": "int"
         }
       ],
-      "type": "Updates"
+      "type": "wallet.NftItems",
+      "id": "-1944915036",
+      "method": "wallet.getNfts"
     },
     {
-      "id": "1146512295",
       "params": [
         {
-          "name": "updates",
-          "type": "Updates",
-          "repr": "Updates"
+          "name": "dapp_client_id",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "manifest_url",
+          "type": "string",
+          "repr": "string"
         }
       ],
-      "type": "messages.ChatInviteJoinResult",
-      "method": "messages.chatInviteJoinResultOk"
+      "type": "TonConnectSession",
+      "id": "-862777274",
+      "method": "wallet.tonConnectCreateSession"
     },
     {
-      "id": "1640638931",
       "params": [
         {
-          "name": "bot_id",
+          "name": "session_id",
           "type": "long",
           "repr": "long"
         },
         {
-          "name": "query_id",
+          "name": "client_id",
+          "type": "string",
+          "repr": "string"
+        }
+      ],
+      "type": "wallet.TonConnectChallenge",
+      "id": "864800540",
+      "method": "wallet.tonConnectRegisterKey"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "error",
+          "type": "true",
+          "repr": "flags.0?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "session_id",
           "type": "long",
           "repr": "long"
         },
         {
-          "name": "users",
-          "type": "Vector<User>",
-          "repr": "Vector<User>"
+          "name": "challenge_answer",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "body",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "trace_id",
+          "type": "string",
+          "repr": "flags.1?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
         }
       ],
-      "type": "messages.ChatInviteJoinResult",
-      "method": "messages.chatInviteJoinResultWebView"
+      "type": "Bool",
+      "id": "-1027602567",
+      "method": "wallet.tonConnectSubmitConnectResult"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "dapp_client_id",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        },
+        {
+          "name": "session_id",
+          "type": "long",
+          "repr": "flags.1?long",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        }
+      ],
+      "type": "wallet.TonConnectPending",
+      "id": "296673381",
+      "method": "wallet.tonConnectGetPending"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "declined",
+          "type": "true",
+          "repr": "flags.1?true",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 1
+          }
+        },
+        {
+          "name": "session_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "app_request_id",
+          "type": "string",
+          "repr": "string"
+        },
+        {
+          "name": "challenge_answer",
+          "type": "bytes",
+          "repr": "flags.0?bytes",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "Bool",
+      "id": "1723169601",
+      "method": "wallet.tonConnectClaimRequest"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "session_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "msg_id",
+          "type": "int",
+          "repr": "int"
+        },
+        {
+          "name": "body",
+          "type": "bytes",
+          "repr": "bytes"
+        },
+        {
+          "name": "trace_id",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "Bool",
+      "id": "-87655108",
+      "method": "wallet.tonConnectSubmitResponse"
+    },
+    {
+      "params": [
+        {
+          "name": "session_id",
+          "type": "long",
+          "repr": "long"
+        }
+      ],
+      "type": "TonConnectNextEventId",
+      "id": "2002612804",
+      "method": "wallet.tonConnectNextEventId"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "session_id",
+          "type": "long",
+          "repr": "long"
+        },
+        {
+          "name": "body",
+          "type": "bytes",
+          "repr": "flags.0?bytes",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "Bool",
+      "id": "-700489266",
+      "method": "wallet.tonConnectCloseSession"
+    },
+    {
+      "params": [],
+      "type": "wallet.TonConnectSessions",
+      "id": "-1476414098",
+      "method": "wallet.tonConnectGetSessions"
+    },
+    {
+      "params": [
+        {
+          "name": "flags",
+          "type": "#",
+          "repr": "#"
+        },
+        {
+          "name": "stickers",
+          "type": "Vector<InputWalletCardSticker>",
+          "repr": "Vector<InputWalletCardSticker>"
+        },
+        {
+          "name": "bg_nft_address",
+          "type": "string",
+          "repr": "flags.0?string",
+          "optional": true,
+          "flag": {
+            "field": "flags",
+            "bit": 0
+          }
+        }
+      ],
+      "type": "wallet.Card",
+      "id": "109382060",
+      "method": "wallet.setCardStickers"
     }
   ],
-  "layer": 229,
-  "version": 229
+  "layer": 233,
+  "version": 233
 }

@@ -5,14 +5,14 @@ interface SchemaParam {
 }
 
 interface SchemaConstructor {
-    id: string;
+    id?: string;
     predicate: string;
     params: SchemaParam[];
     type: string;
 }
 
 interface SchemaMethod {
-    id: string;
+    id?: string;
     method: string;
     params: SchemaParam[];
     type: string;
@@ -28,6 +28,10 @@ function signedDecimalToHex(signed: string): string {
     return (num >>> 0).toString(16).padStart(8, '0');
 }
 
+function formatId(id: string | undefined): string {
+    return id === undefined ? '' : `#${signedDecimalToHex(id)}`;
+}
+
 function formatParams(params: SchemaParam[]): string {
     return params.map(p => `${p.name}:${p.repr || p.type}`).join(' ');
 }
@@ -37,22 +41,20 @@ export function convertJsonSchemaToTL(json: TelegramSchema): string {
 
     lines.push('---types---');
     for (const c of json.constructors) {
-        const hexId = signedDecimalToHex(c.id);
         const paramsStr = formatParams(c.params);
         const line = paramsStr
-            ? `${c.predicate}#${hexId} ${paramsStr} = ${c.type};`
-            : `${c.predicate}#${hexId} = ${c.type};`;
+            ? `${c.predicate}${formatId(c.id)} ${paramsStr} = ${c.type};`
+            : `${c.predicate}${formatId(c.id)} = ${c.type};`;
         lines.push(line);
     }
 
     lines.push('');
     lines.push('---functions---');
     for (const m of json.methods) {
-        const hexId = signedDecimalToHex(m.id);
         const paramsStr = formatParams(m.params);
         const line = paramsStr
-            ? `${m.method}#${hexId} ${paramsStr} = ${m.type};`
-            : `${m.method}#${hexId} = ${m.type};`;
+            ? `${m.method}${formatId(m.id)} ${paramsStr} = ${m.type};`
+            : `${m.method}${formatId(m.id)} = ${m.type};`;
         lines.push(line);
     }
 

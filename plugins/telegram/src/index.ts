@@ -231,8 +231,35 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
             case 0x5353e5a7: type = 'call'; reader.readInt32(); break;
             case 0xab03c6d9: type = 'flash'; reader.readString(); break;
             case 0x82006484: type = 'missed'; reader.readString(); reader.readInt32(); break;
-            case 0x7e132aac: reader.readBytes(); reader.readString(); reader.readInt32(); break;
-            case 0xcd2570c9: reader.readString(); reader.readInt32(); break;
+            case 0xf450f59b: {
+                type = 'email';
+                const typeFlags = reader.readInt32();
+                reader.readString();
+                reader.readInt32();
+                if (typeFlags & 8) reader.readInt32();
+                if (typeFlags & 16) reader.readInt32();
+                break;
+            }
+            case 0xa5491dea: type = 'emailRequired'; reader.readInt32(); break;
+            case 0xd9565c39: type = 'fragment'; reader.readString(); reader.readInt32(); break;
+            case 0x9fd736: {
+                type = 'firebase';
+                const typeFlags = reader.readInt32();
+                if (typeFlags & 1) reader.readBytes();
+                if (typeFlags & 4) reader.readInt64();
+                if (typeFlags & 4) reader.readBytes();
+                if (typeFlags & 2) reader.readString();
+                if (typeFlags & 2) reader.readInt32();
+                reader.readInt32();
+                break;
+            }
+            case 0xa416ac81:
+            case 0xb37794af: {
+                type = typeConstructor === 0xa416ac81 ? 'smsWord' : 'smsPhrase';
+                const typeFlags = reader.readInt32();
+                if (typeFlags & 1) reader.readString();
+                break;
+            }
             default: reader.readInt32(); break;
         }
 
@@ -240,10 +267,15 @@ export class TelegramClientPlugin extends BasePlugin<TelegramClientConfig> {
         let nextType: string | undefined;
         if (flags & 2) {
             const nextTypeConstructor = reader.readUint32();
-            if (nextTypeConstructor === 0xa57c432d || nextTypeConstructor === 0x1712cf51) {
-                nextType = 'call';
-            } else {
-                nextType = 'sms';
+            switch (nextTypeConstructor) {
+                case 0x741cd3e3:
+                case 0x226ccefb:
+                case 0xd61ad6ee:
+                    nextType = 'call';
+                    break;
+                default:
+                    nextType = 'sms';
+                    break;
             }
         }
         const timeout = (flags & 4) ? reader.readInt32() : undefined;

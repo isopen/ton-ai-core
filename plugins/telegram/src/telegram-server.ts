@@ -349,9 +349,32 @@ class TelegramServerAgent {
             case 0x5353e5a7: d.readInt32(); break;
             case 0xab03c6d9: d.readString(); break;
             case 0x82006484: d.readString(); d.readInt32(); break;
-            case 0x6faccd31: d.readString(); d.readInt32(); break;
-            case 0x7e132aac: d.readString(); break;
-            case 0xcd2570c9: d.readString(); d.readString(); break;
+            case 0xf450f59b: {
+                const typeFlags = d.readInt32();
+                d.readString();
+                d.readInt32();
+                if (typeFlags & 8) d.readInt32();
+                if (typeFlags & 16) d.readInt32();
+                break;
+            }
+            case 0xa5491dea: d.readInt32(); break;
+            case 0xd9565c39: d.readString(); d.readInt32(); break;
+            case 0x9fd736: {
+                const typeFlags = d.readInt32();
+                if (typeFlags & 1) d.readBytes();
+                if (typeFlags & 4) d.readInt64();
+                if (typeFlags & 4) d.readBytes();
+                if (typeFlags & 2) d.readString();
+                if (typeFlags & 2) d.readInt32();
+                d.readInt32();
+                break;
+            }
+            case 0xa416ac81:
+            case 0xb37794af: {
+                const typeFlags = d.readInt32();
+                if (typeFlags & 1) d.readString();
+                break;
+            }
             default: throw new Error('Unknown SentCodeType: 0x' + typeCtor.toString(16));
         }
         const phoneCodeHash = d.readString();
