@@ -18,8 +18,13 @@ describe('the service worker does not pin an old build', () => {
     expect(src).not.toMatch(/__WB_MANIFEST/);
   });
 
-  test('hashed bundles may be served from cache', () => {
-    expect(src).toMatch(/pathname\.startsWith\('\/static\/'\)/);
-    expect(src).toMatch(/return cached \|\| networkFetch/);
+  test('hashed bundles go to the network first and fall back to cache', () => {
+    const branch = /pathname\.startsWith\('\/static\/'\)[\s\S]*?\n  \}/.exec(src);
+    expect(branch).not.toBeNull();
+
+    const body = branch![0];
+    expect(body.indexOf('fetch(event.request)')).toBeLessThan(body.indexOf('cache.match'));
+    expect(body).toMatch(/cached \|\| response/);
+    expect(body).toMatch(/cached \|\| new Response\('', \{ status: 504 \}\)/);
   });
 });
