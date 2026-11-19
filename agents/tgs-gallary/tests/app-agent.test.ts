@@ -34,6 +34,9 @@ describe('tgs-gallary mini app', () => {
         assert.ok(text.includes('groupByPack'), 'must support grouping by pack');
         assert.ok(text.includes('fileLabel'), 'must give every emoji a unique label');
         assert.ok(text.includes('formatMetrics'), 'must show per-emoji load and render speed');
+        assert.ok(text.includes('FpsMeter'), 'must show the current page frame rate');
+        assert.ok(!text.includes('FPS_OPTIONS'), 'the frame rate must not be a user setting');
+        assert.ok(!text.includes('setFps'), 'the frame rate must not be a user setting');
         assert.ok(text.includes('loadShard'), 'must load emoji from static shards');
         assert.ok(text.includes('Search emoji'), 'must expose a search input');
         assert.ok(text.includes('fixtureStats'), 'must call the cloud skill');
@@ -157,7 +160,7 @@ describe('tgs-gallary mini app', () => {
 
     test('search, grouping and custom numbers stay pure', () => {
         const stdout = runModule([
-            `import { clampInt, fileLabel, filterFiles, formatMetrics, groupByPack } from ${JSON.stringify(url(join(APP, 'gallery-core.js')))};`,
+            `import { clampInt, fileLabel, filterFiles, formatMetrics, groupByPack, parseSize } from ${JSON.stringify(url(join(APP, 'gallery-core.js')))};`,
             'const files = [',
             "  { id: '1', pack: 'Cats', name: '🐱', file: 'a' },",
             "  { id: '2', pack: 'Dogs', name: '🐶', file: 'b' },",
@@ -168,13 +171,47 @@ describe('tgs-gallary mini app', () => {
             "const groups = groupByPack(filterFiles(files, 'cat')).map((g) => [g.pack, g.items.length]);",
             "const labels = [fileLabel('Cats', '🐱', 0), fileLabel('Cats', '', 0), fileLabel('Cats', '', 11)];",
             "const metrics = [formatMetrics(42.4, 0.304), formatMetrics(0, 0)];",
-            "console.log(JSON.stringify([byEmoji, byPack, groups, clampInt('128', 32, 320, 96), clampInt('9999', 32, 320, 96), clampInt('x', 32, 320, 96), labels, metrics]));",
+            "console.log(JSON.stringify([byEmoji, byPack, groups, clampInt('128', 32, 320, 96), clampInt('9999', 32, 320, 96), clampInt('x', 32, 320, 96), labels, metrics, [parseSize('10', 96), parseSize('1000', 96), parseSize('x', 96), parseSize('0', 96), parseSize('1', 96)]]));",
         ]);
         assert.deepEqual(JSON.parse(stdout), [
             ['2'], ['1', '3'], [['Cats', 2]], 128, 320, 96,
             ['🐱', 'Cats 01', 'Cats 12'],
             ['load 42 ms\nrender 0.30 ms', 'load 0 ms\nrender —'],
+            [10, 1000, 96, 96, 1],
         ]);
+    });
+
+    test('fps badge colours and values stay sane', () => {
+        const stdout = runModule([
+            `import { FPS_MAX, fpsLevel, frameRate } from ${JSON.stringify(url(join(APP, 'gallery-core.js')))};`,
+            'console.log(JSON.stringify({',
+            '  levels: [0, 15, 29, 30, 49, 50, 60, 120].map(fpsLevel),',
+            '  rates: [frameRate(60, 1000), frameRate(3000, 1000), frameRate(0, 1000), frameRate(1, 0), FPS_MAX],',
+            '}));',
+        ]);
+        assert.deepEqual(JSON.parse(stdout), {
+            levels: ['idle', 'low', 'low', 'mid', 'mid', 'good', 'good', 'good'],
+            rates: [60, 240, 0, 0, 240],
+        });
+    });
+
+    test('big cells get overlay stats', () => {
+        const stdout = runModule([
+            `import { BIG_CELL_SIZE, isBigCell } from ${JSON.stringify(url(join(APP, 'gallery-core.js')))};`,
+            'console.log(JSON.stringify({ threshold: BIG_CELL_SIZE, flags: [20, 96, 159, 160, 1000].map(isBigCell) }));',
+        ]);
+        assert.deepEqual(JSON.parse(stdout), {
+            threshold: 160,
+            flags: [false, false, false, true, true],
+        });
+    });
+
+    test('stats stay readable at any emoji size', () => {
+        const appText = readFileSync(APP_JS, 'utf8');
+        const css = readFileSync(join(APP, 'styles.css'), 'utf8');
+        assert.ok(appText.includes('isBigCell(size)'), 'large cells must be marked for the overlay');
+        assert.ok(css.includes('minmax(max(var(--cell), 96px), 1fr)'), 'small cells need room for the stats');
+        assert.ok(css.includes('.cell.big .metrics'), 'large cells need stats over the canvas');
     });
 
     test('cloud modules delegate to the generated fixture manifest', () => {

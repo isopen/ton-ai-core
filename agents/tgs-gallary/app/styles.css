@@ -79,6 +79,58 @@ html, body {
     font-variant-numeric: tabular-nums;
 }
 
+.fps {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    padding: 4px 9px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--panel2);
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    transition: color 0.25s ease, border-color 0.25s ease;
+}
+
+.fps::before {
+    content: "";
+    align-self: center;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.fps-value {
+    min-width: 2ch;
+    text-align: right;
+    font-weight: 600;
+}
+
+.fps-unit {
+    font-size: 11px;
+    opacity: 0.75;
+}
+
+.fps.idle::before {
+    opacity: 0.35;
+}
+
+.fps.good {
+    color: #3ddc84;
+    border-color: rgba(61, 220, 132, 0.4);
+}
+
+.fps.mid {
+    color: #f5c542;
+    border-color: rgba(245, 197, 66, 0.4);
+}
+
+.fps.low {
+    color: #ff5d5d;
+    border-color: rgba(255, 93, 93, 0.4);
+}
+
 .pbtn.active {
     border-color: var(--accent);
     color: var(--accent);
@@ -139,7 +191,7 @@ button:disabled {
 
 .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(var(--cell), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(max(var(--cell), 96px), 1fr));
     gap: 10px;
     padding: 4px 14px 14px;
 }
@@ -220,16 +272,40 @@ button:disabled {
 
 .cell .metrics {
     max-width: 100%;
+    min-height: 2.6em;
     color: var(--muted);
     font-size: 10px;
     font-variant-numeric: tabular-nums;
     text-align: center;
     line-height: 1.3;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: pre-line;
-    opacity: 0.85;
+    opacity: 1;
 }
+
+.cell.big canvas {
+    width: 100%;
+    height: auto;
+}
+
+.cell.big .metrics,
+.cell.big .name,
+.cell.big .note,
+.cell.big .err {
+    position: absolute;
+    z-index: 2;
+    max-width: calc(100% - 16px);
+    padding: 3px 7px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.62);
+    color: #f0f3f8;
+    text-align: left;
+    opacity: 1;
+}
+
+.cell.big .metrics { top: 8px; left: 8px; }
+.cell.big .name { top: 8px; right: 8px; text-align: right; }
+.cell.big .note { top: 46px; left: 8px; }
+.cell.big .err { top: 46px; left: 8px; color: #ffb3b3; }
 
 .cell.paused canvas {
     opacity: 0.75;

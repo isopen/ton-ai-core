@@ -5,20 +5,22 @@ import { useEffect, useRef, useState } from './vendor/atom/hooks.js';
 import initTgs, { TgsRender, getMemory } from './vendor/tgs/tgs_wasm.js';
 import { PACKS, COUNT, BYTES, EMPTY, BUILD } from './fixtures/manifest.js';
 import {
-    FPS_OPTIONS,
+    FPS_MAX,
     PER_PAGE_MAX,
     PER_PAGE_MIN,
-    SIZE_MAX,
-    SIZE_MIN,
     clampInt,
     clampPage,
     fileLabel,
     filterFiles,
     formatMetrics,
     formatRange,
+    fpsLevel,
+    frameRate,
     groupByPack,
+    isBigCell,
     pageCount,
     pageSlice,
+    parseSize,
 } from './gallery-core.js';
 
 const FILES = [];
@@ -161,7 +163,7 @@ async function loadFixture(item) {
 }
 
 function EmojiCell(props) {
-    const { item, size, fps, pausedAll } = props;
+    const { item, size, pausedAll } = props;
     const canvasRef = useRef(null);
     const metricsRef = useRef(null);
     const [paused, setPaused] = useState(false);
@@ -169,11 +171,9 @@ function EmojiCell(props) {
     const [error, setError] = useState('');
     const pausedRef = useRef(false);
     const pausedAllRef = useRef(false);
-    const fpsRef = useRef(fps);
 
     pausedRef.current = paused;
     pausedAllRef.current = pausedAll;
-    fpsRef.current = fps;
 
     useEffect(() => {
         let disposed = false;
@@ -224,7 +224,6 @@ function EmojiCell(props) {
                 let time = 0;
                 let frame = -1;
                 let last = performance.now();
-                let lastDraw = 0;
                 let renderMs = 0;
                 let lastMetrics = 0;
 
@@ -236,8 +235,6 @@ function EmojiCell(props) {
                     const want = Math.floor(time * srcFps);
                     if (want === frame) return;
                     frame = want;
-                    if (now - lastDraw < 1000 / fpsRef.current) return;
-                    lastDraw = now;
 
                     const t0 = performance.now();
                     renderer.render(inFrame + (frame % frames), size, size);
@@ -278,6 +275,7 @@ function EmojiCell(props) {
     if (status === 'error') classes.push('error');
     if (status === 'empty') classes.push('empty-cell');
     if (paused || pausedAll) classes.push('paused');
+    if (isBigCell(size)) classes.push('big');
 
     return h('div', {
         class: classes.join(' '),
@@ -291,6 +289,65 @@ function EmojiCell(props) {
         h('div', { class: 'metrics', ref: metricsRef }),
         status === 'empty' ? h('div', { class: 'note' }, 'no visible layers') : null,
         status === 'error' ? h('div', { class: 'err' }, error) : null,
+    ]);
+}
+
+let currentFps = 0;
+
+const FPS_WINDOW_MS = 1000;
+const MIN_FRAME_MS = 1000 / FPS_MAX;
+
+function FpsMeter() {
+    const boxRef = useRef(null);
+    const valueRef = useRef(null);
+
+    useEffect(() => {
+        const box = boxRef.current;
+        const value = valueRef.current;
+        if (!box || !value) return undefined;
+
+        value.textContent = currentFps ? String(currentFps) : '—';
+        box.className = 'fps ' + fpsLevel(currentFps);
+
+        let raf = 0;
+        let frames = 0;
+        let totalMs = 0;
+        let lastFrame = 0;
+        let windowStart = performance.now();
+
+        const tick = (now) => {
+            raf = requestAnimationFrame(tick);
+            if (lastFrame > 0) {
+                const delta = now - lastFrame;
+                if (delta > 0 && delta <= 1000) {
+                    frames += 1;
+                    totalMs += Math.max(delta, MIN_FRAME_MS);
+                }
+            }
+            lastFrame = now;
+            if (now - windowStart < FPS_WINDOW_MS) return;
+            if (frames > 0) {
+                currentFps = frameRate(frames, totalMs);
+                value.textContent = String(currentFps);
+                box.className = 'fps ' + fpsLevel(currentFps);
+                box.title = 'Page frame rate: ' + currentFps + ' FPS';
+            }
+            frames = 0;
+            totalMs = 0;
+            windowStart = now;
+        };
+
+        raf = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(raf);
+    }, []);
+
+    return h('div', {
+        class: 'fps ' + fpsLevel(currentFps),
+        ref: boxRef,
+        title: currentFps ? 'Page frame rate: ' + currentFps + ' FPS' : 'Measuring page frame rate…',
+    }, [
+        h('span', { class: 'fps-value', ref: valueRef }),
+        h('span', { class: 'fps-unit' }, 'FPS'),
     ]);
 }
 
@@ -342,7 +399,6 @@ function App() {
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(100);
     const [cellSize, setCellSize] = useState(96);
-    const [fps, setFps] = useState(30);
     const [query, setQuery] = useState('');
     const [grouped, setGrouped] = useState(false);
     const [pausedAll, setPausedAll] = useState(false);
@@ -387,7 +443,6 @@ function App() {
         key: item.file,
         item,
         size: cellSize,
-        fps,
         pausedAll,
     });
 
@@ -425,7 +480,7 @@ function App() {
         setPage(1);
     };
     const commitSize = (e) => {
-        const n = clampInt(e.target.value, SIZE_MIN, SIZE_MAX, cellSize);
+        const n = parseSize(e.target.value, cellSize);
         e.target.value = String(n);
         setCellSize(n);
     };
@@ -464,26 +519,17 @@ function App() {
                     h('input', {
                         class: 'num',
                         type: 'number',
-                        min: SIZE_MIN,
-                        max: SIZE_MAX,
                         step: 1,
                         value: String(cellSize),
                         onChange: commitSize,
                     }),
                 ]),
-                h('label', null, [
-                    'fps',
-                    h('select', {
-                        value: String(fps),
-                        onChange: (e) => setFps(Number(e.target.value)),
-                    }, FPS_OPTIONS.map((n) => h('option', { value: String(n) }, String(n)))),
-                ]),
+                h(FpsMeter),
                 h('button', {
                     type: 'button',
                     class: grouped ? 'pbtn active' : 'pbtn',
                     onClick: () => {
                         setGrouped(!grouped);
-                        setPage(1);
                     },
                 }, grouped ? 'Grouped by pack' : 'Group by pack'),
                 h('button', {

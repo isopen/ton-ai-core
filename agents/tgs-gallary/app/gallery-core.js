@@ -1,13 +1,39 @@
-export const FPS_OPTIONS = [15, 30, 60];
 export const PER_PAGE_MIN = 1;
 export const PER_PAGE_MAX = 500;
-export const SIZE_MIN = 32;
-export const SIZE_MAX = 320;
+export const FPS_GOOD = 50;
+export const FPS_MID = 30;
+export const FPS_MAX = 240;
+export const BIG_CELL_SIZE = 160;
+
+export function isBigCell(size) {
+    return Number(size) >= BIG_CELL_SIZE;
+}
+
+export function fpsLevel(fps) {
+    const value = Number(fps);
+    if (!Number.isFinite(value) || value <= 0) return 'idle';
+    if (value >= FPS_GOOD) return 'good';
+    if (value >= FPS_MID) return 'mid';
+    return 'low';
+}
+
+export function frameRate(frames, totalMs) {
+    const count = Number(frames) || 0;
+    const ms = Number(totalMs) || 0;
+    if (count <= 0 || ms <= 0) return 0;
+    return Math.min(FPS_MAX, Math.round((count * 1000) / ms));
+}
 
 export function clampInt(value, min, max, fallback) {
     const n = Math.floor(Number(value));
     if (!Number.isFinite(n)) return fallback;
     return Math.min(max, Math.max(min, n));
+}
+
+export function parseSize(value, fallback) {
+    const n = Math.floor(Number(value));
+    if (!Number.isFinite(n) || n < 1) return fallback;
+    return n;
 }
 
 export function fileLabel(pack, sticker, index) {
