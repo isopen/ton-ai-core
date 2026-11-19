@@ -1,12 +1,29 @@
 import { getLogger } from '@ton-ai/gram-debug';
 import type { ParsedAnimation } from '../ts/types.js';
+import { LayerType } from '../ts/types.js';
 import { decodeAnimation } from '../ts/bridge.js';
 
 const log = getLogger('tgs-rust');
 
+export type TgsWasmRender = {
+    render: (frame: number, w: number, h: number) => void;
+    frame_bytes: (frame: number, w: number, h: number) => Uint8Array;
+    data_ptr: () => number;
+    data_len: () => number;
+    in_frame: () => number;
+    out_frame: () => number;
+    frame_count: () => number;
+    free?: () => void;
+};
+
+export type TgsWasmRenderClass = {
+    new (json: string, w: number, h: number): TgsWasmRender;
+};
+
 type TgsWasmModule = {
     parse_tgs_json: (json: string, key: string | null | undefined, cache: boolean) => string;
     parse_tgs_binary?: (json: string, key: string | null | undefined, cache: boolean) => Uint8Array;
+    TgsRender?: TgsWasmRenderClass;
 };
 
 let wasmModule: TgsWasmModule | null = null;
@@ -114,5 +131,57 @@ export function wasmParseTgs(json: string, key?: string, cache?: boolean): Parse
     } catch (e) {
         log.info('tgs-rust parse failed (' + (e instanceof Error ? e.message : String(e)).slice(0, 120) + '), retrying with TS parser');
         return null;
+    }
+}
+
+export function getWasmTgsRenderClass(): TgsWasmRenderClass | null {
+    const cls = wasmModule?.TgsRender;
+    return typeof cls === 'function' ? cls : null;
+}
+
+export function isTgsNativeRenderActive(): boolean {
+    return getWasmTgsRenderClass() !== null;
+}
+
+export function wasmCreateTgsRender(json: string, w: number, h: number): TgsWasmRender | null {
+    const Cls = getWasmTgsRenderClass();
+    if (!Cls) return null;
+    try {
+        return new Cls(json, w, h);
+    } catch (e) {
+        log.info('tgs-rust render create failed (' + (e instanceof Error ? e.message : String(e)).slice(0, 120) + ')');
+        return null;
+    }
+}
+
+export function tgsWasmRenderSupports(anim: ParsedAnimation): boolean {
+    const okLayers = (layers: readonly { type: number; refId?: string }[] | undefined): boolean => {
+        if (!layers) return true;
+        for (const l of layers) {
+            if (l.type === LayerType.Text || l.type === LayerType.Image) return false;
+            if (l.type === LayerType.Precomp) {
+                const sub = anim.assets?.find((a) => a.id === l.refId)?.layers;
+                if (sub && !okLayers(sub)) return false;
+            }
+        }
+        return true;
+    };
+    try {
+        return okLayers(anim.layers);
+    } catch {
+        return false;
+    }
+}
+
+export function wasmRenderTgsFrameBytes(json: string, frame: number, w: number, h: number): Uint8Array | null {
+    const inst = wasmCreateTgsRender(json, w, h);
+    if (!inst) return null;
+    try {
+        return inst.frame_bytes(frame, w, h);
+    } catch (e) {
+        log.info('tgs-rust render frame failed (' + (e instanceof Error ? e.message : String(e)).slice(0, 120) + ')');
+        return null;
+    } finally {
+        inst.free?.();
     }
 }

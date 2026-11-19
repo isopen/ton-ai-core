@@ -1,20 +1,5 @@
-use serde::{Serialize, Serializer};
-use serde_json::Value as JsonValue;
-
-macro_rules! num_serialize {
-    ($t:ty) => {
-        impl Serialize for $t {
-            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                serializer.serialize_u8(*self as u8)
-            }
-        }
-    };
-}
-
-num_serialize!(LayerType);
-num_serialize!(MatteType);
-num_serialize!(MaskMode);
-num_serialize!(GradientType);
+use crate::json::{JsonStr, Value as JsonValue};
+use crate::easing::CubicBezier;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerType {
@@ -58,21 +43,19 @@ pub enum GradientType {
     Radial = 2,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FillRule {
     Winding,
     Evenodd,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrimMode {
     Simultaneously,
     Individually,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CubicBezierEasing {
     pub x1: f64,
     pub y1: f64,
@@ -80,10 +63,10 @@ pub struct CubicBezierEasing {
     pub y2: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct BezierEasingDef {
-    pub x: Option<Vec<f64>>,
-    pub y: Option<Vec<f64>>,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,141 +80,204 @@ pub enum PropertyValue {
     Numbers(Vec<f64>),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedKeyframe {
     pub t: f64,
     pub s: JsonValue,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub end_frame: Option<f64>,
     pub hold: bool,
-    #[serde(skip)]
     pub o: Option<BezierEasingDef>,
-    #[serde(skip)]
     pub i: Option<BezierEasingDef>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub easing: Option<CubicBezierEasing>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub easing_curve: Option<Box<CubicBezier>>,
     pub e: Option<JsonValue>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub to: Option<Vec<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub ti: Option<Vec<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub h: Option<JsonValue>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub n: Option<JsonValue>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ParsedProperty {
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParsedPropertyData {
     pub animated: bool,
-    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     pub value: JsonValue,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub keyframes: Option<Vec<ParsedKeyframe>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub x: Option<Box<ParsedProperty>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub y: Option<Box<ParsedProperty>>,
-    #[serde(skip)]
     pub override_value: Option<PropertyValue>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+static EMPTY_PROP: ParsedPropertyData = ParsedPropertyData {
+    animated: false,
+    value: JsonValue::Null,
+    keyframes: None,
+    x: None,
+    y: None,
+    override_value: None,
+};
+
+pub struct ParsedProperty(std::ptr::NonNull<ParsedPropertyData>);
+
+unsafe impl Send for ParsedProperty {}
+unsafe impl Sync for ParsedProperty {}
+
+impl ParsedProperty {
+    #[inline]
+    fn empty_ptr() -> std::ptr::NonNull<ParsedPropertyData> {
+        unsafe {
+            std::ptr::NonNull::new_unchecked(
+                &EMPTY_PROP as *const ParsedPropertyData as *mut ParsedPropertyData,
+            )
+        }
+    }
+
+    #[inline]
+    pub fn new(data: ParsedPropertyData) -> ParsedProperty {
+        ParsedProperty(unsafe { std::ptr::NonNull::new_unchecked(Box::into_raw(Box::new(data))) })
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.0.as_ptr() == Self::empty_ptr().as_ptr()
+    }
+}
+
+impl Default for ParsedProperty {
+    #[inline]
+    fn default() -> ParsedProperty {
+        ParsedProperty(Self::empty_ptr())
+    }
+}
+
+impl From<ParsedPropertyData> for ParsedProperty {
+    #[inline]
+    fn from(data: ParsedPropertyData) -> ParsedProperty {
+        ParsedProperty::new(data)
+    }
+}
+
+impl core::ops::Deref for ParsedProperty {
+    type Target = ParsedPropertyData;
+    #[inline]
+    fn deref(&self) -> &ParsedPropertyData {
+        unsafe { self.0.as_ref() }
+    }
+}
+
+impl core::ops::DerefMut for ParsedProperty {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut ParsedPropertyData {
+        if self.is_empty() {
+            let b = Box::new(ParsedPropertyData::default());
+            self.0 = unsafe { std::ptr::NonNull::new_unchecked(Box::into_raw(b)) };
+        }
+        unsafe { self.0.as_mut() }
+    }
+}
+
+impl Clone for ParsedProperty {
+    fn clone(&self) -> ParsedProperty {
+        if self.is_empty() {
+            ParsedProperty::default()
+        } else {
+            ParsedProperty::new((**self).clone())
+        }
+    }
+}
+
+impl Drop for ParsedProperty {
+    fn drop(&mut self) {
+        if !self.is_empty() {
+            unsafe {
+                drop(Box::from_raw(self.0.as_ptr()));
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for ParsedProperty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl PartialEq for ParsedProperty {
+    fn eq(&self, other: &ParsedProperty) -> bool {
+        **self == **other
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParsedTransform {
     pub opacity: Option<ParsedProperty>,
     pub rotation: Option<ParsedProperty>,
     pub position: Option<ParsedProperty>,
     pub anchor: Option<ParsedProperty>,
     pub scale: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub skew: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub skew_axis: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub start_opacity: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub end_opacity: Option<ParsedProperty>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedGradient {
-    #[serde(rename = "type")]
     pub gradient_type: GradientType,
     pub start_point: ParsedProperty,
     pub end_point: ParsedProperty,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub highlight_length: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub highlight_angle: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub color_points: Option<f64>,
     pub stops: ParsedProperty,
+    pub stops_cache: GradStopsCache,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default)]
+pub struct GradStopsCache(pub std::sync::Arc<std::sync::RwLock<Option<crate::gradlut::GradStops>>>);
+
+impl PartialEq for GradStopsCache {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedDash {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    pub name: Option<JsonStr>,
     pub value: ParsedProperty,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ParsedTextKeyframe {
     pub at: f64,
-    pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: JsonStr,
     pub font_size: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub font_family: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<JsonStr>,
     pub fill_color: Option<Vec<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub justify: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub line_height: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tracking: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke_color: Option<Vec<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke_width: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ParsedText {
-    pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: JsonStr,
     pub font_size: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub font_family: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<JsonStr>,
     pub fill_color: Option<Vec<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub justify: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub line_height: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tracking: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke_color: Option<Vec<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke_width: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub keyframes: Option<Vec<ParsedTextKeyframe>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedMask {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    pub name: Option<JsonStr>,
     pub inverted: bool,
     pub mode: MaskMode,
     pub path: ParsedProperty,
@@ -239,167 +285,128 @@ pub struct ParsedMask {
     pub expand: ParsedProperty,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ParsedShape {
-    #[serde(rename = "type")]
-    pub shape_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub match_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape_type: JsonStr,
+    pub name: Option<JsonStr>,
+    pub match_name: Option<JsonStr>,
     pub index: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<ParsedShape>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub star_type: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub points: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub rotation: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub outer_radius: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub inner_radius: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub outer_roundness: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub inner_roundness: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub radius: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub direction: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub rd: Option<Box<ParsedShape>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub gradient: Option<ParsedGradient>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub opacity: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke_width: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub line_cap: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub line_join: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub miter_limit: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub fill_rule: Option<FillRule>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub dashes: Option<Vec<ParsedDash>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub copies: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub copies_offset: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub composite: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub merge_mode: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub transform: Option<ParsedTransform>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub start: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub end: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub trim_mode: Option<TrimMode>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub vertices: Option<ParsedProperty>,
+    pub verts_fast: Option<Box<VertFast>>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct VertContour {
+    pub closed: Option<bool>,
+    pub nv: usize,
+    pub ni: usize,
+    pub no: usize,
+    pub flat: Vec<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct VertShape {
+    pub contours: Vec<VertContour>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct VertKf {
+    pub t: f64,
+    pub end_frame: Option<f64>,
+    pub hold: bool,
+    pub snap: bool,
+    pub s: VertShape,
+    pub e: Option<VertShape>,
+    pub easing_curve: Option<Box<CubicBezier>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct VertFast {
+    pub animated: bool,
+    pub value: VertShape,
+    pub keyframes: Vec<VertKf>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParsedLayer {
-    pub index: f64,
-    #[serde(rename = "type")]
+    pub index: Option<f64>,
     pub layer_type: LayerType,
     pub transform: ParsedTransform,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<JsonStr>,
     pub parent_index: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ref_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ref_id: Option<JsonStr>,
     pub in_frame: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub out_frame: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub start_time: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stretch: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_orient: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub is3d: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub blend_mode: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub solid_color: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solid_color: Option<JsonStr>,
     pub solid_width: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub solid_height: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub layer_width: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub layer_height: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub matte_type: Option<MatteType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub matte_target: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub time_remap: Option<ParsedProperty>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub masks: Option<Vec<ParsedMask>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<ParsedText>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub shapes: Option<Vec<ParsedShape>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedAsset {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "w")]
+    pub id: Option<JsonStr>,
     pub width: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "h")]
     pub height: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub u: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub p: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub layers: Option<Vec<ParsedLayer>>,
+    pub u: Option<JsonStr>,
+    pub p: Option<JsonStr>,
+    pub layers: Option<std::sync::Arc<Vec<ParsedLayer>>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedMarker {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    pub name: Option<JsonStr>,
     pub start_frame: f64,
     pub end_frame: f64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParsedAnimation {
     pub width: f64,
     pub height: f64,
@@ -409,20 +416,15 @@ pub struct ParsedAnimation {
     pub duration: f64,
     pub layers: Vec<ParsedLayer>,
     pub assets: Vec<ParsedAsset>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
+    pub name: Option<JsonStr>,
+    pub version: Option<JsonStr>,
     pub tgs: bool,
     pub is3d: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub markers: Option<Vec<ParsedMarker>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LayerInfo {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub in_frame: f64,
     pub out_frame: f64,

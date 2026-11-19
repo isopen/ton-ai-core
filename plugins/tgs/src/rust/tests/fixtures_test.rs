@@ -1,3 +1,4 @@
+#![recursion_limit = "1024"]
 use tgs::{has_animated_properties, parse_tgs, load_tgs, ParseOptions};
 
 fn read_fixture(name: &str) -> String {

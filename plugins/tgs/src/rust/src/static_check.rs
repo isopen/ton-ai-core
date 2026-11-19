@@ -143,7 +143,7 @@ fn layer_animated(layer: &ParsedLayer) -> bool {
     layer_content_animated(layer)
 }
 
-pub fn has_animated_properties(anim: &ParsedAnimation) -> bool {
+fn properties_animated(anim: &ParsedAnimation) -> bool {
     for layer in &anim.layers {
         if layer_animated(layer) {
             return true;
@@ -151,29 +151,87 @@ pub fn has_animated_properties(anim: &ParsedAnimation) -> bool {
     }
     for asset in &anim.assets {
         if let Some(layers) = &asset.layers {
-            for layer in layers {
+            for layer in layers.iter() {
                 if layer_animated(layer) {
                     return true;
                 }
             }
         }
     }
-    has_timed_layers(anim)
+    false
+}
+
+pub fn has_animated_properties(anim: &ParsedAnimation) -> bool {
+    properties_animated(anim) || has_timed_layers(anim)
+}
+
+const MAX_PRECOMP_DEPTH: usize = 32;
+
+fn layer_visibility(layer: &ParsedLayer, lo: f64, hi: f64) -> (bool, bool) {
+    let ip = layer.in_frame.unwrap_or(f64::NEG_INFINITY);
+    let op = layer.out_frame.unwrap_or(f64::INFINITY);
+    let any = hi >= ip && lo <= op;
+    let all = lo >= ip && hi <= op;
+    (any, all)
+}
+
+fn layers_frame_invariant(
+    anim: &ParsedAnimation,
+    layers: &[ParsedLayer],
+    lo: f64,
+    hi: f64,
+    depth: usize,
+) -> bool {
+    if depth > MAX_PRECOMP_DEPTH {
+        return false;
+    }
+    for layer in layers {
+        let (any, all) = layer_visibility(layer, lo, hi);
+        if !any {
+            continue;
+        }
+        if !all {
+            return false;
+        }
+        let Some(ref_id) = layer.ref_id.as_deref() else {
+            continue;
+        };
+        let Some(asset) = anim.assets.iter().find(|a| a.id.as_deref() == Some(ref_id)) else {
+            continue;
+        };
+        let Some(children) = asset.layers.as_deref() else {
+            continue;
+        };
+        let start = layer.start_time.unwrap_or(0.0);
+        let (clo, chi) = match layer.stretch {
+            Some(stretch) => {
+                if !(stretch > 0.0) {
+                    return false;
+                }
+                (((lo - start) / stretch).trunc(), ((hi - start) / stretch).trunc())
+            }
+            None => (lo - start, hi - start),
+        };
+        if !layers_frame_invariant(anim, children, clo, chi, depth + 1) {
+            return false;
+        }
+    }
+    true
+}
+
+pub fn is_frame_invariant(anim: &ParsedAnimation) -> bool {
+    if anim.layers.is_empty() || properties_animated(anim) {
+        return false;
+    }
+    layers_frame_invariant(anim, &anim.layers, anim.in_frame, anim.out_frame, 0)
 }
 
 fn has_timed_layers(anim: &ParsedAnimation) -> bool {
-    if anim.layers.len() > 1 {
-        for layer in &anim.layers {
-            if let Some(in_frame) = layer.in_frame {
-                if in_frame > anim.in_frame {
-                    return true;
-                }
-                if let Some(out_frame) = layer.out_frame {
-                    if out_frame < anim.out_frame {
-                        return true;
-                    }
-                }
-            }
+    for layer in &anim.layers {
+        let ip = layer.in_frame.unwrap_or(anim.in_frame);
+        let op = layer.out_frame.unwrap_or(anim.out_frame);
+        if ip > anim.in_frame || op < anim.out_frame {
+            return true;
         }
     }
     for asset in &anim.assets {
@@ -183,7 +241,7 @@ fn has_timed_layers(anim: &ParsedAnimation) -> bool {
             }
             let s0 = ls[0].in_frame;
             let e0 = ls[0].out_frame;
-            for layer in ls {
+            for layer in ls.iter() {
                 if layer.in_frame != s0 || layer.out_frame != e0 {
                     return true;
                 }

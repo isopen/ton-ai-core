@@ -1,22 +1,12 @@
-use serde_json::{json, Value as JsonValue};
+#![recursion_limit = "1024"]
+use tgs::json::{jarr, jn, jobj, js, Value as JsonValue};
 use tgs::{
     get_override, interpolate_keyframes, parse_tgs, set_value, ParsedAnimation, ParsedShape, Property,
     PropertyValue,
 };
 
 fn tgs_json(layers: JsonValue) -> String {
-    json!({
-        "tgs": 1,
-        "v": "5.5.2",
-        "fr": 60,
-        "ip": 0,
-        "op": 180,
-        "w": 512,
-        "h": 512,
-        "nm": "test",
-        "layers": layers,
-    })
-    .to_string()
+    tgs::json::to_string(&jobj(vec![("tgs", jn(1.0)), ("v", js("5.5.2")), ("fr", jn(60.0)), ("ip", jn(0.0)), ("op", jn(180.0)), ("w", jn(512.0)), ("h", jn(512.0)), ("nm", js("test")), ("layers", layers)]))
 }
 
 fn parse(s: &str) -> ParsedAnimation {
@@ -32,27 +22,7 @@ fn num(v: f64) -> PropertyValue {
 }
 
 fn fill_layer_layers() -> JsonValue {
-    json!([{
-        "ind": 0,
-        "ty": 4,
-        "nm": "Layer 1",
-        "ks": {
-            "o": { "a": 0, "k": 100 },
-            "r": { "a": 0, "k": 0 },
-            "p": { "a": 0, "k": [0, 0] },
-            "a": { "a": 0, "k": [0, 0] },
-            "s": { "a": 0, "k": [100, 100] }
-        },
-        "shapes": [{
-            "ty": "gr",
-            "nm": "Group 1",
-            "it": [
-                { "ty": "fl", "nm": "Fill 1", "c": { "a": 0, "k": [1, 0, 0] }, "o": { "a": 0, "k": 100 }, "r": 1 },
-                { "ty": "st", "nm": "Stroke 1", "c": { "a": 0, "k": [0, 1, 0] }, "o": { "a": 0, "k": 50 }, "w": { "a": 0, "k": 2 } },
-                { "ty": "tr", "p": { "a": 0, "k": [0, 0] }, "a": { "a": 0, "k": [0, 0] }, "s": { "a": 0, "k": [100, 100] }, "r": { "a": 0, "k": 0 }, "o": { "a": 0, "k": 100 } },
-            ],
-        }],
-    }])
+    jarr(vec![jobj(vec![("ind", jn(0.0)), ("ty", jn(4.0)), ("nm", js("Layer 1")), ("ks", jobj(vec![("o", jobj(vec![("a", jn(0.0)), ("k", jn(100.0))])), ("r", jobj(vec![("a", jn(0.0)), ("k", jn(0.0))])), ("p", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("a", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("s", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(100.0), jn(100.0)]))]))])), ("shapes", jarr(vec![jobj(vec![("ty", js("gr")), ("nm", js("Group 1")), ("it", jarr(vec![jobj(vec![("ty", js("fl")), ("nm", js("Fill 1")), ("c", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(1.0), jn(0.0), jn(0.0)]))])), ("o", jobj(vec![("a", jn(0.0)), ("k", jn(100.0))])), ("r", jn(1.0))]), jobj(vec![("ty", js("st")), ("nm", js("Stroke 1")), ("c", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(1.0), jn(0.0)]))])), ("o", jobj(vec![("a", jn(0.0)), ("k", jn(50.0))])), ("w", jobj(vec![("a", jn(0.0)), ("k", jn(2.0))]))]), jobj(vec![("ty", js("tr")), ("p", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("a", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("s", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(100.0), jn(100.0)]))])), ("r", jobj(vec![("a", jn(0.0)), ("k", jn(0.0))])), ("o", jobj(vec![("a", jn(0.0)), ("k", jn(100.0))]))])]))])]))])])
 }
 
 fn anim_with_fill() -> ParsedAnimation {
@@ -103,8 +73,8 @@ fn get_override_returns_the_static_override_value() {
     set_value(&mut anim, "Layer 1.Group 1.Fill 1", Property::FillColor, nums(&[0.0, 0.0, 1.0])).unwrap();
     let fill = nth_child(&anim, 0, 0, 0);
     let color = fill.color.as_ref().unwrap();
-    assert_eq!(get_override(color, 0.0).unwrap(), json!([0.0, 0.0, 1.0]));
-    assert_eq!(get_override(color, 100.0).unwrap(), json!([0.0, 0.0, 1.0]));
+    assert_eq!(get_override(color, 0.0).unwrap(), jarr(vec![jn(0.0), jn(0.0), jn(1.0)]));
+    assert_eq!(get_override(color, 100.0).unwrap(), jarr(vec![jn(0.0), jn(0.0), jn(1.0)]));
 }
 
 #[test]
@@ -113,7 +83,7 @@ fn interpolate_keyframes_honours_the_override() {
     set_value(&mut anim, "**", Property::FillColor, nums(&[0.0, 0.0, 1.0])).unwrap();
     let fill = nth_child(&anim, 0, 0, 0);
     let color = fill.color.as_ref().unwrap();
-    assert_eq!(interpolate_keyframes(color, 42.0), json!([0.0, 0.0, 1.0]));
+    assert_eq!(interpolate_keyframes(color, 42.0), jarr(vec![jn(0.0), jn(0.0), jn(1.0)]));
 }
 
 #[test]
@@ -122,7 +92,7 @@ fn overrides_fill_opacity() {
     set_value(&mut anim, "**.Fill 1", Property::FillOpacity, num(33.0)).unwrap();
     let fill = nth_child(&anim, 0, 0, 0);
     let opacity = fill.opacity.as_ref().unwrap();
-    assert_eq!(interpolate_keyframes(opacity, 0.0), json!(33.0));
+    assert_eq!(interpolate_keyframes(opacity, 0.0), jn(33.0));
 }
 
 #[test]
@@ -135,9 +105,9 @@ fn overrides_stroke_color_opacity_and_width() {
     let color = stroke.color.as_ref().unwrap();
     let opacity = stroke.opacity.as_ref().unwrap();
     let width = stroke.stroke_width.as_ref().unwrap();
-    assert_eq!(interpolate_keyframes(color, 0.0), json!([1.0, 1.0, 1.0]));
-    assert_eq!(interpolate_keyframes(opacity, 0.0), json!(25.0));
-    assert_eq!(interpolate_keyframes(width, 0.0), json!(7.0));
+    assert_eq!(interpolate_keyframes(color, 0.0), jarr(vec![jn(1.0), jn(1.0), jn(1.0)]));
+    assert_eq!(interpolate_keyframes(opacity, 0.0), jn(25.0));
+    assert_eq!(interpolate_keyframes(width, 0.0), jn(7.0));
 }
 
 #[test]
@@ -152,33 +122,20 @@ fn overrides_the_layer_transform_anchor_scale_rotation_and_opacity() {
     let scale = tr.scale.as_ref().unwrap();
     let rotation = tr.rotation.as_ref().unwrap();
     let opacity = tr.opacity.as_ref().unwrap();
-    assert_eq!(interpolate_keyframes(anchor, 0.0), json!([1.0, 2.0]));
-    assert_eq!(interpolate_keyframes(scale, 0.0), json!([120.0, 120.0]));
-    assert_eq!(interpolate_keyframes(rotation, 0.0), json!(45.0));
-    assert_eq!(interpolate_keyframes(opacity, 0.0), json!(80.0));
+    assert_eq!(interpolate_keyframes(anchor, 0.0), jarr(vec![jn(1.0), jn(2.0)]));
+    assert_eq!(interpolate_keyframes(scale, 0.0), jarr(vec![jn(120.0), jn(120.0)]));
+    assert_eq!(interpolate_keyframes(rotation, 0.0), jn(45.0));
+    assert_eq!(interpolate_keyframes(opacity, 0.0), jn(80.0));
 }
 
 #[test]
 fn overrides_trim_end() {
-    let raw = tgs_json(json!([{
-        "ind": 0,
-        "ty": 4,
-        "nm": "L",
-        "ks": {},
-        "shapes": [{
-            "ty": "tm",
-            "nm": "Trim 1",
-            "s": { "a": 0, "k": 0 },
-            "e": { "a": 0, "k": 100 },
-            "o": { "a": 0, "k": 0 },
-            "m": 1,
-        }],
-    }]));
+    let raw = tgs_json(jarr(vec![jobj(vec![("ind", jn(0.0)), ("ty", jn(4.0)), ("nm", js("L")), ("ks", jobj(vec![])), ("shapes", jarr(vec![jobj(vec![("ty", js("tm")), ("nm", js("Trim 1")), ("s", jobj(vec![("a", jn(0.0)), ("k", jn(0.0))])), ("e", jobj(vec![("a", jn(0.0)), ("k", jn(100.0))])), ("o", jobj(vec![("a", jn(0.0)), ("k", jn(0.0))])), ("m", jn(1.0))])]))])]));
     let mut anim = parse(&raw);
     set_value(&mut anim, "L.Trim 1", Property::TrimEnd, nums(&[60.0])).unwrap();
     let trim = anim.layers[0].shapes.as_ref().unwrap().get(0).unwrap();
     let end = trim.end.as_ref().unwrap();
-    assert_eq!(interpolate_keyframes(end, 0.0), json!([60.0]));
+    assert_eq!(interpolate_keyframes(end, 0.0), jarr(vec![jn(60.0)]));
 }
 
 #[test]
@@ -194,53 +151,23 @@ fn does_not_apply_fill_overrides_to_strokes_and_vice_versa() {
     let stroke = nth_child(&anim, 0, 0, 1);
     let fill_color = fill.color.as_ref().unwrap();
     let stroke_color = stroke.color.as_ref().unwrap();
-    assert_eq!(interpolate_keyframes(fill_color, 0.0), json!([1, 0, 0]));
-    assert_eq!(interpolate_keyframes(stroke_color, 0.0), json!([0, 1, 0]));
+    assert_eq!(interpolate_keyframes(fill_color, 0.0), jarr(vec![jn(1.0), jn(0.0), jn(0.0)]));
+    assert_eq!(interpolate_keyframes(stroke_color, 0.0), jarr(vec![jn(0.0), jn(1.0), jn(0.0)]));
 }
 
 #[test]
 fn addresses_layers_without_a_name_by_their_index() {
-    let raw = tgs_json(json!([{
-        "ind": 3,
-        "ty": 4,
-        "ks": {
-            "o": { "a": 0, "k": 100 },
-            "r": { "a": 0, "k": 0 },
-            "p": { "a": 0, "k": [0, 0] },
-            "a": { "a": 0, "k": [0, 0] },
-            "s": { "a": 0, "k": [100, 100] }
-        },
-        "shapes": [{
-            "ty": "gr",
-            "it": [
-                { "ty": "fl", "c": { "a": 0, "k": [1, 0, 0] }, "o": { "a": 0, "k": 100 }, "r": 1 },
-                { "ty": "tr", "p": { "a": 0, "k": [0, 0] }, "a": { "a": 0, "k": [0, 0] }, "s": { "a": 0, "k": [100, 100] }, "r": { "a": 0, "k": 0 }, "o": { "a": 0, "k": 100 } },
-            ],
-        }],
-    }]));
+    let raw = tgs_json(jarr(vec![jobj(vec![("ind", jn(3.0)), ("ty", jn(4.0)), ("ks", jobj(vec![("o", jobj(vec![("a", jn(0.0)), ("k", jn(100.0))])), ("r", jobj(vec![("a", jn(0.0)), ("k", jn(0.0))])), ("p", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("a", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("s", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(100.0), jn(100.0)]))]))])), ("shapes", jarr(vec![jobj(vec![("ty", js("gr")), ("it", jarr(vec![jobj(vec![("ty", js("fl")), ("c", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(1.0), jn(0.0), jn(0.0)]))])), ("o", jobj(vec![("a", jn(0.0)), ("k", jn(100.0))])), ("r", jn(1.0))]), jobj(vec![("ty", js("tr")), ("p", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("a", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("s", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(100.0), jn(100.0)]))])), ("r", jobj(vec![("a", jn(0.0)), ("k", jn(0.0))])), ("o", jobj(vec![("a", jn(0.0)), ("k", jn(100.0))]))])]))])]))])]));
     let mut anim = parse(&raw);
     set_value(&mut anim, "Layer 3.**", Property::FillColor, nums(&[0.0, 0.0, 1.0])).unwrap();
     let fill = nth_child(&anim, 0, 0, 0);
     let color = fill.color.as_ref().unwrap();
-    assert_eq!(interpolate_keyframes(color, 0.0), json!([0.0, 0.0, 1.0]));
+    assert_eq!(interpolate_keyframes(color, 0.0), jarr(vec![jn(0.0), jn(0.0), jn(1.0)]));
 }
 
 #[test]
 fn throws_when_the_transform_lacks_the_requested_property() {
-    let raw = tgs_json(json!([{
-        "ind": 0,
-        "ty": 4,
-        "nm": "L",
-        "ks": {},
-        "shapes": [{
-            "ty": "gr",
-            "nm": "Group 1",
-            "it": [
-                { "ty": "fl", "c": { "a": 0, "k": [1, 0, 0] }, "o": { "a": 0, "k": 100 }, "r": 1 },
-                { "ty": "tr", "p": { "a": 0, "k": [0, 0] }, "s": { "a": 0, "k": [100, 100] }, "r": { "a": 0, "k": 0 }, "o": { "a": 0, "k": 100 } },
-            ],
-        }],
-    }]));
+    let raw = tgs_json(jarr(vec![jobj(vec![("ind", jn(0.0)), ("ty", jn(4.0)), ("nm", js("L")), ("ks", jobj(vec![])), ("shapes", jarr(vec![jobj(vec![("ty", js("gr")), ("nm", js("Group 1")), ("it", jarr(vec![jobj(vec![("ty", js("fl")), ("c", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(1.0), jn(0.0), jn(0.0)]))])), ("o", jobj(vec![("a", jn(0.0)), ("k", jn(100.0))])), ("r", jn(1.0))]), jobj(vec![("ty", js("tr")), ("p", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("s", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(100.0), jn(100.0)]))])), ("r", jobj(vec![("a", jn(0.0)), ("k", jn(0.0))])), ("o", jobj(vec![("a", jn(0.0)), ("k", jn(100.0))]))])]))])]))])]));
     {
         let mut anim = parse(&raw);
         transform_child_mut(&mut anim).anchor = None;
@@ -275,19 +202,7 @@ fn throws_when_the_transform_lacks_the_requested_property() {
 
 #[test]
 fn throws_for_property_kinds_that_do_not_apply_to_the_shape() {
-    let raw = tgs_json(json!([{
-        "ind": 0,
-        "ty": 4,
-        "nm": "L",
-        "ks": {},
-        "shapes": [{
-            "ty": "gr",
-            "it": [
-                { "ty": "rc", "p": { "a": 0, "k": [0, 0] }, "s": { "a": 0, "k": [10, 10] }, "r": { "a": 0, "k": 0 } },
-                { "ty": "tr", "p": { "a": 0, "k": [0, 0] }, "a": { "a": 0, "k": [0, 0] }, "s": { "a": 0, "k": [100, 100] }, "r": { "a": 0, "k": 0 }, "o": { "a": 0, "k": 100 } },
-            ],
-        }],
-    }]));
+    let raw = tgs_json(jarr(vec![jobj(vec![("ind", jn(0.0)), ("ty", jn(4.0)), ("nm", js("L")), ("ks", jobj(vec![])), ("shapes", jarr(vec![jobj(vec![("ty", js("gr")), ("it", jarr(vec![jobj(vec![("ty", js("rc")), ("p", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("s", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(10.0), jn(10.0)]))])), ("r", jobj(vec![("a", jn(0.0)), ("k", jn(0.0))]))]), jobj(vec![("ty", js("tr")), ("p", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("a", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(0.0), jn(0.0)]))])), ("s", jobj(vec![("a", jn(0.0)), ("k", jarr(vec![jn(100.0), jn(100.0)]))])), ("r", jobj(vec![("a", jn(0.0)), ("k", jn(0.0))])), ("o", jobj(vec![("a", jn(0.0)), ("k", jn(100.0))]))])]))])]))])]));
     let mut anim = parse(&raw);
     let res = set_value(&mut anim, "**", Property::FillColor, nums(&[0.0, 0.0, 1.0]));
     assert!(res.is_err() && no_match(res.unwrap_err()));

@@ -10,16 +10,13 @@ name = "tgs"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
-flate2 = "1"
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
+[features]
+prof = []
 
 [profile.release]
 opt-level = 3
 lto = true
 panic = "abort"
 codegen-units = 1
-overflow-checks = true
+overflow-checks = false

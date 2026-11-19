@@ -1,4 +1,4 @@
-use serde_json::Value as JsonValue;
+use crate::json::Value as JsonValue;
 use crate::types::*;
 
 struct W { v: Vec<u8> }
@@ -28,7 +28,7 @@ impl W {
             Some(v) => { self.byte(1); self.many_f64(v); }
         }
     }
-    fn opt_str(&mut self, s: &Option<String>) {
+    fn opt_str(&mut self, s: Option<&str>) {
         match s {
             None => self.byte(0),
             Some(v) => { self.byte(1); self.str(v); }
@@ -51,7 +51,7 @@ impl W {
         match v {
             JsonValue::Null => self.byte(0),
             JsonValue::Number(n) => {
-                let f = n.as_f64().unwrap_or(f64::NAN);
+                let f = *n;
                 if f.is_finite() {
                     self.byte(1);
                     self.f64(f);
@@ -64,6 +64,14 @@ impl W {
                 self.u32(a.len() as u32);
                 for it in a { self.value(it); }
             }
+            JsonValue::Nums(n) => {
+                self.byte(2);
+                self.u32(n.len() as u32);
+                for x in n.iter() {
+                    self.byte(1);
+                    self.f64(x);
+                }
+            }
             JsonValue::String(s) => {
                 self.byte(3);
                 self.str(s);
@@ -75,7 +83,7 @@ impl W {
             JsonValue::Object(o) => {
                 self.byte(5);
                 self.u32(o.len() as u32);
-                for (k, x) in o {
+                for (k, x) in o.iter() {
                     self.str(k);
                     self.value(x);
                 }
@@ -113,13 +121,16 @@ impl W {
             Some(list) => {
                 self.byte(1);
                 self.u32(list.len() as u32);
-                for k in list {
+                for (i, k) in list.iter().enumerate() {
                     self.f64(k.t);
                     self.value(&k.s);
                     self.opt_f64(k.end_frame);
                     self.byte(if k.hold { 1 } else { 0 });
                     self.opt_easing(&k.easing);
-                    self.opt_value(&k.e);
+                    match crate::keyframes::keyframe_end(list, i) {
+                        None => self.byte(0),
+                        Some(x) => { self.byte(1); self.value(x); }
+                    }
                     self.opt_many_f64(&k.to);
                     self.opt_many_f64(&k.ti);
                     self.opt_value(&k.h);
@@ -175,7 +186,7 @@ impl W {
     fn dashes(&mut self, ds: &[ParsedDash]) {
         self.u32(ds.len() as u32);
         for d in ds {
-            self.opt_str(&d.name);
+            self.opt_str(d.name.as_deref());
             self.prop(&d.value);
         }
     }
@@ -187,8 +198,8 @@ impl W {
     }
     fn shape(&mut self, s: &ParsedShape) {
         self.str(&s.shape_type);
-        self.opt_str(&s.name);
-        self.opt_str(&s.match_name);
+        self.opt_str(s.name.as_deref());
+        self.opt_str(s.match_name.as_deref());
         self.opt_f64(s.index);
         self.opt_child_shapes(&s.children);
         self.opt_prop(&s.position);
@@ -250,7 +261,7 @@ impl W {
         self.f64(k.at);
         self.str(&k.text);
         self.opt_f64(k.font_size);
-        self.opt_str(&k.font_family);
+        self.opt_str(k.font_family.as_deref());
         self.opt_many_f64(&k.fill_color);
         self.opt_f64(k.justify);
         self.opt_f64(k.line_height);
@@ -261,7 +272,7 @@ impl W {
     fn text(&mut self, t: &ParsedText) {
         self.str(&t.text);
         self.opt_f64(t.font_size);
-        self.opt_str(&t.font_family);
+        self.opt_str(t.font_family.as_deref());
         self.opt_many_f64(&t.fill_color);
         self.opt_f64(t.justify);
         self.opt_f64(t.line_height);
@@ -284,7 +295,7 @@ impl W {
         }
     }
     fn mask(&mut self, m: &ParsedMask) {
-        self.opt_str(&m.name);
+        self.opt_str(m.name.as_deref());
         self.byte(if m.inverted { 1 } else { 0 });
         self.byte(m.mode as u8);
         self.prop(&m.path);
@@ -312,12 +323,12 @@ impl W {
         }
     }
     fn layer(&mut self, l: &ParsedLayer) {
-        self.f64(l.index);
+        self.f64(l.index.unwrap_or(f64::NAN));
         self.byte(l.layer_type as u8);
         self.transform(&l.transform);
-        self.opt_str(&l.name);
+        self.opt_str(l.name.as_deref());
         self.opt_f64(l.parent_index);
-        self.opt_str(&l.ref_id);
+        self.opt_str(l.ref_id.as_deref());
         self.opt_f64(l.in_frame);
         self.opt_f64(l.out_frame);
         self.opt_f64(l.start_time);
@@ -325,7 +336,7 @@ impl W {
         self.opt_f64(l.auto_orient);
         self.opt_bool(l.is3d);
         self.opt_f64(l.blend_mode);
-        self.opt_str(&l.solid_color);
+        self.opt_str(l.solid_color.as_deref());
         self.opt_f64(l.solid_width);
         self.opt_f64(l.solid_height);
         self.opt_f64(l.layer_width);
@@ -349,11 +360,11 @@ impl W {
         for l in list { self.layer(l); }
     }
     fn asset(&mut self, a: &ParsedAsset) {
-        self.opt_str(&a.id);
+        self.opt_str(a.id.as_deref());
         self.opt_f64(a.width);
         self.opt_f64(a.height);
-        self.opt_str(&a.u);
-        self.opt_str(&a.p);
+        self.opt_str(a.u.as_deref());
+        self.opt_str(a.p.as_deref());
         match &a.layers {
             None => self.byte(0),
             Some(list) => { self.byte(1); self.layers(list); }
@@ -379,8 +390,8 @@ pub fn encode_animation(a: &ParsedAnimation) -> Vec<u8> {
             for x in list { w.asset(x); }
         }
     }
-    w.opt_str(&a.name);
-    w.opt_str(&a.version);
+    w.opt_str(a.name.as_deref());
+    w.opt_str(a.version.as_deref());
     w.byte(if a.tgs { 1 } else { 0 });
     w.byte(if a.is3d { 1 } else { 0 });
     match &a.markers {
@@ -389,7 +400,7 @@ pub fn encode_animation(a: &ParsedAnimation) -> Vec<u8> {
             w.byte(1);
             w.u32(list.len() as u32);
             for m in list {
-                w.opt_str(&m.name);
+                w.opt_str(m.name.as_deref());
                 w.f64(m.start_frame);
                 w.f64(m.end_frame);
             }

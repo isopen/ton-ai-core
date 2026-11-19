@@ -1,7 +1,4 @@
 use crate::types::{BezierEasingDef, CubicBezierEasing};
-use std::collections::HashMap;
-use std::collections::VecDeque;
-use std::sync::Mutex;
 
 const SAMPLE_TABLE_SIZE: usize = 11;
 const NEWTON_ITERATIONS: usize = 4;
@@ -9,7 +6,6 @@ const NEWTON_MIN_SLOPE: f64 = 0.02;
 const SUBDIVISION_PRECISION: f64 = 1e-7;
 const SUBDIVISION_MAX_ITERATIONS: usize = 10;
 const SAMPLE_STEP_SIZE: f64 = 1.0 / (SAMPLE_TABLE_SIZE as f64 - 1.0);
-const MAX_INTERPOLATORS: usize = 256;
 
 fn calc_bezier(t: f64, a1: f64, a2: f64) -> f64 {
     let a = 1.0 - 3.0 * a2 + 3.0 * a1;
@@ -25,17 +21,17 @@ fn get_slope(t: f64, a1: f64, a2: f64) -> f64 {
     (3.0 * a * t + 2.0 * b) * t + c
 }
 
-fn clamp01(v: f64) -> f64 {
-    if v < 0.0 {
-        0.0
-    } else if v > 1.0 {
-        1.0
+fn clamp_handle(v: f64) -> f64 {
+    if v < -100.0 {
+        -100.0
+    } else if v > 100.0 {
+        100.0
     } else {
         v
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CubicBezier {
     x1: f64,
     y1: f64,
@@ -45,11 +41,15 @@ pub struct CubicBezier {
 }
 
 impl CubicBezier {
+    pub fn from_easing(easing: CubicBezierEasing) -> Self {
+        Self::new(easing.x1, easing.y1, easing.x2, easing.y2)
+    }
+
     pub fn new(x1: f64, y1: f64, x2: f64, y2: f64) -> Self {
-        let cx1 = clamp01(x1);
-        let cy1 = y1;
-        let cx2 = clamp01(x2);
-        let cy2 = y2;
+        let cx1 = clamp_handle(x1);
+        let cy1 = clamp_handle(y1);
+        let cx2 = clamp_handle(x2);
+        let cy2 = clamp_handle(y2);
         let sample_values = if cx1 == cy1 && cx2 == cy2 {
             None
         } else {
@@ -144,11 +144,8 @@ fn tangent_component(def: Option<&BezierEasingDef>, axis: u8) -> f64 {
     match def {
         None => 0.0,
         Some(d) => {
-            let arr = if axis == 0 { d.x.as_ref() } else { d.y.as_ref() };
-            match arr.and_then(|a| a.first()) {
-                Some(el) => *el,
-                None => 0.0,
-            }
+            let comp = if axis == 0 { d.x } else { d.y };
+            comp.unwrap_or(0.0)
         }
     }
 }
@@ -167,51 +164,6 @@ pub fn build_easing(o: Option<&BezierEasingDef>, i: Option<&BezierEasingDef>) ->
     Some(CubicBezierEasing { x1, y1, x2, y2 })
 }
 
-fn easing_key(x1: f64, y1: f64, x2: f64, y2: f64) -> String {
-    format!("{}_{}_{}_{}", x1, y1, x2, y2)
-}
-
-fn cache_get(cache: &Mutex<(HashMap<String, CubicBezier>, VecDeque<String>)>, key: &str) -> Option<CubicBezier> {
-    let mut guard = cache.lock().unwrap();
-    let (map, order) = &mut *guard;
-    let value = map.remove(key)?;
-    if let Some(pos) = order.iter().position(|k| k == key) {
-        order.remove(pos);
-    }
-    order.push_back(key.to_string());
-    map.insert(key.to_string(), value.clone());
-    Some(value)
-}
-
-fn cache_put(cache: &Mutex<(HashMap<String, CubicBezier>, VecDeque<String>)>, key: String, value: CubicBezier) {
-    let mut guard = cache.lock().unwrap();
-    let (map, order) = &mut *guard;
-    let _ = map.remove(&key);
-    if let Some(pos) = order.iter().position(|k| *k == key) {
-        order.remove(pos);
-    }
-    order.push_back(key.clone());
-    map.insert(key, value);
-    while map.len() > MAX_INTERPOLATORS {
-        if let Some(oldest) = order.pop_front() {
-            map.remove(&oldest);
-        }
-    }
-}
-
-fn interpolator_cache() -> &'static Mutex<(HashMap<String, CubicBezier>, VecDeque<String>)> {
-    static CACHE: std::sync::OnceLock<Mutex<(HashMap<String, CubicBezier>, VecDeque<String>)>> = std::sync::OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new((HashMap::new(), VecDeque::new())))
-}
-
 pub fn easing_value(easing: CubicBezierEasing, t: f64) -> f64 {
-    let key = easing_key(easing.x1, easing.y1, easing.x2, easing.y2);
-    let cache = interpolator_cache();
-    if let Some(interp) = cache_get(cache, &key) {
-        return interp.value(t);
-    }
-    let interp = CubicBezier::new(easing.x1, easing.y1, easing.x2, easing.y2);
-    let result = interp.value(t);
-    cache_put(cache, key, interp);
-    result
+    CubicBezier::from_easing(easing).value(t)
 }

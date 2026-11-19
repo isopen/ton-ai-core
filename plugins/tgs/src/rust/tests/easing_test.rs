@@ -1,6 +1,6 @@
 use tgs::{easing_value, BezierEasingDef, CubicBezier, CubicBezierEasing};
 
-fn def(x: Option<Vec<f64>>, y: Option<Vec<f64>>) -> BezierEasingDef {
+fn def(x: Option<f64>, y: Option<f64>) -> BezierEasingDef {
     BezierEasingDef { x, y }
 }
 
@@ -63,7 +63,7 @@ fn build_easing_returns_none_when_both_tangents_are_missing() {
 
 #[test]
 fn build_easing_fills_missing_components_with_zeros() {
-    let o = def(Some(vec![0.3]), Some(vec![0.2]));
+    let o = def(Some(0.3), Some(0.2));
     let e = tgs::build_easing(Some(&o), None).unwrap();
     assert_eq!(
         e,
@@ -73,8 +73,8 @@ fn build_easing_fills_missing_components_with_zeros() {
 
 #[test]
 fn build_easing_reads_out_x_y_from_o_and_in_x_y_from_i() {
-    let o = def(Some(vec![0.25]), Some(vec![0.1]));
-    let i = def(Some(vec![0.75]), Some(vec![0.9]));
+    let o = def(Some(0.25), Some(0.1));
+    let i = def(Some(0.75), Some(0.9));
     let e = tgs::build_easing(Some(&o), Some(&i)).unwrap();
     assert_eq!(
         e,
@@ -84,7 +84,7 @@ fn build_easing_reads_out_x_y_from_o_and_in_x_y_from_i() {
 
 #[test]
 fn build_easing_returns_none_for_non_finite_values() {
-    let o = def(Some(vec![f64::NAN]), Some(vec![0.0]));
+    let o = def(Some(f64::NAN), Some(0.0));
     assert!(tgs::build_easing(Some(&o), None).is_none());
 }
 

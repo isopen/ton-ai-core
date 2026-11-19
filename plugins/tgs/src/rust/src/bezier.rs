@@ -1,5 +1,6 @@
 pub type BezierPoint = [f64; 2];
 
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CubicBezierSeg {
     pub p0: BezierPoint,
@@ -79,17 +80,64 @@ pub fn bezier_split(seg: &CubicBezierSeg, t: f64) -> (CubicBezierSeg, CubicBezie
 
 const T_AT_LENGTH_ERROR: f64 = 0.01;
 const T_AT_LENGTH_MAX_ITERATIONS: usize = 1000;
+const T_AT_LENGTH_SECANT_ITERATIONS: usize = 16;
+
+#[inline]
+fn partial_length(seg: &CubicBezierSeg, t: f64) -> f64 {
+    let (left, _) = bezier_split(seg, t);
+    bezier_length(&left)
+}
 
 pub fn bezier_t_at_length(seg: &CubicBezierSeg, l: f64, total_length: f64) -> f64 {
-    let mut t = 1.0f64;
     if l > total_length || (l - total_length).abs() < 1e-6 {
-        return t;
+        return 1.0;
     }
-    t *= 0.5;
+    if l <= 0.0 || total_length <= 0.0 {
+        return 0.0;
+    }
+    let mut a = 0.0f64;
+    let mut fa = -l;
+    let mut b = 1.0f64;
+    let mut fb = total_length - l;
+    let mut side = 0i32;
+    let mut t = (l / total_length).clamp(0.0, 1.0);
+    for _ in 0..T_AT_LENGTH_SECANT_ITERATIONS {
+        let f = partial_length(seg, t) - l;
+        if f.abs() < T_AT_LENGTH_ERROR {
+            return t;
+        }
+        if f < 0.0 {
+            a = t;
+            fa = f;
+            if side == -1 {
+                fb *= 0.5;
+            }
+            side = -1;
+        } else {
+            b = t;
+            fb = f;
+            if side == 1 {
+                fa *= 0.5;
+            }
+            side = 1;
+        }
+        let denom = fb - fa;
+        let mut next = if denom.abs() > 1e-300 {
+            (a * fb - b * fa) / denom
+        } else {
+            0.5 * (a + b)
+        };
+        if !(next > a && next < b) || !next.is_finite() {
+            next = 0.5 * (a + b);
+        }
+        if (next - t).abs() < 1e-12 {
+            return next;
+        }
+        t = next;
+    }
     let mut last_bigger = 1.0f64;
     for _num in 0..T_AT_LENGTH_MAX_ITERATIONS {
-        let (left, _) = bezier_split(seg, t);
-        let l_len = bezier_length(&left);
+        let l_len = partial_length(seg, t);
         if (l_len - l).abs() < T_AT_LENGTH_ERROR {
             return t;
         }

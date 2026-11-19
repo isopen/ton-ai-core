@@ -1,7 +1,7 @@
 use crate::jsutil::js_num_value;
 pub use crate::types::PropertyValue;
 use crate::types::{ParsedAnimation, ParsedLayer, ParsedProperty, ParsedShape, ParsedTransform};
-use serde_json::Value as JsonValue;
+use crate::json::Value as JsonValue;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Property {
@@ -60,16 +60,20 @@ pub fn match_key_path(pattern: &str, path: &[String]) -> bool {
 fn shape_name(shape: &ParsedShape) -> String {
     shape
         .name
-        .clone()
-        .or_else(|| shape.match_name.clone())
+        .as_ref()
+        .or(shape.match_name.as_ref())
+        .map(|s| s.to_string())
         .unwrap_or_default()
 }
 
 fn layer_path(layer: &ParsedLayer) -> Vec<String> {
     let mut segments: Vec<String> = Vec::new();
     match &layer.name {
-        Some(name) if !name.is_empty() => segments.push(name.clone()),
-        _ => segments.push(format!("Layer {}", layer.index)),
+        Some(name) if !name.is_empty() => segments.push(name.to_string()),
+        _ => segments.push(match layer.index {
+            Some(idx) => format!("Layer {}", idx),
+            None => "Layer ?".to_string(),
+        }),
     }
     segments
 }

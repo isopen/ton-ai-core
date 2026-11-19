@@ -1,12 +1,12 @@
 use crate::jsutil::{
-    js_is_object, js_number, js_number_of, js_opt_str, js_str, js_strict_eq, js_strict_number, js_truthy,
+    js_is_object, js_number, js_number_of, js_owned_opt_str, js_owned_str, js_str, js_strict_eq, js_strict_number, js_truthy,
 };
 use crate::types::{
     FillRule, GradientType, LayerInfo, LayerType, MatteType, MaskMode, ParsedAnimation, ParsedAsset, ParsedDash,
     ParsedGradient, ParsedLayer, ParsedMarker, ParsedMask, ParsedShape, ParsedText, ParsedTextKeyframe,
     ParsedTransform, TrimMode,
 };
-use serde_json::Value as JsonValue;
+use crate::json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 
@@ -79,7 +79,7 @@ fn cache_put(key: &str, value: ParsedAnimation) {
     }
 }
 
-fn shape_type_name(ty: Option<&JsonValue>) -> String {
+pub(crate) fn shape_type_name(ty: Option<&JsonValue>) -> crate::json::JsonStr {
     static MAP: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
     let map = MAP.get_or_init(|| {
         HashMap::from([
@@ -102,71 +102,91 @@ fn shape_type_name(ty: Option<&JsonValue>) -> String {
     match ty {
         Some(JsonValue::String(raw)) => {
             if let Some(mapped) = map.get(raw.as_str()) {
-                mapped.to_string()
+                crate::json::JsonStr::new(mapped)
             } else {
                 raw.clone()
             }
         }
-        Some(other) => js_str(other),
-        None => String::new(),
+        Some(other) => js_owned_str(other),
+        None => crate::json::JsonStr::default(),
     }
 }
 
-fn parse_transform(ks: Option<&JsonValue>) -> ParsedTransform {
-    static EMPTY: OnceLock<JsonValue> = OnceLock::new();
-    let empty = EMPTY.get_or_init(|| serde_json::json!({}));
-    let ks = ks.unwrap_or_else(|| empty);
+fn parse_transform(ks: Option<&mut JsonValue>) -> ParsedTransform {
+    let ks = match ks {
+        Some(ks) => ks,
+        None => {
+            return ParsedTransform {
+                opacity: Some(parse_value_owned(None)),
+                rotation: Some(parse_value_owned(None)),
+                position: Some(parse_value_owned(None)),
+                anchor: Some(parse_value_owned(None)),
+                scale: Some(parse_value_owned(None)),
+                skew: None,
+                skew_axis: None,
+                start_opacity: None,
+                end_opacity: None,
+            }
+        }
+    };
     let mut result = ParsedTransform {
-        opacity: Some(parse_value(ks.get("o"))),
-        rotation: Some(parse_value(ks.get("r"))),
-        position: Some(parse_value(ks.get("p"))),
-        anchor: Some(parse_value(ks.get("a"))),
-        scale: Some(parse_value(ks.get("s"))),
+        opacity: Some(parse_value_owned(ks.take("o"))),
+        rotation: Some(parse_value_owned(ks.take("r"))),
+        position: Some(parse_value_owned(ks.take("p"))),
+        anchor: Some(parse_value_owned(ks.take("a"))),
+        scale: Some(parse_value_owned(ks.take("s"))),
         skew: None,
         skew_axis: None,
         start_opacity: None,
         end_opacity: None,
     };
     if js_truthy(ks.get("sk")) {
-        result.skew = Some(parse_value(ks.get("sk")));
+        result.skew = Some(parse_value_owned(ks.take("sk")));
     }
     if js_truthy(ks.get("sa")) {
-        result.skew_axis = Some(parse_value(ks.get("sa")));
+        result.skew_axis = Some(parse_value_owned(ks.take("sa")));
     }
     if js_truthy(ks.get("so")) {
-        result.start_opacity = Some(parse_value(ks.get("so")));
+        result.start_opacity = Some(parse_value_owned(ks.take("so")));
     }
     if js_truthy(ks.get("eo")) {
-        result.end_opacity = Some(parse_value(ks.get("eo")));
+        result.end_opacity = Some(parse_value_owned(ks.take("eo")));
     }
     result
 }
 
-fn parse_gradient_shape(s: &JsonValue) -> ParsedGradient {
+fn parse_gradient_shape(s: &mut JsonValue) -> ParsedGradient {
+    let mut g = s.take("g");
+    let color_points = g.as_ref().and_then(|g| g.get("p")).and_then(|p| p.as_f64());
+    let stops = match g.as_mut() {
+        Some(g) => parse_value_owned(g.take("k")),
+        None => parse_value_owned(None),
+    };
     ParsedGradient {
-        gradient_type: if matches!(s.get("t"), Some(JsonValue::Number(n)) if n.as_f64() == Some(2.0)) {
+        gradient_type: if matches!(s.get("t"), Some(JsonValue::Number(n)) if *n == 2.0) {
             GradientType::Radial
         } else {
             GradientType::Linear
         },
-        start_point: parse_value(s.get("s")),
-        end_point: parse_value(s.get("e")),
+        start_point: parse_value_owned(s.take("s")),
+        end_point: parse_value_owned(s.take("e")),
         highlight_length: if js_truthy(s.get("h")) {
-            Some(parse_value(s.get("h")))
+            Some(parse_value_owned(s.take("h")))
         } else {
             None
         },
         highlight_angle: if js_truthy(s.get("a")) {
-            Some(parse_value(s.get("a")))
+            Some(parse_value_owned(s.take("a")))
         } else {
             None
         },
-        color_points: s.get("g").and_then(|g| g.get("p")).and_then(|p| p.as_f64()),
-        stops: parse_value(s.get("g").and_then(|g| g.get("k"))),
+        color_points,
+        stops,
+        stops_cache: Default::default(),
     }
 }
 
-pub fn parse_shape(s: &JsonValue) -> Option<ParsedShape> {
+pub fn parse_shape(s: &mut JsonValue) -> Option<ParsedShape> {
     if !js_is_object(s) {
         return None;
     }
@@ -178,29 +198,29 @@ pub fn parse_shape(s: &JsonValue) -> Option<ParsedShape> {
         ..Default::default()
     };
     if js_truthy(s.get("nm")) {
-        result.name = js_opt_str(s.get("nm"));
+        result.name = js_owned_opt_str(s.get("nm"));
     }
     if js_truthy(s.get("mn")) {
-        result.match_name = js_opt_str(s.get("mn"));
+        result.match_name = js_owned_opt_str(s.get("mn"));
     }
     if let Some(ix) = s.get("ix").filter(|v| !v.is_null()) {
         result.index = Some(js_number(ix));
     }
     if js_truthy(s.get("it")) {
-        if let Some(arr) = s.get("it").and_then(|v| v.as_array()) {
-            result.children = Some(arr.iter().filter_map(parse_shape).collect());
+        if let Some(JsonValue::Array(arr)) = s.take("it") {
+            result.children = Some(arr.into_iter().filter_map(|mut c| parse_shape(&mut c)).collect());
         }
     }
     let ty = result.shape_type.clone();
     if ty == "trim" {
         if js_truthy(s.get("s")) {
-            result.start = Some(parse_value(s.get("s")));
+            result.start = Some(parse_value_owned(s.take("s")));
         }
         if js_truthy(s.get("e")) {
-            result.end = Some(parse_value(s.get("e")));
+            result.end = Some(parse_value_owned(s.take("e")));
         }
         if js_truthy(s.get("o")) {
-            result.offset = Some(parse_value(s.get("o")));
+            result.offset = Some(parse_value_owned(s.take("o")));
         }
         if let Some(m) = s.get("m").filter(|v| !v.is_null()) {
             result.trim_mode = Some(if js_number(m) == 2.0 {
@@ -213,16 +233,16 @@ pub fn parse_shape(s: &JsonValue) -> Option<ParsedShape> {
     }
     if ty == "fill" {
         if js_truthy(s.get("c")) {
-            result.color = Some(parse_value(s.get("c")));
+            result.color = Some(parse_value_owned(s.take("c")));
         }
         if js_truthy(s.get("o")) {
-            result.opacity = Some(parse_value(s.get("o")));
+            result.opacity = Some(parse_value_owned(s.take("o")));
         }
         match s.get("r") {
-            Some(JsonValue::Number(n)) if n.as_f64() == Some(2.0) => {
+            Some(JsonValue::Number(n)) if *n == 2.0 => {
                 result.fill_rule = Some(FillRule::Evenodd);
             }
-            Some(JsonValue::Number(n)) if n.as_f64() == Some(1.0) => {
+            Some(JsonValue::Number(n)) if *n == 1.0 => {
                 result.fill_rule = Some(FillRule::Winding);
             }
             _ => {}
@@ -231,13 +251,13 @@ pub fn parse_shape(s: &JsonValue) -> Option<ParsedShape> {
     }
     if ty == "stroke" {
         if js_truthy(s.get("c")) {
-            result.color = Some(parse_value(s.get("c")));
+            result.color = Some(parse_value_owned(s.take("c")));
         }
         if js_truthy(s.get("o")) {
-            result.opacity = Some(parse_value(s.get("o")));
+            result.opacity = Some(parse_value_owned(s.take("o")));
         }
         if js_truthy(s.get("w")) {
-            result.stroke_width = Some(parse_value(s.get("w")));
+            result.stroke_width = Some(parse_value_owned(s.take("w")));
         }
         if let Some(v) = s.get("lc").filter(|v| !v.is_null()) {
             result.line_cap = Some(js_number(v));
@@ -248,13 +268,13 @@ pub fn parse_shape(s: &JsonValue) -> Option<ParsedShape> {
         if let Some(v) = s.get("ml").filter(|v| !v.is_null()) {
             result.miter_limit = Some(js_number(v));
         }
-        if let Some(JsonValue::Array(dashes)) = s.get("d").filter(|v| js_truthy(Some(v))) {
+        if let Some(JsonValue::Array(dashes)) = s.take("d") {
             result.dashes = Some(
                 dashes
-                    .iter()
-                    .map(|d| ParsedDash {
-                        name: js_opt_str(d.get("n")),
-                        value: parse_value(d.get("v")),
+                    .into_iter()
+                    .map(|mut d| ParsedDash {
+                        name: js_owned_opt_str(d.get("n")),
+                        value: parse_value_owned(d.take("v")),
                     })
                     .collect(),
             );
@@ -264,11 +284,11 @@ pub fn parse_shape(s: &JsonValue) -> Option<ParsedShape> {
     if ty == "gradientFill" || ty == "gradientStroke" {
         result.gradient = Some(parse_gradient_shape(s));
         if js_truthy(s.get("o")) {
-            result.opacity = Some(parse_value(s.get("o")));
+            result.opacity = Some(parse_value_owned(s.take("o")));
         }
         if ty == "gradientStroke" {
             if js_truthy(s.get("w")) {
-                result.stroke_width = Some(parse_value(s.get("w")));
+                result.stroke_width = Some(parse_value_owned(s.take("w")));
             }
             if let Some(v) = s.get("lc").filter(|v| !v.is_null()) {
                 result.line_cap = Some(js_number(v));
@@ -279,13 +299,13 @@ pub fn parse_shape(s: &JsonValue) -> Option<ParsedShape> {
             if let Some(v) = s.get("ml").filter(|v| !v.is_null()) {
                 result.miter_limit = Some(js_number(v));
             }
-            if let Some(JsonValue::Array(dashes)) = s.get("d").filter(|v| js_truthy(Some(v))) {
+            if let Some(JsonValue::Array(dashes)) = s.take("d") {
                 result.dashes = Some(
                     dashes
-                        .iter()
-                        .map(|d| ParsedDash {
-                            name: js_opt_str(d.get("n")),
-                            value: parse_value(d.get("v")),
+                        .into_iter()
+                        .map(|mut d| ParsedDash {
+                            name: js_owned_opt_str(d.get("n")),
+                            value: parse_value_owned(d.take("v")),
                         })
                         .collect(),
                 );
@@ -295,10 +315,10 @@ pub fn parse_shape(s: &JsonValue) -> Option<ParsedShape> {
     }
     if ty == "ellipse" {
         if js_truthy(s.get("p")) {
-            result.position = Some(parse_value(s.get("p")));
+            result.position = Some(parse_value_owned(s.take("p")));
         }
         if js_truthy(s.get("s")) {
-            result.size = Some(parse_value(s.get("s")));
+            result.size = Some(parse_value_owned(s.take("s")));
         }
         if let Some(d @ JsonValue::Number(_)) = s.get("d") {
             result.direction = Some(js_number(d));
@@ -307,21 +327,21 @@ pub fn parse_shape(s: &JsonValue) -> Option<ParsedShape> {
     }
     if ty == "rect" {
         if js_truthy(s.get("p")) {
-            result.position = Some(parse_value(s.get("p")));
+            result.position = Some(parse_value_owned(s.take("p")));
         }
         if js_truthy(s.get("s")) {
-            result.size = Some(parse_value(s.get("s")));
+            result.size = Some(parse_value_owned(s.take("s")));
         }
         if js_truthy(s.get("r")) {
-            result.radius = Some(parse_value(s.get("r")));
+            result.radius = Some(parse_value_owned(s.take("r")));
         }
         if let Some(d @ JsonValue::Number(_)) = s.get("d") {
             result.direction = Some(js_number(d));
         }
         if js_truthy(s.get("rd")) {
             result.rd = Some(Box::new(ParsedShape {
-                shape_type: "roundedCorner".to_string(),
-                radius: Some(parse_value(s.get("rd"))),
+                shape_type: crate::json::JsonStr::new("roundedCorner"),
+                radius: Some(parse_value_owned(s.take("rd"))),
                 ..Default::default()
             }));
         }
@@ -329,55 +349,56 @@ pub fn parse_shape(s: &JsonValue) -> Option<ParsedShape> {
     }
     if ty == "roundedCorner" {
         if js_truthy(s.get("r")) {
-            result.radius = Some(parse_value(s.get("r")));
+            result.radius = Some(parse_value_owned(s.take("r")));
         }
         return Some(result);
     }
     if ty == "path" {
         if js_truthy(s.get("ks")) {
-            result.vertices = Some(parse_value(s.get("ks")));
+            result.vertices = Some(parse_value_owned(s.take("ks")));
         }
         return Some(result);
     }
     if ty == "star" {
         if js_truthy(s.get("p")) {
-            result.position = Some(parse_value(s.get("p")));
+            result.position = Some(parse_value_owned(s.take("p")));
         }
         if let Some(sy @ JsonValue::Number(_)) = s.get("sy") {
             result.star_type = Some(js_number(sy));
         }
         if js_truthy(s.get("pt")) {
-            result.points = Some(parse_value(s.get("pt")));
+            result.points = Some(parse_value_owned(s.take("pt")));
         }
         if js_truthy(s.get("r")) {
-            result.rotation = Some(parse_value(s.get("r")));
+            result.rotation = Some(parse_value_owned(s.take("r")));
         }
         if js_truthy(s.get("or")) {
-            result.outer_radius = Some(parse_value(s.get("or")));
+            result.outer_radius = Some(parse_value_owned(s.take("or")));
         }
         if js_truthy(s.get("ir")) {
-            result.inner_radius = Some(parse_value(s.get("ir")));
+            result.inner_radius = Some(parse_value_owned(s.take("ir")));
         }
-        if let Some(os) = s.get("os").filter(|v| !v.is_null()) {
-            result.outer_roundness = Some(parse_value(Some(os)));
+        if let Some(os) = s.take("os").filter(|v| !v.is_null()) {
+            result.outer_roundness = Some(parse_value_owned(Some(os)));
         }
-        if let Some(is) = s.get("is").filter(|v| !v.is_null()) {
-            result.inner_roundness = Some(parse_value(Some(is)));
+        if let Some(is) = s.take("is").filter(|v| !v.is_null()) {
+            result.inner_roundness = Some(parse_value_owned(Some(is)));
         }
         return Some(result);
     }
     if ty == "repeater" {
         if js_truthy(s.get("c")) {
-            result.copies = Some(parse_value(s.get("c")));
+            result.copies = Some(parse_value_owned(s.take("c")));
         }
         if js_truthy(s.get("o")) {
-            result.copies_offset = Some(parse_value(s.get("o")));
+            result.copies_offset = Some(parse_value_owned(s.take("o")));
         }
         if let Some(m @ JsonValue::Number(_)) = s.get("m") {
             result.composite = Some(js_number(m));
         }
         if js_truthy(s.get("tr")) {
-            result.transform = Some(parse_transform(s.get("tr")));
+            let mut tr = s.take("tr");
+            result.transform = Some(parse_transform(tr.as_mut()));
         }
         return Some(result);
     }
@@ -389,19 +410,19 @@ pub fn parse_shape(s: &JsonValue) -> Option<ParsedShape> {
     }
     if ty == "transform" {
         if js_truthy(s.get("p")) {
-            result.position = Some(parse_value(s.get("p")));
+            result.position = Some(parse_value_owned(s.take("p")));
         }
         if js_truthy(s.get("a")) {
-            result.anchor = Some(parse_value(s.get("a")));
+            result.anchor = Some(parse_value_owned(s.take("a")));
         }
         if js_truthy(s.get("s")) {
-            result.scale = Some(parse_value(s.get("s")));
+            result.scale = Some(parse_value_owned(s.take("s")));
         }
         if js_truthy(s.get("r")) {
-            result.rotation = Some(parse_value(s.get("r")));
+            result.rotation = Some(parse_value_owned(s.take("r")));
         }
         if js_truthy(s.get("o")) {
-            result.opacity = Some(parse_value(s.get("o")));
+            result.opacity = Some(parse_value_owned(s.take("o")));
         }
         return Some(result);
     }
@@ -424,7 +445,7 @@ pub fn layer_type_of(ty: Option<&JsonValue>) -> LayerType {
     }
 }
 
-fn parse_mask(m: &JsonValue) -> ParsedMask {
+pub(crate) fn parse_mask(m: &mut JsonValue) -> ParsedMask {
     let mode_raw = m.get("mode");
     let mode_key = if js_truthy(mode_raw) {
         js_str(mode_raw.unwrap())
@@ -440,16 +461,16 @@ fn parse_mask(m: &JsonValue) -> ParsedMask {
         _ => MaskMode::None,
     };
     ParsedMask {
-        name: js_opt_str(m.get("nm")),
+        name: js_owned_opt_str(m.get("nm")),
         inverted: matches!(m.get("inv"), Some(JsonValue::Bool(true))),
         mode,
-        path: parse_value(m.get("pt")),
-        opacity: parse_value(m.get("o")),
-        expand: parse_value(m.get("x")),
+        path: parse_value_owned(m.take("pt")),
+        opacity: parse_value_owned(m.take("o")),
+        expand: parse_value_owned(m.take("x")),
     }
 }
 
-fn parse_text(t: Option<&JsonValue>) -> Option<ParsedText> {
+pub(crate) fn parse_text(t: Option<&JsonValue>) -> Option<ParsedText> {
     let kf = t
         .and_then(|tt| tt.get("d"))
         .and_then(|d| d.get("k"))
@@ -462,8 +483,8 @@ fn parse_text(t: Option<&JsonValue>) -> Option<ParsedText> {
     let s = s.unwrap();
     let mut text = ParsedText {
         text: match s.get("t") {
-            Some(v) => js_str(v),
-            None => String::new(),
+            Some(v) => js_owned_str(v),
+            None => crate::json::JsonStr::default(),
         },
         ..Default::default()
     };
@@ -471,7 +492,7 @@ fn parse_text(t: Option<&JsonValue>) -> Option<ParsedText> {
         text.font_size = Some(js_number(sz));
     }
     if js_truthy(s.get("f")) {
-        text.font_family = js_opt_str(s.get("f"));
+        text.font_family = js_owned_opt_str(s.get("f"));
     }
     if js_truthy(s.get("fc")) {
         text.fill_color = super::jsutil::js_f64_vec(s.get("fc"));
@@ -512,8 +533,8 @@ fn parse_text(t: Option<&JsonValue>) -> Option<ParsedText> {
                 let mut doc = ParsedTextKeyframe {
                     at: js_number_of(k.get("t")),
                     text: match ks.get("t") {
-                        Some(v) => js_str(v),
-                        None => String::new(),
+                        Some(v) => js_owned_str(v),
+                        None => crate::json::JsonStr::default(),
                     },
                     ..Default::default()
                 };
@@ -521,7 +542,7 @@ fn parse_text(t: Option<&JsonValue>) -> Option<ParsedText> {
                     doc.font_size = Some(js_number(sz));
                 }
                 if js_truthy(ks.get("f")) {
-                    doc.font_family = js_opt_str(ks.get("f"));
+                    doc.font_family = js_owned_opt_str(ks.get("f"));
                 }
                 if js_truthy(ks.get("fc")) {
                     doc.fill_color = super::jsutil::js_f64_vec(ks.get("fc"));
@@ -552,27 +573,27 @@ fn parse_text(t: Option<&JsonValue>) -> Option<ParsedText> {
     Some(text)
 }
 
-pub fn parse_layer(l: &JsonValue) -> Option<ParsedLayer> {
+pub fn parse_layer(l: &mut JsonValue) -> Option<ParsedLayer> {
     let parent_raw = l.get("parent");
     if parent_raw.map_or(false, |p| !p.is_null()) {
         if js_strict_eq(parent_raw, l.get("ind")) {
             return None;
         }
     }
+    let parent_index = parent_raw.filter(|p| !p.is_null()).map(js_number);
+    let mut ks = l.take("ks");
     let mut result = ParsedLayer {
-        index: js_number_of(l.get("ind")),
+        index: l.get("ind").map(js_number),
         layer_type: layer_type_of(l.get("ty")),
-        transform: parse_transform(l.get("ks")),
+        transform: parse_transform(ks.as_mut()),
         ..Default::default()
     };
     if js_truthy(l.get("nm")) {
-        result.name = js_opt_str(l.get("nm"));
+        result.name = js_owned_opt_str(l.get("nm"));
     }
-    if l.get("parent").map_or(false, |p| !p.is_null()) {
-        result.parent_index = Some(js_number(parent_raw.unwrap()));
-    }
+    result.parent_index = parent_index;
     if js_truthy(l.get("refId")) {
-        result.ref_id = js_opt_str(l.get("refId"));
+        result.ref_id = js_owned_opt_str(l.get("refId"));
     }
     if let Some(v) = l.get("ip").filter(|v| !v.is_null()) {
         result.in_frame = Some(js_number(v));
@@ -596,7 +617,7 @@ pub fn parse_layer(l: &JsonValue) -> Option<ParsedLayer> {
         result.blend_mode = Some(js_number(v));
     }
     if js_truthy(l.get("sc")) {
-        result.solid_color = js_opt_str(l.get("sc"));
+        result.solid_color = js_owned_opt_str(l.get("sc"));
     }
     if let Some(v) = l.get("sw").filter(|v| !v.is_null()) {
         result.solid_width = Some(js_number(v));
@@ -623,16 +644,16 @@ pub fn parse_layer(l: &JsonValue) -> Option<ParsedLayer> {
         result.matte_target = Some(true);
     }
     if js_truthy(l.get("tm")) {
-        result.time_remap = Some(parse_value(l.get("tm")));
+        result.time_remap = Some(parse_value_owned(l.take("tm")));
     }
-    if let Some(JsonValue::Array(masks)) = l.get("masksProperties") {
-        result.masks = Some(masks.iter().map(parse_mask).collect());
+    if let Some(JsonValue::Array(masks)) = l.take("masksProperties") {
+        result.masks = Some(masks.into_iter().map(|mut m| parse_mask(&mut m)).collect());
     }
     if js_truthy(l.get("t")) {
         result.text = parse_text(l.get("t"));
     }
-    if let Some(JsonValue::Array(shapes)) = l.get("shapes") {
-        result.shapes = Some(shapes.iter().filter_map(parse_shape).collect());
+    if let Some(JsonValue::Array(shapes)) = l.take("shapes") {
+        result.shapes = Some(shapes.into_iter().filter_map(|mut sh| parse_shape(&mut sh)).collect());
     }
     if js_truthy(l.get("hd")) {
         result.layer_type = LayerType::Null;
@@ -658,7 +679,7 @@ pub fn parse_markers(markers: Option<&JsonValue>) -> Option<Vec<ParsedMarker>> {
                 let start_frame = js_strict_number(m.get("tm")).unwrap_or(0.0);
                 let dr = js_strict_number(m.get("dr")).unwrap_or(0.0);
                 ParsedMarker {
-                    name: js_opt_str(m.get("cm")),
+                    name: js_owned_opt_str(m.get("cm")),
                     start_frame,
                     end_frame: start_frame + dr,
                 }
@@ -667,22 +688,23 @@ pub fn parse_markers(markers: Option<&JsonValue>) -> Option<Vec<ParsedMarker>> {
     )
 }
 
-fn parse_asset(a: &JsonValue) -> ParsedAsset {
+pub(crate) fn parse_asset(a: &mut JsonValue) -> ParsedAsset {
     let layers = if js_truthy(a.get("layers")) {
-        if let Some(JsonValue::Array(arr)) = a.get("layers") {
-            Some(arr.iter().filter_map(parse_layer).collect())
-        } else {
-            None
+        match a.take("layers") {
+            Some(JsonValue::Array(arr)) => {
+                Some(std::sync::Arc::new(arr.into_iter().filter_map(|mut l| parse_layer(&mut l)).collect()))
+            }
+            _ => None,
         }
     } else {
         None
     };
     ParsedAsset {
-        id: js_opt_str(a.get("id")),
+        id: js_owned_opt_str(a.get("id")),
         width: a.get("w").filter(|v| !v.is_null()).map(js_number),
         height: a.get("h").filter(|v| !v.is_null()).map(js_number),
-        u: js_opt_str(a.get("u")),
-        p: js_opt_str(a.get("p")),
+        u: js_owned_opt_str(a.get("u")),
+        p: js_owned_opt_str(a.get("p")),
         layers,
     }
 }
@@ -695,13 +717,13 @@ fn truthy_or(v: Option<&JsonValue>, default: f64) -> f64 {
     }
 }
 
-fn parse_animation(data: &JsonValue) -> ParsedAnimation {
-    let layers: Vec<ParsedLayer> = match data.get("layers") {
-        Some(JsonValue::Array(arr)) => arr.iter().filter_map(parse_layer).collect(),
+fn parse_animation(data: &mut JsonValue) -> ParsedAnimation {
+    let layers: Vec<ParsedLayer> = match data.take("layers") {
+        Some(JsonValue::Array(arr)) => arr.into_iter().filter_map(|mut l| parse_layer(&mut l)).collect(),
         _ => Vec::new(),
     };
-    let assets: Vec<ParsedAsset> = match data.get("assets") {
-        Some(JsonValue::Array(arr)) => arr.iter().map(parse_asset).collect(),
+    let assets: Vec<ParsedAsset> = match data.take("assets") {
+        Some(JsonValue::Array(arr)) => arr.into_iter().map(|mut a| parse_asset(&mut a)).collect(),
         _ => Vec::new(),
     };
     let in_frame = truthy_or(data.get("ip"), 0.0);
@@ -715,25 +737,42 @@ fn parse_animation(data: &JsonValue) -> ParsedAnimation {
         duration: (out_frame - in_frame) / truthy_or(data.get("fr"), 30.0),
         layers,
         assets,
-        name: js_opt_str(data.get("nm")),
-        version: js_opt_str(data.get("v")),
-        tgs: matches!(data.get("tgs"), Some(JsonValue::Number(n)) if n.as_f64() == Some(1.0)),
-        is3d: matches!(data.get("ddd"), Some(JsonValue::Number(n)) if n.as_f64() == Some(1.0)),
+        name: js_owned_opt_str(data.get("nm")),
+        version: js_owned_opt_str(data.get("v")),
+        tgs: matches!(data.get("tgs"), Some(JsonValue::Number(n)) if *n == 1.0),
+        is3d: matches!(data.get("ddd"), Some(JsonValue::Number(n)) if *n == 1.0),
         markers: parse_markers(data.get("markers")),
     }
 }
 
+
 pub fn parse_tgs(json: &str, options: Option<ParseOptions>) -> Result<ParsedAnimation, ParseError> {
-    let data = parse_json_value(json)?;
-    build_animation(data, options)
+    let opts_key = options
+        .as_ref()
+        .and_then(|o| o.key.clone())
+        .filter(|k| !k.is_empty());
+    if let Some(key) = &opts_key {
+        if let Some(cached) = cache_get_value(key) {
+            return Ok(cached);
+        }
+    }
+    let (animation, layers_ok) = crate::direct::parse_animation(json)?;
+    if !layers_ok {
+        return Err(crate::TgsError("TGS has no layers".to_string()));
+    }
+    if let Some(key) = &opts_key {
+        cache_put(key, animation.clone());
+        return Ok(animation.clone());
+    }
+    Ok(animation)
 }
 
 pub fn parse_tgs_lex(json: &str, options: Option<ParseOptions>) -> Result<ParsedAnimation, ParseError> {
-    let data = crate::ljson::parse(json).map_err(|_| crate::TgsError("Invalid TGS JSON".to_string()))?;
+    let data = crate::json::parse(json).map_err(|_| crate::TgsError("Invalid TGS JSON".to_string()))?;
     build_animation(data, options)
 }
 
-fn build_animation(data: JsonValue, options: Option<ParseOptions>) -> Result<ParsedAnimation, ParseError> {
+fn build_animation(mut data: JsonValue, options: Option<ParseOptions>) -> Result<ParsedAnimation, ParseError> {
     let layers_ok = data
         .get("layers")
         .map(|l| l.is_array())
@@ -750,7 +789,7 @@ fn build_animation(data: JsonValue, options: Option<ParseOptions>) -> Result<Par
             return Ok(cached);
         }
     }
-    let animation = parse_animation(&data);
+    let animation = parse_animation(&mut data);
     if let Some(key) = &opts_key {
         cache_put(key, animation.clone());
         return Ok(animation.clone());
@@ -758,55 +797,15 @@ fn build_animation(data: JsonValue, options: Option<ParseOptions>) -> Result<Par
     Ok(animation)
 }
 
-/// Untrusted-input guard: reject JSON whose structural nesting or node count exceeds
-/// safe limits before triggering recursive parsing.
-const MAX_JSON_NESTING: usize = 512;
-const MAX_JSON_NODES: usize = 500_000;
-
-fn scan_json_structure(json: &str) -> Result<(), crate::TgsError> {
-    let bytes = json.as_bytes();
-    let mut depth: usize = 0;
-    let mut nodes: usize = 0;
-    let mut in_string = false;
-    let mut escape = false;
-    for &b in bytes {
-        match b {
-            b'"' => {
-                if !escape {
-                    in_string = !in_string;
-                }
-                escape = false;
-            }
-            b'\\' if in_string => escape = !escape,
-            b'{' | b'[' if !in_string => {
-                nodes += 1;
-                if nodes > MAX_JSON_NODES {
-                    return Err(crate::TgsError("TGS JSON too complex".to_string()));
-                }
-                depth += 1;
-                if depth > MAX_JSON_NESTING {
-                    return Err(crate::TgsError("TGS JSON too deep".to_string()));
-                }
-            }
-            b'}' | b']' if !in_string => {
-                depth = depth.saturating_sub(1);
-            }
-            _ => escape = false,
-        }
-    }
-    Ok(())
-}
-
 fn parse_json_value(json: &str) -> Result<JsonValue, crate::TgsError> {
-    scan_json_structure(json)?;
-    serde_json::from_str(json).map_err(|_| crate::TgsError("Invalid TGS JSON".to_string()))
+    crate::json::parse(json).map_err(|_| crate::TgsError("Invalid TGS JSON".to_string()))
 }
 
-/// Benchmark-only: wall time (ms) of [serde json->Value, model build, serde serialize].
-/// Runs without cache; returns truncated floats to 2 decimals.
+
+
 pub fn parse_tgs_parts(json: &str) -> Result<(f64, f64, f64, f64), ParseError> {
     let t0 = crate::jsutil::clock_now();
-    let data = parse_json_value(json)?;
+    let mut data = parse_json_value(json)?;
     let t_json = crate::jsutil::clock_now() - t0;
     let ok = data
         .get("layers")
@@ -816,14 +815,14 @@ pub fn parse_tgs_parts(json: &str) -> Result<(f64, f64, f64, f64), ParseError> {
         return Err(crate::TgsError("TGS has no layers".to_string()));
     }
     let t1 = crate::jsutil::clock_now();
-    let animation = parse_animation(&data);
+    let animation = parse_animation(&mut data);
     let t_build = crate::jsutil::clock_now() - t1;
     let t2 = crate::jsutil::clock_now();
-    let s = serde_json::to_string(&animation)
+    let s = crate::serialize::serialize_animation(&animation)
         .map_err(|_| crate::TgsError("tgs serialize failed".to_string()))?;
     let t_ser = crate::jsutil::clock_now() - t2;
     let t3 = crate::jsutil::clock_now();
-    let lex_ok = crate::ljson::parse(json).is_ok();
+    let lex_ok = crate::json::parse(json).is_ok();
     let t_lex = crate::jsutil::clock_now() - t3;
     let _ = s;
     if !lex_ok {
@@ -836,7 +835,7 @@ pub fn layer_info(animation: &ParsedAnimation) -> Vec<LayerInfo> {    animation
         .layers
         .iter()
         .map(|l| LayerInfo {
-            name: l.name.clone(),
+            name: l.name.as_ref().map(|s| s.to_string()),
             in_frame: l.in_frame.unwrap_or(animation.in_frame),
             out_frame: l.out_frame.unwrap_or(animation.out_frame),
         })
@@ -946,8 +945,7 @@ fn scan_layer(l: Option<&JsonValue>, rep: &mut TgsFeatureReport) {
     let ks_scale = l.get("ks").and_then(|ks| ks.get("s"));
     let mut sv = ks_scale.and_then(|s| s.get("k"));
     if let Some(JsonValue::Array(arr)) = sv {
-        if !arr.is_empty() {
-            let first = &arr[0];
+        if let Some(first) = arr.first() {
             if (first.is_object() || first.is_null()) && !first.is_array() {
                 sv = first.get("s");
             } else if first.is_array() {
@@ -955,16 +953,17 @@ fn scan_layer(l: Option<&JsonValue>, rep: &mut TgsFeatureReport) {
             }
         }
     }
-    if let Some(JsonValue::Array(final_arr)) = sv {
-        if let Some(a0) = final_arr.first() {
-            if js_number(a0) < 0.0 {
-                bump(&mut rep.flags, "negScaleX", 1.0);
-            }
+    if let Some(v) = sv {
+        let neg = |i: usize| match v {
+            JsonValue::Array(a) => a.get(i).map(js_number),
+            JsonValue::Nums(n) => n.get(i),
+            _ => None,
+        };
+        if neg(0).map_or(false, |x| x < 0.0) {
+            bump(&mut rep.flags, "negScaleX", 1.0);
         }
-        if let Some(a1) = final_arr.get(1) {
-            if js_number(a1) < 0.0 {
-                bump(&mut rep.flags, "negScaleY", 1.0);
-            }
+        if neg(1).map_or(false, |x| x < 0.0) {
+            bump(&mut rep.flags, "negScaleY", 1.0);
         }
     }
     scan_shape_tree(l.get("shapes"), &mut rep.shapes);
@@ -1078,5 +1077,4 @@ mod cache_tests {
     }
 }
 
-pub use crate::keyframes::parse_value;
-
+pub use crate::keyframes::{parse_value, parse_value_owned};

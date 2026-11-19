@@ -41,6 +41,8 @@ function transformEsmToCjs(src, filename) {
     },
   );
 
+  code = code.replace(/^[ \t]*export\s+default\s+/gm, 'exports.default = ');
+
   const exportLists = [];
   code = code.replace(/^[ \t]*export\s*\{([^}]*)\};?[ \t]*$/gm, (m, names) => {
     for (const part of names.split(',')) {

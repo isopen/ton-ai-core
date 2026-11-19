@@ -360,7 +360,7 @@ function optMasks(r: Reader): ParsedMask[] | undefined {
 function transformLayer(r: Reader): ParsedTransform { return transform(r); }
 
 function layer(r: Reader): ParsedLayer {
-    const index = r.f64();
+    const index = optF64(r);
     const type = r.u8();
     const l: ParsedLayer = { index, type: type as any, transform: transformLayer(r) } as ParsedLayer;
     const name = optStr(r);
