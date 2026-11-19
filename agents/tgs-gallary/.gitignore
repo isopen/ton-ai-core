@@ -1,4 +1,7 @@
-tgcloud/lib/
+# Generated isolate tree; the hand-written widget helper is tracked.
+!tgcloud/lib/
+tgcloud/lib/*
+!tgcloud/lib/widget.js
 
 app/vendor/
 

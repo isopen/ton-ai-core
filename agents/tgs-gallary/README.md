@@ -21,10 +21,11 @@ agents/tgs-gallary/
   app/vendor/atom/         # GENERATED @ton-ai/atom ESM + browser logger stub
   app/vendor/tgs/          # GENERATED tgs_wasm.js + tgs_wasm_bg.wasm
   app/fixtures/            # GENERATED manifest.js + data/shard-*.bin
-  tgcloud/handlers/message.js       # /start with the Open button
+  tgcloud/handlers/message.js       # /start: widget card or Open button
   tgcloud/endpoints/fixtureStats.js # skill: server-side fixture inventory
   tgcloud/lib/             # GENERATED isolate tree (core + fixtures.js)
-  scripts/sync.mjs         # builds everything under app/ and tgcloud/lib/
+  tgcloud/lib/widget.js    # hand-written, tracked widget HTML builder
+  scripts/sync.mjs         # builds the generated trees under app/ and tgcloud/lib/
   scripts/check-clean.mjs  # fails on Node/npm imports in cloud modules
   tgcloud.jsonc            # static: app/, spa
 ```
@@ -77,6 +78,27 @@ both the corpus bytes and the shard layout, so a changed packing invalidates the
   for anything that slips through);
 - calls the `fixtureStats` skill inside Telegram and shows the server-side
   inventory next to the local one (silently skipped outside Telegram).
+
+## Telegram widget
+
+In a private chat `/start` first tries a [Telegram widget](https://core.telegram.org/bots/widgets)
+(Bot API 10.4 `sendWidget`): a card with the corpus stats, a few pack chips and
+an **Open gallery** button. The widget is built in `tgcloud/lib/widget.js`; its
+HTML is self-contained (inline CSS/JS, no network, well under the 32 KB / 4 KB
+compressed limits), so it can only preview the gallery. The button calls
+`TelegramWidget.openLink(APP_URL)` and opens the Mini App in the in-app browser.
+
+Telegram disabled widgets for general bots in production on 2026-11-13, so
+`sendWidget` currently fails with `INPUT_MEDIA_WIDGET_NOT_ALLOWED`
+([telegram-bot-api#947](https://github.com/tdlib/telegram-bot-api/issues/947)).
+The handler then sends the HTML teaser from `galleryTeaser()` with the same
+numbers and an **Open gallery** button, and remembers the failure for the
+lifetime of the isolate so it does not probe on every `/start`. When Telegram
+restores access, the widget path starts working again without a code change.
+
+Groups, and bots on an older Bot API, get the same teaser message with a URL
+button. The widget path is guarded by `message.chat.type === 'private'` because
+production widgets are only allowed in the bot's private chat.
 
 ## Local checks
 
