@@ -3,8 +3,12 @@ set -e
 source "$HOME/.cargo/env"
 cd "$(dirname "$0")"
 export CARGO_TARGET_DIR="${CRYPTON_WASM_CARGO_TARGET_DIR:-$HOME/.cache/crypton-cargo-target-w32}"
+CARGO_BIN=cargo
+if command -v cargo >/dev/null 2>&1 && command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then
+  CARGO_BIN="cargo +nightly"
+fi
 RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+simd128 -C link-arg=--allow-undefined" \
-  cargo build --release --target wasm32-unknown-unknown -p crypton-wasm
+  $CARGO_BIN build --release --target wasm32-unknown-unknown -p crypton-wasm
 mkdir -p wasm
 cp "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/crypton_wasm.wasm" wasm/crypton_wasm_bg.wasm
 cp glue/crypton_wasm.js wasm/crypton_wasm.js
