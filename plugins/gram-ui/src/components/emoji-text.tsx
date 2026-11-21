@@ -7,7 +7,7 @@ import type { EmojiSegment } from './emoji-canvas.js';
 import { TgsPlayer } from './tgs-player.js';
 import { MediaSourceBadge } from './media-source-badge.js';
 import { UNKNOWN_SOURCE, resolveEmojiSource } from './emoji-source.js';
-import { ensureEmojiStickers, getEmojiAlt, getEmojiDocId, isEmojiStickersLoaded, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, subscribeEmojiMap } from './emoji-store.js';
+import { ensureEmojiStickers, getEmojiAlt, getEmojiDocId, isEmojiStickersLoaded, matchEmojiRuns, normalizeEmoji, requestEmojiDownload, resolveEntityDocId, subscribeEmojiMap } from './emoji-store.js';
 import { messageFontPx, MESSAGE_FONT_DEFAULT } from '../utils.js';
 import { getLogger } from '@ton-ai/gram-debug';
 
@@ -222,8 +222,6 @@ function getSingleRegularEmoji(text: string, entities?: any[]): string | undefin
   return r.emoji;
 }
 
-const KEYCAP_NORM_RE = /^[\d#*]\u20E3$/;
-
 const droppedEntitiesWarned = new Set<string>();
 
 function warnEmojiEntitiesDropped(text: string, entities: any[]): void {
@@ -241,23 +239,31 @@ function warnEmojiEntitiesDropped(text: string, entities: any[]): void {
   } catch {}
 }
 
-function resolveEntityDocId(docId: string, fallbackAlt: string): string {
-  const alt = getEmojiAlt(docId) || fallbackAlt;
-  if (!alt) return docId;
-  if (!KEYCAP_NORM_RE.test(normalizeEmoji(alt))) return docId;
-  return getEmojiDocId(alt) || docId;
+const glyphDocPending = new Map<string, string>();
+let glyphDocFlushScheduled = false;
+
+function scheduleGlyphDoc(alt: string, docId: string): void {
+  if (!alt || !docId) return;
+  glyphDocPending.set(normalizeEmoji(alt), String(docId));
+  if (glyphDocFlushScheduled) return;
+  glyphDocFlushScheduled = true;
+  window.setTimeout(() => {
+    glyphDocFlushScheduled = false;
+    const entries = Array.from(glyphDocPending.entries());
+    glyphDocPending.clear();
+    for (const [alt, docId] of entries) {
+      try { window.dispatchEvent(new CustomEvent('tg-emoji-glyph-doc', { detail: { alt, docId } })); } catch {}
+    }
+  }, 0);
 }
 
 function buildSegments(text: string, emojiEntities: any[]): EmojiSegment[] {
   const cuts: Array<{ start: number; end: number; docId: string; alt: string }> = [];
   for (const e of emojiEntities) {
     const rawAlt = text.slice(e.offset, e.offset + e.length);
-    cuts.push({
-      start: e.offset,
-      end: e.offset + e.length,
-      docId: resolveEntityDocId(String(e.document_id), rawAlt),
-      alt: getEmojiAlt(String(e.document_id)) || rawAlt,
-    });
+    const docId = resolveEntityDocId(String(e.document_id), rawAlt);
+    cuts.push({ start: e.offset, end: e.offset + e.length, docId, alt: rawAlt || getEmojiAlt(String(e.document_id)) || '' });
+    scheduleGlyphDoc(rawAlt || getEmojiAlt(String(e.document_id)) || '', docId);
   }
   cuts.sort((a, b) => a.start - b.start || a.end - b.end);
 

@@ -79,7 +79,8 @@ describe('GramMediaRouter emoji pipeline', () => {
             expect(readyEvents.length).toBe(2);
             const map = readyEvents[readyEvents.length - 1]!.map as Record<string, string>;
             expect(map['❤']).toBe('1001');
-            expect(map['👍']).toBe('1002');
+            expect(map['👍']).toBeUndefined();
+            expect(map['🔥']).toBeUndefined();
         } finally {
             jest.useRealTimers();
         }

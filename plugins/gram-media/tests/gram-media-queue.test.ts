@@ -94,6 +94,77 @@ describe('GramMediaRouter document queue', () => {
         expect(order).toEqual([2, 1]);
     });
 
+    test('isolates emoji FX prefetch from the visible emoji queue', async () => {
+        let active = 0;
+        let peak = 0;
+        let release: () => void = () => {};
+        const gate = new Promise<void>((r) => { release = r; });
+        const { router, setTransport } = makeRouter();
+        setTransport(makeTransport({
+            downloadFiles: async (docs) => {
+                active += docs.length;
+                peak = Math.max(peak, active);
+                await gate;
+                active -= docs.length;
+                return docs.map((d, i) => ({
+                    index: i,
+                    type: d.document.mime_type,
+                    bytes: makeBytes(8),
+                }));
+            },
+        }));
+
+        for (const id of ['fx1', 'fx2', 'fx3', 'fx4']) {
+            router.queueDocumentDownload(
+                makeDocument({ id, mime_type: 'application/x-tgsticker' }),
+                'emojipack-' + id,
+                1,
+                'fx-prefetch',
+            );
+        }
+        await flushPromises();
+
+        expect(peak).toBe(2);
+        const queues = (router as any).downloadQueues;
+        expect(queues.emoji_fx_prefetch_queue).toHaveLength(2);
+        expect(queues.emoji_chat_queue).toHaveLength(0);
+
+        release();
+        await flushTicks();
+        expect(queues.emoji_fx_prefetch_queue).toHaveLength(0);
+    });
+
+    test('moves a queued FX prefetch doc to the chat queue on tap priority', async () => {
+        let seenPriority = 0;
+        let release: () => void = () => {};
+        const gate = new Promise<void>((r) => { release = r; });
+        const { router, setTransport } = makeRouter();
+        setTransport(makeTransport({
+            downloadFiles: async (docs) => {
+                seenPriority = Number(docs[0]?.priority || 0);
+                await gate;
+                return docs.map((d, i) => ({
+                    index: i,
+                    type: d.document.mime_type,
+                    bytes: makeBytes(8),
+                }));
+            },
+        }));
+
+        const doc = makeDocument({ id: 'tapfx', mime_type: 'application/x-tgsticker' });
+        router.queueDocumentDownload(doc, 'emojipack-tapfx', 1, 'fx-prefetch');
+        router.queueDocumentDownload(doc, 'emojipack-tapfx', 32);
+        await flushPromises();
+
+        expect(seenPriority).toBe(32);
+        const queues = (router as any).downloadQueues;
+        expect(queues.emoji_fx_prefetch_queue).toHaveLength(0);
+        expect(queues.emoji_chat_queue).toHaveLength(0);
+
+        release();
+        await flushTicks();
+    });
+
     test('respects video_queue concurrency of 1', async () => {
         const active = new Set<number>();
         let maxActive = 0;

@@ -1,7 +1,12 @@
 let emojiMap: Record<string, string> | null = null;
 let docAltIndex: Record<string, string> | null = null;
 const customAltMap: Record<string, string> = {};
+const preferredEmojiAlts = new Set<string>();
+const effectDocIds = new Set<string>();
 let loading = false;
+let ensureTimer: ReturnType<typeof setTimeout> | null = null;
+let readyListenerAttached = false;
+const localMapUpdates = new Map<string, string>();
 
 type EmojiChange = { alt: string; docId: string };
 const listeners = new Set<(changed?: EmojiChange[]) => void>();
@@ -30,37 +35,85 @@ function indexEntry(alt: string, docId: string): void {
   if (!docAltIndex[docId]) docAltIndex[docId] = alt;
 }
 
+function recordLocalUpdate(alt: string, docId: string): void {
+  localMapUpdates.set(alt, docId);
+  if (localMapUpdates.size > 1024) {
+    const oldest = localMapUpdates.keys().next().value;
+    if (oldest !== undefined) localMapUpdates.delete(oldest);
+  }
+}
+
 export function getEmojiAlt(docId: string): string | undefined {
   const id = String(docId);
-  if (docAltIndex && docAltIndex[id]) return docAltIndex[id];
-  return customAltMap[id];
+  return customAltMap[id] || (docAltIndex && docAltIndex[id]) || undefined;
 }
 
 export function normalizeEmoji(e: string): string {
   return e.replace(/[\uFE00-\uFE0F\u200D]/g, '');
 }
 
+const KEYCAP_NORM_RE = /^[\d#*]\u20E3$/;
+
+export function isKeycapEmoji(alt: string): boolean {
+  return KEYCAP_NORM_RE.test(normalizeEmoji(alt));
+}
+
+export function resolveEntityDocId(docId: string, fallbackAlt: string): string {
+  if (!isEffectDocId(docId)) return docId;
+  const alt = fallbackAlt || getEmojiAlt(docId) || '';
+  const mapped = alt ? getEmojiDocId(alt) : undefined;
+  return mapped || docId;
+}
+
+function applyReadyMap(raw: unknown): boolean {
+  const source = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const next: Record<string, string> = {};
+  for (const [alt, value] of Object.entries(source)) {
+    if (!alt || value == null) continue;
+    next[alt] = String(value);
+  }
+  if (Object.keys(next).length === 0) return false;
+  for (const [alt, docId] of localMapUpdates) {
+    if (!(alt in next)) next[alt] = docId;
+  }
+  localMapUpdates.clear();
+  emojiMap = next;
+  rebuildDocAltIndex();
+  emit();
+  return true;
+}
+
+function onEmojiStickersReady(e: Event): void {
+  loading = false;
+  if (ensureTimer != null) {
+    clearTimeout(ensureTimer);
+    ensureTimer = null;
+  }
+  const applied = applyReadyMap((e as CustomEvent).detail?.map);
+  if (!applied && !emojiMap) {
+    ensureTimer = setTimeout(() => {
+      ensureTimer = null;
+      ensureEmojiStickers();
+    }, 4000);
+  }
+}
+
+function attachReadyListener(): void {
+  if (readyListenerAttached) return;
+  readyListenerAttached = true;
+  window.addEventListener('tg-emoji-stickers-ready', onEmojiStickersReady);
+}
+
 export function ensureEmojiStickers(): void {
-  if (emojiMap || loading) return;
+  attachReadyListener();
+  if ((emojiMap && Object.keys(emojiMap).length > 0) || loading) return;
   loading = true;
-  const onReady = (e: Event) => {
-    loading = false;
-    const map = (e as CustomEvent).detail?.map || {};
-    if (map && Object.keys(map).length > 0) {
-      emojiMap = map;
-      rebuildDocAltIndex();
-      listeners.forEach((l) => l());
-    } else {
-      emojiMap = null;
-      setTimeout(ensureEmojiStickers, 4000);
-    }
-  };
-  window.addEventListener('tg-emoji-stickers-ready', onReady, { once: true });
   window.dispatchEvent(new CustomEvent('tg-fetch-emoji-stickers'));
-  window.setTimeout(() => {
+  if (ensureTimer != null) clearTimeout(ensureTimer);
+  ensureTimer = setTimeout(() => {
+    ensureTimer = null;
     if (loading) {
       loading = false;
-      window.removeEventListener('tg-emoji-stickers-ready', onReady);
       setTimeout(ensureEmojiStickers, 4000);
     }
   }, 12000);
@@ -73,6 +126,7 @@ window.addEventListener('tg-emoji-doc-ready', (e) => {
   if (!emojiMap) emojiMap = {};
   if (emojiMap[alt] === id) return;
   emojiMap[alt] = id;
+  recordLocalUpdate(alt, id);
   indexEntry(alt, id);
   emit([{ alt, docId: id }]);
 });
@@ -86,6 +140,37 @@ window.addEventListener('tg-custom-emoji-alt', (e) => {
   emit([{ alt: normalizeEmoji(alt), docId: id }]);
 });
 
+window.addEventListener('tg-preferred-emoji-alts', (e) => {
+    const alts = (e as CustomEvent).detail?.alts;
+    if (!Array.isArray(alts)) return;
+    let changed = false;
+    for (const raw of alts) {
+        const alt = normalizeEmoji(String(raw || ''));
+        if (!alt || preferredEmojiAlts.has(alt)) continue;
+        preferredEmojiAlts.add(alt);
+        changed = true;
+    }
+    if (changed) emit();
+});
+
+export function isPreferredEmojiAlt(alt: string): boolean {
+    return preferredEmojiAlts.has(normalizeEmoji(alt));
+}
+
+window.addEventListener('tg-effect-doc-ids', (e) => {
+    const ids = (e as CustomEvent).detail?.ids;
+    if (!Array.isArray(ids)) return;
+    for (const raw of ids) {
+        const id = raw == null ? '' : String(raw);
+        if (id) effectDocIds.add(id);
+    }
+    if (ids.length > 0) emit();
+});
+
+export function isEffectDocId(docId: string): boolean {
+    return effectDocIds.has(String(docId));
+}
+
 window.addEventListener('tg-emoji-docs-ready', (e) => {
   const entries = (e as CustomEvent).detail?.entries;
   if (!Array.isArray(entries) || entries.length === 0) return;
@@ -96,6 +181,7 @@ window.addEventListener('tg-emoji-docs-ready', (e) => {
     const id = String(docId);
     if (emojiMap[alt] === id) continue;
     emojiMap[alt] = id;
+    recordLocalUpdate(alt, id);
     indexEntry(alt, id);
     changed.push({ alt, docId: id });
   }
@@ -104,8 +190,23 @@ window.addEventListener('tg-emoji-docs-ready', (e) => {
 
 export function getEmojiDocId(alt: string): string | undefined {
   if (!emojiMap) return undefined;
-  return emojiMap[normalizeEmoji(alt)];
+  const id = emojiMap[normalizeEmoji(alt)];
+  if (id != null && effectDocIds.has(String(id))) return undefined;
+  return id;
 }
+
+window.addEventListener('tg-emoji-glyph-doc', (e) => {
+  const { alt, docId } = (e as CustomEvent).detail || {};
+  if (!alt || !docId) return;
+  const key = normalizeEmoji(String(alt));
+  if (!key || isEffectDocId(String(docId))) return;
+  if (!emojiMap) emojiMap = {};
+  if (emojiMap[key] === String(docId)) return;
+  emojiMap[key] = String(docId);
+  recordLocalUpdate(key, String(docId));
+  indexEntry(key, String(docId));
+  emit([{ alt: key, docId: String(docId) }]);
+});
 
 export function isEmojiStickersLoaded(): boolean {
   return !!emojiMap && Object.keys(emojiMap).length > 0;

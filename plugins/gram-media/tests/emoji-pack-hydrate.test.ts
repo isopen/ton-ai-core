@@ -56,8 +56,12 @@ describe('GramMediaRouter emoji pack map hydrate', () => {
     test('hydrated map still revalidates over network and snapshots', async () => {
         const { router, setTransport } = makeRouter();
         setTransport(makeTransport({
-            callRpc: async (method: string) => {
+            callRpc: async (method: string, params?: any) => {
                 if (method === 'messages.getStickerSet') {
+                    const name = params?.stickerset?._ || '';
+                    if (name === 'inputStickerSetEmojiGenericAnimations' || name === 'inputStickerSetAnimatedEmojiAnimations') {
+                        return stickerSet([], []);
+                    }
                     return stickerSet(
                         [tgsDoc('2001', '🔥')],
                         [{ emoticon: '🔥', documents: ['2001'] }],

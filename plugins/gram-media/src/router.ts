@@ -43,8 +43,8 @@ function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Prom
     });
 }
 
-export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_dialog_queue' | 'emoji_chat_queue' | 'dice_queue' | 'tgs_queue';
-const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 4, emoji_dialog_queue: 16, emoji_chat_queue: 16, dice_queue: 4, tgs_queue: 8 };
+export type QueueKey = 'video_queue' | 'gif_queue' | 'photo_queue' | 'emoji_dialog_queue' | 'emoji_chat_queue' | 'emoji_fx_prefetch_queue' | 'dice_queue' | 'tgs_queue';
+const QUEUE_CONCURRENCY: Record<QueueKey, number> = { video_queue: 1, gif_queue: 1, photo_queue: 4, emoji_dialog_queue: 16, emoji_chat_queue: 16, emoji_fx_prefetch_queue: 2, dice_queue: 4, tgs_queue: 8 };
 const DOC_DOWNLOAD_BATCH = 4;
 const DOC_PENDING_TTL_MS = 30_000;
 
@@ -92,8 +92,8 @@ export class GramMediaRouter {
 
     private documentDownloadGen = 0;
     private documentPending = new Map<number | string, number>();
-    private downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number | string; mime: string; priority: number; ctx?: string; offset?: number; limit?: number }>> = { video_queue: [], gif_queue: [], photo_queue: [], emoji_dialog_queue: [], emoji_chat_queue: [], dice_queue: [], tgs_queue: [] };
-    private downloadInProgress: Record<QueueKey, number> = { video_queue: 0, gif_queue: 0, photo_queue: 0, emoji_dialog_queue: 0, emoji_chat_queue: 0, dice_queue: 0, tgs_queue: 0 };
+    private downloadQueues: Record<QueueKey, Array<{ document: any; messageId: number | string; mime: string; priority: number; ctx?: string; offset?: number; limit?: number }>> = { video_queue: [], gif_queue: [], photo_queue: [], emoji_dialog_queue: [], emoji_chat_queue: [], emoji_fx_prefetch_queue: [], dice_queue: [], tgs_queue: [] };
+    private downloadInProgress: Record<QueueKey, number> = { video_queue: 0, gif_queue: 0, photo_queue: 0, emoji_dialog_queue: 0, emoji_chat_queue: 0, emoji_fx_prefetch_queue: 0, dice_queue: 0, tgs_queue: 0 };
     private downloadQueueMicrotasks = new Set<QueueKey>();
     private documentRetryCounts = new Map<number, number>();
     private documentRetryTimers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -1320,6 +1320,22 @@ export class GramMediaRouter {
                 this.dispatchDocumentUrl(messageId, cachedUrl, this.emojiUrlSources.get(messageId));
                 return;
             }
+            if (requestedPriority >= 32 && ctx !== 'fx-prefetch' && this.documentPending.has(messageId)) {
+                for (const key of Object.keys(this.downloadQueues) as QueueKey[]) {
+                    if (key === 'emoji_chat_queue') continue;
+                    const idx = this.downloadQueues[key].findIndex((it) => String(it.messageId) === String(messageId));
+                    if (idx < 0) continue;
+                    const [item] = this.downloadQueues[key].splice(idx, 1);
+                    item.priority = priority;
+                    item.ctx = undefined;
+                    this.downloadQueues.emoji_chat_queue.push(item);
+                    this.documentPending.set(messageId, Date.now());
+                    this.scheduleDownloadQueue(key);
+                    this.scheduleDownloadQueue('emoji_chat_queue');
+                    if (this.debug) log.info('[gram-media] escalated queued emoji FX doc to chat queue messageId=' + messageId);
+                    return;
+                }
+            }
         }
         if (this.documentPending.has(messageId)) {
             this.bumpQueuedPriority(messageId, priority, opts);
@@ -1344,7 +1360,9 @@ export class GramMediaRouter {
         }
         const attrs = (document.attributes || []) as any[];
         const isAnimated = attrs.some((a: any) => a._ === 'documentAttributeAnimated');
-        const queueKey = isEmoji ? (ctx === 'dialog' ? 'emoji_dialog_queue' : ctx === 'dice' ? 'dice_queue' : 'emoji_chat_queue') : (mime === 'application/x-tgsticker' ? 'tgs_queue' : this.getQueueKey(mime, isAnimated));
+        const queueKey = isEmoji
+            ? (ctx === 'fx-prefetch' ? 'emoji_fx_prefetch_queue' : ctx === 'dialog' ? 'emoji_dialog_queue' : ctx === 'dice' ? 'dice_queue' : 'emoji_chat_queue')
+            : (mime === 'application/x-tgsticker' ? 'tgs_queue' : this.getQueueKey(mime, isAnimated));
         const range = this.normalizeFileRange(opts);
         this.downloadQueues[queueKey].push({ document, messageId, mime, priority, ctx, ...range });
         this.scheduleDownloadQueue(queueKey);

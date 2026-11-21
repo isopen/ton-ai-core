@@ -7,7 +7,7 @@ import { dbGet, dbSet, dbDel, dbKeys, dbClearCacheKeepSession, dbDeleteAvatarByO
 import { GramMediaRouter } from '@ton-ai/gram-media';
 import type { MediaMessageLike } from '@ton-ai/gram-media';
 import type { GramState } from './gram-state';
-import { DIALOG_CACHE_KEY, EMOJI_PACK_MAP_KEY } from './gram-constants';
+import { ANIM_SET_CACHE_KEY, DIALOG_CACHE_KEY, EMOJI_PACK_MAP_KEY } from './gram-constants';
 import { AUTH_PRESERVE_KEYS } from './gram-auth';
 import { API_CREDS_PRESERVE_KEYS } from '@/utils/api-creds';
 import { fetchCachedCountries, fetchLangOptions } from './gram-lang';
@@ -32,10 +32,34 @@ const normalizeEmoticon = (s: string): string => (s || '').replace(/[\uFE00-\uFE
 type EmojiAnimSet = { packs?: any[]; documents?: any[] };
 let emojiAnimSet: EmojiAnimSet | null = null;
 let emojiAnimSetPromise: Promise<EmojiAnimSet | null> | null = null;
+let emojiAnimSetHydration: Promise<void> | null = null;
 const pendingAnimDownloads = new Map<string, Promise<string>>();
 const ANIM_DOWNLOAD_TIMEOUT_MS = 8000;
 
+function isValidAnimSet(value: any): value is EmojiAnimSet {
+  return !!value
+    && Array.isArray(value.packs) && value.packs.length > 0
+    && Array.isArray(value.documents) && value.documents.length > 0;
+}
+
+function hydrateAnimSet(): Promise<void> {
+  if (!emojiAnimSetHydration) {
+    emojiAnimSetHydration = (async () => {
+      try {
+        const cached = await dbGet<EmojiAnimSet>(ANIM_SET_CACHE_KEY);
+        if (isValidAnimSet(cached) && !emojiAnimSet) {
+          emojiAnimSet = cached;
+          cbLog.info('[warmup] emoji anim set restored from cache');
+        }
+      } catch {}
+    })();
+  }
+  return emojiAnimSetHydration;
+}
+
 async function ensureEmojiAnimSet(): Promise<EmojiAnimSet | null> {
+  if (emojiAnimSet) return emojiAnimSet;
+  await hydrateAnimSet();
   if (emojiAnimSet) return emojiAnimSet;
   if (!mediaRouter) return null;
   if (!emojiAnimSetPromise) {
@@ -45,6 +69,7 @@ async function ensureEmojiAnimSet(): Promise<EmojiAnimSet | null> {
         .then((res) => {
           if (res && Array.isArray(res.documents) && res.documents.length > 0) {
             emojiAnimSet = res as EmojiAnimSet;
+            void dbSet(ANIM_SET_CACHE_KEY, emojiAnimSet).catch(() => {});
             return emojiAnimSet;
           }
           return null;
@@ -70,8 +95,30 @@ function findAnimPack(emoticon: string): any[] | null {
   return pack && Array.isArray(pack.documents) && pack.documents.length > 0 ? pack.documents : null;
 }
 
+export function pickAnimIndex(
+  ids: any[],
+  hasCachedUrl: (docId: string) => boolean,
+  random: () => number = Math.random,
+): number {
+  if (!Array.isArray(ids) || ids.length === 0) return 0;
+  const cached: number[] = [];
+  for (let i = 0; i < ids.length; i++) {
+    if (hasCachedUrl(String(ids[i]))) cached.push(i);
+  }
+  const pool = cached.length > 0 ? cached : ids.map((_, i) => i);
+  const pick = Math.min(pool.length - 1, Math.max(0, Math.floor(random() * pool.length)));
+  return pool[pick] + 1;
+}
+
 function emitPlayEmojiFx(messageId: string, url: string, key: string, x?: number, y?: number): void {
   log.info('[gram-app] emit tg-interaction-server-fx: msg=' + messageId + ' key=' + key + ' url=' + url.slice(0, 60));
+  try {
+    const w = window as any;
+    if (!w.__fxDiagHistory) w.__fxDiagHistory = [];
+    w.__fxDiagHistory.push({ t: Date.now(), kind: 'server', messageId, key, url: url.slice(0, 80) });
+    if (w.__fxDiagHistory.length > 60) w.__fxDiagHistory.shift();
+    w.fxDiagDump = () => w.__fxDiagHistory || [];
+  } catch {}
   window.dispatchEvent(new CustomEvent('tg-interaction-server-fx', { detail: { messageId, url, key, x, y } }));
 }
 
@@ -79,21 +126,29 @@ function emitFxFallback(messageId: string, x?: number, y?: number): void {
   window.dispatchEvent(new CustomEvent('tg-interaction-local', { detail: { messageId, x, y } }));
 }
 
-function downloadAnimDoc(docId: string, doc: any, priority = 8): Promise<string> {
-  let p = pendingAnimDownloads.get(docId);
+function downloadAnimDoc(docId: string, doc: any, priority = 1): Promise<string> {
+  const fast = priority > 1;
+  const key = fast ? docId + '|high' : docId;
+  let p = pendingAnimDownloads.get(key);
   if (p) return p;
+  const low = fast ? pendingAnimDownloads.get(docId) : undefined;
   p = requestOnce<{ docId?: string; url?: string }>('tg-download-document', 'tg-emoji-url', {
     match: (d) => String(d?.docId) === docId && !!d?.url,
     timeoutMs: ANIM_DOWNLOAD_TIMEOUT_MS,
-    payload: { document: doc, messageId: 'emojipack-' + docId, priority },
-  }).then((d) => d.url!).finally(() => { pendingAnimDownloads.delete(docId); });
-  pendingAnimDownloads.set(docId, p);
-  return p;
+    payload: {
+      document: doc,
+      messageId: 'emojipack-' + docId,
+      priority,
+      ctx: priority <= 1 ? 'fx-prefetch' : undefined,
+    },
+  }).then((d) => d.url!).finally(() => { pendingAnimDownloads.delete(key); });
+  pendingAnimDownloads.set(key, p);
+  return low ? Promise.race([p, low]) : p;
 }
 
-const FX_PREFETCH_DEBOUNCE_MS = 500;
+const FX_PREFETCH_DEBOUNCE_MS = 200;
 const FX_PREFETCH_MAX_EMOTICONS = 8;
-const FX_PREFETCH_MAX_DOCS_PER_PACK = 12;
+const FX_PREFETCH_MAX_DOCS_TOTAL = 160;
 const FX_PREFETCH_PACK_TTL_MS = 5 * 60 * 1000;
 const fxPrefetchedPacks = new Map<string, number>();
 let fxPrefetchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -117,21 +172,22 @@ async function runFxPrefetch(s: GramState, ids: number[]): Promise<void> {
     for (const d of (emojiAnimSet?.documents || [])) {
       if (d?.id != null) docsById.set(String(d.id), d);
     }
+    let queued = 0;
     for (const emo of emoticons) {
+      if (queued >= FX_PREFETCH_MAX_DOCS_TOTAL) break;
       if ((fxPrefetchedPacks.get(emo) || 0) > now - FX_PREFETCH_PACK_TTL_MS) continue;
       const docIds = findAnimPack(emo);
       if (!docIds || docIds.length === 0) continue;
-      fxPrefetchedPacks.set(emo, now);
-      let n = 0;
       for (const docId of docIds) {
-        if (n >= FX_PREFETCH_MAX_DOCS_PER_PACK) break;
+        if (queued >= FX_PREFETCH_MAX_DOCS_TOTAL) break;
         const id = String(docId);
         if (mediaRouter?.getCachedEmojiUrl('emojipack-' + id)) continue;
         const doc = docsById.get(id);
         if (!doc) continue;
-        n++;
+        queued++;
         downloadAnimDoc(id, doc).catch(() => {});
       }
+      if (queued < FX_PREFETCH_MAX_DOCS_TOTAL) fxPrefetchedPacks.set(emo, now);
     }
   } catch {}
 }
@@ -145,6 +201,13 @@ async function playAnimSegment(s: GramState, emoticon: string, index: number, me
     return false;
   }
   const docId = String(ids[index - 1]);
+  try {
+    const w = window as any;
+    if (!w.__fxDiagHistory) w.__fxDiagHistory = [];
+    w.__fxDiagHistory.push({ t: Date.now(), kind: 'segment', emoticon, index, docId, total: ids.length });
+    if (w.__fxDiagHistory.length > 60) w.__fxDiagHistory.shift();
+    w.fxDiagDump = () => w.__fxDiagHistory || [];
+  } catch {}
   const doc = Array.isArray(emojiAnimSet?.documents)
     ? emojiAnimSet!.documents!.find((d: any) => d && String(d.id) === docId)
     : undefined;
@@ -159,7 +222,6 @@ async function playAnimSegment(s: GramState, emoticon: string, index: number, me
     emitPlayEmojiFx(messageId, cached, seqKey, x, y);
     return true;
   }
-  void s.tgService.current?.downloadFiles([{ document: doc, priority: 32 }]).catch(() => {});
   try {
     const url = await downloadAnimDoc(docId, doc, 32);
     log.info('[fx] segment ready emoticon=' + JSON.stringify(emoticon) + ' doc=' + docId + ' wait=' + (Date.now() - t0) + 'ms');
@@ -177,6 +239,29 @@ export function currentPeerKey(s: GramState): string {
   return peer ? `${peer.type}_${peer.id}` : '';
 }
 
+export function resolveTapEmoticon(
+  glyph: string | undefined,
+  docId: string | undefined,
+  getAlt: (id: string) => string | undefined,
+  findPack: (emoticon: string) => unknown,
+  emots: string[],
+  slotIndex?: number,
+): string {
+  if (glyph) {
+    try {
+      if (findPack(glyph)) return glyph;
+    } catch {}
+  }
+  if (docId) {
+    try {
+      const alt = getAlt(docId);
+      if (alt && findPack(alt)) return alt;
+    } catch {}
+  }
+  if (emots.length === 0) return '';
+  return slotIndex != null && slotIndex >= 0 && slotIndex < emots.length ? emots[slotIndex] : emots[0];
+}
+
 async function processLocalEmojiClick(s: GramState, messageId: string, x?: number, y?: number, slotIndex?: number, docId?: string, glyph?: string): Promise<void> {
   const set = await ensureEmojiAnimSet();
   const cache = s.messagesCache.current.get(currentPeerKey(s));
@@ -190,31 +275,30 @@ async function processLocalEmojiClick(s: GramState, messageId: string, x?: numbe
   }
 
   const emots = extractEmoticons(text);
-  let emoticon = '';
-  if (docId) {
-    try {
-      const alt = getEmojiAlt(String(docId));
-      if (alt) emoticon = alt;
-    } catch {}
-  }
-  if (!emoticon && glyph) {
-    try {
-      if (findAnimPack(glyph)) emoticon = glyph;
-    } catch {}
-  }
-  if (!emoticon && emots.length > 0) {
-    emoticon = slotIndex != null && slotIndex >= 0 && slotIndex < emots.length
-      ? emots[slotIndex]
-      : emots[0];
-  }
+  const emoticon = resolveTapEmoticon(
+    glyph,
+    docId ? String(docId) : undefined,
+    (id) => getEmojiAlt(id),
+    (value) => findAnimPack(value),
+    emots,
+    slotIndex,
+  );
   const ids = emoticon ? findAnimPack(emoticon) : null;
+  try {
+    const w = window as any;
+    if (!w.__fxDiagHistory) w.__fxDiagHistory = [];
+    w.__fxDiagHistory.push({ t: Date.now(), kind: 'tap', messageId, glyph, docId, slotIndex, emots, resolved: emoticon, pack: ids ? ids.length : 0 });
+    if (w.__fxDiagHistory.length > 60) w.__fxDiagHistory.shift();
+    w.fxDiagDump = () => w.__fxDiagHistory || [];
+  } catch {}
   if (!ids) {
     log.warn('[gram-app] local emoji click unresolved: msg=' + messageId + ' emoticons=' + JSON.stringify(emots) + ' slot=' + slotIndex + ' setLoaded=' + !!set);
     emitFxFallback(messageId, x, y);
     return;
   }
-  const index = 1 + Math.floor(Math.random() * ids.length);
+  const index = pickAnimIndex(ids, (id) => !!mediaRouter?.getCachedEmojiUrl('emojipack-' + id));
   log.info('[gram-app] local emoji click: msg=' + messageId + ' emoticon=' + JSON.stringify(emoticon) + ' (' + (slotIndex != null ? slotIndex : 0) + '/' + emots.length + ')' + (glyph ? ' glyph=' + JSON.stringify(glyph) : '') + ' animIndex=' + index + '/' + ids.length);
+  const fx = playAnimSegment(s, emoticon, index, messageId, 'l' + Date.now(), x, y);
   const interaction = { v: 1, a: [{ t: 0, i: index }] };
   s.tgService.current?.sendTyping(s.selectedPeerRef.current!, {
     _: 'sendMessageEmojiInteraction',
@@ -222,7 +306,7 @@ async function processLocalEmojiClick(s: GramState, messageId: string, x?: numbe
     msg_id: Number(messageId),
     interaction: { _: 'dataJSON', data: JSON.stringify(interaction) },
   } as any).catch((err: any) => log.warn('[gram-app] sendEmojiInteraction failed:', err?.message || err));
-  await playAnimSegment(s, emoticon, index, messageId, 'l' + Date.now(), x, y);
+  await fx;
 }
 
 const recentInteractions = new Map<string, number>();
@@ -312,6 +396,7 @@ export function warmupEmojiPipeline(s: GramState): void {
     cbLog.warn('[warmup] stickers dispatch failed: ' + (e?.message || e));
   }
   try {
+    void hydrateAnimSet();
     void ensureEmojiAnimSet();
   } catch (e: any) {
     cbLog.warn('[warmup] anim set prefetch failed: ' + (e?.message || e));

@@ -40,6 +40,9 @@ const SPECIAL_SET_RETRY_MIN_MS = 300;
 const SPECIAL_SET_RETRY_MAX_MS = 600;
 const EMOJI_PACK_SNAPSHOT_MAX_DOCS = 2500;
 
+const PREFERRED_EMOJI_PACK_NAMES = ['Meme Emoji 1', 'MemeEmoji'];
+const PREFERRED_EMOJI_PACK_CONFIDENCE = 5;
+
 const normalizeEmoji = (e: string): string => e.replace(/[\uFE00-\uFE0F\u200D]/g, '');
 
 const stickerAltOf = (doc: any): string | null => {
@@ -47,6 +50,28 @@ const stickerAltOf = (doc: any): string | null => {
     const found = attrs.find((a: any) => (a?._ === 'documentAttributeSticker' || a?._ === 'documentAttributeCustomEmoji') && typeof a.alt === 'string' && a.alt);
     return found ? String(found.alt) : null;
 };
+
+type EmojiDocMap = Record<string, any>;
+
+const emojiMapConfidence = new WeakMap<EmojiDocMap, Map<string, number>>();
+
+function getEmojiMapConfidence(map: EmojiDocMap, key: string): number {
+    return emojiMapConfidence.get(map)?.get(key) ?? -1;
+}
+
+function setEmojiMapDoc(map: EmojiDocMap, key: string, doc: any, confidence: number): boolean {
+    if (!key || !doc?.id) return false;
+    let scores = emojiMapConfidence.get(map);
+    if (!scores) {
+        scores = new Map<string, number>();
+        emojiMapConfidence.set(map, scores);
+    }
+    const prev = scores.get(key) ?? -1;
+    if (prev > confidence || (prev === confidence && map[key])) return false;
+    map[key] = doc;
+    scores.set(key, confidence);
+    return true;
+}
 
 const isStubEmojiDoc = (d: any): boolean => {
     if (!d || d.id == null) return true;
@@ -96,6 +121,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private emojiCustomDocsById = new Map<string, any>();
     private emojiDocsById = new Map<string, any>();
     private emojiStickersLoading = false;
+    private preferredEmojiPackLoaded = false;
     private emojiMapStale = false;
     private requestedEmojiDocIds = new Set<string>();
     private emojiInFlightSince = new Map<string, number>();
@@ -115,6 +141,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
     private fetchedEmojiIds = new Set<string>();
     private unresolvedEmojiIds = new Map<string, number>();
     private emojiStickerSetIds = new Set<string>();
+    private effectDocIds = new Set<string>();
     private emojiMapExpandPending = false;
     private emojiMapExpandDone = false;
     private emojiMapExpandPromise: Promise<void> | null = null;
@@ -609,22 +636,22 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                         log.info('[gram-media] pack', JSON.stringify(pack.emoticon), 'key=' + key, 'docs=' + alts.join(','));
                     }
                 }
-                if (!key || map[key]) continue;
+                if (!key) continue;
                 const ids = pack.documents.map(String);
-                const nAlt = normalizeEmoji(pack.emoticon);
+                const candidates = ids.map((id: string) => docsById.get(id)).filter((d: any) => !!d?.id);
                 let doc: any;
-                if (ids.length > 1) {
-                    doc = ids.map((id: string) => docsById.get(id)).find((d: any) => {
-                        const alt = stickerAltOf(d);
-                        return alt != null && normalizeEmoji(alt) === nAlt;
-                    }) || docsById.get(String(pack.documents[0]));
+                let confidence = 1;
+                const exact = candidates.find((d: any) => {
+                    const alt = stickerAltOf(d);
+                    return alt != null && normalizeEmoji(alt) === key;
+                });
+                if (exact) {
+                    doc = exact;
+                    confidence = 3;
                 } else {
-                    doc = docsById.get(String(pack.documents[0]));
+                    doc = candidates[0];
                 }
-                if (doc?.id) {
-                    map[key] = doc;
-                    added++;
-                }
+                if (setEmojiMapDoc(map, key, doc, confidence)) added++;
             }
         }
         for (const doc of docs) {
@@ -633,7 +660,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             const alt = stickerAltOf(doc);
             if (alt) {
                 const key = normalizeEmoji(alt);
-                if (key && !map[key]) map[key] = doc;
+                if (setEmojiMapDoc(map, key, doc, 2)) added++;
                 if (key === '1\u20E3' && !this.emojiKeycapDocs.some((k) => String(k.id) === String(doc.id))) {
                     this.emojiKeycapDocs.push(doc);
                 }
@@ -783,8 +810,8 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                     return alt != null && normalizeEmoji(alt) === key;
                 }) || null;
             }
-            for (const [k, v] of Object.entries(map)) this.emojiStickerDocs[k] = v;
-            if (diceDoc?.id) this.emojiStickerDocs[key] = diceDoc;
+            for (const [k, v] of Object.entries(map)) setEmojiMapDoc(this.emojiStickerDocs, k, v, 3);
+            if (diceDoc?.id) setEmojiMapDoc(this.emojiStickerDocs, key, diceDoc, 4);
             this.indexEmojiDocs();
             if (this.debug) log.info('[gram-media] dice set', emoji, 'docs =', docs.length, 'map =', Object.keys(map).length);
             this.emitDiceSetsReady();
@@ -856,12 +883,14 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             if (Object.keys(map).length >= EMOJI_PACK_SNAPSHOT_MAX_DOCS) break;
         }
         if (Object.keys(map).length === 0) return;
+        for (const [k, d] of Object.entries(map)) setEmojiMapDoc(map, k, d, 1);
         this.emojiStickerDocs = map;
         this.emojiMapStale = true;
         this.indexEmojiDocs();
         for (const d of Object.values(map)) this.notifyCustomEmojiAlt(d);
         this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
         this.flushPendingEmojiAlts();
+        void this.loadPreferredEmojiPack();
         if (this.debug) log.info('[gram-media] emoji pack map hydrated docs=' + Object.keys(map).length);
     };
 
@@ -916,8 +945,10 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         }
         this.emojiStickersRetryCount = 0;
         if (this.emojiStickerDocs) {
-            for (const [k, d] of Object.entries(this.emojiStickerDocs)) {
-                if (!(k in map)) map[k] = d;
+            const prev = this.emojiStickerDocs;
+            for (const [k, d] of Object.entries(prev)) {
+                if (d?.id != null && this.effectDocIds.has(String(d.id))) continue;
+                if (!(k in map)) setEmojiMapDoc(map, k, d, Math.max(1, getEmojiMapConfidence(prev, k)));
             }
         }
         this.emojiStickerDocs = map;
@@ -930,15 +961,96 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         this.emojiStickersLoading = false;
         void this.expandEmojiMap();
         void this.loadExtraEmojiSets(map);
+        void this.loadPreferredEmojiPack();
     };
+
+    private async loadPreferredEmojiPack(): Promise<void> {
+        if (this.preferredEmojiPackLoaded) return;
+        this.preferredEmojiPackLoaded = true;
+        try {
+            const res = await this.router.transport?.callRpc('messages.searchEmojiStickerSets', {
+                q: PREFERRED_EMOJI_PACK_NAMES[0],
+                hash: 0,
+            });
+            const covered: any[] = Array.isArray(res?.sets)
+                ? res.sets
+                : (Array.isArray(res?.stickersets) ? res.stickersets : (Array.isArray(res) ? res : []));
+            const wanted = PREFERRED_EMOJI_PACK_NAMES.map((name) => name.toLowerCase());
+            const found = covered
+                .map((item: any) => item?.set || item)
+                .find((set: any) => {
+                    const title = String(set?.title || '').toLowerCase();
+                    const shortName = String(set?.short_name || '').toLowerCase();
+                    return wanted.includes(title) || wanted.includes(shortName);
+                });
+            if (!found?.id) return;
+            const id = BigInt(String(found.id));
+            const accessHash = BigInt(String(found.access_hash ?? 0));
+            const full = await this.router.fetchStickerSet('preferred-emoji-pack-' + found.id, {
+                _: 'inputStickerSetID',
+                id,
+                access_hash: accessHash,
+            });
+            if (!Array.isArray(full?.documents) || full.documents.length === 0) return;
+            const preferred: EmojiDocMap = {};
+            this.buildEmojiMapFromSet(full, preferred);
+            const alts = Object.keys(preferred);
+            if (alts.length > 0) this.router.emitWindow('tg-preferred-emoji-alts', { alts });
+            const docs = this.emojiStickerDocs || {};
+            let changed = 0;
+            for (const [alt, doc] of Object.entries(preferred)) {
+                if (!setEmojiMapDoc(docs, alt, doc, PREFERRED_EMOJI_PACK_CONFIDENCE)) continue;
+                this.notifyCustomEmojiAlt(doc);
+                changed++;
+            }
+            if (changed === 0) return;
+            this.emojiStickerDocs = docs;
+            this.indexEmojiDocs();
+            this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
+            this.emitPackSnapshot();
+            if (this.debug) log.info('[gram-media] preferred emoji pack applied: ' + String(found.title || found.short_name) + ' alts=' + changed);
+        } catch (err: any) {
+            this.preferredEmojiPackLoaded = false;
+            log.warn('[gram-media] preferred emoji pack load failed:', err?.message || err);
+        }
+    }
+
+    private registerEffectSetDocs = (full: any): number => {
+        const docs = Array.isArray(full?.documents) ? full.documents : [];
+        for (const doc of docs) {
+            if (!doc?.id) continue;
+            const id = String(doc.id);
+            this.effectDocIds.add(id);
+            this.router.registerStickerDoc(doc);
+            if (!this.emojiCustomDocsById.has(id)) this.emojiCustomDocsById.set(id, doc);
+        }
+        this.indexEmojiDocs();
+        return docs.length;
+    };
+
+    private purgeEffectDocsFromMap(): void {
+        const map = this.emojiStickerDocs;
+        if (!map || this.effectDocIds.size === 0) return;
+        let changed = false;
+        for (const [alt, doc] of Object.entries(map)) {
+            if (doc?.id != null && this.effectDocIds.has(String(doc.id))) {
+                delete map[alt];
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        this.indexEmojiDocs();
+        this.router.emitWindow('tg-emoji-stickers-ready', { map: this.emojiMapSummary() });
+        this.emitPackSnapshot();
+    }
 
     private loadExtraEmojiSets = async (map: Record<string, any>): Promise<void> => {
         try {
             await Promise.all(['inputStickerSetEmojiGenericAnimations', 'inputStickerSetAnimatedEmojiAnimations'].map(async (inp) => {
                 try {
                     const extra = await this.router.fetchStickerSet(inp, { _: inp });
-                    const added = this.buildEmojiMapFromSet(extra, map);
-                    if (this.debug) log.info('[gram-media] extra emoji set', inp, 'docs =', Array.isArray(extra?.documents) ? extra.documents.length : 0, 'added =', added);
+                    const count = this.registerEffectSetDocs(extra);
+                    if (this.debug) log.info('[gram-media] effect emoji set registered by id', inp, 'docs =', count);
                 } catch (e: any) {
                     log.error('[gram-media] extra emoji set error:', e?.message, inp);
                 }
@@ -946,13 +1058,15 @@ export class EmojiPipelineImpl implements EmojiPipeline {
         } catch (e: any) {
             log.error('[gram-media] extra emoji sets error:', e?.message || e);
         }
+        const target = this.emojiStickerDocs || map;
         if (this.emojiKeycapDocs.length > 0) {
             const kcKeys = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
             kcKeys.forEach((e, i) => {
                 const k = normalizeEmoji(e);
-                if (map[k]) return;
+                if (target[k]) return;
                 const doc = this.emojiKeycapDocs[i];
-                if (doc?.id) map[k] = doc;
+                if (doc?.id != null && this.effectDocIds.has(String(doc.id))) return;
+                setEmojiMapDoc(target, k, doc, 2);
             });
             if (this.debug) {
                 log.info('[gram-media] keycap probe docs =', this.emojiKeycapDocs.map((d) => String(d.id)).join(','));
@@ -961,19 +1075,21 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 }).join(','));
             }
         }
+        this.purgeEffectDocsFromMap();
+        this.router.emitWindow('tg-effect-doc-ids', { ids: Array.from(this.effectDocIds) });
         this.emojiStickersLoading = false;
         this.indexEmojiDocs();
         this.flushPendingEmojiAlts();
         if (this.debug) {
-            log.info('[gram-media] emoji stickers loaded, map size =', Object.keys(map).length, 'sample =', Object.keys(map).slice(0, 5).join(' '));
+            log.info('[gram-media] emoji stickers loaded, map size =', Object.keys(target).length, 'sample =', Object.keys(target).slice(0, 5).join(' '));
             const probe = ['⚽', '🏀', '🎾', '🏈', '⚾', '🎱', '🎯', '🎰', '🎲', '🎳'];
             log.info('[gram-media] emoji probe', probe.map((e) => {
-                const d = map[normalizeEmoji(e)];
+                const d = target[normalizeEmoji(e)];
                 return e + '->' + (d?.id ? String(d.id) + ':' + (d?.mime_type || '?') : '-');
             }).join(' '));
             const kc = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '#️⃣', '*️⃣'];
             const rows = kc.map((e) => {
-                const d = map[normalizeEmoji(e)];
+                const d = target[normalizeEmoji(e)];
                 return e + '->' + (d?.id ? String(d.id) : '-') + (d?.mime_type ? ':' + d.mime_type : '');
             });
             log.info('[gram-media] keycap map', rows.join(' '));
@@ -1064,7 +1180,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             }
             if (!this.emojiStickerDocs) this.emojiStickerDocs = {};
             this.emojiNoStickerAlts.delete(nAlt);
-            this.emojiStickerDocs[nAlt] = resolved;
+            setEmojiMapDoc(this.emojiStickerDocs, nAlt, resolved, 4);
             this.indexEmojiDocs();
             const id = String(resolved.id);
             readyEntries.push({ alt: nAlt, docId: id });
@@ -1242,7 +1358,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
                 if (!this.emojiStickerDocs) this.emojiStickerDocs = {};
                 let added = 0;
                 for (const [k, v] of Object.entries(map)) {
-                    if (!this.emojiStickerDocs[k]) { this.emojiStickerDocs[k] = v; added++; }
+                    if (setEmojiMapDoc(this.emojiStickerDocs, k, v, getEmojiMapConfidence(map, k))) added++;
                 }
                 if (added > 0) this.indexEmojiDocs();
                 if (this.debug) log.info('[gram-media] emoji map expanded +' + added + ' (total ' + Object.keys(this.emojiStickerDocs).length + ')');
@@ -1312,7 +1428,7 @@ export class EmojiPipelineImpl implements EmojiPipeline {
             }
             if (!this.emojiStickerDocs) this.emojiStickerDocs = {};
             this.emojiNoStickerAlts.delete(nAlt);
-            this.emojiStickerDocs[nAlt] = doc;
+            setEmojiMapDoc(this.emojiStickerDocs, nAlt, doc, 4);
             this.indexEmojiDocs();
             this.notifyEmojiDocsReady([{ alt: nAlt, docId: String(doc.id) }]);
             this.requestedEmojiAlts.delete(nAlt);

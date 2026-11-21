@@ -10,7 +10,8 @@ export function genId(): string {
 export const TYPING_TIMEOUT = 10000;
 export const MESSAGE_CACHE_PREFIX = 'messages_';
 export const DIALOG_CACHE_KEY = 'dialogs';
-export const EMOJI_PACK_MAP_KEY = 'emojiPackMap:v1';
+export const EMOJI_PACK_MAP_KEY = 'emojiPackMap:v2';
+export const ANIM_SET_CACHE_KEY = 'emojiAnimSet:v1';
 export const ORPHANED_KEY = 'tg_orphaned_dialogs';
 export const ORPHAN_MAX = 50;
 export const ORPHAN_TTL_MS = 30 * 24 * 60 * 60 * 1000;

@@ -26,7 +26,7 @@ const FX_OVERLAY_SIZE = 300;
 const FX_OVERLAY_TTL_MS = 3400;
 const MAX_ACTIVE_FX_OVERLAYS = 3;
 
-const activeFxOverlays = new Map<string, { host: HTMLDivElement; renderer: IAnimatedRenderer; timer: number; anchorEl: Element | null; detach: (() => void) | null }>();
+const activeFxOverlays = new Map<string, { host: HTMLDivElement; renderer: IAnimatedRenderer; timer: number; anchorEl: Element | null; url: string; detach: (() => void) | null }>();
 
 let fxTrackRaf = 0;
 
@@ -113,7 +113,7 @@ export function playStickerFxOverlay(key: string, tgsUrl: string, anchorEl: Elem
     const geo = { left: c0.x - FX_OVERLAY_SIZE / 2, top: c0.y - FX_OVERLAY_SIZE / 2 };
     const existing = activeFxOverlays.get(key);
     if (!existing && activeFxOverlays.size >= MAX_ACTIVE_FX_OVERLAYS) return;
-    if (existing && existing.host.isConnected) {
+    if (existing && existing.url === tgsUrl && existing.host.isConnected) {
     existing.renderer.restart?.();
     existing.anchorEl = anchorEl;
     if (existing.host.parentNode !== document.body) document.body.appendChild(existing.host);
@@ -124,13 +124,10 @@ export function playStickerFxOverlay(key: string, tgsUrl: string, anchorEl: Elem
     fxTrackEnsure();
     return;
   }
-  if (existing) {
-    try { existing.renderer.destroy(); } catch { }
-    clearTimeout(existing.timer);
-    activeFxOverlays.delete(key);
-  }
+  if (existing) disposeStickerFxOverlay(key);
   const host = document.createElement('div');
   host.className = 'tgui-sticker-fx-overlay';
+  host.dataset.fxUrl = tgsUrl;
   host.style.cssText = 'position:fixed;z-index:1150;pointer-events:none;'
     + 'width:' + FX_OVERLAY_SIZE + 'px;height:' + FX_OVERLAY_SIZE + 'px;';
   placeFxHost(host, geo);
@@ -145,7 +142,7 @@ export function playStickerFxOverlay(key: string, tgsUrl: string, anchorEl: Elem
     undefined,
   );
   const timer = window.setTimeout(() => disposeStickerFxOverlay(key), FX_OVERLAY_TTL_MS);
-  activeFxOverlays.set(key, { host, renderer, timer, anchorEl, detach: fxWatchEntry(key) });
+  activeFxOverlays.set(key, { host, renderer, timer, anchorEl, url: tgsUrl, detach: fxWatchEntry(key) });
   fxTrackEnsure();
 }
 

@@ -13,6 +13,8 @@ const diagLog = getLogger('gram-ui:emoji-diag');
 
 if (typeof window !== 'undefined') {
   (window as any).emojiDiagDump = () => (window as any).__emojiDiagLast || null;
+  (window as any).emojiDiagHistory = () => (window as any).__emojiDiagHistory || [];
+  (window as any).__emojiDiagHistory = [];
   (window as any).emojiDiagEnable = () => {
     try { localStorage.setItem('gram-debug:emoji-diag', '1'); } catch {}
     diagLog.info('[emoji-diag] enabled via window.emojiDiagEnable(), reload to see logs');
@@ -759,6 +761,19 @@ export function EmojiCanvas({ segments, documentUrls, documentSources, size = 30
     });
     diagLog.info('[emoji-diag] slots=' + emojiSegs.length + ' key=' + slotsKey.slice(0, 80) + ' inView=' + inView + ' everShown=' + everShown + ' shared=' + shared + ' urlsKey=' + (urlsKey ? urlsKey.slice(0, 60) : '-') + ' rows:', rows);
     (window as any).__emojiDiagLast = rows;
+    try {
+      const hist = (window as any).__emojiDiagHistory as any[];
+      const sig = slotsKey + '|' + urlsKey;
+      if (hist.length === 0 || hist[hist.length - 1].sig !== sig) {
+        hist.push({
+          t: Date.now(),
+          sig,
+          docs: emojiSegs.map((s) => s.docId),
+          urls: emojiSegs.map((s) => (urlFor(s.docId) || '').slice(0, 48)),
+        });
+        if (hist.length > 60) hist.shift();
+      }
+    } catch {}
   }, [slotsKey, urlsKey, kinds, failedDocs, stuckDocs, loadedDocs, inView, everShown, shared, size, hasEmoji, positions, documentSources]);
 
   const missingStrikes = useRef<Record<string, number>>({});
