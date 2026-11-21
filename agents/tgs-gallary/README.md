@@ -62,9 +62,9 @@ both the corpus bytes and the shard layout, so a changed packing invalidates the
 
 - loads the generated `fixtures/manifest.js` and fetches the 1–3 shards a page
   needs, caching up to 16 of them in memory;
-- pagination: any `1–500` per page (default **100**), first/prev/next/last and a
+- pagination: any `1–500` per page (default **50**), first/prev/next/last and a
   page number input, range indicator;
-- cell size is a free `32–320` px number input, playback cap 15/30/60 fps (each
+- cell size is a free `32–320` px number input (default **64**), playback cap 15/30/60 fps (each
   emoji plays at its own `fr`);
 - search across sticker, pack name and file id, with the match count in the
   header;

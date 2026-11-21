@@ -49,5 +49,5 @@ export default async function (message) {
         return;
     }
 
-    await reply('Open the Mini App with the button below or from the bot menu: paginated gallery, 100 emoji per page.');
+    await reply('Open the Mini App with the button below or from the bot menu: paginated gallery, 50 emoji per page.');
 }

@@ -397,8 +397,8 @@ function App() {
     const [manifest, setManifest] = useState(null);
     const [failure, setFailure] = useState('');
     const [page, setPage] = useState(1);
-    const [perPage, setPerPage] = useState(100);
-    const [cellSize, setCellSize] = useState(96);
+    const [perPage, setPerPage] = useState(50);
+    const [cellSize, setCellSize] = useState(64);
     const [query, setQuery] = useState('');
     const [grouped, setGrouped] = useState(false);
     const [pausedAll, setPausedAll] = useState(false);

@@ -24,7 +24,7 @@ export function galleryTeaser(stats = {}) {
     return [
         '<b>TGS Gallary</b> — animated emoji gallery',
         `${formatCount(count)} emoji · ${formatCount(packs)} packs · ${megabytes} MB`,
-        'Rust/WASM renderer · 100 emoji per page',
+        'Rust/WASM renderer · 50 emoji per page',
     ].join('\n');
 }
 
@@ -71,7 +71,7 @@ button:active{filter:brightness(.92)}
 <div class="stats"><span><b>${formatCount(count)}</b> emoji</span><span><b>${formatCount(packs)}</b> packs</span><span><b>${megabytes} MB</b></span></div>
 <div class="packs">${chips}</div>
 <button type="button" onclick="openGallery()">Open gallery</button>
-<div class="foot">Rust/WASM renderer · 100 per page</div>
+<div class="foot">Rust/WASM renderer · 50 per page</div>
 <script>
 function openGallery() {
   try { TelegramWidget.openLink(${JSON.stringify(APP_URL)}); } catch (e) {}
