@@ -548,6 +548,13 @@ pub fn interpolate_keyframes_cow<'a>(
             };
             let mut progress = clamp01((frame - kf.t) / duration);
 
+            if start_val == end_val {
+                if property.x.is_none() && property.y.is_none() {
+                    return std::borrow::Cow::Borrowed(&kf.s);
+                }
+                return std::borrow::Cow::Owned(resolve_split_dimensions(property, &kf.s, frame));
+            }
+
             if let Some(curve) = kf.easing_curve.as_deref() {
                 progress = curve.value(progress);
             } else if kf.o.is_some() || kf.i.is_some() {

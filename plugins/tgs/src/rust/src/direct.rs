@@ -1361,6 +1361,14 @@ mod ease_tests {
         println!("easing={:?} o={:?} i={:?}", kf.easing, kf.o, kf.i);
         assert_eq!(kf.easing.map(|e| (e.x1, e.y1, e.x2, e.y2)), Some((0.333, 0.0, 0.667, 1.0)));
     }
+
+    #[test]
+    fn easing_scalars_parse() {
+        let json = r#"{"layers":[{"ty":4,"ks":{"p":{"a":1,"k":[{"t":0,"s":[0,0],"o":{"x":0.837,"y":0},"i":{"x":0.851,"y":1}},{"t":10,"s":[10,10]}]}}}]}"#;
+        let (anim, _) = parse_animation(json).unwrap();
+        let kf = &anim.layers[0].transform.position.as_ref().unwrap().keyframes.as_ref().unwrap()[0];
+        assert_eq!(kf.easing.map(|e| (e.x1, e.y1, e.x2, e.y2)), Some((0.837, 0.0, 0.851, 1.0)));
+    }
 }
 
 fn vert_pair_ok(el: Option<&crate::json::Value>) -> Option<[f64; 2]> {

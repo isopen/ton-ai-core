@@ -107,12 +107,17 @@ export class CubicBezier {
 const interpolatorCache = new Map<string, CubicBezier>();
 const MAX_INTERPOLATORS = 256;
 
+function easingComponent(v: number | number[] | undefined): number {
+    if (Array.isArray(v)) return Number(v[0] ?? 0);
+    return Number(v ?? 0);
+}
+
 export function buildEasing(o?: TgsEasing, i?: TgsEasing): CubicBezierEasing | undefined {
     if (!o && !i) return undefined;
-    const x1 = Number(o?.x?.[0] ?? 0);
-    const y1 = Number(o?.y?.[0] ?? 0);
-    const x2 = Number(i?.x?.[0] ?? 0);
-    const y2 = Number(i?.y?.[0] ?? 0);
+    const x1 = easingComponent(o?.x);
+    const y1 = easingComponent(o?.y);
+    const x2 = easingComponent(i?.x);
+    const y2 = easingComponent(i?.y);
     if (![x1, y1, x2, y2].every(Number.isFinite)) return undefined;
     return { x1, y1, x2, y2 };
 }

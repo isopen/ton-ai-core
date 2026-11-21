@@ -156,8 +156,8 @@ export interface TgsValue {
 }
 
 export interface TgsEasing {
-    x?: number[];
-    y?: number[];
+    x?: number | number[];
+    y?: number | number[];
 }
 
 export interface TgsKeyframe {

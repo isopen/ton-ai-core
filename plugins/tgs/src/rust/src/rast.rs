@@ -2957,8 +2957,19 @@ pub fn fill_with(dst: &mut PixBuf, cmds: &[Pc], even_odd: bool, style: &PaintSty
 
 const ARC_TOL: f32 = 0.05;
 
+thread_local! {
+    static OUT_SCALE: core::cell::Cell<f64> = const { core::cell::Cell::new(1.0) };
+}
+
+fn set_out_scale(w: u32) {
+    OUT_SCALE.with(|c| c.set((w as f64 / 512.0).clamp(0.05, 1.0)));
+}
+
 fn arc_step(r: f32) -> f32 {
-    (8.0 * ARC_TOL / r.max(1e-3)).sqrt().clamp(0.0655, 0.35)
+    let scale = OUT_SCALE.with(|c| c.get()) as f32;
+    let tol = ARC_TOL / scale.max(0.05);
+    let max_step = (0.35 / scale.max(0.05)).min(1.2);
+    (8.0 * tol / r.max(1e-3)).sqrt().clamp(0.0655, max_step)
 }
 
 fn dir_of(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
@@ -3299,6 +3310,7 @@ pub fn stroke(
         return;
     }
     let _g = crate::prof::aprobe::enter(crate::prof::aprobe::ASTROKE);
+    set_out_scale(dst.width);
     let half = width * 0.5;
     let ml = miter_limit;
     let extra = [

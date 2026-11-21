@@ -315,9 +315,9 @@ impl CovCache {
         let px = w.saturating_mul(h);
         self.shrink_entries = px > 160 * 160;
         self.budget = if px <= 160 * 160 {
-            1 << 20
+            3 << 20
         } else if px <= 448 * 448 {
-            1 << 20
+            3 << 20
         } else {
             512 << 10
         };

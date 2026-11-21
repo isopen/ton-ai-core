@@ -907,6 +907,18 @@ fn mat_is_identity(m: Mat3) -> bool {
     m[0] == 1.0 && m[1] == 0.0 && m[2] == 0.0 && m[3] == 1.0 && m[4] == 0.0 && m[5] == 0.0
 }
 
+const XFORM_SNAP: f64 = 0.0625;
+
+#[inline]
+fn snap(v: f64) -> f64 {
+    (v * 16.0).round_ties_even() * 0.0625
+}
+
+#[inline]
+fn is_small_path(cmds: &[Pc]) -> bool {
+    cmds.len() <= 2
+}
+
 fn transform_cmds_ext_into(cmds: &[Pc], m: Mat3, out: &mut PathCmds) -> Option<(f64, f64, f64, f64)> {
     out.reserve(cmds.len());
     if mat_is_identity(m) {
@@ -931,6 +943,7 @@ fn transform_cmds_ext_into(cmds: &[Pc], m: Mat3, out: &mut PathCmds) -> Option<(
         }
         return if x0.is_finite() { Some((x0, y0, x1, y1)) } else { None };
     }
+    let do_snap = is_small_path(cmds);
     let mut x0 = f64::INFINITY;
     let mut y0 = f64::INFINITY;
     let mut x1 = f64::NEG_INFINITY;
@@ -945,11 +958,13 @@ fn transform_cmds_ext_into(cmds: &[Pc], m: Mat3, out: &mut PathCmds) -> Option<(
         out.push(match *cmd {
             Pc::M(p) => {
                 let (x, y) = mat_apply(m, p[0], p[1]);
+                let (x, y) = if do_snap { (snap(x), snap(y)) } else { (x, y) };
                 add(x, y);
                 Pc::M([x, y])
             }
             Pc::L(p) => {
                 let (x, y) = mat_apply(m, p[0], p[1]);
+                let (x, y) = if do_snap { (snap(x), snap(y)) } else { (x, y) };
                 add(x, y);
                 Pc::L([x, y])
             }
@@ -957,6 +972,11 @@ fn transform_cmds_ext_into(cmds: &[Pc], m: Mat3, out: &mut PathCmds) -> Option<(
                 let (x1_, y1_) = mat_apply(m, c[0], c[1]);
                 let (x2_, y2_) = mat_apply(m, c[2], c[3]);
                 let (x3_, y3_) = mat_apply(m, c[4], c[5]);
+                let (x1_, y1_, x2_, y2_, x3_, y3_) = if do_snap {
+                    (snap(x1_), snap(y1_), snap(x2_), snap(y2_), snap(x3_), snap(y3_))
+                } else {
+                    (x1_, y1_, x2_, y2_, x3_, y3_)
+                };
                 add(x1_, y1_);
                 add(x2_, y2_);
                 add(x3_, y3_);
