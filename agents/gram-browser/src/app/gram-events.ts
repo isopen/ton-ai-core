@@ -325,29 +325,53 @@ function isDuplicateInteraction(emoticon: string, messageId: string, index: numb
   return false;
 }
 
-async function onRemoteEmojiInteraction(s: GramState, detail: { kind?: string; emoticon?: string; messageId?: string; interaction?: string; fromUserId?: string }): Promise<void> {
+export interface RemoteEmojiTap {
+  t: number;
+  i: number;
+}
+
+export function parseRemoteEmojiTaps(data?: string): RemoteEmojiTap[] {
+  if (typeof data !== 'string' || data.length === 0) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    return [];
+  }
+  const rawTaps = (parsed as { a?: unknown } | null)?.a;
+  if (!Array.isArray(rawTaps)) return [];
+  const taps: RemoteEmojiTap[] = [];
+  for (const raw of rawTaps) {
+    if (!raw || typeof raw !== 'object') continue;
+    const i = Number((raw as { i?: unknown }).i);
+    if (!Number.isInteger(i) || i < 1) continue;
+    const t = Number((raw as { t?: unknown }).t);
+    taps.push({ t: Number.isFinite(t) && t >= 0 ? t : 0, i });
+  }
+  return taps;
+}
+
+export async function onRemoteEmojiInteraction(s: GramState, detail: { kind?: string; emoticon?: string; messageId?: string; interaction?: string; fromUserId?: string }): Promise<void> {
   if (detail.kind !== 'interaction') return;
 
   const selfId = s.tgui.current?.state?.selfUserId;
   if (selfId && detail.fromUserId && String(detail.fromUserId) === String(selfId)) {
     return;
   }
-  let taps: Array<{ t?: number; i?: number }> = [];
-  try {
-    const parsed = JSON.parse(detail.interaction || '{}');
-    if (Array.isArray(parsed?.a)) taps = parsed.a;
-  } catch { }
-  if (taps.length === 0) taps = [{ t: 0, i: 1 }];
+  const emoticon = detail.emoticon;
+  const messageId = detail.messageId;
+  if (!emoticon || !messageId) return;
+  const taps = parseRemoteEmojiTaps(detail.interaction);
+  if (taps.length === 0) return;
   await ensureEmojiAnimSet();
   let delayMs = 0;
   for (let k = 0; k < taps.length; k++) {
-    const tap = taps[k];
-    delayMs += Math.max(0, Number(tap.t || 0)) * 1000;
-    const index = Math.max(1, Math.round(Number(tap.i || 1)));
-    if (isDuplicateInteraction(detail.emoticon || '', detail.messageId || '', index)) {
+    const { t, i: index } = taps[k];
+    delayMs += t * 1000;
+    if (isDuplicateInteraction(emoticon, messageId, index)) {
       continue;
     }
-    const run = () => void playAnimSegment(s, detail.emoticon || '', index, detail.messageId || '', 'r' + Date.now() + '_' + k);
+    const run = () => void playAnimSegment(s, emoticon, index, messageId, 'r' + Date.now() + '_' + k);
     if (delayMs <= 30) run();
     else setTimeout(run, delayMs);
   }

@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 import { strict as assert } from 'assert';
-import { pickAnimIndex, resolveTapEmoticon } from '../src/app/gram-events';
+import { onRemoteEmojiInteraction, parseRemoteEmojiTaps, pickAnimIndex, resolveTapEmoticon } from '../src/app/gram-events';
 
 describe('pickAnimIndex', () => {
   test('prefers an already cached anim document', () => {
@@ -40,5 +40,88 @@ describe('resolveTapEmoticon', () => {
     const packs = new Set(['😃']);
     assert.equal(resolveTapEmoticon(undefined, '777', () => '😃', (v) => packs.has(v), [], 0), '😃');
     assert.equal(resolveTapEmoticon(undefined, undefined, () => undefined, () => null, ['🎉', '🔥'], 1), '🔥');
+  });
+});
+
+describe('parseRemoteEmojiTaps', () => {
+  test('keeps the indices and timings supplied by the server', () => {
+    assert.deepEqual(
+      parseRemoteEmojiTaps('{"a":[{"t":0,"i":2},{"t":1.5,"i":7}]}'),
+      [{ t: 0, i: 2 }, { t: 1.5, i: 7 }],
+    );
+  });
+
+  test('never invents an index for an empty or malformed interaction', () => {
+    const payloads = [
+      undefined,
+      '',
+      '{}',
+      'null',
+      'not-json',
+      '{"a":[]}',
+      '{"a":[{"t":0}]}',
+      '{"a":[{"t":0,"i":0}]}',
+      '{"a":[{"t":0,"i":-1}]}',
+      '{"a":[{"t":0,"i":1.5}]}',
+      '{"a":[{"t":0,"i":null}]}',
+    ];
+    for (const payload of payloads) {
+      assert.deepEqual(parseRemoteEmojiTaps(payload), [], String(payload));
+    }
+  });
+});
+
+describe('onRemoteEmojiInteraction', () => {
+  const state = () => ({ tgui: { current: null } } as any);
+
+  test('plays nothing when the server sends no taps', async () => {
+    const local: Event[] = [];
+    const onLocal = (e: Event) => local.push(e);
+    window.addEventListener('tg-interaction-local', onLocal);
+    try {
+      await onRemoteEmojiInteraction(state(), {
+        kind: 'interaction',
+        emoticon: '🔥',
+        messageId: 'empty-' + Date.now(),
+        interaction: '{}',
+      });
+      assert.equal(local.length, 0);
+    } finally {
+      window.removeEventListener('tg-interaction-local', onLocal);
+    }
+  });
+
+  test('ignores a server tap with an invalid index', async () => {
+    const local: Event[] = [];
+    const onLocal = (e: Event) => local.push(e);
+    window.addEventListener('tg-interaction-local', onLocal);
+    try {
+      await onRemoteEmojiInteraction(state(), {
+        kind: 'interaction',
+        emoticon: '🎉',
+        messageId: 'invalid-' + Date.now(),
+        interaction: '{"a":[{"t":0,"i":0}]}',
+      });
+      assert.equal(local.length, 0);
+    } finally {
+      window.removeEventListener('tg-interaction-local', onLocal);
+    }
+  });
+
+  test('still processes a valid tap from the server payload', async () => {
+    const local: Event[] = [];
+    const onLocal = (e: Event) => local.push(e);
+    window.addEventListener('tg-interaction-local', onLocal);
+    try {
+      await onRemoteEmojiInteraction(state(), {
+        kind: 'interaction',
+        emoticon: '🎉',
+        messageId: 'server-' + Date.now(),
+        interaction: '{"a":[{"t":0,"i":3}]}',
+      });
+      assert.equal(local.length, 1);
+    } finally {
+      window.removeEventListener('tg-interaction-local', onLocal);
+    }
   });
 });
