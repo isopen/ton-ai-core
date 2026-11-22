@@ -10,6 +10,7 @@ import {
     PER_PAGE_MIN,
     clampInt,
     clampPage,
+    createCellObserver,
     fileLabel,
     filterFiles,
     formatMetrics,
@@ -162,6 +163,11 @@ async function loadFixture(item) {
     return new TextDecoder().decode(buf);
 }
 
+const cellObserver = createCellObserver((target, visible) => {
+    const notify = target.__tgsCellVisible;
+    if (notify) notify(visible);
+});
+
 function EmojiCell(props) {
     const { item, size, pausedAll } = props;
     const canvasRef = useRef(null);
@@ -180,6 +186,20 @@ function EmojiCell(props) {
         let renderer = null;
         let raf = 0;
         let image = null;
+        let ctx = null;
+        let started = false;
+        let animReady = false;
+        let visible = !cellObserver;
+        let last = 0;
+        let time = 0;
+        let frame = -1;
+        let renderMs = 0;
+        let lastMetrics = 0;
+        let frames = 1;
+        let inFrame = 0;
+        let srcFps = 60;
+        let loadMs = 0;
+
         const canvas = canvasRef.current;
         if (!canvas) return undefined;
         const metrics = metricsRef.current;
@@ -187,71 +207,72 @@ function EmojiCell(props) {
             if (metrics) metrics.textContent = text;
         };
 
-        (async () => {
+        const loop = (now) => {
+            raf = 0;
+            if (disposed || !visible || !animReady) return;
+            raf = requestAnimationFrame(loop);
+            const dt = Math.min(0.1, (now - last) / 1000);
+            last = now;
+            if (!pausedRef.current && !pausedAllRef.current) time += dt;
+            const want = Math.floor(time * srcFps);
+            if (want === frame) return;
+            frame = want;
+
+            const t0 = performance.now();
+            renderer.render(inFrame + (frame % frames), size, size);
+            const src = new Uint8Array(getMemory().buffer, renderer.data_ptr(), renderer.data_len());
+            unpremulInto(src, image.data);
+            ctx.putImageData(image, 0, 0);
+            const cost = performance.now() - t0;
+            renderMs = renderMs === 0 ? cost : renderMs * 0.85 + cost * 0.15;
+            if (now - lastMetrics >= 500) {
+                lastMetrics = now;
+                show(formatMetrics(loadMs, renderMs));
+            }
+        };
+
+        const start = async () => {
+            if (started || disposed) return;
+            started = true;
             try {
-                const started = performance.now();
+                const startedAt = performance.now();
                 const json = await loadFixture(item);
                 if (disposed) return;
                 renderer = new TgsRender(json, size, size);
-                const loadMs = performance.now() - started;
+                loadMs = performance.now() - startedAt;
                 if (disposed) {
                     renderer.free();
                     renderer = null;
                     return;
                 }
-                const frames = Math.max(1, renderer.frame_count());
-                const inFrame = renderer.in_frame();
-                const srcFps = item.fr > 0 ? item.fr : 60;
-                const ctx = canvas.getContext('2d');
+                frames = Math.max(1, renderer.frame_count());
+                inFrame = renderer.in_frame();
+                srcFps = item.fr > 0 ? item.fr : 60;
+                ctx = canvas.getContext('2d');
                 image = ctx.createImageData(size, size);
 
-                let visible = false;
-                for (let f = 0; f < Math.min(frames, 8) && !visible; f++) {
+                let hasPixels = false;
+                for (let f = 0; f < Math.min(frames, 8) && !hasPixels; f++) {
                     renderer.render(inFrame + f, size, size);
                     const probe = new Uint8Array(getMemory().buffer, renderer.data_ptr(), renderer.data_len());
                     for (let i = 3; i < probe.length; i += 4) {
-                        if (probe[i] !== 0) { visible = true; break; }
+                        if (probe[i] !== 0) { hasPixels = true; break; }
                     }
                 }
-                if (!visible) {
+                if (!hasPixels) {
                     if (!disposed) {
                         show(formatMetrics(loadMs, 0));
                         setStatus('empty');
                     }
                     return;
                 }
-
-                let time = 0;
-                let frame = -1;
-                let last = performance.now();
-                let renderMs = 0;
-                let lastMetrics = 0;
-
-                const loop = (now) => {
-                    raf = requestAnimationFrame(loop);
-                    const dt = Math.min(0.1, (now - last) / 1000);
-                    last = now;
-                    if (!pausedRef.current && !pausedAllRef.current) time += dt;
-                    const want = Math.floor(time * srcFps);
-                    if (want === frame) return;
-                    frame = want;
-
-                    const t0 = performance.now();
-                    renderer.render(inFrame + (frame % frames), size, size);
-                    const src = new Uint8Array(getMemory().buffer, renderer.data_ptr(), renderer.data_len());
-                    unpremulInto(src, image.data);
-                    ctx.putImageData(image, 0, 0);
-                    const cost = performance.now() - t0;
-                    renderMs = renderMs === 0 ? cost : renderMs * 0.85 + cost * 0.15;
-                    if (now - lastMetrics >= 500) {
-                        lastMetrics = now;
-                        show(formatMetrics(loadMs, renderMs));
-                    }
-                };
-
                 if (disposed) return;
+                animReady = true;
                 setStatus('ok');
-                raf = requestAnimationFrame(loop);
+                if (visible && !raf) {
+                    last = performance.now();
+                    raf = requestAnimationFrame(loop);
+                }
             } catch (e) {
                 if (!disposed) {
                     show('load failed');
@@ -259,10 +280,31 @@ function EmojiCell(props) {
                     setError(e && e.message ? e.message : String(e));
                 }
             }
-        })();
+        };
+
+        const setCellVisible = (value) => {
+            if (disposed) return;
+            visible = value;
+            if (value) {
+                start();
+                if (animReady && raf === 0) {
+                    last = performance.now();
+                    raf = requestAnimationFrame(loop);
+                }
+            } else if (raf) {
+                cancelAnimationFrame(raf);
+                raf = 0;
+            }
+        };
+
+        canvas.__tgsCellVisible = setCellVisible;
+        if (cellObserver) cellObserver.observe(canvas);
+        else setCellVisible(true);
 
         return () => {
             disposed = true;
+            if (cellObserver) cellObserver.unobserve(canvas);
+            if (canvas.__tgsCellVisible === setCellVisible) delete canvas.__tgsCellVisible;
             if (raf) cancelAnimationFrame(raf);
             if (renderer) {
                 try { renderer.free(); } catch {}

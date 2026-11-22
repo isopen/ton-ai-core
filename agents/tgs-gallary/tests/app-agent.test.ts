@@ -34,6 +34,8 @@ describe('tgs-gallary mini app', () => {
         assert.ok(text.includes('groupByPack'), 'must support grouping by pack');
         assert.ok(text.includes('fileLabel'), 'must give every emoji a unique label');
         assert.ok(text.includes('formatMetrics'), 'must show per-emoji load and render speed');
+        assert.ok(text.includes('createCellObserver'), 'must gate animation on viewport visibility');
+        assert.ok(text.includes('!visible || !animReady'), 'must not animate offscreen cells');
         assert.ok(text.includes('FpsMeter'), 'must show the current page frame rate');
         assert.ok(!text.includes('FPS_OPTIONS'), 'the frame rate must not be a user setting');
         assert.ok(!text.includes('setFps'), 'the frame rate must not be a user setting');
@@ -156,6 +158,22 @@ describe('tgs-gallary mini app', () => {
             ']));',
         ]);
         assert.deepEqual(JSON.parse(stdout), [3, 3, 100, 100, '101–200 of 250', 1, '0 of 0']);
+    });
+
+    test('cell observer reports viewport transitions and degrades without IO', () => {
+        const stdout = runModule([
+            'globalThis.window = {};',
+            `const { createCellObserver, CELL_ROOT_MARGIN } = await import(${JSON.stringify(url(join(APP, 'gallery-core.js')))});`,
+            'const missing = createCellObserver(() => {});',
+            'globalThis.window.IntersectionObserver = class { constructor(fn, opts) { this.fn = fn; this.opts = opts; } observe() {} unobserve() {} };',
+            'const seen = [];',
+            'const obs = createCellObserver((target, visible) => seen.push([target, visible]));',
+            'obs.fn([{ target: { id: 1 }, isIntersecting: true }, { target: { id: 2 }, isIntersecting: false }]);',
+            'console.log(JSON.stringify([missing, !!obs, obs.opts.rootMargin === CELL_ROOT_MARGIN, seen]));',
+        ]);
+        assert.deepEqual(JSON.parse(stdout), [
+            null, true, true, [[{ id: 1 }, true], [{ id: 2 }, false]],
+        ]);
     });
 
     test('search, grouping and custom numbers stay pure', () => {

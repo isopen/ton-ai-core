@@ -4,6 +4,17 @@ export const FPS_GOOD = 50;
 export const FPS_MID = 30;
 export const FPS_MAX = 240;
 export const BIG_CELL_SIZE = 160;
+export const CELL_ROOT_MARGIN = '80px';
+
+export function createCellObserver(onChange) {
+    const IO = typeof window !== 'undefined' && typeof window.IntersectionObserver === 'function'
+        ? window.IntersectionObserver
+        : null;
+    if (!IO) return null;
+    return new IO((entries) => {
+        for (const entry of entries) onChange(entry.target, entry.isIntersecting);
+    }, { rootMargin: CELL_ROOT_MARGIN });
+}
 
 export function isBigCell(size) {
     return Number(size) >= BIG_CELL_SIZE;
