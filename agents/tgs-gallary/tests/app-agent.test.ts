@@ -36,6 +36,8 @@ describe('tgs-gallary mini app', () => {
         assert.ok(text.includes('formatMetrics'), 'must show per-emoji load and render speed');
         assert.ok(text.includes('createCellObserver'), 'must gate animation on viewport visibility');
         assert.ok(text.includes('!visible || !animReady'), 'must not animate offscreen cells');
+        assert.ok(text.includes('renderSize(size, window.devicePixelRatio)'), 'must scale the backing store for high-DPI screens');
+        assert.ok(text.includes('renderer.render(inFrame + (frame % frames), px, px)'), 'must render at the scaled backing size');
         assert.ok(text.includes('FpsMeter'), 'must show the current page frame rate');
         assert.ok(!text.includes('FPS_OPTIONS'), 'the frame rate must not be a user setting');
         assert.ok(!text.includes('setFps'), 'the frame rate must not be a user setting');
@@ -174,6 +176,21 @@ describe('tgs-gallary mini app', () => {
         assert.deepEqual(JSON.parse(stdout), [
             null, true, true, [[{ id: 1 }, true], [{ id: 2 }, false]],
         ]);
+    });
+
+    test('renderSize scales small cells for high-DPI screens and caps the cost', () => {
+        const stdout = runModule([
+            `const { renderSize, MAX_CELL_DPR, MAX_RENDER_PX } = await import(${JSON.stringify(url(join(APP, 'gallery-core.js')))});`,
+            'const rows = [',
+            '  [64, 1], [64, 2], [64, 3], [160, 3], [320, 3], [500, 2],',
+            '  [64, 0], [64, undefined], [0, 3], [NaN, 3],',
+            '].map(([size, dpr]) => renderSize(size, dpr));',
+            'console.log(JSON.stringify({ rows, cap: MAX_CELL_DPR, max: MAX_RENDER_PX }));',
+        ]);
+        const { rows, cap, max } = JSON.parse(stdout);
+        assert.equal(cap, 2);
+        assert.equal(max, 320);
+        assert.deepEqual(rows, [64, 128, 128, 320, 320, 500, 64, 64, 2, 2]);
     });
 
     test('search, grouping and custom numbers stay pure', () => {

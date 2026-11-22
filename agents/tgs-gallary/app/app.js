@@ -22,6 +22,7 @@ import {
     pageCount,
     pageSlice,
     parseSize,
+    renderSize,
 } from './gallery-core.js';
 
 const FILES = [];
@@ -170,6 +171,9 @@ const cellObserver = createCellObserver((target, visible) => {
 
 function EmojiCell(props) {
     const { item, size, pausedAll } = props;
+    const px = typeof window !== 'undefined'
+        ? renderSize(size, window.devicePixelRatio)
+        : size;
     const canvasRef = useRef(null);
     const metricsRef = useRef(null);
     const [paused, setPaused] = useState(false);
@@ -219,7 +223,7 @@ function EmojiCell(props) {
             frame = want;
 
             const t0 = performance.now();
-            renderer.render(inFrame + (frame % frames), size, size);
+            renderer.render(inFrame + (frame % frames), px, px);
             const src = new Uint8Array(getMemory().buffer, renderer.data_ptr(), renderer.data_len());
             unpremulInto(src, image.data);
             ctx.putImageData(image, 0, 0);
@@ -238,7 +242,7 @@ function EmojiCell(props) {
                 const startedAt = performance.now();
                 const json = await loadFixture(item);
                 if (disposed) return;
-                renderer = new TgsRender(json, size, size);
+                renderer = new TgsRender(json, px, px);
                 loadMs = performance.now() - startedAt;
                 if (disposed) {
                     renderer.free();
@@ -249,11 +253,11 @@ function EmojiCell(props) {
                 inFrame = renderer.in_frame();
                 srcFps = item.fr > 0 ? item.fr : 60;
                 ctx = canvas.getContext('2d');
-                image = ctx.createImageData(size, size);
+                image = ctx.createImageData(px, px);
 
                 let hasPixels = false;
                 for (let f = 0; f < Math.min(frames, 8) && !hasPixels; f++) {
-                    renderer.render(inFrame + f, size, size);
+                    renderer.render(inFrame + f, px, px);
                     const probe = new Uint8Array(getMemory().buffer, renderer.data_ptr(), renderer.data_len());
                     for (let i = 3; i < probe.length; i += 4) {
                         if (probe[i] !== 0) { hasPixels = true; break; }
@@ -310,7 +314,7 @@ function EmojiCell(props) {
                 try { renderer.free(); } catch {}
             }
         };
-    }, [item.file, size]);
+    }, [item.file, size, px]);
 
     const classes = ['cell'];
     if (status === 'loading') classes.push('loading');
@@ -326,7 +330,7 @@ function EmojiCell(props) {
             if (status === 'ok') setPaused(!paused);
         },
     }, [
-        h('canvas', { ref: canvasRef, width: size, height: size }),
+        h('canvas', { ref: canvasRef, width: px, height: px }),
         h('div', { class: 'name' }, item.name),
         h('div', { class: 'metrics', ref: metricsRef }),
         status === 'empty' ? h('div', { class: 'note' }, 'no visible layers') : null,

@@ -5,6 +5,17 @@ export const FPS_MID = 30;
 export const FPS_MAX = 240;
 export const BIG_CELL_SIZE = 160;
 export const CELL_ROOT_MARGIN = '80px';
+export const MAX_CELL_DPR = 2;
+export const MAX_RENDER_PX = 320;
+
+export function renderSize(size, devicePixelRatio) {
+    const logical = Math.max(1, Math.floor(Number(size)) || 1);
+    const dpr = Number(devicePixelRatio);
+    const scale = Number.isFinite(dpr) && dpr > 1
+        ? Math.min(MAX_CELL_DPR, dpr, Math.max(1, MAX_RENDER_PX / logical))
+        : 1;
+    return Math.max(logical, Math.round(logical * scale));
+}
 
 export function createCellObserver(onChange) {
     const IO = typeof window !== 'undefined' && typeof window.IntersectionObserver === 'function'
