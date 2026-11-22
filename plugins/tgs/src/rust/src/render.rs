@@ -907,8 +907,6 @@ fn mat_is_identity(m: Mat3) -> bool {
     m[0] == 1.0 && m[1] == 0.0 && m[2] == 0.0 && m[3] == 1.0 && m[4] == 0.0 && m[5] == 0.0
 }
 
-const XFORM_SNAP: f64 = 0.0625;
-
 #[inline]
 fn snap(v: f64) -> f64 {
     (v * 16.0).round_ties_even() * 0.0625
@@ -986,12 +984,6 @@ fn transform_cmds_ext_into(cmds: &[Pc], m: Mat3, out: &mut PathCmds) -> Option<(
         });
     }
     if x0.is_finite() { Some((x0, y0, x1, y1)) } else { None }
-}
-
-fn transform_cmds_ext(cmds: &[Pc], m: Mat3) -> (PathCmds, Option<(f64, f64, f64, f64)>) {
-    let mut out: PathCmds = Vec::with_capacity(cmds.len());
-    let b = transform_cmds_ext_into(cmds, m, &mut out);
-    (out, b)
 }
 
 fn transform_cmds(cmds: &[Pc], m: Mat3) -> PathCmds {

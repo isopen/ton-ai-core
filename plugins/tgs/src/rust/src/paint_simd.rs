@@ -784,48 +784,6 @@ mod simd {
         }
     }
 
-    #[target_feature(enable = "simd128")]
-    pub(crate) unsafe fn src_over_span(data: *mut u8, src: *const u32, n: usize) {
-        if n == 0 {
-            return;
-        }
-        if n < 8 {
-            let mut p = 0usize;
-            while p < n {
-                let s = *src.add(p);
-                over_prem_px(data.add(p * 4), s, 256 - ((s >> 24) & 0xff));
-                p += 1;
-            }
-            return;
-        }
-        let arep_pat = wa::v128_load(SEL_AREP.as_ptr() as *const wa::v128);
-        let m256 = wa::u16x8_splat(256);
-        let nvec = n & !3;
-        let mut p = 0usize;
-        while p < nvec {
-            let sv = wa::v128_load(src.add(p) as *const wa::v128);
-            let arepv = wa::i8x16_swizzle(sv, arep_pat);
-            let inv_lo = wa::u16x8_sub(m256, wa::u16x8_extend_low_u8x16(arepv));
-            let inv_hi = wa::u16x8_sub(m256, wa::u16x8_extend_high_u8x16(arepv));
-            let d_raw = wa::v128_load(data.add(p * 4) as *const wa::v128);
-            let d16_lo = wa::u16x8_extend_low_u8x16(d_raw);
-            let d16_hi = wa::u16x8_extend_high_u8x16(d_raw);
-            let s16_lo = wa::u16x8_extend_low_u8x16(sv);
-            let s16_hi = wa::u16x8_extend_high_u8x16(sv);
-            let o_lo = wa::u16x8_add(s16_lo, wa::u16x8_shr(wa::u16x8_mul(d16_lo, inv_lo), 8));
-            let o_hi = wa::u16x8_add(s16_hi, wa::u16x8_shr(wa::u16x8_mul(d16_hi, inv_hi), 8));
-            wa::v128_store(data.add(p * 4) as *mut wa::v128, wa::u8x16_narrow_i16x8(o_lo, o_hi));
-            p += 4;
-        }
-        while p < n {
-            let s = *src.add(p);
-            over_prem_px(data.add(p * 4), s, 256 - ((s >> 24) & 0xff));
-            p += 1;
-        }
-    }
-
-
-    
     #[inline(always)]
     pub(crate) unsafe fn over_prem_px(q: *mut u8, prem: u32, inv: u32) {
         let x = core::ptr::read_unaligned(q as *const u32);
@@ -1287,18 +1245,6 @@ mod fallback {
         }
     }
 
-    pub(crate) unsafe fn src_over_span(data: *mut u8, src: *const u32, n: usize) {
-        for i in 0..n {
-            let s = *src.add(i);
-            let inv = 256 - ((s >> 24) & 0xff);
-            let q = data.add(i * 4);
-            *q = (((s & 0xff) + ((u32::from(*q) * inv) >> 8)).min(255)) as u8;
-            *q.add(1) = ((((s >> 8) & 0xff) + ((u32::from(*q.add(1)) * inv) >> 8)).min(255)) as u8;
-            *q.add(2) = ((((s >> 16) & 0xff) + ((u32::from(*q.add(2)) * inv) >> 8)).min(255)) as u8;
-            *q.add(3) = ((((s >> 24) & 0xff) + ((u32::from(*q.add(3)) * inv) >> 8)).min(255)) as u8;
-        }
-    }
-
     pub(crate) unsafe fn solid_cov_row(data: *mut u8, cov: *const u8, col: u32, n: usize) {
         let a8 = (col >> 24) & 0xff;
         if a8 == 0 {
@@ -1428,13 +1374,13 @@ mod fallback {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) use simd::{blit_dest_in, blit_dest_in_u8, blit_dest_out, blit_srover, blend_prem_span, grad_lut_cov_span, grad_lut_fill, grad_lut_span, over_prem_px, paint_solid_row, rgrad_lut_cov_span, rgrad_lut_fill, rgrad_lut_span, solid_cov_row, solid_span_small, src_over_span};
+pub(crate) use simd::{blit_dest_in, blit_dest_in_u8, blit_dest_out, blit_srover, blend_prem_span, grad_lut_cov_span, grad_lut_fill, grad_lut_span, over_prem_px, paint_solid_row, rgrad_lut_cov_span, rgrad_lut_fill, rgrad_lut_span, solid_cov_row, solid_span_small};
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
 pub use simd::{solid_grad_span};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use fallback::{blit_dest_in, blit_dest_in_u8, blit_dest_out, blit_srover, blend_prem_span, over_prem_px, paint_solid_row, solid_cov_row, solid_span_small, src_over_span};
+pub(crate) use fallback::{blit_dest_in, blit_dest_in_u8, blit_dest_out, blit_srover, blend_prem_span, over_prem_px, paint_solid_row, solid_cov_row, solid_span_small};
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub use fallback::{solid_grad_span};

@@ -668,6 +668,7 @@ pub(crate) fn seen_recent(key: u128) -> bool {
     })
 }
 
+#[cfg(feature = "prof")]
 #[inline]
 pub(crate) fn seen_cur(key: u128) -> bool {
     SEEN.with(|slot| {

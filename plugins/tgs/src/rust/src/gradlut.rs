@@ -7,7 +7,7 @@ use crate::rast::RgbaF;
 pub(crate) const LUT_SIZE: usize = 1024;
 
 #[derive(Clone, PartialEq)]
-pub(crate) struct GradStops {
+pub struct GradStops {
     pub colors: Vec<(f32, [f32; 3])>,
     pub alphas: Vec<(f32, f32)>,
     pub alpha: f32,
@@ -237,10 +237,6 @@ pub(crate) fn lut_of(stops: &GradStops) -> Rc<Vec<[f32; 4]>> {
         luts.insert(key, l.clone());
         l
     })
-}
-
-pub(crate) fn lut_opaque_of(stops: &GradStops) -> bool {
-    lut_pix_and_opaque(stops).1
 }
 
 #[inline]

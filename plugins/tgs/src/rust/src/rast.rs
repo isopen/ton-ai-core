@@ -1091,12 +1091,6 @@ fn cmds_key(kind: u32, even_odd: bool, w: usize, h: usize, cmds: &[Pc], extra: &
     hs.finish()
 }
 
-fn mix_stops(h: &mut crate::cov_cache::Hasher128, stops: &crate::gradlut::GradStops) {
-    let sk = crate::gradlut::stops_key(stops);
-    h.mix_u64(sk as u64);
-    h.mix_u64((sk >> 64) as u64);
-}
-
 fn replay_cov(
     dst: &mut PixBuf,
     entry: &crate::cov_cache::CovEntry,
@@ -1447,7 +1441,9 @@ struct RowPainter<'a> {
     spans: &'a mut Vec<u64>,
     px_total: &'a mut usize,
     overflow: &'a mut bool,
+    #[allow(dead_code)]
     nspans: &'a mut u64,
+    #[allow(dead_code)]
     npx: &'a mut u64,
     painter_ref: Option<&'a SpanPaint>,
     cov: &'a mut Vec<f32>,
@@ -1836,7 +1832,7 @@ fn raster_cells(
             let mut mk_y = usize::MAX;
             let mut mk0 = 0usize;
             let mut mk1 = 0usize;
-            let mut emit = |y: usize, x0: usize, len: usize, cv: u8| {
+            let emit = |y: usize, x0: usize, len: usize, cv: u8| {
                 if len == 0 {
                     return;
                 }
@@ -1939,7 +1935,6 @@ fn raster_cells(
         let kind = match style {
             PaintStyle::Solid(_) => "solid",
             PaintStyle::Linear { .. } | PaintStyle::Radial { .. } => "grad",
-            _ => "other",
         };
         eprintln!(
             "[shape] polys={} rows={} ext={} nz={} bbox=({:.1},{:.1})-({:.1},{:.1}) kind={} eo={}",

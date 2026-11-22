@@ -4,7 +4,6 @@ const ONE: i32 = 1 << PIX_B;
 pub(crate) const ONE_SCALE: f32 = ONE as f32;
 
 const CELL_FULL: i32 = (ONE * ONE) * 2;
-const SPARSE_ROWS: bool = true;
 
 #[derive(Clone, Copy)]
 struct Edge {
@@ -41,8 +40,10 @@ pub(crate) trait RowSink {
     fn span(&mut self, y: usize, x0: usize, len: usize, cv: u8);
 }
 
+#[cfg(test)]
 pub(crate) struct DenseSink<F>(pub F);
 
+#[cfg(test)]
 impl<F: FnMut(usize, usize, &[u8])> RowSink for DenseSink<F> {
     #[inline(always)]
     fn row(&mut self, y: usize, x0: usize, row: &[u8]) {
@@ -211,6 +212,7 @@ impl CellRaster {
     
     
     
+    #[cfg(test)]
     pub(crate) fn sweep_rows<F: FnMut(usize, usize, &[u8])>(&mut self, even_odd: bool, f: F) {
         let mut sink = DenseSink(f);
         if even_odd {
@@ -231,6 +233,7 @@ impl CellRaster {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn sweep_rows_bits<F: FnMut(usize, usize, &[u8])>(&mut self, even_odd: bool, f: F) {
         let mut sink = DenseSink(f);
         if even_odd {
