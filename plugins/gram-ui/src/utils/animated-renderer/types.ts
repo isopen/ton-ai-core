@@ -13,6 +13,7 @@ export interface AnimatedRendererView {
   isPaused?: boolean;
   isSharedCanvas?: boolean;
   isDirty?: boolean;
+  hasVisiblePaint?: boolean;
   coords?: { x: number; y: number };
   prevScaledCoords?: { x: number; y: number };
   onLoad?: () => void;

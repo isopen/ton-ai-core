@@ -124,7 +124,6 @@ export class TgsRenderer implements IAnimatedRenderer {
   private frames: Frame[] = [];
 
   private emptyFrameIndexes = new Set<number>();
-  private hasVisiblePaint = false;
 
   private framesCount?: number;
 
@@ -266,7 +265,10 @@ export class TgsRenderer implements IAnimatedRenderer {
   private isLooping = false;
 
   private startLoop() {
-    if (this.isLooping) return;
+    if (this.isLooping) {
+      if (this.tickUnregister) setTickClientHost(this.tickUnregister, this.pickHostCanvas());
+      return;
+    }
     this.isLooping = true;
     if (!this.tickUnregister) {
       this.tickUnregister = registerTickClient(() => {
@@ -347,6 +349,10 @@ export class TgsRenderer implements IAnimatedRenderer {
       instance.loggedFrameError = false;
       instance.needsChangeData = true;
       instance.isRendererInited = false;
+      instance.emptyFrameIndexes.clear();
+      instance.views.forEach((view) => {
+        view.hasVisiblePaint = false;
+      });
 
       instance.initGeneration++;
       if (instance.initInFlight) {
@@ -445,6 +451,10 @@ export class TgsRenderer implements IAnimatedRenderer {
     this.views.delete(viewId);
     if (!this.views.size) {
       this.park();
+      return;
+    }
+    if (this.isLooping && this.tickUnregister) {
+      setTickClientHost(this.tickUnregister, this.pickHostCanvas());
     }
   }
 
@@ -491,6 +501,7 @@ export class TgsRenderer implements IAnimatedRenderer {
     this.framesCount = undefined;
     this.prevFrameIndex = -1;
     this.approxFrameIndex = 0;
+    this.emptyFrameIndexes.clear();
     this.lastPaintAt = 0;
     this.lastRenderAt = undefined;
     this.isEnded = false;
@@ -590,10 +601,18 @@ export class TgsRenderer implements IAnimatedRenderer {
     if (prev && (prev.x !== c.x || prev.y !== c.y)) {
       view.ctx.clearRect(prev.x, prev.y, this.imgSize, this.imgSize);
     }
-    const frame = this.getFrame(this.prevFrameIndex) || this.getFrame(Math.round(this.approxFrameIndex));
+    const currentFrameIndex = Math.round(this.approxFrameIndex);
+    let frameIndex = currentFrameIndex;
+    let frame = this.prevFrameIndex >= 0 ? this.getFrame(this.prevFrameIndex) : undefined;
+    if (frame && frame !== WAITING) {
+      frameIndex = this.prevFrameIndex;
+    } else {
+      frame = this.getFrame(currentFrameIndex);
+    }
     if (frame && frame !== WAITING) {
       view.ctx.clearRect(c.x, c.y, this.imgSize, this.imgSize);
       view.ctx.drawImage(frame, c.x, c.y);
+      if (!this.emptyFrameIndexes.has(frameIndex)) view.hasVisiblePaint = true;
     }
     view.prevScaledCoords = { x: c.x, y: c.y };
   }
@@ -633,6 +652,7 @@ export class TgsRenderer implements IAnimatedRenderer {
       this.views.set(viewId, {
         canvas,
         ctx: canvas.getContext('2d')!,
+        isDirty: true,
         onLoad,
         onError,
         onFrame,
@@ -646,6 +666,7 @@ export class TgsRenderer implements IAnimatedRenderer {
           ctx,
           isSharedCanvas: true,
           coords: { x: coords?.x || 0, y: coords?.y || 0 },
+          isDirty: true,
           onLoad,
           onError,
           onFrame,
@@ -653,7 +674,7 @@ export class TgsRenderer implements IAnimatedRenderer {
       } else {
         if (canvas.width !== imgSize) canvas.width = imgSize;
         if (canvas.height !== imgSize) canvas.height = imgSize;
-        this.views.set(viewId, { canvas, ctx, onLoad, onError, onFrame });
+        this.views.set(viewId, { canvas, ctx, isDirty: true, onLoad, onError, onFrame });
       }
     }
 
@@ -674,7 +695,7 @@ export class TgsRenderer implements IAnimatedRenderer {
 
   private pickHostCanvas(): Element | null {
     for (const v of this.views.values()) {
-      if (!v.isSharedCanvas) return v.canvas;
+      if (!v.isSharedCanvas && v.canvas.isConnected) return v.canvas;
     }
     return null;
   }
@@ -875,7 +896,7 @@ export class TgsRenderer implements IAnimatedRenderer {
     resetDrawBudgetIfExpired(performance.now());
 
     this.views.forEach((view) => {
-      const { ctx, isLoaded, isPaused, onLoad, onFrame } = view;
+      const { ctx, isLoaded, isPaused, hasVisiblePaint, onLoad, onFrame } = view;
       if (isLoaded && isPaused) return;
       if (!frameChanged && !view.isDirty) return;
       if (!tryAcquireDrawCall()) {
@@ -883,7 +904,8 @@ export class TgsRenderer implements IAnimatedRenderer {
         return;
       }
       view.isDirty = false;
-      if (this.emptyFrameIndexes.has(frameIndex) && this.hasVisiblePaint) {
+      const frameEmpty = this.emptyFrameIndexes.has(frameIndex);
+      if (frameEmpty && hasVisiblePaint && isLoaded) {
         onFrame?.(frameIndex);
         this.lastPaintAt = Date.now();
         return;
@@ -901,7 +923,7 @@ export class TgsRenderer implements IAnimatedRenderer {
         ctx.clearRect(0, 0, this.imgSize, this.imgSize);
         ctx.drawImage(frame, 0, 0);
       }
-      this.hasVisiblePaint = true;
+      if (!frameEmpty) view.hasVisiblePaint = true;
       onFrame?.(frameIndex);
       this.lastPaintAt = Date.now();
       this.heartbeatFrozenReinit = false;
